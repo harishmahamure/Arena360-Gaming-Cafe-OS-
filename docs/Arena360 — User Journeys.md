@@ -75,7 +75,7 @@ A player with a pack or wallet balance never needs the counter: login, pick a pl
 | Step | Actor | Where | What must be true |
 | --- | --- | --- | --- |
 | Attract screen | Kiosk | Gaming PC | Branding, current rates and the active dynamic rule; an ad slot every 15 minutes on Free only |
-| Login | Player | Kiosk | Phone and PIN in one screen; three failures lock the kiosk login for 60 s and tell the Hub |
+| Login | Player | Kiosk | Username and password in one screen; three failures lock the kiosk login for 60 s and tell the Hub |
 | Pick plan | Player | Kiosk | Shows only plans valid for this device's group; packs show hours left and expiry; wallet shows balance and the hourly rate |
 | Hub approves | Hub | — | One transaction: debit wallet or pack, write session, append change log; refusal returns a typed reason |
 | Plays | Player | Kiosk | HUD counts down; game grid and library available; orders allowed |

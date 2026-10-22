@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arena 360 — Marketing home (key screen)</title>
+<style>
+/* KEY SCREEN — Marketing site Home (Player mood, Cinema Electric). 1440 browser + 390 phone. Re-rendered 2026-10-23 for the AIRY/premium spacing posture.
+   Governing spine sections:
+   DESIGN.md — Brand & Style (player mood: marketing), Colors (accent rules, links underlined, scrim, border-strong), Typography (web-display 40/300 for every
+               page and section title incl. the hero h1; web-body 16/400; kiosk-eyebrow 16/600; kiosk-title 28/600 for card titles; Sora; tnum),
+               Layout & Spacing (Web: marketing row — web-gutter 56 / phone 16, web-section-gap 128 / phone 64, web-card-padding 32 / phone 24,
+               web-header-height 80 / phone 64), Components: button-primary, button-secondary, scrim (copy zone left 45% × bottom 50%), focus-ring, card,
+               floor-tile + status-badge + tile-order-badge + chip-rule (inside the floor-view illustration; hub-tile-padding 16, floor-grid-gap-phone 12 at illustration scale).
+   EXPERIENCE.md — Foundation (Marketing site: static web, player mood), Information Architecture (Marketing site MVP pages), Voice and Tone (player register
+               for marketing; money formal), State Patterns (Media fallback: video → cover → solid bg), Accessibility Floor (links underlined, web SR baseline),
+               Key Flows Journey 1 step 1 (Get started).
+   PRD — Marketing site: Home row; promise "run your cafe offline, see it from anywhere, pay less than you do now"; Tiers.
+   Spacing map: header 80 · gutter 56 · hero → section and section → section 128 · h2 → content 56 · card grid gap 32 · card padding 32.
+   Hero title uses web-display 40/300 exactly; flagged [open] because the token reads small for a full-bleed hero.
+   PC-04: the order badge now sits in the tile's bottom row, so it no longer overlaps the "In session" status badge.
+   Media layer shown at its solid-bg fallback with a labelled placeholder; no invented art. Customer logos are a labelled placeholder. */
+:root{--bg:#09071a;--surface:#16122c;--surface2:#201a3d;--line:#362d5c;--bs:#8178b5;--text:#f5f2ff;--muted:#aca5cc;--accent:#ff4fa8;--onaccent:#1a0010;--ok:#5fe6a0;--warn:#ffbe3d;--onwarn:#1e1300;--danger:#ff5c5c;--info:#7fb2ff;--hbg:#0b0920;--hhead:#110e28;--tile:#141030;--hline:#2a2350;
+--s-free:#5fe6a0;--s-sess:#7fb2ff;--s-paused:#5c82bd;--s-res:#c8a2ff;--s-order:#ffbe3d;--s-maint:#8a85a8;--s-off:#ff5c5c;--s-un:#aca5cc;
+--font:Sora,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+--gutter:56px;--gutter-ph:16px;--sec:128px;--sec-ph:64px;--pad:32px;--pad-ph:24px;--head:80px;--head-ph:64px}
+*{box-sizing:border-box}
+html,body{margin:0;background:#050410;color:var(--text);font-family:var(--font);font-size:16px;line-height:1.5}
+.tnum{font-variant-numeric:tabular-nums}
+a{color:var(--text);text-decoration:underline;text-underline-offset:3px}
+.mock-title{max-width:1440px;margin:40px auto 16px;padding:0 4px;color:var(--muted);font-size:13px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+.mock-note{max-width:1440px;margin:0 auto 16px;padding:0 4px;color:var(--muted);font-size:13px}
+.browser{width:1440px;margin:0 auto 64px;border:1px solid #2a2350;border-radius:14px;overflow:hidden;background:var(--bg);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.chrome{height:44px;background:#1b1830;display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid #2a2350}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#3a3558;display:block}
+.url{flex:1;max-width:640px;height:28px;border-radius:8px;background:#0e0c1f;color:var(--muted);font-size:13px;display:flex;align-items:center;padding:0 12px}
+.phone{width:410px;margin:0 auto 64px;border:10px solid #1b1830;border-radius:44px;overflow:hidden;background:var(--bg);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:9999px;font-family:var(--font);font-weight:800;text-decoration:none;border:0;white-space:nowrap}
+.btn-primary{background:var(--accent);color:var(--onaccent);padding:16px 32px;font-size:18px}
+.btn-primary.lg{padding:24px 40px;font-size:24px}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--bs);padding:12px 24px;font-size:16px;font-weight:600}
+.is-focus{outline:2px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 4px var(--bg),0 0 0 6px var(--text)}
+.open{display:inline-block;font-size:12px;font-weight:600;color:var(--warn);border:1px dashed var(--warn);border-radius:6px;padding:4px 8px;line-height:1.4;font-family:var(--font)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px}
+.badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;background:var(--tile);line-height:1.2;white-space:nowrap}
+.label{font-size:13px;font-weight:500;color:var(--muted)}
+
+/* header — web-header-height 80, web-gutter 56 */
+.site-head{height:var(--head);display:flex;align-items:center;gap:56px;padding:0 var(--gutter);border-bottom:1px solid var(--line);background:var(--bg)}
+.wordmark{font-weight:800;font-size:20px;letter-spacing:.02em;text-decoration:none}
+.wordmark b{color:var(--accent)}
+.site-nav{display:flex;gap:40px;flex:1}
+.site-nav a{font-size:16px;font-weight:500}
+
+/* hero — copy zone = left 45% (648px) × bottom 50% (480px) of a 960px hero */
+.hero{position:relative;height:960px;overflow:hidden;background:var(--bg)}
+.media-ph{position:absolute;inset:0;border:2px dashed #2a2350;margin:16px;border-radius:16px;display:flex;align-items:flex-start;justify-content:center;padding:16px}
+.media-ph span{font-size:12px;color:var(--muted);font-weight:600}
+.scrim{position:absolute;inset:0;background:linear-gradient(0deg,rgba(10,8,22,.92) 0%,rgba(10,8,22,.15) 55%,rgba(10,8,22,.15) 100%),linear-gradient(90deg,rgba(10,8,22,.85) 0%,rgba(10,8,22,.75) 45%,rgba(10,8,22,0) 70%)}
+.hero-copy{position:absolute;left:var(--gutter);bottom:var(--gutter);width:592px}
+.eyebrow{font-size:16px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;margin:0 0 24px}
+.hero h1{font-size:40px;font-weight:300;line-height:1.15;margin:0 0 24px}
+.hero p.lede{font-size:16px;line-height:1.5;margin:0 0 40px;max-width:560px}
+.cta-row{display:flex;gap:16px;align-items:center}
+.fine{font-size:16px;margin:24px 0 0}
+.flag-row{margin-top:16px}
+
+/* floor-view illustration (staff-mood panel shown as product proof) */
+.illus{position:absolute;right:var(--gutter);top:var(--gutter);width:680px;margin:0;background:var(--hbg);border:1px solid var(--bs);border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.illus-head{height:56px;background:var(--hhead);border-bottom:1px solid var(--hline);display:flex;align-items:center;gap:16px;padding:0 24px;font-size:13px}
+.chip-rule{background:#3d0f2a;color:#ffa3d1;border-radius:9999px;padding:4px 12px;font-size:12px;font-weight:600}
+.illus-head .sp{flex:1}
+.zone{padding:24px 24px 12px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:0 24px}
+.grid.last{padding-bottom:24px}
+.ft{position:relative;background:var(--tile);border:1px solid var(--bs);border-radius:16px;min-height:128px;padding:16px;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:8px}
+.ft .top{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;font-weight:600;white-space:nowrap}
+.ft .bar{position:absolute;left:0;right:0;bottom:0;height:3px}
+.ft .t{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+.ft .bot{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ft .who{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ft.un{border:2px dashed var(--s-un)}
+.obadge{flex:none;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:4px 8px;line-height:1.2;background:var(--s-order);color:var(--tile)}
+
+/* sections — web-section-gap 128 between sections, card padding 32 */
+.section{padding:var(--sec) var(--gutter) 0}
+.section:last-of-type{padding-bottom:var(--sec)}
+.section h2{font-size:40px;font-weight:300;line-height:1.15;margin:0 0 56px}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:32px;list-style:none;margin:0;padding:0}
+.steps li{padding:var(--pad)}
+.stepn{font-size:16px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+.card h3{font-size:28px;font-weight:600;line-height:1.2;margin:0 0 16px}
+.card p{margin:0}
+.promise{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
+.promise .card{padding:var(--pad);display:flex;flex-direction:column;gap:16px}
+.promise .card h3{margin:0}
+.logos{display:flex;align-items:center;justify-content:center;height:128px;border:2px dashed #2a2350;border-radius:16px;color:var(--muted);font-weight:600}
+.closing{display:flex;align-items:center;justify-content:space-between;gap:32px}
+.closing h2{margin:0}
+.foot{padding:56px var(--gutter);border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:40px;font-size:14px;color:var(--muted)}
+.foot nav{display:flex;gap:24px;flex-wrap:wrap}
+
+/* phone — gutter 16, header 64, section gap 64, card padding 24 */
+.p-head{height:var(--head-ph);display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 var(--gutter-ph);border-bottom:1px solid var(--line)}
+.p-hero{padding:40px var(--gutter-ph) 0;background:var(--bg)}
+.p-hero .eyebrow{font-size:14px;margin-bottom:16px}
+.p-hero h1{font-size:40px;font-weight:300;line-height:1.15;margin:0 0 24px}
+.p-hero .lede{margin:0 0 32px}
+.p-hero .btn-primary{width:100%}
+.p-illus{margin:var(--sec-ph) var(--gutter-ph) 0;background:var(--hbg);border:1px solid var(--bs);border-radius:16px;overflow:hidden}
+.p-illus .zone{padding:16px 16px 12px}
+.p-illus .grid{grid-template-columns:repeat(2,1fr);padding:0 16px 16px}
+.p-sec{padding:var(--sec-ph) var(--gutter-ph) 0}
+.p-sec.last{padding-bottom:var(--sec-ph)}
+.p-sec h2{font-size:40px;font-weight:300;line-height:1.15;margin:0 0 32px}
+.p-sec .steps,.p-sec .promise{grid-template-columns:1fr;gap:16px}
+.p-sec .card{padding:var(--pad-ph)}
+.p-sec .card h3{font-size:28px;margin-bottom:12px}
+.p-sec .promise .card{gap:12px}
+.p-sec .promise .card h3{margin:0}
+</style></head>
+<body>
+
+<div class="mock-title">Marketing site · Home · 1440 desktop</div>
+<div class="mock-note">Player mood. Hero copy kept inside the scrim copy zone (left 45% × bottom 50%). Media layer shown at solid-bg fallback. Focus shown on “Get started”. Spacing: header 80 · gutter 56 · section gap 128 · card padding 32.</div>
+
+<div class="browser">
+  <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360 [domain open] /</div></div>
+
+  <header class="site-head">
+    <a class="wordmark" href="#">Arena <b>360</b></a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="#">Product</a><a href="#">Pricing</a><a href="#">Downloads</a><a href="#">Help</a><a href="#">FAQ</a>
+    </nav>
+    <a class="btn btn-secondary" href="#">Get started</a>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="h1">
+      <div class="media-ph" aria-hidden="true"><span>[background game video, muted · fallback: still cover → solid bg]</span></div>
+      <div class="scrim" aria-hidden="true"></div>
+
+      <figure class="illus" aria-label="Illustration: the Hub floor view showing PCs and a console with their live states">
+        <div class="illus-head" aria-hidden="true"><b>Floor view</b><span class="chip-rule">Happy hour · ₹40/h</span><span class="sp"></span><span class="label">Last backup 2 min ago</span><span class="tnum">18:42</span></div>
+        <div class="zone" aria-hidden="true">Pro PCs</div>
+        <div class="grid" aria-hidden="true">
+          <div class="ft"><div class="top">PC-01 <span class="badge" style="color:var(--s-free)">Free</span></div><div class="t">₹60/h</div><div class="bot"><span class="who">Pro group</span></div><span class="bar" style="background:var(--s-free)"></span></div>
+          <div class="ft"><div class="top">PC-02 <span class="badge" style="color:var(--s-sess)">In session</span></div><div class="t">1:12:40</div><div class="bot"><span class="who">Aman · prepaid</span></div><span class="bar" style="background:var(--s-sess)"></span></div>
+          <div class="ft"><div class="top">PC-03 <span class="badge" style="color:var(--s-paused)">❚❚ Paused</span></div><div class="t" style="color:var(--muted)">0:38:05</div><div class="bot"><span class="who">Karan · credit</span></div><span class="bar" style="background:var(--s-paused)"></span></div>
+          <div class="ft"><div class="top">PC-04 <span class="badge" style="color:var(--s-sess)">In session</span></div><div class="t">0:21:17</div><div class="bot"><span class="who">Guest · postpaid</span><span class="obadge">Order</span></div><span class="bar" style="background:var(--s-sess)"></span></div>
+          <div class="ft"><div class="top">PC-05 <span class="badge" style="color:var(--s-res)">Reserved</span></div><div class="t" style="font-size:18px">19:00</div><div class="bot"><span class="who">For Rahul</span></div><span class="bar" style="background:var(--s-res)"></span></div>
+          <div class="ft un"><div class="top">PC-06 <span class="badge" style="color:var(--s-un)">Unassigned</span></div><div class="t" style="font-size:18px">New PC</div><div class="bot"><span class="who">Drag into a group</span></div></div>
+        </div>
+        <div class="zone" aria-hidden="true">Consoles</div>
+        <div class="grid last" aria-hidden="true">
+          <div class="ft"><div class="top">🎮 PS5 <span class="badge" style="color:var(--s-sess)">In session</span></div><div class="t">0:47:52</div><div class="bot"><span class="who">TV 3</span></div><span class="bar" style="background:var(--s-sess)"></span></div>
+          <div class="ft"><div class="top">🎮 PS5 <span class="badge" style="color:var(--s-free)">Free</span></div><div class="t">₹120/h</div><div class="bot"><span class="who">TV 4</span></div><span class="bar" style="background:var(--s-free)"></span></div>
+          <div class="ft"><div class="top">🎮 Xbox <span class="badge" style="color:var(--s-off)">Offline</span></div><div class="t" style="font-size:18px">—</div><div class="bot"><span class="who">TV 5 · last seen 18:10</span></div><span class="bar" style="background:var(--s-off)"></span></div>
+        </div>
+      </figure>
+
+      <div class="hero-copy">
+        <p class="eyebrow">Gaming café management</p>
+        <h1 id="h1">Run your café offline. See it from anywhere. Pay less than you do now.</h1>
+        <p class="lede">One Hub on your counter runs every gaming PC, console, sale and shift over your café’s own network. When the internet drops, the floor keeps going.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary lg is-focus" href="#">Get started</a>
+          <a class="btn btn-secondary" href="#">See pricing</a>
+        </div>
+        <p class="fine">Free for one branch. No card needed.</p>
+        <div class="flag-row"><span class="open">[open: hero h1 set to web-display 40/300 per token — reads small for a full-bleed 1440 hero; propose a web-hero token (e.g. 64/200) or confirm 40]</span></div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="how">
+      <h2 id="how">Install. Pair. Play.</h2>
+      <ol class="steps">
+        <li class="card"><div class="stepn">Step 1</div><h3>Install</h3><p>Install the Hub on your counter PC. On the Free plan it runs on an Android tablet or phone.</p></li>
+        <li class="card"><div class="stepn">Step 2</div><h3>Pair</h3><p>Type one code from the setup wizard into the Hub. Each gaming PC then pairs with a 6-digit code shown on the Hub.</p></li>
+        <li class="card"><div class="stepn">Step 3</div><h3>Play</h3><p>Start a 2-minute test session and watch the PC lock right on time. That’s your floor, live.</p></li>
+      </ol>
+    </section>
+
+    <section class="section" aria-labelledby="why">
+      <h2 id="why">What you get</h2>
+      <div class="promise">
+        <div class="card"><h3>Run your café offline</h3><p>Sessions, sales, shifts and reports keep working with the internet down. Cloud features queue and catch up when it’s back.</p></div>
+        <div class="card"><h3>See it from anywhere</h3><p>The Owner app shows every branch on your phone or desktop: sessions live, revenue so far, cash in the drawer. On Basic and Premium.</p><a href="#">How the Owner app works</a></div>
+        <div class="card"><h3>Pay less than you do now</h3><p class="tnum">Free for one branch, supported by ads. Basic ₹200 and Premium ₹1,999 per branch per month.</p><a href="#">Compare plans</a></div>
+      </div>
+    </section>
+
+    <section class="section" aria-label="Cafés using Arena 360">
+      <div class="logos">[customer logos]</div>
+    </section>
+
+    <section class="section closing" aria-labelledby="cta2">
+      <h2 id="cta2">Set up your first branch.</h2>
+      <a class="btn btn-secondary" href="#">Get started</a>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Arena 360</span>
+    <nav aria-label="Footer"><a href="#">Product</a><a href="#">Pricing</a><a href="#">Downloads</a><a href="#">Help centre</a><a href="#">FAQ</a><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Data processing</a><a href="#">Ad policy</a></nav>
+  </footer>
+</div>
+
+<div class="mock-title" style="max-width:410px">Marketing site · Home · 390 phone</div>
+<div class="mock-note" style="max-width:410px">Gutter 16 · header 64 · section gap 64 · card padding 24. Hero h1 at web-display 40/300 (no phone size defined).</div>
+<div class="phone">
+  <header class="p-head">
+    <a class="wordmark" href="#">Arena <b>360</b></a>
+    <span class="open">[open: mobile site nav pattern]</span>
+  </header>
+  <main>
+    <section class="p-hero" aria-labelledby="ph1">
+      <p class="eyebrow">Gaming café management</p>
+      <h1 id="ph1">Run your café offline. See it from anywhere. Pay less than you do now.</h1>
+      <p class="lede">One Hub on your counter runs every gaming PC, console, sale and shift over your café’s own network. When the internet drops, the floor keeps going.</p>
+      <a class="btn btn-primary" href="#">Get started</a>
+      <p class="fine">Free for one branch. No card needed. <a href="#">See pricing</a></p>
+    </section>
+    <figure class="p-illus" aria-label="Illustration: the Hub floor view">
+      <div class="zone" aria-hidden="true">Pro PCs</div>
+      <div class="grid" aria-hidden="true">
+        <div class="ft"><div class="top">PC-01 <span class="badge" style="color:var(--s-free)">Free</span></div><div class="t">₹60/h</div><span class="bar" style="background:var(--s-free)"></span></div>
+        <div class="ft"><div class="top">PC-02 <span class="badge" style="color:var(--s-sess)">Live</span></div><div class="t">1:12:40</div><span class="bar" style="background:var(--s-sess)"></span></div>
+        <div class="ft"><div class="top">PC-03 <span class="badge" style="color:var(--s-paused)">❚❚ Paused</span></div><div class="t" style="color:var(--muted)">0:38:05</div><span class="bar" style="background:var(--s-paused)"></span></div>
+        <div class="ft"><div class="top">🎮 PS5 <span class="badge" style="color:var(--s-sess)">Live</span></div><div class="t">0:47:52</div><span class="bar" style="background:var(--s-sess)"></span></div>
+      </div>
+    </figure>
+    <section class="p-sec" aria-labelledby="phow">
+      <h2 id="phow">Install. Pair. Play.</h2>
+      <ol class="steps">
+        <li class="card"><div class="stepn">Step 1</div><h3>Install</h3><p>Install the Hub on your counter PC. On the Free plan it runs on an Android tablet or phone.</p></li>
+        <li class="card"><div class="stepn">Step 2</div><h3>Pair</h3><p>Type one code from the setup wizard into the Hub. Each gaming PC then pairs with a 6-digit code shown on the Hub.</p></li>
+        <li class="card"><div class="stepn">Step 3</div><h3>Play</h3><p>Start a 2-minute test session and watch the PC lock right on time.</p></li>
+      </ol>
+    </section>
+    <section class="p-sec" aria-labelledby="pwhy">
+      <h2 id="pwhy">What you get</h2>
+      <div class="promise">
+        <div class="card"><h3>Run your café offline</h3><p>Sessions, sales, shifts and reports keep working with the internet down.</p></div>
+        <div class="card"><h3>See it from anywhere</h3><p>Every branch on your phone. On Basic and Premium.</p></div>
+        <div class="card"><h3>Pay less than you do now</h3><p class="tnum">Free for one branch. Basic ₹200, Premium ₹1,999 per branch per month.</p><a href="#">Compare plans</a></div>
+      </div>
+    </section>
+    <section class="p-sec last"><div class="logos" style="height:96px">[customer logos]</div></section>
+  </main>
+</div>
+</body></html>

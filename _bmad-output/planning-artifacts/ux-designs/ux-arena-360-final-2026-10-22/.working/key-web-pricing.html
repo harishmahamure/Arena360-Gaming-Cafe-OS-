@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arena 360 — Pricing (key screen)</title>
+<style>
+/* KEY SCREEN — Marketing site Pricing, Cafés and Partners tabs (Player mood shell; money copy formal). 1440 browser, two states. Re-rendered 2026-10-23 for AIRY/premium spacing.
+   Governing spine sections:
+   DESIGN.md — Colors (one accent; links underlined), Typography (web-display 40/300 page + section titles; web-body 16/400; kiosk-headline 48/300 for prices;
+               kiosk-title 28/600 tier names; hub-title 18/600 small card titles; tabular ₹), Layout & Spacing (Web: marketing row — web-gutter 56,
+               web-section-gap 128, web-card-padding 32, web-header-height 80), Components: tab-control (Cafés · Partners), card, plan-picker
+               (selected = 2px text border; used for tier cards), button-primary (one per view), button-secondary, focus-ring.
+   EXPERIENCE.md — Information Architecture (Marketing: Pricing with tab-control Cafés · Partners), Component Patterns: tab-control (ARIA tabs; arrow keys;
+               [ASSUMPTION] selected tab reflected in URL), Voice and Tone (money/legal formal), Tier Gating in UI, Accessibility Floor (links underlined; landmarks; one h1),
+               Open Questions 2–7 (GST display, yearly billing, add-on prices, cancellation/refunds, partner payouts, partner application fields).
+   PRD — Marketing Pricing row; Tiers and ads table (adjusted by spine overrides); Add-ons; Partner program (10% monthly, non-exclusive leads).
+   Spacing map: header 80 · gutter 56 · page top/bottom 128 · section → section 128 · title → content 40 · tab-control → tiers 56 · card grid gap 32 · card padding 32
+               · table cell 16/24. */
+:root{--bg:#09071a;--surface:#16122c;--surface2:#201a3d;--line:#362d5c;--bs:#8178b5;--text:#f5f2ff;--muted:#aca5cc;--accent:#ff4fa8;--onaccent:#1a0010;--ok:#5fe6a0;--warn:#ffbe3d;--onwarn:#1e1300;--danger:#ff5c5c;--info:#7fb2ff;--hbg:#0b0920;--hhead:#110e28;--tile:#141030;--hline:#2a2350;
+--s-free:#5fe6a0;--s-sess:#7fb2ff;--s-paused:#5c82bd;--s-res:#c8a2ff;--s-order:#ffbe3d;--s-maint:#8a85a8;--s-off:#ff5c5c;--s-un:#aca5cc;
+--font:Sora,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+/* web spacing tokens (DESIGN.md spacing.web-*) */
+--gutter:56px;--sec:128px;--app-sec:56px;--pad:32px;--head:80px}
+*{box-sizing:border-box}
+html,body{margin:0;background:#050410;color:var(--text);font-family:var(--font);font-size:16px;line-height:1.5}
+.tnum{font-variant-numeric:tabular-nums}
+a{color:var(--text);text-decoration:underline;text-underline-offset:3px}
+.mock-title{max-width:1440px;margin:40px auto 16px;padding:0 4px;color:var(--muted);font-size:13px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+.mock-note{max-width:1440px;margin:0 auto 16px;padding:0 4px;color:var(--muted);font-size:13px}
+.browser{width:1440px;margin:0 auto 64px;border:1px solid #2a2350;border-radius:14px;overflow:hidden;background:var(--bg);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.chrome{height:44px;background:#1b1830;display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid #2a2350}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#3a3558;display:block}
+.url{flex:1;max-width:640px;height:28px;border-radius:8px;background:#0e0c1f;color:var(--muted);font-size:13px;display:flex;align-items:center;padding:0 12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:9999px;font-family:var(--font);font-weight:800;text-decoration:none;border:0;white-space:nowrap}
+.btn-primary{background:var(--accent);color:var(--onaccent);padding:16px 32px;font-size:18px}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--bs);padding:12px 24px;font-size:16px;font-weight:600}
+.is-focus{outline:2px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 4px var(--bg),0 0 0 6px var(--text)}
+.open{display:inline-block;font-size:12px;font-weight:600;color:var(--warn);border:1px dashed var(--warn);border-radius:6px;padding:4px 8px;line-height:1.4;font-family:var(--font)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px}
+.badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;background:var(--tile);line-height:1.2;white-space:nowrap}
+.label{font-size:13px;font-weight:500;color:var(--muted)}
+.micro{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.numeric{font-size:26px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.sr{position:absolute;left:-9999px}
+
+/* header — web-header-height 80, web-gutter 56 */
+.site-head{height:var(--head);display:flex;align-items:center;gap:56px;padding:0 var(--gutter);border-bottom:1px solid var(--line)}
+.wordmark{font-weight:800;font-size:20px;letter-spacing:.02em;text-decoration:none}.wordmark b{color:var(--accent)}
+.site-nav{display:flex;gap:40px;flex:1}.site-nav a{font-size:16px;font-weight:500}.site-nav a[aria-current]{font-weight:800}
+.wrap{padding:var(--sec) var(--gutter)}
+h1{font-size:40px;font-weight:300;line-height:1.15;margin:0 0 16px}
+.sub{color:var(--muted);margin:0 0 40px;max-width:720px}
+/* tab-control — surface track, line border, 4px inset, items ≥44 tall with 0 24 padding, selected = text fill + bg ink */
+.tab-control{display:inline-flex;gap:4px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:9999px}
+.tab-control a{min-height:44px;display:flex;align-items:center;padding:0 24px;border-radius:9999px;text-decoration:none;font-weight:600;font-size:16px;color:var(--muted)}
+.tab-control a[aria-selected=true]{background:var(--text);color:var(--bg)}
+.tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:32px;margin:56px 0 32px}
+.tier{padding:var(--pad);display:flex;flex-direction:column;gap:24px}
+.tier.sel{border:2px solid var(--text);padding:31px}
+.tier h2{font-size:28px;font-weight:600;line-height:1.2;margin:0}
+.price{font-size:48px;font-weight:300;line-height:1;font-variant-numeric:tabular-nums}
+.per{font-size:14px;color:var(--muted)}
+.tier ul{margin:0;padding:0 0 0 20px;display:flex;flex-direction:column;gap:12px}
+.tier .btn{margin-top:auto;align-self:flex-start}
+.notes{display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:14px;color:var(--muted)}
+h2.sec{font-size:40px;font-weight:300;line-height:1.15;margin:var(--sec) 0 40px}
+table{width:100%;border-collapse:collapse;font-size:15px}
+caption{text-align:left;color:var(--muted);font-size:13px;padding-bottom:16px}
+th,td{padding:16px 24px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+thead th{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--surface)}
+thead th:first-child{border-top-left-radius:16px}thead th:last-child{border-top-right-radius:16px}
+td.c,th.c{text-align:center;width:22%}
+tbody th{font-weight:400}
+.yes{color:var(--ok);font-weight:700}.no{color:var(--muted)}
+.grp td,.grp th{background:var(--bg);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:40px}
+.after-table{margin:24px 0 0}
+.addons{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
+.addons .card,.faq .card{padding:var(--pad);display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.addons h3,.faq h3{margin:0;font-size:18px;font-weight:600}.addons p,.faq p{margin:0}
+.faq{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+.foot{padding:56px var(--gutter);border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:14px;color:var(--muted)}
+.foot nav{display:flex;gap:24px}
+.partner{display:grid;grid-template-columns:1.3fr 1fr;gap:32px;margin-top:56px;align-items:start}
+.partner .card{padding:var(--pad)}
+.partner h2.sec{margin:0 0 32px}
+.partner dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:24px 40px}
+.partner dt{color:var(--muted);font-size:14px}.partner dd{margin:0}
+.example{font-variant-numeric:tabular-nums}
+.example td,.example th{padding:16px 0;border-bottom:1px solid var(--line)}
+.example td:last-child{text-align:right}
+</style></head>
+<body>
+
+<div class="mock-title">Pricing · state A · “Cafés” tab (default)</div>
+<div class="mock-note">Tab switch uses tab-control. Tier cards follow plan-picker anatomy with Basic shown selected (2px text border) to illustrate the treatment; the page does not pre-select a tier [open: pricing page default emphasis]. Focus shown on “Choose Basic”.</div>
+
+<div class="browser">
+  <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360 [domain open] /pricing</div></div>
+  <header class="site-head">
+    <a class="wordmark" href="#">Arena <b>360</b></a>
+    <nav class="site-nav" aria-label="Main"><a href="#">Product</a><a href="#" aria-current="page">Pricing</a><a href="#">Downloads</a><a href="#">Help</a><a href="#">FAQ</a></nav>
+    <a class="btn btn-secondary" href="#">Get started</a>
+  </header>
+  <main class="wrap">
+    <h1>Pricing</h1>
+    <p class="sub">Each branch is billed separately, per month. Every plan runs your café offline.</p>
+    <div class="tab-control" role="tablist" aria-label="Pricing for">
+      <a role="tab" aria-selected="true" href="#">Cafés</a><a role="tab" aria-selected="false" tabindex="-1" href="#">Partners</a>
+    </div>
+
+    <div class="tiers">
+      <section class="card tier" aria-labelledby="t-free">
+        <h2 id="t-free">Free</h2>
+        <div><span class="price">₹0</span> <span class="per">per branch per month</span></div>
+        <p style="margin:0">One branch, supported by advertising. No card required.</p>
+        <ul><li>Hub on an Android tablet or phone</li><li>Up to 20 devices and 3 users</li><li>POS, inventory, shifts and GST invoices</li><li>Advertising on the Hub banner</li></ul>
+        <a class="btn btn-secondary" href="#">Choose Free</a>
+      </section>
+      <section class="card tier sel" aria-labelledby="t-basic">
+        <h2 id="t-basic">Basic</h2>
+        <div><span class="price">₹200</span> <span class="per">per branch per month</span></div>
+        <p style="margin:0">Removes advertising and adds the cloud.</p>
+        <ul><li>Hub on Windows PC or Android</li><li>Up to 60 devices, unlimited users</li><li>Kiosk food orders and kitchen display</li><li>Owner app, cloud backup, multi-branch</li></ul>
+        <a class="btn btn-secondary is-focus" href="#">Choose Basic</a>
+      </section>
+      <section class="card tier" aria-labelledby="t-prem">
+        <h2 id="t-prem">Premium</h2>
+        <div><span class="price">₹1,999</span> <span class="per">per branch per month</span></div>
+        <p style="margin:0">Adds resilience and remote access.</p>
+        <ul><li>Up to 200 devices</li><li>Live owner view of the floor</li><li>Off-site standby and remote devices</li><li>1-minute cloud backup, 3-year retention</li></ul>
+        <a class="btn btn-secondary" href="#">Choose Premium</a>
+      </section>
+    </div>
+    <div class="notes">
+      <span>Prices shown in Indian rupees (₹) for India.</span>
+      <span class="open">[open: whether prices are inclusive or exclusive of GST]</span>
+      <span class="open">[open: yearly discount amount]</span>
+      <span class="open">[open: single primary CTA for this view]</span>
+    </div>
+
+    <h2 class="sec">Compare plans</h2>
+    <table>
+      <caption>Plan comparison. Prices and limits apply per branch.</caption>
+      <thead><tr><th scope="col">Capability</th><th scope="col" class="c">Free</th><th scope="col" class="c">Basic</th><th scope="col" class="c">Premium</th></tr></thead>
+      <tbody>
+        <tr class="grp"><th scope="rowgroup" colspan="4">Run the branch</th></tr>
+        <tr><th scope="row">Hub: sessions, players, plans, devices, groups, dynamic pricing</th><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Hub runs on</th><td class="c">Android tablet or phone</td><td class="c">Windows PC or Android</td><td class="c">Windows PC or Android</td></tr>
+        <tr><th scope="row">POS, inventory, waste, expiry, shifts, expenses, GST invoices</th><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Kiosk app, lockdown, in-game overlay, game library</th><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Food and drink orders from the kiosk</th><td class="c no">—<span class="sr">Not included; orders at the counter</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Kitchen order tickets and kitchen display</th><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Consoles as timed devices</th><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Branch users</th><td class="c tnum">3</td><td class="c">Unlimited</td><td class="c">Unlimited</td></tr>
+        <tr><th scope="row">Maximum devices</th><td class="c tnum">20</td><td class="c tnum">60</td><td class="c tnum">200</td></tr>
+        <tr><th scope="row">Local reports and CSV export</th><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr class="grp"><th scope="rowgroup" colspan="4">Cloud and owner</th></tr>
+        <tr><th scope="row">Backup</th><td class="c">Manual export</td><td class="c">Cloud, 5-minute batches, 1-year retention</td><td class="c">Cloud, 1-minute batches, 3-year retention</td></tr>
+        <tr><th scope="row">Owner app dashboards, alerts, exports</th><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Remote price and staff changes from the Owner app</th><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Multi-branch</th><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Scheduled reports</th><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Live owner view</th><td class="c no">—<span class="sr">Not included</span></td><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr class="grp"><th scope="rowgroup" colspan="4">Resilience</th></tr>
+        <tr><th scope="row">Standby Hub on the café network</th><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Remote devices via Tunnel</th><td class="c no">—<span class="sr">Not included</span></td><td class="c">Add-on</td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr><th scope="row">Off-site standby</th><td class="c no">—<span class="sr">Not included</span></td><td class="c no">—<span class="sr">Not included</span></td><td class="c yes">✓<span class="sr">Included</span></td></tr>
+        <tr class="grp"><th scope="rowgroup" colspan="4">Advertising and support</th></tr>
+        <tr><th scope="row">Advertising on the Hub banner</th><td class="c">Yes</td><td class="c">None</td><td class="c">None</td></tr>
+        <tr><th scope="row">Rewarded advertisements (café sets the reward)</th><td class="c">Optional</td><td class="c no">—<span class="sr">Not included</span></td><td class="c no">—<span class="sr">Not included</span></td></tr>
+        <tr><th scope="row">Support</th><td class="c">Community and help centre</td><td class="c">Email, response within 24 hours</td><td class="c">Chat, response within 4 hours</td></tr>
+      </tbody>
+    </table>
+    <p class="label after-table">No advertising is shown on a player’s screen during a paid session, on any plan.</p>
+
+    <h2 class="sec">Add-ons</h2>
+    <div class="addons">
+      <div class="card"><h3>Extra devices</h3><p>In blocks of 20 devices, on any plan.</p><span class="open">[open: add-on price]</span></div>
+      <div class="card"><h3>Tunnel for remote devices</h3><p>Available as an add-on on Basic. Included in Premium.</p><span class="open">[open: add-on price]</span></div>
+      <div class="card"><h3>Additional owner logins</h3><p>On any plan.</p><span class="open">[open: add-on price]</span></div>
+    </div>
+
+    <h2 class="sec">Frequently asked questions</h2>
+    <div class="faq">
+      <div class="card"><h3>What happens when the internet is down?</h3><p>Every Hub and kiosk feature continues to work on the café network. Cloud features queue and resume when the connection returns.</p></div>
+      <div class="card"><h3>What happens if I cancel?</h3><p><span class="open">[open: cancellation and refund terms]</span></p></div>
+      <div class="card"><h3>Who owns my data?</h3><p>You may export the full branch database and all reports at any time, including on the Free plan.</p></div>
+      <div class="card"><h3>Can I change plans later?</h3><p>Upgrades and downgrades take effect mid-cycle and are prorated. Upgrading from Free removes advertising within one sync with the cloud.</p></div>
+    </div>
+  </main>
+  <footer class="foot"><span>Arena 360</span><nav aria-label="Footer"><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Data processing</a><a href="#">Ad policy</a></nav></footer>
+</div>
+
+<div class="mock-title">Pricing · state B · “Partners” tab</div>
+<div class="mock-note">Partner program at launch lives on this tab (PRD). Apply is the one primary action in this view. Focus shown on the Partners tab.</div>
+<div class="browser">
+  <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360 [domain open] /pricing#partners</div></div>
+  <header class="site-head">
+    <a class="wordmark" href="#">Arena <b>360</b></a>
+    <nav class="site-nav" aria-label="Main"><a href="#">Product</a><a href="#" aria-current="page">Pricing</a><a href="#">Downloads</a><a href="#">Help</a><a href="#">FAQ</a></nav>
+    <a class="btn btn-secondary" href="#">Get started</a>
+  </header>
+  <main class="wrap">
+    <h1>Pricing</h1>
+    <p class="sub">For resellers and installers who set up Arena 360 for cafés.</p>
+    <div class="tab-control" role="tablist" aria-label="Pricing for">
+      <a role="tab" aria-selected="false" tabindex="-1" href="#">Cafés</a><a role="tab" aria-selected="true" class="is-focus" href="#">Partners</a>
+    </div>
+    <div class="partner">
+      <section class="card" aria-labelledby="pp">
+        <h2 id="pp" class="sec">Partner program</h2>
+        <dl>
+          <dt>Commission</dt><dd>10% of the subscription revenue of each café you refer, for every month that café remains active and paying.</dd>
+          <dt>Calculation</dt><dd>Calculated monthly. Your partner portal lists each referred café and its payout.</dd>
+          <dt>Territory</dt><dd>Leads are not exclusive by territory.</dd>
+          <dt>How referrals count</dt><dd>A café counts as yours when it signs up with your referral link or code.</dd>
+        </dl>
+        <p style="margin:40px 0 0"><a class="btn btn-primary" href="#">Apply to become a partner</a></p>
+        <p class="label" style="margin:16px 0 0">Applications are reviewed before access to the partner portal is granted. <span class="open">[open: application form fields and approval notification]</span></p>
+      </section>
+      <aside class="card" aria-labelledby="ex">
+        <h3 id="ex" style="margin:0 0 24px;font-size:18px;font-weight:600">Illustration of the calculation</h3>
+        <table class="example">
+          <tr><th scope="row">Referred café, 2 branches on Basic</th><td>₹400.00</td></tr>
+          <tr><th scope="row">Commission rate</th><td>10%</td></tr>
+          <tr><th scope="row"><b>Monthly payout</b></th><td><b>₹40.00</b></td></tr>
+        </table>
+        <p class="label" style="margin:24px 0 0">Illustrative only. <span class="open">[open: payout method, schedule, and tax treatment]</span></p>
+      </aside>
+    </div>
+  </main>
+</div>
+</body></html>

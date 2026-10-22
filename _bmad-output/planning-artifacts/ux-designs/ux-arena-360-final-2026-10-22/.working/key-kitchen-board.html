@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen Board</title>
+<style>
+/*
+  KEY SCREEN — Kitchen display board, LAN tablet landscape 1280×800 (Sunita, Koregaon Park)
+  Governing spine sections:
+    DESIGN.md  — Layout & Spacing (AIRY posture; Kitchen row: gutter 24, column gap 24, ticket padding 16, ticket gap 16, header 64; tablet landscape, four status columns New → Preparing → Ready → Served, tickets newest-first);
+                 Components: kitchen-ticket (hub-tile, border-strong, seat in hub-numeric, items + modifiers, order id, elapsed tabular,
+                 "NEW" alert-badge until advanced, Ready = state-free edge + "READY" tag), alert-badge, undo-toast (Kitchen: bottom of screen);
+                 Colors (hub-bg / hub-header / hub-tile / hub-line, state-free), Typography (hub-* ramp; nothing below 11px), Elevation (staff: no shadows)
+    EXPERIENCE — IA (Kitchen display single screen); Component Patterns: kitchen-ticket, undo-toast, alert-badge;
+                 Interaction Primitives (one tap + Undo; Kitchen chimes on each new order; every sound has a persistent alert-badge twin);
+                 State Patterns (Empty kitchen column = header only; LAN loss = open); Key Flows Journey 4 steps 4–5; Accessibility (live region for new tickets)
+*/
+:root{
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;--surface-2:#201A3D;--border-strong:#8178B5;
+  --text:#F5F2FF;--muted:#ACA5CC;--accent:#FF4FA8;--danger:#FF5C5C;--on-danger:#1A0505;--free:#5FE6A0;--warning:#FFBE3D;
+  /* kitchen spacing tokens */
+  --kitchen-gutter:24px;--kitchen-column-gap:24px;--kitchen-ticket-padding:16px;--kitchen-ticket-gap:16px;--kitchen-header-height:64px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#05040f;color:var(--text);font-family:Sora,"Sora Variable",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:56px 40px 80px;-webkit-font-smoothing:antialiased}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+
+/* ── presentation page (not product UI) ── */
+.page-h{max-width:1300px;margin:0 auto 40px}
+.page-h h1{font-weight:300;font-size:32px;letter-spacing:-.01em}
+.page-h p{color:var(--muted);font-size:15px;margin-top:8px;line-height:1.6;max-width:960px}
+.cap{max-width:1300px;margin:0 auto 16px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.tablet{width:1300px;margin:0 auto;border-radius:32px;border:10px solid #000;outline:1px solid var(--hub-line)}
+.open{display:block;font-size:12px;line-height:1.5;color:var(--warning);border:1px dashed var(--warning);border-radius:6px;padding:8px 12px;margin-top:16px}
+.ann{max-width:1300px;margin:56px auto 0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.ann div{border:1px solid var(--hub-line);border-radius:16px;padding:24px;font-size:13px;line-height:1.65;color:var(--muted)}
+.ann b{color:var(--text);display:block;margin-bottom:8px;font-weight:600;font-size:14px}
+
+/* ── product UI: 1280×800 ── */
+.screen{width:1280px;height:800px;background:var(--hub-bg);position:relative;overflow:hidden;display:flex;flex-direction:column;border-radius:22px}
+.bar{height:var(--kitchen-header-height);background:var(--hub-header);border-bottom:1px solid var(--hub-line);display:flex;align-items:center;gap:16px;padding:0 var(--kitchen-gutter);flex:none}
+.bar .t{font-size:18px;font-weight:600}
+.bar .m{font-size:13px;font-weight:500;color:var(--muted)}
+.bar .r{margin-left:auto;display:flex;gap:24px;align-items:center}
+.cols{flex:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--kitchen-column-gap);padding:var(--kitchen-gutter) var(--kitchen-gutter) 128px;min-height:0}
+.col{display:flex;flex-direction:column;min-height:0}
+.col-h{display:flex;align-items:baseline;gap:8px;padding:0 4px 16px;border-bottom:1px solid var(--hub-line);margin-bottom:var(--kitchen-ticket-gap)}
+.col-h h2{font-size:18px;font-weight:600}
+.col-h .c{font-size:13px;color:var(--muted)}
+.stack{display:flex;flex-direction:column;gap:var(--kitchen-ticket-gap);overflow:hidden;padding:4px;margin:-4px}
+.alert-badge{background:var(--danger);color:var(--on-danger);border-radius:9999px;font-size:11px;font-weight:700;letter-spacing:.06em;padding:4px 8px;text-transform:uppercase;white-space:nowrap;line-height:1.2}
+
+/* kitchen-ticket */
+.tk{background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:16px;padding:var(--kitchen-ticket-padding);min-height:44px;position:relative}
+.tk .h{display:flex;align-items:center;gap:8px}
+.tk .seat{font-size:26px;font-weight:800;line-height:1.15}
+.tk .age{margin-left:auto;font-size:15px;font-weight:600}
+.tk ul{list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:8px}
+.tk li{font-size:15px;line-height:1.45}
+.tk li .q{font-weight:700;margin-right:8px}
+.tk li .mod{display:block;font-size:13px;color:var(--muted);padding-left:24px}
+.tk .id{font-size:13px;font-weight:500;color:var(--muted);margin-top:16px;padding-top:12px;border-top:1px solid var(--hub-line);display:flex;justify-content:space-between}
+.tk.new{border:2px solid var(--danger);padding:15px}
+.tk.ready{border:2px solid var(--free);border-left-width:6px;padding:15px 15px 15px 11px}
+.tag-ready{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--free);border:1px solid var(--free);border-radius:6px;padding:4px 8px;background:var(--hub-tile);line-height:1.2}
+.tk.served .seat,.tk.served li{color:var(--muted)}
+.focus{outline:2px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 6px var(--text)}
+
+/* undo-toast */
+.undo{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:16px;display:flex;align-items:center;gap:24px;padding:16px 16px 16px 24px;font-size:15px;min-width:560px}
+.undo a{margin-left:auto;color:var(--accent);font-weight:700;text-decoration:underline;text-underline-offset:3px;min-height:44px;min-width:96px;display:inline-flex;align-items:center;justify-content:center}
+.undo .tm{font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="page-h">
+  <h1>Kitchen display · Koregaon Park</h1>
+  <p>Sunita’s LAN tablet at 8:41 pm. A new order from PC 07 has just chimed and is held with a “NEW” badge; she has just moved PC 12 to Preparing, so Undo is showing.</p>
+</header>
+
+<div class="cap">LAN tablet · 1280 × 800 landscape · rendered 1:1</div>
+<div class="tablet"><div class="screen" role="main">
+  <div class="bar">
+    <span class="t">Kitchen</span><span class="m">Koregaon Park</span>
+    <div class="r">
+      <span class="m num">8:41 pm</span>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- NEW -->
+    <section class="col" aria-labelledby="c-new">
+      <div class="col-h"><h2 id="c-new">New</h2><span class="c num">2</span></div>
+      <div class="stack" aria-live="polite">
+        <article class="tk new focus" aria-label="PC 07, new order">
+          <div class="h"><span class="seat num">PC 07</span><span class="alert-badge">New</span><span class="age num">0:42</span></div>
+          <ul>
+            <li><span class="q num">1×</span>Masala Maggi<span class="mod">Extra spicy</span></li>
+            <li><span class="q num">1×</span>Cold coffee<span class="mod">Less sugar</span></li>
+          </ul>
+          <div class="id"><span class="num">#K-2043</span><span>Aman</span></div>
+        </article>
+        <article class="tk new" aria-label="PC 15, new order">
+          <div class="h"><span class="seat num">PC 15</span><span class="alert-badge">New</span><span class="age num">2:18</span></div>
+          <ul>
+            <li><span class="q num">2×</span>Veg sandwich</li>
+          </ul>
+          <div class="id"><span class="num">#K-2042</span><span>Guest</span></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- PREPARING -->
+    <section class="col" aria-labelledby="c-prep">
+      <div class="col-h"><h2 id="c-prep">Preparing</h2><span class="c num">2</span></div>
+      <div class="stack">
+        <article class="tk" aria-label="PC 12, preparing">
+          <div class="h"><span class="seat num">PC 12</span><span class="age num">4:10</span></div>
+          <ul>
+            <li><span class="q num">1×</span>Veg sandwich<span class="mod">No onion</span></li>
+            <li><span class="q num">2×</span>Cold coffee</li>
+          </ul>
+          <div class="id"><span class="num">#K-2041</span><span>Karan</span></div>
+        </article>
+        <article class="tk" aria-label="TV 3, preparing">
+          <div class="h"><span class="seat num">TV 3</span><span class="age num">7:55</span></div>
+          <ul>
+            <li><span class="q num">2×</span>Masala Maggi</li>
+          </ul>
+          <div class="id"><span class="num">#K-2039</span><span>Guest</span></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- READY -->
+    <section class="col" aria-labelledby="c-ready">
+      <div class="col-h"><h2 id="c-ready">Ready</h2><span class="c num">1</span></div>
+      <div class="stack">
+        <article class="tk ready" aria-label="PC 03, ready">
+          <div class="h"><span class="seat num">PC 03</span><span class="tag-ready">READY</span><span class="age num">11:32</span></div>
+          <ul>
+            <li><span class="q num">1×</span>Cold coffee</li>
+            <li><span class="q num">1×</span>Veg sandwich</li>
+          </ul>
+          <div class="id"><span class="num">#K-2037</span><span>Guest</span></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- SERVED -->
+    <section class="col" aria-labelledby="c-served">
+      <div class="col-h"><h2 id="c-served">Served</h2><span class="c num">2</span></div>
+      <div class="stack">
+        <article class="tk served" aria-label="PC 09, served">
+          <div class="h"><span class="seat num">PC 09</span><span class="age num">18:04</span></div>
+          <ul><li><span class="q num">1×</span>Masala Maggi</li></ul>
+          <div class="id"><span class="num">#K-2035</span><span>Guest</span></div>
+        </article>
+        <article class="tk served" aria-label="PC 21, served">
+          <div class="h"><span class="seat num">PC 21</span><span class="age num">24:40</span></div>
+          <ul><li><span class="q num">3×</span>Cold coffee</li></ul>
+          <div class="id"><span class="num">#K-2033</span><span>Guest</span></div>
+        </article>
+      </div>
+    </section>
+  </div>
+
+  <div class="undo" role="status">
+    <span><b class="num">PC 12</b> · <span class="num">#K-2041</span> moved to Preparing</span>
+    <span class="tm num">8 s</span>
+    <a href="#">Undo</a>
+  </div>
+</div></div>
+<div style="max-width:1300px;margin:0 auto"><span class="open">[open] The Kitchen top bar’s contents beyond branch and clock, and the LAN-loss state, are not designed.</span></div>
+
+<div class="ann">
+  <div><b>New-order chime + persistent badge</b>Each new order chimes once. The red “NEW” alert-badge and red ticket edge stay until Sunita advances the ticket, so a missed chime is never a missed order. New tickets are announced in a polite live region.</div>
+  <div><b>One tap advances, Undo for 5–10 s</b>Tapping a ticket moves it one stage (New → Preparing → Ready → Served). The undo-toast sits at the bottom of the screen; a new advance replaces it and commits the previous one. Focus ring shown on PC 07. Airy rhythm: gutter and column gap 24, ticket padding and gap 16, header 64. Each column scrolls on its own, newest on top.</div>
+  <div><b>Ready / Served</b>Ready gains a free-green edge + “READY” tag (colour + text). Served stays readable in muted ink. Cancel after Preparing needs a reason and lands in the waste report.<span class="open">[open] Where the cancel control sits on a ticket is not designed.</span></div>
+</div>
+</body>
+</html>

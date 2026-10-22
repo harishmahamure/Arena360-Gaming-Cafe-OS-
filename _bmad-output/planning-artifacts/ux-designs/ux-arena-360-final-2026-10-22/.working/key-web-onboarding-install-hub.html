@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arena 360 — Onboarding step 3 Install Hub (key screen)</title>
+<style>
+/* KEY SCREEN — Onboarding wizard, step 3 "Install Hub" (Staff mood; Vikram). 1440 browser, two states: waiting for heartbeat, code expired.
+   Re-rendered 2026-10-23 for AIRY/premium spacing and the new wizard-progress component.
+   Governing spine sections:
+   DESIGN.md — Brand & Style (staff mood: solid panels, no art/video), Colors (hub tones; border-strong; links underlined), Typography (web-display 40/300 for
+               the page title and the pairing code, tabular; web-body; hub-label/hub-micro), Layout & Spacing (Web: onboarding row — web-gutter 56,
+               web-app-section-gap 56, web-card-padding 32, web-header-height 80; content ≈1200px; wizard-progress in a left column),
+               Shapes (rounded.sm for wizard-progress rows), Components: wizard-progress (256px; "Step n of 10" hub-micro; ≥44px rows; done = ok-filled
+               number + on-warning check; current = hub-line fill + 2px text ring; "Can skip" tags), pairing-code, card, status-badge,
+               button-primary (one per view), button-secondary, focus-ring.
+   EXPERIENCE.md — IA (Onboarding wizard: wizard-progress beside step content; 10 steps), Component Patterns: wizard-progress (aria-current="step";
+               Can skip on Products, Staff, Printer & payments), pairing-code (8 chars, QR, 15-min countdown, milestone announcements, auto-advance on first
+               heartbeat + focus to new heading, Expired → "Generate a new code"), Voice (staff: plain, neutral), Accessibility Floor (web SR baseline),
+               Key Flows Journey 1 steps 3–5 + Failures.
+   PRD — Onboarding wizard step table (step 3: download link; code large with QR; waits for Hub heartbeat); Single-key setup.
+   Spacing map: header 80 · gutter 56 · page top 56 · progress column 256 → content 56 · section → section 56 · card padding 32 · rows inside cards 12–16, groups 24–32.
+   Sample data: café name is a placeholder; Basic tier assumed for Vikram so the Windows Hub download applies. */
+:root{--bg:#09071a;--surface:#16122c;--surface2:#201a3d;--line:#362d5c;--bs:#8178b5;--text:#f5f2ff;--muted:#aca5cc;--accent:#ff4fa8;--onaccent:#1a0010;--ok:#5fe6a0;--warn:#ffbe3d;--onwarn:#1e1300;--danger:#ff5c5c;--info:#7fb2ff;--hbg:#0b0920;--hhead:#110e28;--tile:#141030;--hline:#2a2350;
+--s-free:#5fe6a0;--s-sess:#7fb2ff;--s-paused:#5c82bd;--s-res:#c8a2ff;--s-order:#ffbe3d;--s-maint:#8a85a8;--s-off:#ff5c5c;--s-un:#aca5cc;
+--font:Sora,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+/* web spacing tokens (DESIGN.md spacing.web-*) */
+--gutter:56px;--sec:128px;--app-sec:56px;--pad:32px;--head:80px}
+*{box-sizing:border-box}
+html,body{margin:0;background:#050410;color:var(--text);font-family:var(--font);font-size:16px;line-height:1.5}
+.tnum{font-variant-numeric:tabular-nums}
+a{color:var(--text);text-decoration:underline;text-underline-offset:3px}
+.mock-title{max-width:1440px;margin:40px auto 16px;padding:0 4px;color:var(--muted);font-size:13px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+.mock-note{max-width:1440px;margin:0 auto 16px;padding:0 4px;color:var(--muted);font-size:13px}
+.browser{width:1440px;margin:0 auto 64px;border:1px solid #2a2350;border-radius:14px;overflow:hidden;background:var(--bg);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.chrome{height:44px;background:#1b1830;display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid #2a2350}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#3a3558;display:block}
+.url{flex:1;max-width:640px;height:28px;border-radius:8px;background:#0e0c1f;color:var(--muted);font-size:13px;display:flex;align-items:center;padding:0 12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:9999px;font-family:var(--font);font-weight:800;text-decoration:none;border:0;white-space:nowrap}
+.btn-primary{background:var(--accent);color:var(--onaccent);padding:16px 32px;font-size:18px}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--bs);padding:12px 24px;font-size:16px;font-weight:600}
+.is-focus{outline:2px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 4px var(--bg),0 0 0 6px var(--text)}
+.open{display:inline-block;font-size:12px;font-weight:600;color:var(--warn);border:1px dashed var(--warn);border-radius:6px;padding:4px 8px;line-height:1.4;font-family:var(--font)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px}
+.badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;background:var(--tile);line-height:1.2;white-space:nowrap}
+.label{font-size:13px;font-weight:500;color:var(--muted)}
+.micro{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.numeric{font-size:26px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.sr{position:absolute;left:-9999px}
+.app{background:var(--hbg)}
+/* header — web-header-height 80, web-gutter 56 */
+.w-head{height:var(--head);background:var(--hhead);border-bottom:1px solid var(--hline);display:flex;align-items:center;gap:32px;padding:0 var(--gutter);font-size:14px}
+.wordmark{font-weight:800;font-size:18px;text-decoration:none}.wordmark b{color:var(--accent)}
+.w-head .sp{flex:1}
+.shell{max-width:calc(1200px + 2 * var(--gutter));margin:0 auto;display:grid;grid-template-columns:256px 1fr;gap:var(--app-sec);padding:var(--app-sec) var(--gutter) var(--sec)}
+/* wizard-progress */
+.progress h2{margin:0 0 16px;padding:0 12px}
+.progress ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.progress li{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 12px;border-radius:10px;font-size:15px;color:var(--muted)}
+.progress .n{width:28px;height:28px;border-radius:50%;border:1px solid var(--bs);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.progress li.done{color:var(--text)}
+.progress li.done .n{background:var(--ok);border-color:var(--ok);color:var(--onwarn)}
+.progress li.cur{background:var(--hline);color:var(--text);font-weight:600}
+.progress li.cur .n{border:2px solid var(--text);color:var(--text)}
+.progress .skip{margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+/* step content — sections 56 apart */
+.main h1{font-size:40px;font-weight:300;line-height:1.15;margin:0 0 16px}
+.lede{color:var(--muted);margin:0 0 var(--app-sec);max-width:640px}
+.how{list-style:none;margin:0 0 var(--app-sec);padding:0;display:flex;flex-direction:column;gap:16px}
+.how li{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:24px var(--pad);display:grid;grid-template-columns:160px 1fr auto;gap:32px;align-items:center;min-height:96px}
+.how .k{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.how p{margin:0;font-size:15px}
+.pc{background:var(--surface);border:1px solid var(--bs);border-radius:24px;padding:var(--pad);display:grid;grid-template-columns:1fr 200px;gap:var(--app-sec);align-items:center}
+.code{font-size:40px;font-weight:300;letter-spacing:.12em;font-variant-numeric:tabular-nums;line-height:1.15;margin:16px 0 24px;font-family:var(--font)}
+.code .g{display:inline-block}
+.code .gap{display:inline-block;width:.6em}
+.qr{width:200px;height:200px;background:#f5f2ff;border-radius:16px;padding:16px}
+.qr svg{width:100%;height:100%;display:block}
+.qrcap{font-size:12px;color:var(--muted);text-align:center;margin-top:12px}
+.meta{display:flex;align-items:center;gap:24px;flex-wrap:wrap;font-size:15px}
+.wait{margin-top:32px;display:flex;align-items:center;gap:16px;background:var(--tile);border:1px solid var(--bs);border-radius:16px;padding:24px}
+.pulse{width:16px;height:16px;border-radius:50%;border:2px solid var(--info);position:relative;flex:none}
+.pulse:after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--info)}
+.foot-actions{margin-top:var(--app-sec);display:flex;gap:32px;align-items:center}
+.expired .code{color:var(--muted);text-decoration:line-through;text-decoration-thickness:2px}
+.err{margin-top:32px;display:flex;align-items:flex-start;gap:16px;background:var(--tile);border:2px solid var(--warn);border-radius:16px;padding:24px}
+.err .ico{color:var(--warn);font-weight:800;font-size:18px;line-height:1.3}
+</style></head>
+<body>
+
+<div class="mock-title">Onboarding wizard · step 3 “Install Hub” · state A · waiting for the Hub’s first heartbeat</div>
+<div class="mock-note">Vikram, owner (Pune). Staff mood. Countdown announced at milestones only (live region). On first heartbeat the page advances to step 4 and focus moves to its heading. Focus shown on “Download Hub for Windows”. Step list is the wizard-progress component.</div>
+
+<div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360 [domain open] /setup/install-hub</div></div>
+<div class="app">
+  <header class="w-head">
+    <a class="wordmark" href="#">Arena <b>360</b></a>
+    <span class="label">Setting up <b style="color:var(--text)">[café name] · Pune</b></span>
+    <span class="sp"></span>
+    <span class="label">Progress is saved. You can come back to this later.</span>
+    <span>Vikram</span>
+  </header>
+  <div class="shell">
+    <nav class="progress" aria-label="Setup steps">
+      <h2 class="micro">Step 3 of 10</h2>
+      <ol>
+        <li class="done"><span class="n" aria-hidden="true">✓</span>Café details<span class="sr">, done</span></li>
+        <li class="done"><span class="n" aria-hidden="true">✓</span>Subscription tier<span class="sr">, done</span></li>
+        <li class="cur" aria-current="step"><span class="n">3</span>Install Hub</li>
+        <li><span class="n">4</span>Devices</li>
+        <li><span class="n">5</span>Rate plans</li>
+        <li><span class="n">6</span>Products<span class="skip">Can skip</span></li>
+        <li><span class="n">7</span>Staff<span class="skip">Can skip</span></li>
+        <li><span class="n">8</span>Printer and payments<span class="skip">Can skip</span></li>
+        <li><span class="n">9</span>Test session</li>
+        <li><span class="n">10</span>Go live</li>
+      </ol>
+    </nav>
+
+    <main class="main">
+      <h1 tabindex="-1">Install the Hub</h1>
+      <p class="lede">The Hub runs your branch from the counter PC. Install it, then enter the code below. Nothing else needs typing — the code carries your café, branch and plan.</p>
+
+      <ol class="how">
+        <li><div class="k">1 · Download</div><p>On the counter PC, download the Hub for Windows 10 or 11.</p><a class="btn btn-primary is-focus" href="#">Download Hub for Windows</a></li>
+        <li><div class="k">2 · Install</div><p>Run the installer. It asks for one thing: the pairing code.</p><a href="#">System requirements</a></li>
+        <li><div class="k">3 · Enter the code</div><p>Type the code exactly as shown. This page moves on by itself once the Hub connects.</p><span></span></li>
+      </ol>
+
+      <section class="pc" aria-labelledby="pc-h">
+        <div>
+          <h2 id="pc-h" class="micro" style="margin:0">Pairing code</h2>
+          <div class="code" aria-label="Pairing code K 7 Q M, 4 X R 2"><span class="g">K7QM</span><span class="gap"></span><span class="g">4XR2</span></div>
+          <div class="meta">
+            <span class="badge" style="color:var(--info)">Single use</span>
+            <span class="tnum">Expires in <b>12:48</b></span>
+            <a href="#">Copy code</a>
+          </div>
+          <div class="wait" role="status" aria-live="polite">
+            <span class="pulse" aria-hidden="true"></span>
+            <div><b>Waiting for the Hub to connect…</b><br><span class="label">Keep this page open. Step 4 opens as soon as the Hub checks in.</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="qr" role="img" aria-label="QR code for the same pairing code">
+            <svg viewBox="0 0 21 21" shape-rendering="crispEdges" aria-hidden="true"><g fill="#09071a">
+              <rect x="0" y="0" width="7" height="7"/><rect x="1" y="1" width="5" height="5" fill="#f5f2ff"/><rect x="2" y="2" width="3" height="3"/>
+              <rect x="14" y="0" width="7" height="7"/><rect x="15" y="1" width="5" height="5" fill="#f5f2ff"/><rect x="16" y="2" width="3" height="3"/>
+              <rect x="0" y="14" width="7" height="7"/><rect x="1" y="15" width="5" height="5" fill="#f5f2ff"/><rect x="2" y="16" width="3" height="3"/>
+              <rect x="8" y="1" width="1" height="2"/><rect x="10" y="0" width="2" height="1"/><rect x="9" y="4" width="2" height="2"/><rect x="12" y="3" width="1" height="3"/>
+              <rect x="8" y="8" width="3" height="1"/><rect x="12" y="8" width="2" height="2"/><rect x="15" y="8" width="1" height="3"/><rect x="18" y="9" width="2" height="1"/>
+              <rect x="1" y="9" width="2" height="1"/><rect x="4" y="8" width="1" height="3"/><rect x="2" y="11" width="3" height="1"/><rect x="9" y="10" width="1" height="3"/>
+              <rect x="11" y="11" width="3" height="1"/><rect x="16" y="12" width="3" height="1"/><rect x="19" y="11" width="1" height="3"/><rect x="8" y="14" width="2" height="2"/>
+              <rect x="11" y="15" width="1" height="3"/><rect x="13" y="14" width="3" height="1"/><rect x="14" y="17" width="2" height="2"/><rect x="17" y="15" width="2" height="1"/>
+              <rect x="9" y="18" width="1" height="3"/><rect x="12" y="19" width="1" height="2"/><rect x="18" y="18" width="3" height="1"/><rect x="16" y="20" width="2" height="1"/>
+            </g></svg>
+          </div>
+          <div class="qrcap">Same code as a QR</div>
+          <div style="text-align:center;margin-top:12px"><span class="open">[open: which device scans the QR]</span></div>
+        </div>
+      </section>
+
+      <div class="foot-actions">
+        <a href="#">Installing on an Android tablet or phone instead?</a>
+        <a href="#">Help with installing</a>
+      </div>
+    </main>
+  </div>
+</div></div>
+
+<div class="mock-title">Onboarding wizard · step 3 “Install Hub” · state B · code expired</div>
+<div class="mock-note">Code passed its 15-minute life without a heartbeat (or the Hub reported it mistyped and the window lapsed). The Hub itself shows a plain message; the wizard offers a fresh code. Focus moves to the message; “Generate a new code” is the one primary action. Focus shown on it.</div>
+
+<div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360 [domain open] /setup/install-hub</div></div>
+<div class="app">
+  <header class="w-head">
+    <a class="wordmark" href="#">Arena <b>360</b></a>
+    <span class="label">Setting up <b style="color:var(--text)">[café name] · Pune</b></span>
+    <span class="sp"></span>
+    <span class="label">Progress is saved. You can come back to this later.</span>
+    <span>Vikram</span>
+  </header>
+  <div class="shell">
+    <nav class="progress" aria-label="Setup steps">
+      <h2 class="micro">Step 3 of 10</h2>
+      <ol>
+        <li class="done"><span class="n" aria-hidden="true">✓</span>Café details</li>
+        <li class="done"><span class="n" aria-hidden="true">✓</span>Subscription tier</li>
+        <li class="cur" aria-current="step"><span class="n">3</span>Install Hub</li>
+        <li><span class="n">4</span>Devices</li><li><span class="n">5</span>Rate plans</li><li><span class="n">6</span>Products<span class="skip">Can skip</span></li>
+        <li><span class="n">7</span>Staff<span class="skip">Can skip</span></li><li><span class="n">8</span>Printer and payments<span class="skip">Can skip</span></li>
+        <li><span class="n">9</span>Test session</li><li><span class="n">10</span>Go live</li>
+      </ol>
+    </nav>
+    <main class="main">
+      <h1>Install the Hub</h1>
+      <p class="lede">The Hub runs your branch from the counter PC. Install it, then enter the code below.</p>
+      <section class="pc expired" aria-labelledby="pc-h2">
+        <div>
+          <h2 id="pc-h2" class="micro" style="margin:0">Pairing code</h2>
+          <div class="code" aria-label="Expired pairing code"><span class="g">K7QM</span><span class="gap"></span><span class="g">4XR2</span></div>
+          <div class="meta"><span class="badge" style="color:var(--muted)">Expired</span><span class="label">Codes last 15 minutes and work once.</span></div>
+          <div class="err" role="alert" tabindex="-1">
+            <span class="ico" aria-hidden="true">⚠</span>
+            <div><b>This code has expired.</b><br><span class="label" style="color:var(--text)">Generate a new code and enter it in the Hub installer.</span><br>
+              <span class="open" style="margin-top:12px">[open: whether the installer must be restarted after a failed code]</span>
+              <div style="margin-top:24px"><a class="btn btn-primary is-focus" href="#">Generate a new code</a></div></div>
+          </div>
+        </div>
+        <div><div class="qr" aria-hidden="true" style="display:flex;align-items:center;justify-content:center;color:#09071a;font-weight:700">Expired</div><div class="qrcap">QR no longer valid</div></div>
+      </section>
+    </main>
+  </div>
+</div></div>
+</body></html>

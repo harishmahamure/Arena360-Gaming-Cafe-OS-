@@ -1,0 +1,348 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arena 360 · Overdrive</title>
+<style>
+
+/* ---- shared placeholder game art (no network images) ----
+   Valorant  #ff4655 #bd3944 #0f1923 #ff8a7a
+   CS2       #f4a321 #de6b1f #1b1b1f
+   Fortnite  #5a2ee6 #2a9df4 #0d1b4a #f7d84a
+   GTA V     #ffb36b #ff6f91 #3a1c5c #0e1a2b
+   Rocket L. #1e6bff #0c1e5a #ff7a1a
+   PUBG      #c9b37e #6b5b3a #1d1a14
+   Dota 2    #8f1d14 #3b0d0a #0c0606
+   Shadow    #000000 (alpha) / #ffffff (alpha)                       */
+*{box-sizing:border-box;margin:0;padding:0}
+.art-valorant{background:radial-gradient(circle at 72% 28%,#ff8a7a 0,transparent 32%),repeating-linear-gradient(115deg,transparent 0 46px,rgba(255,255,255,.05) 46px 48px),linear-gradient(135deg,#ff4655 0%,#bd3944 38%,#0f1923 100%)}
+.art-cs2{background:radial-gradient(circle at 60% 35%,rgba(0,0,0,.55) 0 18%,transparent 19%),linear-gradient(160deg,#f4a321 0%,#de6b1f 45%,#1b1b1f 100%)}
+.art-fortnite{background:radial-gradient(circle at 30% 72%,#f7d84a 0,transparent 28%),linear-gradient(135deg,#5a2ee6,#2a9df4 60%,#0d1b4a)}
+.art-gta{background:radial-gradient(circle at 50% 46%,#ffb36b 0 12%,transparent 13%),linear-gradient(180deg,#ffb36b 0%,#ff6f91 40%,#3a1c5c 72%,#0e1a2b 100%)}
+.art-rl{background:radial-gradient(ellipse at 30% 80%,#ff7a1a 0,transparent 40%),linear-gradient(135deg,#1e6bff 0%,#0c1e5a 60%,#0c1e5a 100%)}
+.art-pubg{background:repeating-linear-gradient(0deg,transparent 0 30px,rgba(0,0,0,.08) 30px 32px),linear-gradient(160deg,#c9b37e 0%,#6b5b3a 50%,#1d1a14 100%)}
+.art-dota{background:radial-gradient(circle at 70% 30%,#8f1d14 0,transparent 45%),linear-gradient(150deg,#8f1d14,#3b0d0a 60%,#0c0606)}
+.hero-art{position:absolute;inset:0;overflow:hidden}
+.hero-art .shape1{position:absolute;right:220px;top:-120px;width:900px;height:1400px;transform:rotate(18deg);background:linear-gradient(180deg,rgba(255,70,85,.0),rgba(255,70,85,.55));}
+.hero-art .shape2{position:absolute;right:520px;top:180px;width:340px;height:900px;border-radius:170px 170px 40px 40px;background:linear-gradient(180deg,rgba(15,25,35,.85),rgba(15,25,35,1));box-shadow:0 0 120px rgba(255,138,122,.45)}
+.hero-art .shape3{position:absolute;right:600px;top:120px;width:180px;height:180px;border-radius:50%;background:rgba(15,25,35,.95);box-shadow:0 0 80px rgba(255,138,122,.5)}
+.hero-art .shape4{position:absolute;right:0;bottom:0;width:100%;height:420px;background:linear-gradient(0deg,rgba(15,25,35,.9),transparent)}
+.frame{position:relative;overflow:hidden;width:calc(1920px*var(--s));height:calc(1080px*var(--s))}
+.frame>.k{transform:scale(var(--s));transform-origin:0 0}
+.frame.mini{width:calc(1920px*var(--s)*.55);height:calc(1080px*var(--s)*.55)}
+.frame.mini>.k{transform:scale(calc(var(--s)*.55))}
+.hframe{position:relative;overflow:hidden;width:calc(1600px*var(--hs));height:calc(900px*var(--hs))}
+.hframe>.h{transform:scale(var(--hs));transform-origin:0 0}
+.k{position:relative;width:1920px;height:1080px;overflow:hidden}
+.h{position:relative;width:1600px;height:900px;overflow:hidden;display:grid;grid-template-columns:88px 1fr;grid-template-rows:72px 1fr}
+.k-bg{position:absolute;inset:0}
+.amenu-wrap{width:calc(380px*var(--s)*1.1);height:calc(440px*var(--s)*1.1);overflow:hidden}
+.amenu-wrap>.amenu{transform:scale(calc(var(--s)*1.1));transform-origin:0 0;width:380px}
+.row{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+figure figcaption{font-size:13px;margin-top:8px;opacity:.75}
+.h-side{grid-row:1/3;display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:16px}
+.h-side i{font-style:normal;display:flex;flex-direction:column;align-items:center;justify-content:center;width:68px;height:60px;font-size:11px;gap:4px}
+.h-side i b{font-size:18px;line-height:1}
+.h-head{display:flex;align-items:center;gap:16px;padding:0 24px}
+.h-head .grow{flex:1}
+.h-main{padding:16px 24px;overflow:hidden}
+.zone{margin-bottom:14px}
+.zone h4{display:flex;gap:10px;align-items:baseline;margin-bottom:8px}
+.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+.pc{position:relative;height:128px;display:flex;flex-direction:column;justify-content:space-between;padding:12px 14px;overflow:hidden}
+.pc .top{display:flex;justify-content:space-between;align-items:center}
+.pc .big{font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:14px;font-size:12px;margin-left:auto}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:-1px;border-radius:2px;background:var(--c)}
+
+:root{--s:.3}
+@media (min-width:560px){:root{--s:0.25}}
+@media (min-width:600px){:root{--s:0.27}}
+@media (min-width:640px){:root{--s:0.3}}
+@media (min-width:680px){:root{--s:0.32}}
+@media (min-width:720px){:root{--s:0.34}}
+@media (min-width:760px){:root{--s:0.36}}
+@media (min-width:800px){:root{--s:0.38}}
+@media (min-width:840px){:root{--s:0.4}}
+@media (min-width:880px){:root{--s:0.42}}
+@media (min-width:920px){:root{--s:0.44}}
+@media (min-width:960px){:root{--s:0.46}}
+@media (min-width:1000px){:root{--s:0.48}}
+@media (min-width:1040px){:root{--s:0.5}}
+@media (min-width:1080px){:root{--s:0.52}}
+@media (min-width:1120px){:root{--s:0.55}}
+@media (min-width:1160px){:root{--s:0.57}}
+@media (min-width:1200px){:root{--s:0.59}}
+@media (min-width:1240px){:root{--s:0.61}}
+@media (min-width:1280px){:root{--s:0.63}}
+@media (min-width:1320px){:root{--s:0.65}}
+@media (min-width:1360px){:root{--s:0.67}}
+@media (min-width:1400px){:root{--s:0.69}}
+@media (min-width:1440px){:root{--s:0.71}}
+@media (min-width:1480px){:root{--s:0.73}}
+@media (min-width:1520px){:root{--s:0.75}}
+@media (min-width:1560px){:root{--s:0.77}}
+@media (min-width:1600px){:root{--s:0.8}}
+@media (min-width:1640px){:root{--s:0.82}}
+@media (min-width:1680px){:root{--s:0.84}}
+@media (min-width:1720px){:root{--s:0.86}}
+@media (min-width:1760px){:root{--s:0.88}}
+@media (min-width:1800px){:root{--s:0.9}}
+@media (min-width:1840px){:root{--s:0.92}}
+@media (min-width:1880px){:root{--s:0.94}}
+@media (min-width:1920px){:root{--s:0.96}}
+@media (min-width:1960px){:root{--s:0.98}}
+@media (min-width:2000px){:root{--s:1.0}}
+@media (min-width:2040px){:root{--s:1.0}}
+@media (min-width:2080px){:root{--s:1.0}}
+@media (min-width:2120px){:root{--s:1.0}}
+@media (min-width:2160px){:root{--s:1.0}}
+@media (min-width:2200px){:root{--s:1.0}}
+@media (min-width:2240px){:root{--s:1.0}}
+@media (min-width:2280px){:root{--s:1.0}}
+@media (min-width:2320px){:root{--s:1.0}}
+@media (min-width:2360px){:root{--s:1.0}}
+@media (min-width:2400px){:root{--s:1.0}}
+:root{--hs:.3}
+@media (min-width:560px){:root{--hs:0.31}}
+@media (min-width:600px){:root{--hs:0.33}}
+@media (min-width:640px){:root{--hs:0.36}}
+@media (min-width:680px){:root{--hs:0.38}}
+@media (min-width:720px){:root{--hs:0.41}}
+@media (min-width:760px){:root{--hs:0.43}}
+@media (min-width:800px){:root{--hs:0.46}}
+@media (min-width:840px){:root{--hs:0.48}}
+@media (min-width:880px){:root{--hs:0.51}}
+@media (min-width:920px){:root{--hs:0.53}}
+@media (min-width:960px){:root{--hs:0.56}}
+@media (min-width:1000px){:root{--hs:0.58}}
+@media (min-width:1040px){:root{--hs:0.61}}
+@media (min-width:1080px){:root{--hs:0.63}}
+@media (min-width:1120px){:root{--hs:0.66}}
+@media (min-width:1160px){:root{--hs:0.68}}
+@media (min-width:1200px){:root{--hs:0.71}}
+@media (min-width:1240px){:root{--hs:0.73}}
+@media (min-width:1280px){:root{--hs:0.76}}
+@media (min-width:1320px){:root{--hs:0.78}}
+@media (min-width:1360px){:root{--hs:0.81}}
+@media (min-width:1400px){:root{--hs:0.83}}
+@media (min-width:1440px){:root{--hs:0.86}}
+@media (min-width:1480px){:root{--hs:0.88}}
+@media (min-width:1520px){:root{--hs:0.91}}
+@media (min-width:1560px){:root{--hs:0.93}}
+@media (min-width:1600px){:root{--hs:0.96}}
+@media (min-width:1640px){:root{--hs:0.98}}
+@media (min-width:1680px){:root{--hs:1.0}}
+@media (min-width:1720px){:root{--hs:1.0}}
+@media (min-width:1760px){:root{--hs:1.0}}
+@media (min-width:1800px){:root{--hs:1.0}}
+@media (min-width:1840px){:root{--hs:1.0}}
+@media (min-width:1880px){:root{--hs:1.0}}
+@media (min-width:1920px){:root{--hs:1.0}}
+@media (min-width:1960px){:root{--hs:1.0}}
+@media (min-width:2000px){:root{--hs:1.0}}
+@media (min-width:2040px){:root{--hs:1.0}}
+@media (min-width:2080px){:root{--hs:1.0}}
+@media (min-width:2120px){:root{--hs:1.0}}
+@media (min-width:2160px){:root{--hs:1.0}}
+@media (min-width:2200px){:root{--hs:1.0}}
+@media (min-width:2240px){:root{--hs:1.0}}
+@media (min-width:2280px){:root{--hs:1.0}}
+@media (min-width:2320px){:root{--hs:1.0}}
+@media (min-width:2360px){:root{--hs:1.0}}
+@media (min-width:2400px){:root{--hs:1.0}}
+
+/* OVERDRIVE hexes
+   page #050608 · kiosk bg #07080c · surface #12141b · surface2 #1a1d26 · line #262a36
+   text #f2f4f8 · muted #8b93a7 · accent (lime) #c6ff3d · accent text #0a0d02 · accent2 (magenta) #ff2e88
+   ok #c6ff3d · warn #ffb000 · warn text #120a00 · danger #ff2e88
+   hub: bg #0a0b10 · side #07080c · head #0d0f15 · tile #12141b · line #232734 · on #1d2410
+   states: free #c6ff3d · session #3d8bff · reserved #a970ff · order #ffb000 · maint #5b6275 · offline #ff2e88
+   rule bg #c6ff3d / text #0a0d02 · offline chip bg #ff2e88 / text #ffffff */
+:root{--page:#050608;--kbg:#07080c;--surf:#12141b;--surf2:#1a1d26;--line:#262a36;--text:#f2f4f8;--muted:#8b93a7;--acc:#c6ff3d;--accText:#0a0d02;--acc2:#c6ff3d;
+--ok:#c6ff3d;--warn:#ffb000;--warnText:#120a00;--danger:#ff2e88;--font:"Segoe UI",-apple-system,Arial,sans-serif;--fontD:Bahnschrift,"DIN Condensed","Arial Narrow","Roboto Condensed",sans-serif;
+--h1w:700;--wmw:700;--titlew:700;--titlels:.02em;--radius:0;--pillR:0;--tileR:0;--btnR:0;--cardR:0;--markR:0;
+--scrim:linear-gradient(90deg,rgba(7,8,12,.96) 0%,rgba(7,8,12,.6) 40%,rgba(7,8,12,.1) 65%,rgba(7,8,12,.85) 100%),linear-gradient(0deg,rgba(7,8,12,.95),transparent 50%);
+--markBg:#c6ff3d;--markFg:#07080c;--navBg:rgba(18,20,27,.9);--navLine:#262a36;--navOn:#c6ff3d;--navOnText:#07080c;--chipBg:rgba(18,20,27,.92);
+--btn2:rgba(18,20,27,.9);--btn2Line:#3a4050;--card:rgba(13,15,21,.9);--cardLine:#262a36;--toastBg:#0d0f15;--toastText:#f2f4f8;
+--hbg:#0a0b10;--hside:#07080c;--hhead:#0d0f15;--htext:#f2f4f8;--hmuted:#8b93a7;--hline:#232734;--hon:#1d2410;--hbtn:#12141b;--hacc:#c6ff3d;--haccText:#0a0d02;--pcBg:#12141b;--pcR:0;--hbtnR:0;
+--free:#c6ff3d;--sess:#3d8bff;--res:#a970ff;--ord:#ffb000;--maint:#5b6275;--offc:#ff2e88;--ruleBg:#c6ff3d;--ruleText:#0a0d02;--offBg:#ff2e88;--offText:#ffffff}
+body{background:var(--page);color:var(--text);font:15px/1.5 var(--font);padding:24px 16px 48px}
+.doc{max-width:1100px;margin-bottom:20px}.doc .dn{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.doc h1{font:var(--h1w) 34px/1.15 var(--fontD);margin:4px 0 6px}.doc .pers{font-size:18px;color:var(--acc2,var(--acc));margin-bottom:8px}
+.doc p{max-width:900px}.doc ul{margin:10px 0 0 18px;color:var(--muted)}.doc li b{color:var(--text)}
+h2{font:600 16px var(--font);margin:28px 0 10px;color:var(--text)}h2 small{color:var(--muted);font-weight:400;margin-left:8px}
+.k{font-family:var(--font);color:var(--ktext,var(--text));background:var(--kbg)}
+.k-scrim{position:absolute;inset:0;background:var(--scrim)}
+.k-top{position:absolute;top:32px;left:56px;right:56px;height:64px;display:flex;align-items:center;justify-content:space-between;z-index:2}
+.logo{display:flex;align-items:center;gap:14px;width:420px}
+.mark{width:64px;height:64px;border-radius:var(--markR,50%);background:var(--markBg);color:var(--markFg);display:grid;place-items:center;font:800 32px var(--fontD)}
+.wm{font:var(--wmw) 30px/1 var(--fontD);letter-spacing:var(--wmls,.06em);display:flex;flex-direction:column;gap:4px}
+.wm small{font:500 13px var(--font);letter-spacing:.04em;opacity:.7}
+.pills{display:flex;gap:6px;padding:6px;background:var(--navBg);border-radius:var(--pillR);border:1px solid var(--navLine,transparent)}
+.pills a{padding:12px 30px;border-radius:var(--pillR);font-weight:600;font-size:18px;color:var(--ktext,var(--text));opacity:.85}
+.pills a.on{background:var(--navOn);color:var(--navOnText);opacity:1}
+.tr{display:flex;align-items:center;gap:12px;width:420px;justify-content:flex-end}
+.ico{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--chipBg);font-weight:700}
+.timechip{display:flex;align-items:center;gap:8px;padding:12px 18px;border-radius:var(--pillR);background:var(--chipBg);font-size:17px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.timechip .dot{width:10px;height:10px;border-radius:50%;background:var(--ok);display:inline-block}
+.acct{display:flex;align-items:center;gap:10px;padding:6px 14px 6px 6px;border-radius:var(--pillR);background:var(--chipBg);font-weight:600;white-space:nowrap}
+.av{width:36px;height:36px;border-radius:50%;background:var(--acc);color:var(--accText);display:grid;place-items:center;font-weight:800}
+.k-tiles{position:absolute;left:56px;top:200px;display:flex;gap:14px;align-items:flex-start;z-index:2}
+.tile{width:140px;height:196px;border-radius:var(--tileR);position:relative;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.tile.big{width:190px;height:260px;outline:3px solid var(--acc);outline-offset:3px}
+.tname{position:absolute;left:12px;right:12px;bottom:12px;font:900 19px/1 var(--fontD);color:#ffffff;text-shadow:0 2px 8px rgba(0,0,0,.6);letter-spacing:.02em}
+.tile.big .tname{font-size:26px}
+.tile.all{background:var(--surf);display:grid;place-items:center;box-shadow:none}
+.tname2{font-weight:700;font-size:18px;text-align:center;display:flex;flex-direction:column}.tname2 small{font-weight:400;font-size:13px;opacity:.7}
+.k-hero{position:absolute;left:56px;bottom:76px;width:980px;z-index:2}
+.eyebrow{font-size:16px;letter-spacing:.14em;text-transform:uppercase;opacity:.8;margin-bottom:8px}
+.gtitle{font:var(--titlew) 150px/0.9 var(--fontD);letter-spacing:var(--titlels,-.01em);color:var(--titleC,#ffffff)}
+.gmeta{font-size:20px;opacity:.85;margin:16px 0 28px}
+.ctas{display:flex;gap:14px}
+.cta{min-width:340px;padding:24px 40px;border-radius:var(--btnR);background:var(--acc);color:var(--accText);font-weight:800;font-size:24px;text-align:center}
+.cta2{padding:24px 30px;border-radius:var(--btnR);background:var(--btn2);font-weight:700;font-size:20px;border:1px solid var(--btn2Line,transparent)}
+.k-rail{position:absolute;right:56px;top:136px;bottom:76px;width:440px;display:flex;flex-direction:column;gap:18px;z-index:2}
+.card{background:var(--card);border-radius:var(--cardR);padding:22px 24px;border:1px solid var(--cardLine,transparent)}
+.ch{font-weight:700;font-size:20px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:baseline}.ch small{font-weight:400;font-size:14px;opacity:.7}
+.sess-big{display:flex;align-items:baseline;gap:12px}.sess-big b{font:800 48px/1 var(--fontD);font-variant-numeric:tabular-nums}.sess-big span{opacity:.75}
+.bar{height:8px;border-radius:8px;background:var(--line);margin:14px 0 10px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ok)}
+.kv{display:flex;justify-content:space-between;font-size:15px;opacity:.8;margin-bottom:14px}
+.btn-s{display:block;text-align:center;padding:14px;border-radius:var(--btnR);background:var(--btn2);font-weight:700;border:1px solid var(--btn2Line,transparent)}
+.fl{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:17px}.fl:last-of-type{border:0;margin-bottom:10px}
+.an{padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-direction:column}.an:last-child{border:0}.an b{font-size:17px}.an span{font-size:15px;opacity:.75}
+.hudk .ingame{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,transparent 0 30%,rgba(0,0,0,.35) 80%)}
+.cross{position:absolute;left:50%;top:50%;width:40px;height:40px;margin:-20px;border:3px solid rgba(255,255,255,.8);border-radius:50%}
+.igtext{position:absolute;left:50%;top:40px;transform:translateX(-50%);font:700 28px var(--font);color:#ffffff;background:rgba(0,0,0,.45);padding:8px 24px;border-radius:6px}
+.hud-pill{position:absolute;top:36px;right:40px;padding:10px 18px;border-radius:var(--pillR);background:rgba(0,0,0,.55);color:#ffffff;font-size:22px}
+.hud-pill b{color:var(--warn)}
+.hud-toast{position:absolute;top:110px;right:40px;width:640px;display:flex;gap:18px;align-items:flex-start;padding:24px 26px;border-radius:var(--cardR);background:var(--toastBg);color:var(--toastText);border:2px solid var(--warn);box-shadow:0 20px 60px rgba(0,0,0,.5);font-family:var(--font)}
+.ht-icon{flex:none;width:48px;height:48px;border-radius:50%;background:var(--warn);color:var(--warnText);display:grid;place-items:center;font:900 28px var(--font)}
+.ht-body{flex:1;display:flex;flex-direction:column;gap:6px}.ht-body b{font-size:28px;color:var(--warnTitle,var(--warn))}.ht-body span{font-size:18px;opacity:.85}
+.ht-act{display:flex;flex-direction:column;gap:10px}
+.btn-x{padding:14px 18px;border-radius:var(--btnR);font-weight:700;font-size:18px;text-align:center;white-space:nowrap;background:rgba(255,255,255,.1)}
+.btn-x.primary{background:var(--warn);color:var(--warnText)}
+.amenu{background:var(--menuBg,var(--surf));color:var(--text);border-radius:var(--cardR);padding:16px;border:1px solid var(--line);box-shadow:0 16px 40px rgba(0,0,0,.35)}
+.am-h{display:flex;gap:12px;align-items:center;padding-bottom:12px}.am-h small{display:block;color:var(--muted)}
+.am-bal{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}.am-bal div{background:var(--surf2);border-radius:calc(var(--cardR) - 4px);padding:12px}
+.am-bal small{display:block;color:var(--muted)}.am-bal b{font:800 24px var(--fontD)}
+.am-i{padding:11px 8px;border-top:1px solid var(--line);font-weight:600}.am-i.out{color:var(--danger)}
+.h{background:var(--hbg);color:var(--htext);font-family:var(--font)}
+.h-side{background:var(--hside);border-right:1px solid var(--hline)}
+.hlogo{width:44px;height:44px;border-radius:var(--markR,50%);background:var(--markBg);color:var(--markFg);display:grid;place-items:center;font-weight:800;margin-bottom:10px}
+.h-side i{border-radius:10px;color:var(--hmuted)}.h-side i.on{background:var(--hon);color:var(--htext)}
+.h-head{border-bottom:1px solid var(--hline);background:var(--hhead)}
+.hb{font-size:18px}.hs{font-size:13px;color:var(--hmuted)}
+.rule{padding:8px 14px;border-radius:999px;background:var(--ruleBg);color:var(--ruleText);font-weight:700;font-size:14px}
+.off{display:flex;gap:8px;align-items:center;padding:8px 14px;border-radius:999px;background:var(--offBg);color:var(--offText);font-weight:700;font-size:14px}
+.off i{width:9px;height:9px;border-radius:50%;background:var(--offText)}
+.cnt{color:var(--hmuted);font-size:14px}
+.hbtn{padding:12px 18px;border-radius:var(--hbtnR,10px);font-weight:700;background:var(--hbtn);border:1px solid var(--hline)}
+.hbtn.primary{background:var(--hacc);color:var(--haccText);border-color:transparent}
+.zone h4{font-size:15px}.zone h4 small{font-weight:400;color:var(--hmuted)}
+.pc{border-radius:var(--pcR);background:var(--pcBg);border:1px solid var(--hline)}
+.pc .nm{font-size:16px}.pc .big{font:800 26px/1.1 var(--fontD)}.pc .sub{font-size:13px;color:var(--hmuted)}
+.pc .tag{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:6px}
+.pc .tag:empty{display:none}
+
+.doc h1,.wm,.gtitle,.pills a,.cta,.cta2,.ch,.btn-s,.eyebrow,.hb,.zone h4,.pc .nm,.rule,.off,.hbtn,.ht-body b,.btn-x{text-transform:uppercase;font-family:var(--fontD)}
+.cut,.mark,.tile,.cta,.cta2,.card,.btn-s,.timechip,.acct,.hud-toast,.btn-x,.pc,.hbtn{clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px))}
+.pills{transform:skewX(-12deg)}.pills a{transform:skewX(12deg);letter-spacing:.08em}
+.k-top{top:24px}
+.timechip{background:#c6ff3d;color:#07080c;font-family:var(--fontD);font-size:20px;letter-spacing:.04em}.timechip .dot{background:#07080c}
+.k-tiles{top:auto;bottom:76px;left:56px;gap:10px}
+.tile{width:150px;height:150px}.tile.big{width:150px;height:150px;outline:0;box-shadow:inset 0 -6px 0 #c6ff3d}
+.tname{font-family:var(--fontD);font-size:18px;font-weight:700}.tile.big .tname{font-size:18px}
+.tile.all{border:1px solid #3a4050}
+.k-hero{top:150px;bottom:auto}
+.eyebrow{color:#c6ff3d;letter-spacing:.24em}
+.gtitle{font-size:190px;font-style:italic;transform:skewX(-4deg);text-shadow:6px 6px 0 #ff2e88}
+.gmeta{font-size:20px}
+.k-hero{width:1100px}
+.cta{font-size:28px;letter-spacing:.06em;box-shadow:0 0 40px rgba(198,255,61,.45)}
+.k-rail{top:124px;width:420px;gap:12px}
+.card{padding:18px 20px;border-left:4px solid #c6ff3d}
+.ch{font-size:18px;letter-spacing:.1em;color:#c6ff3d}
+.sess-big b{font-family:Consolas,"SF Mono",Menlo,monospace;font-size:52px;color:#f2f4f8}
+.bar{border-radius:0;height:6px}
+.an b{font-family:var(--fontD);text-transform:uppercase;letter-spacing:.04em}
+.ht-body b{font-size:32px;letter-spacing:.04em}
+.hud-toast{background:linear-gradient(90deg,#2a1d00,#0d0f15 60%);border-width:0 0 0 6px}
+.hud-pill{font-family:Consolas,Menlo,monospace;border-radius:0}
+.am-bal b{font-family:Consolas,Menlo,monospace}
+.pc{height:118px;border:0;padding:10px 12px}.pc .big{font-family:Consolas,"SF Mono",Menlo,monospace;font-size:24px}
+.s-free{background:#12141b;box-shadow:inset 0 -4px 0 #c6ff3d}.s-free .big{color:#c6ff3d}
+.s-sess{background:#0f1a33;box-shadow:inset 0 -4px 0 #3d8bff}
+.s-res{background:#1c1330;box-shadow:inset 0 -4px 0 #a970ff}.s-res .tag{background:#a970ff;color:#0a0b10}
+.s-ord{background:#2a1d00;box-shadow:inset 0 -4px 0 #ffb000}.s-ord .tag{background:#ffb000;color:#120a00}
+.s-low{background:#2a1d00}.s-low .big{color:#ffb000}.s-low .tag{background:#ffb000;color:#120a00}
+.s-maint{background:repeating-linear-gradient(135deg,#12141b 0 10px,#1a1d26 10px 20px)}
+.s-off{background:#2a0b18;box-shadow:inset 0 -4px 0 #ff2e88}.s-off .big{color:#ff2e88}
+.h-side i.on{color:#c6ff3d}
+
+</style></head><body>
+<header class="doc"><div class="dn">Direction 2 of 4</div><h1>Overdrive</h1><p class="pers">Loud esports energy — near-black, acid-lime accent, angled cuts and condensed caps. Feels like a tournament stage.</p>
+<p>Speaks directly to the 14–30 competitive crowd: near-black canvas, a single acid-lime accent with hot-magenta reserved for urgency, chamfered (cut-corner) shapes, condensed uppercase Bahnschrift (ships with Windows 10+, so WPF gets it for free). Kiosk is tighter and more 'HUD-like'; the rail becomes stacked telemetry panels. Hub is dense and numeric — monospaced timers and solid state fills so the floor reads like a scoreboard.</p><ul><li><b>Strengths:</b> Strongest differentiation vs ggLeap; matches esports branding of Valorant/CS2 cafés; time and urgency read instantly</li><li><b>Weaknesses:</b> Lime on black can fatigue counter staff across long shifts; chamfered shapes need Path geometry in WPF (more work than CornerRadius); harder to co-brand for a family-friendly or PS5-heavy branch</li><li><b>Cheap monitors:</b> Pure-black areas crush on TN panels and show backlight bleed; Bahnschrift falls back to Arial Narrow on Windows 7 (Kiosk supports Win7 SP1)</li></ul></header>
+<h2>Kiosk · Home <small>1920×1080 · scaled to fit</small></h2>
+<div class="frame"><div class="k">
+<div class="k-bg hero-art art-valorant"><div class="shape1"></div><div class="shape2"></div><div class="shape3"></div><div class="shape4"></div></div>
+<div class="k-scrim"></div>
+<header class="k-top">
+ <div class="logo"><span class="mark">A</span><span class="wm">ARENA 360<small>Koramangala</small></span></div>
+ <nav class="pills"><a class="on">Home</a><a>Games</a><a>Apps</a><a>Shop</a></nav>
+ <div class="tr"><span class="ico">?</span><span class="ico">♪</span><span class="timechip"><i class="dot"></i><b>1h 42m left</b> · Prepaid</span><span class="acct"><span class="av">R</span>Rohit_K ▾</span></div>
+</header>
+<section class="k-tiles"><div class="tile big art-valorant"><span class="tname">VALORANT</span></div><div class="tile  art-cs2"><span class="tname">COUNTER-STRIKE 2</span></div><div class="tile  art-fortnite"><span class="tname">FORTNITE</span></div><div class="tile  art-gta"><span class="tname">GTA V</span></div><div class="tile  art-rl"><span class="tname">ROCKET LEAGUE</span></div><div class="tile  art-pubg"><span class="tname">PUBG</span></div><div class="tile all"><span class="tname2">All games<small>48 installed</small></span></div></section>
+<section class="k-hero">
+ <div class="eyebrow">Most played at Koramangala this week</div>
+ <h1 class="gtitle">VALORANT</h1>
+ <p class="gmeta">5v5 tactical shooter · Riot Client signed in · You last played 2 days ago</p>
+ <div class="ctas"><span class="cta">▶ Play now</span><span class="cta2">All games</span><span class="cta2">Order food</span></div>
+</section>
+<aside class="k-rail">
+ <div class="card sess"><div class="ch">This session</div>
+  <div class="sess-big"><b>1h 42m</b><span>left · ends 7:23 PM</span></div>
+  <div class="bar"><i style="width:43%"></i></div>
+  <div class="kv"><span>PC-07 · Zone B</span><span>Gamer 3h pack · Prepaid</span></div>
+  <span class="btn-s">Extend time</span></div>
+ <div class="card food"><div class="ch">Order food <small>to PC-07</small></div>
+  <div class="fl"><span>Masala Maggi</span><b>₹60</b></div><div class="fl"><span>Cold coffee</span><b>₹90</b></div><div class="fl"><span>Veg puff</span><b>₹40</b></div>
+  <span class="btn-s">Open menu</span></div>
+ <div class="card ann"><div class="ch">At the branch</div>
+  <div class="an"><b>Happy hour −20%</b><span>All PCs until 6 PM today</span></div>
+  <div class="an"><b>Valorant 5v5 cup · Sat 8 PM</b><span>Register your team at the counter · ₹500/team</span></div>
+  <div class="an"><b>Wi-Fi</b><span>Arena360_Guest · ask staff for password</span></div></div>
+</aside>
+</div></div>
+<div class="row" style="margin-top:24px"><figure><div class="frame mini"><div class="k hudk"><div class="k-bg art-cs2"></div>
+<div class="ingame"><div class="cross"></div><div class="igtext">CS2 · de_mirage · Round 14 — CT 8 : 5 T</div></div>
+<div class="hud-pill">PC-07 · <b>10m</b> left</div>
+<div class="hud-toast" role="status"><div class="ht-icon">!</div><div class="ht-body"><b>10 min left · Extend?</b><span>Prepaid time ends at 5:51 PM. Your game won't close until 2 min after.</span></div><div class="ht-act"><span class="btn-x primary">Extend 30 min · ₹40</span><span class="btn-x">Later</span></div></div>
+</div></div><figcaption>State · HUD warning at 10 min (toast over a running game, never steals focus)</figcaption></figure>
+<figure><div class="amenu-wrap"><div class="amenu"><div class="am-h"><span class="av">R</span><div><b>Rohit_K</b><small>+91 98•••• 4417 · Member</small></div></div>
+<div class="am-bal"><div><small>Wallet</small><b>₹240</b></div><div><small>Time left</small><b>1h 42m</b></div></div>
+<div class="am-i">Add time / Top up at counter</div><div class="am-i">My orders</div><div class="am-i">Account</div><div class="am-i">Lock PC (keep time)</div><div class="am-i out">Log out</div></div></div><figcaption>Account menu (₹ balance lives here, not in the top bar)</figcaption></figure></div>
+<h2>Hub · Floor view <small>1600×900 counter PC · scaled</small></h2>
+<div class="hframe"><div class="h">
+<aside class="h-side"><span class="hlogo">A</span><i class="on"><b>▦</b>Floor</i><i><b>⏱</b>Sessions</i><i><b>☺</b>Players</i><i><b>₹</b>POS</i><i><b>☰</b>Orders</i><i><b>⇄</b>Shift</i></aside>
+<header class="h-head"><div><b class="hb">Arena 360 · Koramangala</b><div class="hs">Wed 22 Oct · 5:41 PM · Shift: Priya</div></div>
+<span class="rule">⚡ Happy hour −20% until 6 PM</span><span class="off"><i></i>Offline · working locally</span><span class="grow"></span>
+<span class="cnt">7 in use · 3 free · 1 reserved</span><span class="hbtn primary">+ Walk-in</span><span class="hbtn">POS</span></header>
+<main class="h-main">
+<div class="zone"><h4>Zone A · Pro <small>RTX 4070 · 240 Hz · ₹100/hr</small><span class="legend"><span style="--c:var(--free)">Free</span><span style="--c:var(--sess)">In session</span><span style="--c:var(--res)">Reserved</span><span style="--c:var(--ord)">Order pending</span><span style="--c:var(--maint)">Maintenance</span><span style="--c:var(--offc)">Offline</span></span></h4><div class="grid">
+<div class="pc s-sess"><div class="top"><b class="nm">PC-01</b><span class="tag"></span></div><div><div class="big">2h 05m</div><div class="sub">Aditya S · Postpaid</div></div></div>
+<div class="pc s-ord"><div class="top"><b class="nm">PC-02</b><span class="tag">Order</span></div><div><div class="big">48m</div><div class="sub">Neha R · 2 items ₹150</div></div></div>
+<div class="pc s-free"><div class="top"><b class="nm">PC-03</b><span class="tag"></span></div><div><div class="big">Free</div><div class="sub">Tap to start</div></div></div>
+<div class="pc s-sess s-low"><div class="top"><b class="nm">PC-04</b><span class="tag">Low</span></div><div><div class="big">8m left</div><div class="sub">Kabir M · Prepaid</div></div></div>
+<div class="pc s-res"><div class="top"><b class="nm">PC-05</b><span class="tag">Reserved</span></div><div><div class="big">6:30 PM</div><div class="sub">Team Phoenix · 5 PCs</div></div></div>
+<div class="pc s-free"><div class="top"><b class="nm">PC-06</b><span class="tag"></span></div><div><div class="big">Free</div><div class="sub">Tap to start</div></div></div>
+</div></div>
+<div class="zone"><h4>Zone B · Standard <small>GTX 1660 · 144 Hz · ₹70/hr</small></h4><div class="grid">
+<div class="pc s-sess"><div class="top"><b class="nm">PC-07</b><span class="tag"></span></div><div><div class="big">1h 42m</div><div class="sub">Rohit K · Prepaid</div></div></div>
+<div class="pc s-off"><div class="top"><b class="nm">PC-08</b><span class="tag"></span></div><div><div class="big">Offline</div><div class="sub">Last seen 4:02 PM</div></div></div>
+<div class="pc s-free"><div class="top"><b class="nm">PC-09</b><span class="tag"></span></div><div><div class="big">Free</div><div class="sub">Tap to start</div></div></div>
+<div class="pc s-maint"><div class="top"><b class="nm">PC-10</b><span class="tag"></span></div><div><div class="big">Maintenance</div><div class="sub">Headset swap · Arjun</div></div></div>
+</div></div>
+<div class="zone"><h4>Consoles <small>PS5 · ₹120/hr</small></h4><div class="grid">
+<div class="pc s-sess"><div class="top"><b class="nm">PS5-1</b><span class="tag"></span></div><div><div class="big">35m</div><div class="sub">Guest 14 · Postpaid</div></div></div>
+<div class="pc s-free"><div class="top"><b class="nm">PS5-2</b><span class="tag"></span></div><div><div class="big">Free</div><div class="sub">Tap to start</div></div></div>
+</div></div>
+</main></div></div>
+</body></html>

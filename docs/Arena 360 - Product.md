@@ -1,10 +1,10 @@
-# Gamezone SaaS — Product Requirements
+# Arena 360 — Product Requirements
 
 Oct 22, 2026 · @Harish
 
 ## Summary and goals
 
-Gamezone is a local-first management system for gaming cafes and game zones: a Hub app that runs the branch from a counter PC, a Kiosk app on every gaming PC, a Pi controller for consoles, an Owner app for multi-branch oversight, and a marketing site with a self-serve onboarding flow. The branch keeps working with the internet down; the cloud mirrors data and relays owner commands. Architecture is specified separately in "Gamezone SaaS — Low-Level Architecture".
+Arena 360 is a local-first management system for gaming cafes and game zones: a Hub app that runs the branch from a counter PC, a Kiosk app on every gaming PC, a Pi controller for consoles, an Owner app for multi-branch oversight, and a marketing site with a self-serve onboarding flow. The branch keeps working with the internet down; the cloud mirrors data and relays owner commands. Architecture is specified separately in "Gamezone SaaS — Low-Level Architecture".
 
 **Goals**
 
@@ -35,7 +35,7 @@ Gamezone is a local-first management system for gaming cafes and game zones: a H
 | Ads | Rewarded ads via AdMob on the Android Hub; attract-screen ads on kiosks served from the Hub's creative pack | No direct ad sales team needed at launch |
 | WhatsApp | Gupshup as the WhatsApp Business provider | SMS fallback also via Gupshup |
 | OTP | Mandatory on Owner app sign-up and new-device login; player sign-up at kiosk needs no OTP | SMS cost only on owner side |
-| Kiosk OS | Windows 7 SP1 and later | Kiosk built on .NET Framework 4.8 (WPF), not Tauri or WebView2, which no longer support Windows 7 |
+| Kiosk OS | Windows 10 and later (Windows 7 dropped) | Kiosk and Windows Hub built on Tauri (WebView2); one shared web UI and design-token codebase. Revised 22 Oct 2026 in UX planning, superseding .NET Framework 4.8 (WPF) on Windows 7 SP1 |
 | Console pricing | Consoles always have their own groups and packs; never shared with PC packs | Simplifies pack rules; a "combo" pack is two packs sold together |
 | Partner program | Reseller and installer program at launch | Pricing page carries a partner tab; control plane tracks referral codes |
 | Markets | All countries at launch with purchasing-power-parity pricing | See Regional pricing under Tiers |
@@ -84,7 +84,7 @@ The Hub runs the floor. Everything below works with the internet down and is one
 
 | Feature | Requirement | Acceptance criteria | Phase |
 | --- | --- | --- | --- |
-| Profile | Phone (unique per branch), name, PIN, optional email, DOB, notes, tags | Create in under 15 s at counter; phone lookup finds a player in 1 tap | MVP |
+| Profile | Username and password (username unique per branch), phone (unique per branch), name, optional email, DOB, notes, tags | Create in under 15 s at counter; phone lookup finds a player in 1 tap | MVP |
 | Guest | Start a session without a profile; convert to profile later | Guest sessions appear in reports as "Guest"; conversion keeps history | MVP |
 | Wallet | Prepaid balance in paise; top-up by cash, UPI, card; full ledger | Balance never negative; every change has a ledger row with actor | MVP |
 | Credit | Postpaid limit per player, overdue days, reminder cycle (3, 7, 14 days) via WhatsApp/SMS | Session start blocked when limit exceeded; manager PIN can override once | MVP |
@@ -223,7 +223,7 @@ Access is role-based with a fixed permission catalogue; owners compose roles, th
 | Opening hours | Per day; used by passes, dynamic pricing and "branch offline" alerts | MVP |
 | Notifications | WhatsApp provider keys, SMS provider, templates for credit reminder, low balance, session ending | MVP |
 | Ads (Free tier) | Consent view; ad slots cannot be disabled on Free | MVP |
-| Language | English, Hindi, Tamil, Telugu, Kannada, Bengali, Indonesian, Vietnamese at launch | MVP (English, Hindi), v1.1 (rest) |
+| Language | English only (revised 22 Oct 2026; other languages deferred, strings stay externalised) | MVP (English) |
 
 **Reports (on the Hub, offline)**
 
@@ -268,8 +268,8 @@ The Kiosk is a Windows app that owns the PC between sessions and stays out of th
 | Feature | Requirement | Acceptance criteria | Phase |
 | --- | --- | --- | --- |
 | Attract screen | Idle loop: branch branding, current rates, promotions; ad slot on Free tier | Ad every 15 min minimum per entitlement; no ads on Basic/Premium | MVP |
-| Login | Phone + PIN, or QR from Hub, or staff starts from Hub (walk-in) | Login under 3 s on LAN | MVP |
-| Sign-up | Phone, name, PIN; OTP optional per branch; consent text | Creates profile on Hub; duplicates blocked by phone | MVP |
+| Login | Username + password, or QR from Hub, or staff starts from Hub (walk-in) | Login under 3 s on LAN | MVP |
+| Sign-up | Username, password, phone, name; OTP optional per branch; consent text | Creates profile on Hub; duplicates blocked by username and by phone | MVP |
 | Session start | Choose plan or pack when prepaid; postpaid shows rate and starts | Shows device group rate and any active dynamic rule | MVP |
 | Overlay HUD | Small always-on-top widget: time left or elapsed, balance, hotkey to expand | Does not steal focus from games; hides in fullscreen exclusive mode with a toast on warnings | MVP |
 | Warnings | At 10 and 5 minutes and 60 seconds; low balance | Toast plus sound; configurable | MVP |
@@ -426,7 +426,7 @@ These apply to every app and are tested as a group before each release.
 | Payments | UPI dynamic QR via Razorpay and PhonePe; card via external terminal with reference entry; cash | Webhook confirm within 10 s online; manual confirm offline flagged |
 | Notifications | WhatsApp Business API (via provider), SMS fallback, push for owner app | Templates versioned; opt-in stored per player |
 | Ads (Free) | Attract-screen and Hub-banner slots served from a cached creative pack; impressions batched to the change log; no ads during a session on a player screen | Impression counts within 2% of cloud tally |
-| Languages | UI strings externalised; English and Hindi at MVP; number and date formats by locale | No hard-coded strings in release build |
+| Languages | UI strings externalised; English only at MVP (revised 22 Oct 2026); number and date formats by locale | No hard-coded strings in release build |
 | Accessibility | Touch targets 44 px minimum on Hub; high-contrast theme; keyboard shortcuts for POS | Counter flow possible without mouse |
 | Performance | Hub idle under 50 MB RAM, UI actions under 100 ms on LAN, floor view 60 devices without lag on a 2015 PC | Benchmark on reference hardware per release |
 | Security | Device tokens, PIN elevation, audit on every write, no inbound ports on the Hub, SQLCipher opt-in | Pen test on Kiosk lockdown before GA |
@@ -435,7 +435,7 @@ These apply to every app and are tested as a group before each release.
 | Updates | Hub and Kiosk auto-update with staged rollout and rollback; never during an open session | Rollback tested each release |
 | Support | In-app "send diagnostics" bundles logs and config (no player PII) | Bundle under 5 MB |
 
-**Windows 7 support.** The Kiosk targets Windows 7 SP1 through Windows 11 on .NET Framework 4.8 with WPF. TLS 1.2 must be enabled explicitly on Windows 7 (registry and `ServicePointManager`), WebSocket uses a managed client rather than the OS stack, and the overlay avoids DirectComposition. The Windows Hub build targets Windows 10 and later; cafes on Windows 7 counter PCs use the Android Hub or upgrade the counter PC.
+**Windows support.** The Kiosk and the Windows Hub are Tauri apps rendering in WebView2 and target Windows 10 and later. Windows 7 is not supported: cafes with Windows 7 gaming PCs must upgrade them, and cafes on Windows 7 counter PCs use the Android Hub or upgrade the counter PC. (Revised 22 Oct 2026; previously .NET Framework 4.8 with WPF on Windows 7 SP1.)
 
 ## Tiers and ads
 
@@ -523,7 +523,7 @@ Region is set from the tenant's billing country at sign-up and verified by payme
 | WhatsApp Business provider | Gupshup |
 | Rewarded-ad inventory | AdMob on the Android Hub (Free tier only); no Windows ad SDK |
 | OTP on sign-up | Mandatory for the Owner app; none for player sign-up at kiosk |
-| Minimum Windows version for Kiosk | Windows 7 SP1 |
+| Minimum Windows version for Kiosk | Windows 10 (revised 22 Oct 2026; was Windows 7 SP1) |
 | Console packs shared with PCs | Never; consoles always have separate groups and packs |
 | Partner program timing | At launch, with reseller margin and lead sharing defined before pricing page goes live |
 | Second-wave countries | All countries at launch with PPP pricing bands (see Tiers) |

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hub POS</title>
+<style>
+/* GOVERNED BY (spine is the contract; this mock only illustrates):
+   EXPERIENCE.md: Component Patterns rows pos-product-grid, cart (Hub), settle-bar, payment-split (UPI last-4 required),
+     player-lookup, undo-toast (receipt / void-with-audit assumption); State Patterns 'No printer', 'Empty';
+     Journey 2 step 7, Journey 6.
+   DESIGN.md: Layout & Spacing (Hub desktop: grid and cart 40 apart), Components pos-product-grid (tilePadding 16, gap 16),
+     cart (hubBackground), settle-bar (padding 16 24), payment-split, bill-breakdown, text-field, focus-ring.
+   Tokens: DESIGN.md frontmatter — colours (Cinema Electric, hub/staff mood) and the AIRY Hub spacing set
+   (hub-gutter 32 · hub-section-gap 40 · hub-panel-padding 24 · hub-tile-padding 16 · hub-header-height 72 ·
+   hub-rail-width 88 · floor-grid-gap 24 · phone: hub-gutter-phone 16 · floor-grid-gap-phone 12 · bottom bar 64).
+   Rendered at true 1:1 on a scrollable canvas (no scaling). Font: Sora stack, no network. No JS. */
+:root{
+  /* colours — DESIGN.md frontmatter (Cinema Electric, hub/staff mood) */
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--text-muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;
+  --ok:#5FE6A0;--warning:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --ring-in:#FF4FA8;--ring-out:#F5F2FF;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;
+  --st-free:#5FE6A0;--st-session:#7FB2FF;--st-paused:#5C82BD;--st-reserved:#C8A2FF;--st-order:#FFBE3D;
+  --st-maint:#8A85A8;--st-offline:#FF5C5C;--st-unassigned:#ACA5CC;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --r-xs:6px;--r-sm:10px;--r-md:16px;--r-lg:20px;--r-xl:24px;--r-full:9999px;
+  /* spacing scale {spacing.1}…{spacing.12} */
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:40px;--s8:56px;--s9:64px;--s10:80px;--s11:96px;--s12:128px;
+  --touch:44px;
+  /* Hub spacing tokens (airy console-dashboard) */
+  --hub-gutter:32px;--hub-gutter-phone:16px;--hub-section-gap:40px;--hub-panel-padding:24px;
+  --hub-tile-padding:16px;--hub-header-height:72px;--hub-rail-width:88px;
+  --floor-grid-gap:24px;--floor-grid-gap-phone:12px;
+  --font:"Sora","Segoe UI","Roboto",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:#05040f}
+/* True 1:1 canvas: the page is as wide as its frames and scrolls; nothing is scaled down. */
+body{background:#05040f;color:var(--text);font-family:var(--font);font-size:15px;line-height:1.45;padding:var(--s6);width:max-content;min-width:100%}
+.tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mock-cap{width:1920px;margin:0 0 var(--s5);color:var(--text-muted);font-size:14px;display:flex;flex-direction:column;gap:var(--s2)}
+.mock-cap h1{color:var(--text);font-size:20px;font-weight:600}
+.mock-cap .tags{display:flex;flex-wrap:wrap;gap:var(--s2)}
+.open,.assume{display:inline-block;border:1px dashed var(--warning);color:var(--warning);background:#1E1606;border-radius:var(--r-xs);padding:2px 8px;font-size:12px;font-weight:700;letter-spacing:.02em}
+.assume{border-color:var(--info);color:var(--info);background:#0E1730}
+.resolved{display:inline-block;border:1px solid var(--ok);color:var(--ok);border-radius:var(--r-xs);padding:2px 8px;font-size:12px;font-weight:700;letter-spacing:.02em}
+/* desktop frame 1920×1080 */
+.frame{width:1920px;height:1080px;flex:none;position:relative;overflow:hidden;background:var(--hub-bg);border:1px solid var(--hub-line);border-radius:8px;display:grid;grid-template-columns:var(--hub-rail-width) 1fr;grid-template-rows:var(--hub-header-height) minmax(0,1fr)}
+.focus{outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+/* hub-rail */
+.rail{grid-row:1/3;background:var(--hub-bg);border-right:1px solid var(--hub-line);display:flex;flex-direction:column;align-items:center;gap:var(--s2);padding:var(--s4) var(--s2)}
+.rail .mark{width:44px;height:44px;border-radius:50%;border:2px solid var(--text);display:grid;place-items:center;font-weight:300;font-size:18px;margin-bottom:var(--s4);flex:none}
+.rail a{width:72px;min-height:64px;border-radius:var(--r-sm);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s1);color:var(--text-muted);text-decoration:none}
+.rail a b{font-size:20px;line-height:1;font-weight:400}
+.rail a span{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.rail a.on{background:var(--hub-line);color:var(--text)}
+.rail .sp{flex:1}
+/* hub-header: height 72, padding 0 32, item gap 24 */
+.hdr{background:var(--hub-header);border-bottom:1px solid var(--hub-line);display:flex;align-items:center;gap:var(--s5);padding:0 var(--hub-gutter);min-width:0}
+.hdr .branch{font-size:18px;font-weight:600;white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:var(--s2);min-height:32px;padding:6px 14px;border-radius:var(--r-full);font-size:13px;font-weight:700;white-space:nowrap}
+.chip-rule{background:var(--chip-rule-bg);color:var(--chip-rule-text)}
+.chip-off{background:var(--chip-off-bg);color:var(--chip-off-text)}
+.chip-off i{width:8px;height:8px;border-radius:50%;background:var(--chip-off-text)}
+.backup{font-size:13px;font-weight:500;color:var(--text-muted);background:none;border:0;font-family:inherit;min-height:44px;padding:0;text-decoration:underline;text-underline-offset:3px;white-space:nowrap}
+.grow{flex:1}
+.hdr-alert{display:inline-flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s4) 0 var(--s3);border-radius:var(--r-full);background:var(--hub-tile);border:1px solid var(--border-strong);color:var(--text);font:inherit;font-size:13px;font-weight:500;white-space:nowrap}
+.abadge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;border-radius:var(--r-full);background:var(--danger);color:var(--on-danger);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.clock{font-size:13px;color:var(--text-muted);white-space:nowrap}
+.staff{display:inline-flex;align-items:center;gap:var(--s2);font-size:13px;font-weight:500;white-space:nowrap}
+.staff .av{width:36px;height:36px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);display:grid;place-items:center;font-weight:700}
+/* main area: gutter 32 */
+.main{padding:var(--hub-gutter);overflow-y:auto;overflow-x:hidden;position:relative;min-height:0}
+/* zones: 40 apart; header row 16 above grid */
+.zone+.zone{margin-top:var(--hub-section-gap)}
+.zh{display:flex;align-items:center;gap:var(--s4);min-height:44px;margin-bottom:var(--s4)}
+.zh h2{font-size:18px;font-weight:600;white-space:nowrap}
+.zh .meta{font-size:13px;font-weight:500;color:var(--text-muted);white-space:nowrap}
+.zh .count{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);white-space:nowrap}
+.zh .grow{flex:1;height:1px;background:var(--hub-line)}
+.collapse{width:44px;height:44px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font:inherit;font-size:16px;display:grid;place-items:center;flex:none}
+.zone.collapsed{background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--s4) var(--s5)}
+.zone.collapsed .zh{margin:0}
+.zsum{display:flex;gap:var(--s4);align-items:center;flex-wrap:wrap}
+.zsum span{font-size:13px;font-weight:500;color:var(--text-muted);white-space:nowrap}
+.zsum i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px;vertical-align:1px}
+.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:var(--floor-grid-gap)}
+/* floor-tile: min-height 128, padding 16, 3px state bar */
+.tile{position:relative;min-height:var(--s12);background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--hub-tile-padding);display:flex;flex-direction:column;gap:var(--s3);overflow:hidden;color:var(--text);min-width:0}
+.tile::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--c,transparent)}
+.tile .r1{display:flex;align-items:center;gap:var(--s2);min-height:24px}
+.tile .nm{font-size:18px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .glyph{color:var(--text-muted);font-size:16px}
+.corner{margin-left:auto;display:flex;align-items:center;gap:var(--s1);flex:none}
+.tile .r2{display:flex;align-items:baseline;gap:var(--s2)}
+.tile .big{font-size:26px;font-weight:800;line-height:1.1;white-space:nowrap}
+.tile .unit{font-size:13px;font-weight:500;color:var(--text-muted)}
+.tile .r3{display:flex;flex-direction:column;gap:var(--s1);margin-top:auto}
+.tile .r3a{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.tile .who{font-size:13px;font-weight:500;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .sub{font-size:13px;font-weight:500;color:var(--text-muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:var(--r-xs);border:1px solid currentColor;color:var(--c);background:var(--hub-tile);white-space:nowrap;line-height:1.3;flex:none}
+.obadge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:3px 6px;border-radius:var(--r-xs);background:var(--st-order);color:var(--hub-tile);white-space:nowrap;line-height:1.2}
+.s-free{--c:var(--st-free)}.s-sess{--c:var(--st-session)}.s-paused{--c:var(--st-paused)}.s-res{--c:var(--st-reserved)}
+.s-maint{--c:var(--st-maint)}.s-off{--c:var(--st-offline)}
+.s-un{--c:var(--st-unassigned);border:2px dashed var(--st-unassigned)}
+.s-un::after{display:none}
+.s-paused .big{color:var(--st-paused)}
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);min-height:44px;padding:0 var(--s5);border-radius:var(--r-full);font:inherit;font-size:15px;font-weight:700;white-space:nowrap;cursor:pointer}
+.btn-p{background:var(--accent);color:var(--on-accent);border:0;font-weight:800}
+.btn-s{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong)}
+.btn-p[disabled]{background:var(--surface-2);color:var(--text-muted);border:1px dashed var(--border-strong)}
+.btn-s.sel{background:var(--text);color:var(--bg);border-color:var(--text)}
+.btn-s[disabled]{color:var(--text-muted);border-style:dashed}
+/* fields */
+.field{display:flex;flex-direction:column;gap:var(--s2);min-width:0}
+.field label,.field .fl{font-size:13px;font-weight:500;color:var(--text-muted)}
+.input{min-height:44px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:0 var(--s3);display:flex;align-items:center;font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden}
+.input.ph{color:var(--text-muted)}
+.input.focused{border:2px solid var(--accent);outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+.input.err{border:2px solid var(--danger)}
+.ferr{font-size:13px;font-weight:600;color:var(--danger)}
+/* inline-pin */
+.pin{display:flex;gap:var(--s2)}
+.pin span{width:44px;height:48px;border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--border-strong);display:grid;place-items:center}
+.pin span.f::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--text)}
+.pin span.cur{outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+/* undo-toast: padding 16 24 */
+.undo{display:flex;align-items:center;gap:var(--s5);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--s2) var(--s2) var(--s2) var(--s5);min-height:60px;font-size:15px;min-width:560px}
+.undo .msg{flex:1;white-space:nowrap}
+.undo .left{color:var(--text-muted);font-size:13px;white-space:nowrap}
+.undo .act{min-height:44px;padding:0 var(--s4);border-radius:var(--r-sm);background:none;border:0;color:var(--accent);font:inherit;font-weight:800;font-size:15px;text-decoration:underline;text-underline-offset:3px}
+/* bill-breakdown: padding 24, row gap 12 */
+.bill{background:var(--hub-tile);border:1px solid var(--hub-line);border-radius:var(--r-md);padding:var(--hub-panel-padding);display:flex;flex-direction:column;gap:var(--s3)}
+.bill .ln{display:flex;justify-content:space-between;gap:var(--s4);font-size:15px}
+.bill .ln span:last-child{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.bill .ln.m{color:var(--text-muted);font-size:13px}
+.bill .tot{border-top:1px solid var(--border-strong);padding-top:var(--s4);margin-top:var(--s1);display:flex;justify-content:space-between;align-items:baseline;gap:var(--s4)}
+.bill .tot b{font-size:26px;font-weight:800;line-height:1.1}
+.h3{font-size:18px;font-weight:600;line-height:1.3}
+.lbl{font-size:13px;font-weight:500;color:var(--text-muted)}
+.micro{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+.close{width:44px;height:44px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-size:16px;flex:none}
+/* alternate-state strip under a frame */
+.alt{margin-top:var(--s7);width:1920px;display:flex;gap:var(--hub-section-gap);align-items:flex-start}
+.altcard{background:var(--surface);border:1px solid var(--hub-line);border-radius:var(--r-xl);padding:var(--hub-panel-padding);flex:1;display:flex;flex-direction:column;gap:var(--s4);min-width:0}
+
+.frame.pos .mainwrap{display:flex;flex-direction:column;min-height:0}
+.frame.pos .main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 560px;gap:var(--hub-section-gap);align-items:start}
+.pgrid{display:flex;flex-direction:column;gap:var(--s5);min-width:0}
+.cats{display:flex;gap:var(--s2);align-items:center}
+.search{width:360px;margin-left:auto}
+.prods{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s4)}
+.prod{background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--hub-tile-padding);display:flex;flex-direction:column;gap:var(--s3);position:relative;color:var(--text);text-align:left;font:inherit;min-width:0}
+.photo{height:112px;border-radius:var(--r-sm);background:var(--surface-2);display:grid;place-items:center;color:var(--text-muted);font-size:13px;font-weight:600;letter-spacing:.06em}
+.prod .pr{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3)}
+.prod .pn{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prod .pp{font-size:26px;font-weight:800;line-height:1.1}
+.prod .star{position:absolute;top:calc(var(--hub-tile-padding) + 8px);left:calc(var(--hub-tile-padding) + 10px);color:var(--text);font-size:16px}
+.prod.oos .photo{opacity:.35}
+.prod.oos .oost{position:absolute;top:calc(var(--hub-tile-padding) + 8px);right:calc(var(--hub-tile-padding) + 8px)}
+.cartp{background:var(--hub-tile);border:1px solid var(--line);border-radius:var(--r-xl);padding:var(--hub-panel-padding);display:flex;flex-direction:column;gap:var(--s5)}
+.attach{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--border-strong)}
+.lines{display:flex;flex-direction:column}
+.cl{display:flex;align-items:center;gap:var(--s3);padding:var(--s2) 0;border-bottom:1px solid var(--hub-line)}
+.cl:first-child{padding-top:0}
+.cl .n{flex:1;font-size:15px}
+.step{display:flex;align-items:center;gap:var(--s2)}
+.step button{width:44px;height:44px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-size:18px;font-weight:700}
+.step b{min-width:24px;text-align:center}
+.cl .a{width:96px;text-align:right}
+.cartp .bill{background:var(--hub-bg);padding:var(--s4)}
+.split{display:flex;flex-direction:column;gap:var(--s3)}
+.srow{display:grid;grid-template-columns:72px minmax(0,1fr) minmax(0,1fr) 44px;gap:var(--s3);align-items:end}
+.srow .m{font-weight:700;min-height:44px;display:flex;align-items:center}
+.rem{display:flex;justify-content:space-between;align-items:baseline;padding:var(--s3) var(--s4);border-radius:var(--r-sm);border:1px solid currentColor}
+.rem b{font-size:26px;font-weight:800;line-height:1.1}
+.rem.ok{color:var(--ok)} .rem.open{color:var(--warning)}
+.settle{background:var(--hub-header);border-top:1px solid var(--border-strong);display:flex;align-items:center;gap:var(--s3);padding:var(--s4) var(--hub-panel-padding);flex:none}
+.settle .tot{display:flex;flex-direction:column;margin-right:var(--s3)}
+.settle .tot b{font-size:26px;font-weight:800;line-height:1.1}
+.settle .vr{width:1px;height:44px;background:var(--hub-line);margin:0 var(--s3)}
+.settle .grp{display:flex;gap:var(--s2);align-items:center}
+.inlinewhy{color:var(--warning);font-size:13px;font-weight:600}
+.printer{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted)}
+.printer i{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.alt.pos2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.alt .undo{min-width:0}
+.alt .undo .msg{white-space:normal}
+.alt .srow{grid-template-columns:72px 200px 240px 44px;justify-content:start}
+
+</style></head><body>
+<div class="mock-cap "><h1>Hub · POS — Windows 1920×1080 (1:1)</h1><div>Rohit sells Aman 2 Masala Maggi, 1 Cold coffee, 4 Lays; split ₹200 cash + ₹110 UPI recorded by the required last 4 digits of the transaction reference (no QR, no webhook). Remainder zero → Settle enabled. Grid and cart sit 40 apart; product tiles pad 16 with 16 gaps; cart pads 24; settle bar pads 16 / 24. Printer is available, so Print is offered.</div><div class="tags"><span class="open">[open: POS key map — not defined]</span><span class="resolved">UPI: last 4 digits of the reference, required</span><span class="resolved">Receipt prints only if a printer is available</span></div></div><div class="frame pos"><nav class="rail" aria-label="Hub"><span class="mark" aria-label="Arena 360">A</span><a href="#"><b aria-hidden="true">▦</b><span>Floor</span></a><a href="#" class="on" aria-current="page"><b aria-hidden="true">₹</b><span>POS</span></a><a href="#"><b aria-hidden="true">☺</b><span>Players</span></a><a href="#"><b aria-hidden="true">◷</b><span>Sessions</span></a><a href="#"><b aria-hidden="true">▤</b><span>Inventory</span></a><a href="#"><b aria-hidden="true">⇄</b><span>Shift</span></a><a href="#"><b aria-hidden="true">▥</b><span>Reports</span></a><a href="#"><b aria-hidden="true">⚙</b><span>Settings</span></a><span class="sp"></span><a href="#"><b aria-hidden="true">⛁</b><span>System</span></a></nav><header class="hdr">
+  <span class="branch">Arena 360 · Koramangala</span>
+  <span class="chip chip-rule">⚡ Happy hour −20% · until 6:00 pm</span>
+  <span class="chip chip-off" role="status"><i aria-hidden="true"></i>Internet offline · working locally</span>
+  <button class="backup tnum" title="Opens System">Backup: last upload 4:58 pm · 3 batches pending</button>
+  <span class="grow"></span>
+  <button class="hdr-alert" aria-label="3 alerts"><span class="abadge tnum">3</span>Alerts</button>
+  <span class="clock tnum">Thu 23 Oct · 5:41 pm</span>
+  <span class="staff"><span class="av">R</span>Rohit · Counter</span>
+</header><div class="mainwrap"><main class="main"><section class="pgrid" aria-label="Products"><div class="cats"><button class="btn btn-s sel">★ Favourites</button><button class="btn btn-s">Snacks</button><button class="btn btn-s">Drinks</button><button class="btn btn-s">Meals</button><button class="btn btn-s">Combos</button><div class="field search"><div class="input ph">Search or scan barcode</div></div></div><div class="prods"><button class="prod "><span class="star" aria-label="Favourite">★</span><span class="photo" role="img" aria-label="Masala Maggi photo">MAGGI</span><span class="pr"><span class="pn">Masala Maggi</span><span class="pp tnum">₹70</span></span></button><button class="prod "><span class="star" aria-label="Favourite">★</span><span class="photo" role="img" aria-label="Cold coffee photo">COFFEE</span><span class="pr"><span class="pn">Cold coffee</span><span class="pp tnum">₹90</span></span></button><button class="prod "><span class="star" aria-label="Favourite">★</span><span class="photo" role="img" aria-label="Lays Magic Masala photo">CHIPS</span><span class="pr"><span class="pn">Lays Magic Masala</span><span class="pp tnum">₹20</span></span></button><button class="prod "><span class="photo" role="img" aria-label="Veg sandwich photo">SANDWICH</span><span class="pr"><span class="pn">Veg sandwich</span><span class="pp tnum">₹80</span></span></button><button class="prod "><span class="photo" role="img" aria-label="Paneer roll photo">ROLL</span><span class="pr"><span class="pn">Paneer roll</span><span class="pp tnum">₹110</span></span></button><button class="prod "><span class="photo" role="img" aria-label="Egg Maggi photo">MAGGI</span><span class="pr"><span class="pn">Egg Maggi</span><span class="pp tnum">₹90</span></span></button><button class="prod "><span class="photo" role="img" aria-label="French fries photo">FRIES</span><span class="pr"><span class="pn">French fries</span><span class="pp tnum">₹90</span></span></button><button class="prod "><span class="photo" role="img" aria-label="Coke 300 ml photo">COKE</span><span class="pr"><span class="pn">Coke 300 ml</span><span class="pp tnum">₹40</span></span></button><button class="prod "><span class="photo" role="img" aria-label="Red Bull 250 ml photo">CAN</span><span class="pr"><span class="pn">Red Bull 250 ml</span><span class="pp tnum">₹125</span></span></button><button class="prod "><span class="photo" role="img" aria-label="Water 1 L photo">WATER</span><span class="pr"><span class="pn">Water 1 L</span><span class="pp tnum">₹20</span></span></button><button class="prod oos" disabled><span class="sb oost" style="--c:var(--text)">Out of stock</span><span class="photo" role="img" aria-label="Chocolate shake photo">SHAKE</span><span class="pr"><span class="pn">Chocolate shake</span><span class="pp tnum">₹120</span></span></button><button class="prod "><span class="photo" role="img" aria-label="Maggi + Cold coffee combo photo">COMBO</span><span class="pr"><span class="pn">Maggi + Cold coffee combo</span><span class="pp tnum">₹150</span></span></button></div></section><section class="cartp" aria-label="Cart">
+  <div class="h3">Cart</div>
+  <div class="attach"><span class="sb" style="--c:var(--st-session)">In session</span><span style="flex:1"><b>Aman</b> · PC-01 · +91 98••• ••417</span><button class="btn btn-s">Change</button></div>
+  <div class="lines">
+    <div class="cl"><span class="n">Masala Maggi</span><span class="step"><button aria-label="Remove one">−</button><b class="tnum">2</b><button aria-label="Add one">+</button></span><span class="a tnum">₹140.00</span></div>
+    <div class="cl"><span class="n">Cold coffee</span><span class="step"><button aria-label="Remove one">−</button><b class="tnum">1</b><button aria-label="Add one">+</button></span><span class="a tnum">₹90.00</span></div>
+    <div class="cl"><span class="n">Lays Magic Masala</span><span class="step"><button aria-label="Remove one">−</button><b class="tnum">4</b><button aria-label="Add one">+</button></span><span class="a tnum">₹80.00</span></div>
+  </div>
+  <div class="bill">
+    <div class="ln m"><span>Subtotal</span><span>₹310.00</span></div>
+    <div class="ln m"><span>GST 5% (included)</span><span>₹14.76</span></div>
+    <div class="tot"><span class="lbl">Total</span><b class="tnum">₹310.00</b></div>
+  </div>
+  <div class="split" role="group" aria-label="Payment split">
+    <div class="micro">Payments</div>
+    <div class="srow"><span class="m">Cash</span><div class="field"><label>Amount</label><div class="input tnum">₹200.00</div></div><div></div><button class="close" aria-label="Remove cash">✕</button></div>
+    <div class="srow"><span class="m">UPI</span><div class="field"><label>Amount</label><div class="input tnum">₹110.00</div></div><div class="field"><label for="u4">Ref · last 4 digits (required)</label><div class="input tnum focused" id="u4">4417</div></div><button class="close" aria-label="Remove UPI">✕</button></div>
+    <div class="rem ok" role="status"><span>✓ Paid in full</span><b class="tnum">₹0.00</b></div>
+  </div>
+</section></main><div class="settle">
+  <div class="tot"><span class="lbl">Total</span><b class="tnum">₹310.00</b></div>
+  <div class="grp"><button class="btn btn-s sel">Cash</button><button class="btn btn-s sel">UPI</button><button class="btn btn-s">Card</button><button class="btn btn-s">Wallet</button><button class="btn btn-s">Credit</button></div>
+  <span class="vr"></span><div class="grp"><button class="btn btn-s">Coupon</button><button class="btn btn-s">Discount</button></div>
+  <span class="grow"></span>
+  <span class="printer"><i aria-hidden="true"></i>Printer ready</span>
+  <div class="grp"><span class="lbl" style="margin-right:4px">Receipt</span><button class="btn btn-s sel">Print</button><button class="btn btn-s">WhatsApp</button><button class="btn btn-s">None</button></div>
+  <button class="btn btn-p" style="min-width:200px;font-size:18px;margin-left:var(--s3)">Settle ₹310.00</button>
+</div></div></div>
+<div class="alt pos2">
+  <div class="altcard"><div class="micro">Alternate state · remainder open</div>
+    <div class="srow"><span class="m">Cash</span><div class="field"><label>Amount</label><div class="input tnum">₹200.00</div></div><div></div><span></span></div>
+    <div class="srow"><span class="m">UPI</span><div class="field"><label>Amount</label><div class="input tnum">₹50.00</div></div><div class="field"><label>Ref · last 4 digits (required)</label><div class="input ph">e.g. 4417</div></div><span></span></div>
+    <div class="rem open" role="status"><span>⚠ Remaining</span><b class="tnum">₹60.00</b></div>
+    <button class="btn btn-p" disabled aria-describedby="why" style="align-self:flex-start">Settle ₹310.00</button>
+    <div id="why" class="inlinewhy">Settle needs ₹60.00 more, or move it to credit (profiled credit player only).</div>
+  </div>
+  <div class="altcard"><div class="micro">Alternate state · UPI reference missing</div>
+    <div class="srow"><span class="m">UPI</span><div class="field"><label>Amount</label><div class="input tnum">₹110.00</div></div><div class="field"><label for="u5">Ref · last 4 digits (required)</label><div class="input err ph" id="u5">e.g. 4417</div></div><span></span></div>
+    <div class="ferr" role="alert">Enter the last 4 digits of the UPI reference to save this payment.</div>
+    <div class="lbl">The UPI row can't be saved without it, so Settle stays disabled.</div>
+  </div>
+  <div class="altcard"><div class="micro">Alternate state · no printer</div>
+    <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap"><span class="lbl" style="margin-right:4px">Receipt</span><button class="btn btn-s" disabled>Print</button><button class="btn btn-s">WhatsApp</button><button class="btn btn-s sel">None</button></div>
+    <div class="lbl">No printer connected — nothing will print. Settle is never blocked.</div>
+    <button class="btn btn-p" style="align-self:flex-start">Settle ₹310.00</button>
+  </div>
+  <div class="altcard"><div class="micro">After Settle · receipt printed</div>
+    <div class="undo" role="status"><span class="msg"><b>Settled</b> · Aman · <span class="tnum">₹310.00</span> · Receipt printed</span><span class="left tnum">8 s</span><button class="act">Undo</button></div>
+    <div class="lbl">Undo voids invoice No. 000123 and adds an audit entry.</div>
+    <div><span class="assume">[assumption: Undo after print = void with audit — confirm]</span></div>
+    <div class="micro" style="margin-top:var(--s2)">Empty cart</div><div class="lbl">Cart's empty.</div>
+  </div>
+</div>
+</body></html>

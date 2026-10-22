@@ -18,7 +18,7 @@ This is the high-level design for Arena360: what the system is made of, where ea
 | Free tier | Android Hub with AdMob; Windows Hub for paid | Ads need a mobile ad SDK; Free costs the company nothing |
 | Connectivity beyond LAN | Cloudflare Tunnel first; WebRTC only Hub-to-Hub | Tunnel is free and needs no NAT code; TURN reserved for off-site standby |
 | Billing | Razorpay only, autopay mandatory | One integration; recurring revenue by default |
-| Kiosk platform | Windows 7 SP1+, .NET Framework 4.8 | The PCs cafes actually own |
+| Kiosk platform | Windows 10+, Tauri 2 (Rust core + WebView2) | One Rust toolchain shared with the Hub; Windows 7 dropped |
 
 **Out of scope here**: UI design (see the Arena360 design system), accounting exports, player mobile app, cloud gaming.
 
@@ -85,7 +85,7 @@ The whole fleet is served by one small VPS behind Cloudflare, with Turso and R2 
 | R2 | Managed | Free to 10 GB | Usage |
 | Hub primary | Cafe's counter PC (Windows 10+) or Android tablet (Free) | 50 MB RAM idle | One per branch |
 | Hub standby | Cafe's second PC | Same binary | Optional, paid |
-| Gaming PCs | Cafe's PCs, Windows 7 SP1+ | Kiosk app, .NET 4.8 | Up to the tier's device cap |
+| Gaming PCs | Cafe's PCs, Windows 10 1803+ | Kiosk app, Tauri | Up to the tier's device cap |
 | Pi per TV | Pi Zero 2 W or Pi 4 | Pi agent | One per console TV |
 | Kitchen tablet | Any browser on LAN | — | — |
 
@@ -145,14 +145,14 @@ Seven outside integrations, each behind one adapter module so a provider can be 
 
 ## Technology stack
 
-Two languages for the whole system: Rust for everything that holds data, and Dart for the owner app. The Kiosk is the one exception, on .NET so it runs on Windows 7.
+Two languages for the whole system: Rust for everything that holds data, and Dart for the owner app. The Kiosk is Tauri, so its core is the same Rust.
 
 | Component | Language, framework | Key libraries | Why |
 | --- | --- | --- | --- |
 | Hub (Windows) | Rust, Axum, Tokio | rusqlite (WAL), tokio-tungstenite, zstd, rmp-serde, mdns-sd, ed25519-dalek, reqwest | One static binary, 50 MB idle, same codebase as the cloud |
 | Hub (Android, Free) | Rust core via JNI + Kotlin shell | Same Rust crate; AdMob SDK; Android foreground service | Rust logic shared; Kotlin only for UI shell and ads |
 | Hub UI | Svelte, TypeScript | Tabler icons, Manrope | Small bundle for old counter PCs; served from the binary |
-| Kiosk | C#, .NET Framework 4.8, WPF | Managed WebSocket client, Win32 hooks for lockdown, LibreHardwareMonitor optional | Windows 7 SP1 support; WebView2 and Tauri cannot |
+| Kiosk | Rust, Tauri 2, Svelte front end in WebView2 | tokio-tungstenite, windows crate for hooks and process control, windows-service, Tauri updater | Shares arena-proto and cleaners with the Hub; Windows 10 1803+ only |
 | Pi agent | Rust (aarch64) | cec-client bindings, framebuffer or minimal Wayland for QR screen | Same crate family; low RAM |
 | Kitchen display | Web page served by Hub | Svelte | Any tablet, no install |
 | Control plane, ingester, command API | Rust, Axum, Tokio | libsql client (Turso), aws-sdk-s3 for R2, jsonwebtoken (EdDSA), argon2 | One binary, three roles by flag |
@@ -179,7 +179,7 @@ The branch is held to real-time standards; the cloud is held to "eventually, and
 | Footprint | Hub idle under 50 MB RAM, Kiosk under 80 MB, no GPU use | Reference hardware benchmark | Rust binary, WPF without composition effects |
 | Cost | Under ₹20 marginal per paid tenant per month; free tenant ≈ ₹0 | Cloud bills | Batched R2 writes, no per-tenant compute |
 | Security | No inbound ports on Hub; every device token revocable within one heartbeat; signed entitlements | Pen test before GA | See Security |
-| Compatibility | Kiosk on Windows 7 SP1 to 11; Hub on Windows 10+ and Android 9+ (3 GB RAM); any ESC/POS printer | Compatibility matrix | .NET 4.8; Rust; raw ESC/POS |
+| Compatibility | Kiosk on Windows 10 1803 to 11; Hub on Windows 10+ and Android 9+ (3 GB RAM); any ESC/POS printer | Compatibility matrix | Tauri; Rust; raw ESC/POS |
 | Offline duration | Unlimited for Free; paid features resume from cursor after any outage; entitlement cache 7 days | Soak test | Change-log cursors, cached JWT |
 | Upgrade safety | Hub and Kiosk updates never during an open session; rollback in one step | Release checklist | Staged rollout flags from control plane |
 | Localisation | UI strings externalised; number, date and currency by locale; PPP pricing bands | Build check | i18n from day one |
@@ -267,7 +267,7 @@ The table makes the priority order concrete: journeys 2, 3 and 4 depend only on 
 
 | Risk | Likelihood | Impact | Mitigation | Owner |
 | --- | --- | --- | --- | --- |
-| Kiosk lockdown bypassed on Windows 7 | Medium | Players reach the desktop; revenue leak | Shell replacement, hook-based key blocking, process allow-list; pen test before GA; bug bounty for cafes | Engineering |
+| Kiosk lockdown bypassed | Medium | Players reach the desktop; revenue leak | Shell replacement, hook-based key blocking, process allow-list; pen test before GA; bug bounty for cafes | Engineering |
 | Split-brain after a bad promote | Low | Duplicate writes during a partition | Epoch in every transaction; old-epoch batches quarantined; manual promote in v1 | Engineering |
 | R2 write costs from a bad interval | Medium if misconfigured | 100× cost per tenant | Hard floor of 30 s on `upload_interval_s`; cost alert per tenant | Engineering |
 | Turso plan ceiling at tens of thousands of active DBs | Medium at scale | Cost or forced migration | Self-hosted libSQL path tested in staging by 1,000 tenants | Engineering |
@@ -275,7 +275,7 @@ The table makes the priority order concrete: journeys 2, 3 and 4 depend only on 
 | AdMob policy rejects the kiosk/counter use case | Medium | Free tier loses funding | Ads only in the Android Hub app (a normal app surface), never injected on PCs; review policy before Free launch | Growth |
 | Gupshup template approval delays | Medium | Reminders late at launch | Submit templates at wave 1; SMS fallback | Product |
 | Scope: everything in one launch | High | Date slips | Wave-1 beta with 20 cafes while waves 2 and 3 are built; cut list agreed before beta | Founder |
-| Old counter PCs cannot run the Windows Hub | Medium | Onboarding friction | Android Hub as the fallback for any cafe; stated minimums on the downloads page | Product |
+| Windows 7 gaming PCs cannot run the Kiosk | Medium | Onboarding friction | Stated minimums on the downloads page; partners offer OS upgrades as a service; Android Hub for old counter PCs | Product |
 | Printer compatibility | Medium | Support load | Raw ESC/POS, tested-device list, "print test" in onboarding, WhatsApp receipts as a no-printer path | Engineering |
 
 **Open items for the LLD**

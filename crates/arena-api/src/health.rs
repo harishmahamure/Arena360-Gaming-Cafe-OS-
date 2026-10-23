@@ -131,7 +131,7 @@ pub(crate) async fn ui_guard(
         );
         h.insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("authorization, content-type"),
+            HeaderValue::from_static("authorization, content-type, x-arena-elevation"),
         );
         h.insert(
             header::ACCESS_CONTROL_MAX_AGE,

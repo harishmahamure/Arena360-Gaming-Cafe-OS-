@@ -60,6 +60,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Role(t) => staff_roles::validate_role(intent, r, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::AuditReadGranted(g) => match target {
+            Target::Branch(b) => super::read_grants::validate(intent, g, b.as_ref()),
+            _ => Err(internal_target()),
+        },
     }
 }
 

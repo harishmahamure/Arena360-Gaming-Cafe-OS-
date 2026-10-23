@@ -60,7 +60,7 @@ export function onSessionLocked(handler: (() => void) | null) {
   sessionLockedHandler = handler;
 }
 
-function noticeLocked(err: UiError | null) {
+export function noticeLocked(err: UiError | null) {
   if (err?.code === "SESSION_LOCKED") sessionLockedHandler?.();
 }
 
@@ -123,7 +123,7 @@ export function hasPermission(staff: SessionStaff | null, permission: Permission
   return Array.isArray(staff?.permissions) && staff.permissions.includes(permission);
 }
 
-function authHeaders(token: string | null): HeadersInit {
+export function authHeaders(token: string | null): HeadersInit {
   return token ? { authorization: `Bearer ${token}` } : {}; // i18n-ignore (an HTTP scheme)
 }
 
@@ -160,7 +160,7 @@ export type SignInResult =
   | { kind: "locked"; retryAfterS: number }
   | { kind: "unreachable" };
 
-async function errorOf(res: Response): Promise<UiError | null> {
+export async function errorOf(res: Response): Promise<UiError | null> {
   try {
     const body: unknown = await res.json();
     return isObject(body) && typeof body.code === "string" ? (body as UiError) : null;
@@ -296,7 +296,8 @@ export type ElevateOutcome =
 
 /**
  * `POST /ui/elevate`: asks the Hub to check a manager's PIN for exactly `items` (the intents
- * the signed-in member is about to submit). The PIN goes to this one loopback call only and is
+ * the signed-in member is about to submit, or one `{permission}` read item: a read ticket for
+ * the `X-Arena-Elevation` header, valid 10 minutes). The PIN goes to this one loopback call only and is
  * not kept here; the caller clears its own copy. A match answers a short-lived ticket for
  * `submitIntent`; `expiresAt` is when it lapses, on this clock.
  */

@@ -13,6 +13,8 @@ import {
   formatTime,
   groupDigits,
   isTimeZone,
+  nextDay,
+  zonedDayStart,
 } from "../packages/ui/src/format.js";
 
 /** A locale for `code` from the generated table. */
@@ -116,4 +118,29 @@ test("the generated time zone list has UTC and the branch zones", () => {
     assert.ok(TIME_ZONES.includes(tz), tz);
   }
   assert.deepEqual([...TIME_ZONES].sort(), [...TIME_ZONES]);
+});
+
+test("a date in the branch zone starts at its local midnight", () => {
+  // Kolkata is UTC+5:30 all year.
+  assert.equal(zonedDayStart("2026-10-23", "Asia/Kolkata"), Date.UTC(2026, 9, 22, 18, 30));
+  assert.equal(zonedDayStart("2026-10-23", "UTC"), Date.UTC(2026, 9, 23));
+  // New York on the day DST ends (midnight is still EDT, UTC−4).
+  assert.equal(zonedDayStart("2026-11-01", "America/New_York"), Date.UTC(2026, 10, 1, 4));
+  assert.equal(zonedDayStart("2026-11-02", "America/New_York"), Date.UTC(2026, 10, 2, 5));
+  assert.equal(zonedDayStart("2026-10-23", "Not/AZone"), Date.UTC(2026, 9, 23));
+  assert.equal(zonedDayStart("23/10/2026", "UTC"), null);
+});
+
+test("a day whose midnight is skipped starts when the clocks jump", () => {
+  // Cuba springs forward at 00:00 on 2026-03-08 (UTC−5 → UTC−4): the day starts at 01:00.
+  assert.equal(zonedDayStart("2026-03-08", "America/Havana"), Date.UTC(2026, 2, 8, 5));
+  assert.equal(zonedDayStart("2026-03-09", "America/Havana"), Date.UTC(2026, 2, 9, 4));
+  assert.equal(zonedDayStart("2026-03-07", "America/Havana"), Date.UTC(2026, 2, 7, 5));
+});
+
+test("nextDay rolls months and years", () => {
+  assert.equal(nextDay("2026-10-23"), "2026-10-24");
+  assert.equal(nextDay("2026-12-31"), "2027-01-01");
+  assert.equal(nextDay("2028-02-28"), "2028-02-29");
+  assert.equal(nextDay("nope"), null);
 });

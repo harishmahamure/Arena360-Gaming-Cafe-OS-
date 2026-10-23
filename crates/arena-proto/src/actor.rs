@@ -26,6 +26,20 @@ impl ActorKind {
             Self::Device => "device",
         }
     }
+
+    /// Every kind.
+    pub const ALL: [ActorKind; 5] = [
+        Self::Staff,
+        Self::Owner,
+        Self::Admin,
+        Self::System,
+        Self::Device,
+    ];
+
+    /// The kind with this stored form, if any.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
 }
 
 /// A typed actor. Nothing is written anonymously or through a shared actor.
@@ -55,6 +69,13 @@ impl ElevationMode {
             Self::CachedVerifier => "cached_verifier",
         }
     }
+
+    /// The mode with this stored form, if any.
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::Hub, Self::CachedVerifier]
+            .into_iter()
+            .find(|m| m.as_str() == s)
+    }
 }
 
 /// How an elevation was proven.
@@ -75,6 +96,11 @@ impl ElevationKind {
             Self::Pin => "pin",
             Self::Mfa => "mfa",
         }
+    }
+
+    /// The kind with this stored form, if any.
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::Pin, Self::Mfa].into_iter().find(|k| k.as_str() == s)
     }
 }
 
@@ -107,7 +133,14 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&kind).unwrap(), format!("\"{text}\""));
             assert_eq!(kind.as_str(), text);
+            assert_eq!(ActorKind::parse(text), Some(kind));
         }
+        assert_eq!(ActorKind::parse("nobody"), None);
+        assert_eq!(
+            ElevationMode::parse("cached_verifier"),
+            Some(ElevationMode::CachedVerifier)
+        );
+        assert_eq!(ElevationKind::parse("mfa"), Some(ElevationKind::Mfa));
         assert_eq!(
             serde_json::to_string(&ElevationMode::CachedVerifier).unwrap(),
             "\"cached_verifier\""

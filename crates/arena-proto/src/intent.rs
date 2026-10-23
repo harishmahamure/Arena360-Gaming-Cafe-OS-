@@ -20,6 +20,7 @@ pub enum IntentCategory {
     Money,
     Kitchen,
     Console,
+    Audit,
 }
 
 /// What an intent asks for, as `domain.verb`.
@@ -54,11 +55,15 @@ pub enum IntentKind {
     /// Creates or edits a custom role and its permission rows (built-in roles are fixed).
     #[serde(rename = "role.upsert")]
     RoleUpsert,
+    /// Records that a manager's PIN granted a read elevation (system only; the Hub submits it
+    /// when it issues the read ticket), so the grant shows in the audit log.
+    #[serde(rename = "audit.read_granted")]
+    AuditReadGranted,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 9] = [
+    pub const ALL: [IntentKind; 10] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -68,6 +73,7 @@ impl IntentKind {
         Self::ConsolePlanRequested,
         Self::StaffUpsert,
         Self::RoleUpsert,
+        Self::AuditReadGranted,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -82,6 +88,7 @@ impl IntentKind {
             Self::ConsolePlanRequested => "console.plan_requested",
             Self::StaffUpsert => "staff.upsert",
             Self::RoleUpsert => "role.upsert",
+            Self::AuditReadGranted => "audit.read_granted",
         }
     }
 
@@ -100,6 +107,7 @@ impl IntentKind {
             }
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
+            Self::AuditReadGranted => IntentCategory::Audit,
         }
     }
 
@@ -114,6 +122,7 @@ impl IntentKind {
             Self::DeviceVersionReported => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
+            Self::AuditReadGranted => Requirement::System,
         }
     }
 
@@ -134,7 +143,8 @@ impl IntentKind {
             | Self::DeviceVersionReported
             | Self::ConsolePlanRequested
             | Self::StaffUpsert
-            | Self::RoleUpsert => None,
+            | Self::RoleUpsert
+            | Self::AuditReadGranted => None,
         }
     }
 
@@ -245,6 +255,18 @@ pub struct DeviceVersionReported {
     pub version: String,
 }
 
+/// The payload of `audit.read_granted`: who asked for a read elevation of `permission`, whose
+/// PIN granted it, and the `pin_verifier_version` it was checked against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AuditReadGranted {
+    pub permission: Permission,
+    pub requester_staff_id: String,
+    pub approver_staff_id: String,
+    #[ts(type = "number")]
+    pub verifier_version: i64,
+}
+
 /// The payload of `staff.upsert`. Without `staff_id` it creates a staff member (the writer
 /// mints the id); with one it edits that member. `password_hash` and `pin_hash` are argon2id PHC
 /// strings computed outside the transaction; `None` keeps the stored hash. A new PIN bumps the
@@ -328,6 +350,8 @@ pub enum IntentPayload {
     StaffUpsert(StaffUpsert),
     #[serde(rename = "role.upsert")]
     RoleUpsert(RoleUpsert),
+    #[serde(rename = "audit.read_granted")]
+    AuditReadGranted(AuditReadGranted),
 }
 
 impl IntentPayload {
@@ -342,6 +366,7 @@ impl IntentPayload {
             Self::DeviceVersionReported(_) => IntentKind::DeviceVersionReported,
             Self::StaffUpsert(_) => IntentKind::StaffUpsert,
             Self::RoleUpsert(_) => IntentKind::RoleUpsert,
+            Self::AuditReadGranted(_) => IntentKind::AuditReadGranted,
         }
     }
 }
@@ -456,9 +481,10 @@ mod tests {
             assert!(seen.insert(kind), "{} listed twice in ALL", kind.as_str());
             // `requirement()` is a total match returning one value; pin the current mapping.
             let want = match kind.as_str() {
-                "branch.bootstrap" | "branch.seed_defaults" | "device.version_reported" => {
-                    Requirement::System
-                }
+                "branch.bootstrap"
+                | "branch.seed_defaults"
+                | "device.version_reported"
+                | "audit.read_granted" => Requirement::System,
                 "settings.set" => Requirement::Perm(Permission::SettingsEdit),
                 "device.register" => Requirement::Perm(Permission::DeviceManage),
                 "device.revoke" => Requirement::Perm(Permission::DeviceRemote),

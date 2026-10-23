@@ -106,6 +106,15 @@ impl SnapshotReader {
         })
     }
 
+    /// The database file this reader reads.
+    pub fn db_path(&self) -> Result<std::path::PathBuf, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store.path().to_path_buf())
+    }
+
     /// The snapshot at `now_ms`. Blocking (SQLite).
     pub fn snapshot(&self, now_ms: i64) -> Result<HubSnapshot, AppError> {
         let store = self

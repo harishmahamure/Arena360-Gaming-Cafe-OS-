@@ -163,6 +163,16 @@ impl Permission {
         }
     }
 
+    /// The read permissions a manager PIN may grant for a while ("read elevation", Story 1.15):
+    /// `POST /ui/elevate` with a `{permission}` item issues a read ticket for one of these.
+    pub const READ_ELEVATION: [Permission; 3] =
+        [Self::AuditView, Self::ReportView, Self::PlayerView];
+
+    /// Whether a read elevation may grant this permission ([`Self::READ_ELEVATION`]).
+    pub fn is_read_elevation(self) -> bool {
+        Self::READ_ELEVATION.contains(&self)
+    }
+
     /// The permission with this wire form, if it is in the catalogue.
     pub fn parse(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.as_str() == s)
@@ -230,5 +240,22 @@ mod tests {
         assert_eq!(Permission::DeviceRemote.module(), "device");
         assert_eq!(Permission::CreditCollect.module(), "wallet");
         assert_eq!(Permission::AuditView.module(), "views");
+    }
+
+    #[test]
+    fn only_view_permissions_take_a_read_elevation() {
+        let reads: Vec<_> = Permission::ALL
+            .into_iter()
+            .filter(|p| p.is_read_elevation())
+            .collect();
+        assert_eq!(
+            reads,
+            vec![
+                Permission::PlayerView,
+                Permission::ReportView,
+                Permission::AuditView
+            ]
+        );
+        assert!(!Permission::SettingsEdit.is_read_elevation());
     }
 }

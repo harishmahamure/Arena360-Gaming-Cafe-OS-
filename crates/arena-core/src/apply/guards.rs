@@ -78,7 +78,14 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             ErrorCode::Internal,
             "the loaded target does not match the payload",
         )),
-        (Target::None | Target::Setting(_) | Target::NewDevice(_) | Target::Device(_), _) => Ok(()),
+        (
+            Target::None
+            | Target::Setting(_)
+            | Target::NewDevice(_)
+            | Target::Device(_)
+            | Target::Branch(_),
+            _,
+        ) => Ok(()),
     }
 }
 
@@ -113,7 +120,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
     match target {
         Target::None => Ok(()),
         Target::Setting(row) => settings_set::base_rev(intent, row.as_ref()),
-        Target::NewDevice(_) => Ok(()),
+        Target::NewDevice(_) | Target::Branch(_) => Ok(()),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::Staff(t) => staff_roles::base_rev_staff(intent, t),
         Target::Role(t) => staff_roles::base_rev_role(intent, t),

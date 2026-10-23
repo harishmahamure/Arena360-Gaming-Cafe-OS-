@@ -199,6 +199,28 @@ impl StaffDirectory {
             .map(|c| (c.staff_id, c.pin_verifier_version)))
     }
 
+    /// Whether a read elevation approved by `staff_id` still holds: the member is active,
+    /// their role allows `permission`, and their `pin_verifier_version` is still `version`
+    /// (a rotated PIN ends it). Blocking (SQLite).
+    pub fn approval_holds(
+        &self,
+        staff_id: &str,
+        permission: Permission,
+        version: i64,
+    ) -> Result<bool, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+        let Some((staff, role)) = store.staff_by_id_with_role(staff_id)? else {
+            return Ok(false);
+        };
+        if !staff.active || staff.pin_verifier_version != version {
+            return Ok(false);
+        }
+        Ok(allowed(&store.role_perms(&role.role_id)?).contains(&permission))
+    }
+
     /// Whether the staff member `staff_id` has a PIN set (the lock screen says to sign out
     /// otherwise). Blocking (SQLite).
     pub fn has_pin(&self, staff_id: &str) -> Result<bool, AppError> {

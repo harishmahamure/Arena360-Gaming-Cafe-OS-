@@ -21,6 +21,13 @@
 //!   failures in a row pause elevation for the requesting staff member (whatever the session)
 //!   for 60 s (`AUTH_LOCKED`, 429, with `retry_after_s`; the fifth failure already answers it).
 //!   The PIN is never logged, stored or echoed.
+//! - `POST /ui/elevate {items: [{permission}], pin}` (bearer token) is a read elevation: one
+//!   item naming a read permission ([`Permission::READ_ELEVATION`]: `audit.view`,
+//!   `report.view`, `player.view`), alone. The same PIN check, throttle and refusals apply (a
+//!   follower may grant one: nothing is written). The ticket it answers is bound to the session,
+//!   the member and that permission, allows unlimited reads for 10 min ([`READ_TICKET_TTL_MS`])
+//!   and is sent in the `X-Arena-Elevation` header ([`crate::ui_audit`]); it never redeems an
+//!   intent. A lock, a re-bind or signing out drops it like any ticket.
 //! - `POST /ui/elevate/drop {ticket}` (bearer token) gives up a ticket's unused approvals (204);
 //!   signing out drops the session's tickets.
 //! - `POST /ui/intent {intent, elevation_ticket?}` (bearer token) submits the intent with the
@@ -30,8 +37,8 @@
 //!   `elevated_by{pin, staff_id, hub, verifier_version}`, which `apply()` re-checks. A refusal
 //!   (nothing applied) gives the item back.
 //! - `POST /ui/lock` (bearer token) idle-locks the session (204): until it is unlocked,
-//!   `/ui/intent` and `/ui/elevate` answer `SESSION_LOCKED` (423) and the session's tickets are
-//!   dropped. Nothing else stops: `/ui/events` keeps streaming and the Hub keeps applying.
+//!   `/ui/intent`, `/ui/elevate` and the `/ui/audit*` reads answer `SESSION_LOCKED` (423) and
+//!   the session's tickets are dropped. Nothing else stops: `/ui/events` keeps streaming and the Hub keeps applying.
 //! - `POST /ui/unlock {pin}` (bearer token) only unlocks a locked session (otherwise
 //!   `VALIDATION_FAILED` on `session`, 409, before any PIN check). It checks the PIN against
 //!   the session's own member first, then the other active staff with a PIN (at most 50 checks,
@@ -83,6 +90,8 @@ pub const SESSION_TTL_MS: i64 = 12 * 60 * 60 * 1000;
 pub const MAX_SESSIONS_PER_STAFF: usize = 5;
 /// How long an elevation ticket lives.
 pub const TICKET_TTL_MS: i64 = 60_000;
+/// How long a read-elevation ticket lives (unlimited reads meanwhile).
+pub const READ_TICKET_TTL_MS: i64 = 10 * 60_000;
 /// Unexpired tickets one session may hold; a new one replaces the oldest.
 const MAX_TICKETS_PER_SESSION: usize = 4;
 
@@ -101,7 +110,8 @@ struct Ticket {
     staff_id: String,
     verifier_version: i64,
     expires_at: i64,
-    /// The approved intents, each redeemed once (`true` once used).
+    /// The approved items: intents, each redeemed once (`true` once used), or one read
+    /// permission, never redeemed by an intent.
     items: Vec<(ElevationItem, bool)>,
 }
 
@@ -389,6 +399,8 @@ pub struct UiAuth {
     events_config: crate::ui_events::EventsConfig,
     /// The shared `/ui/events` fan-out, started by the first stream.
     events: std::sync::OnceLock<Arc<crate::ui_events::EventsHub>>,
+    /// The audit viewer's read-only connection, opened on first use.
+    audit: std::sync::OnceLock<Arc<arena_core::AuditReader>>,
 }
 
 impl std::fmt::Debug for UiAuth {
@@ -423,7 +435,19 @@ impl UiAuth {
             status: None,
             events_config: crate::ui_events::EventsConfig::default(),
             events: std::sync::OnceLock::new(),
+            audit: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The audit viewer's reader, opened on the snapshot reader's database the first time.
+    pub(crate) fn audit_reader(&self) -> Result<Arc<arena_core::AuditReader>, UiError> {
+        if let Some(r) = self.audit.get() {
+            return Ok(Arc::clone(r));
+        }
+        let path = self.reader.db_path().map_err(ui_error)?;
+        let opened = Arc::new(arena_core::AuditReader::open(path).map_err(ui_error)?);
+        // A concurrent first use may have won: keep whichever was stored.
+        Ok(Arc::clone(self.audit.get_or_init(|| opened)))
     }
 
     /// Resets `/ui/events` streams whenever this Hub's role changes (promotion or demotion), so
@@ -491,7 +515,7 @@ impl UiAuth {
     }
 
     /// The session behind `token` when it may act: `SESSION_LOCKED` while it is locked.
-    async fn acting_session(&self, token: &str) -> Result<SessionStaff, UiError> {
+    pub(crate) async fn acting_session(&self, token: &str) -> Result<SessionStaff, UiError> {
         let (me, locked) = self.session_state(token).await?;
         if locked {
             return Err(session_locked());
@@ -577,7 +601,7 @@ impl UiAuth {
     }
 }
 
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
     let token = token.trim();
@@ -602,7 +626,7 @@ fn session_locked() -> UiError {
     }
 }
 
-fn internal() -> UiError {
+pub(crate) fn internal() -> UiError {
     UiError {
         code: ErrorCode::Internal,
         message: "the hub could not complete this request".into(),
@@ -611,7 +635,7 @@ fn internal() -> UiError {
     }
 }
 
-fn bad_frame(message: &str) -> UiError {
+pub(crate) fn bad_frame(message: &str) -> UiError {
     UiError {
         code: ErrorCode::BadFrame,
         message: message.into(),
@@ -622,7 +646,7 @@ fn bad_frame(message: &str) -> UiError {
 
 /// The wire form of an [`AppError`]. An internal error's message may carry database details,
 /// so only its code is sent.
-fn ui_error(e: AppError) -> UiError {
+pub(crate) fn ui_error(e: AppError) -> UiError {
     if e.code == ErrorCode::Internal {
         tracing::warn!(detail = %e.message, "ui request failed");
         return internal();
@@ -996,18 +1020,47 @@ fn invalid_items(message: &str) -> UiError {
     }
 }
 
-/// The permissions `items` need from an approver (catalogue order, each once), or `None` when
-/// one of them is not a permission (it can never be elevated). Checks the items' shape first.
-fn item_permissions(items: &[ElevationItem]) -> Result<Option<Vec<Permission>>, UiError> {
+/// What a list of elevation items asks for.
+struct Needs {
+    /// The permissions an approver must hold (catalogue order, each once), or `None` when one
+    /// of the intents is not a permission (it can never be elevated).
+    perms: Option<Vec<Permission>>,
+}
+
+/// What `items` need from an approver. Checks the items' shape first: 1–[`MAX_TICKET_USES`]
+/// intent items (`settings.set` naming its key, others none), or exactly one read item.
+fn item_permissions(items: &[ElevationItem]) -> Result<Needs, UiError> {
     if items.is_empty() || items.len() > MAX_TICKET_USES {
         return Err(invalid_items(&format!(
             "an elevation approves 1–{MAX_TICKET_USES} intents"
         )));
     }
+    if items.iter().any(|i| i.permission.is_some()) {
+        let [item] = items else {
+            return Err(invalid_items(
+                "a read approval names one permission, on its own",
+            ));
+        };
+        return match (item.permission, item.intent_kind, &item.key) {
+            (Some(p), None, None) if p.is_read_elevation() => Ok(Needs {
+                perms: Some(vec![p]),
+            }),
+            (Some(_), None, None) => Err(invalid_items(
+                "only audit.view, report.view and player.view can be approved for reading",
+            )),
+            _ => Err(invalid_items(
+                "a read approval names its permission and nothing else",
+            )),
+        };
+    }
     let mut perms = Vec::new();
     let mut all_perms = true;
     for item in items {
-        let kind = item.intent_kind;
+        let Some(kind) = item.intent_kind else {
+            return Err(invalid_items(
+                "each item names an intent_kind or a permission",
+            ));
+        };
         if !kind.is_handled() {
             return Err(ui_error(AppError::new(
                 ErrorCode::Unsupported,
@@ -1034,7 +1087,27 @@ fn item_permissions(items: &[ElevationItem]) -> Result<Option<Vec<Permission>>, 
         }
     }
     perms.sort_by_key(|p| Permission::ALL.iter().position(|q| q == p));
-    Ok(all_perms.then_some(perms))
+    Ok(Needs {
+        perms: all_perms.then_some(perms),
+    })
+}
+
+/// How long a ticket for `items` lives: a read elevation 10 min, intents 60 s.
+fn ticket_ttl_ms(items: &[ElevationItem]) -> i64 {
+    if items.iter().any(|i| i.permission.is_some()) {
+        READ_TICKET_TTL_MS
+    } else {
+        TICKET_TTL_MS
+    }
+}
+
+/// What an item is about, for the logs: its intent kind or its read permission.
+fn item_label(item: &ElevationItem) -> &'static str {
+    match (item.intent_kind, item.permission) {
+        (Some(k), _) => k.as_str(),
+        (None, Some(p)) => p.as_str(),
+        (None, None) => "?",
+    }
 }
 
 async fn elevate(
@@ -1051,18 +1124,20 @@ async fn elevate(
     };
     let Ok(ElevateRequest { items, pin }) = serde_json::from_slice::<ElevateRequest>(&body) else {
         return fail(bad_frame(
-            "the body must be {\"items\": [{\"intent_kind\", \"key\"?}], \"pin\"}",
+            "the body must be {\"items\": [{\"intent_kind\", \"key\"?} | {\"permission\"}], \"pin\"}",
         ));
     };
-    // A follower could never apply what it approved: refuse before any PIN is checked.
-    if auth.writer.is_none() {
+    let read = items.iter().any(|i| i.permission.is_some());
+    // A follower could never apply what it approved: refuse before any PIN is checked. A read
+    // elevation writes nothing, so a follower may grant it.
+    if auth.writer.is_none() && !read {
         return fail(ui_error(AppError::new(
             ErrorCode::NotPrimary,
             "this hub is not the primary writer",
         )));
     }
-    let perms = match item_permissions(&items) {
-        Ok(p) => p,
+    let Needs { perms } = match item_permissions(&items) {
+        Ok(n) => n,
         Err(e) => return fail(e),
     };
     if let Some(perms) = &perms
@@ -1070,7 +1145,7 @@ async fn elevate(
     {
         return fail(invalid_items("you can do this without approval"));
     }
-    let kinds: Vec<&str> = items.iter().map(|i| i.intent_kind.as_str()).collect();
+    let kinds: Vec<&str> = items.iter().map(item_label).collect();
     let requester = me.staff_id.clone();
     let reserved = match auth.elevate_lockout.lock() {
         Ok(mut l) => l.begin(&requester, auth.clock.now_ms()),
@@ -1151,16 +1226,30 @@ async fn elevate(
     ) {
         return fail(e);
     }
+    // A read grant is audited before it is handed out; if that cannot be recorded, the
+    // ticket is withdrawn.
+    if let Some(permission) = items.iter().find_map(|i| i.permission)
+        && let Err(e) = auth
+            .record_read_grant(permission, &me.staff_id, &approver, verifier_version)
+            .await
+    {
+        if let Ok(mut tickets) = auth.tickets.lock() {
+            tickets.remove(&ticket);
+        }
+        tracing::warn!(staff_id = %me.staff_id, "read elevation not recorded; withdrawn");
+        return fail(e);
+    }
     tracing::info!(
         staff_id = %me.staff_id,
         approver = %approver,
         kinds = ?kinds,
         "pin elevation granted"
     );
+    let expires_in_s = u32::try_from(ticket_ttl_ms(&items) / 1000).unwrap_or(u32::MAX);
     Json(ElevateOk {
         ticket,
         items,
-        expires_in_s: u32::try_from(TICKET_TTL_MS / 1000).unwrap_or(u32::MAX),
+        expires_in_s,
     })
     .into_response()
 }
@@ -1226,7 +1315,7 @@ impl UiAuth {
             return Err(ui_error(pin_required()));
         }
         let Some(index) = t.items.iter().position(|(item, used)| {
-            !used && item.intent_kind == kind && item.key.as_deref() == key
+            !used && item.intent_kind == Some(kind) && item.key.as_deref() == key
         }) else {
             return Err(ui_error(pin_required()));
         };
@@ -1305,7 +1394,7 @@ impl UiAuth {
                 requester: requester.to_owned(),
                 staff_id: approver.to_owned(),
                 verifier_version,
-                expires_at: now + TICKET_TTL_MS,
+                expires_at: now + ticket_ttl_ms(items),
                 items: items.iter().cloned().map(|i| (i, false)).collect(),
             },
         );
@@ -1318,6 +1407,96 @@ impl UiAuth {
         tokio::task::spawn_blocking(move || dir.current(&id))
             .await
             .map_err(|_| internal())?
+            .map_err(ui_error)
+    }
+
+    /// Whether `ticket` is an unexpired read elevation of `permission` issued to the session
+    /// `token` while it acted as `staff_id`, and its approver still holds it: active, their
+    /// role still allowing `permission`, their PIN not rotated since (re-read on every use).
+    /// An approval that no longer holds drops the ticket. Reading spends nothing.
+    pub(crate) async fn read_granted(
+        &self,
+        ticket: &str,
+        token: &str,
+        staff_id: &str,
+        permission: Permission,
+    ) -> Result<bool, UiError> {
+        let now = self.clock.now_ms();
+        let approval = {
+            let tickets = self.tickets.lock().map_err(|_| internal())?;
+            tickets
+                .get(ticket)
+                .filter(|t| {
+                    t.expires_at > now
+                        && t.session == token
+                        && t.requester == staff_id
+                        && t.items.iter().any(|(item, _)| {
+                            item.intent_kind.is_none() && item.permission == Some(permission)
+                        })
+                })
+                .map(|t| (t.staff_id.clone(), t.verifier_version))
+        };
+        let Some((approver, version)) = approval else {
+            return Ok(false);
+        };
+        let dir = Arc::clone(&self.staff);
+        let id = approver.clone();
+        let holds =
+            tokio::task::spawn_blocking(move || dir.approval_holds(&id, permission, version))
+                .await
+                .map_err(|_| internal())?
+                .map_err(ui_error)?;
+        if !holds {
+            tracing::info!(staff_id, approver = %approver, "read elevation ended: approval no longer holds");
+            if let Ok(mut tickets) = self.tickets.lock() {
+                tickets.remove(ticket);
+            }
+        }
+        Ok(holds)
+    }
+
+    /// Records a granted read elevation as the system intent `audit.read_granted`, so it
+    /// shows in the audit log. A follower cannot write: it logs the grant at info instead.
+    async fn record_read_grant(
+        &self,
+        permission: Permission,
+        requester: &str,
+        approver: &str,
+        verifier_version: i64,
+    ) -> Result<(), UiError> {
+        let Some(writer) = &self.writer else {
+            tracing::info!(
+                permission = permission.as_str(),
+                staff_id = requester,
+                approver,
+                verifier_version,
+                "read elevation granted on a follower (not in the change log)"
+            );
+            return Ok(());
+        };
+        let intent = arena_proto::Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: IntentKind::AuditReadGranted,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: self.clock.now_ms(),
+            base_rev: None,
+            actor: arena_proto::Actor {
+                kind: ActorKind::System,
+                id: "hub".into(),
+            },
+            elevated_by: None,
+            reason: None,
+            payload: arena_proto::IntentPayload::AuditReadGranted(arena_proto::AuditReadGranted {
+                permission,
+                requester_staff_id: requester.to_owned(),
+                approver_staff_id: approver.to_owned(),
+                verifier_version,
+            }),
+        };
+        writer
+            .submit_intent(intent)
+            .await
+            .map(|_| ())
             .map_err(ui_error)
     }
 
@@ -1419,6 +1598,9 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/elevate/drop", post(elevate_drop))
         .route("/ui/intent", post(intent))
         .route("/ui/settings", get(settings))
+        .route("/ui/audit", get(crate::ui_audit::list))
+        .route("/ui/audit/item", get(crate::ui_audit::item))
+        .route("/ui/audit/facets", get(crate::ui_audit::facets))
         .route("/ui/events", get(crate::ui_events::events))
         .with_state(auth)
         .layer(axum::middleware::from_fn(crate::health::ui_guard))
@@ -1962,6 +2144,28 @@ pub(crate) mod tests {
                 .unwrap()
                 .contains("authorization")
         );
+        // The audit viewer's read ticket header is allowed too.
+        let req = Request::options("/ui/audit")
+            .header(header::HOST, "127.0.0.1:7409")
+            .header(header::ORIGIN, "http://localhost:5173")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization, x-arena-elevation",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let res = hub.app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        let allowed: Vec<String> = res.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS]
+            .to_str()
+            .unwrap()
+            .split(',')
+            .map(|h| h.trim().to_ascii_lowercase())
+            .collect();
+        for wanted in ["authorization", "x-arena-elevation"] {
+            assert!(allowed.iter().any(|h| h == wanted), "{wanted}: {allowed:?}");
+        }
     }
 
     #[tokio::test]
@@ -2337,6 +2541,36 @@ pub(crate) mod tests {
                 (StatusCode::SERVICE_UNAVAILABLE, Some("NOT_PRIMARY"))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_follower_may_grant_a_read_elevation() {
+        let hub = hub().await;
+        let follower = ui_auth_router(Arc::new(UiAuth::new(
+            Arc::new(StaffDirectory::open(&hub.path).unwrap()),
+            Arc::new(SnapshotReader::open(&hub.path).unwrap()),
+            None,
+            hub.clock.clone(),
+        )));
+        let (_, body) = call_app(
+            &follower,
+            "POST",
+            "/ui/auth/sign-in",
+            None,
+            Some(json!({"login": "counter", "password": "c-pass"})),
+        )
+        .await;
+        let token = body["token"].as_str().unwrap().to_owned();
+        let (status, body) = call_app(
+            &follower,
+            "POST",
+            "/ui/elevate",
+            Some(&token),
+            Some(json!({"items": [{"permission": "audit.view"}], "pin": "2222"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["expires_in_s"], 600);
     }
 
     #[tokio::test]
@@ -3161,10 +3395,10 @@ pub(crate) mod tests {
     async fn a_ticket_requested_before_the_session_changed_hands_is_refused() {
         let hub = hub().await;
         let token = token_for(&hub, "counter", "c-pass").await;
-        let items = vec![ElevationItem {
-            intent_kind: IntentKind::SettingsSet,
-            key: Some("branch.currency".into()),
-        }];
+        let items = vec![ElevationItem::intent(
+            IntentKind::SettingsSet,
+            Some("branch.currency".into()),
+        )];
         let issue = || {
             hub.auth
                 .issue_ticket("T1", &token, &hub.counter_id, &hub.manager_id, 1, &items)

@@ -1,9 +1,10 @@
 //! `arena-api`: the Hub's network edges: the loopback `/healthz`, `/ui/snapshot`, the staff
-//! auth routes ([`ui_auth`]) and the `/ui/events` push stream ([`ui_events`]), and the LAN
-//! protocol server ([`lan`]).
+//! auth routes ([`ui_auth`]), the audit viewer's routes ([`ui_audit`]) and the `/ui/events`
+//! push stream ([`ui_events`]), and the LAN protocol server ([`lan`]).
 
 pub mod health;
 pub mod lan;
+pub mod ui_audit;
 pub mod ui_auth;
 pub mod ui_events;
 

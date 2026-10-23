@@ -120,3 +120,78 @@ export function formatBusinessDay(day) {
   const utc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12);
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(utc);
 }
+
+/**
+ * The wall-clock date and time of the instant `utcMs` in `tz`.
+ * @param {number} utcMs
+ * @param {string} tz
+ */
+function wallClock(utcMs, tz) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(utcMs);
+  /** @param {string} type */
+  const n = (type) => Number(parts.find((p) => p.type === type)?.value);
+  const day = `${String(n("year")).padStart(4, "0")}-${String(n("month")).padStart(2, "0")}-${String(n("day")).padStart(2, "0")}`; // i18n-ignore (an ISO date)
+  const asUtc = Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute"), n("second"));
+  return {
+    day,
+    offset: asUtc - Math.floor(utcMs / 1000) * 1000,
+    midnight: asUtc % 86_400_000 === 0,
+  };
+}
+
+/**
+ * The UTC ms of the first instant of calendar date `day` (`YYYY-MM-DD`) in the zone `tz`:
+ * its 00:00, or, when a clock change skips midnight that day, the moment the clocks jump
+ * forward. An unknown zone counts as UTC. `null` when `day` is not a date. Used to turn a
+ * date picked in the branch time zone into a range bound.
+ * @param {string} day
+ * @param {string | null | undefined} tz IANA zone
+ * @returns {number | null}
+ */
+export function zonedDayStart(day, tz) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return null;
+  const local = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(local)) return null;
+  if (!tz || !isTimeZone(tz)) return local;
+  const HALF_DAY = 43_200_000;
+  // Midnight under the offset in force half a day before, and half a day after.
+  const candidates = [
+    local - wallClock(local - HALF_DAY, tz).offset,
+    local - wallClock(local + HALF_DAY, tz).offset,
+  ].sort((a, b) => a - b);
+  for (const c of candidates) {
+    const w = wallClock(c, tz);
+    if (w.day === day && w.midnight) return c;
+  }
+  // Midnight does not exist that day: find the first instant whose date is `day`.
+  let lo = candidates[0] - HALF_DAY;
+  let hi = candidates[1] + HALF_DAY;
+  while (hi - lo > 1) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (wallClock(mid, tz).day >= day) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+}
+
+/**
+ * The calendar date after `day` (`YYYY-MM-DD`), e.g. for an inclusive "to" date.
+ * @param {string} day
+ * @returns {string | null}
+ */
+export function nextDay(day) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1));
+  return d.toISOString().slice(0, 10);
+}

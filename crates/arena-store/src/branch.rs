@@ -33,17 +33,19 @@ pub enum Table {
     Roles,
     RolePerms,
     Staff,
+    ReadGrants,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 6] = [
+    pub const ALL: [Table; 7] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
         Table::Roles,
         Table::RolePerms,
         Table::Staff,
+        Table::ReadGrants,
     ];
 
     /// The SQL table name.
@@ -55,6 +57,7 @@ impl Table {
             Self::Roles => "roles",
             Self::RolePerms => "role_perms",
             Self::Staff => "staff",
+            Self::ReadGrants => "read_grants",
         }
     }
 
@@ -67,13 +70,14 @@ impl Table {
             Self::Roles => &["role_id"],
             Self::RolePerms => &["role_id", "permission"],
             Self::Staff => &["staff_id"],
+            Self::ReadGrants => &["grant_id"],
         }
     }
 
     /// Whether the table has a `created_at` column (stamped on insert).
     pub fn has_created_at(self) -> bool {
         match self {
-            Self::Branch | Self::Devices | Self::Roles | Self::Staff => true,
+            Self::Branch | Self::Devices | Self::Roles | Self::Staff | Self::ReadGrants => true,
             Self::Settings | Self::RolePerms => false,
         }
     }
@@ -99,6 +103,7 @@ pub enum RowKey {
     Roles { role_id: String },
     RolePerms { role_id: String, permission: String },
     Staff { staff_id: String },
+    ReadGrants { grant_id: String },
 }
 
 impl RowKey {
@@ -110,6 +115,7 @@ impl RowKey {
             Self::Roles { .. } => Table::Roles,
             Self::RolePerms { .. } => Table::RolePerms,
             Self::Staff { .. } => Table::Staff,
+            Self::ReadGrants { .. } => Table::ReadGrants,
         }
     }
 
@@ -125,6 +131,7 @@ impl RowKey {
                 permission,
             } => format!("{role_id}/{permission}"),
             Self::Staff { staff_id } => staff_id.clone(),
+            Self::ReadGrants { grant_id } => grant_id.clone(),
         }
     }
 
@@ -156,6 +163,9 @@ impl RowKey {
             Table::Staff => Self::Staff {
                 staff_id: text("staff_id")?,
             },
+            Table::ReadGrants => Self::ReadGrants {
+                grant_id: text("grant_id")?,
+            },
         })
     }
 
@@ -170,6 +180,7 @@ impl RowKey {
                 permission,
             } => vec![role_id, permission],
             Self::Staff { staff_id } => vec![staff_id],
+            Self::ReadGrants { grant_id } => vec![grant_id],
         }
     }
 }
@@ -313,7 +324,7 @@ pub fn has_branch_data(conn: &Connection) -> Result<bool, AppError> {
         "SELECT EXISTS (SELECT 1 FROM branch) OR EXISTS (SELECT 1 FROM settings)
              OR EXISTS (SELECT 1 FROM devices) OR EXISTS (SELECT 1 FROM roles)
              OR EXISTS (SELECT 1 FROM role_perms) OR EXISTS (SELECT 1 FROM staff)
-             OR EXISTS (SELECT 1 FROM changes)",
+             OR EXISTS (SELECT 1 FROM read_grants) OR EXISTS (SELECT 1 FROM changes)",
         [],
         |r| r.get(0),
     )
@@ -350,6 +361,37 @@ pub fn insert_setting(
     conn.execute(
         "INSERT INTO settings (branch_id, key, value, rev, updated_at) VALUES (?1, ?2, ?3, 0, 0)",
         params![branch_id, key, value],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// A granted read elevation (`audit.read_granted`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewReadGrant<'a> {
+    pub grant_id: &'a str,
+    pub branch_id: &'a str,
+    pub permission: &'a str,
+    pub requester_staff_id: &'a str,
+    pub approver_staff_id: &'a str,
+    pub verifier_version: i64,
+}
+
+/// Inserts a read-grant row with `rev = 0` and zero timestamps, for the stamp step to set.
+pub fn insert_read_grant(conn: &Connection, g: &NewReadGrant<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO read_grants (grant_id, branch_id, permission, requester_staff_id,
+                                  approver_staff_id, verifier_version, rev, created_at,
+                                  updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, 0)",
+        params![
+            g.grant_id,
+            g.branch_id,
+            g.permission,
+            g.requester_staff_id,
+            g.approver_staff_id,
+            g.verifier_version
+        ],
     )
     .map_err(db_error)?;
     Ok(())
@@ -629,6 +671,42 @@ pub fn insert_change(conn: &Connection, c: &ChangeRecord) -> Result<(), AppError
     Ok(())
 }
 
+/// The columns [`change_from`] reads, in order.
+pub(crate) const CHANGE_COLUMNS: &str = "epoch, seq, tbl, row_id, op, row, intent_id, intent_kind,
+    actor_kind, actor_id, elevated_by_kind, elevated_by_id, elevated_by_mode,
+    elevated_by_verifier_version, at, business_day, fy, reason";
+
+/// One `changes` row selected as [`CHANGE_COLUMNS`].
+pub(crate) fn change_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChangeRecord> {
+    let op: String = r.get(4)?;
+    Ok(ChangeRecord {
+        epoch: r.get(0)?,
+        seq: r.get(1)?,
+        tbl: r.get(2)?,
+        row_id: r.get(3)?,
+        op: ChangeOp::parse(&op).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                format!("unknown op {op}").into(),
+            )
+        })?,
+        row: r.get(5)?,
+        intent_id: r.get(6)?,
+        intent_kind: r.get(7)?,
+        actor_kind: r.get(8)?,
+        actor_id: r.get(9)?,
+        elevated_by_kind: r.get(10)?,
+        elevated_by_id: r.get(11)?,
+        elevated_by_mode: r.get(12)?,
+        elevated_by_verifier_version: r.get(13)?,
+        at: r.get(14)?,
+        business_day: r.get(15)?,
+        fy: r.get(16)?,
+        reason: r.get(17)?,
+    })
+}
+
 /// Every change row, ordered by epoch (numeric counter, then the epoch text) and `seq`.
 pub fn read_changes(conn: &Connection) -> Result<Vec<ChangeRecord>, AppError> {
     let mut stmt = conn
@@ -640,37 +718,7 @@ pub fn read_changes(conn: &Connection) -> Result<Vec<ChangeRecord>, AppError> {
              ORDER BY CAST(substr(epoch, 1, instr(epoch, ':') - 1) AS INTEGER), epoch, seq",
         )
         .map_err(db_error)?;
-    let rows = stmt
-        .query_map([], |r| {
-            let op: String = r.get(4)?;
-            Ok(ChangeRecord {
-                epoch: r.get(0)?,
-                seq: r.get(1)?,
-                tbl: r.get(2)?,
-                row_id: r.get(3)?,
-                op: ChangeOp::parse(&op).ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        4,
-                        rusqlite::types::Type::Text,
-                        format!("unknown op {op}").into(),
-                    )
-                })?,
-                row: r.get(5)?,
-                intent_id: r.get(6)?,
-                intent_kind: r.get(7)?,
-                actor_kind: r.get(8)?,
-                actor_id: r.get(9)?,
-                elevated_by_kind: r.get(10)?,
-                elevated_by_id: r.get(11)?,
-                elevated_by_mode: r.get(12)?,
-                elevated_by_verifier_version: r.get(13)?,
-                at: r.get(14)?,
-                business_day: r.get(15)?,
-                fy: r.get(16)?,
-                reason: r.get(17)?,
-            })
-        })
-        .map_err(db_error)?;
+    let rows = stmt.query_map([], change_from).map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 

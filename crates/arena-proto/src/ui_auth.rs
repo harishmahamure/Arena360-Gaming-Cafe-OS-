@@ -103,14 +103,42 @@ pub struct UiIntentRequest {
 /// Most intents one elevation ticket may cover.
 pub const MAX_TICKET_USES: usize = 10;
 
-/// One intent an elevation approves: its kind and, for `settings.set`, the setting key.
+/// One thing an elevation approves: an intent (`intent_kind` and, for `settings.set`, the
+/// setting `key`), redeemed once; or a read permission (`permission`, one of
+/// [`Permission::READ_ELEVATION`], alone in its request), which grants unlimited reads for a
+/// while. Exactly one of `intent_kind` and `permission` is set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct ElevationItem {
-    pub intent_kind: IntentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub intent_kind: Option<IntentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<Permission>,
+}
+
+impl ElevationItem {
+    /// An item approving one intent of `kind` (with the setting `key` of a `settings.set`).
+    pub fn intent(kind: IntentKind, key: Option<String>) -> Self {
+        Self {
+            intent_kind: Some(kind),
+            key,
+            permission: None,
+        }
+    }
+
+    /// An item asking for a read elevation of `permission`.
+    pub fn read(permission: Permission) -> Self {
+        Self {
+            intent_kind: None,
+            key: None,
+            permission: Some(permission),
+        }
+    }
 }
 
 /// `POST /ui/elevate`: a manager's PIN, typed on this screen, approving exactly `items`
@@ -170,7 +198,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(req.items[0].key.as_deref(), Some("k"));
+        assert_eq!(req.items[0].intent_kind, Some(IntentKind::SettingsSet));
         assert!(!format!("{req:?}").contains("2468"));
+    }
+
+    #[test]
+    fn a_read_item_names_only_its_permission() {
+        let item: ElevationItem = serde_json::from_str(r#"{"permission":"audit.view"}"#).unwrap();
+        assert_eq!(item, ElevationItem::read(Permission::AuditView));
+        assert_eq!(
+            serde_json::to_string(&item).unwrap(),
+            r#"{"permission":"audit.view"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ElevationItem::intent(IntentKind::StaffUpsert, None)).unwrap(),
+            r#"{"intent_kind":"staff.upsert"}"#
+        );
     }
 
     #[test]

@@ -18,4 +18,6 @@ export {
   formatDateTime,
   formatMoney,
   formatTime,
+  nextDay,
+  zonedDayStart,
 } from "./format.js";

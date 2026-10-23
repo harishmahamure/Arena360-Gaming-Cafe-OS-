@@ -2,6 +2,7 @@
 //! through the single [`Writer`] actor, and every branch write goes through [`apply`].
 
 mod apply;
+pub mod audit;
 mod clock;
 pub mod devices;
 pub mod locale;
@@ -20,6 +21,7 @@ pub use apply::{
     MAX_VERSION_LEN, apply, emit, fingerprint, is_ulid, validate_frame,
 };
 pub use arena_store::{ChangeOp, META_TLS_FINGERPRINT};
+pub use audit::{AuditQuery, AuditReader};
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use devices::{DeviceDirectory, VerifiedDevice};
 pub use settings_defaults::{

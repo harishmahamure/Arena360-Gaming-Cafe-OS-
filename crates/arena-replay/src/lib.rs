@@ -224,6 +224,21 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            // A read elevation the Hub recorded (system actor).
+            let mut grant = submit(
+                IntentPayload::AuditReadGranted(arena_proto::AuditReadGranted {
+                    permission: arena_proto::Permission::AuditView,
+                    requester_staff_id: "01JCOUNTER".into(),
+                    approver_staff_id: "01JMANAGER".into(),
+                    verifier_version: 1,
+                }),
+                None,
+            );
+            grant.actor = Actor {
+                kind: ActorKind::System,
+                id: "hub".into(),
+            };
+            writer.submit_intent(grant).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

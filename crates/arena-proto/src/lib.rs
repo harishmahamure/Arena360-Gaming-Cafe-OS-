@@ -4,6 +4,7 @@
 //! `packages/ui/src/generated`.
 
 mod actor;
+mod audit;
 pub mod currency;
 mod error;
 mod frame;
@@ -14,6 +15,11 @@ mod snapshot;
 mod ui_auth;
 
 pub use actor::{Actor, ActorKind, ElevatedBy, ElevationKind, ElevationMode};
+pub use audit::{
+    AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditDetail, AuditElevatedBy,
+    AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem, AuditPage,
+    AuditStaffOption, AuditValue, ELEVATION_HEADER,
+};
 pub use error::{AppError, ErrorCode};
 pub use frame::{
     AppliedSummary, ChangeOpKind, ChangeSummary, Envelope, ErrorFrame, EventFrame, FRAME_KINDS,
@@ -22,9 +28,9 @@ pub use frame::{
     parse_json,
 };
 pub use intent::{
-    BranchBootstrap, BranchSeedDefaults, DeviceRegister, DeviceRevoke, DeviceVersionReported,
-    Intent, IntentCategory, IntentKind, IntentPayload, PermEffect, ReasonCode, RolePerm,
-    RoleUpsert, SettingsSet, StaffUpsert, reasons_json,
+    AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceRegister, DeviceRevoke,
+    DeviceVersionReported, Intent, IntentCategory, IntentKind, IntentPayload, PermEffect,
+    ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffUpsert, reasons_json,
 };
 pub use permission::{Permission, Requirement};
 pub use scope::{ClientClass, class_scope, in_scope};

@@ -27,6 +27,7 @@ mod devices;
 mod frame;
 mod guards;
 mod mutate;
+mod read_grants;
 pub(crate) mod seed_defaults;
 mod settings_set;
 mod staff_roles;
@@ -104,6 +105,8 @@ pub(crate) enum Target {
     Staff(Box<staff_roles::StaffTarget>),
     /// `role.upsert`: the branch, the edited role and its rows, and the name's holder.
     Role(Box<staff_roles::RoleTarget>),
+    /// `audit.read_granted`: the branch, if it has been bootstrapped.
+    Branch(Option<String>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
@@ -116,6 +119,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,
         P::StaffUpsert(s) => Target::Staff(Box::new(staff_roles::load_staff(tx, intent, s)?)),
         P::RoleUpsert(r) => Target::Role(Box::new(staff_roles::load_role(tx, intent, r)?)),
+        P::AuditReadGranted(_) => read_grants::load(tx)?,
     })
 }
 

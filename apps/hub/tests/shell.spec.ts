@@ -51,8 +51,9 @@ const RAIL = [
   ["settings", en["hub.nav.settings"]],
   ["system", en["hub.nav.system"]],
 ] as const;
-// Settings has its own sections (settings.spec.ts); every other unbuilt screen is a placeholder.
-const PLACEHOLDERS = RAIL.filter(([id]) => id !== "floor" && id !== "settings");
+// Settings (settings.spec.ts) and System (audit.spec.ts) have their own sections; every other
+// unbuilt screen is a placeholder.
+const PLACEHOLDERS = RAIL.filter(([id]) => id !== "floor" && id !== "settings" && id !== "system");
 const BAR = [
   en["hub.nav.floor_short"],
   en["hub.nav.pos"],
@@ -270,7 +271,7 @@ test("landmarks, one h1 and no serious axe violations on every screen", async ({
     // One visible Hub navigation (Settings adds its own section list beside it).
     const hubNav = visibleNav(page).and(page.locator(`[aria-label="${en["hub.nav.label"]}"]`));
     await expect(hubNav).toHaveCount(1);
-    await expect(visibleNav(page)).toHaveCount(id === "settings" ? 2 : 1);
+    await expect(visibleNav(page)).toHaveCount(id === "settings" || id === "system" ? 2 : 1);
     await expect(page.locator("h1")).toHaveCount(1);
     await expectNoSeriousAxe(page);
   }

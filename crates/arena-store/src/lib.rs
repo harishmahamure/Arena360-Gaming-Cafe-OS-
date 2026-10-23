@@ -3,6 +3,7 @@
 //! [`Store::open`] opens SQLite in WAL mode with `synchronous=FULL` (both verified by reading
 //! them back), refuses a schema newer than this binary and applies the embedded migrations.
 
+mod audit;
 mod branch;
 mod dedupe;
 mod devices;
@@ -16,12 +17,17 @@ use std::time::Duration;
 use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+pub use audit::{
+    AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,
+    list_staff_names, previous_row_image,
+};
 pub use branch::{
-    BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue,
-    SettingRef, SettingRow, Table, branch_exists, current_branch_id, delete_row, dump_table,
-    find_branch_locale, find_branch_summary, find_setting, has_branch_data, insert_branch,
-    insert_change, insert_setting, list_settings, next_change_seq, read_changes, read_row,
-    stamp_row, update_setting, update_setting_value, upsert_row,
+    BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, NewReadGrant, Row, RowKey,
+    RowValue, SettingRef, SettingRow, Table, branch_exists, current_branch_id, delete_row,
+    dump_table, find_branch_locale, find_branch_summary, find_setting, has_branch_data,
+    insert_branch, insert_change, insert_read_grant, insert_setting, list_settings,
+    next_change_seq, read_changes, read_row, stamp_row, update_setting, update_setting_value,
+    upsert_row,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
@@ -382,6 +388,44 @@ impl Store {
             return Ok(Vec::new());
         }
         list_unlock_candidates(&self.conn, first, limit)
+    }
+
+    /// Up to `limit` changes matching `filter`, newest first (see [`list_audit`]).
+    pub fn audit_page(&self, filter: &AuditFilter, limit: u32) -> Result<Vec<AuditRow>, AppError> {
+        list_audit(&self.conn, filter, limit)
+    }
+
+    /// The change `(epoch, seq)`, if it exists.
+    pub fn change(&self, epoch: &str, seq: i64) -> Result<Option<ChangeRecord>, AppError> {
+        find_change(&self.conn, epoch, seq)
+    }
+
+    /// The row image of the change before `(epoch, seq)` to the same row (see
+    /// [`previous_row_image`]).
+    pub fn previous_row_image(
+        &self,
+        tbl: &str,
+        row_id: &str,
+        epoch: &str,
+        seq: i64,
+    ) -> Result<Option<Vec<u8>>, AppError> {
+        previous_row_image(&self.conn, tbl, row_id, epoch, seq)
+    }
+
+    /// Every staff member's `(staff_id, display_name)` (empty before the staff table exists).
+    pub fn staff_names(&self) -> Result<Vec<(String, String)>, AppError> {
+        if !self.table_exists("staff")? {
+            return Ok(Vec::new());
+        }
+        list_staff_names(&self.conn)
+    }
+
+    /// Every device's `(device_id, label)`.
+    pub fn device_labels(&self) -> Result<Vec<(String, String)>, AppError> {
+        if !self.devices_table_exists()? {
+            return Ok(Vec::new());
+        }
+        list_device_labels(&self.conn)
     }
 
     /// The branch's locale columns, outside any write transaction (`None` before bootstrap).

@@ -12,4 +12,5 @@ export type IntentKind =
   | "device.version_reported"
   | "console.plan_requested"
   | "staff.upsert"
-  | "role.upsert";
+  | "role.upsert"
+  | "audit.read_granted";

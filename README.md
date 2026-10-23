@@ -105,12 +105,15 @@ locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` 
   | `POST /ui/auth/sign-in {login, password}`                       | `{token, staff: {staff_id, display_name, role_name, permissions}}`, or 401 `AUTH_FAILED` with one fixed message whatever was wrong (unknown login, wrong password, inactive staff)                                                                                                                     |
   | `POST /ui/auth/sign-out` (bearer)                               | 204; the token stops working                                                                                                                                                                                                                                                                           |
   | `GET /ui/me` (bearer)                                           | the session's staff plus `locked` and `has_pin`, or 401 `AUTH_FAILED`                                                                                                                                                                                                                                  |
-  | `POST /ui/lock` (bearer)                                        | 204; the session is idle-locked: `/ui/intent` and `/ui/elevate` answer 423 `SESSION_LOCKED` and its tickets are dropped. See **Idle lock** below                                                                                                                                                       |
+  | `POST /ui/lock` (bearer)                                        | 204; the session is idle-locked: `/ui/intent`, `/ui/elevate` and `/ui/audit*` answer 423 `SESSION_LOCKED` and its tickets are dropped. See **Idle lock** below                                                                                                                                         |
   | `POST /ui/unlock {pin}` (bearer)                                | `{staff, switched}` for a locked session (else 409 `VALIDATION_FAILED` on `session`); own PIN first, another member's re-binds it; else 403 `PIN_REJECTED`                                                                                                                                             |
   | `POST /ui/elevate {items: [{intent_kind, key?}], pin}` (bearer) | `{ticket, items, expires_in_s}` when the PIN belongs to another active staff member whose role holds every permission the items need; otherwise 403 `PIN_REJECTED` with one fixed message. See **PIN elevation** below                                                                                 |
   | `POST /ui/elevate/drop {ticket}` (bearer)                       | 204; the ticket's unused approvals are given up                                                                                                                                                                                                                                                        |
   | `POST /ui/intent {intent, elevation_ticket?}` (bearer)          | `{applied}`; the intent runs as the session's `actor{staff, staff_id}` whatever actor was sent, and any client-supplied `elevated_by` is dropped. A ticket is redeemed for one matching approved item and becomes `elevated_by`; a bad one is 403 `PIN_REQUIRED`. Errors are `{code, message, field?}` |
   | `GET /ui/settings` (bearer)                                     | `[{key, value, rev}]`, so an edit can carry `base_rev`                                                                                                                                                                                                                                                 |
+  | `GET /ui/audit?actor&module&from&to&cursor&limit` (bearer)      | `{items, next_cursor}`, newest first; needs `audit.view` or a read ticket in `X-Arena-Elevation`, else 403 `PERMISSION_DENIED`. See **Audit log** below                                                                                                                                                |
+  | `GET /ui/audit/item?epoch&seq` (bearer)                         | `{item, after, before, changed}` for one change (same gate); secrets read `"[redacted]"`                                                                                                                                                                                                               |
+  | `GET /ui/audit/facets` (bearer)                                 | `{staff: [{id, name}], modules}` for the audit filters (same gate)                                                                                                                                                                                                                                     |
   | `GET /ui/events?token=<token>`                                  | server-sent events: `settings.changed` `{locale, keys, ui}` when an intent wrote `settings`, `applied` `{intent_id}` for any other intent, `resync` when the stream fell behind. A bad token is 401; the stream closes once its session ends                                                           |
 
   Five consecutive failed sign-ins for a login (compared without case) pause it for 60 s: every
@@ -146,6 +149,20 @@ locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` 
   is the same intent. Change rows record the actor and `elevated_by_*` (`elevated_by_kind` is
   `pin` or `mfa`, migration 0007). A client's own `elevated_by` is stripped at `/ui/intent` and
   on the LAN. The PIN is never logged, stored or echoed, and goes nowhere but this loopback call.
+  **Read elevation:** `items: [{permission}]` (one item, on its own, naming `audit.view`,
+  `report.view` or `player.view`) asks for a read ticket instead: the same candidates (active
+  staff holding that permission, never the requester), the same throttle and the same
+  refusals. It is bound to the session, the member and that permission, allows unlimited
+  reads for 10 min (`expires_in_s: 600`), counts toward the 4 tickets a session holds, never
+  redeems an intent (`PIN_REQUIRED`), and is dropped like any ticket by a lock, an unlock that
+  switches the member, or sign-out. Every read re-checks the approver (active, their role
+  still allows the permission, `pin_verifier_version` unchanged); if not, the ticket is
+  dropped and the read is 403 `PERMISSION_DENIED`. **Grants are audited:** on a primary the
+  Hub records each grant, before handing the ticket out, as the system intent
+  `audit.read_granted {permission, requester_staff_id, approver_staff_id, verifier_version}`,
+  which inserts a `read_grants` row (migration 0008) and so shows in the audit viewer (module
+  `audit`); if it cannot be recorded the ticket is withdrawn and the error returned. A follower
+  cannot write: it may still grant a read elevation and logs the grant at info instead.
 - **Idle lock:** a signed-in Hub UI locks after `idle_lock_minutes` (1–30, default 5; the
   snapshot's `ui: {idle_lock_minutes}`, pushed in `settings.changed`, a failed read sending the
   default) without input. It calls `POST /ui/lock`; until a PIN unlocks the session the Hub
@@ -169,6 +186,40 @@ locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` 
   `ui.unlocked {staff_id, previous_staff_id?, at}` at info, never the PIN or its length. A
   re-bound session keeps its token and its 12 h lifetime, and a staff refresh in flight never
   reverts it.
+- **Audit log:** the read-only routes over `changes` (`arena-api/src/ui_audit.rs`, read through
+  `arena_core::audit` on their own read-only connection, never the writer). The session must be
+  able to act (423 `SESSION_LOCKED` while idle-locked) and hold `audit.view`, or send a read
+  ticket for `audit.view` in `X-Arena-Elevation` (allowed by the CORS preflight); otherwise 403
+  `PERMISSION_DENIED`, checked before anything is read. `GET /ui/audit` filters by
+  `actor=<kind>` or `<kind>:<id>`, `module=<domain>` (equality on the generated column
+  `changes.module`: the text of `intent_kind` before its first `.`, or the whole kind when it
+  has none), `from` (UTC ms, inclusive) and `to` (exclusive), all ANDed; it orders by
+  `(at DESC, epoch DESC, seq DESC)` and pages by keyset: `cursor` is that triple of the last
+  item, base64url, and `next_cursor` is `null` on the last page (no `OFFSET`). `limit` is 1–100
+  (default 50); a malformed parameter is 422 `VALIDATION_FAILED` naming it. Items are
+  `{epoch, seq, at, business_day, actor: {kind, id, name}, elevated_by: {kind, id, name, mode} |
+null, module, intent_kind, intent_id, tbl, row_id, op}`: staff show their display name,
+  devices their label, and `system`, `owner` and `admin` the catalogue keys `hub.audit.actor.*`;
+  an unknown id shows the id, and a stored kind or mode this build does not know reads `unknown`
+  (logged as a warning) instead of failing the page. `GET /ui/audit/item?epoch&seq` decodes the
+  change's MessagePack image (`after`; for a delete, the row as it was deleted) and the image of
+  the previous change to the same `(tbl, row_id)` in log order (`before`; `null` for a created
+  row, including one re-created after a delete), lists the columns that differ (`changed`, empty
+  for a create), and replaces `password_hash`, `pin_hash`, `token_hash` (and any column in
+  `arena_core::audit::REDACTED`) with `"[redacted]"` in both images. Columns in
+  `arena_core::audit::ID_ONLY` (`player_id`, for the player tables of later epics) show the id
+  alone: a text value keeps only its leading id, anything joined to it (a name, a phone) is
+  dropped, and a value with no id in front is redacted. An `epoch`/`seq` that names no change
+  is 422 `VALIDATION_FAILED` on `seq` (a missing `epoch` names `epoch`). Migration 0008 adds the
+  virtual generated columns `epoch_counter` and `module` and the indexes
+  `changes(at, epoch, seq)`, `changes(actor_kind, actor_id, at, epoch, seq)`,
+  `changes(actor_kind, at, epoch, seq)`, `changes(module, at, epoch, seq)` and
+  `changes(tbl, row_id, epoch_counter, epoch, seq)`, so every filter combination pages without a
+  sort and the previous image is one indexed lookup. A Rust test writes 100,000 changes (5
+  actors, 3 modules) and requires the unfiltered, actor + date, actor + module + date,
+  module-only and kind-only first pages under `AUDIT_PERF_BUDGET_MS` (default 250) in a debug
+  build after a warm-up, a proxy for the < 1 s budget on the reference hardware (the release
+  benchmark's job).
 - **Reasons:** `IntentKind::reasons()` lists the reason codes a kind requires (generated for the
   UI as `generated/reasons.json`, read through `reasonsFor()` / `reasonOptions()` in
   `@arena/ui`). Only `device.revoke` has any today (`lost`, `stolen`, `replaced`, `other`);
@@ -338,7 +389,20 @@ dropped, and focus returns to Save; a lapsed approval asks again without a round
 returns focus, and a `PIN_REQUIRED` answer asks for the PIN again), **Receipt** (the
 "Receipt footer" control from Story 1.11) and **Screen lock** (`/settings/screen-lock`: the idle
 lock in minutes with "1–30 minutes" shown inline, checked before any round trip, saved with
-`settings.set` and the same manager approval for a Counter). Every signed-in view listens to `/ui/events`: a
+`settings.set` and the same manager approval for a Counter). **System → Audit**
+(`/system` opens `/system/audit`): filters for who (staff names from `/ui/audit/facets`, plus
+System, Owner and Devices), module and a from/to date pair in the branch time zone (`to`
+inclusive, sent as the next day's start), with Clear filters resetting them all; a table of
+time (`formatDateTime`, branch tz), actor name and kind, module, action and record, newest
+first, with Load more and the next page loading as the end scrolls into view; "No changes match
+these filters." when empty. Activating a row (Enter or click) opens the details in the page:
+Before and After side by side, each changed field marked with the text "Changed" and an
+`aria-label`, "Created" in the before column of a created row, a "Deleted" marker on a delete, secrets shown as "Hidden", and
+"Approved by {manager} ({mode})" on an elevated change; Esc or Close returns focus to the row.
+There are no edit, delete or export controls. A member without `audit.view` still sees the
+entry: it opens the `InlinePin` in place, and only after a manager's PIN does it load, with the
+read ticket held in the page's memory; a cancel fetches and shows nothing, and a lapsed ticket
+clears the screen and asks again. Every signed-in view listens to `/ui/events`: a
 `settings.changed` updates the branch locale (the header clock's time zone, formatted amounts
 and a Settings form with no unsaved edits) and the idle lock in every open window without a
 reload. **Idle lock:** `src/lib/idle.js` counts input idleness (`keydown`, `pointerdown`,

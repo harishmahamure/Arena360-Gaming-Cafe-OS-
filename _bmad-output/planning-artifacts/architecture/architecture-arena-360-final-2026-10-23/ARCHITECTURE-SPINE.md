@@ -106,7 +106,7 @@ Only rows that bind architecture are listed. Product rules (ad placement and cad
 
 - **Binds:** hub, kiosk, pi-agent, kitchen-display, cloud
 - **Prevents:** inbound ports on cafe networks; branch-held provider secrets
-- **Rule:** Hub is outbound-443 only. Devices ↔ Hub over LAN WebSocket `:7400` and HTTPS `:7401` (AD-42). Payment/provider webhooks terminate in the cloud only. Remote access via Cloudflare Tunnel + Access is gated by the `tunnel` entitlement flag (add-on on paid tiers, included in Premium) and is used only for the read-only live view (AD-43).
+- **Rule:** Hub is outbound-443 only. Devices ↔ Hub over LAN WebSocket `:7400` and HTTPS `:7401` (AD-42). Payment/provider webhooks terminate in the cloud only. Remote access via Cloudflare Tunnel + Access is gated by the `tunnel` entitlement flag (add-on on paid tiers, included in Premium) and carries two things only: the read-only live view (AD-43) and remote devices (kiosks/Pis outside the café LAN), which connect as the paired-device class with device token + pinned TLS (AD-42), never anonymously.
 
 ### AD-7 — Data conventions [ADOPTED, amended]
 
@@ -328,7 +328,7 @@ Only rows that bind architecture are listed. Product rules (ad placement and cad
 
 - **Binds:** owner-pwa, hub (arena-api), cloud-control
 - **Prevents:** a second owner write path around commands; Hub trusting cloud sessions it cannot verify
-- **Rule:** Live view is a read-only AD-25 subscription through Cloudflare Tunnel + Access, gated by the live-view flag. The owner presents a short-lived (≤ 5 min), branch-scoped token signed by the cloud and verified by the Hub with its licence verify keys. The live-view client class accepts subscriptions only; every owner write goes through AD-5 commands. Default dashboards read AD-35 files.
+- **Rule:** Live view is a read-only AD-25 subscription through Cloudflare Tunnel + Access, gated by the `tunnel` entitlement flag (Premium, or the Tunnel add-on on Basic). The owner presents a short-lived (≤ 5 min), branch-scoped token signed by the cloud and verified by the Hub with its licence verify keys. The live-view client class accepts subscriptions only; every owner write goes through AD-5 commands. Default dashboards read AD-35 files.
 
 ### AD-44 — Hub clock trust
 

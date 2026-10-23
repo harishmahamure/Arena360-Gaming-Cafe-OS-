@@ -15,6 +15,7 @@ export const LAYER_RULES = {
   "arena-tasks": ["arena-core", "arena-store", "arena-proto"],
   "arena-replay": ["arena-store", "arena-proto"],
   "arena-cloud": ["arena-proto", "arena-replay", "arena-store"],
+  "arena-kiosk-core": ["arena-proto"],
 };
 
 /**

@@ -14,6 +14,7 @@
 //! `applied_intents` right after append_changes, in the same transaction.
 
 mod changes;
+mod devices;
 mod frame;
 mod guards;
 mod mutate;
@@ -31,6 +32,7 @@ use tokio::sync::broadcast;
 use crate::clock::Clock;
 use crate::status::{Epoch, Role};
 
+pub use devices::MAX_VERSION_LEN;
 pub use frame::{is_ulid, validate_frame};
 pub use settings_set::MAX_SETTING_VALUE_CHARS;
 pub(crate) use ttl_dedupe::record_rejection;
@@ -84,12 +86,20 @@ pub(crate) enum Target {
     None,
     /// `settings.set`: the setting row, if it exists.
     Setting(Option<arena_store::SettingRef>),
+    /// `device.register`: the branch the device joins, if it has been bootstrapped.
+    NewDevice(Option<String>),
+    /// `device.revoke`, `device.version_reported`: the device row, if it exists.
+    Device(Option<arena_store::DeviceRow>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
+    use arena_proto::IntentPayload as P;
     Ok(match &intent.payload {
-        arena_proto::IntentPayload::BranchBootstrap(_) => Target::None,
-        arena_proto::IntentPayload::SettingsSet(s) => Target::Setting(settings_set::load(tx, s)?),
+        P::BranchBootstrap(_) => Target::None,
+        P::SettingsSet(s) => Target::Setting(settings_set::load(tx, s)?),
+        P::DeviceRegister(_) => devices::load_register(tx)?,
+        P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
+        P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,
     })
 }
 
@@ -124,7 +134,7 @@ pub(crate) fn run(
     intent: &Intent,
 ) -> Result<Outcome, AppError> {
     let now = ctx.clock.now_ms();
-    guards::permission(intent)?;
+    guards::permission(tx, intent)?;
     let epoch = guards::epoch(tx, ctx)?;
     if let Some(stored) = ttl_dedupe::ttl_dedupe(tx, intent, now)? {
         return Ok(Outcome::Replayed(stored));
@@ -132,7 +142,7 @@ pub(crate) fn run(
     let target = load(tx, intent)?;
     guards::base_rev(intent, &target)?;
     validate::validate(intent, &target)?;
-    let written = mutate::mutate(tx, intent, &target)?;
+    let written = mutate::mutate(tx, intent, &target, now)?;
     #[cfg(test)]
     if ctx.fail_after_mutate {
         return Err(AppError::new(

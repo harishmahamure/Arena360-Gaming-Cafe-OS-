@@ -326,7 +326,7 @@ fn perturb(intent: &Intent, how: &Index) -> Intent {
         _ => {
             out.payload = match &intent.payload {
                 IntentPayload::SettingsSet(s) => set_payload(&s.key, &format!("{}~", s.value)),
-                IntentPayload::BranchBootstrap(_) => set_payload("receipt.footer", "other"),
+                _ => set_payload("receipt.footer", "other"),
             };
             out.kind = out.payload.kind();
         }

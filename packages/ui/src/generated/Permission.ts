@@ -3,4 +3,4 @@
 /**
  * A catalogue permission. Every intent maps to exactly one.
  */
-export type Permission = never;
+export type Permission = "device.remote" | "device.pair";

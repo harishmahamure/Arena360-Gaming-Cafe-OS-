@@ -3,7 +3,7 @@
 //! [`replay`] applies each change onto a freshly migrated, empty database, in `(epoch, seq)`
 //! order with epochs compared as `(counter, hub_instance_id)`. An insert or update upserts the
 //! change's MessagePack row into its table; a delete removes the row with that key. Only the
-//! change-log tables ([`Table::ALL`]: `branch`, `settings`) may be written. Replaying a
+//! change-log tables ([`Table::ALL`]: `branch`, `settings`, `devices`) may be written. Replaying a
 //! database's whole log must reproduce its rows exactly.
 
 use arena_proto::{AppError, ErrorCode};
@@ -101,6 +101,15 @@ mod tests {
 
     /// A database seeded through the Writer with `branch.bootstrap`, as `dev seed` does.
     async fn seeded() -> (tempfile::TempDir, Store) {
+        seed(false).await
+    }
+
+    /// Like [`seeded`], plus one `device.register` so every change-log table has a row.
+    async fn seeded_with_device() -> (tempfile::TempDir, Store) {
+        seed(true).await
+    }
+
+    async fn seed(with_device: bool) -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("branch.db");
         let mut store = Store::open(&path, T0).unwrap();
@@ -140,6 +149,29 @@ mod tests {
             })
             .await
             .unwrap();
+        if with_device {
+            let payload = IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                class: arena_proto::ClientClass::Kds,
+                label: "Pass".into(),
+                token_hash: arena_core::devices::hash_token_secret("s").unwrap(),
+            });
+            writer
+                .submit_intent(Intent {
+                    intent_id: ulid::Ulid::generate().to_string(),
+                    kind: payload.kind(),
+                    idempotency_key: ulid::Ulid::generate().to_string(),
+                    issued_at: T0,
+                    base_rev: None,
+                    actor: Actor {
+                        kind: ActorKind::System,
+                        id: "dev-seed".into(),
+                    },
+                    elevated_by: None,
+                    payload,
+                })
+                .await
+                .unwrap();
+        }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();
         (dir, store)
@@ -153,7 +185,7 @@ mod tests {
 
     #[tokio::test]
     async fn replaying_the_seeded_log_reproduces_branch_and_settings() {
-        let (_a, source) = seeded().await;
+        let (_a, source) = seeded_with_device().await;
         let (_b, mut dest) = empty();
         let changes = source.changes().unwrap();
         assert!(!changes.is_empty());

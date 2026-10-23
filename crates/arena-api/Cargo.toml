@@ -12,7 +12,24 @@ arena-proto.workspace = true
 axum.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["net"] }
+serde_json.workspace = true
+sha2.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+rcgen.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[features]
+# Dev-only loopback endpoints (`POST /dev/revoke-device`). Never enabled in release builds.
+dev-fixtures = []
 
 [dev-dependencies]
-serde_json.workspace = true
+arena-kiosk-core.workspace = true
+arena-store.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["net", "test-util"] }
 tower.workspace = true

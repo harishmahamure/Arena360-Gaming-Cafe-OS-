@@ -109,6 +109,8 @@ fn running_hub_prunes_dedupe_records_older_than_30_days() {
         .arg("--data-dir")
         .arg(dir.path())
         .args(["--health-port", &port.to_string()])
+        .args(["--lan-port", &free_port().to_string()])
+        .args(["--web-port", &free_port().to_string()])
         .spawn()
         .unwrap();
     let mut child = Some(child);

@@ -1,14 +1,9 @@
-//! `arena-kiosk-core` placeholder.
+//! `arena-kiosk-core`: the shared Rust Hub client used by the Kiosk service (and any other
+//! paired Rust app). It depends only on `arena-proto` among the workspace crates.
 
-/// Returns this crate's name.
-pub fn crate_name() -> &'static str {
-    "arena-kiosk-core"
-}
+pub mod client;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_name_is_set() {
-        assert_eq!(super::crate_name(), "arena-kiosk-core");
-    }
-}
+pub use client::{
+    ClientError, Closed, DEFAULT_PORT, EventStream, HubClient, HubStream, IDLE_TIMEOUT,
+    PING_INTERVAL, REQUEST_TIMEOUT, connect_ws, parse_fingerprint, pinned_config,
+};

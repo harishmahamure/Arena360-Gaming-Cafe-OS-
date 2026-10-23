@@ -55,15 +55,16 @@ build-essential` for `cargo build --workspace`.
 Normal and build dependencies between workspace crates must follow this allow-list
 (dev-dependencies are ignored; crates not listed are unrestricted):
 
-| Crate          | May depend on                                |
-| -------------- | -------------------------------------------- |
-| `arena-proto`  | —                                            |
-| `arena-store`  | `arena-proto`                                |
-| `arena-core`   | `arena-store`, `arena-proto`                 |
-| `arena-api`    | `arena-core`, `arena-proto`                  |
-| `arena-tasks`  | `arena-core`, `arena-store`, `arena-proto`   |
-| `arena-replay` | `arena-store`, `arena-proto`                 |
-| `arena-cloud`  | `arena-proto`, `arena-replay`, `arena-store` |
+| Crate              | May depend on                                |
+| ------------------ | -------------------------------------------- |
+| `arena-proto`      | —                                            |
+| `arena-store`      | `arena-proto`                                |
+| `arena-core`       | `arena-store`, `arena-proto`                 |
+| `arena-api`        | `arena-core`, `arena-proto`                  |
+| `arena-tasks`      | `arena-core`, `arena-store`, `arena-proto`   |
+| `arena-replay`     | `arena-store`, `arena-proto`                 |
+| `arena-cloud`      | `arena-proto`, `arena-replay`, `arena-store` |
+| `arena-kiosk-core` | `arena-proto`                                |
 
 ## Running the Hub
 
@@ -76,20 +77,68 @@ curl 127.0.0.1:7409/healthz
 | ---------------------- | ---------------------------------------------------------- |
 | `--data-dir <path>`    | Data directory (overrides `ARENA_HUB_DATA_DIR`)            |
 | `--health-port <port>` | Loopback port for `GET /healthz` (default `7409`, not `0`) |
+| `--lan-port <port>`    | TLS WebSocket port for paired apps (default `7400`)        |
+| `--web-port <port>`    | Sniffed TLS / plain HTTP port (default `7401`)             |
 | `--help`, `-h`         | Print usage and exit 0                                     |
 | `--version`            | Print the version and exit 0                               |
+
+The three ports must differ. Tests pass free ports; production uses the defaults.
 
 - **Data dir:** `--data-dir`, else `ARENA_HUB_DATA_DIR`, else `%PROGRAMDATA%\Arena360\Hub` on
   Windows and `$XDG_DATA_HOME/arena360/hub` (falling back to `~/.local/share/arena360/hub`)
   elsewhere. The database is `<data>/branch.db`; `<data>/branch.db.lock` is the process writer
   lock, so a second process on the same dir starts as a read-only follower.
 - **Health:** `GET 127.0.0.1:<port>/healthz` returns `db_open`, `role`, `lease`, `epoch`,
-  `schema_version`, `self_instance_id` and `now`. It binds loopback only.
+  `schema_version`, `self_instance_id`, `tls_fingerprint` and `now`. It binds loopback only.
 - **Logs:** JSON lines in `<data>/logs/hub-YYYY-MM-DD.jsonl` (UTC), with `.N` part files when the
   ring fills during a day. Files older than 14 days are deleted and the total is kept at or under
   50 MB (oldest deleted first). Logs never contain PII. Set the level with `RUST_LOG` (default
   `info`, e.g. `RUST_LOG=arena_tasks=debug`).
 - **Stopping:** Ctrl+C, or SIGTERM on Unix.
+
+### LAN protocol
+
+The Hub listens on `0.0.0.0:7400` and `0.0.0.0:7401`; no other inbound port is opened.
+
+- **TLS.** At first start the writer generates a self-signed ECDSA P-256 certificate (SAN
+  `arena360.local` plus the hostname) into `<data>/tls/hub.crt` and `hub.key` (the key is
+  owner-only on Unix) and records its SHA-256 fingerprint (lower-case hex) in
+  `hub_meta.tls_fingerprint`. Later starts reuse it. Clients pin that fingerprint; there is no
+  CA and no unpinned fallback.
+- **Ports.** `:7400` serves the TLS WebSocket at `/` for `paired` apps. `:7401` sniffs the first
+  byte: `0x16` (TLS) is served exactly like `:7400`; otherwise it is plain HTTP, where `GET /ws`
+  upgrades for the browser classes (`kds`, `phone`), `/kitchen` and `/console/<tv>` return a
+  placeholder page and everything else is 404.
+- **Frames.** UTF-8 JSON text `{v: 1, kind, rid, ...body}` with kinds `hello`, `hello.ok`,
+  `intent.submit`, `intent.result`, `event`, `error`, `ping`/`pong` (types in `arena-proto`,
+  generated into `@arena/ui/generated`). Unknown fields are ignored; an unknown kind or a `v`
+  other than 1 gets `UNSUPPORTED`, an unparseable frame `BAD_FRAME`, and neither closes the
+  session.
+- **Hello.** The first frame must be `hello{credential, class, versions, capabilities}`, or the
+  connection gets an error frame and is closed. `paired` (TLS only) and `kds` (`:7401/ws` only)
+  present a device token `<device_id>.<secret>`, verified with argon2id against the `devices`
+  row (`TOKEN_INVALID`, `TOKEN_REVOKED`); `phone` is anonymous. A paired client must share the
+  Hub's major version and be at most two minors behind (`UNSUPPORTED` naming the minimum).
+- **Sessions.** The actor is always `{device, device_id}` from the session. Each class may only
+  submit the intents in its scope (`arena-proto` `class_scope`), else `FORBIDDEN` and a `warn`
+  log line; no browser class can reach staff, money or device intents. Token checks are
+  limited to 4 at a time, and an address with 5 failed hellos in 60 s is refused for 60 s. At
+  most 512 connections are served at once. After hello the Hub sends `ping` every 15 s and
+  closes a session that sent nothing for 45 s; the client does the same in reverse. A follower answers
+  `hello` and refuses every intent with `NOT_PRIMARY`. Every committed intent is pushed to
+  every `paired` session as `event{kind: "applied"}` (browser classes only get allow-listed
+  tables, none yet); clients never poll. If the push fan-out falls behind, every session is
+  dropped and clients reconnect. Each session has its own
+  bounded queue, and a session that falls behind is dropped.
+- **Revocation.** `device.revoke` closes the device's sessions with `TOKEN_REVOKED` within 1 s,
+  and later hellos with that token are refused.
+- **Client.** `arena-kiosk-core` has `HubClient::connect(url, pinned_fingerprint, hello)`:
+  pinned TLS, `request(kind, body)` with a 5 s `HUB_SLOW` timeout per request, and
+  `events()`.
+- **Firewall.** `scripts/windows/firewall.ps1` (run elevated) adds inbound allow rules for TCP
+  7400 and 7401 (`-LanPort`/`-WebPort` to match non-default Hub ports) on the Private profile
+  only, and warns when the active network is not Private; `-Remove` deletes them. The Hub installer story
+  calls it; CI does not run it.
 
 ### Idempotency and housekeeping
 
@@ -114,8 +163,14 @@ cargo run -p arena-hub --features dev-fixtures -- dev seed --data-dir /tmp/hub
 `dev` must be the first argument (`arena-hub --data-dir /tmp/hub dev seed` is rejected). It
 takes the lease once and submits `branch.bootstrap` as `actor{system, "dev-seed"}`: branch
 "Dev Branch", code `DEV01`, INR, `Asia/Kolkata`, business day from 06:00, financial year from
-April, plus the default settings. On exit it releases the lease (it expires immediately), so a
-real Hub can start on the same data dir straight away.
+April, plus the default settings. It then registers one `paired` device, "Dev Kiosk"
+(`device.register`, argon2id hash only), and prints its id and token once. On exit it releases
+the lease (it expires immediately), so a real Hub can start on the same data dir straight away.
+
+With the same feature, `arena-hub dev revoke-device <device_id> [--health-port <port>]` asks
+the running Hub to revoke a device through the dev-only loopback endpoint
+`POST /dev/revoke-device` on its health port (absent without the feature). The Hub applies
+`device.revoke` and closes that device's sessions.
 
 | Exit code | Meaning                                                                        |
 | --------- | ------------------------------------------------------------------------------ |
@@ -175,6 +230,12 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | rmp-serde                    | =1.3.1        | `Cargo.toml`          |
 | chrono-tz                    | =0.10.4       | `Cargo.toml`          |
 | sha2                         | =0.10.9       | `Cargo.toml`          |
+| tokio-tungstenite            | =0.30.0       | `Cargo.toml`          |
+| rustls                       | =0.23.46      | `Cargo.toml`          |
+| tokio-rustls                 | =0.26.6       | `Cargo.toml`          |
+| rcgen                        | =0.14.10      | `Cargo.toml`          |
+| argon2                       | =0.6.0        | `Cargo.toml`          |
+| futures-util                 | =0.3.34       | `Cargo.toml`          |
 | tempfile                     | =3.27.0       | `Cargo.toml`          |
 | tower                        | =0.5.3        | `Cargo.toml`          |
 | proptest                     | =1.12.0       | `Cargo.toml`          |

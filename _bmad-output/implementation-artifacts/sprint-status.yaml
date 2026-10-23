@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-23-2026 14:00
-last_updated: 10-23-2026 17:24
+last_updated: 10-23-2026 18:05
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -44,7 +44,7 @@ development_status:
   1-6-hub-service-starts-as-the-single-writer-of-its-branch-databa: review
   1-7-every-change-goes-through-apply-into-a-gap-free-change-log-s: review
   1-8-idempotent-intents-optimistic-row-versions-and-property-test: review
-  1-9-lan-protocol-envelope-hello-handshake-and-client-classes: backlog
+  1-9-lan-protocol-envelope-hello-handshake-and-client-classes: review
   1-10-hub-app-shell-with-left-rail-header-and-floor-placeholder-on: backlog
   1-11-staff-sign-in-to-the-hub-with-roles-and-permissions: backlog
   1-12-branch-locale-settings-currency-number-format-and-timezone: backlog

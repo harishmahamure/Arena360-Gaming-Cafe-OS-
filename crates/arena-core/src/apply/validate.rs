@@ -1,6 +1,6 @@
 //! **validate.** Payload checks; a failure is `VALIDATION_FAILED` naming the field.
 
-use super::{Target, settings_set};
+use super::{Target, devices, settings_set};
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
 /// ISO 4217 alpha-3 codes this build accepts as a branch currency.
@@ -38,10 +38,36 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
         IntentPayload::SettingsSet(s) => {
             let row = match target {
                 Target::Setting(row) => row.as_ref(),
-                Target::None => None,
+                _ => None,
             };
             settings_set::validate(s, row)
         }
+        IntentPayload::DeviceRegister(d) => match target {
+            Target::NewDevice(branch) => devices::validate_register(intent, d, branch.as_ref()),
+            _ => devices::validate_register(intent, d, None),
+        },
+        IntentPayload::DeviceRevoke(d) => devices::validate_revoke(d, device_row(target)),
+        IntentPayload::DeviceVersionReported(d) => devices::validate_version(d, device_row(target)),
+    }
+}
+
+fn device_row(target: &Target) -> Option<&arena_store::DeviceRow> {
+    match target {
+        Target::Device(row) => row.as_ref(),
+        _ => None,
+    }
+}
+
+/// A display label: 1–80 characters after trimming, with no control characters.
+pub(super) fn validate_label(label: &str) -> Result<(), String> {
+    let label = label.trim();
+    let len = label.chars().count();
+    if len == 0 || len > MAX_NAME_CHARS || label.chars().any(char::is_control) {
+        Err(format!(
+            "label must be 1–{MAX_NAME_CHARS} characters with no control characters"
+        ))
+    } else {
+        Ok(())
     }
 }
 

@@ -5,6 +5,7 @@
 
 mod branch;
 mod dedupe;
+mod devices;
 mod migrations;
 
 use std::fs::{File, OpenOptions, TryLockError};
@@ -16,13 +17,17 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 pub use branch::{
     ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, SettingRef, Table, branch_exists,
-    delete_row, dump_table, find_setting, has_branch_data, insert_branch, insert_change,
-    insert_setting, next_change_seq, read_changes, read_row, stamp_row, update_setting_value,
-    upsert_row,
+    current_branch_id, delete_row, dump_table, find_setting, has_branch_data, insert_branch,
+    insert_change, insert_setting, next_change_seq, read_changes, read_row, stamp_row,
+    update_setting_value, upsert_row,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
     insert_applied_intent, prune_applied_intents,
+};
+pub use devices::{
+    DeviceRow, NewDevice, find_device, insert_device, list_devices, set_device_reported_version,
+    set_device_revoked,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
@@ -33,6 +38,9 @@ pub type StoreTx<'a> = Transaction<'a>;
 
 /// The `hub_meta` key holding this Hub's instance id.
 pub const META_HUB_INSTANCE_ID: &str = "hub_instance_id";
+/// The `hub_meta` key holding the SHA-256 fingerprint (lower-case hex) of the Hub's LAN TLS
+/// certificate.
+pub const META_TLS_FINGERPRINT: &str = "tls_fingerprint";
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -60,6 +68,9 @@ pub struct Store {
     conn: Connection,
     path: PathBuf,
     writer_lock: Option<File>,
+    /// Set once the schema is known to have the `devices` table, so device reads stop
+    /// re-checking the schema version.
+    has_devices: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for Store {
@@ -102,6 +113,7 @@ impl Store {
             conn,
             path,
             writer_lock: None,
+            has_devices: Default::default(),
         };
         let journal = store.journal_mode()?;
         if !mode.eq_ignore_ascii_case("wal") || !journal.eq_ignore_ascii_case("wal") {
@@ -131,6 +143,30 @@ impl Store {
             store.migrate(now_ms)?;
         }
         Ok(store)
+    }
+
+    /// Opens a read-only connection to an existing database: it never takes the writer lock,
+    /// migrates or writes. Fails `SCHEMA_TOO_NEW` on a newer schema. The Hub's LAN sessions use
+    /// one to verify device tokens without going through the writer.
+    pub fn open_reader(path: impl AsRef<Path>) -> Result<Self, AppError> {
+        use rusqlite::OpenFlags;
+        let path = path.as_ref().to_path_buf();
+        let conn = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(db_error)?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(db_error)?;
+        let found = current_version(&conn)?;
+        if found > LATEST_SCHEMA_VERSION {
+            return Err(schema_too_new(found));
+        }
+        Ok(Self {
+            conn,
+            path,
+            writer_lock: None,
+            has_devices: Default::default(),
+        })
     }
 
     fn migrate(&mut self, applied_at: i64) -> Result<(), AppError> {
@@ -218,6 +254,37 @@ impl Store {
     /// Every row of a change-log table, ordered by primary key.
     pub fn rows(&self, table: Table) -> Result<Vec<Row>, AppError> {
         dump_table(&self.conn, table)
+    }
+
+    /// The device `device_id`, outside any write transaction (`None` on a database not yet
+    /// migrated to the devices table).
+    pub fn device(&self, device_id: &str) -> Result<Option<DeviceRow>, AppError> {
+        if !self.devices_table_exists()? {
+            return Ok(None);
+        }
+        find_device(&self.conn, device_id)
+    }
+
+    /// Whether the schema has the `devices` table. Only a positive answer is cached: a reader
+    /// opened before the writer migrated sees the table once it exists.
+    fn devices_table_exists(&self) -> Result<bool, AppError> {
+        use std::sync::atomic::Ordering;
+        if self.has_devices.load(Ordering::Relaxed) {
+            return Ok(true);
+        }
+        let yes = self.schema_version()? >= 4;
+        if yes {
+            self.has_devices.store(true, Ordering::Relaxed);
+        }
+        Ok(yes)
+    }
+
+    /// Every device, outside any write transaction.
+    pub fn devices(&self) -> Result<Vec<DeviceRow>, AppError> {
+        if !self.devices_table_exists()? {
+            return Ok(Vec::new());
+        }
+        list_devices(&self.conn)
     }
 
     /// How many `applied_intents` (dedupe) records exist, outside any write transaction.
@@ -589,7 +656,13 @@ mod tests {
         }
         let store = Store::open(&path, T).unwrap();
         assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
-        for table in ["branch", "settings", "changes", "applied_intents"] {
+        for table in [
+            "branch",
+            "settings",
+            "changes",
+            "applied_intents",
+            "devices",
+        ] {
             let exists: bool = store
                 .conn
                 .query_row(
@@ -627,7 +700,7 @@ mod tests {
             .unwrap();
         }
         let store = Store::open(&path, T).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
         assert_eq!(store.rows(Table::Branch).unwrap().len(), 1);
         let index: bool = store
             .conn
@@ -656,6 +729,26 @@ mod tests {
                 .write_tx(|tx| insert_setting(tx, "no-such-branch", "k", "v"))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn reader_never_locks_or_writes() {
+        let (_dir, path) = temp_db();
+        drop(Store::open(&path, T).unwrap());
+        let reader = Store::open_reader(&path).unwrap();
+        assert!(!reader.holds_writer_lock());
+        assert_eq!(reader.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        assert!(reader.devices().unwrap().is_empty());
+        let mut writer = Store::open(&path, T).unwrap();
+        assert!(writer.holds_writer_lock());
+        writer
+            .write_tx(|tx| set_meta(tx, META_TLS_FINGERPRINT, "ab"))
+            .unwrap();
+        assert_eq!(
+            reader.meta(META_TLS_FINGERPRINT).unwrap().as_deref(),
+            Some("ab")
+        );
+        assert!(reader.conn.execute("DELETE FROM hub_meta", []).is_err());
     }
 
     #[test]

@@ -72,6 +72,13 @@ test("unrestricted crates and external deps are not flagged", () => {
   assert.deepEqual(findViolations(metadata(graph), LAYER_RULES), []);
 });
 
+test("the shared hub client may depend on arena-proto only", () => {
+  const graph = { ...clean, "arena-kiosk-core": ["arena-proto", "arena-core"] };
+  assert.deepEqual(findViolations(metadata(graph), LAYER_RULES).map(formatViolation), [
+    "forbidden edge: arena-kiosk-core -> arena-core",
+  ]);
+});
+
 test("an edge listed twice (normal + build) is reported once", () => {
   const graph = { ...clean, "arena-proto": ["arena-store", ["arena-store", "build"]] };
   assert.equal(findViolations(metadata(graph), LAYER_RULES).length, 1);

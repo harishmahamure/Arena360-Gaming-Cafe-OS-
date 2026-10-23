@@ -3,4 +3,10 @@
 /**
  * What an intent asks for, as `domain.verb`.
  */
-export type IntentKind = "branch.bootstrap" | "settings.set";
+export type IntentKind =
+  | "branch.bootstrap"
+  | "settings.set"
+  | "device.register"
+  | "device.revoke"
+  | "device.version_reported"
+  | "console.plan_requested";

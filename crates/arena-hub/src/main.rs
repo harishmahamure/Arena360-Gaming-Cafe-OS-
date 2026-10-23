@@ -1,7 +1,8 @@
 //! `arena-hub`: the branch Hub service.
 //!
 //! Start-up: parse args, init logs, open the store (exit 2 on `SCHEMA_TOO_NEW`), load or mint
-//! the instance id, start the lease task and `/healthz`, then run until Ctrl+C or SIGTERM.
+//! the instance id, load or generate the LAN TLS certificate, start the lease task, `/healthz`
+//! and the LAN listeners (`:7400`, `:7401`), then run until Ctrl+C or SIGTERM.
 //!
 //! Logs carry ids, codes and counts only — no PII (see `logs.rs`).
 
@@ -13,8 +14,14 @@ mod logs;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use arena_api::{bind_health, serve_health};
-use arena_core::{Clock, HubStatus, Role, SystemClock, load_or_mint_instance_id, status_channel};
+use std::net::{IpAddr, Ipv4Addr};
+
+use arena_api::lan::{LanHub, bind_lan, serve_lan, tls};
+use arena_api::{bind_health, serve_router};
+use arena_core::{
+    Clock, DeviceDirectory, HubStatus, Role, SystemClock, load_or_mint_instance_id,
+    record_tls_fingerprint, status_channel,
+};
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
 use arena_tasks::{HousekeepingTask, LeaseTask};
@@ -35,6 +42,11 @@ async fn main() -> ExitCode {
         Ok(config::Command::Run(cfg)) => cfg,
         #[cfg(feature = "dev-fixtures")]
         Ok(config::Command::DevSeed(cfg)) => return dev_seed(cfg).await,
+        #[cfg(feature = "dev-fixtures")]
+        Ok(config::Command::DevRevokeDevice {
+            device_id,
+            health_port,
+        }) => return dev_revoke(&device_id, health_port),
         Ok(config::Command::Help) => {
             println!("{}", config::USAGE);
             return ExitCode::SUCCESS;
@@ -93,11 +105,18 @@ async fn main() -> ExitCode {
 #[cfg(feature = "dev-fixtures")]
 async fn dev_seed(cfg: config::Config) -> ExitCode {
     match dev::seed(&cfg, Arc::new(SystemClock)).await {
-        Ok(changes) => {
+        Ok(seeded) => {
             println!(
-                "dev seed: bootstrapped branch DEV01 in {} ({changes} changes)",
-                cfg.data_dir.display()
+                "dev seed: bootstrapped branch DEV01 in {} ({} changes)",
+                cfg.data_dir.display(),
+                seeded.changes
             );
+            println!(
+                "dev seed: registered paired device \"{}\" {}",
+                dev::DEV_KIOSK_LABEL,
+                seeded.device_id
+            );
+            println!("dev seed: device token (shown once): {}", seeded.token);
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -107,6 +126,21 @@ async fn dev_seed(cfg: config::Config) -> ExitCode {
             } else {
                 ExitCode::from(EXIT_FAILURE)
             }
+        }
+    }
+}
+
+/// Runs `dev revoke-device` against the running Hub: exit 0 once it applied the revoke.
+#[cfg(feature = "dev-fixtures")]
+fn dev_revoke(device_id: &str, health_port: u16) -> ExitCode {
+    match dev::revoke_device(device_id, health_port) {
+        Ok(body) => {
+            println!("dev revoke-device: revoked {device_id} {body}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("dev revoke-device: {e}");
+            ExitCode::from(EXIT_FAILURE)
         }
     }
 }
@@ -151,11 +185,33 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         "store open"
     );
 
-    let (status_tx, status_rx) =
-        status_channel(HubStatus::opened(schema_version, instance_id.clone()));
+    // The LAN certificate: generated once by the writer, reused afterwards; a follower never
+    // writes it. Its fingerprint goes into hub_meta like the instance id.
+    let cert = tls::load_or_create(
+        &cfg.data_dir,
+        tls::hostname().as_deref(),
+        store.holds_writer_lock(),
+    )?;
+    record_tls_fingerprint(&mut store, &cert.fingerprint)?;
+    tracing::info!(tls_fingerprint = %cert.fingerprint, "lan certificate ready");
+    let server_tls = cert.server_config()?;
+    let devices = Arc::new(DeviceDirectory::open(cfg.db_path())?);
+
+    let mut initial = HubStatus::opened(schema_version, instance_id.clone());
+    initial.tls_fingerprint = Some(cert.fingerprint.clone());
+    let (status_tx, status_rx) = status_channel(initial);
     let listener = bind_health(cfg.health_port)
         .await
         .map_err(|e| internal(format!("bind 127.0.0.1:{}: {e}", cfg.health_port)))?;
+    let any = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let lan_listeners = bind_lan(any, cfg.lan_port, cfg.web_port)
+        .await
+        .map_err(|e| {
+            internal(format!(
+                "bind 0.0.0.0:{} / 0.0.0.0:{}: {e}",
+                cfg.lan_port, cfg.web_port
+            ))
+        })?;
 
     let lease = LeaseTask::start(store, instance_id, Arc::clone(&clock), status_tx.clone()).await?;
     let writer = lease.writer();
@@ -167,10 +223,37 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let mut lease_job = Some(tokio::spawn(lease.run()));
 
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
-    let mut server = tokio::spawn(serve_health(listener, status_rx, clock, async {
+    #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
+    let mut router = arena_api::router(status_rx.clone(), Arc::clone(&clock));
+    #[cfg(feature = "dev-fixtures")]
+    {
+        router = router.merge(arena_api::health::dev_router(
+            writer.clone(),
+            Arc::clone(&clock),
+        ));
+    }
+    let mut server = tokio::spawn(serve_router(listener, router, async {
         let _ = stop_rx.await;
     }));
     tracing::info!(port = cfg.health_port, "healthz listening on loopback");
+
+    let lan_hub = Arc::new(LanHub::new(
+        writer.clone(),
+        status_rx,
+        Arc::clone(&clock),
+        devices,
+        server_tls,
+        env!("CARGO_PKG_VERSION"),
+    ));
+    let (lan_stop_tx, lan_stop_rx) = oneshot::channel::<()>();
+    let lan = tokio::spawn(serve_lan(lan_listeners, lan_hub, async {
+        let _ = lan_stop_rx.await;
+    }));
+    tracing::info!(
+        lan_port = cfg.lan_port,
+        web_port = cfg.web_port,
+        "lan listening"
+    );
 
     let outcome = loop {
         tokio::select! {
@@ -219,6 +302,9 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         job.abort();
         let _ = job.await;
     }
+    // Close every LAN session before the writer goes away.
+    let _ = lan_stop_tx.send(());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), lan).await;
     if let Some(writer) = writer {
         writer.close().await;
     }

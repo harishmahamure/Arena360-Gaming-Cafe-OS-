@@ -84,3 +84,15 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Refusal demo:** the Settings placeholder gets one "Receipt footer" control, so the inline `PERMISSION_DENIED` refusal can be demonstrated and tested.
 - **Dev credentials:** `owner`/`manager`/`counter`/`kitchen`, password `dev-<login>-pass`, PINs 1111–4444. These exist only in `dev-fixtures` builds.
 - **1.8 review outcome:** 14 fixes, 3 rejections, 1 deferred (replicating dedupe records to the standby). Key fixes: a request fingerprint and a new `IDEMPOTENCY_CONFLICT` code; outcomes are recorded from an allow-list and permission denials are never recorded; per-key setting rules (`idle_lock_minutes` 1–30); housekeeping runs on promotion and deletes in batches; `sha2 =0.10.9` pinned.
+
+## Story 1.12: branch locale settings
+
+- **Spec approval:** self-approved. Spec: `spec-1-12-branch-locale-settings-currency-number-format-and-timezone.md`.
+- **Source of truth:** locale lives in `settings` keys `branch.*`. The `branch` row's currency/tz/day_start columns are kept only as bootstrap values. Why: the acceptance criteria say changes go through `settings.set` with a key and value.
+- **Deferred tz/day-start:** `prior_value` + `effective_from` columns on `settings`. A second change while one is pending replaces the new value but keeps the original prior value.
+- **business_day/fy:** stamped on every change row (new `business_day`/`fy` columns on `changes`), so the rule can be observed now, before sessions and orders exist. The FY label format is `FY2026-27`.
+- **Currency table:** a single source in `arena-proto`, exported to `packages/ui/src/generated/currencies.json` by `gen:types`. The formatter and the Rust validation share it.
+- **Live updates:** a loopback SSE stream, `/ui/events?token=…` (EventSource can't send headers). This is server push, not polling.
+- **Defaults:** symbol before; Indian number format when the currency is INR, otherwise international. Negatives use U+2212.
+- **1.9 implementation choices, accepted:** a device token is `<device_id>.<secret>`, so each hello checks one argon2 hash. Event and error frames nest their bodies. Token checks read through a read-only connection, off the async threads. A follower with no certificate yet serves a temporary one.
+- **1.9 review outcome:** 19 fixes and 4 rejections. Security fixes: no missed kills during the handshake; `applied` events go only to paired sessions; argon2 checks are capped, throttled per IP and timing-matched; 512-connection cap, 15 s ping and 45 s idle close. Deviations: an oversized frame closes the session (tungstenite can't continue after it); a revoked device actor gets FORBIDDEN, because PERMISSION_DENIED arrives in 1.11.

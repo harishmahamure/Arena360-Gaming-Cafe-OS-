@@ -31,6 +31,7 @@ struct HealthBody {
     epoch: Option<String>,
     schema_version: u32,
     self_instance_id: String,
+    tls_fingerprint: Option<String>,
     now: i64,
 }
 
@@ -48,6 +49,7 @@ impl HealthBody {
             epoch: s.lease.as_ref().map(|l| l.epoch().to_string()),
             schema_version: s.schema_version,
             self_instance_id: s.self_instance_id.clone(),
+            tls_fingerprint: s.tls_fingerprint.clone(),
             now,
         }
     }
@@ -75,6 +77,95 @@ pub fn router(status: watch::Receiver<HubStatus>, clock: Arc<dyn Clock>) -> Rout
 /// Binds the health listener on loopback only.
 pub async fn bind_health(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await
+}
+
+/// Serves `router` on `listener` until `shutdown` resolves.
+pub async fn serve_router(
+    listener: TcpListener,
+    router: Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown)
+        .await
+}
+
+/// Dev-only loopback endpoints (feature `dev-fixtures`, never in release builds):
+/// `POST /dev/revoke-device` with `{"device_id": "…"}` submits `device.revoke` as
+/// `actor{system, "dev-revoke"}` through the running Hub's writer. It answers 200 with
+/// `{"applied": …}`, or an error status with `{"error": AppError}`.
+#[cfg(feature = "dev-fixtures")]
+pub fn dev_router(writer: Option<arena_core::WriterHandle>, clock: Arc<dyn Clock>) -> Router {
+    use arena_proto::{
+        Actor, ActorKind, AppError, DeviceRevoke, ErrorCode, Intent, IntentKind, IntentPayload,
+    };
+    use axum::http::StatusCode;
+    use axum::routing::post;
+
+    #[derive(Clone)]
+    struct DevState {
+        writer: Option<arena_core::WriterHandle>,
+        clock: Arc<dyn Clock>,
+    }
+
+    fn status_of(code: ErrorCode) -> StatusCode {
+        match code {
+            ErrorCode::BadFrame => StatusCode::BAD_REQUEST,
+            ErrorCode::Forbidden => StatusCode::FORBIDDEN,
+            ErrorCode::NotPrimary => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::ValidationFailed | ErrorCode::Stale => StatusCode::UNPROCESSABLE_ENTITY,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    async fn revoke(
+        State(state): State<DevState>,
+        body: String,
+    ) -> (StatusCode, Json<serde_json::Value>) {
+        let fail = |e: AppError| (status_of(e.code), Json(serde_json::json!({ "error": e })));
+        let device_id = match serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("device_id")?.as_str().map(str::to_owned))
+        {
+            Some(id) => id,
+            None => {
+                return fail(AppError::new(
+                    ErrorCode::BadFrame,
+                    "the body must be {\"device_id\": \"…\"}",
+                ));
+            }
+        };
+        let Some(writer) = state.writer else {
+            return fail(AppError::new(
+                ErrorCode::NotPrimary,
+                "this hub is not the primary writer",
+            ));
+        };
+        let intent = Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: IntentKind::DeviceRevoke,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: state.clock.now_ms(),
+            base_rev: None,
+            actor: Actor {
+                kind: ActorKind::System,
+                id: "dev-revoke".into(),
+            },
+            elevated_by: None,
+            payload: IntentPayload::DeviceRevoke(DeviceRevoke { device_id }),
+        };
+        match writer.submit_intent(intent).await {
+            Ok(applied) => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "applied": crate::lan::registry::summary(&applied) })),
+            ),
+            Err(e) => fail(e),
+        }
+    }
+
+    Router::new()
+        .route("/dev/revoke-device", post(revoke))
+        .with_state(DevState { writer, clock })
 }
 
 /// Serves `/healthz` on `listener` until `shutdown` resolves.
@@ -119,6 +210,7 @@ mod tests {
                 provisional: true,
                 expires_at: 42,
             });
+            s.tls_fingerprint = Some("ab".repeat(32));
         });
         assert_eq!(
             get_json(rx).await,
@@ -129,6 +221,7 @@ mod tests {
                 "epoch": "1:01JX",
                 "schema_version": 1,
                 "self_instance_id": "01JSELF",
+                "tls_fingerprint": "ab".repeat(32),
                 "now": 1000
             })
         );
@@ -139,8 +232,46 @@ mod tests {
         let (_tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
         assert_eq!(
             get_json(rx).await,
-            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "now": 1000})
+            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "now": 1000})
         );
+    }
+
+    #[cfg(feature = "dev-fixtures")]
+    #[tokio::test]
+    async fn dev_revoke_needs_a_body_and_a_writer() {
+        let app = dev_router(None, Arc::new(ManualClock::new(0)));
+        for (body, status) in [
+            ("nope", StatusCode::BAD_REQUEST),
+            (r#"{"device_id":"D"}"#, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::post("/dev/revoke-device")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), status, "{body}");
+        }
+    }
+
+    #[cfg(not(feature = "dev-fixtures"))]
+    #[tokio::test]
+    async fn no_dev_routes_without_the_feature() {
+        let res = router(
+            status_channel(HubStatus::opened(1, "H")).1,
+            Arc::new(ManualClock::new(0)),
+        )
+        .oneshot(
+            Request::post("/dev/revoke-device")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

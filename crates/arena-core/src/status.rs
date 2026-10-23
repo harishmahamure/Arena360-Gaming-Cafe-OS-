@@ -74,6 +74,8 @@ pub struct HubStatus {
     pub role: Role,
     pub lease: Option<LeaseInfo>,
     pub schema_version: u32,
+    /// The SHA-256 fingerprint (lower-case hex) of the LAN TLS certificate, once loaded.
+    pub tls_fingerprint: Option<String>,
 }
 
 impl HubStatus {
@@ -85,6 +87,7 @@ impl HubStatus {
             role: Role::Follower,
             lease: None,
             schema_version,
+            tls_fingerprint: None,
         }
     }
 }

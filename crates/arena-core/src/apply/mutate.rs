@@ -6,7 +6,7 @@ use arena_store::{
     stamp_row,
 };
 
-use super::{Target, settings_set};
+use super::{Target, devices, settings_set};
 use crate::settings_defaults::DEFAULT_SETTINGS;
 
 /// One row the intent wrote.
@@ -24,6 +24,7 @@ pub(super) fn mutate(
     tx: &StoreTx<'_>,
     intent: &Intent,
     target: &Target,
+    now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     match &intent.payload {
         IntentPayload::BranchBootstrap(b) => {
@@ -69,10 +70,28 @@ pub(super) fn mutate(
         IntentPayload::SettingsSet(s) => {
             let row = match target {
                 Target::Setting(row) => row.as_ref(),
-                Target::None => None,
+                _ => None,
             };
             settings_set::mutate(tx, s, row)
         }
+        IntentPayload::DeviceRegister(d) => {
+            let branch = match target {
+                Target::NewDevice(b) => b.as_ref(),
+                _ => None,
+            };
+            devices::mutate_register(tx, d, branch)
+        }
+        IntentPayload::DeviceRevoke(_) => devices::mutate_revoke(tx, device_row(target), now_ms),
+        IntentPayload::DeviceVersionReported(d) => {
+            devices::mutate_version(tx, d, device_row(target))
+        }
+    }
+}
+
+fn device_row(target: &Target) -> Option<&arena_store::DeviceRow> {
+    match target {
+        Target::Device(row) => row.as_ref(),
+        _ => None,
     }
 }
 

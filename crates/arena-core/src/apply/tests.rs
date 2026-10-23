@@ -1022,3 +1022,221 @@ async fn values_are_validated_per_key() {
             .unwrap();
     }
 }
+
+// ---- Story 1.9: device intents ----
+
+fn device_intent(actor: ActorKind, body: IntentPayload) -> Intent {
+    Intent {
+        kind: body.kind(),
+        payload: body,
+        ..intent_with(actor, payload())
+    }
+}
+
+fn register(hash: &str) -> IntentPayload {
+    IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+        class: arena_proto::ClientClass::Paired,
+        label: "Dev Kiosk".into(),
+        token_hash: hash.into(),
+    })
+}
+
+/// A bootstrapped branch with one registered paired device; returns its id.
+async fn with_device(f: &mut Fixture) -> (String, String) {
+    f.writer.submit_intent(bootstrap()).await.unwrap();
+    let secret = crate::devices::new_token_secret().unwrap();
+    let hash = crate::devices::hash_token_secret(&secret).unwrap();
+    let applied = f
+        .writer
+        .submit_intent(device_intent(ActorKind::System, register(&hash)))
+        .await
+        .unwrap();
+    assert_eq!(applied.changes.len(), 1);
+    assert_eq!(applied.changes[0].tbl, "devices");
+    assert_eq!(applied.changes[0].op, ChangeOp::Insert);
+    while f.events.try_recv().is_ok() {}
+    (applied.changes[0].row_id.clone(), secret)
+}
+
+#[tokio::test]
+async fn device_register_writes_a_row_and_an_insert_change() {
+    let mut f = primary();
+    let (id, secret) = with_device(&mut f).await;
+    let store = reopen(&f);
+    let row = store.device(&id).unwrap().unwrap();
+    assert_eq!(row.class, "paired");
+    assert_eq!(row.label, "Dev Kiosk");
+    assert_eq!(row.rev, 1);
+    assert_eq!(row.revoked_at, None);
+    assert!(crate::devices::verify_token_secret(
+        &secret,
+        &row.token_hash
+    ));
+    let devices = store.rows(Table::Devices).unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0]["created_at"], RowValue::Integer(T0));
+    let change = store.changes().unwrap().pop().unwrap();
+    assert_eq!(change.intent_kind, "device.register");
+    let logged: Row = rmp_serde::from_slice(&change.row).unwrap();
+    assert_eq!(logged, devices[0]);
+}
+
+#[tokio::test]
+async fn device_register_checks_actor_hash_class_and_branch() {
+    let f = primary();
+    // Before bootstrap there is no branch to join.
+    let hash = crate::devices::hash_token_secret("s").unwrap();
+    let err = expect_err(&f, device_intent(ActorKind::System, register(&hash))).await;
+    assert_eq!(err.code, ErrorCode::ValidationFailed);
+    f.writer.submit_intent(bootstrap()).await.unwrap();
+    for actor in [ActorKind::Device, ActorKind::Staff, ActorKind::Owner] {
+        let err = expect_err(&f, device_intent(actor, register(&hash))).await;
+        assert_eq!(err.code, ErrorCode::Forbidden, "{actor:?}");
+    }
+    let err = expect_err(&f, device_intent(ActorKind::System, register("plain"))).await;
+    assert_eq!(err.field.as_deref(), Some("token_hash"));
+    let phone = IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+        class: arena_proto::ClientClass::Phone,
+        label: "x".into(),
+        token_hash: hash.clone(),
+    });
+    let err = expect_err(&f, device_intent(ActorKind::System, phone)).await;
+    assert_eq!(err.field.as_deref(), Some("class"));
+    assert!(reopen(&f).devices().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn device_revoke_sets_revoked_at_once_and_needs_system() {
+    let mut f = primary();
+    let (id, _) = with_device(&mut f).await;
+    let revoke = || {
+        IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+            device_id: id.clone(),
+        })
+    };
+    let err = expect_err(&f, device_intent(ActorKind::Device, revoke())).await;
+    assert_eq!(err.code, ErrorCode::Forbidden);
+    let mut stale = device_intent(ActorKind::System, revoke());
+    stale.base_rev = Some(7);
+    assert_eq!(expect_err(&f, stale).await.code, ErrorCode::Stale);
+
+    f.clock.advance(5);
+    let applied = f
+        .writer
+        .submit_intent(device_intent(ActorKind::System, revoke()))
+        .await
+        .unwrap();
+    assert_eq!(applied.changes[0].op, ChangeOp::Update);
+    assert_eq!(applied.changes[0].row_id, id);
+    assert_eq!(f.events.try_recv().unwrap(), applied);
+    let row = reopen(&f).device(&id).unwrap().unwrap();
+    assert_eq!((row.revoked_at, row.rev), (Some(T0 + 5), 2));
+
+    let err = expect_err(&f, device_intent(ActorKind::System, revoke())).await;
+    assert_eq!(
+        (err.code, err.field.as_deref()),
+        (ErrorCode::ValidationFailed, Some("device_id"))
+    );
+    let missing = IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+        device_id: "01JNOPEAAAAAAAAAAAAAAAAAAA".into(),
+    });
+    let err = expect_err(&f, device_intent(ActorKind::System, missing)).await;
+    assert_eq!(err.field.as_deref(), Some("device_id"));
+}
+
+#[tokio::test]
+async fn device_version_reported_records_the_version() {
+    let mut f = primary();
+    let (id, _) = with_device(&mut f).await;
+    let report = |v: &str| {
+        IntentPayload::DeviceVersionReported(arena_proto::DeviceVersionReported {
+            device_id: id.clone(),
+            version: v.into(),
+        })
+    };
+    let err = expect_err(&f, device_intent(ActorKind::System, report("1.2"))).await;
+    assert_eq!(err.field.as_deref(), Some("version"));
+    let err = expect_err(&f, device_intent(ActorKind::Device, report("0.1.0"))).await;
+    assert_eq!(err.code, ErrorCode::Forbidden);
+    f.writer
+        .submit_intent(device_intent(ActorKind::System, report("0.1.0")))
+        .await
+        .unwrap();
+    let row = reopen(&f).device(&id).unwrap().unwrap();
+    assert_eq!(row.reported_version.as_deref(), Some("0.1.0"));
+    assert_eq!(row.rev, 2);
+    let c = reopen(&f).changes().unwrap().pop().unwrap();
+    assert_eq!(c.intent_kind, "device.version_reported");
+}
+
+#[tokio::test]
+async fn device_directory_verifies_and_sees_revocation() {
+    let mut f = primary();
+    let (id, secret) = with_device(&mut f).await;
+    let dir = crate::DeviceDirectory::open(&f.path).unwrap();
+    let token = crate::devices::format_token(&id, &secret);
+    let v = dir
+        .verify(arena_proto::ClientClass::Paired, &token)
+        .unwrap();
+    assert_eq!(v.device_id, id);
+    assert_eq!(
+        dir.verify(arena_proto::ClientClass::Kds, &token)
+            .unwrap_err()
+            .code,
+        ErrorCode::TokenInvalid
+    );
+    assert!(!dir.is_revoked(&id).unwrap());
+    f.writer
+        .submit_intent(device_intent(
+            ActorKind::System,
+            IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                device_id: id.clone(),
+            }),
+        ))
+        .await
+        .unwrap();
+    assert!(dir.is_revoked(&id).unwrap());
+    assert_eq!(
+        dir.verify(arena_proto::ClientClass::Paired, &token)
+            .unwrap_err()
+            .code,
+        ErrorCode::TokenRevoked
+    );
+}
+
+#[tokio::test]
+async fn a_revoked_or_unknown_device_actor_is_forbidden_before_anything_else() {
+    let mut f = primary();
+    let (id, _) = with_device(&mut f).await;
+    let as_device = |device_id: &str| {
+        let mut i = device_intent(
+            ActorKind::Device,
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "receipt.footer".into(),
+                value: "x".into(),
+            }),
+        );
+        i.actor.id = device_id.into();
+        i.base_rev = Some(1);
+        i
+    };
+    // A live device reaches the kind's own check.
+    let err = expect_err(&f, as_device(&id)).await;
+    assert!(err.message.contains("settings.set"), "{}", err.message);
+    let err = expect_err(&f, as_device("01JNOPEAAAAAAAAAAAAAAAAAAA")).await;
+    assert_eq!(
+        (err.code, err.message.as_str()),
+        (ErrorCode::Forbidden, "the device is revoked or unknown")
+    );
+    f.writer
+        .submit_intent(device_intent(
+            ActorKind::System,
+            IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                device_id: id.clone(),
+            }),
+        ))
+        .await
+        .unwrap();
+    let err = expect_err(&f, as_device(&id)).await;
+    assert_eq!(err.message, "the device is revoked or unknown");
+}

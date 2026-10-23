@@ -12,6 +12,7 @@ export type ErrorCode =
   | "EXPIRED"
   | "STALE"
   | "TOKEN_REVOKED"
+  | "TOKEN_INVALID"
   | "HUB_SLOW"
   | "INTERNAL"
   | "VALIDATION_FAILED"

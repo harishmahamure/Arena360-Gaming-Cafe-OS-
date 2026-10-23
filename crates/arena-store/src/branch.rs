@@ -29,17 +29,19 @@ pub type Row = BTreeMap<String, RowValue>;
 pub enum Table {
     Branch,
     Settings,
+    Devices,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 2] = [Table::Branch, Table::Settings];
+    pub const ALL: [Table; 3] = [Table::Branch, Table::Settings, Table::Devices];
 
     /// The SQL table name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Branch => "branch",
             Self::Settings => "settings",
+            Self::Devices => "devices",
         }
     }
 
@@ -48,13 +50,14 @@ impl Table {
         match self {
             Self::Branch => &["branch_id"],
             Self::Settings => &["branch_id", "key"],
+            Self::Devices => &["device_id"],
         }
     }
 
     /// Whether the table has a `created_at` column (stamped on insert).
     pub fn has_created_at(self) -> bool {
         match self {
-            Self::Branch => true,
+            Self::Branch | Self::Devices => true,
             Self::Settings => false,
         }
     }
@@ -70,6 +73,7 @@ impl Table {
 pub enum RowKey {
     Branch { branch_id: String },
     Settings { branch_id: String, key: String },
+    Devices { device_id: String },
 }
 
 impl RowKey {
@@ -77,6 +81,7 @@ impl RowKey {
         match self {
             Self::Branch { .. } => Table::Branch,
             Self::Settings { .. } => Table::Settings,
+            Self::Devices { .. } => Table::Devices,
         }
     }
 
@@ -85,6 +90,7 @@ impl RowKey {
         match self {
             Self::Branch { branch_id } => branch_id.clone(),
             Self::Settings { branch_id, key } => format!("{branch_id}/{key}"),
+            Self::Devices { device_id } => device_id.clone(),
         }
     }
 
@@ -103,6 +109,9 @@ impl RowKey {
                 branch_id: text("branch_id")?,
                 key: text("key")?,
             },
+            Table::Devices => Self::Devices {
+                device_id: text("device_id")?,
+            },
         })
     }
 
@@ -110,6 +119,7 @@ impl RowKey {
         match self {
             Self::Branch { branch_id } => vec![branch_id],
             Self::Settings { branch_id, key } => vec![branch_id, key],
+            Self::Devices { device_id } => vec![device_id],
         }
     }
 }
@@ -174,6 +184,13 @@ pub struct NewBranch<'a> {
     pub fy_start_month: u8,
 }
 
+/// The branch's id, if it has been bootstrapped (a database holds one branch).
+pub fn current_branch_id(conn: &Connection) -> Result<Option<String>, AppError> {
+    conn.query_row("SELECT branch_id FROM branch LIMIT 1", [], |r| r.get(0))
+        .optional()
+        .map_err(db_error)
+}
+
 /// Whether a branch row exists.
 pub fn branch_exists(conn: &Connection) -> Result<bool, AppError> {
     conn.query_row("SELECT EXISTS (SELECT 1 FROM branch)", [], |r| r.get(0))
@@ -184,7 +201,7 @@ pub fn branch_exists(conn: &Connection) -> Result<bool, AppError> {
 pub fn has_branch_data(conn: &Connection) -> Result<bool, AppError> {
     conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM branch) OR EXISTS (SELECT 1 FROM settings)
-             OR EXISTS (SELECT 1 FROM changes)",
+             OR EXISTS (SELECT 1 FROM devices) OR EXISTS (SELECT 1 FROM changes)",
         [],
         |r| r.get(0),
     )

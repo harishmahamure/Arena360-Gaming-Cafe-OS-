@@ -36,8 +36,21 @@ ulid = "=3.0.0"
 rmp-serde = "=1.3.1"
 chrono-tz = "=0.10.4"
 sha2 = "=0.10.9"
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
+argon2 = "=0.6.0"
+futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 
 # Dev-only
 tempfile = "=3.27.0"
 tower = "=0.5.3"
 proptest = "=1.12.0"
+
+# argon2id is unusably slow unoptimised; tests and dev builds verify device tokens with it.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

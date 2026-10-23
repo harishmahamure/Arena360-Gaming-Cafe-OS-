@@ -4,14 +4,14 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use arena_api::DEFAULT_HEALTH_PORT;
+use arena_api::lan::{DEFAULT_LAN_PORT, DEFAULT_WEB_PORT};
 
 #[cfg(not(feature = "dev-fixtures"))]
-pub const USAGE: &str =
-    "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--help] [--version]";
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--help] [--version]";
 #[cfg(feature = "dev-fixtures")]
-pub const USAGE: &str =
-    "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--help] [--version]
-       arena-hub dev seed [--data-dir <path>]";
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--help] [--version]
+       arena-hub dev seed [--data-dir <path>]
+       arena-hub dev revoke-device <device_id> [--health-port <port>]";
 pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
 
 /// Resolved start-up configuration.
@@ -19,6 +19,10 @@ pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
 pub struct Config {
     pub data_dir: PathBuf,
     pub health_port: u16,
+    /// The TLS WebSocket port for paired apps (default 7400).
+    pub lan_port: u16,
+    /// The sniffed TLS / plain HTTP port (default 7401).
+    pub web_port: u16,
 }
 
 impl Config {
@@ -38,6 +42,13 @@ pub enum Command {
     /// `dev seed`: bootstrap a fixture branch (feature `dev-fixtures` only).
     #[cfg(feature = "dev-fixtures")]
     DevSeed(Config),
+    /// `dev revoke-device <id>`: ask the running Hub on `health_port` to revoke a device
+    /// (feature `dev-fixtures` only).
+    #[cfg(feature = "dev-fixtures")]
+    DevRevokeDevice {
+        device_id: String,
+        health_port: u16,
+    },
     Help,
     Version,
 }
@@ -58,22 +69,64 @@ pub fn parse(
                 Command::Run(cfg) => Ok(Command::DevSeed(cfg)),
                 other => Ok(other),
             },
+            Some(sub) if sub == "revoke-device" => parse_revoke(args),
             Some(sub) => Err(format!("unknown dev command {}", sub.to_string_lossy())),
-            None => Err("dev needs a command (seed)".to_owned()),
+            None => Err("dev needs a command (seed, revoke-device)".to_owned()),
         };
     }
     parse_flags(args, &env, windows, true)
 }
 
-/// Parses the flags; `--health-port` is accepted only when `health` is set.
+/// A port flag's value: 1–65535.
+fn port(flag: &str, v: &OsString) -> Result<u16, String> {
+    v.to_str()
+        .and_then(|s| s.parse::<u16>().ok())
+        .filter(|p| *p != 0)
+        .ok_or_else(|| format!("invalid {flag} {v:?}"))
+}
+
+/// `dev revoke-device <device_id> [--health-port <port>]`.
+#[cfg(feature = "dev-fixtures")]
+fn parse_revoke(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let device_id = args
+        .next()
+        .and_then(|a| a.into_string().ok())
+        .filter(|a| !a.is_empty() && !a.starts_with("--"))
+        .ok_or("dev revoke-device needs a device id")?;
+    let mut health_port = DEFAULT_HEALTH_PORT;
+    while let Some(arg) = args.next() {
+        let arg = arg
+            .into_string()
+            .map_err(|a| format!("invalid argument {a:?}"))?;
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) => (f.to_owned(), Some(OsString::from(v))),
+            None => (arg, None),
+        };
+        if flag != "--health-port" {
+            return Err(format!("unknown argument {flag}"));
+        }
+        let v = inline
+            .or_else(|| args.next())
+            .ok_or("--health-port needs a value")?;
+        health_port = port("--health-port", &v)?;
+    }
+    Ok(Command::DevRevokeDevice {
+        device_id,
+        health_port,
+    })
+}
+
+/// Parses the flags; the port flags are accepted only when `ports` is set.
 fn parse_flags(
     args: impl Iterator<Item = OsString>,
     env: &impl Fn(&str) -> Option<OsString>,
     windows: bool,
-    health: bool,
+    ports: bool,
 ) -> Result<Command, String> {
     let mut data_dir: Option<PathBuf> = None;
     let mut health_port = DEFAULT_HEALTH_PORT;
+    let mut lan_port = DEFAULT_LAN_PORT;
+    let mut web_port = DEFAULT_WEB_PORT;
     let mut args = args;
     while let Some(arg) = args.next() {
         let arg = arg
@@ -97,14 +150,9 @@ fn parse_flags(
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Ok(Command::Version),
             "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
-            "--health-port" if health => {
-                let v = value()?;
-                health_port = v
-                    .to_str()
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .filter(|p| *p != 0)
-                    .ok_or_else(|| format!("invalid --health-port {v:?}"))?;
-            }
+            "--health-port" if ports => health_port = port(&flag, &value()?)?,
+            "--lan-port" if ports => lan_port = port(&flag, &value()?)?,
+            "--web-port" if ports => web_port = port(&flag, &value()?)?,
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -115,9 +163,18 @@ fn parse_flags(
             None => default_data_dir(env, windows)?,
         },
     };
+    if ports {
+        let mut seen = [health_port, lan_port, web_port];
+        seen.sort_unstable();
+        if seen.windows(2).any(|w| w[0] == w[1]) {
+            return Err("--health-port, --lan-port and --web-port must differ".to_owned());
+        }
+    }
     Ok(Command::Run(Config {
         data_dir,
         health_port,
+        lan_port,
+        web_port,
     }))
 }
 
@@ -265,7 +322,45 @@ mod tests {
             Command::DevSeed(Config {
                 data_dir: PathBuf::from("/env"),
                 health_port: DEFAULT_HEALTH_PORT,
+                lan_port: DEFAULT_LAN_PORT,
+                web_port: DEFAULT_WEB_PORT,
             })
+        );
+        assert!(parse(args(&["dev", "seed", "--lan-port", "1"]), &env, false).is_err());
+        assert_eq!(
+            parse(
+                args(&["dev", "revoke-device", "01JD", "--health-port", "7500"]),
+                &env,
+                false
+            ),
+            Ok(Command::DevRevokeDevice {
+                device_id: "01JD".into(),
+                health_port: 7500
+            })
+        );
+        assert_eq!(
+            parse(args(&["dev", "revoke-device", "01JD"]), &env, false),
+            Ok(Command::DevRevokeDevice {
+                device_id: "01JD".into(),
+                health_port: DEFAULT_HEALTH_PORT
+            })
+        );
+        assert!(parse(args(&["dev", "revoke-device"]), &env, false).is_err());
+        assert!(
+            parse(
+                args(&["dev", "revoke-device", "--health-port", "1"]),
+                &env,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                args(&["dev", "revoke-device", "D", "--data-dir", "/d"]),
+                &env,
+                false
+            )
+            .is_err()
         );
         assert!(parse(args(&["dev"]), &env, false).is_err());
         assert!(parse(args(&["dev", "wipe"]), &env, false).is_err());
@@ -281,6 +376,13 @@ mod tests {
         let c = run(&["--health-port=7411", "--data-dir=/d"], &env, false).unwrap();
         assert_eq!((c.health_port, c.data_dir), (7411, PathBuf::from("/d")));
         assert!(run(&["--health-port", "x"], &env, false).is_err());
+        let c = run(&["--lan-port", "8400", "--web-port=8401"], &env, false).unwrap();
+        assert_eq!((c.lan_port, c.web_port, c.health_port), (8400, 8401, 7409));
+        let c = run(&[], &env, false).unwrap();
+        assert_eq!((c.lan_port, c.web_port), (7400, 7401));
+        assert!(run(&["--lan-port", "0"], &env, false).is_err());
+        assert!(run(&["--lan-port", "7401"], &env, false).is_err());
+        assert!(run(&["--web-port", "7409"], &env, false).is_err());
         assert!(run(&["--health-port"], &env, false).is_err());
         assert!(run(&["--bogus"], &env, false).is_err());
     }

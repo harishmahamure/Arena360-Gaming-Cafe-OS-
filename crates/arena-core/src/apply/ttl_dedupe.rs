@@ -45,6 +45,10 @@ pub(crate) const RECORDABLE_FIELDS: &[&str] = &[
     "day_start_min",
     "fy_start_month",
     "intent_id",
+    "class",
+    "label",
+    "token_hash",
+    "version",
 ];
 
 /// What the fingerprint covers: everything that decides an intent's outcome except its

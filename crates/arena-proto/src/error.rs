@@ -24,6 +24,8 @@ pub enum ErrorCode {
     Stale,
     /// The device token was revoked.
     TokenRevoked,
+    /// The device token is wrong, malformed or unknown for its class.
+    TokenInvalid,
     /// The Hub did not answer in time.
     HubSlow,
     /// An unexpected storage or I/O failure on the Hub.
@@ -59,6 +61,7 @@ impl ErrorCode {
             Self::Expired => "EXPIRED",
             Self::Stale => "STALE",
             Self::TokenRevoked => "TOKEN_REVOKED",
+            Self::TokenInvalid => "TOKEN_INVALID",
             Self::HubSlow => "HUB_SLOW",
             Self::Internal => "INTERNAL",
             Self::ValidationFailed => "VALIDATION_FAILED",
@@ -147,6 +150,7 @@ mod tests {
             (ErrorCode::Expired, "EXPIRED"),
             (ErrorCode::Stale, "STALE"),
             (ErrorCode::TokenRevoked, "TOKEN_REVOKED"),
+            (ErrorCode::TokenInvalid, "TOKEN_INVALID"),
             (ErrorCode::HubSlow, "HUB_SLOW"),
             (ErrorCode::Internal, "INTERNAL"),
             (ErrorCode::ValidationFailed, "VALIDATION_FAILED"),

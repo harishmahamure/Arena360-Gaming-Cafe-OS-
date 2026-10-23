@@ -10,7 +10,7 @@ use arena_api::lan::{DEFAULT_LAN_PORT, DEFAULT_WEB_PORT};
 pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--help] [--version]";
 #[cfg(feature = "dev-fixtures")]
 pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--help] [--version]
-       arena-hub dev seed [--data-dir <path>]
+       arena-hub dev seed [--data-dir <path>] [--kiosk-allow <path_glob>]... [--kiosk-process-mode <enforce|report>]
        arena-hub dev revoke-device <device_id> [--health-port <port>]";
 pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
 
@@ -41,7 +41,7 @@ pub enum Command {
     Run(Config),
     /// `dev seed`: bootstrap a fixture branch (feature `dev-fixtures` only).
     #[cfg(feature = "dev-fixtures")]
-    DevSeed(Config),
+    DevSeed(Config, SeedOptions),
     /// `dev revoke-device <id>`: ask the running Hub on `health_port` to revoke a device
     /// (feature `dev-fixtures` only).
     #[cfg(feature = "dev-fixtures")]
@@ -51,6 +51,67 @@ pub enum Command {
     },
     Help,
     Version,
+}
+
+/// `dev seed`'s own flags (feature `dev-fixtures` only): extra unsigned kiosk allow rules
+/// appended to the default allow-list, and an explicit `kiosk.process_mode`. The escape-suite
+/// VMs (Story 1.19) use them to allow the harness and pin `enforce`.
+#[cfg(feature = "dev-fixtures")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SeedOptions {
+    /// `--kiosk-allow <path_glob>` (repeatable): full-path globs, no signer.
+    pub kiosk_allow: Vec<String>,
+    /// `--kiosk-process-mode <enforce|report>`.
+    pub kiosk_process_mode: Option<String>,
+}
+
+/// Splits `dev seed`'s own flags off `args`; the rest go to the shared flag parser.
+#[cfg(feature = "dev-fixtures")]
+fn split_seed_flags(
+    args: impl Iterator<Item = OsString>,
+) -> Result<(Vec<OsString>, SeedOptions), String> {
+    let mut rest = Vec::new();
+    let mut opts = SeedOptions::default();
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        let Some(s) = arg.to_str() else {
+            rest.push(arg);
+            continue;
+        };
+        let (flag, inline) = match s.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_owned(), Some(v.to_owned())),
+            _ => (s.to_owned(), None),
+        };
+        if flag != "--kiosk-allow" && flag != "--kiosk-process-mode" {
+            rest.push(arg);
+            continue;
+        }
+        let v = match inline {
+            Some(v) => v,
+            None => args
+                .next()
+                .and_then(|v| v.into_string().ok())
+                .ok_or_else(|| format!("{flag} needs a value"))?,
+        };
+        if v.is_empty() || v.starts_with("--") {
+            return Err(format!("{flag} needs a value"));
+        }
+        if flag == "--kiosk-allow" {
+            let rule = arena_proto::ProcessRule {
+                path_glob: v.clone(),
+                signer: None,
+            };
+            let json = serde_json::to_string(&[rule]).map_err(|e| e.to_string())?;
+            arena_proto::parse_process_rules(arena_proto::ProcessList::Allow, &json)
+                .map_err(|e| format!("invalid --kiosk-allow {v:?}: {}", e.message))?;
+            opts.kiosk_allow.push(v);
+        } else {
+            arena_proto::parse_process_mode(&v)
+                .map_err(|_| format!("invalid --kiosk-process-mode {v:?} (enforce or report)"))?;
+            opts.kiosk_process_mode = Some(v);
+        }
+    }
+    Ok((rest, opts))
 }
 
 /// Parses `args` (without the program name). `env` reads an environment variable.
@@ -65,10 +126,13 @@ pub fn parse(
     if args.peek().is_some_and(|a| a == "dev") {
         args.next();
         return match args.next() {
-            Some(sub) if sub == "seed" => match parse_flags(args, &env, windows, false)? {
-                Command::Run(cfg) => Ok(Command::DevSeed(cfg)),
-                other => Ok(other),
-            },
+            Some(sub) if sub == "seed" => {
+                let (rest, opts) = split_seed_flags(args)?;
+                match parse_flags(rest.into_iter(), &env, windows, false)? {
+                    Command::Run(cfg) => Ok(Command::DevSeed(cfg, opts)),
+                    other => Ok(other),
+                }
+            }
             Some(sub) if sub == "revoke-device" => parse_revoke(args),
             Some(sub) => Err(format!("unknown dev command {}", sub.to_string_lossy())),
             None => Err("dev needs a command (seed, revoke-device)".to_owned()),
@@ -307,9 +371,10 @@ mod tests {
     fn dev_seed_parses_with_the_feature() {
         let env = env_of(&[("HOME", "/h")]);
         let cmd = parse(args(&["dev", "seed", "--data-dir", "/d"]), &env, false).unwrap();
-        let Command::DevSeed(cfg) = cmd else {
+        let Command::DevSeed(cfg, opts) = cmd else {
             panic!("{cmd:?}")
         };
+        assert_eq!(opts, SeedOptions::default());
         assert_eq!(cfg.data_dir, PathBuf::from("/d"));
         let cmd = parse(
             args(&["dev", "seed"]),
@@ -319,13 +384,53 @@ mod tests {
         .unwrap();
         assert_eq!(
             cmd,
-            Command::DevSeed(Config {
-                data_dir: PathBuf::from("/env"),
-                health_port: DEFAULT_HEALTH_PORT,
-                lan_port: DEFAULT_LAN_PORT,
-                web_port: DEFAULT_WEB_PORT,
-            })
+            Command::DevSeed(
+                Config {
+                    data_dir: PathBuf::from("/env"),
+                    health_port: DEFAULT_HEALTH_PORT,
+                    lan_port: DEFAULT_LAN_PORT,
+                    web_port: DEFAULT_WEB_PORT,
+                },
+                SeedOptions::default()
+            )
         );
+        let cmd = parse(
+            args(&[
+                "dev",
+                "seed",
+                "--kiosk-allow",
+                r"C:\ArenaEscape\bin\arena-escape.exe",
+                "--data-dir=/d",
+                "--kiosk-process-mode=enforce",
+                r"--kiosk-allow=C:\Games\*.exe",
+            ]),
+            &env,
+            false,
+        )
+        .unwrap();
+        let Command::DevSeed(cfg, opts) = cmd else {
+            panic!("{cmd:?}")
+        };
+        assert_eq!(cfg.data_dir, PathBuf::from("/d"));
+        assert_eq!(
+            opts,
+            SeedOptions {
+                kiosk_allow: vec![
+                    r"C:\ArenaEscape\bin\arena-escape.exe".into(),
+                    r"C:\Games\*.exe".into()
+                ],
+                kiosk_process_mode: Some("enforce".into()),
+            }
+        );
+        // A bare name, an unsigned user-writable path and an unknown mode are refused.
+        for bad in [
+            &["dev", "seed", "--kiosk-allow", "cmd.exe"][..],
+            &["dev", "seed", "--kiosk-allow", r"C:\Users\x\a.exe"],
+            &["dev", "seed", "--kiosk-allow"],
+            &["dev", "seed", "--kiosk-process-mode", "off"],
+        ] {
+            assert!(parse(args(bad), &env, false).is_err(), "{bad:?}");
+        }
         assert!(parse(args(&["dev", "seed", "--lan-port", "1"]), &env, false).is_err());
         assert_eq!(
             parse(

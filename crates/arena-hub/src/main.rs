@@ -41,7 +41,7 @@ async fn main() -> ExitCode {
     ) {
         Ok(config::Command::Run(cfg)) => cfg,
         #[cfg(feature = "dev-fixtures")]
-        Ok(config::Command::DevSeed(cfg)) => return dev_seed(cfg).await,
+        Ok(config::Command::DevSeed(cfg, opts)) => return dev_seed(cfg, opts).await,
         #[cfg(feature = "dev-fixtures")]
         Ok(config::Command::DevRevokeDevice {
             device_id,
@@ -103,8 +103,8 @@ async fn main() -> ExitCode {
 /// Runs `dev seed` and prints the outcome: exit 0 on success, 2 on `SCHEMA_TOO_NEW` and 1
 /// otherwise (including `ALREADY_BOOTSTRAPPED` and `NOT_PRIMARY`).
 #[cfg(feature = "dev-fixtures")]
-async fn dev_seed(cfg: config::Config) -> ExitCode {
-    match dev::seed(&cfg, Arc::new(SystemClock)).await {
+async fn dev_seed(cfg: config::Config, opts: config::SeedOptions) -> ExitCode {
+    match dev::seed(&cfg, &opts, Arc::new(SystemClock)).await {
         Ok(seeded) => {
             println!(
                 "dev seed: bootstrapped branch DEV01 in {} ({} changes)",

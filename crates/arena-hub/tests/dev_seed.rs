@@ -110,6 +110,58 @@ mod with_feature {
     }
 
     #[test]
+    fn seed_with_kiosk_flags_appends_the_allow_rule_and_pins_the_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = hub(
+            &[
+                "dev",
+                "seed",
+                "--kiosk-allow",
+                r"C:\ArenaEscape\bin\arena-escape.exe",
+                "--kiosk-process-mode",
+                "enforce",
+            ],
+            dir.path(),
+        );
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        let store = Store::open(dir.path().join("branch.db"), 0).unwrap();
+        let settings = store.rows(Table::Settings).unwrap();
+        let get = |key: &str| {
+            settings
+                .iter()
+                .find(|r| r["key"] == RowValue::Text(key.into()))
+                .unwrap_or_else(|| panic!("{key}"))
+                .clone()
+        };
+        let allow = get("kiosk.process_allow");
+        let RowValue::Text(value) = &allow["value"] else {
+            panic!("{allow:?}")
+        };
+        let rules: Vec<arena_proto::ProcessRule> = serde_json::from_str(value).unwrap();
+        let last = rules.last().unwrap();
+        assert_eq!(last.path_glob, r"C:\ArenaEscape\bin\arena-escape.exe");
+        assert_eq!(last.signer, None);
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.path_glob.ends_with("arena-kiosk-ui.exe"))
+        );
+        assert_eq!(allow["rev"], RowValue::Integer(2));
+        let mode = get("kiosk.process_mode");
+        assert_eq!(mode["value"], RowValue::Text("enforce".into()));
+        assert_eq!(mode["rev"], RowValue::Integer(2));
+        // Both edits are owner settings.set change rows.
+        let sets: Vec<_> = store
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.intent_kind == "settings.set")
+            .collect();
+        assert_eq!(sets.len(), 2);
+        assert!(sets.iter().all(|c| c.actor_kind == "owner"));
+    }
+
+    #[test]
     fn seed_while_another_process_holds_the_db_is_not_primary() {
         let dir = tempfile::tempdir().unwrap();
         // Holding the store open in this process takes the writer lock.

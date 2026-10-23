@@ -228,3 +228,9 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Deferred to a follow-up:** verifying the signature through the image's file handle, and issuer/thumbprint pinning (both recorded in the spec's Implementation Notes).
 - **Rollout decision:** `kiosk.process_mode` is `enforce` for new branches and `report` for backfilled (upgraded) branches.
 - **1.18 outcome:** 17 review fixes applied as safety hardening. Report-only mode for backfilled branches; a kiosk that never received a mode only reports; WebView2-only descendant exemption; `{system}` placeholder; validation guards; capped reporting; back-pressure; revision seeding. Deferred: file-handle signature verification and signer pinning; the drop_paired test. Windows code is type-checked only.
+
+## Story 1.19: kiosk escape suite (BLOCKED, needs a human)
+
+- **What happened:** two implementation attempts were stopped by safety checks partway through, and my own follow-up dispatch was stopped as well. The only parts kept are the `arena-hub dev seed --kiosk-allow <glob>` and `--kiosk-process-mode enforce|report` flags (tested), committed separately.
+- **Status:** 1.19 is left `in-progress` in sprint-status, and its spec is not done. A person should decide how to build this conformance suite: write it by hand, use an off-the-shelf kiosk-testing tool, or scope it differently. The loop skips it and continues with 1.20.
+- **Known product gap the suite would flag:** the watchdog relaunches the app after about 6 s, longer than the 2 s "screen uncovered" rule.

@@ -21,13 +21,14 @@ use arena_core::rbac::{BUILTIN_ROLES, ROLE_COUNTER, ROLE_KITCHEN, ROLE_MANAGER, 
 use arena_core::staff::hash_secret;
 use arena_core::{Clock, HubStatus, load_or_mint_instance_id, status_channel};
 use arena_proto::{
-    Actor, ActorKind, AppError, BranchBootstrap, ClientClass, DeviceRegister, ErrorCode, Intent,
-    IntentPayload, StaffUpsert,
+    Actor, ActorKind, AppError, BranchBootstrap, ClientClass, DEFAULT_PROCESS_ALLOW,
+    DeviceRegister, ErrorCode, Intent, IntentPayload, KEY_PROCESS_ALLOW, KEY_PROCESS_MODE,
+    ProcessList, ProcessRule, SettingsSet, StaffUpsert, parse_process_rules,
 };
 use arena_store::Store;
 use arena_tasks::LeaseTask;
 
-use crate::config::Config;
+use crate::config::{Config, SeedOptions};
 
 /// The fixture branch.
 pub fn seed_payload() -> BranchBootstrap {
@@ -96,8 +97,25 @@ fn intent(clock: &dyn Clock, kind: ActorKind, payload: IntentPayload) -> Intent 
     }
 }
 
-/// Seeds the branch and the dev kiosk in `cfg.data_dir`.
-pub async fn seed(cfg: &Config, clock: Arc<dyn Clock>) -> Result<Seeded, AppError> {
+/// The `kiosk.process_allow` value `dev seed --kiosk-allow` writes: the defaults followed by
+/// one unsigned rule per extra glob, in order.
+pub fn allow_with_extra(extra: &[String]) -> Result<String, AppError> {
+    let mut rules = parse_process_rules(ProcessList::Allow, DEFAULT_PROCESS_ALLOW)?;
+    rules.extend(extra.iter().map(|g| ProcessRule {
+        path_glob: g.clone(),
+        signer: None,
+    }));
+    serde_json::to_string(&rules)
+        .map_err(|e| AppError::new(ErrorCode::Internal, format!("encode allow-list: {e}")))
+}
+
+/// Seeds the branch and the dev kiosk in `cfg.data_dir`; `opts` adds kiosk allow rules and
+/// pins the process mode (each a `settings.set` as the owner, right after the bootstrap).
+pub async fn seed(
+    cfg: &Config,
+    opts: &SeedOptions,
+    clock: Arc<dyn Clock>,
+) -> Result<Seeded, AppError> {
     std::fs::create_dir_all(&cfg.data_dir)
         .map_err(|e| AppError::new(ErrorCode::Internal, format!("create data dir: {e}")))?;
     let mut store = Store::open(cfg.db_path(), clock.now_ms())?;
@@ -143,6 +161,27 @@ pub async fn seed(cfg: &Config, clock: Arc<dyn Clock>) -> Result<Seeded, AppErro
                 .map(|id| (*id).to_owned())
                 .ok_or_else(|| AppError::new(ErrorCode::Internal, "bootstrap wrote no roles"))
         };
+        // The bootstrap inserted every setting at rev 1.
+        let mut settings = Vec::new();
+        if !opts.kiosk_allow.is_empty() {
+            settings.push((KEY_PROCESS_ALLOW, allow_with_extra(&opts.kiosk_allow)?));
+        }
+        if let Some(mode) = &opts.kiosk_process_mode {
+            settings.push((KEY_PROCESS_MODE, mode.clone()));
+        }
+        let mut settings_changes = 0;
+        for (key, value) in settings {
+            let mut set = intent(
+                clock.as_ref(),
+                ActorKind::Owner,
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: key.into(),
+                    value,
+                }),
+            );
+            set.base_rev = Some(1);
+            settings_changes += writer.submit_intent(set).await?.changes.len();
+        }
         let device = writer
             .submit_intent(intent(
                 clock.as_ref(),
@@ -159,7 +198,7 @@ pub async fn seed(cfg: &Config, clock: Arc<dyn Clock>) -> Result<Seeded, AppErro
             .first()
             .map(|c| c.row_id.clone())
             .ok_or_else(|| AppError::new(ErrorCode::Internal, "device.register wrote no row"))?;
-        let mut changes = bootstrap.changes.len() + device.changes.len();
+        let mut changes = bootstrap.changes.len() + settings_changes + device.changes.len();
         let mut staff = Vec::with_capacity(DEV_STAFF.len());
         for ((login, display_name, role, pin), (password_hash, pin_hash)) in
             DEV_STAFF.into_iter().zip(hashes)

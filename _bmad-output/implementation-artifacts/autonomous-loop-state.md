@@ -32,6 +32,10 @@ Read this file after a context flush (`/clear`). It's the single entry point for
 7. Triage. Write the Review Triage Log into the spec, send patch items back to the same implementation subagent, and add deferrals to `deferred-work.md`.
 8. Verify again. Set the spec to `done` and the sprint status to `review`, append the outcome to the decision log, and commit with only that story's files (exclude the other untracked pre-drafted specs). Then run `pnpm check:generated` after the commit.
 
+## Blocked stories (skip; need a human)
+
+- **1-19 (kiosk escape suite):** safety checks stop automated implementation. Don't retry it in the loop; continue with the next story.
+
 ## Resume prompt (after /clear)
 
-> Continue the autonomous BMAD loop: read `_bmad-output/implementation-artifacts/autonomous-loop-state.md` and pick up from the first story not at `review` in sprint-status.yaml.
+> Continue the autonomous BMAD loop: read `_bmad-output/implementation-artifacts/autonomous-loop-state.md` and pick up from the first story not at `review` in sprint-status.yaml, skipping the blocked stories listed in that file.

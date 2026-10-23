@@ -38,7 +38,7 @@ The wizard is resumable at every step, and steps 6 to 8 can be skipped and finis
 | Hub paired | Hub, cloud | Hub | Hub holds a device token and a signed entitlement; onboarding page advances on the first heartbeat |
 | Kiosks pair | Owner or staff | Each gaming PC | Kiosk app finds the Hub by mDNS and asks for the 6-digit code from the Hub screen; each PC appears on the floor view as unassigned |
 | Groups and plans | Owner | Onboarding web or Hub | At least one group with one hourly rate; template or CSV import with dry-run |
-| Invite staff | Owner | Onboarding web | At least one manager with a PIN; invitation by phone |
+| Invite staff | Owner | Onboarding web | At least one manager; invitation by phone with a one-time setup code; the staff member sets their own PIN and password at the Hub on first login, never the owner (revised 23 Oct 2026, architecture) |
 | Test session | Owner | Hub and one kiosk | A 2-minute session starts, the kiosk HUD counts down, the screen locks at zero |
 | Go live | Owner | Onboarding web | Checklist: opening hours, backup location, ad consent on Free; Owner app dashboard unlocks |
 
@@ -125,7 +125,7 @@ The Hub knows what should be in the drawer; closing is counting what is. Staff s
 | Within threshold | Hub | Shift sheet | Threshold per branch (default ₹100); close completes with no PIN |
 | Over threshold | Manager | Shift sheet | Manager PIN and a reason from a list plus free text; both go in the audit log |
 | Owner alerted | Cloud | Owner app | Web push and WhatsApp with branch, staff, amount and reason; shown on the Owner home under "needs attention" |
-| Z-report prints | Hub | Printer, Owner app | Sales by type and method, expected vs counted, variance, waste, expenses, refunds; the same numbers the Owner app shows |
+| Z-report prints | Hub | Printer, Owner app | Sales by type and method, expected vs counted, variance, waste, expenses, refunds; the same numbers the Owner app shows, which reach it with the Hub's next summary upload and the day's rollup at close (revised 23 Oct 2026, architecture) |
 | Next shift opens | Staff | Hub | Closing cash becomes the next float unless a deposit was made |
 
 The rule that makes this honest: nothing in the day can change expected cash except a recorded sale, deposit, expense or refund, and each of those is in the change log with an actor.
@@ -144,7 +144,7 @@ The owner never writes to a branch directly. A change becomes a command, the Hub
 | Hub polls | Hub | — | Every 60 s on paid tiers; a premium Hub also receives a poke over its tunnel and polls at once |
 | Hub applies | Hub | — | Runs `apply(price.set)` in one transaction; records the command id locally so a retry cannot apply it twice |
 | Rejected | Hub | — | Validation fails (plan deleted, group missing): status rejected with a reason code and message |
-| Change logged | Hub | Change log | The price row and the command id go to the change log and up to the mirror on the next upload |
+| Change logged | Hub | Change log | The price row and the command id go to the change log and up to the cloud in the next batch; the new rate appears in the owner view with the next published summary (`state/latest.json`) (revised 23 Oct 2026, architecture) |
 | Result reported | Hub → Cloud | Command queue | Status applied or rejected with timestamp |
 | Owner sees it | Owner app | Commands screen | Badge flips to applied, or shows the rejection reason with a retry button |
 
@@ -181,7 +181,7 @@ The main Hub PC dies during a Saturday rush. Sessions keep running on the kiosks
 | Open standby | Counter staff | Standby PC | The standby Hub shows "Promote to main" |
 | Promote | Counter staff, manager | Standby Hub | A manager's PIN entered inline; promotion completes under 10 s |
 | Kiosks reconnect | Kiosk → Hub | Gaming PC | Kiosks find the new main Hub by themselves and sessions reconcile; no player notices |
-| Promote fails | Manager | Standby Hub | A warning says data since the last sync may be lost; a manager can force promote with PIN; the forced promote is audited and the owner is alerted |
+| Promote fails | Manager | Standby Hub | A warning says data since the last sync may be lost; a manager can force promote with PIN; the forced promote starts a new epoch, is audited and the owner is alerted (revised 23 Oct 2026, architecture) |
 | Old main returns | Hub | Old counter PC | Split-brain lock: it shows "This PC is no longer the main Hub" with "Make this the standby" and never serves kiosks |
 
 The rule that keeps the money right: only one main Hub ever serves kiosks.

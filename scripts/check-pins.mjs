@@ -1,0 +1,197 @@
+#!/usr/bin/env node
+// Pin table check: the README pin table must match the manifests exactly.
+// Reads local files only (no network).
+
+import { readFileSync, realpathSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const lines = (text) => text.split(/\r?\n/);
+const unquote = (s) => s.trim().replace(/^(['"])(.*)\1$/, "$2");
+
+/**
+ * Parses the `| Item | Version | Source |` table from README text.
+ * @returns {Array<{item: string, version: string, source: string}>}
+ */
+export function parsePinTable(readme) {
+  const all = lines(readme);
+  const header = all.findIndex((l) =>
+    /^\|\s*Item\s*\|\s*Version\s*\|\s*Source\s*\|\s*$/.test(l.trim()),
+  );
+  if (header === -1 || !/^\|[\s:|-]+\|$/.test((all[header + 1] ?? "").trim())) {
+    throw new Error("pin table not found in README.md");
+  }
+  const rows = [];
+  for (const raw of all.slice(header + 2)) {
+    const line = raw.trim();
+    if (!line.startsWith("|")) break;
+    const cells = line
+      .slice(1, line.endsWith("|") ? -1 : undefined)
+      .split("|")
+      .map((c) => c.trim().replace(/^`(.*)`$/, "$1"));
+    const [item, version, source] = cells;
+    if (cells.length !== 3 || !item) throw new Error(`malformed pin row: ${line}`);
+    rows.push({ item, version, source });
+  }
+  return rows;
+}
+
+/** rust-toolchain.toml -> { rust: channel } */
+export function readRustToolchain(text) {
+  const m = text.match(/^\s*channel\s*=\s*"([^"]+)"/m);
+  return m ? { rust: m[1] } : {};
+}
+
+/** .nvmrc -> { node: version } */
+export function readNvmrc(text) {
+  const v = text.trim();
+  return v ? { node: v } : {};
+}
+
+/** package.json -> { pnpm, "node engines" } */
+export function readPackageJson(text) {
+  const pkg = JSON.parse(text);
+  const out = {};
+  if (typeof pkg.packageManager === "string") {
+    const m = pkg.packageManager.match(/^pnpm@([^+]+)/);
+    out.pnpm = m ? m[1] : pkg.packageManager;
+  }
+  if (pkg.engines?.node) out["node engines"] = pkg.engines.node;
+  return out;
+}
+
+/** pnpm-workspace.yaml -> entries of the top-level `catalog:` map */
+export function readPnpmCatalog(text) {
+  const out = {};
+  let inCatalog = false;
+  for (const line of lines(text)) {
+    if (/^\S/.test(line)) {
+      inCatalog = /^catalog:\s*$/.test(line);
+      continue;
+    }
+    if (!inCatalog || !line.trim() || line.trim().startsWith("#")) continue;
+    const m = line.match(/^\s+((?:"[^"]+")|(?:'[^']+')|[^:\s]+)\s*:\s*(.+?)\s*$/);
+    if (m) out[unquote(m[1])] = unquote(m[2]);
+  }
+  return out;
+}
+
+/** Cargo.toml -> third-party (non-path) entries of [workspace.dependencies] */
+export function readCargoWorkspaceDeps(text) {
+  const out = {};
+  let inSection = false;
+  for (const line of lines(text)) {
+    const t = line.trim();
+    if (t.startsWith("[")) {
+      inSection = t === "[workspace.dependencies]";
+      continue;
+    }
+    if (!inSection || !t || t.startsWith("#")) continue;
+    const m = t.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!m) continue;
+    const [, name, value] = m;
+    if (value.startsWith('"')) {
+      out[name] = unquote(value);
+    } else if (value.startsWith("{")) {
+      if (/\bpath\s*=/.test(value)) continue;
+      const v = value.match(/\bversion\s*=\s*"([^"]+)"/);
+      if (v) out[name] = v[1];
+    }
+  }
+  return out;
+}
+
+export const READERS = {
+  "rust-toolchain.toml": readRustToolchain,
+  ".nvmrc": readNvmrc,
+  "package.json": readPackageJson,
+  "pnpm-workspace.yaml": readPnpmCatalog,
+  "Cargo.toml": readCargoWorkspaceDeps,
+};
+
+/** Manifests whose values must be exact versions (no ranges). */
+export const EXACT = {
+  "pnpm-workspace.yaml": /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/,
+  "Cargo.toml": /^=\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/,
+};
+
+/**
+ * Compares README rows against manifest values.
+ * @param {Array<{item: string, version: string, source: string}>} table
+ * @param {Record<string, Record<string, string>>} sources source file -> item -> version
+ * @returns {string[]} error messages (empty when in sync)
+ */
+export function comparePins(table, sources) {
+  const errors = [];
+  const seen = new Set();
+  for (const row of table) {
+    const key = `${row.source}\u0000${row.item}`;
+    if (seen.has(key)) {
+      errors.push(`duplicate pin row: ${row.item} (${row.source})`);
+      continue;
+    }
+    seen.add(key);
+    const manifest = sources[row.source]?.[row.item];
+    if (manifest === undefined) {
+      errors.push(
+        `extra pin row: ${row.item} — README ${row.version}, ${row.source} has no such entry`,
+      );
+    } else if (manifest !== row.version) {
+      errors.push(`pin mismatch: ${row.item} — README ${row.version}, ${row.source} ${manifest}`);
+    }
+  }
+  for (const [source, items] of Object.entries(sources)) {
+    for (const [item, version] of Object.entries(items)) {
+      if (EXACT[source] && !EXACT[source].test(version)) {
+        errors.push(`non-exact pin: ${item} (${source} ${version})`);
+      }
+      if (!seen.has(`${source}\u0000${item}`)) {
+        errors.push(`missing pin row: ${item} (${source} ${version})`);
+      }
+    }
+  }
+  return errors;
+}
+
+export function readSources(root) {
+  const sources = {};
+  for (const [file, reader] of Object.entries(READERS)) {
+    sources[file] = reader(readFileSync(join(root, file), "utf8"));
+  }
+  return sources;
+}
+
+export function checkRepo(root) {
+  let table;
+  try {
+    table = parsePinTable(readFileSync(join(root, "README.md"), "utf8"));
+  } catch (err) {
+    return [err.code === "ENOENT" ? "pin table not found in README.md" : err.message];
+  }
+  return comparePins(table, readSources(root));
+}
+
+function main() {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const errors = checkRepo(root);
+  if (errors.length > 0) {
+    for (const e of errors) console.error(e);
+    process.exit(1);
+  }
+  console.log("pin check: ok");
+}
+
+const isMain = (() => {
+  try {
+    return (
+      Boolean(process.argv[1]) &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  main();
+}

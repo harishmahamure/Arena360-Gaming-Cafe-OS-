@@ -1,0 +1,11 @@
+/target/
+node_modules/
+.DS_Store
+*.log
+.svelte-kit/
+dist/
+build/
+.astro/
+.wrangler/
+.env*
+!.env.example

@@ -1,0 +1,7 @@
+_bmad/
+_bmad-output/
+docs/
+.claude/
+target/
+node_modules/
+pnpm-lock.yaml

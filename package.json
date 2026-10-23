@@ -1,0 +1,20 @@
+{
+  "name": "arena-360",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.15.0",
+  "engines": {
+    "node": ">=22.23.4 <23"
+  },
+  "scripts": {
+    "check:layers": "node scripts/check-layers.mjs",
+    "check:pins": "node scripts/check-pins.mjs",
+    "test:scripts": "node --test scripts/*.test.mjs",
+    "format:check": "prettier --check .",
+    "check:rust": "cargo fmt --check && cargo clippy --locked --workspace --all-targets -- -D warnings",
+    "check": "pnpm run check:rust && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run test:scripts"
+  },
+  "devDependencies": {
+    "prettier": "3.9.10"
+  }
+}

@@ -1,0 +1,25 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+arena-proto = { path = "crates/arena-proto" }
+arena-store = { path = "crates/arena-store" }
+arena-core = { path = "crates/arena-core" }
+arena-api = { path = "crates/arena-api" }
+arena-tasks = { path = "crates/arena-tasks" }
+arena-replay = { path = "crates/arena-replay" }
+arena-cloud = { path = "crates/arena-cloud" }
+arena-kiosk-core = { path = "crates/arena-kiosk-core" }
+
+# Pinned third-party versions (see README pin table)
+tauri = "=2.12.5"
+tauri-plugin-updater = "=2.14.0"

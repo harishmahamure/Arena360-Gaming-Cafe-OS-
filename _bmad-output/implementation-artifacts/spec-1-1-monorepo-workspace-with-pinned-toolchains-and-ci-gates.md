@@ -2,9 +2,10 @@
 title: 'Story 1.1: Monorepo workspace with pinned toolchains and CI gates'
 type: 'chore'
 created: '2026-10-23'
-status: 'draft'
+status: 'done'
+baseline_commit: '72f3f8a86a903f4fa5cb42216ffbf3c2b089136a'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-1-context.md'
 ---
@@ -49,6 +50,8 @@ context:
 
 **Never:** No Svelte/Tauri app scaffolding (that is Story 1.2), no ts-rs or generated types (Story 1.3), no domain code. No third-party actions beyond actions/checkout, actions/setup-node, pnpm/action-setup, dtolnay/rust-toolchain and Swatinem/rust-cache, pinned to major tags. No network calls in the check scripts.
 
+**Decision (merge blocking):** Commit `scripts/protect-main.sh`, which uses `gh api` to protect the repository's **default branch** (looked up through `gh repo view`; `master` today, with an optional argument to override it) with `ci-ok` as the required status check. Document it in the README as a one-time step. (The human answered this in review loop 1: the trunk is the repo default branch, not a hardcoded `main`.)
+
 ## I/O & Edge-Case Matrix
 
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
@@ -62,13 +65,6 @@ context:
 
 </frozen-after-approval>
 
-## Open Questions
-
-1. **Merge blocking on `main`.** The repo has no Git remote, so GitHub branch protection can't be set from this story. Options:
-   - **(a)** Commit `scripts/protect-main.sh`, which uses `gh api` to make `ci-ok` the required check, and document it in the README for you to run once a remote exists. Nothing is enforced until you run it.
-   - **(b)** Document the required setting in the README only.
-   - **(c)** Skip it for now.
-
 ## Code Map
 
 - Greenfield: only `_bmad/`, `_bmad-output/` and `docs/` exist. Do not modify these.
@@ -78,16 +74,17 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `Cargo.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `.gitignore` -- workspace with `members = ["crates/*"]`, resolver 3, edition 2024, shared `[workspace.package]` and `[workspace.dependencies]` pins.
-- [ ] `crates/<11 crates>/{Cargo.toml,src/lib.rs|main.rs}` -- placeholder plus one test. Inter-crate deps follow the allow-list (for example core → store, proto) so the check has real edges.
-- [ ] `package.json`, `pnpm-workspace.yaml`, `.nvmrc`, `.prettierrc`, `pnpm-lock.yaml`:
+- [x] `Cargo.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `.gitignore` -- workspace with `members = ["crates/*"]`, resolver 3, edition 2024, shared `[workspace.package]` and `[workspace.dependencies]` pins.
+- [x] `crates/<11 crates>/{Cargo.toml,src/lib.rs|main.rs}` -- placeholder plus one test. Inter-crate deps follow the allow-list (for example core → store, proto) so the check has real edges.
+- [x] `package.json`, `pnpm-workspace.yaml`, `.nvmrc`, `.prettierrc`, `pnpm-lock.yaml`:
   - private root with `packageManager`, `engines` and the catalog
   - prettier as a devDependency
   - scripts `check:layers`, `check:pins`, `test:scripts`, `format:check`, `check`
-- [ ] `scripts/check-layers.mjs` plus `scripts/check-layers.test.mjs` -- a pure `findViolations(metadata, rules)` and a CLI wrapper. Tests cover the matrix rows.
-- [ ] `scripts/check-pins.mjs` plus `scripts/check-pins.test.mjs` -- a pure `comparePins(table, sources)`, plus readers for rust-toolchain.toml, .nvmrc, package.json, the pnpm catalog and Cargo.toml. Tests cover the matrix rows.
-- [ ] `README.md` -- the bootstrap command (`corepack enable && pnpm install && cargo build --workspace && pnpm check`), the layout, and the pin table (columns: Item | Version | Source).
-- [ ] `.github/workflows/ci.yml` -- the pipeline described above.
+- [x] `scripts/check-layers.mjs` plus `scripts/check-layers.test.mjs` -- a pure `findViolations(metadata, rules)` and a CLI wrapper. Tests cover the matrix rows.
+- [x] `scripts/check-pins.mjs` plus `scripts/check-pins.test.mjs` -- a pure `comparePins(table, sources)`, plus readers for rust-toolchain.toml, .nvmrc, package.json, the pnpm catalog and Cargo.toml. Tests cover the matrix rows.
+- [x] `scripts/protect-main.sh` -- gh api branch protection for main requiring `ci-ok`.
+- [x] `README.md` -- the bootstrap command (`corepack enable && pnpm install && cargo build --workspace && pnpm check`), the layout, and the pin table (columns: Item | Version | Source).
+- [x] `.github/workflows/ci.yml` -- the pipeline described above.
 
 **Acceptance Criteria:**
 - Given a fresh clone with the pinned toolchains, when the bootstrap command runs, then pnpm installs the root, `cargo build --workspace` succeeds and `cargo test --workspace` reports 11 passing tests.
@@ -99,6 +96,27 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Finding | Verdict | Evidence | Route |
+|---|---------|---------|----------|-------|
+| 1 | protect-main.sh hardcodes `main` (blind, verify-gap, edge) | medium | `git ls-remote --symref origin HEAD` → `refs/heads/master`; local `main` is stale at ebb99d8. The script would protect an unused branch. | intent_gap |
+| 2 | `contexts` form of required checks accepts a status from any token with write access | low | GitHub's docs prefer `checks` with `app_id`; spoofing needs a repo-write token. Fix is a direct correction. | patch |
+| 3 | check-pins doesn't require exact versions (`^5.57.2` would pass if the README matches) | medium | `comparePins` compares strings only; nothing asserts an exact semver form. | patch |
+| 4 | prettier, `rust-version` and the dtolnay ref are outside the pin table | low | Real, but prettier isn't a listed pin; rustup honours rust-toolchain.toml and a `rust-version` mismatch fails loudly. The fix adds readers. | reject |
+| 5 | readCargoWorkspaceDeps misses multi-line, subtable and crate-level forms | low | No such form exists in the repo today; the fix adds parsing branches. | reject |
+| 6 | check-layers leaves unknown crates unrestricted | false | The frozen spec says "Other crates are unrestricted". | reject |
+| 7 | Layer table duplicated between README and LAYER_RULES | low | Real duplication; the fix would add README parsing. | reject |
+| 8 | CI cargo commands missing `--locked` | low | Without it, cargo can re-resolve Cargo.lock in CI. Fix: one flag. | patch |
+| 9 | Actions pinned to major tags, not SHAs | false | The frozen spec says "pinned to major tags". | reject |
+| 10 | push + pull_request both run on PRs | false | The frozen spec requires both triggers. | reject |
+| 11 | Rust tauri 2.12.5 vs JS 2.12.4 | false | These are the spec-mandated pins; the crate and the npm packages version independently. | reject |
+| 12 | parsePinTable accepts rows with fewer than 3 cells | low | Gives a confusing `README undefined` message. Fix: a direct cell-count check. | patch |
+| 13 | .gitignore is missing app build outputs and `.env*` | low | Story 1.2 apps would produce these; the fix adds a few lines. | patch |
+| 14 | Duplicate pin row path is untested | low | Pre-verified gap: no test feeds a repeated row. | patch |
+| 15 | `argv[1]` equality gate skips main() under a symlinked path, so the check exits 0 silently | low | `pathToFileURL(argv[1])` differs from the realpath'd `import.meta.url` under a symlink, giving a silent pass. Fix: compare realpaths. | patch |
+| 16 | Prototype-key crate or item names | low | Unreachable: no crate named `constructor`. The fix adds guards. | reject |
+| 17 | Missing manifest throws an uncaught exception | false | A loud failure on a broken checkout is correct behaviour. | reject |
+| 18 | pnpm named `catalogs:` not read | low | Not used; the fix adds parsing. | reject |
 
 ## Verification
 

@@ -31,7 +31,8 @@ Rust crates: `arena-proto`, `arena-store`, `arena-core`, `arena-api`, `arena-tas
 
 ### Apps
 
-Every app renders `Placeholder` from `@arena/ui` on its root page. `pnpm build` builds them all;
+Every app except the Hub renders `Placeholder` from `@arena/ui` on its root page (the Hub has its
+app shell, see [The Hub UI](#the-hub-ui)). `pnpm build` builds them all;
 `pnpm --filter @arena/<name> build` builds one.
 
 | App               | Package             | Stack                                          | Build output                     |
@@ -90,6 +91,12 @@ The three ports must differ. Tests pass free ports; production uses the defaults
   lock, so a second process on the same dir starts as a read-only follower.
 - **Health:** `GET 127.0.0.1:<port>/healthz` returns `db_open`, `role`, `lease`, `epoch`,
   `schema_version`, `self_instance_id`, `tls_fingerprint` and `now`. It binds loopback only.
+- **UI snapshot:** `GET 127.0.0.1:<port>/ui/snapshot` on the same loopback server returns
+  `HubSnapshot {branch: {name, branch_code} | null, devices: [{device_id, label, class, zone}]}`
+  (type in `arena-proto`; revoked devices are left out; `zone` is `null` until zones exist). It
+  reads through `arena-core` on its own read-only connection. CORS allows only
+  `tauri://localhost`, `http(s)://tauri.localhost` and the vite origin `http://localhost:5173`;
+  another `Origin`, or a `Host` that is not `127.0.0.1`/`localhost`/`[::1]`, gets 403.
 - **Logs:** JSON lines in `<data>/logs/hub-YYYY-MM-DD.jsonl` (UTC), with `.N` part files when the
   ring fills during a day. Files older than 14 days are deleted and the total is kept at or under
   50 MB (oldest deleted first). Logs never contain PII. Set the level with `RUST_LOG` (default
@@ -184,6 +191,55 @@ the running Hub to revoke a device through the dev-only loopback endpoint
 | 1         | Runtime failure (logs, store, port bind, or the healthz server died) |
 | 2         | `SCHEMA_TOO_NEW`: the database is newer than this binary             |
 | 64        | Bad command-line arguments                                           |
+
+## The Hub UI
+
+`apps/hub` is the staff app shell: an 88px left rail (Floor view · POS · Players · Sessions ·
+Inventory · Shift · Reports · Settings · System), a 72px header (branch name and clock) and the
+main area. Below 840px wide the rail becomes a 64px bottom bar (Floor · POS · Players · Shift ·
+More, where More opens a bottom sheet with the rest). Ctrl+1–4 open Floor, POS, Players and
+Shift, except while a text field has focus. `/` redirects to `/floor`; screens not built yet show
+a placeholder. The root layout reads `/ui/snapshot` before the first render; if the Hub service
+does not answer, it shows an error state with Retry.
+
+```sh
+cargo run -p arena-hub --features dev-fixtures -- dev seed --data-dir /tmp/hub
+cargo run -p arena-hub -- --data-dir /tmp/hub      # serves 127.0.0.1:7409
+pnpm --filter @arena/hub dev                       # http://localhost:5173: "Dev Branch", "Dev Kiosk"
+pnpm --filter @arena/hub test:shell                # Playwright: builds, then runs on vite preview
+```
+
+- **Tauri shell (`arena-hub-ui`).** The window starts hidden. On start the shell probes
+  `127.0.0.1:7409/healthz`; when nothing healthy answers it spawns `arena-hub` from next to its
+  own executable (plain `std::process::Command`, no plugin, with `--data-dir`, detached so the
+  service keeps running when the UI closes) and waits up to 10 s for it (stopping early if it
+  exits), then tells the page to re-read the snapshot and shows the window. Failures go to
+  `<data dir>/logs/hub-ui.log`. The UI also re-reads the snapshot on window focus, and while the
+  Hub is unreachable it retries on its own (2, 4, 8 … up to 30 s apart). Install and uninstall
+  stop a running `arena-hub.exe` first. The CSP adds
+  `connect-src 'self' http://127.0.0.1:7409`.
+- **Installer.** `src-tauri/tauri.installer.conf.json` is merged in for the installer build only:
+  NSIS bundle, `bundle.externalBin: ["binaries/arena-hub"]` and the NSIS hooks in
+  `src-tauri/windows/hooks.nsh`. It is not in `tauri.conf.json` because tauri-build would then
+  need the binary for every workspace build and copy it over `target/<profile>/arena-hub`. The
+  hook aborts in `NSIS_HOOK_PREINSTALL` on Windows builds older than 17134 with "Arena 360 Hub
+  needs Windows 10 version 1803 or later." (a copy of the catalogue key
+  `hub.installer.windows_too_old`; `scripts/installer-hooks.test.mjs` checks they match). To
+  build it on Windows:
+
+  ```sh
+  cargo build --locked --release -p arena-hub
+  mkdir apps/hub/src-tauri/binaries   # gitignored
+  cp target/release/arena-hub.exe apps/hub/src-tauri/binaries/arena-hub-x86_64-pc-windows-msvc.exe
+  pnpm --filter @arena/hub tauri build --config src-tauri/tauri.installer.conf.json --bundles nsis
+  ```
+
+- **Release benchmark.** `.github/workflows/release-bench.yml` (manual, and on `v*` tags; not
+  part of `ci-ok`) builds the installer and a `dev-fixtures` `arena-hub`, then on the
+  `[self-hosted, windows, reference-i3]` runner installs the Hub silently, seeds a branch and runs
+  `scripts/bench/hub-idle.ps1`. After 5 minutes idle it requires `arena-hub` under 50 MB working
+  set, the Hub UI plus its WebView2 processes under 250 MB, and 0 % GPU engine use by every Hub
+  process.
 
 ## Pinned versions
 
@@ -296,6 +352,9 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 
 `.github/workflows/ci.yml` runs on every push and pull request on `ubuntu-latest` and
 `windows-latest`. The `ci-ok` job depends on all other jobs and is the single required status.
+Besides the Rust, checks and per-app build jobs, `a11y` runs the Playwright suites (the gallery
+and the Hub shell) and `installer` builds the Hub's Windows NSIS installer with the `arena-hub`
+sidecar and uploads it as the `hub-installer` artifact.
 
 **One-time step after the GitHub remote is added:** protect the default branch so `ci-ok` (from
 GitHub Actions) must pass before a merge:

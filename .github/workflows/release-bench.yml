@@ -1,0 +1,97 @@
+name: Release benchmark
+
+# Hub idle budgets on the reference hardware (2015 i3 + HDD): arena-hub < 50 MB, Hub UI +
+# WebView2 < 250 MB, no GPU use. Not part of ci-ok; runs on demand and on release tags.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-bench-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    name: build the Hub installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installer
+      - run: pnpm install --frozen-lockfile
+      - run: cargo build --locked --release -p arena-hub
+      - name: Stage the arena-hub sidecar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force apps/hub/src-tauri/binaries | Out-Null
+          Copy-Item target/release/arena-hub.exe apps/hub/src-tauri/binaries/arena-hub-x86_64-pc-windows-msvc.exe
+      - run: pnpm --filter @arena/hub tauri build --config src-tauri/tauri.installer.conf.json --bundles nsis -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hub-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+      # The seeding tool: a dev-fixtures build, never shipped in the installer.
+      - run: cargo build --locked --release -p arena-hub --features dev-fixtures
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arena-hub-dev-fixtures
+          path: target/release/arena-hub.exe
+          if-no-files-found: error
+
+  hub-idle:
+    name: hub idle (reference i3)
+    needs: installer
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hub-installer
+          path: bench/installer
+      - uses: actions/download-artifact@v4
+        with:
+          name: arena-hub-dev-fixtures
+          path: bench/dev
+      - name: Install the Hub
+        shell: pwsh
+        run: |
+          Get-Process -Name arena-hub-ui, arena-hub -ErrorAction SilentlyContinue | Stop-Process -Force
+          $setup = Get-ChildItem bench/installer -Filter *.exe | Select-Object -First 1
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
+      - name: Seed a dev branch
+        shell: pwsh
+        run: |
+          $data = Join-Path $env:RUNNER_TEMP "arena-hub-bench"
+          Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
+          & bench/dev/arena-hub.exe dev seed --data-dir $data
+          if ($LASTEXITCODE -ne 0) { throw "dev seed exited $LASTEXITCODE" }
+      - name: Idle budgets
+        shell: pwsh
+        run: |
+          $ui = Join-Path $env:LOCALAPPDATA "Arena 360 Hub\arena-hub-ui.exe"
+          & scripts/bench/hub-idle.ps1 -UiExe $ui -DataDir (Join-Path $env:RUNNER_TEMP "arena-hub-bench")
+          exit $LASTEXITCODE
+      - name: Uninstall the Hub
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process -Name arena-hub-ui, arena-hub -ErrorAction SilentlyContinue | Stop-Process -Force
+          $uninstall = Join-Path $env:LOCALAPPDATA "Arena 360 Hub\uninstall.exe"
+          if (Test-Path $uninstall) {
+            $p = Start-Process -FilePath $uninstall -ArgumentList "/S" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "uninstaller exited $($p.ExitCode)" }
+          } else {
+            Write-Host "nothing to uninstall ($uninstall not found)"
+          }

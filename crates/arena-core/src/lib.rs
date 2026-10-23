@@ -5,6 +5,7 @@ mod apply;
 mod clock;
 pub mod devices;
 mod settings_defaults;
+mod snapshot;
 mod status;
 mod writer;
 
@@ -19,6 +20,7 @@ pub use arena_store::{ChangeOp, META_TLS_FINGERPRINT};
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use devices::{DeviceDirectory, VerifiedDevice};
 pub use settings_defaults::{DEFAULT_SETTINGS, SETTING_RULES, SettingRule, setting_rule};
+pub use snapshot::{SnapshotReader, build_snapshot, read_snapshot};
 pub use status::{Epoch, HubStatus, LeaseInfo, Role, status_channel};
 pub use writer::{LeaseRenewal, Writer, WriterHandle};
 

@@ -191,6 +191,31 @@ pub fn current_branch_id(conn: &Connection) -> Result<Option<String>, AppError> 
         .map_err(db_error)
 }
 
+/// The branch's display fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchSummary {
+    pub branch_id: String,
+    pub name: String,
+    pub branch_code: String,
+}
+
+/// The branch's display fields, if it has been bootstrapped (a database holds one branch).
+pub fn find_branch_summary(conn: &Connection) -> Result<Option<BranchSummary>, AppError> {
+    conn.query_row(
+        "SELECT branch_id, name, branch_code FROM branch LIMIT 1",
+        [],
+        |r| {
+            Ok(BranchSummary {
+                branch_id: r.get(0)?,
+                name: r.get(1)?,
+                branch_code: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 /// Whether a branch row exists.
 pub fn branch_exists(conn: &Connection) -> Result<bool, AppError> {
     conn.query_row("SELECT EXISTS (SELECT 1 FROM branch)", [], |r| r.get(0))

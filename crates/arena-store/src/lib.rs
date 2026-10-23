@@ -16,10 +16,10 @@ use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 pub use branch::{
-    ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, SettingRef, Table, branch_exists,
-    current_branch_id, delete_row, dump_table, find_setting, has_branch_data, insert_branch,
-    insert_change, insert_setting, next_change_seq, read_changes, read_row, stamp_row,
-    update_setting_value, upsert_row,
+    BranchSummary, ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, SettingRef, Table,
+    branch_exists, current_branch_id, delete_row, dump_table, find_branch_summary, find_setting,
+    has_branch_data, insert_branch, insert_change, insert_setting, next_change_seq, read_changes,
+    read_row, stamp_row, update_setting_value, upsert_row,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
@@ -277,6 +277,43 @@ impl Store {
             self.has_devices.store(true, Ordering::Relaxed);
         }
         Ok(yes)
+    }
+
+    /// The branch's display fields, outside any write transaction (`None` before the branch is
+    /// bootstrapped or on a database not yet migrated to the branch table).
+    pub fn branch_summary(&self) -> Result<Option<BranchSummary>, AppError> {
+        if !self.table_exists("branch")? {
+            return Ok(None);
+        }
+        find_branch_summary(&self.conn)
+    }
+
+    /// Whether the schema has table `name`.
+    fn table_exists(&self, name: &str) -> Result<bool, AppError> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                [name],
+                |r| r.get(0),
+            )
+            .map_err(db_error)
+    }
+
+    /// Runs `f` inside one read transaction, so every read in it sees the same snapshot of the
+    /// database. Never writes.
+    pub fn read_consistent<R>(
+        &self,
+        f: impl FnOnce(&Self) -> Result<R, AppError>,
+    ) -> Result<R, AppError> {
+        self.conn
+            .execute_batch("BEGIN DEFERRED")
+            .map_err(db_error)?;
+        let out = f(self);
+        let end = if out.is_ok() { "COMMIT" } else { "ROLLBACK" };
+        let ended = self.conn.execute_batch(end).map_err(db_error);
+        let out = out?;
+        ended?;
+        Ok(out)
     }
 
     /// Every device, outside any write transaction.
@@ -749,6 +786,45 @@ mod tests {
             Some("ab")
         );
         assert!(reader.conn.execute("DELETE FROM hub_meta", []).is_err());
+    }
+
+    #[test]
+    fn branch_summary_is_none_until_bootstrapped() {
+        let (_dir, path) = temp_db();
+        let _held = hold_lock(&path);
+        let unmigrated = Store::open(&path, T).unwrap();
+        assert_eq!(unmigrated.branch_summary().unwrap(), None);
+        drop((unmigrated, _held));
+        let mut store = Store::open(&path, T).unwrap();
+        assert_eq!(store.branch_summary().unwrap(), None);
+        store
+            .write_tx(|tx| {
+                insert_branch(
+                    tx,
+                    &NewBranch {
+                        branch_id: "B",
+                        name: "Dev Branch",
+                        branch_code: "DEV01",
+                        currency: "INR",
+                        tz: "UTC",
+                        day_start_min: 0,
+                        fy_start_month: 1,
+                    },
+                )
+            })
+            .unwrap();
+        let reader = Store::open_reader(&path).unwrap();
+        let b = reader.read_consistent(|r| r.branch_summary()).unwrap();
+        // The read transaction ended: the reader is usable again.
+        assert_eq!(reader.devices().unwrap(), vec![]);
+        assert_eq!(
+            b,
+            Some(BranchSummary {
+                branch_id: "B".into(),
+                name: "Dev Branch".into(),
+                branch_code: "DEV01".into(),
+            })
+        );
     }
 
     #[test]

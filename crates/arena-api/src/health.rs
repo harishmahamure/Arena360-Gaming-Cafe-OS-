@@ -1,10 +1,11 @@
-//! `GET /healthz` on `127.0.0.1` only.
+//! The loopback-only HTTP server on `127.0.0.1`: `GET /healthz`, and `GET /ui/snapshot` for the
+//! local Hub UI ([`ui_router`]).
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use arena_core::{Clock, HubStatus};
+use arena_core::{Clock, HubStatus, SnapshotReader};
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -72,6 +73,109 @@ pub fn router(status: watch::Receiver<HubStatus>, clock: Arc<dyn Clock>) -> Rout
     Router::new()
         .route("/healthz", get(healthz))
         .with_state(HealthState { status, clock })
+}
+
+/// The origins allowed to read `/ui/*`: the Tauri Hub UI (`tauri://localhost` on macOS and
+/// Linux, `http(s)://tauri.localhost` on Windows) and the vite dev/preview server.
+pub const UI_ALLOWED_ORIGINS: [&str; 4] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:5173",
+];
+
+/// Host names a `/ui/*` request may be addressed to (blocks DNS-rebinding pages).
+const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
+
+fn host_is_loopback(host: &str) -> bool {
+    let name = match host.rsplit_once(':') {
+        Some((name, port)) if !name.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    };
+    LOOPBACK_HOSTS.iter().any(|h| h.eq_ignore_ascii_case(name))
+}
+
+/// CORS and origin guard for `/ui/*`: a request from another origin, without a `Host` header
+/// or addressed to a non-loopback host name, is refused with 403. An allowed origin is echoed back in
+/// `Access-Control-Allow-Origin`; a preflight is answered here with 204.
+async fn ui_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{HeaderValue, Method, StatusCode, header};
+    use axum::response::IntoResponse;
+
+    let headers = req.headers();
+    let host_ok = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(host_is_loopback);
+    if !host_ok {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let origin = match headers.get(header::ORIGIN) {
+        None => None,
+        Some(o) => match o.to_str() {
+            Ok(o) if UI_ALLOWED_ORIGINS.contains(&o) => Some(HeaderValue::from_str(o)),
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        },
+    };
+    let origin = origin.and_then(Result::ok);
+    let mut res = if req.method() == Method::OPTIONS {
+        let mut r = StatusCode::NO_CONTENT.into_response();
+        let h = r.headers_mut();
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET"),
+        );
+        h.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("600"),
+        );
+        r
+    } else {
+        next.run(req).await
+    };
+    let h = res.headers_mut();
+    h.insert(header::VARY, HeaderValue::from_static("Origin"));
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Some(origin) = origin {
+        h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    }
+    res
+}
+
+async fn ui_snapshot(State(reader): State<Arc<SnapshotReader>>) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let read = tokio::task::spawn_blocking(move || reader.snapshot()).await;
+    match read {
+        Ok(Ok(snapshot)) => Json(snapshot).into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!(code = e.code.as_str(), detail = %e.message, "ui snapshot failed");
+            // Only the code: the message may carry database details.
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "code": e.code })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(detail = %e, "ui snapshot task failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// The local Hub UI's read API (merged into the loopback health server):
+/// `GET /ui/snapshot` returns a [`arena_proto::HubSnapshot`]. Only the [`UI_ALLOWED_ORIGINS`]
+/// may read it from a browser.
+pub fn ui_router(reader: Arc<SnapshotReader>) -> Router {
+    Router::new()
+        .route("/ui/snapshot", get(ui_snapshot))
+        .with_state(reader)
+        .layer(axum::middleware::from_fn(ui_guard))
 }
 
 /// Binds the health listener on loopback only.
@@ -272,6 +376,196 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    mod ui {
+        use super::*;
+        use arena_store::{
+            NewBranch, NewDevice, Store, insert_branch, insert_device, set_device_revoked,
+        };
+        use axum::http::header;
+
+        /// A branch database: bootstrapped with "Dev Kiosk" and a revoked "Old Kiosk", or empty.
+        fn reader(seeded: bool) -> (tempfile::TempDir, Arc<SnapshotReader>) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("branch.db");
+            let mut store = Store::open(&path, 0).unwrap();
+            if seeded {
+                store
+                    .write_tx(|tx| {
+                        insert_branch(
+                            tx,
+                            &NewBranch {
+                                branch_id: "B",
+                                name: "Dev Branch",
+                                branch_code: "DEV01",
+                                currency: "INR",
+                                tz: "Asia/Kolkata",
+                                day_start_min: 360,
+                                fy_start_month: 4,
+                            },
+                        )?;
+                        for (id, label) in [("D1", "Dev Kiosk"), ("D2", "Old Kiosk")] {
+                            insert_device(
+                                tx,
+                                &NewDevice {
+                                    device_id: id,
+                                    branch_id: "B",
+                                    class: "paired",
+                                    label,
+                                    token_hash: "$argon2id$x",
+                                },
+                            )?;
+                        }
+                        set_device_revoked(tx, "D2", 7)
+                    })
+                    .unwrap();
+            }
+            let reader = Arc::new(SnapshotReader::open(&path).unwrap());
+            (dir, reader)
+        }
+
+        async fn send(
+            reader: Arc<SnapshotReader>,
+            req: Request<Body>,
+        ) -> (StatusCode, axum::http::HeaderMap, Value) {
+            let res = ui_router(reader).oneshot(req).await.unwrap();
+            let status = res.status();
+            let headers = res.headers().clone();
+            let bytes = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+            let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            (status, headers, body)
+        }
+
+        fn get(origin: Option<&str>) -> Request<Body> {
+            let mut b = Request::get("/ui/snapshot").header(header::HOST, "127.0.0.1:7409");
+            if let Some(o) = origin {
+                b = b.header(header::ORIGIN, o);
+            }
+            b.body(Body::empty()).unwrap()
+        }
+
+        #[tokio::test]
+        async fn snapshot_has_the_branch_and_excludes_revoked_devices() {
+            let (_dir, r) = reader(true);
+            let (status, _, body) = send(r, get(None)).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body,
+                json!({
+                    "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
+                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null}]
+                })
+            );
+        }
+
+        #[tokio::test]
+        async fn snapshot_without_a_branch_is_null() {
+            let (_dir, r) = reader(false);
+            let (status, _, body) = send(r, get(None)).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, json!({"branch": null, "devices": []}));
+        }
+
+        #[tokio::test]
+        async fn cors_allows_only_the_tauri_and_vite_origins() {
+            let (_dir, r) = reader(true);
+            for origin in UI_ALLOWED_ORIGINS {
+                let (status, headers, _) = send(Arc::clone(&r), get(Some(origin))).await;
+                assert_eq!(status, StatusCode::OK, "{origin}");
+                assert_eq!(
+                    headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                    origin,
+                    "{origin}"
+                );
+                assert_eq!(headers[header::VARY], "Origin");
+            }
+            for origin in [
+                "http://evil.example",
+                "http://localhost:4173",
+                "null",
+                "tauri://localhost.evil",
+            ] {
+                let (status, headers, _) = send(Arc::clone(&r), get(Some(origin))).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{origin}");
+                assert!(
+                    headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(),
+                    "{origin}"
+                );
+            }
+            // No Origin (curl): served, without CORS headers.
+            let (status, headers, _) = send(Arc::clone(&r), get(None)).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+        }
+
+        #[tokio::test]
+        async fn preflight_is_answered_for_allowed_origins() {
+            let (_dir, r) = reader(true);
+            let req = Request::options("/ui/snapshot")
+                .header(header::HOST, "127.0.0.1:7409")
+                .header(header::ORIGIN, "http://tauri.localhost")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .body(Body::empty())
+                .unwrap();
+            let (status, headers, _) = send(r, req).await;
+            assert_eq!(status, StatusCode::NO_CONTENT);
+            assert_eq!(
+                headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "http://tauri.localhost"
+            );
+            assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_METHODS], "GET");
+        }
+
+        #[tokio::test]
+        async fn a_missing_host_header_is_refused() {
+            let (_dir, r) = reader(true);
+            let req = Request::get("/ui/snapshot").body(Body::empty()).unwrap();
+            let (status, _, _) = send(r, req).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+        }
+
+        #[tokio::test]
+        async fn a_failed_read_returns_only_the_code() {
+            let (dir, r) = reader(true);
+            // Drop the devices table under the reader: the next read fails.
+            Store::open(dir.path().join("branch.db"), 0)
+                .unwrap()
+                .write_tx(|tx| {
+                    tx.execute_batch("DROP TABLE devices")
+                        .map_err(arena_store::db_error)
+                })
+                .unwrap();
+            let (status, _, body) = send(r, get(None)).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+            assert_eq!(body, json!({"code": "INTERNAL"}));
+        }
+
+        #[tokio::test]
+        async fn non_loopback_host_names_are_refused() {
+            let (_dir, r) = reader(true);
+            for (host, ok) in [
+                ("127.0.0.1:7409", true),
+                ("localhost:7409", true),
+                ("[::1]:7409", true),
+                ("127.0.0.1", true),
+                ("evil.example:7409", false),
+                ("evil.example", false),
+                ("192.168.1.5:7409", false),
+            ] {
+                let req = Request::get("/ui/snapshot")
+                    .header(header::HOST, host)
+                    .body(Body::empty())
+                    .unwrap();
+                let (status, _, _) = send(Arc::clone(&r), req).await;
+                let want = if ok {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                };
+                assert_eq!(status, want, "{host}");
+            }
+        }
     }
 
     #[tokio::test]

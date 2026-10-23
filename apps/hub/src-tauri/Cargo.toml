@@ -12,3 +12,4 @@ tauri-build.workspace = true
 
 [dependencies]
 tauri.workspace = true
+serde_json.workspace = true

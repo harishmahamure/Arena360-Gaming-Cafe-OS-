@@ -1,7 +1,7 @@
 //! `arena-hub`: the branch Hub service.
 //!
 //! Start-up: parse args, init logs, open the store (exit 2 on `SCHEMA_TOO_NEW`), load or mint
-//! the instance id, load or generate the LAN TLS certificate, start the lease task, `/healthz`
+//! the instance id, load or generate the LAN TLS certificate, start the lease task, `/healthz` + `/ui/snapshot`
 //! and the LAN listeners (`:7400`, `:7401`), then run until Ctrl+C or SIGTERM.
 //!
 //! Logs carry ids, codes and counts only — no PII (see `logs.rs`).
@@ -19,7 +19,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use arena_api::lan::{LanHub, bind_lan, serve_lan, tls};
 use arena_api::{bind_health, serve_router};
 use arena_core::{
-    Clock, DeviceDirectory, HubStatus, Role, SystemClock, load_or_mint_instance_id,
+    Clock, DeviceDirectory, HubStatus, Role, SnapshotReader, SystemClock, load_or_mint_instance_id,
     record_tls_fingerprint, status_channel,
 };
 use arena_proto::{AppError, ErrorCode};
@@ -196,6 +196,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     tracing::info!(tls_fingerprint = %cert.fingerprint, "lan certificate ready");
     let server_tls = cert.server_config()?;
     let devices = Arc::new(DeviceDirectory::open(cfg.db_path())?);
+    let snapshots = Arc::new(SnapshotReader::open(cfg.db_path())?);
 
     let mut initial = HubStatus::opened(schema_version, instance_id.clone());
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
@@ -224,7 +225,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
 
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
-    let mut router = arena_api::router(status_rx.clone(), Arc::clone(&clock));
+    let mut router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
+        .merge(arena_api::ui_router(snapshots));
     #[cfg(feature = "dev-fixtures")]
     {
         router = router.merge(arena_api::health::dev_router(
@@ -235,7 +237,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let mut server = tokio::spawn(serve_router(listener, router, async {
         let _ = stop_rx.await;
     }));
-    tracing::info!(port = cfg.health_port, "healthz listening on loopback");
+    tracing::info!(
+        port = cfg.health_port,
+        "healthz and ui snapshot listening on loopback"
+    );
 
     let lan_hub = Arc::new(LanHub::new(
         writer.clone(),

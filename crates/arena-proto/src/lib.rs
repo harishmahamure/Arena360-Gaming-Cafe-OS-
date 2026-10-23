@@ -9,6 +9,7 @@ mod frame;
 mod intent;
 mod permission;
 mod scope;
+mod snapshot;
 
 pub use actor::{Actor, ActorKind, ElevatedBy, ElevationMode};
 pub use error::{AppError, ErrorCode};
@@ -24,6 +25,7 @@ pub use intent::{
 };
 pub use permission::Permission;
 pub use scope::{ClientClass, class_scope, in_scope};
+pub use snapshot::{HubSnapshot, SnapshotBranch, SnapshotDevice};
 
 /// Returns this crate's name.
 pub fn crate_name() -> &'static str {

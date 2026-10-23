@@ -96,3 +96,23 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Defaults:** symbol before; Indian number format when the currency is INR, otherwise international. Negatives use U+2212.
 - **1.9 implementation choices, accepted:** a device token is `<device_id>.<secret>`, so each hello checks one argon2 hash. Event and error frames nest their bodies. Token checks read through a read-only connection, off the async threads. A follower with no certificate yet serves a temporary one.
 - **1.9 review outcome:** 19 fixes and 4 rejections. Security fixes: no missed kills during the handshake; `applied` events go only to paired sessions; argon2 checks are capped, throttled per IP and timing-matched; 512-connection cap, 15 s ping and 45 s idle close. Deviations: an oversized frame closes the session (tungstenite can't continue after it); a revoked device actor gets FORBIDDEN, because PERMISSION_DENIED arrives in 1.11.
+
+## Story 1.13: inline manager PIN elevation
+
+- **Spec approval:** self-approved. Spec: `spec-1-13-inline-manager-pin-elevation.md`.
+- **Identifying the manager:** by PIN alone. The Hub argon2-checks it against the active staff whose role holds the permission (excluding the requester), at most 50. Why: the inline PIN has only digit cells, with no login field.
+- **Ticket flow:** `POST /ui/elevate` returns a single-use, 60 s ticket kept in memory, and `/ui/intent` redeems it. This supports the reason step and the rotation check. A ticket can cover up to N intents of the same kind (N = number of changed fields, at most 10) for a multi-field Save.
+- **Reasons:** a generic `IntentKind::reasons()` mechanism. The first user is `device.revoke` (lost/stolen/replaced/other).
+- **ElevatedBy.kind:** becomes `pin|mfa`, per AD-30 (the 1.7 shape reused actor kinds).
+- **Conflict between 1.12 and 1.13:** 1.13 overrides 1.12's "Counter fields read-only". A Counter can now edit and save through manager approval.
+- **Self-elevation:** refused; a staff member can't approve their own action.
+- **1.10 deviation, accepted:** `bundle.externalBin` moved to `tauri.installer.conf.json`, which only the installer build merges. Leaving it in the base config would break `cargo build --workspace` and overwrite `target/<profile>/arena-hub`. Loopback endpoints also reject any foreign Origin and any non-loopback Host (protection against DNS rebinding). Rail labels use sentence case, not uppercase, so long labels don't break at 88px.
+
+## Story 1.14: Hub idle lock
+
+- **Spec approval:** self-approved. Spec: `spec-1-14-hub-idle-lock-with-pin-unlock-in-place.md`.
+- **Allowed range:** 1–30 minutes, the same as the 1.8 validator.
+- **Lock mechanism:** an overlay plus `inert` on the app root, so the current screen stays mounted and its state survives without any snapshot/restore code.
+- **Server-side lock:** `POST /ui/lock` rejects intents with a new `SESSION_LOCKED` code until unlock, so the lock can't be bypassed by calling the API directly.
+- **PIN switch:** unlock tries the current staff member first, then other active staff (at most 50). A match rebinds the session's actor to that person.
+- **1.10 review outcome:** 18 fixes and 5 rejections. Key fixes: the installer stops the running service before upgrade or uninstall; the shell refetches on hub-ready, on focus and with backoff while unreachable; a strict health probe and early sidecar-exit detection; a log at `logs/hub-ui.log`. Untested: the Windows installer hooks, the NSIS build and the benchmark (no Windows runner available).

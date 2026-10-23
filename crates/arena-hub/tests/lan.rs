@@ -26,10 +26,15 @@ fn free_port() -> u16 {
 }
 
 fn healthz(port: u16) -> Option<serde_json::Value> {
+    get_json(port, "/healthz")
+}
+
+/// `GET <path>` on the loopback health port, as JSON.
+fn get_json(port: u16, path: &str) -> Option<serde_json::Value> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-    s.write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-        .ok()?;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    s.write_all(req.as_bytes()).ok()?;
     let mut out = String::new();
     s.read_to_string(&mut out).ok()?;
     serde_json::from_str(out.split_once("\r\n\r\n")?.1).ok()
@@ -113,6 +118,16 @@ async fn seeded_hub_accepts_the_printed_token_and_revocation_closes_it() {
         .unwrap();
     assert_eq!(stored.as_deref(), Some(fingerprint.as_str()));
 
+    // The Hub UI's snapshot names the seeded branch and its kiosk.
+    let snapshot = get_json(health, "/ui/snapshot").unwrap();
+    assert_eq!(
+        snapshot,
+        serde_json::json!({
+            "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
+            "devices": [{"device_id": device_id, "label": "Dev Kiosk", "class": "paired", "zone": null}]
+        })
+    );
+
     let url = format!("wss://127.0.0.1:{lan}/");
     let client = HubClient::connect(&url, &fingerprint, hello(&token))
         .await
@@ -133,6 +148,9 @@ async fn seeded_hub_accepts_the_printed_token_and_revocation_closes_it() {
         .await
         .expect("the session closes within 1 s of the revoke");
     assert_eq!(closed.error.map(|e| e.code), Some(ErrorCode::TokenRevoked));
+    // A revoked device leaves the snapshot.
+    let snapshot = get_json(health, "/ui/snapshot").unwrap();
+    assert_eq!(snapshot["devices"], serde_json::json!([]));
 
     let err = HubClient::connect(&url, &fingerprint, hello(&token))
         .await

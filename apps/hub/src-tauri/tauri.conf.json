@@ -12,13 +12,15 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Arena 360 Hub",
         "width": 1280,
-        "height": 800
+        "height": 800,
+        "visible": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:7409"
     }
   },
   "bundle": {

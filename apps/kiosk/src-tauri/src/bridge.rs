@@ -55,6 +55,9 @@ pub struct Bridge {
     restore: Mutex<Option<Value>>,
     restore_seen: AtomicBool,
     heartbeat: Mutex<Option<Instant>>,
+    /// Whether the OS lockdown (the keyboard hook) is degraded; when true the service is told
+    /// over IPC so it queues a `kiosk.log{error, lockdown_degraded}` for the Hub.
+    lockdown_degraded: watch::Sender<bool>,
 }
 
 impl Default for Bridge {
@@ -65,6 +68,7 @@ impl Default for Bridge {
             restore: Mutex::default(),
             restore_seen: AtomicBool::new(false),
             heartbeat: Mutex::default(),
+            lockdown_degraded: watch::channel(false).0,
         }
     }
 }
@@ -83,6 +87,27 @@ impl Bridge {
     /// The webview is alive.
     pub fn heartbeat(&self) {
         self.heartbeat_at(Instant::now());
+    }
+
+    /// The OS lockdown became degraded (`true`) or healthy again (`false`). The service hears
+    /// the change on its next pass and queues a `kiosk.log` for the Hub when degraded. Only the
+    /// Windows input guard reports this; off Windows there is no OS hook.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_lockdown_degraded(&self, degraded: bool) {
+        self.lockdown_degraded.send_replace(degraded);
+    }
+
+    /// The `log` request that reports the degraded lockdown to the service.
+    fn degraded_log() -> IpcMsg {
+        IpcMsg::Request {
+            rid: "lockdown-degraded".into(),
+            kind: "log".into(),
+            body: serde_json::json!({
+                "level": "error",
+                "code": "lockdown_degraded",
+                "detail": "the kiosk keyboard hook is not active",
+            }),
+        }
     }
 
     fn heartbeat_at(&self, now: Instant) {
@@ -157,6 +182,10 @@ impl Bridge {
         // The latest state goes out on every (re)connect: a restarted service lost it.
         let mut state = self.state.subscribe();
         state.mark_changed();
+        // A degraded lockdown is re-reported on every (re)connect, so a service restart does not
+        // lose it.
+        let mut degraded = self.lockdown_degraded.subscribe();
+        degraded.mark_changed();
         let writer_task = tokio::spawn(async move {
             loop {
                 let msg = tokio::select! {
@@ -172,6 +201,15 @@ impl Bridge {
                             continue;
                         };
                         IpcMsg::AppState { json }
+                    }
+                    changed = degraded.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        if !*degraded.borrow_and_update() {
+                            continue;
+                        }
+                        Self::degraded_log()
                     }
                 };
                 if write_msg(&mut writer, &msg).await.is_err() {

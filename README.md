@@ -488,7 +488,7 @@ The Kiosk is two processes with a privilege split:
   Hub connection and the offline intent queue. It is the only part that talks to the Hub.
 - **`arena-kiosk-ui`** (Tauri, `apps/kiosk`) runs as the standard `player` account. It talks
   only to the service, over an ACL'd named pipe; its webview has no Hub socket, no token and no
-  admin rights. The window is full screen with no decorations.
+  admin rights. The window is the player's shell (see [Kiosk lockdown](#kiosk-lockdown)).
 
 `arena-kiosk-core` holds the platform-neutral parts both use: the Hub client, the reconnect
 back-off, the IPC messages, the watchdog state machine and the queue ordering rules.
@@ -497,13 +497,14 @@ back-off, the IPC messages, the watchdog state machine and the queue ordering ru
 | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `arena-kiosk-svc --console [--data-dir <path>] [--app <path>]`                        | Runs in the foreground on any OS (dev; `--app` is relaunched)  |
 | `arena-kiosk-svc service install` / `uninstall` / `run`                               | Windows: register (auto-start, LocalSystem), remove, SCM entry |
+| `arena-kiosk-svc lockdown apply\|restore [--player-user <name>] [--data-dir <path>]`  | Windows, elevated: lock the player account down / put it back  |
 | `arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>` | `dev-fixtures` builds only: write the config and the token     |
 
 - **Data dir:** `--data-dir`, else `%PROGRAMDATA%\Arena360\Kiosk` on Windows, else
   `ARENA_KIOSK_DATA_DIR`, else `~/.arena360/kiosk`. It holds `config.json`
   (`{hub_addr, hub_fingerprint, device_id, player_user}`, default `player_user` `player`; an
   IPv6 `hub_addr` must be bracketed; a file carrying a token is refused), `token.bin`,
-  `entropy.bin` (Windows), `queue.db`, `logs/` (tracing JSON, the Hub's 14 d / 50 MB ring with a
+  `entropy.bin` and `lockdown-backup.json` (Windows), `queue.db`, `logs/` (tracing JSON, the Hub's 14 d / 50 MB ring with a
   `kiosk-` prefix) and, off Windows, the socket `ipc/kiosk.sock` (0600, in a 0700 directory).
   Files are written through fresh `create_new` temp files and a rename.
 - **Data dir ACL (Windows).** At every service start and in `service install` the directory
@@ -589,8 +590,15 @@ FILE_WRITE_ATTRIBUTES` only, so it cannot create pipe instances; no Everyone, Us
   and less than 4 GB of installed RAM (`GetPhysicallyInstalledSystemMemory`), each with the
   text of its catalogue key (`kiosk.installer.*`; `scripts/kiosk-installer.test.mjs` checks
   them). Before an install or uninstall they run `arena-kiosk-svc service uninstall`; after
-  install, `service install`. CI builds it in the `installer (kiosk, windows)` job (part of
-  `ci-ok`); locally on Windows:
+  install, `service install` then `lockdown apply` (the account comes from the config, not a
+  hard-coded flag). A failed service install or lockdown **aborts** the install with a non-zero
+  exit, even in silent mode, so a half-secured kiosk is never left behind. Before uninstall the
+  hooks run `lockdown restore` first (while the exe is still present); a failed restore falls
+  back to `lockdown reset-shell` so the player's Shell is not left pointing at a removed exe. An
+  in-place update (Tauri passes `/UPDATE` to the old uninstaller) **skips** the restore, so the
+  player is never handed a desktop between uninstall and reinstall. Each failure is reported
+  with its `kiosk.installer.*` catalogue text. CI builds it in the `installer (kiosk, windows)`
+  job (part of `ci-ok`); locally on Windows:
 
   ```sh
   cargo build --locked --release -p arena-kiosk-svc
@@ -614,6 +622,123 @@ FILE_WRITE_ATTRIBUTES` only, so it cannot create pipe instances; no Everyone, Us
   instance is denied, the client image check and sequential connects. `pnpm --filter
 @arena/kiosk test:ui` (Playwright, the Tauri shell stubbed in the page) covers the status
   line, the heartbeat and state restore.
+
+## Kiosk lockdown
+
+Only the `player` account is locked down; administrators, other accounts and HKLM policy are
+never touched. The plan is pure (`arena_kiosk_core::lockdown`: `plan_apply`, `capture_backup`,
+`plan_restore`) and is run by `arena-kiosk-svc lockdown apply|restore`, which the installer
+calls elevated.
+
+**What is set,** in the player's own hive (keys relative to `HKEY_USERS\<player SID>`):
+
+| Key                                                           | Value                    | Data                                         |
+| ------------------------------------------------------------- | ------------------------ | -------------------------------------------- |
+| `Software\Microsoft\Windows NT\CurrentVersion\Winlogon`       | `Shell` (REG_SZ)         | `"<install dir>\arena-kiosk-ui.exe"`         |
+| `Software\Microsoft\Windows\CurrentVersion\Policies\System`   | `DisableTaskMgr`         | `1`                                          |
+|                                                               | `DisableLockWorkstation` | `1`                                          |
+|                                                               | `DisableChangePassword`  | `1`                                          |
+|                                                               | `DisableRegistryTools`   | `1` (no regedit/reg.exe for the player)      |
+| `Software\Microsoft\Windows\CurrentVersion\Policies\Explorer` | `NoRun`                  | `1`                                          |
+|                                                               | `NoClose`                | `1`                                          |
+|                                                               | `NoLogoff`               | `1`                                          |
+|                                                               | `NoDriveTypeAutoRun`     | `0xFF` (autorun off on every drive type)     |
+|                                                               | `NoAutorun`              | `1`                                          |
+|                                                               | `NoDrives`               | `0x03FFFFFB` (every letter but C: hidden)    |
+|                                                               | `NoViewOnDrive`          | `0x03FFFFFB` (every letter but C: refused)   |
+| `Control Panel\Accessibility\StickyKeys`                      | `Flags` (REG_SZ)         | `"506"` (the Shift×5 hotkey and feature off) |
+| `Control Panel\Accessibility\Keyboard Response`               | `Flags` (REG_SZ)         | `"122"` (the hold-Shift hotkey off)          |
+| `Control Panel\Accessibility\ToggleKeys`                      | `Flags` (REG_SZ)         | `"58"` (the NumLock×5 hotkey off)            |
+
+Policy values are REG_DWORD; the accessibility `Flags` are REG_SZ. The accessibility hotkeys
+otherwise open a dialog that escapes the kiosk. With the kiosk as the shell, Explorer never
+starts for the player, so there is no desktop, taskbar or Start menu behind the app, even while
+the watchdog restarts it.
+
+**Protected keys.** After the values are set, the DACL of `…\Winlogon` and the two
+`Policies\…` keys is tightened to SYSTEM + Administrators full control and the player read-only
+(`D:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KR;;;<player SID>)`, inheritance broken), so the player
+cannot re-enable anything by editing its own hive; combined with `DisableRegistryTools` it has
+no registry path to the lockdown. Each key's previous security descriptor (and whether the key
+existed at all) is recorded in the backup for restore.
+
+- **`lockdown apply`** (the account comes from the provisioned `config.json`'s `player_user`,
+  or `--player-user <name>`; `player` by default): validates the name (1–20 chars, the SAM
+  limit, no trailing dot), refuses the shell unless it exists and is named `arena-kiosk-ui.exe`,
+  makes sure a local standard account exists (created with `NetUserAdd` and a random
+  32-character password that is never stored or shown; auto-logon is not set up yet) with a
+  profile (`CreateProfile`), and refuses an administrator **or** a member of Administrators,
+  Power Users, Backup Operators, Remote Desktop Users or Hyper-V Administrators (matched by the
+  group SID, so it works in any UI language). It then opens the player's hive: `HKEY_USERS\<SID>`
+  when the player is signed in, else its `NTUSER.DAT` loaded under
+  `HKEY_USERS\ArenaPlayerTemp-<pid>` (`RegLoadKeyW`, with `SeRestorePrivilege` and
+  `SeBackupPrivilege`) and unloaded afterwards. A machine-wide mutex (`Global\ArenaKioskLockdown`)
+  serializes the hive work across a service start and an installer run. The shell path is the
+  configured `app_path`, else `arena-kiosk-ui.exe` next to the service. The account name is
+  qualified with the computer name for the SID lookup.
+- **Backup.** Before anything is written, the previous value of every touched name (or
+  "absent"), whether each key already existed, and each protected key's SDDL go into
+  `%PROGRAMDATA%\Arena360\Kiosk\lockdown-backup.json` (the protected data folder; a backup not
+  owned by SYSTEM or Administrators, or of another format version, is refused), with the account
+  name and SID. A value of another type is kept byte for byte with its type code. Applying again
+  keeps the first backup, so the originals are never replaced by the lockdown's own values; a
+  backup for another account or SID is refused.
+- **`lockdown restore`**: writes back exactly what the backup holds, deletes the names that were
+  absent, puts each protected key's DACL back, and deletes any key the lockdown itself created
+  that it left empty, then removes the backup (a failed restore keeps the backup for a retry).
+  The account is kept. No backup: nothing to do; the account deleted since: the backup is
+  dropped.
+- **`lockdown reset-shell`**: the uninstaller's last resort when a restore fails — it points the
+  player's `Winlogon\Shell` back at `explorer.exe` (and hands the Winlogon key's DACL back)
+  so the PC is still usable, leaving the backup for a later proper restore.
+- **Off Windows** every `lockdown` subcommand prints `lockdown is only available on Windows` and
+  exits 2.
+- **Takes effect at next sign-in.** The shell and policy keys apply when the player next signs
+  in; apply/restore log a warning when the player is already signed in. Signing the player in is
+  manual for now (auto-logon is a later story): at the counter, sign in once as `player` (the
+  account has a random password nobody holds, so a Manager sets one, or configures auto-logon,
+  until that story lands), after which Winlogon launches the kiosk as its shell. Sign the player
+  out (or reboot) for an apply or restore to take hold.
+
+**In the app** (`arena-kiosk-ui`, the player's session):
+
+- **Launch ownership.** Winlogon launches the kiosk as the player's shell (no Explorer); the
+  service's watchdog relaunches it only when it hangs or crashes. A machine-wide mutex
+  (`Global\ArenaKioskUi`) makes a second instance exit at once, so Winlogon and the watchdog can
+  never leave two running; a restart kills the previous one (its kill-on-close job, plus
+  `taskkill` by image name).
+- The window is undecorated, not resizable, `alwaysOnTop`, `skipTaskbar` and starts hidden. At
+  start and on every `WM_DISPLAYCHANGE`/`WM_DPICHANGED` it is moved over the union of all
+  monitor rectangles (`EnumDisplayMonitors`; the union is `arena_kiosk_core::monitors::union`),
+  re-asserts topmost and is shown; when another window steals the foreground (`WM_ACTIVATEAPP`)
+  it re-asserts topmost and focus. When the union cannot be computed it falls back to the primary
+  monitor's rect, and when no monitor is reported at all to real fullscreen. A close request is
+  always refused (`CloseRequested` → `prevent_close`). The locked placeholder is positioned over
+  the primary monitor, not stretched across every screen.
+- A `WH_KEYBOARD_LL` hook on its own thread (with its message loop) runs every key through
+  `arena_kiosk_core::keys::KeyFilter`, resynced from `GetAsyncKeyState` on every event so a
+  missed key-up or a pre-held modifier cannot stick: it swallows both Windows keys and any chord
+  with them, Alt+F4, Alt+Tab, Alt+Esc, Ctrl+Esc and Alt+Space, and always passes Ctrl+Alt+Shift+A
+  (reserved for the admin exit, Story 1.20). Ctrl+Alt+Del cannot be hooked; the policy keys take
+  Task Manager, lock, log off and change password off its screen. The install retries with
+  backoff and the hook is re-installed every 60 s (a silently removed hook comes back); while it
+  is not active the app reports it over IPC and the service queues
+  `kiosk.log{error, lockdown_degraded}`. Even without a window the hook is still started.
+- **WebView2** is hardened (`with_webview`): no default context menus, no browser accelerator
+  keys (Ctrl+P, Ctrl+R, Ctrl+F, F5, F12, Ctrl+Shift+I…), no devtools and no status bar. The
+  frontend repeats the block as defense in depth (`contextmenu`, the same key combos and
+  `window.print` are cancelled; kiosk pages carry no file picker), so a reload, print, find or
+  devtools cannot escape the kiosk.
+- With no session the app shows the locked placeholder ("This PC is ready. Log in at the
+  counter or with your account.", `player.locked.*`).
+- Debug builds only: `ARENA_KIOSK_DEV_UNLOCKED=1` skips the single-instance guard, the hook, the
+  topmost placement and the close refusal, so a developer's desktop stays usable; it is ignored
+  in release builds (a release-gated test asserts this).
+
+The automated 30-minute escape suite (Story 1.19) verifies all of this on real Windows 10 and
+11; CI here type-checks the Windows code and tests the pure plan (values, backup, created-key
+cleanup, protected-key SDDL capture), the key filter and its resync, the monitor union and the
+executor on an in-memory registry.
 
 ## Pinned versions
 

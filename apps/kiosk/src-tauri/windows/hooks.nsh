@@ -5,11 +5,15 @@
 ;   requirement.
 ; - arena-kiosk-svc (bundled as an externalBin next to the app) is the LocalSystem service:
 ;   it is registered after install, and stopped and removed before an upgrade or uninstall.
+; - The `player` account is locked down after install (`lockdown apply`: the kiosk as its shell,
+;   the policy keys, no drives or autorun; Story 1.17) and put back before uninstall
+;   (`lockdown restore`: its previous values from the backup; the account is kept).
 ; - NSIS cannot read the JS catalogue: each refusal text duplicates the
 ;   packages/ui/src/messages/en.json key named next to it (scripts/kiosk-installer.test.mjs
 ;   checks they match).
 
 !include x64.nsh
+!include FileFunc.nsh
 
 ; Stops and removes an installed arena-kiosk-svc; "not installed" (or no exe yet) is fine.
 !macro ARENA_REMOVE_KIOSK_SERVICE
@@ -64,15 +68,45 @@
   Push $0
   nsExec::ExecToLog '"$INSTDIR\arena-kiosk-svc.exe" service install'
   Pop $0
+  ; The kiosk is not safe to run without the service: a failure aborts the install (so does a
+  ; failed lockdown below). /SD IDOK makes the message auto-dismiss in silent mode; the Abort
+  ; still returns non-zero.
   StrCmp $0 "0" arena_service_ok
     ; key "kiosk.installer.service_failed"
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The Arena 360 Kiosk service could not be installed." /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "The Arena 360 Kiosk service could not be installed." /SD IDOK
+    Abort "The Arena 360 Kiosk service could not be installed."
   arena_service_ok:
+  ; No hard-coded account: lockdown reads player_user from the provisioned config.
+  nsExec::ExecToLog '"$INSTDIR\arena-kiosk-svc.exe" lockdown apply'
+  Pop $0
+  StrCmp $0 "0" arena_lockdown_ok
+    ; key "kiosk.installer.lockdown_failed"
+    MessageBox MB_OK|MB_ICONSTOP "The player account could not be locked down. The kiosk is not secure until this is fixed." /SD IDOK
+    Abort "The player account could not be locked down. The kiosk is not secure until this is fixed."
+  arena_lockdown_ok:
   Pop $0
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   Push $0
+  Push $1
+  ; An in-place update runs this uninstaller before reinstalling; keep the lockdown so the
+  ; player is never handed a desktop between the two. Tauri passes /UPDATE on that run.
+  ${GetOptions} $CMDLINE "/UPDATE" $1
+  IfErrors arena_do_restore
+    Goto arena_skip_restore
+  arena_do_restore:
+  ; Before the files go: the player's shell must not point at a removed app.
+  nsExec::ExecToLog '"$INSTDIR\arena-kiosk-svc.exe" lockdown restore'
+  Pop $0
+  StrCmp $0 "0" arena_skip_restore
+    ; key "kiosk.installer.lockdown_restore_failed"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "The player account's previous settings could not be restored." /SD IDOK
+    ; Fallback so the PC is still usable: point the player's Shell back at Explorer.
+    nsExec::ExecToLog '"$INSTDIR\arena-kiosk-svc.exe" lockdown reset-shell'
+    Pop $0
+  arena_skip_restore:
   !insertmacro ARENA_REMOVE_KIOSK_SERVICE
+  Pop $1
   Pop $0
 !macroend

@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-23-2026 14:00
-last_updated: 10-24-2026 01:18
+last_updated: 10-24-2026 02:29
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -52,7 +52,7 @@ development_status:
   1-14-hub-idle-lock-with-pin-unlock-in-place: review
   1-15-audit-log-viewer-on-the-hub: review
   1-16-kiosk-privilege-split-locked-service-and-unprivileged-ui: review
-  1-17-kiosk-shell-replacement-and-windows-lockdown: backlog
+  1-17-kiosk-shell-replacement-and-windows-lockdown: review
   1-18-kiosk-process-allow-block-list: backlog
   1-19-automated-30-minute-kiosk-escape-suite-on-windows-10-and-11: backlog
   1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r: backlog

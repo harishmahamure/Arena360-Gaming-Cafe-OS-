@@ -1,11 +1,12 @@
 //! Where the service keeps its files.
 //!
-//! - Windows: `%PROGRAMDATA%\Arena360\Kiosk` (the installer locks it down to SYSTEM and
-//!   Administrators; Story 1.17).
+//! - Windows: `%PROGRAMDATA%\Arena360\Kiosk` (protected to SYSTEM and Administrators by the
+//!   service and by `lockdown`; see `winsec`).
 //! - Elsewhere (dev and tests only): `$ARENA_KIOSK_DATA_DIR`, else `~/.arena360/kiosk`.
 //!
 //! `--data-dir` overrides both. The directory holds `config.json`, `token.bin`, `queue.db`,
-//! `logs/` and, off Windows, the IPC socket `ipc/kiosk.sock` (the `ipc/` directory is 0700).
+//! `lockdown-backup.json`, `logs/` and, off Windows, the IPC socket `ipc/kiosk.sock` (the
+//! `ipc/` directory is 0700).
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,7 @@ pub const CONFIG_FILE: &str = "config.json";
 pub const TOKEN_FILE: &str = "token.bin";
 pub const QUEUE_FILE: &str = "queue.db";
 pub const LOGS_DIR: &str = "logs";
+pub const LOCKDOWN_BACKUP_FILE: &str = "lockdown-backup.json";
 
 /// The data directory when none is given on the command line.
 pub fn default_data_dir(env: impl Fn(&str) -> Option<String>, windows: bool) -> PathBuf {
@@ -42,6 +44,10 @@ impl DataDir {
     }
     pub fn logs(&self) -> PathBuf {
         self.0.join(LOGS_DIR)
+    }
+    /// What `lockdown apply` replaced in the player's hive (`lockdown restore` puts it back).
+    pub fn lockdown_backup(&self) -> PathBuf {
+        self.0.join(LOCKDOWN_BACKUP_FILE)
     }
     /// The IPC socket (non-Windows builds), inside a 0700 directory.
     pub fn socket(&self) -> PathBuf {

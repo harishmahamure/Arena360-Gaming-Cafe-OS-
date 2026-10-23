@@ -14,8 +14,12 @@
     startHeartbeat,
     takeRestoreState,
   } from "../lib/bridge";
+  import { installKioskGuards, placeOnPrimary } from "../lib/guards";
 
   let { children }: { children: Snippet } = $props();
+
+  /** The window-filling stage; positioned over the primary monitor when the shell says where. */
+  let stage: HTMLDivElement;
 
   /** The Hub link as the Kiosk service reports it (unknown until it says). */
   let hub: KioskHubState | null = $state(null);
@@ -29,7 +33,11 @@
   }
 
   onMount(() => {
-    const stops: Array<() => void> = [startHeartbeat()];
+    const stops: Array<() => void> = [
+      startHeartbeat(),
+      installKioskGuards(),
+      placeOnPrimary(stage),
+    ];
     let gone = false;
     void (async () => {
       const add = (stop: () => void) => (gone ? stop() : stops.push(stop));
@@ -55,7 +63,7 @@
   afterNavigate(() => reportAppState({ route: here() }));
 </script>
 
-<div class="kiosk">
+<div class="kiosk" bind:this={stage}>
   {@render children()}
 </div>
 

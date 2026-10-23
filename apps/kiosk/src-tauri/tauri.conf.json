@@ -14,9 +14,11 @@
       {
         "label": "main",
         "title": "Arena 360 Kiosk",
-        "fullscreen": true,
         "decorations": false,
-        "resizable": false
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {

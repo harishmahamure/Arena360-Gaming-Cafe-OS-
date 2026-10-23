@@ -190,9 +190,72 @@ pub fn owner_is_trusted(path: &Path) -> io::Result<bool> {
     Ok(trusted)
 }
 
-/// The string SID of local *user* account `name` (a group or alias is refused).
-pub fn user_sid(name: &str) -> io::Result<String> {
+/// This computer's NetBIOS name (for qualifying a local account in a SID lookup).
+pub fn computer_name() -> String {
+    std::env::var("COMPUTERNAME").unwrap_or_default()
+}
+
+/// `name` qualified with the computer name (`COMPUTER\name`) when it is not already qualified,
+/// so a local account is never confused with a same-named domain account.
+pub fn qualified_local(name: &str) -> String {
+    if name.contains('\\') {
+        return name.to_owned();
+    }
+    let c = computer_name();
+    if c.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{c}\\{name}")
+    }
+}
+
+/// The string SID of any account `name` (user, group or alias). No type check and no
+/// qualification; used to resolve a local group to its SID.
+pub fn account_sid_any(name: &str) -> io::Result<String> {
     let wname = wide(name);
+    let mut sid_len = 0u32;
+    let mut dom_len = 0u32;
+    let mut use_ = SID_NAME_USE::default();
+    // SAFETY: a size query.
+    let _ = unsafe {
+        LookupAccountNameW(
+            PCWSTR::null(),
+            PCWSTR(wname.as_ptr()),
+            None,
+            &mut sid_len,
+            None,
+            &mut dom_len,
+            &mut use_,
+        )
+    };
+    if sid_len == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no account named {name}"),
+        ));
+    }
+    let mut sid = vec![0u8; sid_len as usize];
+    let mut dom = vec![0u16; dom_len.max(1) as usize];
+    // SAFETY: the buffers have the sizes the first call reported.
+    unsafe {
+        LookupAccountNameW(
+            PCWSTR::null(),
+            PCWSTR(wname.as_ptr()),
+            Some(PSID(sid.as_mut_ptr().cast())),
+            &mut sid_len,
+            Some(PWSTR(dom.as_mut_ptr())),
+            &mut dom_len,
+            &mut use_,
+        )
+    }
+    .map_err(win)?;
+    sid_string(PSID(sid.as_mut_ptr().cast()))
+}
+
+/// The string SID of local *user* account `name` (a group or alias is refused). The name is
+/// qualified with the computer name for the lookup.
+pub fn user_sid(name: &str) -> io::Result<String> {
+    let wname = wide(&qualified_local(name));
     let mut sid_len = 0u32;
     let mut dom_len = 0u32;
     let mut use_ = SID_NAME_USE::default();

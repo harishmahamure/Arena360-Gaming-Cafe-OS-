@@ -28,6 +28,15 @@ pub struct KioskConfig {
     pub app_path: Option<String>,
 }
 
+/// A plain local account name: 1–64 of letters, digits, `.`, `_` and `-`.
+pub fn valid_account_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
 fn default_player_user() -> String {
     DEFAULT_PLAYER_USER.to_owned()
 }
@@ -57,13 +66,7 @@ impl KioskConfig {
         if self.device_id.is_empty() || !self.device_id.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return Err("the device id must be letters and digits".into());
         }
-        let user_ok = !self.player_user.is_empty()
-            && self.player_user.len() <= 64
-            && self
-                .player_user
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
-        if !user_ok {
+        if !valid_account_name(&self.player_user) {
             return Err("the player account name is not valid".into());
         }
         Ok(())

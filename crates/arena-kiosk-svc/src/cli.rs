@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub const USAGE: &str = "usage:
   arena-kiosk-svc --console [--data-dir <path>] [--app <path>]
   arena-kiosk-svc service install|uninstall|run          (Windows)
+  arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>
                   [--player-user <name>] [--data-dir <path>]   (dev-fixtures builds)
   arena-kiosk-svc --help | --version";
@@ -22,6 +23,12 @@ pub enum Command {
     ServiceInstall,
     ServiceUninstall,
     ServiceRun,
+    /// `lockdown apply|restore`: lock the player account down, or put it back.
+    Lockdown {
+        action: LockdownAction,
+        player_user: Option<String>,
+        data_dir: Option<PathBuf>,
+    },
     /// `dev provision`.
     DevProvision {
         hub: String,
@@ -32,6 +39,16 @@ pub enum Command {
     },
     Help,
     Version,
+}
+
+/// What `lockdown` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockdownAction {
+    Apply,
+    Restore,
+    /// Last-resort: point the player's `Winlogon\Shell` back at Explorer (used by the
+    /// uninstaller when a restore failed, so the PC is still usable).
+    ResetShell,
 }
 
 fn text(v: OsString, flag: &str) -> Result<String, String> {
@@ -52,6 +69,30 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             Some("run") if args.len() == 2 => Ok(Command::ServiceRun),
             _ => Err("service takes install, uninstall or run".into()),
         },
+        "lockdown" => {
+            let action = match args.get(1).and_then(|a| a.to_str()) {
+                Some("apply") => LockdownAction::Apply,
+                Some("restore") => LockdownAction::Restore,
+                Some("reset-shell") => LockdownAction::ResetShell,
+                _ => return Err("lockdown takes apply, restore or reset-shell".into()),
+            };
+            let (mut player_user, mut data_dir) = (None, None);
+            let mut it = args.into_iter().skip(2);
+            while let Some(flag) = it.next() {
+                let flag = text(flag, "a flag")?;
+                let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                match flag.as_str() {
+                    "--player-user" => player_user = Some(text(value, "--player-user")?),
+                    "--data-dir" => data_dir = Some(PathBuf::from(value)),
+                    other => return Err(format!("unknown flag {other}")),
+                }
+            }
+            Ok(Command::Lockdown {
+                action,
+                player_user,
+                data_dir,
+            })
+        }
         "dev" => {
             if args.get(1).and_then(|a| a.to_str()) != Some("provision") {
                 return Err("dev takes provision".into());
@@ -128,6 +169,30 @@ mod tests {
             Command::ServiceUninstall
         );
         assert_eq!(p(&["service", "run"]).unwrap(), Command::ServiceRun);
+        assert_eq!(
+            p(&["lockdown", "apply", "--player-user", "player"]).unwrap(),
+            Command::Lockdown {
+                action: LockdownAction::Apply,
+                player_user: Some("player".into()),
+                data_dir: None,
+            }
+        );
+        assert_eq!(
+            p(&["lockdown", "restore"]).unwrap(),
+            Command::Lockdown {
+                action: LockdownAction::Restore,
+                player_user: None,
+                data_dir: None,
+            }
+        );
+        assert_eq!(
+            p(&["lockdown", "reset-shell"]).unwrap(),
+            Command::Lockdown {
+                action: LockdownAction::ResetShell,
+                player_user: None,
+                data_dir: None,
+            }
+        );
         assert_eq!(p(&["--help"]).unwrap(), Command::Help);
         assert_eq!(p(&["--version"]).unwrap(), Command::Version);
         assert_eq!(
@@ -158,6 +223,10 @@ mod tests {
             &["--console", "--nope", "x"],
             &["dev", "provision", "--hub", "h"],
             &["dev", "seed"],
+            &["lockdown"],
+            &["lockdown", "undo"],
+            &["lockdown", "apply", "--player-user"],
+            &["lockdown", "apply", "--force", "x"],
             &["bogus"],
         ] {
             assert!(p(bad).is_err(), "{bad:?}");

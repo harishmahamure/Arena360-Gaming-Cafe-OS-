@@ -1,13 +1,16 @@
-//! `arena-kiosk-svc`: see the library docs. Exit codes: 0 success, 1 failure, 64 bad usage.
+//! `arena-kiosk-svc`: see the library docs. Exit codes: 0 success, 1 failure, 2 `lockdown` off
+//! Windows, 64 bad usage.
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use arena_kiosk_svc::cli::{self, Command};
+use arena_kiosk_svc::cli::{self, Command, LockdownAction};
 use arena_kiosk_svc::launcher::{AppLauncher, CommandLauncher, NoopLauncher};
 use arena_kiosk_svc::paths::{DataDir, default_data_dir};
 
 const EXIT_FAILURE: u8 = 1;
+#[cfg(not(windows))]
+const EXIT_NOT_WINDOWS: u8 = 2;
 const EXIT_USAGE: u8 = 64;
 
 fn data_dir(given: Option<std::path::PathBuf>) -> DataDir {
@@ -33,6 +36,11 @@ fn main() -> ExitCode {
         }
         Command::Console { data_dir: d, app } => console(data_dir(d), app),
         Command::ServiceInstall | Command::ServiceUninstall | Command::ServiceRun => service(cmd),
+        Command::Lockdown {
+            action,
+            player_user,
+            data_dir: d,
+        } => lockdown(data_dir(d), action, player_user),
         Command::DevProvision {
             hub,
             fingerprint,
@@ -96,6 +104,83 @@ fn service(cmd: Command) -> ExitCode {
 fn service(_cmd: Command) -> ExitCode {
     eprintln!("arena-kiosk-svc: the service commands are Windows only; use --console");
     ExitCode::from(EXIT_USAGE)
+}
+
+#[cfg(windows)]
+fn lockdown(data: DataDir, action: LockdownAction, player_user: Option<String>) -> ExitCode {
+    use arena_kiosk_svc::lockdown::{self, RestoreOutcome, windows::WinAccounts};
+    if let Some(u) = &player_user
+        && !arena_kiosk_svc::config::valid_account_name(u)
+    {
+        eprintln!("arena-kiosk-svc: the player account name is not valid");
+        return ExitCode::from(EXIT_USAGE);
+    }
+    if let Err(e) = arena_kiosk_svc::winsec::protect_data_dir(data.root()) {
+        eprintln!("lockdown: cannot protect {}: {e}", data.root().display());
+        return ExitCode::from(EXIT_FAILURE);
+    }
+    let mut accounts = WinAccounts;
+    let backup = data.lockdown_backup();
+    let result = match action {
+        LockdownAction::Apply => {
+            // The installer passes no `--player-user`: take it from the provisioned config, so
+            // the account the app runs as and the account locked down are always the same.
+            let user = player_user.unwrap_or_else(|| {
+                arena_kiosk_svc::config::KioskConfig::load(&data.config())
+                    .ok()
+                    .flatten()
+                    .map(|c| c.player_user)
+                    .unwrap_or_else(|| arena_kiosk_svc::config::DEFAULT_PLAYER_USER.to_owned())
+            });
+            let shell = arena_kiosk_svc::launcher::configured_app_path(&data.config());
+            lockdown::apply(&mut accounts, &backup, &user, &shell.display().to_string()).map(|b| {
+                format!(
+                    "lockdown applied to {} (shell {}); previous values in {}",
+                    b.player_user,
+                    shell.display(),
+                    backup.display()
+                )
+            })
+        }
+        LockdownAction::Restore => {
+            lockdown::restore(&mut accounts, &backup, player_user.as_deref()).map(|o| match o {
+                RestoreOutcome::Restored { player_user } => {
+                    format!("lockdown restored for {player_user}")
+                }
+                RestoreOutcome::NothingToRestore => "lockdown: nothing to restore".to_owned(),
+                RestoreOutcome::AccountGone { player_user } => {
+                    format!("lockdown: {player_user} no longer exists; backup removed")
+                }
+            })
+        }
+        LockdownAction::ResetShell => {
+            lockdown::reset_shell(&mut accounts, &backup, player_user.as_deref()).map(|o| match o {
+                RestoreOutcome::Restored { player_user } => {
+                    format!("lockdown: {player_user} shell reset to explorer.exe")
+                }
+                RestoreOutcome::NothingToRestore => "lockdown: nothing to reset".to_owned(),
+                RestoreOutcome::AccountGone { player_user } => {
+                    format!("lockdown: {player_user} no longer exists")
+                }
+            })
+        }
+    };
+    match result {
+        Ok(msg) => {
+            println!("{msg}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("lockdown: {e}");
+            ExitCode::from(EXIT_FAILURE)
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn lockdown(_data: DataDir, _action: LockdownAction, _player_user: Option<String>) -> ExitCode {
+    eprintln!("{}", arena_kiosk_svc::lockdown::ONLY_ON_WINDOWS);
+    ExitCode::from(EXIT_NOT_WINDOWS)
 }
 
 #[cfg(feature = "dev-fixtures")]

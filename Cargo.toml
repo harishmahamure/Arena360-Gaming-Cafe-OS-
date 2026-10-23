@@ -44,17 +44,25 @@ rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", 
 argon2 = "=0.6.0"
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 # Windows-only (arena-kiosk-svc, arena-kiosk-ui): DPAPI, ACLs, pipe peers, WTS session launch,
-# job objects, the service host.
+# job objects, the service host; the lockdown (local accounts, profiles, hives), the keyboard
+# hook and the monitor layout.
 windows = { version = "=0.62.2", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_NetworkManagement_NetManagement",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Security_Cryptography",
   "Win32_System_Environment",
   "Win32_System_JobObjects",
+  "Win32_System_LibraryLoader",
   "Win32_System_Pipes",
+  "Win32_System_Registry",
   "Win32_System_RemoteDesktop",
   "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 windows-service = "=0.8.1"
 

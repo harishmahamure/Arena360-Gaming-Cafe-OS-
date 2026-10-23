@@ -42,6 +42,8 @@ test("every refusal names its requirement with the catalogue text", () => {
     "kiosk.installer.not_64bit",
     "kiosk.installer.ram_too_low",
     "kiosk.installer.service_failed",
+    "kiosk.installer.lockdown_failed",
+    "kiosk.installer.lockdown_restore_failed",
   ]) {
     assert.ok(en[key], `${key} is in en.json`);
     assert.ok(text.includes(`key "${key}"`), `hooks.nsh names ${key}`);
@@ -70,6 +72,53 @@ test("the service is removed before an upgrade or uninstall and registered after
     /nsExec::ExecToLog '"\$INSTDIR\\arena-kiosk-svc\.exe" service install'/,
   );
   assert.match(macro(text, "NSIS_HOOK_PREUNINSTALL"), /!insertmacro ARENA_REMOVE_KIOSK_SERVICE/);
+});
+
+test("the player is locked down after install and restored before uninstall", () => {
+  const text = hooks();
+  const post = macro(text, "NSIS_HOOK_POSTINSTALL");
+  // No hard-coded account: lockdown apply reads player_user from the provisioned config.
+  const apply = `nsExec::ExecToLog '"$INSTDIR\\arena-kiosk-svc.exe" lockdown apply'`;
+  assert.ok(post.includes(apply), "lockdown apply runs after install");
+  assert.doesNotMatch(post, /lockdown apply --player-user/, "no hard-coded account");
+  assert.ok(
+    post.indexOf(apply) > post.indexOf("service install"),
+    "after the service (and its protected data folder) is in place",
+  );
+  // A failed service install or lockdown aborts the install (non-zero, even silent).
+  assert.equal(
+    (post.match(/^\s*Abort\b/gm) ?? []).length,
+    2,
+    "service and lockdown failures both abort",
+  );
+  assert.ok(
+    post.indexOf("service install") < post.indexOf("Abort"),
+    "apply is skipped when the service failed (its Abort comes first)",
+  );
+
+  const unin = macro(text, "NSIS_HOOK_PREUNINSTALL");
+  const restore = `nsExec::ExecToLog '"$INSTDIR\\arena-kiosk-svc.exe" lockdown restore'`;
+  assert.ok(unin.includes(restore), "lockdown restore runs before uninstall");
+  assert.ok(
+    unin.indexOf(restore) < unin.indexOf("!insertmacro ARENA_REMOVE_KIOSK_SERVICE"),
+    "while the service exe is still there",
+  );
+  // An in-place update skips the restore, so the player is never handed a desktop between
+  // uninstall and reinstall.
+  assert.match(unin, /\$\{GetOptions\} \$CMDLINE "\/UPDATE"/, "update run detected");
+  assert.ok(
+    unin.indexOf('"/UPDATE"') < unin.indexOf("lockdown restore"),
+    "the update check guards the restore",
+  );
+  // A failed restore still leaves the PC usable: the Shell is pointed back at Explorer.
+  assert.match(
+    unin,
+    /nsExec::ExecToLog '"\$INSTDIR\\arena-kiosk-svc\.exe" lockdown reset-shell'/,
+    "fallback shell reset on a failed restore",
+  );
+
+  // An upgrade keeps the lockdown: the pre-install hook never restores it.
+  assert.doesNotMatch(macro(text, "NSIS_HOOK_PREINSTALL"), /lockdown/);
 });
 
 test("every hook path leaves the NSIS stack balanced", () => {
@@ -120,8 +169,13 @@ test("the base Kiosk config builds without the service and covers the screen", (
   const conf = JSON.parse(read(`${TAURI}/tauri.conf.json`));
   assert.equal(conf.bundle.externalBin, undefined);
   const main = conf.app.windows.find((w) => w.label === "main");
-  assert.equal(main.fullscreen, true);
+  // The shell sizes it over the union of every monitor (fullscreen would cover only one).
+  assert.notEqual(main.fullscreen, true);
   assert.equal(main.decorations, false);
+  assert.equal(main.resizable, false);
+  assert.equal(main.alwaysOnTop, true);
+  assert.equal(main.skipTaskbar, true);
+  assert.equal(main.visible, false, "shown once it covers every monitor");
   // The webview reaches nothing but its own bundle (no Hub socket).
   assert.match(conf.app.security.csp, /^default-src 'self';/);
   assert.doesNotMatch(conf.app.security.csp, /connect-src/);

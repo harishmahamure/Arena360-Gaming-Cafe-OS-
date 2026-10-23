@@ -1,20 +1,37 @@
 //! Arena 360 Kiosk UI: the Tauri shell around the `@arena/kiosk` frontend. It runs as the
 //! unprivileged player and talks only to the Kiosk service (`arena-kiosk-svc`), through
-//! [`bridge`]. The window covers the whole screen.
+//! [`bridge`]. The window is the player's shell: topmost over every monitor, never closed, with
+//! the Windows keys and task switchers swallowed ([`shell`]).
 
 // Prevents an additional console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod shell;
 
 use std::sync::Arc;
 
 use arena_proto::KioskHubStatus;
 use bridge::{Bridge, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, Runtime, WebviewWindow, WindowEvent};
 
 fn crate_name() -> &'static str {
     "arena-kiosk-ui"
+}
+
+/// Covers every monitor and tells the webview where the primary monitor is (so the locked
+/// placeholder sits on it, not stretched across all of them).
+fn place_window<R: Runtime>(window: &WebviewWindow<R>) {
+    shell::cover_all_monitors(window);
+    if let Some(b) = shell::content_box(window) {
+        // Physical px relative to the window; the page divides by devicePixelRatio.
+        let js = format!(
+            "window.__ARENA_PRIMARY__ = {{ x: {}, y: {}, width: {}, height: {} }};\
+             window.dispatchEvent(new CustomEvent('arena-primary'));",
+            b.x, b.y, b.width, b.height
+        );
+        let _ = window.eval(&js);
+    }
 }
 
 /// The webview's restorable state changed (its route, for now).
@@ -42,6 +59,12 @@ fn take_restore_state(bridge: tauri::State<'_, Arc<Bridge>>) -> Option<serde_jso
 }
 
 fn main() {
+    // One kiosk per machine: a second instance (e.g. one the service relaunched while the
+    // shell-launched one still runs) exits at once, so there are never two.
+    if !shell::dev_unlocked() && !shell::claim_single_instance() {
+        eprintln!("{}: another instance is already running", crate_name());
+        return;
+    }
     tauri::Builder::default()
         .manage(Arc::new(Bridge::default()))
         .invoke_handler(tauri::generate_handler![
@@ -50,7 +73,59 @@ fn main() {
             take_restore_state,
             heartbeat
         ])
+        .on_window_event(|_window, event| {
+            // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && !shell::dev_unlocked()
+            {
+                api.prevent_close();
+            }
+        })
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                if shell::dev_unlocked() {
+                    let _ = window.set_always_on_top(false);
+                    let _ = window.show();
+                } else {
+                    shell::harden_webview(&window);
+                    place_window(&window);
+                    #[cfg(windows)]
+                    {
+                        let handle = app.handle().clone();
+                        let bridge = Arc::clone(app.state::<Arc<Bridge>>().inner());
+                        let reassert = {
+                            let handle = handle.clone();
+                            move || {
+                                let h = handle.clone();
+                                let _ = handle.run_on_main_thread(move || {
+                                    if let Some(w) = h.get_webview_window("main") {
+                                        place_window(&w);
+                                    }
+                                });
+                            }
+                        };
+                        let on_degraded = move |degraded: bool| {
+                            if degraded {
+                                tracing::error!("the kiosk keyboard hook is not active");
+                            }
+                            bridge.set_lockdown_degraded(degraded);
+                        };
+                        shell::start_input_thread(reassert, on_degraded);
+                    }
+                }
+            } else {
+                // No window is a serious misconfiguration, but the hook must still run so the
+                // Windows keys and task switchers are swallowed.
+                tracing::error!("no kiosk window; starting the input guard anyway");
+                #[cfg(windows)]
+                if !shell::dev_unlocked() {
+                    let bridge = Arc::clone(app.state::<Arc<Bridge>>().inner());
+                    shell::start_input_thread(
+                        || {},
+                        move |degraded| bridge.set_lockdown_degraded(degraded),
+                    );
+                }
+            }
             let handle = app.handle().clone();
             let bridge = Arc::clone(app.state::<Arc<Bridge>>().inner());
             tauri::async_runtime::spawn(async move {

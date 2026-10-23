@@ -4,7 +4,8 @@
 //! reconnect ([`hub_link`]) and the offline intent queue ([`queue`]). The unprivileged Kiosk app
 //! (`arena-kiosk-ui`, the player's session) talks only to this service, over an ACL'd named pipe
 //! ([`ipc`]); the service pings it and restarts it when it stops answering ([`app`],
-//! [`launcher`]). Off Windows the same logic runs in console mode over a Unix socket, for dev
+//! [`launcher`]). `lockdown apply|restore` ([`lockdown`]) locks the player account down for
+//! the installer. Off Windows the same logic runs in console mode over a Unix socket, for dev
 //! and CI.
 
 pub mod app;
@@ -18,6 +19,7 @@ pub mod hub_link;
 pub mod intents;
 pub mod ipc;
 pub mod launcher;
+pub mod lockdown;
 pub mod logs;
 pub mod paths;
 pub mod queue;

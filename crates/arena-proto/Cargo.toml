@@ -11,6 +11,10 @@ serde.workspace = true
 ts-rs.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+# Only the `export-ts` test reads it, to write `timezones.json`.
+chrono-tz.workspace = true
+
 [features]
 # Export TypeScript bindings during `cargo test` (used by `pnpm gen:types`).
 export-ts = []

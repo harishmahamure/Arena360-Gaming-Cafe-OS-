@@ -5,6 +5,7 @@
  */
 export type IntentKind =
   | "branch.bootstrap"
+  | "branch.seed_defaults"
   | "settings.set"
   | "device.register"
   | "device.revoke"

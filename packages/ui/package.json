@@ -20,6 +20,9 @@
     "./messages": {
       "default": "./src/messages/index.js"
     },
+    "./format": {
+      "default": "./src/format.js"
+    },
     "./base.css": {
       "default": "./src/base.css"
     },

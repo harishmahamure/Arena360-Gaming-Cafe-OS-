@@ -7,6 +7,7 @@ import type {
   Intent,
   IntentPayload,
   IntentResult,
+  Permission,
   SessionStaff,
   SettingEntry,
   SignInOk,
@@ -64,8 +65,15 @@ export function isSessionStaff(v: unknown): v is SessionStaff {
     isObject(v) &&
     typeof v.staff_id === "string" &&
     typeof v.display_name === "string" &&
-    typeof v.role_name === "string"
+    typeof v.role_name === "string" &&
+    (v.permissions === undefined ||
+      (Array.isArray(v.permissions) && v.permissions.every((p) => typeof p === "string")))
   );
+}
+
+/** Whether the member's role allows `permission` (the Hub still checks every intent). */
+export function hasPermission(staff: SessionStaff | null, permission: Permission): boolean {
+  return Array.isArray(staff?.permissions) && staff.permissions.includes(permission);
 }
 
 function authHeaders(token: string | null): HeadersInit {

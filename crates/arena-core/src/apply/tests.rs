@@ -103,6 +103,7 @@ fn bootstrap() -> Intent {
 /// roles and their permission rows.
 fn bootstrap_changes() -> usize {
     1 + DEFAULT_SETTINGS.len()
+        + crate::LOCALE_KEYS.len()
         + crate::rbac::BUILTIN_ROLES
             .iter()
             .map(|r| 1 + crate::rbac::builtin_perms(r).len())
@@ -142,13 +143,30 @@ async fn bootstrap_writes_branch_settings_and_gap_free_changes() {
     assert_eq!(b["updated_at"], RowValue::Integer(T0));
 
     let settings = store.rows(Table::Settings).unwrap();
-    assert_eq!(settings.len(), DEFAULT_SETTINGS.len());
-    for (key, value) in DEFAULT_SETTINGS {
+    assert_eq!(
+        settings.len(),
+        DEFAULT_SETTINGS.len() + crate::LOCALE_KEYS.len()
+    );
+    let seeded: Vec<(String, String)> = DEFAULT_SETTINGS
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .chain([
+            ("branch.currency".into(), "INR".into()),
+            ("branch.symbol_position".into(), "before".into()),
+            ("branch.number_format".into(), "indian".into()),
+            ("branch.tz".into(), "Asia/Kolkata".into()),
+            ("branch.day_start_min".into(), "360".into()),
+            ("branch.fy_start_month".into(), "4".into()),
+        ])
+        .collect();
+    for (key, value) in &seeded {
         let s = settings
             .iter()
-            .find(|s| s["key"] == RowValue::Text((*key).into()))
+            .find(|s| s["key"] == RowValue::Text(key.clone()))
             .unwrap();
-        assert_eq!(s["value"], RowValue::Text((*value).into()));
+        assert_eq!(s["value"], RowValue::Text(value.clone()));
+        assert_eq!(s["prior_value"], RowValue::Null);
+        assert_eq!(s["effective_from"], RowValue::Null);
         assert_eq!(s["branch_id"], RowValue::Text(branch_id.clone()));
         assert_eq!(s["rev"], RowValue::Integer(1));
         assert_eq!(s["updated_at"], RowValue::Integer(T0));
@@ -380,7 +398,7 @@ async fn every_validation_names_its_field() {
 
     // Range edges are accepted.
     for currency in ["USD", "EUR", "GBP", "AED", "SGD"] {
-        assert!(KNOWN_CURRENCIES.contains(&currency));
+        assert!(arena_proto::currency::is_known_currency(currency));
     }
     f.writer
         .submit_intent(intent_with(
@@ -2019,5 +2037,384 @@ mod rbac_matrix {
             let err = expect_err(&f, as_actor(owner(), custom_role(name, &[]), None)).await;
             assert_eq!(err.field.as_deref(), Some("name"), "{name}");
         }
+    }
+}
+
+// ---- Story 1.12: branch locale settings, deferred tz/day start, business_day and fy ----
+
+mod locale_matrix {
+    use super::*;
+    use crate::snapshot::SnapshotReader;
+    use chrono::{NaiveDateTime, TimeZone};
+    use chrono_tz::Tz;
+
+    /// UTC ms of the wall-clock time `local` in `tz`.
+    fn at(tz: Tz, local: &str) -> i64 {
+        let naive = NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M").unwrap();
+        tz.from_local_datetime(&naive).unwrap().timestamp_millis()
+    }
+
+    const IST: Tz = Tz::Asia__Kolkata;
+    const GST: Tz = Tz::Asia__Dubai;
+
+    fn rev_of(f: &Fixture, key: &str) -> i64 {
+        match setting(&reopen(f), key)["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        }
+    }
+
+    /// `settings.set` by the owner, issued now, with the row's current `rev`.
+    async fn save(f: &Fixture, key: &str, value: &str) -> Result<Applied, AppError> {
+        let mut intent = set(key, value, Some(rev_of(f, key)));
+        intent.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(intent).await
+    }
+
+    /// The (business_day, fy) of the newest change row.
+    fn last_stamp(f: &Fixture) -> (Option<String>, Option<String>) {
+        let c = reopen(f).changes().unwrap().pop().unwrap();
+        (c.business_day, c.fy)
+    }
+
+    fn day(s: &str) -> (Option<String>, Option<String>) {
+        (Some(s.to_owned()), Some("FY2026-27".to_owned()))
+    }
+
+    fn text(v: &RowValue) -> Option<&str> {
+        match v {
+            RowValue::Text(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_stamps_every_change_with_business_day_and_fy() {
+        let f = bootstrapped().await;
+        // T0 is 2027-01-15 13:30 in Kolkata.
+        let changes = reopen(&f).changes().unwrap();
+        assert_eq!(changes.len(), bootstrap_changes());
+        for c in &changes {
+            assert_eq!(
+                (c.business_day.clone(), c.fy.clone()),
+                day("2027-01-15"),
+                "{}",
+                c.row_id
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bad_currency_and_bad_tz_fail_on_the_value_and_write_nothing() {
+        let f = bootstrapped().await;
+        let before = snapshot(&f);
+        for (key, value) in [
+            ("branch.currency", "XYZ"),
+            ("branch.tz", "Mars/Base"),
+            ("branch.symbol_position", "middle"),
+            ("branch.number_format", "roman"),
+            ("branch.day_start_min", "1440"),
+            ("branch.fy_start_month", "13"),
+        ] {
+            let err = save(&f, key, value).await.unwrap_err();
+            assert_eq!(
+                (err.code, err.field.as_deref()),
+                (ErrorCode::ValidationFailed, Some("value")),
+                "{key}={value}"
+            );
+        }
+        let after = snapshot(&f);
+        assert_eq!(
+            (&after.0, &after.1, &after.2),
+            (&before.0, &before.1, &before.2),
+            "no rows and no change rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn other_locale_keys_apply_at_once() {
+        let f = bootstrapped().await;
+        save(&f, "branch.currency", "KWD").await.unwrap();
+        save(&f, "branch.symbol_position", "after").await.unwrap();
+        save(&f, "branch.number_format", "international")
+            .await
+            .unwrap();
+        let row = setting(&reopen(&f), "branch.currency");
+        assert_eq!(row["value"], RowValue::Text("KWD".into()));
+        assert_eq!(
+            (&row["prior_value"], &row["effective_from"]),
+            (&RowValue::Null, &RowValue::Null)
+        );
+        let locale = SnapshotReader::open(&f.path)
+            .unwrap()
+            .locale(f.clock.now_ms())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                locale.currency.as_str(),
+                locale.exponent,
+                locale.symbol.as_str()
+            ),
+            ("KWD", 3, "KD")
+        );
+        assert_eq!(locale.symbol_position, arena_proto::SymbolPosition::After);
+        assert_eq!(
+            locale.number_format,
+            arena_proto::NumberFormat::International
+        );
+        assert_eq!(locale.pending, None);
+    }
+
+    #[tokio::test]
+    async fn a_tz_change_during_d_stamps_d_under_the_old_rules_until_d_plus_one() {
+        let f = bootstrapped().await;
+        let reader = SnapshotReader::open(&f.path).unwrap();
+        f.clock.set(at(IST, "2027-01-15 14:00"));
+        save(&f, "branch.tz", "Asia/Dubai").await.unwrap();
+        let row = setting(&reopen(&f), "branch.tz");
+        assert_eq!(text(&row["value"]), Some("Asia/Dubai"));
+        assert_eq!(text(&row["prior_value"]), Some("Asia/Kolkata"));
+        assert_eq!(text(&row["effective_from"]), Some("2027-01-16"));
+        assert_eq!(last_stamp(&f), day("2027-01-15"));
+        let now = reader.locale(f.clock.now_ms()).unwrap().unwrap();
+        assert_eq!(now.tz, "Asia/Kolkata");
+        let pending = now.pending.unwrap();
+        assert_eq!(
+            pending.tz.map(|t| (t.value, t.effective_from)),
+            Some(("Asia/Dubai".to_owned(), "2027-01-16".to_owned()))
+        );
+
+        // The rest of D, up to Kolkata's 06:00 day start, is still D.
+        for local in ["2027-01-15 23:59", "2027-01-16 05:59"] {
+            f.clock.set(at(IST, local));
+            save(&f, "receipt.footer", local).await.unwrap();
+            assert_eq!(last_stamp(&f), day("2027-01-15"), "{local}");
+        }
+        // 06:00 in Kolkata (04:30 in Dubai) starts D+1, now under Dubai rules.
+        f.clock.set(at(IST, "2027-01-16 06:00"));
+        save(&f, "receipt.footer", "d+1").await.unwrap();
+        assert_eq!(last_stamp(&f), day("2027-01-16"));
+        let now = reader.locale(f.clock.now_ms()).unwrap().unwrap();
+        assert_eq!((now.tz.as_str(), now.pending), ("Asia/Dubai", None));
+        // Dubai's day start decides from here on.
+        f.clock.set(at(GST, "2027-01-17 05:59"));
+        save(&f, "receipt.footer", "late").await.unwrap();
+        assert_eq!(last_stamp(&f), day("2027-01-16"));
+        f.clock.set(at(GST, "2027-01-17 06:00"));
+        save(&f, "receipt.footer", "d+2").await.unwrap();
+        assert_eq!(last_stamp(&f), day("2027-01-17"));
+        // The earlier rows were not restamped.
+        let days: Vec<_> = reopen(&f)
+            .changes()
+            .unwrap()
+            .into_iter()
+            .rev()
+            .take(5)
+            .map(|c| c.business_day.unwrap())
+            .collect();
+        assert_eq!(
+            days,
+            [
+                "2027-01-17",
+                "2027-01-16",
+                "2027-01-16",
+                "2027-01-15",
+                "2027-01-15"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_change_while_one_waits_keeps_the_prior_value() {
+        let f = bootstrapped().await;
+        save(&f, "branch.tz", "Asia/Dubai").await.unwrap();
+        save(&f, "branch.tz", "UTC").await.unwrap();
+        let row = setting(&reopen(&f), "branch.tz");
+        assert_eq!(text(&row["value"]), Some("UTC"));
+        assert_eq!(text(&row["prior_value"]), Some("Asia/Kolkata"));
+        assert_eq!(text(&row["effective_from"]), Some("2027-01-16"));
+        // Back to the value in effect: nothing waits.
+        save(&f, "branch.tz", "Asia/Kolkata").await.unwrap();
+        let row = setting(&reopen(&f), "branch.tz");
+        assert_eq!(text(&row["value"]), Some("Asia/Kolkata"));
+        assert_eq!(
+            (&row["prior_value"], &row["effective_from"]),
+            (&RowValue::Null, &RowValue::Null)
+        );
+        // A day start change waits as well; once its day has come, a new change waits for
+        // the day after that, with the then-current value as its prior.
+        save(&f, "branch.day_start_min", "0").await.unwrap();
+        let row = setting(&reopen(&f), "branch.day_start_min");
+        assert_eq!(text(&row["prior_value"]), Some("360"));
+        assert_eq!(text(&row["effective_from"]), Some("2027-01-16"));
+        f.clock.set(at(IST, "2027-01-16 12:00"));
+        save(&f, "branch.day_start_min", "120").await.unwrap();
+        let row = setting(&reopen(&f), "branch.day_start_min");
+        assert_eq!(text(&row["value"]), Some("120"));
+        assert_eq!(text(&row["prior_value"]), Some("0"));
+        assert_eq!(text(&row["effective_from"]), Some("2027-01-17"));
+    }
+
+    #[tokio::test]
+    async fn a_minute_before_day_start_belongs_to_the_previous_date() {
+        let f = bootstrapped().await;
+        f.clock.set(at(IST, "2027-01-16 05:59"));
+        save(&f, "receipt.footer", "x").await.unwrap();
+        assert_eq!(last_stamp(&f), day("2027-01-15"));
+        f.clock.set(at(IST, "2027-01-16 06:00"));
+        save(&f, "receipt.footer", "y").await.unwrap();
+        assert_eq!(last_stamp(&f), day("2027-01-16"));
+    }
+
+    #[tokio::test]
+    async fn the_financial_year_turns_on_the_start_month() {
+        let f = bootstrapped().await;
+        f.clock.set(at(IST, "2027-03-31 12:00"));
+        save(&f, "receipt.footer", "march").await.unwrap();
+        assert_eq!(
+            last_stamp(&f),
+            (Some("2027-03-31".into()), Some("FY2026-27".into()))
+        );
+        f.clock.set(at(IST, "2027-04-01 12:00"));
+        save(&f, "receipt.footer", "april").await.unwrap();
+        assert_eq!(
+            last_stamp(&f),
+            (Some("2027-04-01".into()), Some("FY2027-28".into()))
+        );
+        // A new start month waits for the next business day: the 1st keeps one FY label.
+        save(&f, "branch.fy_start_month", "1").await.unwrap();
+        assert_eq!(
+            last_stamp(&f),
+            (Some("2027-04-01".into()), Some("FY2027-28".into()))
+        );
+        let row = setting(&reopen(&f), "branch.fy_start_month");
+        assert_eq!(text(&row["effective_from"]), Some("2027-04-02"));
+        f.clock.set(at(IST, "2027-04-02 12:00"));
+        save(&f, "receipt.footer", "next day").await.unwrap();
+        assert_eq!(
+            last_stamp(&f),
+            (Some("2027-04-02".into()), Some("FY2027".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_locale_save_is_refused_and_changes_nothing() {
+        let f = bootstrapped().await;
+        save(&f, "branch.currency", "USD").await.unwrap();
+        let before = snapshot(&f);
+        let mut intent = set("branch.currency", "EUR", Some(1));
+        intent.issued_at = f.clock.now_ms();
+        let err = f.writer.submit_intent(intent).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::Stale);
+        let after = snapshot(&f);
+        assert_eq!((&after.1, &after.2), (&before.1, &before.2));
+    }
+}
+
+// ---- branch.seed_defaults: upgraded branches get the rows they lack ----
+
+mod seed_defaults {
+    use super::*;
+
+    /// Makes the branch look like one bootstrapped before 0005/0006: no `branch.*` settings and
+    /// no roles (or, with `partial`, one built-in permission row gone).
+    async fn strip(f: &Fixture, partial: bool) {
+        f.writer
+            .submit(move |tx| {
+                let sql = if partial {
+                    "DELETE FROM role_perms WHERE permission = 'settings.edit' AND role_id =
+                         (SELECT role_id FROM roles WHERE name = 'Manager')"
+                } else {
+                    "DELETE FROM settings WHERE key LIKE 'branch.%';
+                     DELETE FROM role_perms; DELETE FROM roles;"
+                };
+                tx.execute_batch(sql).map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_upgraded_branch_gets_its_locale_keys_and_roles_once() {
+        let mut f = bootstrapped().await;
+        strip(&f, false).await;
+        let before = reopen(&f).changes().unwrap().len();
+        let applied = f.writer.seed_defaults().await.unwrap().unwrap();
+        assert_eq!(f.events.try_recv().unwrap(), applied);
+        let roles: usize = crate::rbac::BUILTIN_ROLES
+            .iter()
+            .map(|r| 1 + crate::rbac::builtin_perms(r).len())
+            .sum();
+        assert_eq!(applied.changes.len(), crate::LOCALE_KEYS.len() + roles);
+        let s = reopen(&f);
+        let changes = s.changes().unwrap();
+        assert_eq!(changes.len(), before + applied.changes.len());
+        for c in &changes[before..] {
+            assert_eq!(c.intent_kind, "branch.seed_defaults");
+            assert_eq!(c.actor_kind, "system");
+            assert_eq!(c.op, ChangeOp::Insert);
+            assert_eq!(c.business_day.as_deref(), Some("2027-01-15"));
+        }
+        // The values come from the branch row's columns.
+        for (key, value) in [
+            ("branch.currency", "INR"),
+            ("branch.number_format", "indian"),
+            ("branch.tz", "Asia/Kolkata"),
+            ("branch.day_start_min", "360"),
+            ("branch.fy_start_month", "4"),
+        ] {
+            assert_eq!(
+                setting(&s, key)["value"],
+                RowValue::Text(value.into()),
+                "{key}"
+            );
+        }
+        assert_eq!(s.rows(Table::Roles).unwrap().len(), 5);
+        // Nothing missing now: no intent, no change rows.
+        assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
+        assert_eq!(reopen(&f).changes().unwrap().len(), changes.len());
+        assert!(f.events.try_recv().is_err());
+        // And the seeded keys are editable.
+        let mut edit = set("branch.currency", "USD", Some(1));
+        edit.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(edit).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_missing_builtin_permission_row_is_added_back() {
+        let f = bootstrapped().await;
+        strip(&f, true).await;
+        let applied = f.writer.seed_defaults().await.unwrap().unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        assert_eq!(applied.changes[0].tbl, "role_perms");
+        assert!(applied.changes[0].row_id.ends_with("settings.edit"));
+    }
+
+    #[tokio::test]
+    async fn nothing_missing_or_no_branch_submits_nothing() {
+        let f = primary_long_lease();
+        assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
+        let f = bootstrapped().await;
+        assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
+        // Submitted by hand with nothing missing, the intent is refused and writes nothing.
+        let before = snapshot(&f);
+        let mut intent = intent_with(ActorKind::System, payload());
+        intent.kind = IntentKind::BranchSeedDefaults;
+        intent.payload =
+            IntentPayload::BranchSeedDefaults(arena_proto::BranchSeedDefaults::default());
+        let err = expect_err(&f, intent).await;
+        assert_eq!(err.code, ErrorCode::AlreadyBootstrapped);
+        let after = snapshot(&f);
+        assert_eq!((&after.1, &after.2), (&before.1, &before.2));
+        // Only the system may run it.
+        let mut intent = intent_with(ActorKind::Owner, payload());
+        intent.kind = IntentKind::BranchSeedDefaults;
+        intent.payload =
+            IntentPayload::BranchSeedDefaults(arena_proto::BranchSeedDefaults::default());
+        assert_eq!(
+            expect_err(&f, intent).await.code,
+            ErrorCode::PermissionDenied
+        );
     }
 }

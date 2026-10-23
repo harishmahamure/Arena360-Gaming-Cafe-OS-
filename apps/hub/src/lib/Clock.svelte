@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { formatTime } from "@arena/ui/format";
   import { onMount } from "svelte";
+  import { branchLocale } from "./locale.svelte";
 
-  // Local time through `Intl` in the runtime's default locale (branch locale arrives in 1.12).
-  const format = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-
+  // The time in the branch time zone (the runtime's own until the snapshot names one), in the
+  // runtime's language. A tz change applies with the business day it takes effect on.
   let now = $state(new Date());
+  const label = $derived(formatTime(now, branchLocale.current?.tz));
 
   onMount(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -31,7 +33,7 @@
 </script>
 
 <time class="clock type-hub-title" datetime={now.toISOString()} data-testid="hub-clock"
-  >{format.format(now)}</time
+  >{label}</time
 >
 
 <style>

@@ -10,6 +10,11 @@
 //! Pruning is a maintenance write outside `apply()`: dedupe records are not branch rows, so it
 //! writes no change rows and is not audited. Intents expire after 7 days, so a pruned key can
 //! no longer be applied anyway.
+//!
+//! Each time this Hub becomes primary (and at start, if it already is), the task also runs
+//! [`WriterHandle::seed_defaults`] once: an upgraded branch gets the default settings and
+//! built-in roles it lacks through `apply()` (`branch.seed_defaults`); with nothing missing no
+//! intent is submitted.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,12 +104,29 @@ impl HousekeepingTask {
         }
     }
 
+    /// Seeds missing default rows (see the module docs); logs the outcome.
+    pub async fn seed_and_log(&self) {
+        if !self.is_primary() {
+            return;
+        }
+        match self.writer.seed_defaults().await {
+            Ok(Some(applied)) => tracing::info!(
+                rows = applied.changes.len(),
+                "branch.seed_defaults: missing default rows added"
+            ),
+            Ok(None) => {}
+            Err(e) if e.code == ErrorCode::NotPrimary => {}
+            Err(e) => tracing::warn!(code = e.code.as_str(), "branch.seed_defaults failed"),
+        }
+    }
+
     /// Runs at once, then every interval and on each promotion to primary, until the writer
     /// closes (or the status channel does).
     pub async fn run(mut self) {
         let mut interval = tokio::time::interval_at(Instant::now(), self.interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut was_primary = self.is_primary();
+        self.seed_and_log().await;
         while !self.writer.is_closed() {
             tokio::select! {
                 _ = interval.tick() => self.tick_and_log().await,
@@ -114,6 +136,7 @@ impl HousekeepingTask {
                     }
                     let primary = self.is_primary();
                     if primary && !was_primary {
+                        self.seed_and_log().await;
                         self.tick_and_log().await;
                     }
                     was_primary = primary;
@@ -304,6 +327,85 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), f.task.run())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_upgraded_branch_is_seeded_at_start_and_its_settings_are_editable() {
+        use arena_core::SnapshotReader;
+        use arena_proto::{Actor, ActorKind, Intent, IntentKind, IntentPayload, SettingsSet};
+        use arena_store::{NewBranch, insert_branch};
+        // A branch from before 0005/0006: the branch row only, no settings, no roles.
+        let f = fixture(Role::Primary);
+        Store::open(&f.path, NOW)
+            .unwrap()
+            .write_tx(|tx| {
+                insert_branch(
+                    tx,
+                    &NewBranch {
+                        branch_id: "B",
+                        name: "Old Branch",
+                        branch_code: "OLD01",
+                        currency: "USD",
+                        tz: "Asia/Dubai",
+                        day_start_min: 300,
+                        fy_start_month: 1,
+                    },
+                )
+            })
+            .unwrap();
+        let path = f.path.clone();
+        let writer = f.task.writer.clone();
+        let _runner = tokio::spawn(f.task.run());
+        let reader = SnapshotReader::open(&path).unwrap();
+        assert!(
+            eventually(|| reader
+                .settings()
+                .unwrap()
+                .iter()
+                .any(|s| s.key == "branch.tz" && s.value == "Asia/Dubai"))
+            .await
+        );
+        let settings = reader.settings().unwrap();
+        for key in arena_core::LOCALE_KEYS {
+            assert!(settings.iter().any(|s| s.key == key), "{key}");
+        }
+        let store = Store::open(&path, NOW).unwrap();
+        assert_eq!(store.rows(arena_store::Table::Roles).unwrap().len(), 5);
+        assert!(
+            store
+                .changes()
+                .unwrap()
+                .iter()
+                .all(|c| c.intent_kind == "branch.seed_defaults")
+        );
+        // Settings → Branch can now save.
+        let currency = settings
+            .iter()
+            .find(|s| s.key == "branch.currency")
+            .unwrap();
+        assert_eq!(currency.value, "USD");
+        let intent = Intent {
+            intent_id: "01JAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            kind: IntentKind::SettingsSet,
+            idempotency_key: "01JAAAAAAAAAAAAAAAAAAAAAAB".into(),
+            issued_at: NOW,
+            base_rev: Some(currency.rev),
+            actor: Actor {
+                kind: ActorKind::Owner,
+                id: "owner".into(),
+            },
+            elevated_by: None,
+            payload: IntentPayload::SettingsSet(SettingsSet {
+                key: "branch.currency".into(),
+                value: "EUR".into(),
+            }),
+        };
+        writer.submit_intent(intent).await.unwrap();
+        assert_eq!(
+            reader.locale(NOW).unwrap().unwrap().currency,
+            "EUR",
+            "the edit applied"
+        );
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@
 mod apply;
 mod clock;
 pub mod devices;
+pub mod locale;
 pub mod rbac;
 mod settings_defaults;
 mod snapshot;
@@ -15,13 +16,17 @@ use arena_proto::AppError;
 use arena_store::{META_HUB_INSTANCE_ID, Store, insert_meta_if_absent, set_meta};
 
 pub use apply::{
-    Applied, ApplyCtx, ChangeMeta, INTENT_TTL_MS, KNOWN_CURRENCIES, MAX_CLOCK_SKEW_MS,
-    MAX_SETTING_VALUE_CHARS, MAX_VERSION_LEN, apply, emit, fingerprint, is_ulid, validate_frame,
+    Applied, ApplyCtx, ChangeMeta, INTENT_TTL_MS, MAX_CLOCK_SKEW_MS, MAX_SETTING_VALUE_CHARS,
+    MAX_VERSION_LEN, apply, emit, fingerprint, is_ulid, validate_frame,
 };
 pub use arena_store::{ChangeOp, META_TLS_FINGERPRINT};
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use devices::{DeviceDirectory, VerifiedDevice};
-pub use settings_defaults::{DEFAULT_SETTINGS, SETTING_RULES, SettingRule, setting_rule};
+pub use settings_defaults::{
+    DEFAULT_SETTINGS, DEFERRED_KEYS, KEY_CURRENCY, KEY_DAY_START_MIN, KEY_FY_START_MONTH,
+    KEY_NUMBER_FORMAT, KEY_SYMBOL_POSITION, KEY_TZ, LOCALE_KEYS, SETTING_RULES, SettingRule,
+    bootstrap_locale_settings, setting_rule,
+};
 pub use snapshot::{SnapshotReader, build_snapshot, read_snapshot};
 pub use staff::StaffDirectory;
 pub use status::{Epoch, HubStatus, LeaseInfo, Role, status_channel};

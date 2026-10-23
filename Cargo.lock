@@ -89,6 +89,7 @@ dependencies = [
  "arena-replay",
  "arena-store",
  "argon2",
+ "chrono",
  "chrono-tz",
  "proptest",
  "rmp-serde",
@@ -171,6 +172,7 @@ dependencies = [
 name = "arena-proto"
 version = "0.1.0"
 dependencies = [
+ "chrono-tz",
  "serde",
  "serde_json",
  "ts-rs",

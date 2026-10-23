@@ -220,6 +220,11 @@ pub struct ChangeRecord {
     pub elevated_by_mode: Option<String>,
     pub elevated_by_verifier_version: Option<i64>,
     pub at: i64,
+    /// The business day (`YYYY-MM-DD`) the change belongs to, under the branch locale then in
+    /// effect; `None` before the branch exists and on rows written before migration 0006.
+    pub business_day: Option<String>,
+    /// The financial year of `business_day`, e.g. `FY2026-27`.
+    pub fy: Option<String>,
 }
 
 /// A new branch row (`rev` and timestamps are set by the stamp step).
@@ -259,6 +264,34 @@ pub fn find_branch_summary(conn: &Connection) -> Result<Option<BranchSummary>, A
                 branch_id: r.get(0)?,
                 name: r.get(1)?,
                 branch_code: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// The locale columns of the branch row: the bootstrap values (the `branch.*` settings are
+/// authoritative once they exist).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchLocale {
+    pub currency: String,
+    pub tz: String,
+    pub day_start_min: u16,
+    pub fy_start_month: u8,
+}
+
+/// The branch's locale columns, if it has been bootstrapped.
+pub fn find_branch_locale(conn: &Connection) -> Result<Option<BranchLocale>, AppError> {
+    conn.query_row(
+        "SELECT currency, tz, day_start_min, fy_start_month FROM branch LIMIT 1",
+        [],
+        |r| {
+            Ok(BranchLocale {
+                currency: r.get(0)?,
+                tz: r.get(1)?,
+                day_start_min: r.get(2)?,
+                fy_start_month: r.get(3)?,
             })
         },
     )
@@ -320,19 +353,25 @@ pub fn insert_setting(
     Ok(())
 }
 
-/// The key and `rev` of one existing setting.
+/// One existing setting: its key, `rev`, value and any deferred change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingRef {
     pub branch_id: String,
     pub key: String,
     pub rev: i64,
+    pub value: String,
+    /// The value in effect before `effective_from` (a deferred change), if any.
+    pub prior_value: Option<String>,
+    /// The business day (`YYYY-MM-DD`) from which `value` applies, if deferred.
+    pub effective_from: Option<String>,
 }
 
 /// The branch's setting `key`, if it exists. A database holds one branch, so the key alone
 /// identifies the row.
 pub fn find_setting(conn: &Connection, key: &str) -> Result<Option<SettingRef>, AppError> {
     conn.query_row(
-        "SELECT s.branch_id, s.key, s.rev FROM settings s
+        "SELECT s.branch_id, s.key, s.rev, s.value, s.prior_value, s.effective_from
+         FROM settings s
          JOIN branch b ON b.branch_id = s.branch_id
          WHERE s.key = ?1",
         [key],
@@ -341,6 +380,9 @@ pub fn find_setting(conn: &Connection, key: &str) -> Result<Option<SettingRef>, 
                 branch_id: r.get(0)?,
                 key: r.get(1)?,
                 rev: r.get(2)?,
+                value: r.get(3)?,
+                prior_value: r.get(4)?,
+                effective_from: r.get(5)?,
             })
         },
     )
@@ -354,13 +396,15 @@ pub struct SettingRow {
     pub key: String,
     pub value: String,
     pub rev: i64,
+    pub prior_value: Option<String>,
+    pub effective_from: Option<String>,
 }
 
 /// Every setting of the branch, ordered by key (empty before bootstrap).
 pub fn list_settings(conn: &Connection) -> Result<Vec<SettingRow>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT s.key, s.value, s.rev FROM settings s
+            "SELECT s.key, s.value, s.rev, s.prior_value, s.effective_from FROM settings s
              JOIN branch b ON b.branch_id = s.branch_id ORDER BY s.key",
         )
         .map_err(db_error)?;
@@ -370,24 +414,40 @@ pub fn list_settings(conn: &Connection) -> Result<Vec<SettingRow>, AppError> {
                 key: r.get(0)?,
                 value: r.get(1)?,
                 rev: r.get(2)?,
+                prior_value: r.get(3)?,
+                effective_from: r.get(4)?,
             })
         })
         .map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
-/// Sets one setting's `value` (the stamp step then bumps `rev` and `updated_at`). Fails
-/// `INTERNAL` if the row does not exist.
+/// Sets one setting's `value` and clears any deferred change (the stamp step then bumps `rev`
+/// and `updated_at`). Fails `INTERNAL` if the row does not exist.
 pub fn update_setting_value(
     conn: &Connection,
     branch_id: &str,
     key: &str,
     value: &str,
 ) -> Result<(), AppError> {
+    update_setting(conn, branch_id, key, value, None, None)
+}
+
+/// Sets one setting's `value`, `prior_value` and `effective_from` (both `None` for a change
+/// that applies at once). Fails `INTERNAL` if the row does not exist.
+pub fn update_setting(
+    conn: &Connection,
+    branch_id: &str,
+    key: &str,
+    value: &str,
+    prior_value: Option<&str>,
+    effective_from: Option<&str>,
+) -> Result<(), AppError> {
     let n = conn
         .execute(
-            "UPDATE settings SET value = ?3 WHERE branch_id = ?1 AND key = ?2",
-            params![branch_id, key, value],
+            "UPDATE settings SET value = ?3, prior_value = ?4, effective_from = ?5
+             WHERE branch_id = ?1 AND key = ?2",
+            params![branch_id, key, value, prior_value, effective_from],
         )
         .map_err(db_error)?;
     if n != 1 {
@@ -538,8 +598,9 @@ pub fn insert_change(conn: &Connection, c: &ChangeRecord) -> Result<(), AppError
     conn.execute(
         "INSERT INTO changes (epoch, seq, tbl, row_id, op, row, intent_id, intent_kind,
                               actor_kind, actor_id, elevated_by_kind, elevated_by_id,
-                              elevated_by_mode, elevated_by_verifier_version, at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                              elevated_by_mode, elevated_by_verifier_version, at,
+                              business_day, fy)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             c.epoch,
             c.seq,
@@ -555,7 +616,9 @@ pub fn insert_change(conn: &Connection, c: &ChangeRecord) -> Result<(), AppError
             c.elevated_by_id,
             c.elevated_by_mode,
             c.elevated_by_verifier_version,
-            c.at
+            c.at,
+            c.business_day,
+            c.fy
         ],
     )
     .map_err(db_error)?;
@@ -568,7 +631,7 @@ pub fn read_changes(conn: &Connection) -> Result<Vec<ChangeRecord>, AppError> {
         .prepare(
             "SELECT epoch, seq, tbl, row_id, op, row, intent_id, intent_kind, actor_kind,
                     actor_id, elevated_by_kind, elevated_by_id, elevated_by_mode,
-                    elevated_by_verifier_version, at
+                    elevated_by_verifier_version, at, business_day, fy
              FROM changes
              ORDER BY CAST(substr(epoch, 1, instr(epoch, ':') - 1) AS INTEGER), epoch, seq",
         )
@@ -598,6 +661,8 @@ pub fn read_changes(conn: &Connection) -> Result<Vec<ChangeRecord>, AppError> {
                 elevated_by_mode: r.get(12)?,
                 elevated_by_verifier_version: r.get(13)?,
                 at: r.get(14)?,
+                business_day: r.get(15)?,
+                fy: r.get(16)?,
             })
         })
         .map_err(db_error)?;
@@ -722,6 +787,8 @@ mod tests {
             elevated_by_mode: None,
             elevated_by_verifier_version: None,
             at: 5,
+            business_day: Some("2027-01-01".into()),
+            fy: Some("FY2026-27".into()),
         }
     }
 
@@ -733,6 +800,8 @@ mod tests {
             .unwrap();
         for sql in [
             "UPDATE changes SET at = 6",
+            // No retroactive restamping either.
+            "UPDATE changes SET business_day = '2027-01-02'",
             "DELETE FROM changes",
             "DELETE FROM changes WHERE seq = 1",
         ] {
@@ -927,6 +996,25 @@ mod tests {
                 )?;
                 assert_eq!(row["value"], RowValue::Text("w".into()));
                 assert!(update_setting_value(tx, "B", "nope", "x").is_err());
+                update_setting(tx, "B", "k", "z", Some("w"), Some("2027-01-02"))?;
+                let found = find_setting(tx, "k")?.unwrap();
+                assert_eq!(found.value, "z");
+                assert_eq!(found.prior_value.as_deref(), Some("w"));
+                assert_eq!(found.effective_from.as_deref(), Some("2027-01-02"));
+                let listed = list_settings(tx)?;
+                assert_eq!(listed[0].prior_value.as_deref(), Some("w"));
+                update_setting_value(tx, "B", "k", "y")?;
+                let found = find_setting(tx, "k")?.unwrap();
+                assert_eq!((found.prior_value, found.effective_from), (None, None));
+                assert_eq!(
+                    find_branch_locale(tx)?,
+                    Some(BranchLocale {
+                        currency: "INR".into(),
+                        tz: "UTC".into(),
+                        day_start_min: 0,
+                        fy_start_month: 1,
+                    })
+                );
                 Ok(())
             })
             .unwrap();

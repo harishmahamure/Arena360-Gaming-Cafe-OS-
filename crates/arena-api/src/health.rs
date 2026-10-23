@@ -150,11 +150,19 @@ pub(crate) async fn ui_guard(
     res
 }
 
-async fn ui_snapshot(State(reader): State<Arc<SnapshotReader>>) -> axum::response::Response {
+#[derive(Clone)]
+struct SnapshotState {
+    reader: Arc<SnapshotReader>,
+    clock: Arc<dyn Clock>,
+}
+
+async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    let read = tokio::task::spawn_blocking(move || reader.snapshot()).await;
+    let now = state.clock.now_ms();
+    let reader = state.reader;
+    let read = tokio::task::spawn_blocking(move || reader.snapshot(now)).await;
     match read {
         Ok(Ok(snapshot)) => Json(snapshot).into_response(),
         Ok(Err(e)) => {
@@ -174,12 +182,12 @@ async fn ui_snapshot(State(reader): State<Arc<SnapshotReader>>) -> axum::respons
 }
 
 /// The local Hub UI's read API (merged into the loopback health server):
-/// `GET /ui/snapshot` returns a [`arena_proto::HubSnapshot`]. Only the [`UI_ALLOWED_ORIGINS`]
-/// may read it from a browser.
-pub fn ui_router(reader: Arc<SnapshotReader>) -> Router {
+/// `GET /ui/snapshot` returns a [`arena_proto::HubSnapshot`], its locale resolved at `clock`'s
+/// now. Only the [`UI_ALLOWED_ORIGINS`] may read it from a browser.
+pub fn ui_router(reader: Arc<SnapshotReader>, clock: Arc<dyn Clock>) -> Router {
     Router::new()
         .route("/ui/snapshot", get(ui_snapshot))
-        .with_state(reader)
+        .with_state(SnapshotState { reader, clock })
         .layer(axum::middleware::from_fn(ui_guard))
 }
 
@@ -434,7 +442,8 @@ mod tests {
             reader: Arc<SnapshotReader>,
             req: Request<Body>,
         ) -> (StatusCode, axum::http::HeaderMap, Value) {
-            let res = ui_router(reader).oneshot(req).await.unwrap();
+            let clock = Arc::new(ManualClock::new(1_800_000_000_000));
+            let res = ui_router(reader, clock).oneshot(req).await.unwrap();
             let status = res.status();
             let headers = res.headers().clone();
             let bytes = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
@@ -459,7 +468,18 @@ mod tests {
                 body,
                 json!({
                     "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
-                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null}]
+                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null}],
+                    "locale": {
+                        "currency": "INR",
+                        "exponent": 2,
+                        "symbol": "₹",
+                        "symbol_position": "before",
+                        "number_format": "indian",
+                        "tz": "Asia/Kolkata",
+                        "day_start_min": 360,
+                        "fy_start_month": 4,
+                        "pending": null
+                    }
                 })
             );
         }
@@ -469,7 +489,7 @@ mod tests {
             let (_dir, r) = reader(false);
             let (status, _, body) = send(r, get(None)).await;
             assert_eq!(status, StatusCode::OK);
-            assert_eq!(body, json!({"branch": null, "devices": []}));
+            assert_eq!(body, json!({"branch": null, "devices": [], "locale": null}));
         }
 
         #[tokio::test]

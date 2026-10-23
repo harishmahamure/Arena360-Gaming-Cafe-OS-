@@ -4,6 +4,7 @@
 //! `packages/ui/src/generated`.
 
 mod actor;
+pub mod currency;
 mod error;
 mod frame;
 mod intent;
@@ -21,12 +22,16 @@ pub use frame::{
     parse_json,
 };
 pub use intent::{
-    BranchBootstrap, DeviceRegister, DeviceRevoke, DeviceVersionReported, Intent, IntentCategory,
-    IntentKind, IntentPayload, PermEffect, RolePerm, RoleUpsert, SettingsSet, StaffUpsert,
+    BranchBootstrap, BranchSeedDefaults, DeviceRegister, DeviceRevoke, DeviceVersionReported,
+    Intent, IntentCategory, IntentKind, IntentPayload, PermEffect, RolePerm, RoleUpsert,
+    SettingsSet, StaffUpsert,
 };
 pub use permission::{Permission, Requirement};
 pub use scope::{ClientClass, class_scope, in_scope};
-pub use snapshot::{HubSnapshot, SnapshotBranch, SnapshotDevice};
+pub use snapshot::{
+    AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
+    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLocale, SymbolPosition,
+};
 pub use ui_auth::{SessionStaff, SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest};
 
 /// Returns this crate's name.

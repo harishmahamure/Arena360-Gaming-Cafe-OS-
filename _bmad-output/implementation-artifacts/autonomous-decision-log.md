@@ -142,3 +142,30 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - sessions expire after 12 h, are capped at 5 per staff member, and are re-checked against the staff row on every request;
   - logins are ASCII-only and role names are case-insensitive.
 - **Tooling note:** the session scratchpad directory went away mid-run, so review diffs now go to the gitignored `target/review/`.
+
+## Story 1.17: kiosk shell replacement and Windows lockdown
+
+- **Spec approval:** self-approved. Spec: `spec-1-17-kiosk-shell-replacement-and-windows-lockdown.md`.
+- **Mechanism:** a pure registry-operation plan, with an exact backup of the old values, applied to the player's `NTUSER.DAT` hive (loaded under `HKU`, or the live SID hive if the player is signed in). The executor sits behind a `RegistryBackend` trait, so it can be tested on any OS.
+- **Hiding drives:** `NoDrives`/`NoViewOnDrive` = `0x03FFFFFB` hides every letter except `C:`, which hides removable drives. Autorun is off via `NoDriveTypeAutoRun=0xFF` and `NoAutorun=1`.
+- **Player account:** created as a standard user with a random password that isn't stored. Auto-logon is out of scope (later).
+- **Uninstall:** restores the exact prior values and keeps the account.
+- **Hook:** swallows Win (and Win chords), Alt+F4, Alt+Tab, Alt+Esc, Ctrl+Esc and Alt+Space. Ctrl+Alt+Shift+A passes through for 1.20's admin exit.
+- **Validation limits:** real Windows behaviour is verified by 1.19's escape suite; here it's unit tests plus compiling on Windows.
+- **1.12 implementation choices, accepted:** validation errors use `field=value`; the session now carries a `permissions` list; a tz switch never sends the stamped day backwards; setting a pending value back to its old value cancels the pending change; a January FY start is labelled `FY2027`; a lagging SSE stream gets `resync`; `chrono =0.4.45` is pinned.
+
+## Story 1.18: kiosk process allow/block list
+
+- **Spec approval:** self-approved. Spec: `spec-1-18-kiosk-process-allow-block-list.md`.
+- **Rule format:** a JSON array of `{path_glob, signer?}`. "Signed path" means the full path matches and, when a signer is given, the Authenticode signature is valid and its subject CN matches.
+- **Default lists:** allow the kiosk app and service (Arena signer), a set of System32 essentials (Microsoft Windows signer) and WebView2. Block cmd, PowerShell/pwsh, regedit, Task Manager, mmc, explorer, control, msconfig, wscript/cscript and mshta.
+- **Delivery:** a new paired-scope LAN request, `settings.get`, limited to `kiosk.*` keys; changes are pushed through `settings.changed` to paired sessions only.
+- **Seeding existing branches:** an idempotent system intent at Hub start adds the two settings to a branch that was bootstrapped before this story.
+- **Watcher:** WMI `Win32_ProcessStartTrace` or ETW, whichever meets 200 ms; the implementer records the choice.
+- **1.12 review outcome:** 17 fixes, 1 rejection, 1 deferred (a currency exponent guard for the first money story). Key fixes:
+  - a new system intent `branch.seed_defaults` backfills missing settings and built-in roles on start or promotion; this also covers the pre-0005 roles gap rejected in 1.11;
+  - `fy_start_month` is deferred like tz;
+  - stale prior values are fixed;
+  - the rollover is pushed, and clients resync on reconnect;
+  - the tz picker uses a generated `timezones.json` from chrono-tz.
+- **Local tooling:** the marketing (Astro) build needs Node 22.23.4, and the local Node is 22.22.3. Story verification builds every app except marketing; CI uses the pinned Node.

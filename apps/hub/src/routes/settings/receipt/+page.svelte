@@ -3,13 +3,12 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount } from "svelte";
   import { invalidate } from "$app/navigation";
-  import ScreenPlaceholder from "../../lib/ScreenPlaceholder.svelte";
   import {
     SESSION_DEPENDENCY,
     loadSettings,
     newIdempotencyKey,
     submitIntent,
-  } from "../../lib/auth";
+  } from "../../../lib/auth";
 
   const KEY = "receipt.footer";
 
@@ -95,7 +94,8 @@
   });
 </script>
 
-<ScreenPlaceholder title="hub.nav.settings">
+<section class="receipt" aria-labelledby="settings-receipt-title">
+  <h2 class="type-hub-title" id="settings-receipt-title">{t("hub.settings.nav.receipt")}</h2>
   <form
     class="demo"
     data-testid="settings-receipt-footer"
@@ -146,9 +146,13 @@
       {/if}
     {/if}
   </form>
-</ScreenPlaceholder>
+</section>
 
 <style>
+  .receipt h2 {
+    margin: 0;
+  }
+
   .demo {
     display: grid;
     gap: var(--space-4);

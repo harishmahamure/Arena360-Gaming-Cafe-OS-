@@ -4,3 +4,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-8-idempotent-intents-optimistic-row-versions-and-property-test.md`
   summary: Replicate `applied_intents` (and other non-change-log tables) to the standby, so idempotent retries survive failover.
   evidence: `applied_intents` sits outside `changes`, so replay and replicas don't have it. A client retrying across a failover would re-run its intent. Settle this in the standby/replication epic.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-12-branch-locale-settings-currency-number-format-and-timezone.md`
+  summary: Guard `branch.currency` changes that alter the ISO 4217 exponent once money rows exist (refuse, or require a conversion step), so stored minor units keep their meaning.
+  evidence: No money tables exist in Epic 1. The first story that adds wallets, orders or prices must add the guard.

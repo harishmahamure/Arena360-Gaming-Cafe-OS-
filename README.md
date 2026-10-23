@@ -92,20 +92,22 @@ The three ports must differ. Tests pass free ports; production uses the defaults
 - **Health:** `GET 127.0.0.1:<port>/healthz` returns `db_open`, `role`, `lease`, `epoch`,
   `schema_version`, `self_instance_id`, `tls_fingerprint` and `now`. It binds loopback only.
 - **UI snapshot:** `GET 127.0.0.1:<port>/ui/snapshot` on the same loopback server returns
-  `HubSnapshot {branch: {name, branch_code} | null, devices: [{device_id, label, class, zone}]}`
-  (type in `arena-proto`; revoked devices are left out; `zone` is `null` until zones exist). It
+  `HubSnapshot {branch: {name, branch_code} | null, devices: [{device_id, label, class, zone}],
+locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` until zones
+  exist; `locale` is `null` before bootstrap, see **Branch locale** below). It
   reads through `arena-core` on its own read-only connection. CORS allows only
   `tauri://localhost`, `http(s)://tauri.localhost` and the vite origin `http://localhost:5173`;
   another `Origin`, or a `Host` that is not `127.0.0.1`/`localhost`/`[::1]`, gets 403.
 - **Staff auth (same loopback server and origin guard):**
 
-  | Endpoint                                  | Answer                                                                                                                                                                 |
-  | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `POST /ui/auth/sign-in {login, password}` | `{token, staff: {staff_id, display_name, role_name}}`, or 401 `AUTH_FAILED` with one fixed message whatever was wrong (unknown login, wrong password, inactive staff)  |
-  | `POST /ui/auth/sign-out` (bearer)         | 204; the token stops working                                                                                                                                           |
-  | `GET /ui/me` (bearer)                     | the session's staff, or 401 `AUTH_FAILED`                                                                                                                              |
-  | `POST /ui/intent {intent}` (bearer)       | `{applied}`; the intent runs as the session's `actor{staff, staff_id}` whatever actor was sent, and any `elevated_by` is dropped. Errors are `{code, message, field?}` |
-  | `GET /ui/settings` (bearer)               | `[{key, value, rev}]`, so an edit can carry `base_rev`                                                                                                                 |
+  | Endpoint                                  | Answer                                                                                                                                                                                                                                   |
+  | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `POST /ui/auth/sign-in {login, password}` | `{token, staff: {staff_id, display_name, role_name, permissions}}`, or 401 `AUTH_FAILED` with one fixed message whatever was wrong (unknown login, wrong password, inactive staff)                                                       |
+  | `POST /ui/auth/sign-out` (bearer)         | 204; the token stops working                                                                                                                                                                                                             |
+  | `GET /ui/me` (bearer)                     | the session's staff, or 401 `AUTH_FAILED`                                                                                                                                                                                                |
+  | `POST /ui/intent {intent}` (bearer)       | `{applied}`; the intent runs as the session's `actor{staff, staff_id}` whatever actor was sent, and any `elevated_by` is dropped. Errors are `{code, message, field?}`                                                                   |
+  | `GET /ui/settings` (bearer)               | `[{key, value, rev}]`, so an edit can carry `base_rev`                                                                                                                                                                                   |
+  | `GET /ui/events?token=<token>`            | server-sent events: `settings.changed` `{locale, keys}` when an intent wrote `settings`, `applied` `{intent_id}` for any other intent, `resync` when the stream fell behind. A bad token is 401; the stream closes once its session ends |
 
   Five consecutive failed sign-ins for a login (compared without case) pause it for 60 s: every
   attempt in that window gets 429 `AUTH_LOCKED` with `retry_after_s`, and a success resets the
@@ -116,6 +118,20 @@ The three ports must differ. Tests pass free ports; production uses the defaults
   role). A staff member holds at most 5 sessions; a sixth sign-in ends the oldest. A missing or
   unknown token is 401 `AUTH_FAILED`; signing out an unknown token is still 204.
 
+- **Branch locale:** the `branch.*` settings are authoritative (the `branch` row's columns are
+  only the bootstrap values), and `branch.bootstrap` seeds them from its payload:
+  `branch.currency` (ISO 4217, from `arena_proto::currency::CURRENCIES`),
+  `branch.symbol_position` (`before`), `branch.number_format` (`indian` for INR, otherwise
+  `international`), `branch.tz` (IANA), `branch.day_start_min` (0–1439) and
+  `branch.fy_start_month` (1–12). They are edited with `settings.set` (`settings.edit`).
+  `apply()` stamps every change row with its `business_day` (the local date of
+  `ts − day_start` in the branch tz) and `fy` (`FY2026-27` for an April start; `FY2027` for a
+  January one). A `branch.tz` or `branch.day_start_min` change saved during business day D keeps
+  the old value in `settings.prior_value` and applies from `effective_from` = D+1, so the rest
+  of D is stamped under the old rules; a second change while one waits keeps the original prior
+  value. Every other key applies at once. Existing rows are never restamped. The snapshot's
+  `locale` is `{currency, exponent, symbol, symbol_position, number_format, tz, day_start_min,
+fy_start_month, pending: {tz?, day_start_min?, effective_from} | null}`.
 - **Permissions:** every intent kind has one requirement (`IntentKind::requirement()` in
   `arena-proto`): a catalogue permission (`Permission`, dotted `domain.verb`), or the implicit
   `System`, `Device` or `Phone`. `apply()` checks it first: a `staff` actor needs an active staff
@@ -252,8 +268,18 @@ a placeholder. The root layout reads `/ui/snapshot` and `/ui/me` before the firs
 Hub service does not answer, it shows an error state with Retry. With nobody signed in every
 screen redirects to `/sign-in` (login and password, one generic failure message, a live
 countdown while locked out); after sign-in it opens `/floor`, and the header shows the staff
-member's name and role with a Sign out button. Settings carries one demo control, "Receipt
-footer", which submits `settings.set` with `base_rev`; a refusal shows inline next to it.
+member's name and role with a Sign out button. Settings has sections: **Branch** (currency with
+its symbol, symbol position, number format, time zone, business day start and financial year
+start month, with a live preview of 123456.78; Save submits one `settings.set` per changed field
+in order, each with its `base_rev`; field errors show inline, a STALE save shows the current
+value and asks to check it; a pending tz or day-start change says "Takes effect from {date}";
+without `settings.edit` the fields are read-only and Save says why) and **Receipt** (the
+"Receipt footer" control from Story 1.11). Every signed-in view listens to `/ui/events`: a
+`settings.changed` updates the branch locale (the header clock's time zone, formatted amounts
+and a Settings form with no unsaved edits) in every open window without a reload. Money is
+formatted only through `formatMoney(minor, locale)` from `@arena/ui/format` (exact integer
+maths; Indian or international grouping; a leading `−` for negatives), paired with the
+`.tabular-nums` class.
 
 ```sh
 cargo run -p arena-hub --features dev-fixtures -- dev seed --data-dir /tmp/hub
@@ -338,6 +364,7 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | ulid                         | =3.0.0        | `Cargo.toml`          |
 | rmp-serde                    | =1.3.1        | `Cargo.toml`          |
 | chrono-tz                    | =0.10.4       | `Cargo.toml`          |
+| chrono                       | =0.4.45       | `Cargo.toml`          |
 | sha2                         | =0.10.9       | `Cargo.toml`          |
 | tokio-tungstenite            | =0.30.0       | `Cargo.toml`          |
 | rustls                       | =0.23.46      | `Cargo.toml`          |
@@ -354,7 +381,9 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 - **Type generator: ts-rs.** Protocol types live in `crates/arena-proto` and derive `TS`. Run
   `pnpm gen:types` after changing them: it runs `cargo test -p arena-proto --features export-ts`
   with `TS_RS_EXPORT_DIR` pointing at a temp folder, writes the `index.ts` barrel, formats the
-  output and only then replaces `packages/ui/src/generated`. Plain `cargo test` exports nothing.
+  output and only then replaces `packages/ui/src/generated`. The same run writes
+  `currencies.json` from `arena_proto::currency::CURRENCIES` (code, exponent, symbol), which
+  `@arena/ui/format` reads. Plain `cargo test` exports nothing.
   Commit the output. Import protocol types only from `@arena/ui/generated`.
 - **Messages.** All user-visible text lives in `packages/ui/src/messages/en.json` (flat dotted
   keys, `{name}` placeholders) and is read with `t(key, params?)` from `@arena/ui`. Exempt a line

@@ -1,6 +1,6 @@
 // Reads the branch snapshot from the local Hub service over loopback (`GET /ui/snapshot`).
 
-import type { HubSnapshot } from "@arena/ui/generated";
+import type { HubSnapshot, SnapshotLocale } from "@arena/ui/generated";
 
 /** The Hub service's loopback snapshot endpoint (the Tauri CSP allows only this host). */
 export const SNAPSHOT_URL = "http://127.0.0.1:7409/ui/snapshot";
@@ -20,7 +20,8 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
     if (!res.ok) return { ok: false };
     const snapshot: unknown = await res.json();
     if (!isHubSnapshot(snapshot)) return { ok: false };
-    return { ok: true, snapshot };
+    // A Hub from before branch locales sends no `locale`: treat it as not set up.
+    return { ok: true, snapshot: { ...snapshot, locale: snapshot.locale ?? null } };
   } catch {
     return { ok: false };
   }
@@ -29,10 +30,39 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 const isString = (v: unknown): v is string => typeof v === "string";
+const isInt = (v: unknown, min: number, max: number): v is number =>
+  typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
+
+/** Whether `v` has the `SnapshotLocale` shape (the branch locale block). */
+export function isSnapshotLocale(v: unknown): v is SnapshotLocale {
+  if (!isObject(v)) return false;
+  const p = v.pending;
+  const entry = (e: unknown, ok: (value: unknown) => boolean) =>
+    e === undefined || (isObject(e) && isString(e.effective_from) && ok(e.value));
+  const pendingOk =
+    p === null ||
+    p === undefined ||
+    (isObject(p) &&
+      entry(p.tz, isString) &&
+      entry(p.day_start_min, (x) => isInt(x, 0, 1439)) &&
+      entry(p.fy_start_month, (x) => isInt(x, 1, 12)));
+  return (
+    isString(v.currency) &&
+    isInt(v.exponent, 0, 6) &&
+    isString(v.symbol) &&
+    (v.symbol_position === "before" || v.symbol_position === "after") &&
+    (v.number_format === "indian" || v.number_format === "international") &&
+    isString(v.tz) &&
+    isInt(v.day_start_min, 0, 1439) &&
+    isInt(v.fy_start_month, 1, 12) &&
+    pendingOk
+  );
+}
 
 /**
  * Whether `v` has the `HubSnapshot` shape: `branch` is null or `{name, branch_code}` strings,
- * and each device has string `device_id`, `label` and `class` and a string-or-null `zone`.
+ * each device has string `device_id`, `label` and `class` and a string-or-null `zone`, and
+ * `locale` is null, absent or a `SnapshotLocale`.
  * Anything else is treated like an unreachable Hub.
  */
 export function isHubSnapshot(v: unknown): v is HubSnapshot {
@@ -40,8 +70,10 @@ export function isHubSnapshot(v: unknown): v is HubSnapshot {
   const branchOk =
     v.branch === null ||
     (isObject(v.branch) && isString(v.branch.name) && isString(v.branch.branch_code));
+  const localeOk = v.locale === null || v.locale === undefined || isSnapshotLocale(v.locale);
   return (
     branchOk &&
+    localeOk &&
     v.devices.every(
       (d) =>
         isObject(d) &&

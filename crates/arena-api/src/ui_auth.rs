@@ -143,6 +143,13 @@ pub struct UiAuth {
     clock: Arc<dyn Clock>,
     lockout: Mutex<Lockout>,
     sessions: Mutex<HashMap<String, Session>>,
+    /// Bumped whenever a session ends, so open `/ui/events` streams re-check theirs.
+    ended: tokio::sync::watch::Sender<u64>,
+    /// The Hub's role: `/ui/events` streams are reset when it changes.
+    status: Option<tokio::sync::watch::Receiver<arena_core::HubStatus>>,
+    events_config: crate::ui_events::EventsConfig,
+    /// The shared `/ui/events` fan-out, started by the first stream.
+    events: std::sync::OnceLock<Arc<crate::ui_events::EventsHub>>,
 }
 
 impl std::fmt::Debug for UiAuth {
@@ -167,7 +174,79 @@ impl UiAuth {
             clock,
             lockout: Mutex::new(Lockout::default()),
             sessions: Mutex::new(HashMap::new()),
+            ended: tokio::sync::watch::channel(0).0,
+            status: None,
+            events_config: crate::ui_events::EventsConfig::default(),
+            events: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Resets `/ui/events` streams whenever this Hub's role changes (promotion or demotion), so
+    /// clients reopen them against the new writer.
+    pub fn with_status(
+        mut self,
+        status: tokio::sync::watch::Receiver<arena_core::HubStatus>,
+    ) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    /// Overrides the `/ui/events` timings and buffer (tests).
+    pub fn with_events_config(mut self, config: crate::ui_events::EventsConfig) -> Self {
+        self.events_config = config;
+        self
+    }
+
+    pub(crate) fn events_config(&self) -> &crate::ui_events::EventsConfig {
+        &self.events_config
+    }
+
+    pub(crate) fn status(&self) -> Option<&tokio::sync::watch::Receiver<arena_core::HubStatus>> {
+        self.status.as_ref()
+    }
+
+    pub(crate) fn events_hub(&self) -> &std::sync::OnceLock<Arc<crate::ui_events::EventsHub>> {
+        &self.events
+    }
+
+    /// The cheap per-event check: the session is still in the map and within its 12 h (no
+    /// database read). An expired session is dropped.
+    pub(crate) fn session_live(&self, token: &str) -> bool {
+        let now = self.clock.now_ms();
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return false;
+        };
+        match sessions.get(token) {
+            Some(s) if now - s.created_at < SESSION_TTL_MS => true,
+            Some(_) => {
+                sessions.remove(token);
+                drop(sessions);
+                self.session_ended();
+                false
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn clock(&self) -> &Arc<dyn Clock> {
+        &self.clock
+    }
+
+    pub(crate) fn reader(&self) -> &Arc<SnapshotReader> {
+        &self.reader
+    }
+
+    pub(crate) fn writer(&self) -> Option<&WriterHandle> {
+        self.writer.as_ref()
+    }
+
+    /// A receiver that changes whenever a session ends.
+    pub(crate) fn session_ends(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.ended.subscribe()
+    }
+
+    fn session_ended(&self) {
+        self.ended.send_modify(|n| *n = n.wrapping_add(1));
     }
 
     /// The session behind the bearer token. Each call re-reads the staff row: a session past
@@ -175,12 +254,20 @@ impl UiAuth {
     /// otherwise its name and role are refreshed.
     async fn session(&self, headers: &HeaderMap) -> Result<SessionStaff, UiError> {
         let token = bearer(headers).ok_or_else(auth_failed)?.to_owned();
+        self.session_for(&token).await
+    }
+
+    /// Like [`session`](Self::session), for a token given directly (`/ui/events?token=`).
+    pub(crate) async fn session_for(&self, token: &str) -> Result<SessionStaff, UiError> {
+        let token = token.to_owned();
         let now = self.clock.now_ms();
         let cached = {
             let mut sessions = self.sessions.lock().map_err(|_| internal())?;
             let session = sessions.get(&token).cloned().ok_or_else(auth_failed)?;
             if now - session.created_at >= SESSION_TTL_MS {
                 sessions.remove(&token);
+                drop(sessions);
+                self.session_ended();
                 return Err(auth_failed());
             }
             session
@@ -201,6 +288,8 @@ impl UiAuth {
             }
             None => {
                 sessions.remove(&token);
+                drop(sessions);
+                self.session_ended();
                 Err(auth_failed())
             }
         }
@@ -214,7 +303,7 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
 
-fn auth_failed() -> UiError {
+pub(crate) fn auth_failed() -> UiError {
     UiError {
         code: ErrorCode::AuthFailed,
         message: AUTH_FAILED_MESSAGE.into(),
@@ -273,7 +362,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
     }
 }
 
-fn fail(e: UiError) -> Response {
+pub(crate) fn fail(e: UiError) -> Response {
     (status_of(e.code), Json(e)).into_response()
 }
 
@@ -347,6 +436,7 @@ async fn sign_in(State(auth): State<Arc<UiAuth>>, body: axum::body::Bytes) -> Re
                     .map(|(k, _)| k.clone());
                 if let Some(k) = oldest {
                     s.remove(&k);
+                    auth.session_ended();
                 }
             }
             s.insert(
@@ -370,7 +460,11 @@ async fn sign_out(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
     // An unknown or already-ended token is fine: the session is gone either way.
     match auth.sessions.lock() {
         Ok(mut s) => {
-            s.remove(token);
+            let removed = s.remove(token).is_some();
+            drop(s);
+            if removed {
+                auth.session_ended();
+            }
             StatusCode::NO_CONTENT.into_response()
         }
         Err(_) => fail(internal()),
@@ -438,12 +532,13 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/me", get(me))
         .route("/ui/intent", post(intent))
         .route("/ui/settings", get(settings))
+        .route("/ui/events", get(crate::ui_events::events))
         .with_state(auth)
         .layer(axum::middleware::from_fn(crate::health::ui_guard))
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use arena_core::rbac::{ROLE_COUNTER, ROLE_MANAGER};
     use arena_core::staff::hash_secret;
@@ -533,19 +628,19 @@ mod tests {
         assert!(l.entries.len() < before);
     }
 
-    struct Hub {
-        _status: tokio::sync::watch::Sender<HubStatus>,
-        _dir: tempfile::TempDir,
-        path: std::path::PathBuf,
-        clock: Arc<ManualClock>,
-        app: Router,
-        writer: arena_core::WriterHandle,
-        manager_id: String,
-        counter_id: String,
-        counter_role: String,
+    pub(crate) struct Hub {
+        pub(crate) _status: tokio::sync::watch::Sender<HubStatus>,
+        pub(crate) _dir: tempfile::TempDir,
+        pub(crate) path: std::path::PathBuf,
+        pub(crate) clock: Arc<ManualClock>,
+        pub(crate) app: Router,
+        pub(crate) writer: arena_core::WriterHandle,
+        pub(crate) manager_id: String,
+        pub(crate) counter_id: String,
+        pub(crate) counter_role: String,
     }
 
-    fn intent_as(actor: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
+    pub(crate) fn intent_as(actor: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
         Intent {
             intent_id: ulid::Ulid::generate().to_string(),
             kind: payload.kind(),
@@ -560,7 +655,12 @@ mod tests {
 
     /// A bootstrapped hub with a Manager (`manager` / `m-pass`) and a Counter
     /// (`counter` / `c-pass`).
-    async fn hub() -> Hub {
+    pub(crate) async fn hub() -> Hub {
+        hub_with(crate::ui_events::EventsConfig::default()).await
+    }
+
+    /// [`hub`] with the given `/ui/events` timings and buffer.
+    pub(crate) async fn hub_with(config: crate::ui_events::EventsConfig) -> Hub {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("branch.db");
         let mut store = Store::open(&path, T0).unwrap();
@@ -637,12 +737,16 @@ mod tests {
                 .unwrap();
             ids.push(applied.changes[0].row_id.clone());
         }
-        let auth = Arc::new(UiAuth::new(
-            Arc::new(StaffDirectory::open(&path).unwrap()),
-            Arc::new(SnapshotReader::open(&path).unwrap()),
-            Some(writer.clone()),
-            clock.clone(),
-        ));
+        let auth = Arc::new(
+            UiAuth::new(
+                Arc::new(StaffDirectory::open(&path).unwrap()),
+                Arc::new(SnapshotReader::open(&path).unwrap()),
+                Some(writer.clone()),
+                clock.clone(),
+            )
+            .with_status(status_tx.subscribe())
+            .with_events_config(config),
+        );
         Hub {
             _status: status_tx,
             _dir: dir,
@@ -656,7 +760,7 @@ mod tests {
         }
     }
 
-    async fn call(
+    pub(crate) async fn call(
         hub: &Hub,
         method: &str,
         uri: &str,
@@ -696,13 +800,13 @@ mod tests {
         .await
     }
 
-    async fn token_for(hub: &Hub, login: &str, password: &str) -> String {
+    pub(crate) async fn token_for(hub: &Hub, login: &str, password: &str) -> String {
         let (status, body) = sign_in_as(hub, login, password).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         body["token"].as_str().unwrap().to_owned()
     }
 
-    fn footer_set(actor: Actor, rev: i64) -> Value {
+    pub(crate) fn footer_set(actor: Actor, rev: i64) -> Value {
         json!({ "intent": intent_as(
             actor,
             IntentPayload::SettingsSet(SettingsSet {
@@ -725,8 +829,23 @@ mod tests {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         );
-        let staff =
-            json!({"staff_id": hub.counter_id, "display_name": "Counter", "role_name": "Counter"});
+        let perms: Vec<&str> = arena_core::rbac::builtin_perms(ROLE_COUNTER)
+            .into_iter()
+            .map(arena_proto::Permission::as_str)
+            .collect();
+        let mut perms_sorted = perms.clone();
+        perms_sorted.sort_by_key(|p| {
+            arena_proto::Permission::ALL
+                .iter()
+                .position(|q| q.as_str() == *p)
+        });
+        let staff = json!({
+            "staff_id": hub.counter_id,
+            "display_name": "Counter",
+            "role_name": "Counter",
+            "permissions": perms_sorted,
+        });
+        assert!(!perms.contains(&"settings.edit"));
         assert_eq!(body["staff"], staff);
         assert_eq!(
             call(&hub, "GET", "/ui/me", Some(token), None).await,

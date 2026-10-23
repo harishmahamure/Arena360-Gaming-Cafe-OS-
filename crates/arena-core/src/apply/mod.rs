@@ -9,6 +9,10 @@
 //! depend on the target row (built-in roles are fixed; a Manager assigns only Counter and
 //! Kitchen). Both fail `PERMISSION_DENIED`.
 //!
+//! **stamp** also gives every change row its `business_day` and `fy`, under the branch locale in
+//! effect at that moment (`locale::resolve`); a tz or day-start change applies from the next
+//! business day, and existing rows are never restamped.
+//!
 //! [`apply`] runs the steps up to `append_changes` on the caller's transaction. The Writer then
 //! commits that transaction and, only once it has committed, calls [`emit`]. No I/O other than
 //! SQLite happens inside the transaction. Any failing step returns exactly one [`AppError`];
@@ -23,6 +27,7 @@ mod devices;
 mod frame;
 mod guards;
 mod mutate;
+pub(crate) mod seed_defaults;
 mod settings_set;
 mod staff_roles;
 mod ttl_dedupe;
@@ -43,7 +48,6 @@ pub use frame::{is_ulid, validate_frame};
 pub use settings_set::MAX_SETTING_VALUE_CHARS;
 pub(crate) use ttl_dedupe::record_rejection;
 pub use ttl_dedupe::{INTENT_TTL_MS, MAX_CLOCK_SKEW_MS, fingerprint};
-pub use validate::KNOWN_CURRENCIES;
 
 /// What `apply()` needs besides the transaction and the intent.
 pub struct ApplyCtx<'a> {
@@ -105,7 +109,7 @@ pub(crate) enum Target {
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
     use arena_proto::IntentPayload as P;
     Ok(match &intent.payload {
-        P::BranchBootstrap(_) => Target::None,
+        P::BranchBootstrap(_) | P::BranchSeedDefaults(_) => Target::None,
         P::SettingsSet(s) => Target::Setting(settings_set::load(tx, s)?),
         P::DeviceRegister(_) => devices::load_register(tx)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
@@ -164,7 +168,8 @@ pub(crate) fn run(
         ));
     }
     mutate::stamp(tx, &written, now)?;
-    let changes = changes::append_changes(tx, &epoch, intent, &written, now)?;
+    let day = crate::locale::stamp(tx, now)?;
+    let changes = changes::append_changes(tx, &epoch, intent, &written, now, day.as_ref())?;
     let applied = Applied {
         intent_id: intent.intent_id.clone(),
         changes,

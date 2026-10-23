@@ -8,7 +8,7 @@ use arena_store::{
 
 use super::{Target, devices, settings_set, staff_roles};
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
-use crate::settings_defaults::DEFAULT_SETTINGS;
+use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
 
 /// One row the intent wrote.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +55,12 @@ pub(super) fn mutate(
                 op: ChangeOp::Insert,
                 before: None,
             }];
-            for (key, value) in DEFAULT_SETTINGS {
+            let locale = bootstrap_locale_settings(b);
+            let seeded = DEFAULT_SETTINGS
+                .iter()
+                .map(|(k, v)| (*k, *v))
+                .chain(locale.iter().map(|(k, v)| (*k, v.as_str())));
+            for (key, value) in seeded {
                 insert_setting(tx, &branch_id, key, value)?;
                 written.push(Written {
                     key: RowKey::Settings {
@@ -91,12 +96,13 @@ pub(super) fn mutate(
             }
             Ok(written)
         }
+        IntentPayload::BranchSeedDefaults(_) => super::seed_defaults::mutate(tx),
         IntentPayload::SettingsSet(s) => {
             let row = match target {
                 Target::Setting(row) => row.as_ref(),
                 _ => None,
             };
-            settings_set::mutate(tx, s, row)
+            settings_set::mutate(tx, s, row, now_ms)
         }
         IntentPayload::DeviceRegister(d) => {
             let branch = match target {
@@ -135,7 +141,8 @@ fn device_row(target: &Target) -> Option<&arena_store::DeviceRow> {
 }
 
 /// **stamp.** `rev` goes 0 → 1 on insert and +1 on update; `created_at` (insert) and
-/// `updated_at` come from the clock.
+/// `updated_at` come from the clock. (The change rows' `business_day` and `fy` are stamped by
+/// `locale::stamp`, from the locale in effect after this write.)
 pub(super) fn stamp(tx: &StoreTx<'_>, written: &[Written], now_ms: i64) -> Result<(), AppError> {
     for w in written {
         match w.op {

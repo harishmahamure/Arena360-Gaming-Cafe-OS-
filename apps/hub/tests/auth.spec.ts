@@ -7,7 +7,11 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 // refusal on Settings and sign-out. The Hub's loopback API is stubbed with `page.route`.
 
 const HUB = "http://127.0.0.1:7409";
-const SNAPSHOT: HubSnapshot = { branch: { name: "Dev Branch", branch_code: "DEV01" }, devices: [] };
+const SNAPSHOT: HubSnapshot = {
+  branch: { name: "Dev Branch", branch_code: "DEV01" },
+  devices: [],
+  locale: null,
+};
 const CORS = {
   "access-control-allow-origin": "http://localhost:5173",
   "access-control-allow-methods": "GET, POST",
@@ -18,12 +22,14 @@ const STAFF: Record<string, SessionStaff & { password: string }> = {
     staff_id: "01JCOUNTER0000000000000000",
     display_name: "Counter",
     role_name: "Counter",
+    permissions: ["session.start", "pos.sell"],
     password: "dev-counter-pass",
   },
   manager: {
     staff_id: "01JMANAGER0000000000000000",
     display_name: "Manager",
     role_name: "Manager",
+    permissions: ["settings.edit", "user.manage"],
     password: "dev-manager-pass",
   },
 };
@@ -139,6 +145,17 @@ async function stubHub(page: Page): Promise<Hub> {
         hub.setting = { value: sent.payload.value, rev: hub.setting.rev + 1 };
         return json(route, 200, { applied: { intent_id: "I", changes: [] } });
       }
+      case "/ui/events":
+        // An empty push stream that asks the browser to wait before reconnecting.
+        if (!hub.sessions.has(new URL(req.url()).searchParams.get("token") ?? "")) {
+          return json(route, 401, AUTH_FAILED);
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          headers: CORS,
+          body: "retry: 60000\n\n",
+        });
       default:
         return route.fulfill({ status: 404, headers: CORS });
     }
@@ -154,7 +171,7 @@ async function signIn(page: Page, login: string, password: string) {
 
 test("signed out, every screen goes to sign-in", async ({ page }) => {
   await stubHub(page);
-  await page.goto("/settings");
+  await page.goto("/settings/receipt");
   await expect(page).toHaveURL(/\/sign-in(\?|$)/);
   await expect(page.locator("main h1")).toHaveText(en["hub.sign_in.title"]);
   // No rail before sign-in.
@@ -225,7 +242,7 @@ test("a Counter saving a setting gets the refusal inline, with no dialog", async
   await page.goto("/sign-in");
   await signIn(page, "counter", "dev-counter-pass");
   await expect(page).toHaveURL(/\/floor$/);
-  await page.goto("/settings");
+  await page.goto("/settings/receipt");
   const form = page.getByTestId("settings-receipt-footer");
   await form.getByLabel(en["hub.settings.receipt_footer"]).fill("Thanks for playing");
   await form.getByRole("button", { name: en["hub.settings.save"] }).click();
@@ -251,7 +268,7 @@ test("a Manager saves the setting", async ({ page }) => {
   await page.goto("/sign-in");
   await signIn(page, "manager", "dev-manager-pass");
   await expect(page).toHaveURL(/\/floor$/);
-  await page.goto("/settings");
+  await page.goto("/settings/receipt");
   await page.getByRole("button", { name: en["hub.settings.save"] }).click();
   await expect(page.getByTestId("settings-status")).toContainText(en["hub.settings.saved"]);
 });
@@ -269,7 +286,7 @@ test("sign-out returns to sign-in, and a revoked session does too", async ({ pag
   // intent gets 401 and the UI goes to sign-in.
   await signIn(page, "manager", "dev-manager-pass");
   await expect(page).toHaveURL(/\/floor$/);
-  await page.goto("/settings");
+  await page.goto("/settings/receipt");
   await expect(page.locator("main h1")).toHaveText(en["hub.nav.settings"]);
   await expect(page.getByRole("button", { name: en["hub.settings.save"] })).not.toHaveAttribute(
     "aria-disabled",
@@ -338,7 +355,7 @@ test("a STALE save keeps the typed text and shows the Hub's value", async ({ pag
   const hub = await stubHub(page);
   await signedInAs(page, "manager");
   await expect(page).toHaveURL(/\/floor$/);
-  await page.goto("/settings");
+  await page.goto("/settings/receipt");
   const field = page.getByLabel(en["hub.settings.receipt_footer"]);
   await expect(page.getByRole("button", { name: en["hub.settings.save"] })).not.toHaveAttribute(
     "aria-disabled",
@@ -363,7 +380,7 @@ test("two saves send base_rev from the reloaded settings", async ({ page }) => {
   const hub = await stubHub(page);
   await signedInAs(page, "manager");
   await expect(page).toHaveURL(/\/floor$/);
-  await page.goto("/settings");
+  await page.goto("/settings/receipt");
   const field = page.getByLabel(en["hub.settings.receipt_footer"]);
   const save = page.getByRole("button", { name: en["hub.settings.save"] });
   for (const text of ["first", "second"]) {
@@ -389,7 +406,7 @@ test("settings that fail to load offer Retry", async ({ page }) => {
   await page.route(`${HUB}/ui/settings`, (route) =>
     fail ? json(route, 500, { code: "INTERNAL" }) : route.fallback(),
   );
-  await page.goto("/settings");
+  await page.goto("/settings/receipt");
   const failed = page.getByTestId("settings-load-failed");
   await expect(failed).toContainText(en["hub.settings.load_failed"]);
   fail = false;

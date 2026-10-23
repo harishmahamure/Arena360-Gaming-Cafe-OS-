@@ -17,11 +17,11 @@ use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 pub use branch::{
-    BranchSummary, ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, SettingRef,
-    SettingRow, Table, branch_exists, current_branch_id, delete_row, dump_table,
-    find_branch_summary, find_setting, has_branch_data, insert_branch, insert_change,
-    insert_setting, list_settings, next_change_seq, read_changes, read_row, stamp_row,
-    update_setting_value, upsert_row,
+    BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue,
+    SettingRef, SettingRow, Table, branch_exists, current_branch_id, delete_row, dump_table,
+    find_branch_locale, find_branch_summary, find_setting, has_branch_data, insert_branch,
+    insert_change, insert_setting, list_settings, next_change_seq, read_changes, read_row,
+    stamp_row, update_setting, update_setting_value, upsert_row,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
@@ -353,6 +353,16 @@ impl Store {
             };
             Ok(find_role(&s.conn, &staff.role_id)?.map(|role| (staff, role)))
         })
+    }
+
+    /// The branch's locale columns, outside any write transaction (`None` before bootstrap).
+    pub fn branch_locale(&self) -> Result<Option<BranchLocale>, AppError> {
+        find_branch_locale(&self.conn)
+    }
+
+    /// The permission rows of `role_id`, as `(permission, effect)`.
+    pub fn role_perms(&self, role_id: &str) -> Result<Vec<(String, String)>, AppError> {
+        list_role_perms(&self.conn, role_id)
     }
 
     /// Every branch setting, outside any write transaction (empty before bootstrap).

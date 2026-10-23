@@ -225,6 +225,53 @@ impl WriterHandle {
         .await
     }
 
+    /// Brings an upgraded branch up to the current defaults: when the branch exists and lacks
+    /// default settings, built-in roles or their permission rows, submits `branch.seed_defaults`
+    /// (system actor) through `apply()` in the same transaction as the check, then emits. With
+    /// nothing missing (or no branch) it writes nothing, submits no intent and answers `None`.
+    pub async fn seed_defaults(&self) -> Result<Option<Applied>, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        let events = self.events.clone();
+        self.run_then(
+            move |store| {
+                let ctx = ctx_from(clock.as_ref(), &status);
+                store.write_tx_mut(|tx| {
+                    match crate::apply::seed_defaults::missing(tx)? {
+                        Some(m) if !m.is_empty() => {}
+                        _ => return Ok(None),
+                    }
+                    let now = clock.now_ms();
+                    let intent = Intent {
+                        intent_id: ulid::Ulid::generate().to_string(),
+                        kind: arena_proto::IntentKind::BranchSeedDefaults,
+                        idempotency_key: ulid::Ulid::generate().to_string(),
+                        issued_at: now,
+                        base_rev: None,
+                        actor: arena_proto::Actor {
+                            kind: arena_proto::ActorKind::System,
+                            id: "hub-seed-defaults".into(),
+                        },
+                        elevated_by: None,
+                        payload: arena_proto::IntentPayload::BranchSeedDefaults(
+                            arena_proto::BranchSeedDefaults::default(),
+                        ),
+                    };
+                    match run(tx, &ctx, &intent)? {
+                        Outcome::Fresh(applied) => Ok(Some(applied)),
+                        Outcome::Replayed(_) => Ok(None),
+                    }
+                })
+            },
+            move |out| {
+                if let Some(applied) = out {
+                    emit(&events, applied);
+                }
+            },
+        )
+        .await
+    }
+
     /// How many jobs this writer has been handed (for tests: a `BAD_FRAME` queues none).
     #[cfg(any(test, feature = "test-jobs"))]
     pub fn jobs_submitted(&self) -> u64 {

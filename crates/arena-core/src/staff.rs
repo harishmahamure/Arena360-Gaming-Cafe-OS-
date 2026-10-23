@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use arena_proto::{AppError, ErrorCode, SessionStaff};
+use arena_proto::{AppError, ErrorCode, PermEffect, Permission, SessionStaff};
 use arena_store::Store;
 use argon2::password_hash::try_generate_salt;
 
@@ -45,6 +45,17 @@ fn dummy_hash() -> &'static str {
                 .to_owned()
         })
     })
+}
+
+/// The catalogue permissions among a role's `allow` rows, in catalogue order.
+fn allowed(rows: &[(String, String)]) -> Vec<Permission> {
+    Permission::ALL
+        .into_iter()
+        .filter(|p| {
+            rows.iter()
+                .any(|(perm, effect)| perm == p.as_str() && effect == PermEffect::Allow.as_str())
+        })
+        .collect()
 }
 
 const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -97,29 +108,41 @@ impl StaffDirectory {
     /// The staff member `staff_id` as a session shows them now: `None` when the member is
     /// missing or inactive. Blocking (SQLite).
     pub fn current(&self, staff_id: &str) -> Result<Option<SessionStaff>, AppError> {
-        let found = self
+        let store = self
             .reader
             .lock()
-            .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?
-            .staff_by_id_with_role(staff_id)?;
-        Ok(found
+            .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+        let Some((staff, role)) = store
+            .staff_by_id_with_role(staff_id)?
             .filter(|(staff, _)| staff.active)
-            .map(|(staff, role)| SessionStaff {
-                staff_id: staff.staff_id,
-                display_name: staff.display_name,
-                role_name: role.name,
-            }))
+        else {
+            return Ok(None);
+        };
+        let permissions = allowed(&store.role_perms(&role.role_id)?);
+        Ok(Some(SessionStaff {
+            staff_id: staff.staff_id,
+            display_name: staff.display_name,
+            role_name: role.name,
+            permissions,
+        }))
     }
 
     /// Verifies `login` and `password`. The row is read under the lock; the argon2id check
     /// runs after it is released. Unknown logins, members without a password, wrong passwords
     /// and inactive members all do one argon2id verification and fail `AUTH_FAILED`. Blocking.
     pub fn sign_in(&self, login: &str, password: &str) -> Result<SessionStaff, AppError> {
-        let found = self
-            .reader
-            .lock()
-            .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?
-            .staff_with_role(login.trim())?;
+        let (found, perms) = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+            let found = store.staff_with_role(login.trim())?;
+            let perms = match &found {
+                Some((_, role)) => store.role_perms(&role.role_id)?,
+                None => Vec::new(),
+            };
+            (found, perms)
+        };
         let Some((staff, role)) = found else {
             let _ = verify_secret(password, dummy_hash());
             return Err(auth_failed());
@@ -136,6 +159,7 @@ impl StaffDirectory {
             staff_id: staff.staff_id,
             display_name: staff.display_name,
             role_name: role.name,
+            permissions: allowed(&perms),
         })
     }
 }

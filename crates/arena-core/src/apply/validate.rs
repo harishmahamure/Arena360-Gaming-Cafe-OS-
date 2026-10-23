@@ -3,12 +3,6 @@
 use super::{Target, devices, settings_set, staff_roles};
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
-/// ISO 4217 alpha-3 codes this build accepts as a branch currency.
-pub const KNOWN_CURRENCIES: &[&str] = &[
-    "INR", "USD", "EUR", "GBP", "AED", "SGD", "AUD", "CAD", "JPY", "CHF", "LKR", "NPR", "BDT",
-    "MYR", "THB", "SAR", "QAR", "OMR", "KWD", "BHD",
-];
-
 /// Longest branch name, in characters, after trimming.
 pub const MAX_NAME_CHARS: usize = 80;
 /// Longest branch code.
@@ -34,6 +28,15 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
                 return Err(invalid("base_rev", "branch.bootstrap takes no base_rev"));
             }
             validate_bootstrap(b)
+        }
+        IntentPayload::BranchSeedDefaults(_) => {
+            if intent.base_rev.is_some() {
+                return Err(invalid(
+                    "base_rev",
+                    "branch.seed_defaults takes no base_rev",
+                ));
+            }
+            Ok(())
         }
         IntentPayload::SettingsSet(s) => {
             let row = match target {
@@ -105,7 +108,7 @@ fn validate_bootstrap(b: &BranchBootstrap) -> Result<(), AppError> {
             "branch_code must be 1–16 ASCII letters, digits or '-'",
         ));
     }
-    if !KNOWN_CURRENCIES.contains(&b.currency.as_str()) {
+    if !arena_proto::currency::is_known_currency(&b.currency) {
         return Err(invalid("currency", "currency is not a known ISO 4217 code"));
     }
     // An exact IANA name from the bundled tz database (e.g. `Asia/Kolkata`, `UTC`).

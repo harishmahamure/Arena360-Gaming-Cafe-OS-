@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Generates the TypeScript protocol types from `arena-proto` with ts-rs, writes the `index.ts`
-// barrel and formats the folder with prettier. Output: packages/ui/src/generated (committed).
+// barrel and formats the folder with prettier. The same test run writes `currencies.json` (the
+// `arena_proto::currency` table). Output: packages/ui/src/generated (committed).
 
 import { spawnSync } from "node:child_process";
 import {
@@ -80,7 +81,8 @@ export async function generate(root) {
     writeFileSync(join(tmp, "index.ts"), buildBarrel(names));
 
     const prettier = await import("prettier");
-    for (const file of readdirSync(tmp).filter((f) => f.endsWith(".ts"))) {
+    // The TypeScript types and the data tables written next to them (currencies.json).
+    for (const file of readdirSync(tmp).filter((f) => f.endsWith(".ts") || f.endsWith(".json"))) {
       const path = join(tmp, file);
       // Resolve config as if the file were already in place so repo settings apply.
       const options = (await prettier.resolveConfig(join(dir, file))) ?? {};

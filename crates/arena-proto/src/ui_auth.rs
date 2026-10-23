@@ -5,6 +5,7 @@ use ts_rs::TS;
 
 use crate::error::ErrorCode;
 use crate::intent::Intent;
+use crate::permission::Permission;
 
 /// `POST /ui/auth/sign-in`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -21,6 +22,9 @@ pub struct SessionStaff {
     pub staff_id: String,
     pub display_name: String,
     pub role_name: String,
+    /// What the member's role allows now (the screens use it to show read-only controls; the
+    /// Hub still checks every intent).
+    pub permissions: Vec<Permission>,
 }
 
 /// A successful sign-in: the bearer token for this Hub process and who it belongs to.

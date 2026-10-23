@@ -13,6 +13,7 @@ pub(super) fn append_changes(
     intent: &Intent,
     written: &[Written],
     now_ms: i64,
+    day: Option<&(String, String)>,
 ) -> Result<Vec<ChangeMeta>, AppError> {
     let epoch = epoch.to_string();
     let elevated = intent.elevated_by.as_ref();
@@ -46,6 +47,8 @@ pub(super) fn append_changes(
             elevated_by_mode: elevated.map(|e| e.mode.as_str().to_owned()),
             elevated_by_verifier_version: elevated.map(|e| i64::from(e.verifier_version)),
             at: now_ms,
+            business_day: day.map(|(d, _)| d.clone()),
+            fy: day.map(|(_, fy)| fy.clone()),
         };
         insert_change(tx, &record)?;
         metas.push(ChangeMeta {
@@ -121,7 +124,10 @@ mod tests {
                     op: ChangeOp::Delete,
                     before: Some(before.clone()),
                 }];
-                Ok((before, append_changes(tx, &epoch, &intent, &written, 7)?))
+                Ok((
+                    before,
+                    append_changes(tx, &epoch, &intent, &written, 7, None)?,
+                ))
             })
             .unwrap();
         assert_eq!(metas.len(), 1);

@@ -1,0 +1,79 @@
+// The Hub's push stream (`GET /ui/events?token=`, server-sent events). Every open view
+// subscribes while someone is signed in; the Hub pushes, the UI never polls.
+
+import type { SettingsChangedEvent } from "@arena/ui/generated";
+import { isSnapshotLocale } from "./snapshot";
+
+export const EVENTS_URL = "http://127.0.0.1:7409/ui/events";
+/** Waits before reopening a stream the Hub closed or refused, in seconds (then 15 s each). */
+const REOPEN_DELAYS = [1, 2, 4, 8, 15];
+
+export type EventHandlers = {
+  /** `settings.changed`: the locale now in effect and the keys written. */
+  onSettingsChanged: (event: SettingsChangedEvent) => void;
+  /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
+  onResync: () => void;
+  /** The Hub closed or refused the stream (signed out, revoked, or the Hub restarted). */
+  onClosed: () => void;
+};
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+export function isSettingsChanged(v: unknown): v is SettingsChangedEvent {
+  return (
+    isObject(v) &&
+    (v.locale === null || isSnapshotLocale(v.locale)) &&
+    Array.isArray(v.keys) &&
+    v.keys.every((k) => typeof k === "string")
+  );
+}
+
+/**
+ * Opens the stream for `token` and keeps it open: the browser retries a dropped connection by
+ * itself; a refused one (401) is reopened with a back-off after `onClosed` has run. Returns the
+ * function that closes it for good.
+ */
+export function connectEvents(token: string, handlers: EventHandlers): () => void {
+  if (typeof EventSource === "undefined") return () => {};
+  let source: EventSource | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let failures = 0;
+  let stopped = false;
+  let opened = false;
+
+  const open = () => {
+    if (stopped) return;
+    const es = new EventSource(`${EVENTS_URL}?${new URLSearchParams({ token })}`); // i18n-ignore (a URL)
+    source = es;
+    es.addEventListener("open", () => {
+      failures = 0;
+      // Anything pushed while the stream was down is lost: catch up from the snapshot.
+      if (opened) handlers.onResync();
+      opened = true;
+    });
+    es.addEventListener("settings.changed", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        if (isSettingsChanged(data)) handlers.onSettingsChanged(data);
+        else handlers.onResync();
+      } catch {
+        handlers.onResync();
+      }
+    });
+    es.addEventListener("resync", () => handlers.onResync());
+    es.addEventListener("error", () => {
+      if (es.readyState !== EventSource.CLOSED || stopped) return;
+      handlers.onClosed();
+      const seconds = REOPEN_DELAYS[Math.min(failures, REOPEN_DELAYS.length - 1)];
+      failures++;
+      timer = setTimeout(open, seconds * 1000);
+    });
+  };
+  open();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    source?.close();
+  };
+}

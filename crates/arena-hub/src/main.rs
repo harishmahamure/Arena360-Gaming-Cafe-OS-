@@ -233,15 +233,18 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let mut lease_job = Some(tokio::spawn(lease.run()));
 
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
-    let ui_auth = Arc::new(arena_api::UiAuth::new(
-        staff,
-        Arc::clone(&snapshots),
-        writer.clone(),
-        Arc::clone(&clock),
-    ));
+    let ui_auth = Arc::new(
+        arena_api::UiAuth::new(
+            staff,
+            Arc::clone(&snapshots),
+            writer.clone(),
+            Arc::clone(&clock),
+        )
+        .with_status(status_rx.clone()),
+    );
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
     let mut router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
-        .merge(arena_api::ui_router(snapshots))
+        .merge(arena_api::ui_router(snapshots, Arc::clone(&clock)))
         .merge(arena_api::ui_auth_router(ui_auth));
     #[cfg(feature = "dev-fixtures")]
     {

@@ -9,7 +9,9 @@
   import MoreSheet from "../lib/MoreSheet.svelte";
   import { BOTTOM_BAR, MORE, SCREENS, screenOf, shortcutTarget, type Screen } from "../lib/nav";
   import { SNAPSHOT_DEPENDENCY } from "../lib/snapshot";
-  import { SESSION_DEPENDENCY, safeRedirect, signOut } from "../lib/auth";
+  import { SESSION_DEPENDENCY, getToken, safeRedirect, signOut } from "../lib/auth";
+  import { connectEvents } from "../lib/events";
+  import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
   import type { LayoutData } from "./$types";
 
   let { data, children }: { data: LayoutData; children: Snippet } = $props();
@@ -100,6 +102,28 @@
     } else if (staff && onSignIn) {
       void goto(safeRedirect(page.url.searchParams.get("redirectTo")), { replaceState: true });
     }
+  });
+
+  // The branch locale comes from each (re)loaded snapshot, then live from `/ui/events`.
+  $effect(() => {
+    const locale = data.hub.ok ? (data.hub.snapshot.locale ?? null) : null;
+    if (data.hub.ok) untrack(() => setLocale(locale));
+  });
+
+  // While someone is signed in, this view listens to the Hub's push stream, keyed on the token
+  // (signing in again, even as the same member, reopens it with the new one).
+  const streamToken = $derived(staff ? getToken() : null);
+  $effect(() => {
+    const token = streamToken;
+    if (!token) return;
+    return untrack(() => {
+      return connectEvents(token, {
+        onSettingsChanged: (e) => applySettingsChanged(e.locale, e.keys),
+        onResync: () => void refresh(),
+        // Refused: find out whether the session is still there (sign-in otherwise).
+        onClosed: () => void invalidate(SESSION_DEPENDENCY),
+      });
+    });
   });
 
   // The More sheet belongs to the signed-in shell.

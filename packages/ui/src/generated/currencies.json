@@ -1,0 +1,102 @@
+[
+  {
+    "code": "AED",
+    "exponent": 2,
+    "symbol": "د.إ"
+  },
+  {
+    "code": "AUD",
+    "exponent": 2,
+    "symbol": "A$"
+  },
+  {
+    "code": "BDT",
+    "exponent": 2,
+    "symbol": "৳"
+  },
+  {
+    "code": "BHD",
+    "exponent": 3,
+    "symbol": "BD"
+  },
+  {
+    "code": "CAD",
+    "exponent": 2,
+    "symbol": "C$"
+  },
+  {
+    "code": "CHF",
+    "exponent": 2,
+    "symbol": "CHF"
+  },
+  {
+    "code": "EUR",
+    "exponent": 2,
+    "symbol": "€"
+  },
+  {
+    "code": "GBP",
+    "exponent": 2,
+    "symbol": "£"
+  },
+  {
+    "code": "INR",
+    "exponent": 2,
+    "symbol": "₹"
+  },
+  {
+    "code": "JPY",
+    "exponent": 0,
+    "symbol": "¥"
+  },
+  {
+    "code": "KWD",
+    "exponent": 3,
+    "symbol": "KD"
+  },
+  {
+    "code": "LKR",
+    "exponent": 2,
+    "symbol": "Rs"
+  },
+  {
+    "code": "MYR",
+    "exponent": 2,
+    "symbol": "RM"
+  },
+  {
+    "code": "NPR",
+    "exponent": 2,
+    "symbol": "रु"
+  },
+  {
+    "code": "OMR",
+    "exponent": 3,
+    "symbol": "RO"
+  },
+  {
+    "code": "QAR",
+    "exponent": 2,
+    "symbol": "QR"
+  },
+  {
+    "code": "SAR",
+    "exponent": 2,
+    "symbol": "SR"
+  },
+  {
+    "code": "SGD",
+    "exponent": 2,
+    "symbol": "S$"
+  },
+  {
+    "code": "THB",
+    "exponent": 2,
+    "symbol": "฿"
+  },
+  {
+    "code": "USD",
+    "exponent": 2,
+    "symbol": "$"
+  }
+]

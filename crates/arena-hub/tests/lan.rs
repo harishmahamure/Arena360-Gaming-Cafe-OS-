@@ -121,10 +121,20 @@ async fn seeded_hub_accepts_the_printed_token_and_revocation_closes_it() {
     // The Hub UI's snapshot names the seeded branch and its kiosk.
     let snapshot = get_json(health, "/ui/snapshot").unwrap();
     assert_eq!(
-        snapshot,
+        snapshot["branch"],
+        serde_json::json!({"name": "Dev Branch", "branch_code": "DEV01"})
+    );
+    assert_eq!(
+        snapshot["devices"],
+        serde_json::json!([{"device_id": device_id, "label": "Dev Kiosk", "class": "paired", "zone": null}])
+    );
+    // The seeded branch locale (from the `branch.*` settings bootstrap wrote).
+    assert_eq!(
+        snapshot["locale"],
         serde_json::json!({
-            "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
-            "devices": [{"device_id": device_id, "label": "Dev Kiosk", "class": "paired", "zone": null}]
+            "currency": "INR", "exponent": 2, "symbol": "₹", "symbol_position": "before",
+            "number_format": "indian", "tz": "Asia/Kolkata", "day_start_min": 360,
+            "fy_start_month": 4, "pending": null
         })
     );
 

@@ -29,6 +29,10 @@ pub enum IntentKind {
     /// Creates the branch row and its default settings, once.
     #[serde(rename = "branch.bootstrap")]
     BranchBootstrap,
+    /// Inserts whatever default rows an upgraded branch lacks (settings, built-in roles and
+    /// their permission rows). System only; the Hub runs it when it becomes primary.
+    #[serde(rename = "branch.seed_defaults")]
+    BranchSeedDefaults,
     /// Sets the value of one existing branch setting (an edit: carries `base_rev`).
     #[serde(rename = "settings.set")]
     SettingsSet,
@@ -54,8 +58,9 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 8] = [
+    pub const ALL: [IntentKind; 9] = [
         Self::BranchBootstrap,
+        Self::BranchSeedDefaults,
         Self::SettingsSet,
         Self::DeviceRegister,
         Self::DeviceRevoke,
@@ -69,6 +74,7 @@ impl IntentKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::BranchBootstrap => "branch.bootstrap",
+            Self::BranchSeedDefaults => "branch.seed_defaults",
             Self::SettingsSet => "settings.set",
             Self::DeviceRegister => "device.register",
             Self::DeviceRevoke => "device.revoke",
@@ -87,7 +93,7 @@ impl IntentKind {
     /// The domain this kind belongs to.
     pub fn category(self) -> IntentCategory {
         match self {
-            Self::BranchBootstrap => IntentCategory::Branch,
+            Self::BranchBootstrap | Self::BranchSeedDefaults => IntentCategory::Branch,
             Self::SettingsSet => IntentCategory::Settings,
             Self::DeviceRegister | Self::DeviceRevoke | Self::DeviceVersionReported => {
                 IntentCategory::Device
@@ -101,7 +107,7 @@ impl IntentKind {
     /// kind does not compile until it is mapped.
     pub fn requirement(self) -> Requirement {
         match self {
-            Self::BranchBootstrap => Requirement::System,
+            Self::BranchBootstrap | Self::BranchSeedDefaults => Requirement::System,
             Self::SettingsSet => Requirement::Perm(Permission::SettingsEdit),
             Self::DeviceRegister => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
@@ -132,6 +138,11 @@ pub struct BranchBootstrap {
     /// Month in which the financial year starts (1–12).
     pub fy_start_month: u8,
 }
+
+/// The payload of `branch.seed_defaults` (nothing: the writer works out what is missing).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BranchSeedDefaults {}
 
 /// The payload of `settings.set`: the setting `key` (which must already exist) and its new
 /// TEXT `value`.
@@ -237,6 +248,8 @@ pub struct RoleUpsert {
 pub enum IntentPayload {
     #[serde(rename = "branch.bootstrap")]
     BranchBootstrap(BranchBootstrap),
+    #[serde(rename = "branch.seed_defaults")]
+    BranchSeedDefaults(BranchSeedDefaults),
     #[serde(rename = "settings.set")]
     SettingsSet(SettingsSet),
     #[serde(rename = "device.register")]
@@ -256,6 +269,7 @@ impl IntentPayload {
     pub fn kind(&self) -> IntentKind {
         match self {
             Self::BranchBootstrap(_) => IntentKind::BranchBootstrap,
+            Self::BranchSeedDefaults(_) => IntentKind::BranchSeedDefaults,
             Self::SettingsSet(_) => IntentKind::SettingsSet,
             Self::DeviceRegister(_) => IntentKind::DeviceRegister,
             Self::DeviceRevoke(_) => IntentKind::DeviceRevoke,
@@ -371,7 +385,9 @@ mod tests {
             assert!(seen.insert(kind), "{} listed twice in ALL", kind.as_str());
             // `requirement()` is a total match returning one value; pin the current mapping.
             let want = match kind.as_str() {
-                "branch.bootstrap" | "device.version_reported" => Requirement::System,
+                "branch.bootstrap" | "branch.seed_defaults" | "device.version_reported" => {
+                    Requirement::System
+                }
                 "settings.set" => Requirement::Perm(Permission::SettingsEdit),
                 "device.register" => Requirement::Perm(Permission::DeviceManage),
                 "device.revoke" => Requirement::Perm(Permission::DeviceRemote),

@@ -6,14 +6,22 @@ use std::sync::Mutex;
 
 use arena_proto::{
     AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SnapshotBranch, SnapshotDevice,
+    SnapshotLocale,
 };
 use arena_store::{BranchSummary, DeviceRow, Store};
+
+use crate::locale::{locale_rows, next_rollover, snapshot_locale};
 
 /// Builds the snapshot from the branch row and every device row. Revoked devices are left
 /// out, and so is a row with a class the protocol does not know. Every device is unassigned
 /// (`zone: null`) until zones exist.
-pub fn build_snapshot(branch: Option<BranchSummary>, devices: Vec<DeviceRow>) -> HubSnapshot {
+pub fn build_snapshot(
+    branch: Option<BranchSummary>,
+    devices: Vec<DeviceRow>,
+    locale: Option<SnapshotLocale>,
+) -> HubSnapshot {
     HubSnapshot {
+        locale,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -41,10 +49,21 @@ pub fn build_snapshot(branch: Option<BranchSummary>, devices: Vec<DeviceRow>) ->
     }
 }
 
-/// Reads the snapshot from `store`: the branch and the devices in one read transaction.
-pub fn read_snapshot(store: &Store) -> Result<HubSnapshot, AppError> {
-    let (branch, devices) = store.read_consistent(|s| Ok((s.branch_summary()?, s.devices()?)))?;
-    Ok(build_snapshot(branch, devices))
+/// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
+/// read transaction.
+pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
+    let (branch, devices, locale) = store
+        .read_consistent(|s| Ok((s.branch_summary()?, s.devices()?, read_locale(s, now_ms)?)))?;
+    Ok(build_snapshot(branch, devices, locale))
+}
+
+/// The locale in effect at `now_ms` (`None` before bootstrap).
+fn read_locale(store: &Store, now_ms: i64) -> Result<Option<SnapshotLocale>, AppError> {
+    let Some(branch) = store.branch_locale()? else {
+        return Ok(None);
+    };
+    let rows = locale_rows(&branch, &store.settings()?);
+    Ok(Some(snapshot_locale(&rows, now_ms)))
 }
 
 /// A read-only connection that serves [`HubSnapshot`]s on a primary or a follower.
@@ -66,13 +85,44 @@ impl SnapshotReader {
         })
     }
 
-    /// The current snapshot. Blocking (SQLite).
-    pub fn snapshot(&self) -> Result<HubSnapshot, AppError> {
+    /// The snapshot at `now_ms`. Blocking (SQLite).
+    pub fn snapshot(&self, now_ms: i64) -> Result<HubSnapshot, AppError> {
         let store = self
             .reader
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
-        read_snapshot(&store)
+        read_snapshot(&store, now_ms)
+    }
+
+    /// The branch locale in effect at `now_ms` and when its next deferred change takes effect
+    /// (UTC ms, `None` when nothing waits); `None` before bootstrap. Blocking (SQLite).
+    pub fn locale_and_rollover(
+        &self,
+        now_ms: i64,
+    ) -> Result<Option<(SnapshotLocale, Option<i64>)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let Some(branch) = s.branch_locale()? else {
+                return Ok(None);
+            };
+            let rows = locale_rows(&branch, &s.settings()?);
+            Ok(Some((
+                snapshot_locale(&rows, now_ms),
+                next_rollover(&rows, now_ms),
+            )))
+        })
+    }
+
+    /// The branch locale in effect at `now_ms` (`None` before bootstrap). Blocking (SQLite).
+    pub fn locale(&self, now_ms: i64) -> Result<Option<SnapshotLocale>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| read_locale(s, now_ms))
     }
 
     /// Every branch setting with its `rev` (empty before bootstrap). Blocking (SQLite).
@@ -139,7 +189,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("branch.db");
         seed(&path, true);
-        let snap = SnapshotReader::open(&path).unwrap().snapshot().unwrap();
+        let snap = SnapshotReader::open(&path).unwrap().snapshot(0).unwrap();
         assert_eq!(
             snap,
             HubSnapshot {
@@ -153,6 +203,17 @@ mod tests {
                     class: ClientClass::Paired,
                     zone: None,
                 }],
+                locale: Some(SnapshotLocale {
+                    currency: "INR".into(),
+                    exponent: 2,
+                    symbol: "₹".into(),
+                    symbol_position: arena_proto::SymbolPosition::Before,
+                    number_format: arena_proto::NumberFormat::Indian,
+                    tz: "UTC".into(),
+                    day_start_min: 0,
+                    fy_start_month: 1,
+                    pending: None,
+                }),
             }
         );
     }
@@ -162,12 +223,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("branch.db");
         seed(&path, false);
-        let snap = SnapshotReader::open(&path).unwrap().snapshot().unwrap();
+        let snap = SnapshotReader::open(&path).unwrap().snapshot(0).unwrap();
         assert_eq!(
             snap,
             HubSnapshot {
                 branch: None,
                 devices: vec![],
+                locale: None,
             }
         );
     }
@@ -184,6 +246,6 @@ mod tests {
             revoked_at: None,
             rev: 1,
         };
-        assert!(build_snapshot(None, vec![row]).devices.is_empty());
+        assert!(build_snapshot(None, vec![row], None).devices.is_empty());
     }
 }

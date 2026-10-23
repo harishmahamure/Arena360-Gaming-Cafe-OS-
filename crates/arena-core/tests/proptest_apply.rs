@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use arena_core::{
-    Applied, DEFAULT_SETTINGS, HubStatus, INTENT_TTL_MS, LeaseInfo, ManualClock, Role, Writer,
-    WriterHandle, status_channel,
+    Applied, DEFAULT_SETTINGS, HubStatus, INTENT_TTL_MS, LOCALE_KEYS, LeaseInfo, ManualClock, Role,
+    Writer, WriterHandle, status_channel,
 };
 use arena_proto::{
     Actor, ActorKind, AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload, SettingsSet,
@@ -110,6 +110,11 @@ fn valid_setting() -> impl Strategy<Value = (&'static str, String)> {
         (1..=30i64).prop_map(|n| ("idle_lock_minutes", n.to_string())),
         "[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}".prop_map(|v| ("hub.locale", v)),
         "[a-z0-9 !.]{0,16}".prop_map(|v| ("receipt.footer", v)),
+        prop::sample::select(vec!["INR", "USD", "JPY", "KWD"])
+            .prop_map(|v| ("branch.currency", v.to_owned())),
+        prop::sample::select(vec!["Asia/Kolkata", "Asia/Dubai", "UTC"])
+            .prop_map(|v| ("branch.tz", v.to_owned())),
+        (0..=1439i64).prop_map(|n| ("branch.day_start_min", n.to_string())),
     ]
 }
 
@@ -133,6 +138,9 @@ fn invalid_setting() -> impl Strategy<Value = (&'static str, String)> {
         ]
         .prop_map(|v| ("hub.locale", v)),
         Just(("receipt.footer", "x".repeat(4097))),
+        Just(("branch.currency", "XYZ".to_owned())),
+        Just(("branch.tz", "Mars/Base".to_owned())),
+        Just(("branch.day_start_min", "1440".to_owned())),
     ]
 }
 
@@ -384,7 +392,10 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .iter()
                     .map(|r| 1 + arena_core::rbac::builtin_perms(r).len())
                     .sum();
-                prop_assert_eq!(hub.change_count(), 1 + DEFAULT_SETTINGS.len() + roles);
+                prop_assert_eq!(
+                    hub.change_count(),
+                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + roles
+                );
                 hub.bootstrapped = true;
                 // One staff member per built-in role (outside the history: not retried).
                 let applied = out.unwrap();
@@ -417,7 +428,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
                 prop_assert_eq!(
                     hub.change_count(),
-                    1 + DEFAULT_SETTINGS.len() + roles + STAFF_ROLES.len()
+                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + roles + STAFF_ROLES.len()
                 );
             }
         }

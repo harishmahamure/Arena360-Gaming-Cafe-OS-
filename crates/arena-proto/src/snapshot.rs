@@ -1,4 +1,5 @@
-//! The Hub UI's branch snapshot, read over the loopback `GET /ui/snapshot`.
+//! The Hub UI's branch snapshot, read over the loopback `GET /ui/snapshot`, and the events
+//! pushed on `GET /ui/events`.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -13,6 +14,96 @@ pub struct HubSnapshot {
     pub branch: Option<SnapshotBranch>,
     /// Every device that is not revoked, ordered by id.
     pub devices: Vec<SnapshotDevice>,
+    /// The branch locale in effect now, or `null` before the branch is set up.
+    pub locale: Option<SnapshotLocale>,
+}
+
+/// Where the currency symbol goes: `₹1.00` or `1.00 €`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum SymbolPosition {
+    Before,
+    After,
+}
+
+/// Digit grouping: `1,23,456` (Indian) or `123,456` (international).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum NumberFormat {
+    Indian,
+    International,
+}
+
+/// The branch locale in effect for the current business day (from the `branch.*` settings).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotLocale {
+    /// ISO 4217 code.
+    pub currency: String,
+    /// Minor-unit exponent of `currency` (2 for INR, 0 for JPY, 3 for KWD).
+    pub exponent: u8,
+    pub symbol: String,
+    pub symbol_position: SymbolPosition,
+    pub number_format: NumberFormat,
+    /// IANA time zone.
+    pub tz: String,
+    /// Minutes after local midnight at which the business day starts (0–1439).
+    pub day_start_min: u16,
+    /// The month (1–12) the financial year starts in.
+    pub fy_start_month: u8,
+    /// Timezone, day-start or financial-year changes still waiting for their business day.
+    pub pending: Option<LocalePending>,
+}
+
+/// The deferred locale changes, each with the business day it applies from. At least one is
+/// set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct LocalePending {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tz: Option<PendingText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub day_start_min: Option<PendingNumber>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fy_start_month: Option<PendingNumber>,
+}
+
+/// A deferred text value and the business day (`YYYY-MM-DD`) it applies from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PendingText {
+    pub value: String,
+    pub effective_from: String,
+}
+
+/// A deferred number and the business day (`YYYY-MM-DD`) it applies from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PendingNumber {
+    pub value: u16,
+    pub effective_from: String,
+}
+
+/// `event: settings.changed` on `GET /ui/events`: a committed intent wrote `settings`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SettingsChangedEvent {
+    /// The locale now in effect (`null` only before the branch is set up).
+    pub locale: Option<SnapshotLocale>,
+    /// The setting keys the intent wrote.
+    pub keys: Vec<String>,
+}
+
+/// `event: applied` on `GET /ui/events`: any other committed intent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AppliedEvent {
+    pub intent_id: String,
 }
 
 /// The branch fields the shell shows.
@@ -48,13 +139,49 @@ mod tests {
                 class: ClientClass::Paired,
                 zone: None,
             }],
+            locale: None,
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
             serde_json::json!({
                 "branch": null,
-                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null}]
+                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null}],
+                "locale": null
             })
+        );
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::*;
+
+    #[test]
+    fn locale_serializes_with_lowercase_enums_and_sparse_pending() {
+        let l = SnapshotLocale {
+            currency: "INR".into(),
+            exponent: 2,
+            symbol: "₹".into(),
+            symbol_position: SymbolPosition::Before,
+            number_format: NumberFormat::Indian,
+            tz: "Asia/Kolkata".into(),
+            day_start_min: 360,
+            fy_start_month: 4,
+            pending: Some(LocalePending {
+                tz: Some(PendingText {
+                    value: "Asia/Dubai".into(),
+                    effective_from: "2027-01-02".into(),
+                }),
+                day_start_min: None,
+                fy_start_month: None,
+            }),
+        };
+        let v = serde_json::to_value(&l).unwrap();
+        assert_eq!(v["symbol_position"], "before");
+        assert_eq!(v["number_format"], "indian");
+        assert_eq!(
+            v["pending"],
+            serde_json::json!({"tz": {"value": "Asia/Dubai", "effective_from": "2027-01-02"}})
         );
     }
 }

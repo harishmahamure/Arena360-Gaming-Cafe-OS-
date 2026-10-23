@@ -20,8 +20,19 @@ const SEEDED: HubSnapshot = {
   devices: [
     { device_id: "01JDEVKIOSK0000000000000000", label: "Dev Kiosk", class: "paired", zone: null },
   ],
+  locale: {
+    currency: "INR",
+    exponent: 2,
+    symbol: "₹",
+    symbol_position: "before",
+    number_format: "indian",
+    tz: "Asia/Kolkata",
+    day_start_min: 360,
+    fy_start_month: 4,
+    pending: null,
+  },
 };
-const NOT_SEEDED: HubSnapshot = { branch: null, devices: [] };
+const NOT_SEEDED: HubSnapshot = { branch: null, devices: [], locale: null };
 
 const RAIL = [
   ["floor", en["hub.nav.floor"]],
@@ -34,7 +45,8 @@ const RAIL = [
   ["settings", en["hub.nav.settings"]],
   ["system", en["hub.nav.system"]],
 ] as const;
-const PLACEHOLDERS = RAIL.filter(([id]) => id !== "floor");
+// Settings has its own sections (settings.spec.ts); every other unbuilt screen is a placeholder.
+const PLACEHOLDERS = RAIL.filter(([id]) => id !== "floor" && id !== "settings");
 const BAR = [
   en["hub.nav.floor_short"],
   en["hub.nav.pos"],
@@ -249,8 +261,10 @@ test("landmarks, one h1 and no serious axe violations on every screen", async ({
     await page.goto(`/${id}`);
     await expect(page.locator("header")).toHaveCount(1);
     await expect(page.locator("main")).toHaveCount(1);
-    await expect(visibleNav(page)).toHaveCount(1);
-    await expect(visibleNav(page)).toHaveAttribute("aria-label", en["hub.nav.label"]);
+    // One visible Hub navigation (Settings adds its own section list beside it).
+    const hubNav = visibleNav(page).and(page.locator(`[aria-label="${en["hub.nav.label"]}"]`));
+    await expect(hubNav).toHaveCount(1);
+    await expect(visibleNav(page)).toHaveCount(id === "settings" ? 2 : 1);
     await expect(page.locator("h1")).toHaveCount(1);
     await expectNoSeriousAxe(page);
   }

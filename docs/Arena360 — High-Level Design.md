@@ -4,6 +4,8 @@ Oct 23, 2026 · @Harish
 
 > **Revision 23 Oct 2026.** Brought in line with the architecture spine (`_bmad-output/planning-artifacts/architecture/architecture-arena-360-final-2026-10-23/ARCHITECTURE-SPINE.md`), which is the binding contract; where this document and the spine differ, the spine wins. Major changes: no continuous cloud mirror — the cloud is files, a command mailbox, the licence and an on-demand audit builder, and owner reporting reads Hub-computed `state/latest.json` and daily rollups on R2; Turso holds only the control DB (`gz_control`, Mumbai); control plane on the existing Hostinger VPS in Mumbai running Kubernetes; epochs `(counter, hub_instance_id)` issued by the cloud, manual-only promotion with force promote under epoch fencing; Tauri 2 everywhere incl. the Android Hub (AdMob via an in-house Kotlin plugin); Svelte 5 + SvelteKit 3.1 for every app surface and Astro 7 for marketing, all web apps on Cloudflare Workers static assets; Owner app is a SvelteKit PWA with VAPID web push; no branch payment integration (UPI/card recorded by reference, last 4 digits); Free Hub ads = banner + interstitial on idle return only, no ads on Kiosk or Pi TV; kiosk login username + password or staff-start; Pi has no player login; notifications drained from a Hub outbox and sent by the cloud through a Gupshup adapter; crypto-shredding for player PII; yearly GST archive kept 8 years; multi-currency in minor units; per-branch Razorpay subscriptions; partner portal and internal admin app; LAN client classes; cost model updated.
 
+> **Revision 23 Oct 2026, epics.** Decisions made during epics creation: root domain `arena360.cloud` (site, `partners.`, `admin.`, `staging.`, `api.`, `app.`, tunnel hostnames `<branch_id>.tunnel.arena360.cloud`; LAN mDNS `arena360.local` unchanged); Hub `:7401` serves TLS for paired Tauri apps and plain HTTP by path (`/kitchen`, `/console`) with scoped tokens; Free Hub ads = standard AdMob interstitial on idle return at most once per 15 min (Google controls close timing) plus a banner in a permanent reserved bottom slot, owner ad control = per-branch content rating G/PG/T (default PG); device-health telemetry stored outside `apply()`/change log; scheduled owner reports by WhatsApp only; branch KEK escrowed (wrapped) on every tier incl. Free; controller check on Hub console tiles (MVP, independent of the Pi); KOT shows seat only; smart plugs (Tuya/Tapo) deferred; rollup schema v2 (Epic 13) and v3 (Epic 14) pinned per tier; ts-rs type generation; Pi TV screens = Chromium kiosk + Svelte page served by the Pi agent; setup-file upload on paid tiers only.
+
 ## Purpose and scope
 
 This is the high-level design for Arena 360: what the system is made of, where each part runs, how data moves, and the qualities it must have. It is the document an engineering lead reads before the low-level design and the one a new engineer reads first. Binding decisions live in the architecture spine; schemas, APIs and protocols live in "Arena 360 — Low-Level Design"; features live in "Arena 360 — Product Requirements"; the eight flows it must serve live in "Arena360 — User Journeys".
@@ -19,7 +21,7 @@ This is the high-level design for Arena 360: what the system is made of, where e
 | Multi-writer | None inside a branch; primary/standby with a cloud-fenced epoch `(counter, hub_instance_id)`; promotion manual only | CRDTs cannot protect wallet and stock invariants; fencing makes a force promote safe |
 | Cloud platform | Cloudflare edge + Kubernetes on the existing Hostinger VPS in Mumbai + Turso (`gz_control` only, Mumbai) + R2 | Zero egress, a prepaid node, control-plane data residency in India |
 | UI stack | Svelte 5 + SvelteKit 3.1 on every app surface; Astro 7 for the marketing site; one shared token and component package | One UI codebase across Kiosk, Hub (Windows and Android), Kitchen display, Owner PWA, portals |
-| Free tier | Android Hub (Tauri 2 mobile) with AdMob banner + interstitial on idle return; Windows Hub for paid | Ads need a mobile ad SDK; Free costs the company nothing |
+| Free tier | Android Hub (Tauri 2 mobile) with an AdMob banner in a reserved bottom slot + standard interstitial on idle return (≤ once/15 min) (revised 23 Oct 2026, epics); Windows Hub for paid | Ads need a mobile ad SDK; Free costs the company nothing |
 | Connectivity beyond LAN | Cloudflare Tunnel first; WebRTC only Hub-to-Hub | Tunnel is free and needs no NAT code; TURN reserved for off-site standby |
 | Billing | Razorpay Subscriptions only, one subscription per branch, autopay mandatory (card or eNACH above ₹15,000) | One integration; recurring revenue by default; renewals stay under the UPI Autopay ceiling |
 | Counter payments | Cash, UPI and card recorded by reference (UPI last 4 digits); no branch payment provider | No provider keys or webhooks at the branch this phase |
@@ -74,10 +76,10 @@ Sixteen components in three places. Only the Hub primary writes branch data; the
 | Hub primary | Branch counter PC (Windows, Tauri 2) or tablet (Android, Tauri 2 mobile, Free) | Sessions, players, wallets, POS, inventory, kitchen, shifts, RBAC, floor view; the single writer; change log; lease; summary and rollup engines; notification outbox | Branch SQLite, player key table, reference cache (catalogue, media, licence) | LAN WebSocket API `:7400`, HTTPS/HTTP `:7401`, `/replicate` | Control plane HTTP, R2 presigned PUT, command mailbox |
 | Hub standby | Second branch PC | Replays the change log and player keys; manually promotable; keeps its own reference cache | Replica SQLite | Promote UI | `/replicate` from primary |
 | Kiosk | Each gaming PC | Lockdown, username + password login or staff-start, HUD, orders (Basic+), game library from the global catalogue, launcher logout, booster | Device token only | — | Hub LAN API (pinned TLS) |
-| Pi controller | Raspberry Pi per console TV | QR idle screen, CEC input switching, warnings, lock screen; no player login | Device token only | — | Hub LAN API (pinned TLS) |
+| Pi controller | Raspberry Pi per console TV | QR idle screen, CEC input switching, warnings, lock screen (Chromium kiosk showing a Svelte page served by the Pi agent); no player login (revised 23 Oct 2026, epics) | Device token only | — | Hub LAN API (pinned TLS) |
 | Hub UI | Tauri window on the Hub device | Staff interface | — | — | Hub core in-process |
-| Kitchen display | Tablet browser on LAN | KOT queue and status | Scoped pairing token | — | Hub HTTP/WebSocket (plain HTTP, kitchen scope) |
-| Phone console page | Player's phone browser on LAN | Request a console plan, show own live timer | Short-lived per-console token | — | Hub `:7401` (plain HTTP, rate-limited per TV) |
+| Kitchen display | Tablet browser on LAN | KOT queue and status | Scoped pairing token | — | Hub `:7401` `/kitchen` (plain HTTP/WS, kitchen scope) (revised 23 Oct 2026, epics) |
+| Phone console page | Player's phone browser on LAN | Request a console plan, show own live timer | Short-lived per-console token | — | Hub `:7401` `/console` (plain HTTP, rate-limited per TV; QR via `arena360.local` mDNS) (revised 23 Oct 2026, epics) |
 | Control plane | `arena-cloud` role `control`, K8s on Hostinger VPS Mumbai | Tenants, owners, auth, subscriptions, licence, pairing, devices, branch fence, heartbeat and gap detection, presign, owner read API, notify send, web push, catalogue, partners, signaling | `gz_control` (Turso) | Hub API, Owner/partner/admin `/v1` API, webhooks | Razorpay, Gupshup, Cloudflare API, R2 |
 | Command relay | `arena-cloud` role `command` | Owner/admin commands, fan-out per branch, status, expiry, epoch checks | `commands` in `gz_control` | Owner API, Hub poll endpoint | `branch_fence` |
 | Audit builder | `arena-cloud` role `builder` | Replays snapshot + a month of batches into a temporary SQLite for audit queries | `builder_jobs`; `audit-cache/` objects (24 h) | Audit API | R2 |
@@ -115,7 +117,7 @@ flowchart TB
     KDS["Kitchen display browser"]
     K -- "WSS 7400 pinned TLS" --> HubP
     P -- "WSS 7400 pinned TLS" --> HubP
-    KDS -- "HTTP 7401 scoped token" --> HubP
+    KDS -- "HTTP 7401 /kitchen scoped token" --> HubP
     HubP -- "replication + keys" --> HubS
   end
   subgraph CF["Cloudflare"]
@@ -154,7 +156,7 @@ flowchart TB
 | Pi per TV | Pi Zero 2 W or Pi 4 | Pi agent | One per console TV |
 | Kitchen tablet | Any browser on LAN | — | — |
 
-**Network rules.** The Hub opens no inbound ports to the internet. Outbound from the branch is HTTPS 443 only: heartbeat, presigned PUTs to R2, command polling, notification drain and, where the `tunnel` flag is on, the `cloudflared` tunnel. The branch LAN is the guest Wi-Fi, so the Hub authenticates every LAN client by class: paired devices with a device token over TLS pinned to the Hub certificate, the kitchen display with a scoped pairing token, and the anonymous phone page with a short-lived per-console token limited to a console request and its own timer. The owner's live view reaches the Hub through the tunnel hostname behind Cloudflare Access. Hub-to-Hub replication across sites uses a WebRTC data channel negotiated through the control plane, STUN first and TURN as fallback.
+**Network rules.** The Hub opens no inbound ports to the internet. Outbound from the branch is HTTPS 443 only: heartbeat, presigned PUTs to R2, command polling, notification drain and, where the `tunnel` flag is on, the `cloudflared` tunnel. The branch LAN is the guest Wi-Fi, so the Hub authenticates every LAN client by class: paired devices with a device token over TLS pinned to the Hub certificate, the kitchen display with a scoped pairing token, and the anonymous phone page with a short-lived per-console token limited to a console request and its own timer. Port `:7401` serves both TLS (paired Tauri apps, pinned cert) and plain HTTP by path (`/kitchen` board, `/console` phone page) with scoped tokens (revised 23 Oct 2026, epics). The owner's live view reaches the Hub through the tunnel hostname `<branch_id>.tunnel.arena360.cloud` behind Cloudflare Access. Hub-to-Hub replication across sites uses a WebRTC data channel negotiated through the control plane, STUN first and TURN as fallback.
 
 **Regions.** The control plane and `gz_control` live in Mumbai, so control-plane data stays in India; branches talk to it through Cloudflare's anycast edge, which keeps latency acceptable because every branch call is a background task, never on a player's critical path. Markets at launch are India plus the countries Razorpay Subscriptions can bill.
 
@@ -198,7 +200,7 @@ The standby replays the same batches over LAN that the uploader ships to R2, and
 3. Owner figures come only from Hub-computed files and say how old they are: summaries carry `as_of`; rollups are schema-versioned and regenerable by the Hub. The cloud never recomputes branch figures from rows.
 4. Commands and offline-queued intents carry a client ULID idempotency key; the Hub applies each once and records it in the same transaction; commands expire after 7 days.
 5. Player PII (name, phone) is encrypted at the Hub with a per-player key held outside the change log; erasure deletes the key (crypto-shredding), so batches, snapshots and audit caches only ever hold ciphertext. No card data anywhere.
-6. Retention: branch `changes` pruned 90 days after upload; batches, snapshots and rollups kept 1 year (Basic) or 3 years (Premium); a yearly GST archive (invoices, credit notes, tax summaries) kept 8 years on every paid tier; GST money records kept 8 years in the Hub DB. Free uploads nothing under the branch prefix.
+6. Retention: branch `changes` pruned 90 days after upload; batches, snapshots and rollups kept 1 year (Basic) or 3 years (Premium); a yearly GST archive (invoices, credit notes, tax summaries) kept 8 years on every paid tier; GST money records kept 8 years in the Hub DB. Free uploads nothing under the branch prefix; the branch KEK escrowed (wrapped) in `gz_control` on every tier incl. Free is the single key-only exception, like licence and heartbeat, and the setup-file template upload is paid tiers only (revised 23 Oct 2026, epics).
 
 **Backup and restore.** The Hub primary writes a daily snapshot after close. A branch is restored from the latest snapshot plus every batch since and the player-key backup, replayed by the same replayer, and the restored Hub opens a new epoch (same fencing as a promote). Full DB export is available on every tier. Restore is tested by the onboarding wizard's "restore drill" on paid tiers once a quarter.
 
@@ -211,10 +213,10 @@ Seven outside integrations, each behind one adapter module with a recorded fake 
 | Razorpay Subscriptions | Per-branch tenant billing, monthly and yearly plans, autopay mandates (UPI Autopay up to ₹15,000; card or eNACH above), refunds | Control plane | REST + webhooks (signature verified, idempotent by event id) | N/A (cloud) | SOPS + age encrypted, decrypted into K8s secrets at deploy |
 | Gupshup | WhatsApp receipts, credit reminders, session alerts; SMS fallback; owner OTP | Control plane, from Arena 360's account, on the Hub's behalf (drained from the Hub outbox) | REST, templates pre-approved; behind a swappable messaging adapter | Requests wait in the Hub outbox and send when the branch is back online | SOPS + age |
 | Web Push (VAPID) | Owner alerts to the Owner PWA | Control plane | Standard Web Push | Alert waits for the browser; WhatsApp stays primary for critical alerts | SOPS + age |
-| AdMob | Banner (always) and interstitial on idle return on the Free Android Hub; never on Kiosk or Pi TV | Android Hub, via an in-house Tauri Kotlin plugin | Google Mobile Ads SDK | No ad shown; app continues | App id in build config |
+| AdMob | Banner (always, in a permanent reserved bottom slot) and the standard AdMob interstitial on idle return at most once per 15 min (Google controls close timing) on the Free Android Hub; owner sets a per-branch content rating G/PG/T (default PG, MA never); never on Kiosk or Pi TV (revised 23 Oct 2026, epics) | Android Hub, via an in-house Tauri Kotlin plugin | Google Mobile Ads SDK | No ad shown; app continues | App id in build config |
 | Cloudflare Tunnel + Access | Owner live view (premium or add-on), read-only | Hub spawns `cloudflared` | Outbound tunnel; Access service tokens | Live view unavailable; LAN unaffected | Tunnel token delivered per heartbeat |
 | Cloudflare TURN | Off-site standby replication fallback | Hub | ICE credentials from control plane | Replication pauses; resumes from last seq | Short-lived credentials |
-| ESC/POS printers, cash drawer, barcode scanner, HDMI-CEC | Receipts, KOT, drawer kick, scanning, console control | Hub and Pi (after commit, from a local outbox) | USB, LAN 9100, Bluetooth SPP; CEC via `cec-client` | Printer offline shows a badge; kitchen display still works | None |
+| ESC/POS printers, cash drawer, barcode scanner, HDMI-CEC | Receipts, KOT (seat — PC/TV number or 'Counter' — only, no player name, no cancel slip) (revised 23 Oct 2026, epics), drawer kick, scanning, console control | Hub and Pi (after commit, from a local outbox) | USB, LAN 9100, Bluetooth SPP; CEC via `cec-client` | Printer offline shows a badge; kitchen display still works | None |
 
 Counter UPI and card payments are not an integration this phase: staff record them by reference (UPI requires the last 4 digits), with no provider keys or webhooks at the branch.
 
@@ -226,7 +228,7 @@ Counter UPI and card payments are not an integration this phase: staff record th
 
 ## Technology stack
 
-Two languages for the whole system: Rust for everything that holds data, and TypeScript with Svelte for every screen. The Kiosk and both Hubs are Tauri 2, so their core is the same Rust; protocol types are generated from Rust into the shared UI package.
+Two languages for the whole system: Rust for everything that holds data, and TypeScript with Svelte for every screen. The Kiosk and both Hubs are Tauri 2, so their core is the same Rust; protocol types are generated from Rust into the shared UI package with ts-rs (revised 23 Oct 2026, epics).
 
 | Component | Language, framework | Key libraries | Why |
 | --- | --- | --- | --- |
@@ -234,7 +236,7 @@ Two languages for the whole system: Rust for everything that holds data, and Typ
 | Hub (Android, Free) | Rust core in Tauri 2 mobile; same Svelte UI | In-house Tauri Kotlin plugin calling Google Mobile Ads SDK 25.5.x; Android plugins for foreground service, mDNS and Bluetooth printing; targetSdk 36, minSdk 28 | One Hub codebase across Windows and Android; no ad code in Rust |
 | Hub UI | Svelte 5.57, SvelteKit 3.1 (`adapter-static`), TypeScript 6, Vite 8 | Shared UI package (tokens from DESIGN.md, components, message catalogue, generated types); Sora bundled | Small bundle for old counter PCs; no runtime font or CDN fetch |
 | Kiosk | Rust, Tauri 2, Svelte front end in WebView2 | tokio-tungstenite, windows crate for hooks and process control, windows-service, Tauri updater | Shares arena-proto and cleaners with the Hub; Windows 10 1803+ only |
-| Pi agent | Rust (aarch64) | cec-client bindings; TV screen stack decided in the Pi epic | Same crate family; low RAM |
+| Pi agent | Rust (aarch64) | cec-client bindings; TV screens rendered by Chromium in kiosk mode showing a Svelte page served by the Pi agent, using the shared tokens and components (revised 23 Oct 2026, epics) | Same crate family; low RAM |
 | Kitchen display | Web page served by Hub | Svelte | Any tablet, no install |
 | Cloud (control, command, builder, jobs) | Rust, Axum, Tokio; one binary, four roles, on Kubernetes | libsql 0.10 (`gz_control` only), aws-sdk-s3 for R2, jsonwebtoken (EdDSA), argon2, web-push (VAPID) | One binary; the builder reuses `arena-replay` |
 | Owner app | SvelteKit 3.1 PWA (`adapter-cloudflare`) | Service worker, IndexedDB cache, Web Push | One codebase for phone and desktop; installable |
@@ -317,8 +319,8 @@ Three environments, one deploy pipeline, and a rollout that treats the branch fl
 | Environment | Cloud | Branch software | Data | Purpose |
 | --- | --- | --- | --- | --- |
 | dev | Each engineer's local Rust binary with SQLite in place of Turso and MinIO in place of R2 | Hub and Kiosk against a local Hub on the same machine or VM | Seeded demo tenant | Daily work |
-| staging | Separate K8s namespace or node, Turso org and R2 bucket; `api.staging.arena360.app` | Internal test cafe with 10 PCs, a Pi and a printer; two friendly beta cafes | Anonymised copy of production control data; synthetic branch data; no ingester; the builder is tested with a synthetic month | Release candidate soak, failover and restore drills |
-| production | K8s on the Hostinger VPS behind Cloudflare; `api.arena360.app` | The fleet | Real | — |
+| staging | Separate K8s namespace or node, Turso org and R2 bucket; `api.staging.arena360.cloud` | Internal test cafe with 10 PCs, a Pi and a printer; two friendly beta cafes | Anonymised copy of production control data; synthetic branch data; no ingester; the builder is tested with a synthetic month | Release candidate soak, failover and restore drills |
+| production | K8s on the Hostinger VPS behind Cloudflare; `api.arena360.cloud` | The fleet | Real | — |
 
 **Pipeline** (GitHub Actions): lint and unit tests on every push; property tests for `apply` invariants; rollup golden tests; generated-type freshness check; integration tests that run a Hub, a fake Kiosk and the cloud binary together; builder round-trip checksum equals the Hub DB; Owner API sum-of-rollups equals Hub Z-report totals over 30 synthetic days; signed Windows and Android builds; web builds for the Owner PWA, portals and marketing; release candidate to staging on tag.
 
@@ -354,11 +356,11 @@ The table makes the priority order concrete: journeys 2, 3 and 4 depend only on 
 | Kiosk lockdown bypassed | Medium | Players reach the desktop; revenue leak | Shell replacement, hook-based key blocking, process allow-list; pen test before GA; bug bounty for cafes | Engineering |
 | Split-brain after a force promote | Low | Duplicate writes during a partition | Cloud-issued epoch `(counter, hub_instance_id)` fenced in `gz_control`; epoch re-checked in every transaction; old Hub self-locks on a higher epoch; old-epoch rows above the fork orphaned, never replayed; promotion manual only | Engineering |
 | R2 write costs from a bad interval | Medium if misconfigured | Many × cost per tenant | Hard floor of 30 s on `upload_interval_s`; tier cadence Basic 900 s / Premium 300 s; cost alert per tenant | Engineering |
-| Rollup schema lags a report request | Medium | Owner asks for a figure the rollup lacks | Rollup schema versioned; Hub regenerates older days (oldest first, max 10/min); a new field needs only Hub + Owner app releases | Engineering |
+| Rollup schema lags a report request | Medium | Owner asks for a figure the rollup lacks | Rollup schema versioned; Hub regenerates older days (oldest first, max 10/min); a new field needs only Hub + Owner app releases; the licence pins `rollup_schema` per tier and the Hub emits the pinned schema (v2 with Epic 13, v3 with Epic 14) (revised 23 Oct 2026, epics) | Engineering |
 | Audit builder load spikes | Medium | Slow first audit query | 24 h audit cache, 50 GB local LRU, progress state; add a second node for the builder | Engineering |
 | Single-node control plane | Medium | Owner API and commands down while rebuilt | Branches unaffected (local-first); rebuild from code + nightly off-provider `gz_control` backup, RTO 4 h | Engineering |
 | Razorpay unavailable in a target country | High for some regions | Cannot sell there | Markets limited to India + Razorpay Subscriptions countries; pricing page hides others | Product |
-| AdMob policy rejects the counter use case | Medium | Free tier loses funding | Ads only in the Android Hub app (banner + interstitial on idle return, never after settle or over an open cart), never on PCs or TVs; review policy before Free launch | Growth |
+| AdMob policy rejects the counter use case | Medium | Free tier loses funding | Ads only in the Android Hub app (banner in a reserved slot + standard interstitial on idle return at most once per 15 min, never after settle or over an open cart; content rating G/PG/T) (revised 23 Oct 2026, epics), never on PCs or TVs; review policy before Free launch | Growth |
 | Gupshup template approval delays | Medium | Reminders late at launch | Submit templates at wave 1; SMS fallback; adapter swappable | Product |
 | Scope: everything in one launch | High | Date slips | Wave-1 beta with 20 cafes while waves 2 and 3 are built; cut list agreed before beta | Founder |
 | Gaming PCs below Windows 10 1803 cannot run the Kiosk | Medium | Onboarding friction | Stated minimums on the downloads page; partners offer OS upgrades as a service; Android Hub for old counter PCs | Product |

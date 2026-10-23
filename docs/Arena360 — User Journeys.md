@@ -61,7 +61,7 @@ The default way a cafe is used: the player sits, plays, and pays at the counter 
 | Bill computed | Hub | Session sheet | Minutes × rate with the branch rounding unit and minimum, plus orders, plus GST if enabled; the sheet shows the breakdown |
 | Settle | Staff | Session sheet | Any mix of cash, UPI by reference (last 4 digits, required), card reference, wallet; the sheet will not close with a remainder (revised 23 Oct 2026, UX) |
 | Rest to credit | Staff | Session sheet | Only for a profiled player with credit enabled; blocked at the limit with a manager-PIN override, once per player per day (revised 23 Oct 2026, UX) |
-| Receipt | Hub | Printer or WhatsApp | Sequential invoice number; WhatsApp receipt needs the player's consent |
+| Receipt | Hub | Printer or WhatsApp | Sequential invoice number, assigned at print when a printer is used (a printed bill cannot be undone; use Refund) or when the 8 s Undo window closes; a drawer kick also ends Undo; WhatsApp receipt needs the player's consent (revised 23 Oct 2026, epics) |
 | PC back to free | Kiosk | Gaming PC | Launchers signed out, saved credentials cleared, attract screen up; tile turns green |
 
 Timing budget: start under 10 s, settle under 10 s, measured from the first tap on the tile.
@@ -77,7 +77,7 @@ A player with a pack or wallet balance never needs the counter: login, pick a pl
 | Step | Actor | Where | What must be true |
 | --- | --- | --- | --- |
 | Attract screen | Kiosk | Gaming PC | Branding, game video, current rates and the active dynamic rule; no ads (revised 23 Oct 2026, UX) |
-| Login | Player | Kiosk | Username and password only, in one screen (staff can also start from the Hub); three failures lock the kiosk login for 60 s and tell the Hub (revised 23 Oct 2026, UX) |
+| Login | Player | Kiosk | Username and password only, in one screen (staff can also start from the Hub); five failures lock the kiosk login for 60 s with a visible countdown and tell the Hub (revised 23 Oct 2026, UX) (revised 23 Oct 2026, epics) |
 | Pick plan | Player | Kiosk | Shows only plans valid for this device's group; packs show hours left and expiry; wallet shows balance and the hourly rate |
 | Hub approves | Hub | — | One transaction: debit wallet or pack, write session, append change log; refusal returns a typed reason |
 | Plays | Player | Kiosk | HUD counts down; game grid and library available; orders allowed |
@@ -100,7 +100,7 @@ A player orders from the seat; the kitchen sees a ticket with the seat number; t
 | Open menu | Player or staff | Kiosk HUD or Hub POS | Menu with images and categories; items out of stock are greyed with "out" |
 | Build cart | Player | Kiosk | Stock is checked live against the Hub; a bundle shows its components and refuses if any component is short, with staff override at the POS only |
 | Place order | Player | Kiosk | Order attaches to the running session; a player without a session pays at the counter instead |
-| KOT prints | Hub | Kitchen printer | Within 3 s; ticket carries seat number, items, modifiers, order id; reprint from the Hub |
+| KOT prints | Hub | Kitchen printer | Within 3 s; ticket carries the seat only (PC/TV number or "Counter", never the player name), items, modifiers, order id; reprint from the Hub; no cancel slip (revised 23 Oct 2026, epics) |
 | Kitchen display | Kitchen | Any tablet on LAN | New orders appear at the top with elapsed time; tap advances new → preparing |
 | Marked ready | Kitchen | Display | Tap advances to ready; the ticket row turns green on the display |
 | HUD shows ready | Kiosk | HUD | Toast on the player's screen; staff see a ready badge on the device tile for runner delivery |
@@ -117,7 +117,7 @@ The Hub knows what should be in the drawer; closing is counting what is. Staff s
 
 | Step | Actor | Where | What must be true |
 | --- | --- | --- | --- |
-| Shift opened | Staff | Hub | Opening float entered and confirmed; shift bound to the staff login |
+| Shift opened | Staff | Hub | Opening float entered and confirmed; shift bound to the staff login; one open shift per drawer, so handover is close then open (revised 23 Oct 2026, epics) |
 | Sales all day | Staff | Hub | Every settlement records method; cash sales kick the drawer and add to expected cash |
 | Deposits, spend | Staff or manager | Hub | Cash deposits to safe or bank and petty-cash expenses reduce expected cash, each with a reference or receipt photo |
 | Close shift | Staff | Hub shift sheet | A denomination counter or a single total; the sheet never shows expected cash until counted cash is entered |
@@ -179,7 +179,7 @@ The main Hub PC dies during a Saturday rush. Sessions keep running on the kiosks
 | Main Hub dies | Hub | Counter PC | Kiosks show "Reconnecting…"; running sessions continue on the last known time; the player is never locked out |
 | Kiosk while Hub unreachable | Kiosk | Gaming PC | New login, orders and Extend are disabled with "Counter is reconnecting — try again shortly." |
 | Open standby | Counter staff | Standby PC | The standby Hub shows "Promote to main" |
-| Promote | Counter staff, manager | Standby Hub | A manager's PIN entered inline; promotion completes under 10 s |
+| Promote | Counter staff, manager | Standby Hub | A manager's PIN entered inline (Manager holds `ops.promote`; restore from a file stays Owner-only); promotion completes under 10 s (revised 23 Oct 2026, epics) |
 | Kiosks reconnect | Kiosk → Hub | Gaming PC | Kiosks find the new main Hub by themselves and sessions reconcile; no player notices |
 | Promote fails | Manager | Standby Hub | A warning says data since the last sync may be lost; a manager can force promote with PIN; the forced promote starts a new epoch, is audited and the owner is alerted (revised 23 Oct 2026, architecture) |
 | Old main returns | Hub | Old counter PC | Split-brain lock: it shows "This PC is no longer the main Hub" with "Make this the standby" and never serves kiosks |
@@ -194,7 +194,7 @@ A reseller or installer (Imran in the UX spine) applies, is approved by WhatsApp
 | --- | --- | --- | --- |
 | Apply | Partner | Marketing site, Pricing → Partners | Light form: name, phone (OTP), email, city, business name, type (reseller or installer), cafes served |
 | Under review | Partner | Partner portal | Only the application status shows until approval |
-| Approved | Arena 360 team | WhatsApp | Approval by WhatsApp only, with the login link to the partner portal (partners.arena360.in, separate login) |
+| Approved | Arena 360 team | WhatsApp | Approval by WhatsApp only, with the login link to the partner portal (partners.arena360.cloud, separate login) |
 | KYC | Partner | Partner portal | PAN, bank details, GSTIN optional; required before the first payout |
 | Share link | Partner | Partner portal | Referral link and code shown; a cafe owner signs up through it |
 | Cafe referred | Control plane | Partner portal | The tenant carries the `referral_code`; the cafe is listed as referred with 10% accruing monthly |
@@ -208,14 +208,14 @@ Two friends play on a PS5 at TV 3. With the Pi (v1.1) they request from a phone 
 
 | Step | Actor | Where | What must be true |
 | --- | --- | --- | --- |
-| TV idle | Pi | TV | Branch logo, TV number, console rates and a large "Scan to start" QR; no ads |
+| TV idle | Pi | TV | Branch logo, TV number, console rates and a large "Scan to start" QR (`http://arena360.local:7401/console/<tv>`, found by mDNS); no ads (revised 23 Oct 2026, epics) |
 | Scan and request | Player | Phone | Hub page over the cafe LAN with no login; pick a console plan and tap Request; "Waiting for the counter — pay at the counter to start." |
 | Request on Hub | Hub | Floor view tile | The console tile raises a "REQUEST" badge with sound; the requested plan is pre-selected in the sheet |
 | Pay and start | Counter staff | Session sheet | Player pays at the counter or is looked up (or Guest); postpaid, pack and pass rules apply; Start switches the TV to the console within 3 s |
 | Live timer | Hub → phone | Phone | The phone shows time left only, over the LAN, with "Extend at the counter"; a WhatsApp/SMS at 5 min goes out only with consent |
 | Warnings | Pi | TV | At 5 and 1 min the TV switches to the Pi input for 5 s, then back to the game; the tile shows the warning states |
-| Time-up | Pi, Hub | TV, floor view | No grace: the TV locks at once with "Time's up — see the counter."; CEC standby or smart plug per branch; the tile raises "TIME UP" with sound until acknowledged |
-| End and settle | Counter staff | Session sheet | Staff end and settle; Undo until a receipt prints |
-| Controller check | Counter staff | Floor view tile | Staff tap Returned or Missing; logged against the session; TV returns to idle |
+| Time-up | Pi, Hub | TV, floor view | No grace: the TV locks at once with "Time's up — see the counter."; CEC standby per branch (smart plug deferred) (revised 23 Oct 2026, epics); the tile raises "TIME UP" with sound until acknowledged |
+| End and settle | Counter staff | Session sheet | Staff end and settle; Undo for 8 s, ending early if a receipt prints or the drawer kicks (revised 23 Oct 2026, epics) |
+| Controller check | Counter staff | Floor view tile | Staff tap Returned or Missing; logged against the session; TV returns to idle. The check is MVP on the Hub console tile and works without a Pi (revised 23 Oct 2026, epics) |
 
 Failure branches: extend is done at the counter and the phone and TV pick up the new time; a refused request shows "Ask at the counter." on the phone; a phone that leaves the cafe Wi-Fi keeps its last value with "Reconnect to cafe Wi-Fi to update".

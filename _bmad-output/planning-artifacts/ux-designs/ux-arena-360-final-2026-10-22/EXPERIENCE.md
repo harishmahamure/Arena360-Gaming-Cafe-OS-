@@ -25,7 +25,7 @@ This is a multi-surface product: one brand in two moods (see `DESIGN.md` Brand &
 | Kitchen display | Browser page on any LAN tablet | Staff | Kitchen staff |
 | Owner app | One responsive web app, installable as a PWA (phone + desktop), with standard web push for alerts (on iOS only when installed to the Home Screen) | Staff | Owner |
 | Onboarding wizard | Web, resumable, 10 steps | Staff | Owner |
-| Partner portal | Separate web app at partners.arena360.in with its own login (a partner is not a café owner) | Staff | Partner / installer |
+| Partner portal | Separate web app at partners.arena360.cloud with its own login (a partner is not a café owner) | Staff | Partner / installer |
 | Marketing site | Static web | Player | Prospective owner, partner |
 | Pi TV idle/warning/lock + phone QR start page and live timer | TV via Pi; the player's phone browser (no login). **v1.1** | Player | Player |
 | Receipts, prints & messages | Thermal print, WhatsApp/SMS, web push | Formal | Player, owner, kitchen |
@@ -204,7 +204,7 @@ These rows are behavioural. Visual specs live in `DESIGN.md` Components, under t
 | `theme-toggle` | Owner app Account; web footer | System · Light · Dark. System (the default) follows `prefers-color-scheme` live. The choice is remembered per device. Not on Kiosk, Hub, Kitchen display or Pi. |
 | `button-primary` | All | One per view. Disabled state shows why, inline (never a silent disabled). |
 | `button-secondary` / `button-warning` | All / HUD | Secondary for non-primary actions (Dismiss, Cancel, End, Lock). Warning only for Extend in `hud-toast` and `extend-options`. |
-| `undo-toast` | Hub (End, Settle, Collect), Kitchen display (stage advance) | ([Tile sheet](mockups/key-hub-tile-sheet.html), [POS](mockups/key-hub-pos.html), [Kitchen board](mockups/key-kitchen-board.html) mocks) Money actions run **in one tap, with no confirm modal**, then show Undo for 5–10 s. Undo restores the prior state exactly. The toast never blocks the floor. A new money action replaces the toast and commits the previous one. The receipt prints at once if a printer is available. **No Undo once a receipt has printed**: the toast is not shown and staff use Refund instead. Kiosk cleanup runs **immediately** on End; Undo restores the session record, but the player must log in again. |
+| `undo-toast` | Hub (End, Settle, Collect), Kitchen display (stage advance) | ([Tile sheet](mockups/key-hub-tile-sheet.html), [POS](mockups/key-hub-pos.html), [Kitchen board](mockups/key-kitchen-board.html) mocks) Money actions run **in one tap, with no confirm modal**, then show Undo for 5–10 s. Undo restores the prior state exactly. The toast never blocks the floor. A new money action replaces the toast and commits the previous one. The receipt prints at once if a printer is available. **No Undo once a receipt has printed or the cash drawer has kicked**: with a printer assigned the invoice number is issued at print, so the toast is not shown and staff use Refund instead; without a printer the invoice number is assigned when the 8 s Undo window closes. Kiosk cleanup runs **immediately** on End; Undo restores the session record, but the player must log in again. |
 | `alert-badge` | Hub header, floor tiles, kitchen tickets | The visual twin of every alert sound. It persists until acknowledged by opening the item it points to. The header shows the count, and opening the header badge lists the alerts. |
 | `status-badge` | Floor tiles, Owner commands, Kitchen display | Always colour + text. Owner command states: pending ("Waiting for branch" + time queued) → applied / rejected (reason + Retry) / expired (Resend). Changes are announced in a polite live region on web. |
 | `tier-lock` | Hub, Owner app, Onboarding (staff/owner only) | A gated feature or limit (Kitchen display on Free, Owner dashboards on Free, Live view below Premium, the device limit (Free 20, Basic 60, Premium 200), Free's 3 users) shows locked with "Available on <tier>" + Upgrade, which leads to Owner app Subscription. **Player surfaces hide gated features entirely.** |
@@ -215,7 +215,7 @@ These rows are behavioural. Visual specs live in `DESIGN.md` Components, under t
 |---|---|---|
 | `scrim` / `tile-scrim` | All media-backed surfaces | Always rendered when media is present. Removed with media in high-contrast. |
 | `video-control` | Kiosk login, Kiosk Home hero | ([Home mock](mockups/key-kiosk-home.html)) Always visible while video plays. Keyboard-reachable. Pause holds the current frame for the rest of the login or session view. |
-| `login-panel` | Kiosk login | ([Login mock](mockups/key-kiosk-login.html): at rest, failed submit, Hub unreachable) Username + password; Enter submits. 3 failures lock login for 60 s with a visible countdown, and the Hub is notified. Non-memory alternative: **staff starts from Hub** (satisfies WCAG 3.3.8 by alternative). QR-from-Hub login is dropped for now. While the Hub is unreachable, submit is disabled (see State Patterns, Hub unreachable). "Forgot password?" shows the Forgot password line from Voice; staff reset it from the Players profile. No language picker. |
+| `login-panel` | Kiosk login | ([Login mock](mockups/key-kiosk-login.html): at rest, failed submit, Hub unreachable) Username + password; Enter submits. 5 failures lock login for 60 s with a visible countdown, and the Hub is notified. Non-memory alternative: **staff starts from Hub** (satisfies WCAG 3.3.8 by alternative). QR-from-Hub login is dropped for now. While the Hub is unreachable, submit is disabled (see State Patterns, Hub unreachable). "Forgot password?" shows the Forgot password line from Voice; staff reset it from the Players profile. No language picker. |
 | `signup-form` | Kiosk "Create account" | (Spine-only.) Fields: username, password, phone, name. **No OTP.** One **required** consent checkbox, unticked by default, covering Terms, Privacy Policy and service messages only (WhatsApp/SMS receipts, credit reminders, session and console alerts); copy in Voice. There is no marketing consent. Account creation is blocked until it is ticked, with the reason inline. Duplicates are blocked by username **and** by phone, with the copy in Voice. On success the profile is created on the Hub and the player continues to the plan picker. |
 | `pill-nav` / `pill-nav-item-active` | Kiosk shell | Home · Games · Apps · Shop. Shop is hidden on Free (player surfaces hide gated features). Exactly one item is active; on the Account page the tab the player came from stays active. Arrow keys move; selection persists per session and resets on logout. |
 | `time-chip` | Kiosk top bar | Always visible while logged in. Counts down (prepaid) or up (postpaid). At ≤10 min the chip gains a 2px warning border and a ⚠ glyph replaces the dot. Click → `account-menu`. |
@@ -260,7 +260,7 @@ These rows are behavioural. Visual specs live in `DESIGN.md` Components, under t
 | `hub-header` | Hub | Always shows: branch, active `chip-rule`, connectivity (`chip-offline`), cloud backup status on paid tiers (last upload, pending batches), `alert-badge` count, clock, signed-in staff. Tapping backup status opens System. |
 | `floor-tile` | Hub floor view | ([Floor view mock](mockups/key-hub-floor.html)) Tiles group by zone; each zone header can collapse its zone (see State Patterns, High device count). Tap or Enter → `tile-sheet`. Updates ≤2 s from source events. Live updates never move focus or reorder a focused tile. Shows the `status-badge`, time, player, `group-chip`, `tile-order-badge` and `alert-badge`. |
 | `group-chip` | Floor tile corner | Read-only. Name + colour dot of the tile's device group; the owner or manager sets group colours from six swatches in Settings → Layout. Hidden on Unassigned tiles. |
-| `floor-tile-console` | Hub floor view (consoles) | Same as `floor-tile`. Sessions are started and ended **from the Hub only**, and the timer runs on the Hub. Warnings show on the tile. Time-up raises `alert-badge` "TIME UP" + sound until staff walk over and end it. The audit records who ended it. After the end the tile shows "CHECK CONTROLLERS" until staff tap **Returned** or **Missing** in the sheet (logged against the session). A QR start request raises `alert-badge` "REQUEST"; the sheet opens with the requested plan pre-selected and Start. |
+| `floor-tile-console` | Hub floor view (consoles) | Same as `floor-tile`. Sessions are started and ended **from the Hub only**, and the timer runs on the Hub. Warnings show on the tile. Time-up raises `alert-badge` "TIME UP" + sound until staff walk over and end it. The audit records who ended it. After the end the tile shows "CHECK CONTROLLERS" until staff tap **Returned** or **Missing** in the sheet (logged against the session); this controller check is MVP on the Hub tile and does not need a Pi. A QR start request raises `alert-badge` "REQUEST"; the sheet opens with the requested plan pre-selected and Start. |
 | `tile-order-badge` | Floor tile | "ORDER" while the kitchen is working; "READY" when the order is ready to deliver to the seat or to pick up at the counter, per the branch's order fulfilment setting. Tapping the tile opens the sheet at the order section. |
 | `tile-sheet` | Hub | ([Tile sheet mock](mockups/key-hub-tile-sheet.html)) Start / extend / order / transfer / pause-resume / lock / end; each is one tap. Pause asks for a reason: Player stepped away · Hardware issue · Power cut · Other; paused time isn't billed, and the tile's secondary line shows the reason. The sheet docks to the right and the floor reflows while it is open. Remote unlock (for Kiosk admin exit) needs `inline-pin` and is logged. Transfer: pick a target tile; the old device locks and the new one unlocks within 5 s. Shows `bill-breakdown`. Non-modal: the floor stays live behind it. On open, focus moves into the sheet; Esc closes it and returns focus to the tile. |
 | `inline-pin` | Manager-gated actions (forced end, manual discount, refund/void, variance over threshold, credit override, promote standby and forced promote, Kiosk admin exit, any action the signed-in role lacks) | ([Tile sheet](mockups/key-hub-tile-sheet.html) and [Shift close](mockups/key-hub-shift-close.html) mocks) Renders in place inside the current sheet, row or Kiosk panel. Numeric keypad + keyboard. Never navigates away. A reason picker appears in the same place when required. |
@@ -274,10 +274,10 @@ These rows are behavioural. Visual specs live in `DESIGN.md` Components, under t
 | `variance-readout` | Shift close | Shows counted, expected and the signed difference. "Breakdown" is one tap away and lists opening float, cash sales, cash refunds, deposits and expenses. Within threshold (default ₹100), close completes with no PIN. Over threshold: `inline-pin` + a reason from a list + free text, in place. Reason list: Counting error · Unrecorded expense · Change float mismatch · Other (+ free text). Close → Z-report prints with one tap. **Difference = counted − expected**: + means extra cash ("over"), − means short ("short"). |
 | `chip-rule` | Hub header, Kiosk attract, plan picker | Shows the active dynamic pricing rule while that rule is in effect. A rule change reaches the chip within 1 min. |
 | `chip-offline` | Hub header | Appears when internet or cloud is unreachable and names which. Nothing else in the UI changes. |
-| `kitchen-ticket` | Kitchen display | ([Kitchen board mock](mockups/key-kitchen-board.html)) New tickets appear at the top with elapsed time, a chime and the "NEW" `alert-badge` (held until advanced). Tap advances one stage → `undo-toast`. **The Kitchen display cannot cancel**: only the Hub/counter cancels (after preparing, with a reason, landing in the waste report). A cancelled ticket shows "Cancelled", greys out, then leaves the board. During LAN loss tickets stay visible and can still be advanced, with no per-ticket marker (see State Patterns). |
+| `kitchen-ticket` | Kitchen display | ([Kitchen board mock](mockups/key-kitchen-board.html)) New tickets appear at the top with elapsed time, a chime and the "NEW" `alert-badge` (held until advanced). Tap advances one stage → `undo-toast`. Tickets show the seat only (PC/TV number or "Counter"), never the player's name. **The Kitchen display cannot cancel**: only the Hub/counter cancels (after preparing, with a reason, landing in the waste report); no cancel slip prints. A cancelled ticket shows "Cancelled", greys out, then leaves the board. During LAN loss tickets stay visible and can still be advanced, with no per-ticket marker (see State Patterns). |
 | `kitchen-top-bar` | Kitchen display | Branch name · clock · open tickets with the oldest age · LAN status (Connected / Reconnecting) · mute-chime toggle. Muting silences the chime only; the "NEW" `alert-badge` and a "Chime off" label stay visible. |
-| `ad-banner` | Free-tier Android Hub | See Ads. Never covers the floor grid, cart or settle bar. Never on the Kiosk in Phase 1. |
-| `ad-interstitial` | Free-tier Android Hub | Only when staff return after the idle lock (on PIN unlock), never after a settle. Skippable after 5 s. Never shown while a cart or `tile-sheet` is open. |
+| `ad-banner` | Free-tier Android Hub | See Ads. Sits in a permanent reserved bottom slot that no overlay (sheet, toast, dialog) ever covers; never covers the floor grid, cart or settle bar. Never on the Kiosk in Phase 1. |
+| `ad-interstitial` | Free-tier Android Hub | The standard AdMob interstitial: only when staff return after the idle lock (on PIN unlock), at most once per 15 min, never after a settle. Close timing is controlled by Google (no custom skip countdown). Never shown while a cart or `tile-sheet` is open. |
 
 ### Owner and Web
 
@@ -334,7 +334,7 @@ Consoles use the same states on `floor-tile-console`.
 | Refusal | Extend | Past closing time / credit limit / insufficient balance: Voice copy; options stay open. |
 | Credit block | Kiosk / Hub | "Credit limit reached, see counter." The Hub offers an `inline-pin` override, once per player per day. |
 | Sign-up duplicate | Kiosk | Field-level error on username or phone, using the Voice copy. |
-| Login lock | Kiosk | 60 s countdown on the panel after 3 failures; the Hub is notified with an `alert-badge`. |
+| Login lock | Kiosk | 60 s countdown on the panel after 5 failures; the Hub is notified with an `alert-badge`. |
 | Blocked app | Kiosk | `hud-toast` "That app isn't allowed on this PC."; logged on the Hub. |
 | Forced end | Kiosk | `lock-screen` with the forced-end line. |
 | Low balance | Kiosk HUD | Persistent warning `hud-toast` with Extend / top-up guidance. |
@@ -349,7 +349,7 @@ Consoles use the same states on `floor-tile-console`.
 | No network | Owner PWA | Cached data with data age. Commands queue on the device as "Queued on this device", then become "Waiting for branch" once sent. |
 | Old main Hub returns (split-brain) | Hub | The returning PC locks itself: "This PC is no longer the main Hub" with **Make this the standby**. It never serves Kiosks. |
 | Command conflict | Hub | The owner's command overwrites the local edit; toast "Price updated by owner"; both changes in the audit. |
-| Ad interstitial due | Free Android Hub | Shown only when staff return after the idle lock; skipped if a cart or sheet is open on return. Never after a settle. |
+| Ad interstitial due | Free Android Hub | Shown only when staff return after the idle lock, at most once per 15 min; skipped if a cart or sheet is open on return. Never after a settle. |
 
 ## Interaction Primitives
 
@@ -383,7 +383,7 @@ Visual contrast and token ratios live in `DESIGN.md`.
 - **Focus.** `focus-ring` on every focusable element, distinct from the featured-tile outline. In HC it is the thicker yellow ring.
 - **Boundaries.** Inputs, PIN cells and focusable edges use `{colors.border-strong}` (≥3:1).
 - **Links** are always underlined.
-- **High-contrast theme** (`*-hc` tokens) is a **branch/device setting**: an owner or manager toggles it per device from Hub settings. There is no player toggle. HC removes art, video and translucency, adds 2px outlines, and cuts motion. It applies to Kiosk, Hub, Kitchen display, Pi TV and Owner surfaces.
+- **High-contrast theme** (`*-hc` tokens) is a **branch/device setting**: an owner or manager toggles it per device from Hub settings. There is no player toggle. HC removes art, video and translucency, adds 2px outlines, and cuts motion. It applies to Kiosk, Hub, Kitchen display, Pi TV, the Owner app and web surfaces (where it overrides light/dark).
 - **Light theme** (`*-light` tokens) on the Owner app and web surfaces follows `prefers-color-scheme`, with `theme-toggle` to override. All its load-bearing pairs meet the same floors (`DESIGN.md` Colors, Light theme).
 - **Text over media.**
   - Always sits on `{components.scrim}` inside its copy zone, verified against a white frame.
@@ -448,7 +448,7 @@ Failures:
 Failures:
 - Settle with a remainder: Settle stays disabled, with the reason shown.
 - Credit at the limit: `inline-pin` override (once per player per day).
-- A mis-tapped End or Settle: Undo, until a receipt has printed; after printing, Refund.
+- A mis-tapped End or Settle: Undo, until a receipt has printed or the drawer has kicked; after that, Refund.
 
 ### Journey 3 — Prepaid player at the Kiosk (Aman, 17, prepaid regular)
 
@@ -567,7 +567,7 @@ Failures:
 
 ### Journey 10 — Console session (Rohit; PS5, TV 3)
 
-The Pi/QR path is v1.1 ([Pi console mock](mockups/key-pi-console.html)). Without a Pi, Rohit starts from the tile (step 4) and the tile alone carries the warnings and time-up.
+The Pi/QR path is v1.1 ([Pi console mock](mockups/key-pi-console.html)). Without a Pi, Rohit starts from the tile (step 4) and the tile alone carries the warnings, time-up and the controller check (MVP). The TV QR opens the phone page on the café LAN at `arena360.local` (the Hub's mDNS name), over plain HTTP.
 
 1. TV 3 is idle ([Pi console mock](mockups/key-pi-console.html), frame 1): `tv-idle` loops muted game video with the branch logo, "TV 3", console rates and a large "Scan to start" QR.
 2. Two friends scan it. `qr-start-page` opens on a phone with **no login**; they pick a console plan and tap Request ([Pi console mock](mockups/key-pi-console.html), frame 2): "Waiting for the counter — pay at the counter to start."
@@ -575,7 +575,7 @@ The Pi/QR path is v1.1 ([Pi console mock](mockups/key-pi-console.html)). Without
 4. The friends pay at the counter (or Rohit looks them up, or picks Guest; postpaid, pack and pass rules apply). Rohit taps Start. The Pi switches the TV to the console.
 5. The phone page becomes `live-timer` ([Pi console mock](mockups/key-pi-console.html), frame 3): "Time left on TV 3", updating over the LAN, with "Extend at the counter". The Hub runs the timer; with consent on a profile, a WhatsApp/SMS goes out at 5 min.
 6. At 5 and 1 min the Pi switches the TV to `tv-warning` for 5 s ([Pi console mock](mockups/key-pi-console.html), frame 4) ("5 min left — ask at the counter to extend"), then back to the game. The tile shows the warning states.
-7. At time-up the TV locks immediately, with no grace, showing `tv-lock` ("Time's up — see the counter."; staff handle it; CEC standby or smart plug per branch; [Pi console mock](mockups/key-pi-console.html), frame 5), and the tile raises `alert-badge` "TIME UP" + sound until acknowledged ([Floor view mock](mockups/key-hub-floor.html), PS5 · TV 3).
+7. At time-up the TV locks immediately, with no grace, showing `tv-lock` ("Time's up — see the counter."; staff handle it; CEC standby per branch (smart plug deferred); [Pi console mock](mockups/key-pi-console.html), frame 5), and the tile raises `alert-badge` "TIME UP" + sound until acknowledged ([Floor view mock](mockups/key-hub-floor.html), PS5 · TV 3).
 8. Rohit ends the session from the tile (Undo available until a receipt prints) and settles. The tile shows "CHECK CONTROLLERS"; he taps **Returned** ([Pi console mock](mockups/key-pi-console.html), frame 6).
 9. **Climax:** TV 3 returns to `tv-idle`, the audit records who ended it and that both controllers came back, and nobody overran unnoticed.
 
@@ -594,11 +594,11 @@ Structure only; register is formal. Print treatment (58mm and 80mm, ESC/POS font
 | Receipt / GST invoice | Branch name (text header, no logo image), GSTIN · invoice no. (sequential per branch and financial year, never reused) · date/time · staff · player or "Guest" · session line (device, minutes × rate) · item lines (name, HSN, qty, rate, GST rate, amount) · coupon · discount · subtotal · GST breakdown · total · payments by method (with UPI last-4 / card refs) · remainder to credit · footer text. B2B adds the customer GSTIN. Delivery: print · WhatsApp (consent) · none |
 | Credit note | As invoice, negative, referencing the original invoice no. |
 | Credit collection receipt | Amount, method, references to the settled transactions, outstanding after |
-| KOT | Seat/device no. · order id · time · items + modifiers. Reprint from the Hub |
+| KOT | Seat only (PC/TV number or "Counter"; no player name) · order id · time · items + modifiers. Reprint from the Hub. No cancel slip |
 | Z-report | Sales by type · payments by method · expected vs counted · variance · waste · expenses · deposits · refunds · drawer opens |
 | WhatsApp / SMS | Credit reminder (amount, branch) · low balance · session ending · console 5-min alert · receipt. Service messages only, under the sign-up consent; no marketing |
 | Subscription invoice (owner) | Tier, branches, add-ons, billing cycle, subtotal, GST 18% itemised, total |
-| Partner (WhatsApp, email) | Application approved + portal link (WhatsApp) · payout statement: accrued, TDS, paid, invoice status |
+| Partner (WhatsApp) | Application approved + portal link (WhatsApp) · payout statement: accrued, TDS, paid, invoice status |
 | Owner alerts (web push + WhatsApp) | Branch offline · cash variance (branch, staff, amount, reason) · low stock · credit overdue · large refund/discount |
 
 ## Game Media
@@ -621,7 +621,7 @@ Structure only; register is formal. Print treatment (58mm and 80mm, ESC/POS font
 ## Ads
 
 - **Phase 1 has no Kiosk ads.** The attract screen exists without an ad slot, and the PRD's "every 15 min on Free" is deferred.
-- The Free-tier Android Hub carries an `ad-banner` (always) and an `ad-interstitial` (AdMob) only when staff return after the idle lock, never after a settle, skippable after 5 s, never while a cart or tile sheet is open. There are no rewarded ads. Basic and Premium show none. Upgrading removes ads within one heartbeat. There is never an ad on a player screen (Kiosk or Pi).
+- The Free-tier Android Hub carries an `ad-banner` (always) and an `ad-interstitial` (AdMob) only when staff return after the idle lock, at most once per 15 min, never after a settle, never while a cart or tile sheet is open. The interstitial is the standard AdMob format and Google controls when it can be closed (no custom skip countdown). The banner has a permanent reserved bottom slot that overlays never cover. Ads exclude adult, gambling and alcohol categories; the owner's only ad control is a per-branch content rating G / PG / T (default PG; MA never), not category blocks. There are no rewarded ads. Basic and Premium show none. Upgrading removes ads within one heartbeat. There is never an ad on a player screen (Kiosk or Pi).
 
 ## Tier Gating in UI
 

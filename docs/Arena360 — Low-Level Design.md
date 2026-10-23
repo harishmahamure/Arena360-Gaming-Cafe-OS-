@@ -4,6 +4,8 @@ Oct 23, 2026 · @Harish
 
 > **Revision 23 Oct 2026.** Brought in line with the architecture spine (`_bmad-output/planning-artifacts/architecture/architecture-arena-360-final-2026-10-23/ARCHITECTURE-SPINE.md`), which is the binding contract; where this document and the spine differ, the spine wins. This document now also carries the infrastructure tables, batch format and Hub↔cloud endpoints that previously lived in a separate low-level architecture document. Major changes: no cloud mirror — the uploader ships batches plus Hub-computed `state/latest.json` and daily rollups, gaps are found by heartbeat, owner reads come from files and audits from an on-demand builder; `commands` in `gz_control`; epochs `(counter, hub_instance_id)` issued by the cloud through `branch_fence`, manual-only promotion with force promote under fencing; undo as compensating intents with row versions (`rev`/`base_rev`); client ULID idempotency keys with a relay-assigned fetch cursor; `business_day`/`fy` stamped in `apply()`; money in minor units with ISO 4217 currency; epoch-segmented invoice numbering and per-invoice GST rounding (GST-registered Indian tenants only); notifications from a Hub outbox sent by the cloud through a Gupshup adapter, owner alerts by VAPID web push; crypto-shredding for player PII; yearly GST archive; Android Hub on Tauri 2 mobile with AdMob through an in-house Kotlin plugin (banner + interstitial on idle return only); Owner app is a SvelteKit PWA; kiosk login username + password or staff-start; Pi has no player login and no console grace; global game catalogue with a Hub media cache; LAN client classes; per-tenant rate limits in `arena-cloud`; SOPS + age secrets; Razorpay per-branch subscriptions; partner, admin and billing components; version pins.
 
+> **Revision 23 Oct 2026, epics.** Decisions made during epics creation: domains under `arena360.cloud` (LAN mDNS `arena360.local` unchanged); `:7401` serves TLS (paired apps) and plain HTTP by path (`/kitchen`, `/console`); kiosk login lockout 5 failures → 60 s; device-health telemetry (`last_seen_at`, `kiosk_version`, hardware, outages) written outside `apply()`/change log — an explicit exception to "all state via `apply()`", not synced or audited; Manager holds `ops.promote`, `ops.restore` is Owner-only; branch KEK escrowed on every tier incl. Free; invoice number timing (printer: at print, so printed bills are not undoable; no printer: `invoice.issue` when the 8 s Undo window closes; a drawer kick also ends Undo); one open shift per drawer; Unassigned devices cannot start sessions; KOT seat only, no cancel slip; standard AdMob interstitial ≤ once/15 min, reserved banner slot, content rating G/PG/T; rollup schema pin per tier; ts-rs; Pi TV = Chromium kiosk + Svelte page; Pi QR via `arena360.local`; smart plugs deferred; setup-file upload paid tiers only; scheduled reports WhatsApp only.
+
 ## Scope and conventions
 
 This LLD specifies each component to the level an engineer implements from: module boundaries, full schema including infrastructure tables, the intent catalogue with validation and error codes, the algorithms inside the Hub, the Kiosk's lockdown mechanics, the batch and file formats, cloud internals and the test plan. Binding cross-unit rules live in the architecture spine (ADs referenced as AD-n); features live in "Arena 360 — Product Requirements".
@@ -55,7 +57,7 @@ flowchart TD
 | `arena-tasks` | `lease`, `uploader`, `publisher` (`summary` on a `summary_interval_s` timer, `rollup` daily at close, GST archive), `snapshot`, `key_backup`, `poller`, `follower`, `replicator` (primary side), `discovery`, `tunnel`, `heartbeat`, `catalogue_sync`, `printer`, `notify_drain` | core, store, reqwest | Each task is a Tokio task with a shutdown signal |
 | `arena-replay` | Batch decode, fork handling, upsert/delete replay | `arena-store` | Shared by the standby follower and the cloud builder |
 | `arena-hub` (bin) | `main`, config, role selection (primary or follower) | all | Hosted by the Tauri app on Windows and by Tauri 2 mobile on Android |
-| `arena-proto` | Frame, batch, summary, rollup, export and DTO types (`serde`), error codes, permission and command catalogues | — | Used by cloud, Kiosk and Pi; TypeScript types generated into the shared UI package (ts-rs or specta, AD-41) |
+| `arena-proto` | Frame, batch, summary, rollup, export and DTO types (`serde`), error codes, permission and command catalogues | — | Used by cloud, Kiosk and Pi; TypeScript types generated into the shared UI package (ts-rs, AD-41) (revised 23 Oct 2026, epics) |
 
 **Threading model.** One Tokio runtime. A single `Writer` actor owns the write connection and processes intents from an `mpsc` channel in order, so `apply()` is serialised without locks; readers use a pool of 4 connections. WebSocket sessions are tasks that send intents to the writer and await a reply with the same `rid`. Timers for sessions live in the `sessions` engine as a `BinaryHeap<(ends_at, session_id)>` rebuilt from the DB on start.
 
@@ -114,11 +116,11 @@ CREATE TABLE device_groups (
 
 CREATE TABLE devices_meta (             -- extends infra `devices` for gaming devices
   device_id TEXT PRIMARY KEY REFERENCES devices(id),
-  group_id TEXT NOT NULL REFERENCES device_groups(id),
+  group_id TEXT REFERENCES device_groups(id),   -- NULL = Unassigned: exactly one group or Unassigned; Unassigned cannot start sessions (revised 23 Oct 2026, epics)
   label TEXT NOT NULL,                  -- 'PC 07', 'PS5 1'
   zone TEXT, floor_x INTEGER, floor_y INTEGER,
   state TEXT NOT NULL DEFAULT 'free' CHECK (state IN ('free','session','reserved','maintenance','offline')),
-  last_seen_at INTEGER, kiosk_version TEXT);
+  last_seen_at INTEGER, kiosk_version TEXT);  -- device-health telemetry: written outside apply()/change log, not synced or audited (AD-2 exception; revised 23 Oct 2026, epics)
 
 CREATE TABLE rates (                    -- postpaid hourly rate per group
   id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES device_groups(id),
@@ -242,7 +244,7 @@ CREATE TABLE payments (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, method TEXT 
   reference TEXT,                        -- upi: last 4 digits required; card: optional last 4
   staff_id TEXT, at INTEGER NOT NULL);
 
-CREATE TABLE kot_tickets (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, station TEXT, printed_at INTEGER, state TEXT NOT NULL CHECK (state IN ('new','preparing','ready','served','cancelled')), updated_at INTEGER NOT NULL);
+CREATE TABLE kot_tickets (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, station TEXT, printed_at INTEGER, state TEXT NOT NULL CHECK (state IN ('new','preparing','ready','served','cancelled')), updated_at INTEGER NOT NULL);  -- KOT and kitchen display show the seat only (PC/TV number or 'Counter'), never the player name; cancelled orders print no cancel slip (revised 23 Oct 2026, epics)
 ```
 
 **Shifts, cash, expenses, invoices**
@@ -307,20 +309,20 @@ pub fn apply(ctx: &mut Ctx, intent: Intent) -> Result<Outcome, AppError>
 | --- | --- | --- | --- | --- |
 | `branch.bootstrap` | Owner command at first pairing | not already bootstrapped | branch, settings | `settings.changed` |
 | `player.create` | `player.manage` or Device (kiosk sign-up) | username unique (`USERNAME_TAKEN`), password policy; consent rows with policy version | players (PII encrypted), player\_keys, wallets, consents | — |
-| `player.login` | Device | username + password match (Argon2id) (`AUTH_FAILED`), lockout after 3 (`AUTH_LOCKED`) | — (read) | — |
+| `player.login` | Device | username + password match (Argon2id) (`AUTH_FAILED`), 5 failures lock login for 60 s with a visible countdown and a Hub alert (`AUTH_LOCKED`) (revised 23 Oct 2026, epics) | — (read) | — |
 | `player.erased` | `player.manage` + manager PIN, or owner command | player exists | players (tombstone: PII cleared, `erased_at`), player\_keys row deleted | — |
 | `wallet.topup` | `wallet.topup` | amount > 0, method valid, UPI needs 4-digit reference (`REFERENCE_REQUIRED`), cash needs open shift (`SHIFT_NOT_OPEN`) | wallet\_txns, wallets, cash\_events, orders+payments (receipt) | `wallet.changed` |
 | `credit.set_limit` | `credit.manage` | limit ≥ outstanding (`CREDIT_BELOW_OUTSTANDING`) | players | — |
 | `credit.override` | `credit.manage` + manager PIN | once per player per business day (`OVERRIDE_USED_TODAY`) | credit\_balances.last\_override\_day | — |
 | `credit.collect` | `credit.collect` | amount ≤ outstanding | wallet\_txns(kind credit), credit\_balances, payments, cash\_events | `credit.changed` |
-| `session.start` | `session.start` (staff-start) or Device (prepaid self-start after `player.login`) | device free (`PC_BUSY`), not maintenance (`PC_UNAVAILABLE`), plan allowed for group (`PLAN_NOT_FOR_GROUP`), funds: pack minutes > 0 / wallet ≥ min bill / credit headroom (`INSUFFICIENT_BALANCE`, `CREDIT_LIMIT`), pass within window (`PASS_OUTSIDE_WINDOW`), booking conflict (`DEVICE_RESERVED`), device within licence cap (`DEVICE_LIMIT`) | sessions, session\_segments, wallet\_txns or player\_packs, devices\_meta.state | `session.started`, `pc.power on` |
+| `session.start` | `session.start` (staff-start) or Device (prepaid self-start after `player.login`) | device in a group, not Unassigned (`DEVICE_UNASSIGNED`) (revised 23 Oct 2026, epics); device free (`PC_BUSY`), not maintenance (`PC_UNAVAILABLE`), plan allowed for group (`PLAN_NOT_FOR_GROUP`), funds: pack minutes > 0 / wallet ≥ min bill / credit headroom (`INSUFFICIENT_BALANCE`, `CREDIT_LIMIT`), pass within window (`PASS_OUTSIDE_WINDOW`), booking conflict (`DEVICE_RESERVED`), device within licence cap (`DEVICE_LIMIT`) | sessions, session\_segments, wallet\_txns or player\_packs, devices\_meta.state | `session.started`, `pc.power on` |
 | `console.plan_requested` | Phone page class (per-console token) | rate limit per TV (`RATE_LIMITED`); console free | console\_requests | `console.requested` to Hub UI |
 | `console.start` | `session.start` | open request or staff-chosen plan; payment taken at the counter | sessions, console\_requests | `session.started`, Pi `input console` |
 | `session.pause` / `session.resume` | `session.pause` | state active/paused | sessions | `session.paused` |
 | `session.extend` | `session.extend` or Device | state active, paused or grace; funds as above; not past closing (`PAST_CLOSING`) | sessions.ends\_at, wallet\_txns/packs | `session.extended` |
 | `session.transfer` | `session.transfer` | target free, group change allowed | session\_segments (close + open), sessions.device\_id, two devices\_meta | `session.moved` to both kiosks |
 | `session.end` | `session.end` or Device (player done) or System (timer) | state active/paused/grace; reason required for staff force (`REASON_REQUIRED`); manager PIN for force (`PIN_REQUIRED`) | sessions, orders (postpaid bill line), devices\_meta.state | `session.ended`, `pc.power standby` after grace (PCs only) |
-| `controller.check` | Device (Pi) or `session.end` | after console time-up | — (result row) | — |
+| `controller.check` | `session.end` (staff mark Returned or Missing on the Hub console tile; MVP, independent of the Pi) (revised 23 Oct 2026, epics) | after console time-up; tile shows CHECK CONTROLLERS until marked | — (result row) | — |
 | `session.settle` | `pos.sell` | bill computed; payments sum = total (`PAYMENT_SHORT`); UPI reference present (`REFERENCE_REQUIRED`); credit path checks limit | payments, cash\_events, orders.state, invoice\_sequences (epoch-segmented number, tax once per rate) | `receipt.ready` |
 | `booking.create` / `booking.cancel` | `booking.manage` | no overlap on device/group capacity (`BOOKING_CONFLICT`) | bookings, orders (deposit) | — |
 | `order.create` | `pos.sell` or Device (kiosk orders: Basic+ flag, `FEATURE_NOT_ENTITLED`) | each product active; stock ≥ qty for tracked (`OUT_OF_STOCK`) with override permission `stock.override`; bundle components checked | orders, order\_lines, kot\_tickets (kitchen items) | `kot.new`, `order.placed` |
@@ -331,7 +333,7 @@ pub fn apply(ctx: &mut Ctx, intent: Intent) -> Result<Outcome, AppError>
 | `stock.in` / `stock.waste` / `stock.adjust` | `stock.adjust` | qty > 0; reason; expiry date valid | stock, stock\_moves | `stock.low` when under threshold |
 | `product.upsert` / `plan.upsert` / `rate.upsert` / `rule.upsert` / `coupon.upsert` / `group.upsert` | `catalog.edit` | referential checks; rule window valid; `base_rev` (`STALE`) | catalogue tables | `catalog.changed` to all kiosks |
 | `discount.manual` | `discount.manual` | manager PIN; reason | orders.discount\_minor | — |
-| `shift.open` | `shift.open` | no open shift for staff (`SHIFT_ALREADY_OPEN`) | shifts, cash\_events(float\_in) | — |
+| `shift.open` | `shift.open` | no open shift on the drawer — one drawer, so one open shift per branch; handover is close then open (`SHIFT_ALREADY_OPEN`) (revised 23 Oct 2026, epics) | shifts, cash\_events(float\_in) | — |
 | `shift.close` | `shift.close` | counted entered before expected is shown; variance (counted − expected) over threshold needs `shift.override_variance` PIN + reason | shifts (expected, variance), cash\_events | `shift.closed` (owner alert if over) |
 | `cash.deposit` / `expense.create` | `cash.manage` | open shift; amount ≤ expected drawer (`DRAWER_SHORT`) | cash\_events | — |
 | `device.register` / `device.assign` / `device.maintenance` / `device.revoke` | `device.manage` | code valid (`PAIR_CODE_INVALID`); group exists; within licence cap (`DEVICE_LIMIT`) | devices, devices\_meta | `device.state` |
@@ -343,12 +345,13 @@ pub fn apply(ctx: &mut Ctx, intent: Intent) -> Result<Outcome, AppError>
 | `notify.requested` | System | consent present for purpose; `not_before = commit + undo window` | notify\_outbox | — |
 | `notify.sent` / `notify.failed` / `receipt.printed` / `drawer.kicked` | System (result intents) | outbox row exists | notify\_outbox.state / side-effect result | — |
 | `summary.publish` / `rollup.publish` | System | — | rollup\_log only | — |
+| `invoice.issue` | System | settled order without a number, receipt choice not Print, 8 s Undo window closed | orders.invoice\_no, invoice\_sequences | — (revised 23 Oct 2026, epics) |
 | `<domain.verb>.reverted` (undo) | same as forward (+ same elevation) | within UX window, same user/device, `base_rev` = forward `rev` (`STALE`), no irreversible effect recorded (`UNDO_NOT_ALLOWED`) | compensating rows | forward intent's inverse event |
 | `backup.export` | `backup.export` | path writable | — (file) | — |
 | `lease.promote` | `ops.promote` (manual only) | standby schema ≥ primary (`SCHEMA_BEHIND`); if the lease is still fresh, force with manager PIN + data-loss acknowledgement (`LEASE_FRESH` without force); epoch counter from the cloud or provisional offline | lease | `epoch.changed` |
 | `command.apply` wrapper | Owner/admin actor | `idempotency_key` not in applied\_commands (`ALREADY_APPLIED`); epoch current; inner intent validated as above; owner wins over prior local change | applied\_commands + inner writes | inner events, `updated_by_owner` naming the overwritten change |
 
-**Permission catalogue** (fixed, in `arena-proto`, plus tenant custom roles): the union of the Permission column plus `report.view`, `audit.view`, `player.view`, `ops.restore`. Built-in roles: Owner (all), Manager (all except `ops.*`, `user.manage` limited to Counter and Kitchen), Counter (`session.*` except force end, `pos.sell`, `wallet.topup`, `credit.collect`, `shift.open`, `shift.close`, `stock.in`, `player.manage`), Kitchen (`kitchen.use`), Device (implicit: `player.login`, `session.start` prepaid, `session.extend`, `session.end` own, `order.create`, `game.launch_report`), Phone page (implicit: `console.plan_requested` only). Staff surfaces lock after 5 min idle.
+**Permission catalogue** (fixed, in `arena-proto`, plus tenant custom roles): the union of the Permission column plus `report.view`, `audit.view`, `player.view`, `ops.restore`. Built-in roles: Owner (all; `ops.restore` is Owner-only), Manager (all except `ops.restore`, holds `ops.promote` for standby promote and force promote with PIN, `user.manage` limited to Counter and Kitchen) (revised 23 Oct 2026, epics), Counter (`session.*` except force end, `pos.sell`, `wallet.topup`, `credit.collect`, `shift.open`, `shift.close`, `stock.in`, `player.manage`), Kitchen (`kitchen.use`), Device (implicit: `player.login`, `session.start` prepaid, `session.extend`, `session.end` own, `order.create`, `game.launch_report`), Phone page (implicit: `console.plan_requested` only). Staff surfaces lock after 5 min idle.
 
 **Validation order inside a session start** (the most complex intent): device state → booking window → plan allowed for group → pricing rule resolution (Hub engines) → funds → write. Funds are checked last so the error message can name the exact rate the player would have paid.
 
@@ -366,7 +369,7 @@ These pieces of logic carry most of the correctness risk; each is specified as a
 
 **Postpaid bill** (`sessions::bill(session)`): for each `session_segment`, minutes = ceil((to − from − paused\_in\_segment) / 60 000); segment cost = minutes × rate / 60. Sum, then apply `min_bill_minutes` on the first segment only and round the total minutes up to `rounding_minutes` on the last segment. Pausing creates no segment; it subtracts time. Transfers close a segment and open one at the new device's rate.
 
-**Invoice numbering and tax** (`invoice`): numbers are issued inside `apply()` at settle (invoice) and refund (credit note) as `<branch code>/<FY>/E<counter><instance tag>/<seq>` (e.g. `KOR/26-27/E3a/000142`), from `invoice_sequences(fy, segment)`; a new epoch starts a new segment, so numbers never collide. Tax: sum line amounts per rate, compute tax once per rate, round to minor units once, half-up. The GST series, CGST/SGST split and GST rounding apply only when `branch.tax_mode = 'gst_in'` (GST-registered Indian tenant); other tenants use the same series shape with a generic tax rate. Numbers on rows orphaned by a fork are never reused; the builder and GST archive list them as orphaned, pending reconciliation.
+**Invoice numbering and tax** (`invoice`): numbers are issued inside `apply()` — an invoice number inside the settle intent when the receipt choice is Print (printer assigned; a printed bill is therefore not undoable and is corrected by Refund), otherwise by the system `invoice.issue` when the 8 s Undo window closes (revised 23 Oct 2026, epics); a credit note at refund — as `<branch code>/<FY>/E<counter><instance tag>/<seq>` (e.g. `KOR/26-27/E3a/000142`), from `invoice_sequences(fy, segment)`; a new epoch starts a new segment, so numbers never collide. Tax: sum line amounts per rate, compute tax once per rate, round to minor units once, half-up. The GST series, CGST/SGST split and GST rounding apply only when `branch.tax_mode = 'gst_in'` (GST-registered Indian tenant); other tenants use the same series shape with a generic tax rate. Numbers on rows orphaned by a fork are never reused; the builder and GST archive list them as orphaned, pending reconciliation.
 
 **Session timer engine**
 
@@ -374,7 +377,7 @@ These pieces of logic carry most of the correctness risk; each is specified as a
 - Tick every 1 s: pop entries with `ends_at ≤ now`; for each, `apply(session.end{reason:'expired', actor: system})`. Warnings are emitted (not persisted) at `ends_at − 10 min`, `− 5 min`, `− 60 s` to the owning device; postpaid sessions have no `ends_at` but get a `closing_at` from opening hours and the same warnings.
 - Every `session.tick` carries `lock_after_ms` and `time_up_mode`, already resolved for grace, wallet balance and pricing windows.
 - Pause removes the entry; resume re-inserts with `ends_at += paused_duration`.
-- Grace (PCs): at time-up the session enters `grace`; Extend is allowed during grace; after grace the branch's `time_up_mode` applies (clean up: lock and launcher logout; staff handles: overlay until staff act); the Hub sends `pc.power standby` only if configured. Consoles have no grace: time-up switches the TV to the Pi lock screen and a `controller.check` follows.
+- Grace (PCs): at time-up the session enters `grace`; Extend is allowed during grace; after grace the branch's `time_up_mode` applies (clean up: lock and launcher logout; staff handles: overlay until staff act); the Hub sends `pc.power standby` only if configured. Consoles have no grace: time-up switches the TV to the Pi lock screen at once and the Hub console tile asks staff for a `controller.check` (Returned/Missing) (revised 23 Oct 2026, epics).
 - Clock skew: while connected, devices display the Hub's remaining time from `session.tick`; while the Hub is unreachable the kiosk and Pi count `lock_after_ms` down on their monotonic clock (never the wall clock), perform the mode's local action at zero, and never write state. Login, orders and Extend are disabled while unreachable; the Hub record is authoritative on reconnect.
 
 **Lease and epoch** (`tasks::lease`)
@@ -421,10 +424,12 @@ There is no manifest call: the heartbeat reports `last_seq_uploaded, epoch, last
 
 - Summary: every `summary_interval_s`, the `summary` engine computes `state/latest.json` (schema-versioned, < 50 ms) from the in-memory floor state plus 6 queries over stamped columns and stored invoice totals, never blocking `apply()`, applies `summary.publish` (a system intent that writes only `rollup_log` and appears in the audit) and PUTs it with the next presign.
 - Rollup: at closing time + 30 min or on `shift.close` of the last shift, the `rollup` engine runs ~20 queries and emits `rollups/{yyyy-mm-dd}.json` with its `schema` for that business day (< 5 s), applies `rollup.publish` (writes `rollup_log(date, schema, built_at, key)`) and PUTs it with presign `kind: rollup`.
-- Regeneration: on startup, days whose `rollup_log.schema` < current are regenerated oldest first, max 10 per minute. `rollup_schema` is pinned per tier in the licence; the cloud accepts N and N−1.
+- Regeneration: on startup, days whose `rollup_log.schema` < current are regenerated oldest first, max 10 per minute. `rollup_schema` is pinned per tier in the licence and the Hub (keeping writers for N and N−1) emits the pinned schema, so a tier's file shape changes only when the cloud raises the pin; schema v2 ships with Epic 13 and v3 with Epic 14 (revised 23 Oct 2026, epics); the cloud accepts N and N−1.
 - Snapshot: daily after close, `VACUUM INTO` a temp file, zstd, upload to `snapshots/{yyyy-mm-dd}.db.zst` (PII as ciphertext only).
 - GST archive: after FY close, invoices, credit notes and tax summaries for the FY are written to `gst-archive/{fy}.zst` (retained 8 years on every paid tier).
-- Key backup: after any `player_keys` change, the table is wrapped by the branch KEK and PUT as `keys/player-keys.bin` (overwritten).
+- Key backup: after any `player_keys` change, the table is wrapped by the branch KEK and PUT as `keys/player-keys.bin` (overwritten; paid tiers).
+- KEK escrow: at pairing the Hub sends its branch KEK wrapped with the cloud escrow public key (`POST /v1/kek/escrow` → `gz_control.kek_escrow`) on every tier incl. Free — the single key-only exception to "Free uploads nothing" (revised 23 Oct 2026, epics).
+- Setup template: on paid tiers only, the Hub uploads the branch setup file (≤ 1 MB) within 5 min of a catalogue change (`PUT /v1/branches/{id}/setup-template`); Free uploads nothing (`FEATURE_NOT_ENTITLED`) (revised 23 Oct 2026, epics).
 
 **Poller** (`tasks::poller`)
 
@@ -442,7 +447,7 @@ A command whose inner intent fails validation reports `rejected` with the `AppEr
 
 **Notify drain** (`tasks::notify_drain`): after `not_before`, for each `queued` outbox row: re-check consent and erasure, skip (and mark `skipped`) if the forward intent was reverted, decrypt the recipient, `POST /notify` keyed by the outbox row ULID; on reply apply `notify.sent` or `notify.failed`. While the branch is offline rows wait.
 
-**Undo** (`undo`): actions commit immediately; undo is the reverse intent `domain.verb.reverted` through `apply()`, accepted within the UX window from the same user/device, carrying the forward `rev`, and only if no irreversible side effect is recorded (receipt printed, drawer kicked, invoice number issued, notification sent). Reports net reversed pairs.
+**Undo** (`undo`): actions commit immediately; undo is the reverse intent `domain.verb.reverted` through `apply()`, accepted within the UX window from the same user/device, carrying the forward `rev`, and only if no irreversible side effect is recorded (receipt printed, drawer kicked, invoice number issued, notification sent); a print or drawer kick therefore ends a settle's 8 s Undo window early (revised 23 Oct 2026, epics). Reports net reversed pairs.
 
 **Replication** (`tasks::replicator` on the primary, `tasks::follower` on the standby)
 
@@ -504,12 +509,12 @@ The app and the service share the `arena-proto` and `arena-kiosk-core` crates, s
 | Concern | Design |
 | --- | --- |
 | Image | Prebuilt image with the agent as a systemd service, read-only root with an overlay, Wi-Fi and Ethernet; first boot shows a pairing screen with its TV number and a 6-digit code field |
-| Display | QR idle screen, lock screen with countdown, warning screen; fonts from the design system; 48px minimum type; the rendering stack (framebuffer renderer proposed) is decided in the Pi epic, outside the shared Svelte stack. No ads on the TV |
+| Display | QR idle screen, lock screen with countdown, warning screen; fonts from the design system; 48px minimum type; rendered by Chromium in kiosk mode showing a Svelte page served by the Pi's Rust agent, using the shared tokens and components (revised 23 Oct 2026, epics). No ads on the TV |
 | CEC | `libcec` via `cec-client` bindings: `on`, `standby`, `set_active_source` to switch the TV between the Pi's HDMI and the console's; capability probed at pairing and reported in `hello` |
-| Smart plug | Deferred to the v1.1 Pi epic (local-API plugs only) |
-| Hub link | Same LAN protocol as the Kiosk over TLS pinned to the Hub cert: `hello` with device token and `class: paired`, `kind: pi`; receives `pc.power`, `pc.lock`, `pc.message`, `session.tick`; sends `pc.state`, `controller.check` results |
-| Session on console | No player login. The QR encodes the Hub LAN URL `http://hub:7401/q/{device}?t={per-console token}`; the phone page requests a plan (`console.plan_requested`); the player pays at the counter; staff confirm and start at the Hub (`console.start`), and the Hub tells the Pi `pc.power on` + `input console`. The phone then shows the live timer only (LAN only, no Tunnel or cloud path). Staff can also start directly from the Hub |
-| Time-up | No console grace: `input pi` + lock screen at time-up, then a `controller.check`; `standby` per config |
+| Smart plug | Deferred (Tuya/Tapo local-API plugs; vendor TBD; CEC only for now) (revised 23 Oct 2026, epics) |
+| Hub link | Same LAN protocol as the Kiosk over TLS pinned to the Hub cert: `hello` with device token and `class: paired`, `kind: pi`; receives `pc.power`, `pc.lock`, `pc.message`, `session.tick`; sends `pc.state` (the controller check is marked at the Hub tile, not on the Pi) (revised 23 Oct 2026, epics) |
+| Session on console | No player login. The QR encodes `http://arena360.local:7401/console/<tv>?t=<token>` (the primary Hub advertises `arena360.local` by mDNS; the per-console token rotates every 5 min, previous token valid one more period; plain HTTP on the `/console` path) (revised 23 Oct 2026, epics); the phone page requests a plan (`console.plan_requested`); the player pays at the counter; staff confirm and start at the Hub (`console.start`), and the Hub tells the Pi `pc.power on` + `input console`. The phone then shows the live timer only (LAN only, no Tunnel or cloud path). Staff can also start directly from the Hub |
+| Time-up | No console grace: `input pi` + lock screen ("Time's up — see the counter.") at once at time-up, tile alert until acknowledged, then the Hub tile's `controller.check`; CEC `standby` per config (revised 23 Oct 2026, epics) |
 | Warnings | At 5 and 1 minutes the Pi switches input to itself for 5 s to show the warning, then back |
 | Offline | Loses the Hub → counts the last `lock_after_ms` down on its monotonic clock and runs warnings and the time-up switch at the resolved times; writes no state; the phone timer is unavailable; reconnects with backoff |
 | Updates | Agent self-updates from the Hub-served binary with ed25519 signature check, only with no active session; image updates are manual |
@@ -518,11 +523,11 @@ The app and the service share the `arena-proto` and `arena-kiosk-core` crates, s
 
 | Concern | Design |
 | --- | --- |
-| Process | Tauri 2 mobile app; the Rust core runs in-process (Tokio on a dedicated thread) with the WebSocket server on `:7400` and HTTP on `:7401`; a foreground service (Android plugin) keeps it alive and also runs the daily rollup (must complete under 5 s on a 3 GB device; see the test plan); the UI is the same Svelte app as the Windows Hub |
+| Process | Tauri 2 mobile app; the Rust core runs in-process (Tokio on a dedicated thread) with the WebSocket server on `:7400` and `:7401` serving TLS for paired apps and plain HTTP by path (`/kitchen`, `/console`) with scoped tokens (revised 23 Oct 2026, epics); a foreground service (Android plugin) keeps it alive and also runs the daily rollup (must complete under 5 s on a 3 GB device; see the test plan); the UI is the same Svelte app as the Windows Hub |
 | Storage | SQLite file in app-private storage; device token and branch KEK in Android Keystore; export to `Downloads/` or a USB OTG drive for backups; 20 GB free required (installer check) |
 | Battery and sleep | `WAKE_LOCK` and battery-optimisation exemption requested at setup; a persistent notification shows branch status; the device is expected to stay on power |
 | Network | mDNS via an Android plugin (`NsdManager`); LAN only; no tunnel or standby on Android (Windows-only features) |
-| Ads | AdMob through an in-house Tauri Kotlin plugin calling Google Mobile Ads SDK 25.5.x (loads off the main thread); a banner anchored under the Hub header always, and an interstitial only when staff return from the 5-minute idle lock — never after a settle and never over an open cart or sheet. The plugin reports `ad.shown{slot}` and the core logs `ad_impressions` with no device or creative ids; an upgrade removes ads within one heartbeat; no ad code in the Rust crates |
+| Ads | AdMob through an in-house Tauri Kotlin plugin calling Google Mobile Ads SDK 25.5.x (loads off the main thread); a banner always in a permanent reserved bottom slot that overlays never cover, and the standard AdMob interstitial (Google controls close timing; no custom skip countdown) only when staff return from the 5-minute idle lock, at most once per 15 min — never after a settle and never over an open cart or sheet; the owner sets a per-branch ad content rating G/PG/T (default PG, MA never) instead of blocking categories (revised 23 Oct 2026, epics). The plugin reports `ad.shown{slot}` and the core logs `ad_impressions` with no device or creative ids; an upgrade removes ads within one heartbeat; no ad code in the Rust crates |
 | Printing | ESC/POS over Bluetooth SPP (Android plugin) or LAN 9100 from the Rust `printer` task; USB not supported on Android |
 | Limits | 20 devices, 3 users per the Free entitlement; the same binary enforces it from the cached licence |
 | Build | targetSdk 36, minSdk 28, NDK 28+, Kotlin 2.1+; Play signing; Play staged rollout |
@@ -596,7 +601,7 @@ A SvelteKit 3.1 PWA (Svelte 5, `adapter-cloudflare`, deployed as Cloudflare Work
 | `cache` | IndexedDB + service worker: last successful payload per screen with its `as_of`, so the app opens instantly and shows age; cleared on logout |
 | `auth` | Login, TOTP enrolment and challenge, backup codes, SMS OTP fallback, step-up MFA for sensitive commands |
 | `notifications` | Standard Web Push (VAPID) via the service worker; tapping deep-links to the branch or command; iOS only when installed to the Home Screen |
-| `live` | Premium: opens a WebSocket to the branch's Tunnel hostname with the short-lived token from `GET /v1/live/{branch}`; read-only; renders the floor view from `session.tick` and device events using the same frame types as the Kiosk |
+| `live` | Premium: opens a WebSocket to the branch's Tunnel hostname (`<branch_id>.tunnel.arena360.cloud`) with the short-lived token from `GET /v1/live/{branch}`; read-only; renders the floor view from `session.tick` and device events using the same frame types as the Kiosk |
 
 **Command states in the UI** (driving the "waiting for branch" experience)
 
@@ -611,7 +616,7 @@ A SvelteKit 3.1 PWA (Svelte 5, `adapter-cloudflare`, deployed as Cloudflare Work
 
 **Data age**: every number carries `as_of`; the UI shows "2 min ago" in `ink-3` and turns it `warn` past 30 minutes during opening hours, which is also the owner-alert threshold. Data age targets: Basic ≤ 15 min, Premium ≤ 5 min or live.
 
-**Hosting**: deployed to Cloudflare Workers static assets under `app.arena360.app`; MFA and cookies identical on every device; printing of reports uses the browser.
+**Hosting**: deployed to Cloudflare Workers static assets under `app.arena360.cloud`; MFA and cookies identical on every device; printing of reports uses the browser.
 
 **Sizes**: first dashboard render under 2 s on a 3-year-old phone over 4G.
 
@@ -694,7 +699,7 @@ Correctness lives in `apply()`, so that is where most tests go; the rest of the 
 | Property | Random sequences of intents against an in-memory Hub: invariants hold after every step (no negative wallet, stock or credit; one active session per device; order totals balance; `changes` seq gap-free and replay reproduces the DB byte for byte; undo with stale `rev` rejected; duplicate idempotency keys apply once) | `proptest` | Every push |
 | Rollup | Golden tests: fixed SQLite fixture → expected summary and rollup JSON; summary < 50 ms on the reference PC; rollup at close < 5 s; regeneration of old-schema days | Golden files, benchmark | Every push |
 | Replay | Record real-shaped change logs including forks; replay with `arena-replay` as follower and as builder; builder round-trip checksum equals the Hub DB; orphaned rows above a fork never replayed | Golden files | Every push |
-| Contract | Frame schemas, DTOs, error codes and catalogues generated from `arena-proto` into TypeScript; CI fails on stale generation; a fixture set of frames round-trips | ts-rs or specta + CI | Every push |
+| Contract | Frame schemas, DTOs, error codes and catalogues generated from `arena-proto` into TypeScript; CI fails on stale generation; a fixture set of frames round-trips | ts-rs + CI (revised 23 Oct 2026, epics) | Every push |
 | Integration | Docker: cloud binary + MinIO + local SQLite for `gz_control` + one Hub + 5 fake kiosks; run the eight journeys end to end including a command round-trip, heartbeat gap repair with `resend`, and an owner API read; Owner API sum-of-rollups equals Hub Z-report totals over 30 synthetic days | `cargo test --features integration` | Nightly and before release |
 | Failover | Kill the primary mid-session; promote manually (and force promote with the lease fresh); assert kiosks reconnect under 10 s, timers resume, the old primary self-locks on the higher epoch from LAN or heartbeat, its late batches are stored but orphaned, and fenced command results are re-queued | Integration harness | Before release |
 | Offline soak | 20 real kiosks on a test LAN, WAN cut for 8 h, 1,000 sessions and 500 orders; kiosk offline countdown locks on time; zero loss; uploads, summary and rollups catch up within 10 min of WAN return | Test cafe | Before release and quarterly |
@@ -706,7 +711,7 @@ Correctness lives in `apply()`, so that is where most tests go; the rest of the 
 | Privacy | Erasure deletes the key; batches, snapshots and audit caches show only ciphertext; notify drain skips erased or reverted rows | Integration | Every push |
 | Cloud | Webhook idempotency, pairing rate limits, per-tenant limits, licence signing and rotation, fence CAS, presign fencing, command dedupe and re-queue on fence move, sweeper, send-ledger exactly-once, builder job states | `cargo test`, integration | Every push |
 | Owner app | Component tests per route; command state transitions; offline queue with idempotency keys; MFA and step-up flow; web push subscription | Vitest + Playwright | Every push |
-| Android Hub | Instrumented test on a 3 GB device: 20 kiosks, foreground service survives Doze, rollup < 5 s, banner renders and the interstitial appears only on idle return, never blocking `apply` | Device farm | Before release |
+| Android Hub | Instrumented test on a 3 GB device: 20 kiosks, foreground service survives Doze, rollup < 5 s, banner renders in its reserved slot and the interstitial appears only on idle return, at most once per 15 min, never blocking `apply` (revised 23 Oct 2026, epics) | Device farm | Before release |
 
 **Exit criteria for GA**: all gates green, the 8-hour soak passed twice, pen test findings closed, and 20 beta cafes running wave 1 for 30 days with median shift variance under ₹50.
 

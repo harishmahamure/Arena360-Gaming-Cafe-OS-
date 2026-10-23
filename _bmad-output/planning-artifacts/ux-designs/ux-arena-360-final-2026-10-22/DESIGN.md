@@ -676,7 +676,7 @@ components:
   ad-interstitial:
     background: '{colors.bg}'
     label: '"Ad" {typography.hub-micro}, {colors.text-muted}'
-    skip: '{components.button-secondary}, top-right, countdown "Skip in 5 s" then "Skip ad"'
+    close: 'standard AdMob interstitial; close control and timing owned by Google (no custom skip countdown)'
   tv-idle:
     media: 'muted game video → cover → {colors.bg}, under {components.scrim}'
     logo: '{components.logo-slot}'
@@ -1107,13 +1107,13 @@ Player mood, dark only (HC applies to the TV screens). All five are shown in the
 - **kitchen-top-bar.** A 64px `hub-header` bar: branch name in `hub-title`, clock, "5 open · oldest 9 min" (tabular), a LAN `status-badge` ("CONNECTED" in `ok`, "RECONNECTING" in `warning`), and a 44px mute-chime toggle. While muted, the toggle shows a struck-through bell and the "Chime off" label; new tickets still carry their `alert-badge`.
 - **kitchen-ticket.** ([Kitchen board mock](mockups/key-kitchen-board.html))
   - A `hub-tile` card with a `border-strong` edge.
-  - Contents: the seat number in `hub-numeric`, items and modifiers, order id, and elapsed time (tabular).
+  - Contents: the seat only (PC/TV number or "Counter") in `hub-numeric` — never the player's name — items and modifiers, order id, and elapsed time (tabular).
   - A new ticket carries an `alert-badge` "NEW" until it is advanced.
   - Ready tickets gain a `state-free` edge plus a "READY" tag.
   - A NEW ticket also carries a `danger` edge until advanced, and Served tickets drop to `text-muted` ink.
-  - Cancelled (from the Hub only): ink drops to `text-muted`, a "CANCELLED" `status-badge` replaces the stage tag, then the ticket leaves the board. The ticket has no cancel control.
-- **ad-banner.** A plain `surface` strip with an "Ad" label at the bottom of the Free-tier Android Hub. It never overlaps the floor grid, cart or settle bar and never shares an edge with `settle-bar` or `cart`. It never appears on the Kiosk in Phase 1.
-- **ad-interstitial.** (Free-tier Android Hub, shown only on return after the idle lock.) A full-screen ad on solid `bg` with an "Ad" label and a `button-secondary` Skip at the top-right that counts down "Skip in 5 s" and then reads "Skip ad".
+  - Cancelled (from the Hub only): ink drops to `text-muted`, a "CANCELLED" `status-badge` replaces the stage tag, then the ticket leaves the board. The ticket has no cancel control and no cancel slip prints.
+- **ad-banner.** A plain `surface` strip with an "Ad" label in a permanent reserved slot at the bottom of the Free-tier Android Hub; no overlay (sheet, toast, dialog) ever covers it. It never overlaps the floor grid, cart or settle bar and never shares an edge with `settle-bar` or `cart`. It never appears on the Kiosk in Phase 1.
+- **ad-interstitial.** (Free-tier Android Hub, shown only on return after the idle lock.) The standard full-screen AdMob interstitial, at most once per 15 min. Google renders it and controls when it can be closed; there is no custom skip button or countdown.
 
 ### Owner and Web
 

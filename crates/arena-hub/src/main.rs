@@ -17,7 +17,7 @@ use arena_api::{bind_health, serve_health};
 use arena_core::{Clock, HubStatus, Role, SystemClock, load_or_mint_instance_id, status_channel};
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
-use arena_tasks::LeaseTask;
+use arena_tasks::{HousekeepingTask, LeaseTask};
 use tokio::sync::oneshot;
 use tracing_subscriber::EnvFilter;
 
@@ -159,6 +159,11 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
 
     let lease = LeaseTask::start(store, instance_id, Arc::clone(&clock), status_tx.clone()).await?;
     let writer = lease.writer();
+    // Housekeeping (dedupe prune) runs at start and daily while primary; it ends once the
+    // writer closes.
+    let housekeeping = writer.clone().map(|w| {
+        tokio::spawn(HousekeepingTask::new(w, Arc::clone(&clock), status_tx.subscribe()).run())
+    });
     let mut lease_job = Some(tokio::spawn(lease.run()));
 
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
@@ -207,6 +212,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         s.db_open = false;
     });
     if let Some(job) = lease_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = housekeeping {
         job.abort();
         let _ = job.await;
     }

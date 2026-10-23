@@ -11,3 +11,4 @@ export type { Intent } from "./Intent";
 export type { IntentKind } from "./IntentKind";
 export type { IntentPayload } from "./IntentPayload";
 export type { Permission } from "./Permission";
+export type { SettingsSet } from "./SettingsSet";

@@ -10,9 +10,12 @@ mod writer;
 use arena_proto::AppError;
 use arena_store::{META_HUB_INSTANCE_ID, Store, insert_meta_if_absent};
 
-pub use apply::{Applied, ApplyCtx, ChangeMeta, KNOWN_CURRENCIES, apply, emit};
+pub use apply::{
+    Applied, ApplyCtx, ChangeMeta, INTENT_TTL_MS, KNOWN_CURRENCIES, MAX_CLOCK_SKEW_MS,
+    MAX_SETTING_VALUE_CHARS, apply, emit, fingerprint, is_ulid, validate_frame,
+};
 pub use clock::{Clock, ManualClock, SystemClock};
-pub use settings_defaults::DEFAULT_SETTINGS;
+pub use settings_defaults::{DEFAULT_SETTINGS, SETTING_RULES, SettingRule, setting_rule};
 pub use status::{Epoch, HubStatus, LeaseInfo, Role, status_channel};
 pub use writer::{LeaseRenewal, Writer, WriterHandle};
 

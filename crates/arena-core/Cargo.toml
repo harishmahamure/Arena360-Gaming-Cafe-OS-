@@ -12,12 +12,17 @@ arena-proto.workspace = true
 tokio.workspace = true
 ulid.workspace = true
 rmp-serde.workspace = true
+sha2.workspace = true
+tracing.workspace = true
 chrono-tz.workspace = true
+serde.workspace = true
 
 [features]
 # Exposes the closure job API (`WriterHandle::submit`) to other crates' tests.
 test-jobs = []
 
 [dev-dependencies]
+arena-replay.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
+proptest.workspace = true

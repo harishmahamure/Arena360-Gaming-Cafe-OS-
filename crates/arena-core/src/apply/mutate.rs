@@ -6,6 +6,7 @@ use arena_store::{
     stamp_row,
 };
 
+use super::{Target, settings_set};
 use crate::settings_defaults::DEFAULT_SETTINGS;
 
 /// One row the intent wrote.
@@ -19,7 +20,11 @@ pub(super) struct Written {
 
 /// **mutate.** Writes the intent's rows (with `rev = 0` and zero timestamps on insert; `stamp`
 /// sets them) and returns them in write order.
-pub(super) fn mutate(tx: &StoreTx<'_>, intent: &Intent) -> Result<Vec<Written>, AppError> {
+pub(super) fn mutate(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    target: &Target,
+) -> Result<Vec<Written>, AppError> {
     match &intent.payload {
         IntentPayload::BranchBootstrap(b) => {
             if branch_exists(tx)? {
@@ -60,6 +65,13 @@ pub(super) fn mutate(tx: &StoreTx<'_>, intent: &Intent) -> Result<Vec<Written>, 
                 });
             }
             Ok(written)
+        }
+        IntentPayload::SettingsSet(s) => {
+            let row = match target {
+                Target::Setting(row) => row.as_ref(),
+                Target::None => None,
+            };
+            settings_set::mutate(tx, s, row)
         }
     }
 }

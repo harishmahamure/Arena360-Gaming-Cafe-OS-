@@ -3,4 +3,4 @@
 /**
  * What an intent asks for, as `domain.verb`.
  */
-export type IntentKind = "branch.bootstrap";
+export type IntentKind = "branch.bootstrap" | "settings.set";

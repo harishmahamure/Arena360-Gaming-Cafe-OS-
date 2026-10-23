@@ -1,12 +1,14 @@
-//! The steps before any write: permission, epoch, ttl_dedupe and base_rev.
+//! The steps before any write: permission, epoch and base_rev (ttl_dedupe is in
+//! `ttl_dedupe.rs`).
 
 use arena_proto::{ActorKind, AppError, ErrorCode, Intent, IntentKind};
 use arena_store::{StoreTx, read_lease};
 
-use super::ApplyCtx;
+use super::{ApplyCtx, Target, settings_set};
 use crate::status::{Epoch, Role};
 
-/// **permission.** In this story `branch.bootstrap` requires a `system` actor. Story 1.11
+/// **permission.** `branch.bootstrap` requires a `system` actor; `settings.set` a system, owner
+/// or staff actor. Story 1.11
 /// replaces this with the permission catalogue. The kind is taken from the payload, so a
 /// mislabelled envelope cannot borrow another kind's permission.
 pub(super) fn permission(intent: &Intent) -> Result<(), AppError> {
@@ -23,6 +25,7 @@ pub(super) fn permission(intent: &Intent) -> Result<(), AppError> {
     }
     let allowed = match intent.payload.kind() {
         IntentKind::BranchBootstrap => intent.actor.kind == ActorKind::System,
+        IntentKind::SettingsSet => settings_set::permitted(intent.actor.kind),
     };
     if allowed {
         Ok(())
@@ -43,7 +46,7 @@ fn not_primary(message: &str) -> AppError {
 
 /// **epoch.** Fails `NOT_PRIMARY` unless this writer is primary and the lease row, read inside
 /// the transaction, still holds its epoch and has not expired. Returns that epoch.
-pub(super) fn epoch(tx: &StoreTx<'_>, ctx: &ApplyCtx<'_>) -> Result<Epoch, AppError> {
+pub(crate) fn epoch(tx: &StoreTx<'_>, ctx: &ApplyCtx<'_>) -> Result<Epoch, AppError> {
     if ctx.role != Role::Primary {
         return Err(not_primary("this hub is not the primary writer"));
     }
@@ -62,20 +65,11 @@ pub(super) fn epoch(tx: &StoreTx<'_>, ctx: &ApplyCtx<'_>) -> Result<Epoch, AppEr
     }
 }
 
-/// **ttl_dedupe.** A pass-through stub: Story 1.8 adds the 7-day TTL (`EXPIRED`) and the
-/// `applied_intents` dedupe records.
-pub(super) fn ttl_dedupe(
-    _tx: &StoreTx<'_>,
-    _intent: &Intent,
-    _now_ms: i64,
-) -> Result<(), AppError> {
-    Ok(())
-}
-
 /// **base_rev.** Edit intents carry the `rev` they were based on, and a mismatch fails
-/// `STALE`. `branch.bootstrap` creates rows, so it has none to check.
-pub(super) fn base_rev(_tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
-    match intent.payload.kind() {
-        IntentKind::BranchBootstrap => Ok(()),
+/// `STALE`. `branch.bootstrap` creates rows, so it has none to check (validate rejects one).
+pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError> {
+    match target {
+        Target::None => Ok(()),
+        Target::Setting(row) => settings_set::base_rev(intent, row.as_ref()),
     }
 }

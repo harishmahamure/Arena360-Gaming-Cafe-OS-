@@ -32,6 +32,8 @@ pub enum ErrorCode {
     ValidationFailed,
     /// The branch has already been bootstrapped.
     AlreadyBootstrapped,
+    /// The idempotency key was already used for a different intent body.
+    IdempotencyConflict,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -61,6 +63,7 @@ impl ErrorCode {
             Self::Internal => "INTERNAL",
             Self::ValidationFailed => "VALIDATION_FAILED",
             Self::AlreadyBootstrapped => "ALREADY_BOOTSTRAPPED",
+            Self::IdempotencyConflict => "IDEMPOTENCY_CONFLICT",
         }
     }
 }
@@ -148,6 +151,7 @@ mod tests {
             (ErrorCode::Internal, "INTERNAL"),
             (ErrorCode::ValidationFailed, "VALIDATION_FAILED"),
             (ErrorCode::AlreadyBootstrapped, "ALREADY_BOOTSTRAPPED"),
+            (ErrorCode::IdempotencyConflict, "IDEMPOTENCY_CONFLICT"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

@@ -10,7 +10,7 @@ mod permission;
 
 pub use actor::{Actor, ActorKind, ElevatedBy, ElevationMode};
 pub use error::{AppError, ErrorCode};
-pub use intent::{BranchBootstrap, Intent, IntentKind, IntentPayload};
+pub use intent::{BranchBootstrap, Intent, IntentKind, IntentPayload, SettingsSet};
 pub use permission::Permission;
 
 /// Returns this crate's name.

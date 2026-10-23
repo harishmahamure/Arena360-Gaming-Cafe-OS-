@@ -63,3 +63,24 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Firewall:** `scripts/windows/firewall.ps1` (Private profile only, ports 7400 and 7401) for a future installer story to call. There is no installer yet.
 - **Permission catalogue:** it starts with `device.remote` and `device.pair`. Story 1.11 adds the rest.
 - **1.7 review outcome:** 18 fixes, 3 rejections and 1 item deferred to 1.8 (the multi-epoch replay test). Key fixes: unverified `elevated_by` is rejected until 1.13; the epoch guard also checks lease expiry; time zones are validated with chrono-tz (=0.10.4); foreign keys are enforced; `dev seed` releases the lease when it exits.
+
+## Story 1.10: Hub app shell
+
+- **Spec approval:** self-approved. Spec: `spec-1-10-hub-app-shell-with-left-rail-header-and-floor-placeholder-on.md`.
+- **How the UI gets data:** a loopback-only `GET 127.0.0.1:7409/ui/snapshot` on the existing health server. CORS allows only the Tauri and dev origins. Why: the Hub UI is local, so it doesn't need a LAN device token, and the single writer stays in `arena-hub`.
+- **How the service starts:** the Tauri app spawns `arena-hub` as a bundled sidecar when `/healthz` doesn't answer, and leaves it running when the UI closes. Registering the Hub as a Windows service comes later.
+- **Installer:** the CI NSIS bundle, with an install hook that blocks Windows builds older than 17134 (10 1803). NSIS can't read the JS catalogue, so its message is duplicated there with a comment pointing to the key.
+- **Benchmark:** `release-bench.yml` runs on a self-hosted `[windows, reference-i3]` runner and can't run until that runner exists. It isn't part of `ci-ok`.
+- **Shell tests:** Playwright against `vite preview` with a stubbed snapshot (`page.route`), at desktop and phone widths.
+- **1.8 implementation choices, accepted:** dedupe runs before the TTL check, so retrying a recorded key returns its first outcome even after 7 days. A future-skew rejection is not recorded. Keys are compared upper-cased. Setting values are capped at 4096 characters.
+
+## Story 1.11: staff sign-in, roles and permissions
+
+- **Spec approval:** self-approved. Spec: `spec-1-11-staff-sign-in-to-the-hub-with-roles-and-permissions.md`.
+- **Permission catalogue:** taken from the LLD intent→permission table plus `report.view`, `audit.view`, `player.view` and `ops.restore` (about 34, close to "~40"). Implicit requirements are modelled as `Requirement::{System, Device, Phone}`, so every intent has exactly one requirement.
+- **`device.revoke` permission:** `device.remote`, following the epic's acceptance criteria rather than the LLD's `device.manage`, because the epic is the more recent source.
+- **Owner/admin actors:** an `owner` actor holds every permission (owner commands arrive later). An `admin` actor holds none until the admin epic.
+- **Sessions:** in-memory bearer tokens on the loopback server; signing in again is required after a Hub restart. The lockout is also in-memory, per login.
+- **Refusal demo:** the Settings placeholder gets one "Receipt footer" control, so the inline `PERMISSION_DENIED` refusal can be demonstrated and tested.
+- **Dev credentials:** `owner`/`manager`/`counter`/`kitchen`, password `dev-<login>-pass`, PINs 1111–4444. These exist only in `dev-fixtures` builds.
+- **1.8 review outcome:** 14 fixes, 3 rejections, 1 deferred (replicating dedupe records to the standby). Key fixes: a request fingerprint and a new `IDEMPOTENCY_CONFLICT` code; outcomes are recorded from an allow-list and permission denials are never recorded; per-key setting rules (`idle_lock_minutes` 1–30); housekeeping runs on promotion and deletes in batches; `sha2 =0.10.9` pinned.

@@ -5,19 +5,23 @@
 //! panics is rolled back and fails `INTERNAL`; the thread keeps running. If the thread exits
 //! for any other reason, the writer counts as closed and `submit` fails `INTERNAL`.
 //!
-//! Branch writes go through [`WriterHandle::submit_intent`], which runs `apply()`, commits and
-//! then emits. The only other write is the lease renewal ([`WriterHandle::renew_lease`]). The
-//! closure API (`submit`) exists for tests only (`cfg(test)` or the `test-jobs` feature).
+//! Branch writes go through [`WriterHandle::submit_intent`], which checks the frame, runs
+//! `apply()`, commits and then emits. The only other writes are maintenance: the lease renewal
+//! ([`WriterHandle::renew_lease`]) and the dedupe prune ([`WriterHandle::prune_applied_intents`]),
+//! neither of which writes change rows. The closure API (`submit`) exists for tests only
+//! (`cfg(test)` or the `test-jobs` feature).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+#[cfg(any(test, feature = "test-jobs"))]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use arena_proto::{AppError, ErrorCode, Intent};
-use arena_store::{LeaseRow, Store, read_lease, write_lease};
+use arena_store::{LeaseRow, Store, prune_applied_intents, read_lease, write_lease};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
-use crate::apply::{Applied, ApplyCtx, apply, emit};
+use crate::apply::{Applied, ApplyCtx, Outcome, emit, record_rejection, run, validate_frame};
 use crate::clock::Clock;
 use crate::status::{HubStatus, LeaseInfo};
 
@@ -54,6 +58,9 @@ struct Flags {
     closed: AtomicBool,
     /// Set when the writer thread exits, however it exits.
     dead: AtomicBool,
+    /// How many jobs were queued (tests: a `BAD_FRAME` queues none).
+    #[cfg(any(test, feature = "test-jobs"))]
+    jobs: AtomicU64,
 }
 
 /// Marks the writer dead when the thread ends (normal exit or unwinding).
@@ -63,6 +70,15 @@ impl Drop for DeadOnDrop {
     fn drop(&mut self) {
         self.0.dead.store(true, Ordering::SeqCst);
     }
+}
+
+/// The `ApplyCtx` for a job, from the status watch as it is when the job runs.
+fn ctx_from<'a>(clock: &'a dyn Clock, status: &watch::Receiver<HubStatus>) -> ApplyCtx<'a> {
+    let (role, epoch) = {
+        let s = status.borrow();
+        (s.role, s.lease.as_ref().map(LeaseInfo::epoch))
+    };
+    ApplyCtx::new(clock, epoch, role)
 }
 
 /// Spawns the writer actor.
@@ -140,26 +156,79 @@ impl std::fmt::Debug for WriterHandle {
 impl WriterHandle {
     /// Runs `intent` through `apply()` in one `BEGIN IMMEDIATE` transaction, commits it and
     /// then emits the [`Applied`] to every [`subscribe`](Self::subscribe)r. On any error
-    /// nothing is written and nothing is emitted.
+    /// nothing is written and nothing is emitted, except that a deterministic rejection is
+    /// recorded for dedupe in a separate short transaction after the rollback.
+    ///
+    /// A malformed idempotency key fails `BAD_FRAME` here, before any job is queued. A retried
+    /// key returns its stored outcome without writing or emitting anything.
     pub async fn submit_intent(&self, intent: Intent) -> Result<Applied, AppError> {
+        validate_frame(&intent)?;
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();
         let events = self.events.clone();
-        self.run_then(
-            move |store| {
-                let (role, epoch) = {
-                    let s = status.borrow();
-                    (s.role, s.lease.as_ref().map(LeaseInfo::epoch))
-                };
-                let ctx = ApplyCtx::new(clock.as_ref(), epoch, role);
-                // commit: `write_tx_mut` commits on Ok and rolls back on Err.
-                store.write_tx_mut(|tx| apply(tx, &ctx, &intent))
-            },
-            // emit: only after a successful commit, outside the panic guard (a committed intent
-            // is never reported as failed), on the writer thread so events keep commit order.
-            move |applied| emit(&events, applied),
-        )
+        let outcome = self
+            .run_then(
+                move |store| {
+                    let ctx = ctx_from(clock.as_ref(), &status);
+                    // commit: `write_tx_mut` commits on Ok and rolls back on Err.
+                    let result = store.write_tx_mut(|tx| run(tx, &ctx, &intent));
+                    if let Err(e) = &result {
+                        // Best effort: if recording fails, a retry re-runs the intent, which is
+                        // still safe (nothing was applied).
+                        if let Err(rec) =
+                            store.write_tx(|tx| record_rejection(tx, &ctx, &intent, e))
+                        {
+                            tracing::warn!(
+                                intent_id = %intent.intent_id,
+                                code = e.code.as_str(),
+                                record_error = rec.code.as_str(),
+                                "could not record a rejection for dedupe"
+                            );
+                        }
+                    }
+                    result
+                },
+                // emit: only after a successful commit of a fresh run, outside the panic guard
+                // (a committed intent is never reported as failed), on the writer thread so
+                // events keep commit order. A dedupe hit committed nothing, so emits nothing.
+                move |outcome| {
+                    if let Outcome::Fresh(applied) = outcome {
+                        emit(&events, applied);
+                    }
+                },
+            )
+            .await?;
+        match outcome {
+            Outcome::Fresh(applied) => Ok(applied),
+            Outcome::Replayed(stored) => stored,
+        }
+    }
+
+    /// Housekeeping: deletes one batch of at most `limit` `applied_intents` dedupe records with
+    /// `applied_at < cutoff_ms`, only while this writer is primary and still holds its epoch
+    /// (`NOT_PRIMARY` otherwise). A maintenance write outside `apply()`: it writes no change
+    /// rows. Returns how many records were deleted (fewer than `limit`: none remain).
+    pub async fn prune_applied_intents(
+        &self,
+        cutoff_ms: i64,
+        limit: usize,
+    ) -> Result<usize, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                prune_applied_intents(tx, cutoff_ms, limit)
+            })
+        })
         .await
+    }
+
+    /// How many jobs this writer has been handed (for tests: a `BAD_FRAME` queues none).
+    #[cfg(any(test, feature = "test-jobs"))]
+    pub fn jobs_submitted(&self) -> u64 {
+        self.flags.jobs.load(Ordering::SeqCst)
     }
 
     /// Receives every committed intent, in commit order.
@@ -249,6 +318,8 @@ impl WriterHandle {
         if self.tx.send(Msg::Job(job)).await.is_err() {
             return Err(self.channel_error());
         }
+        #[cfg(any(test, feature = "test-jobs"))]
+        self.flags.jobs.fetch_add(1, Ordering::SeqCst);
         match result.await {
             Ok(out) => out,
             Err(_) => Err(self.channel_error()),

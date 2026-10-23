@@ -91,6 +91,16 @@ curl 127.0.0.1:7409/healthz
   `info`, e.g. `RUST_LOG=arena_tasks=debug`).
 - **Stopping:** Ctrl+C, or SIGTERM on Unix.
 
+### Idempotency and housekeeping
+
+Each intent carries a ULID `idempotency_key`; a missing or malformed one fails `BAD_FRAME`
+before any transaction. The outcome of each key (success, or a deterministic rejection such as
+`STALE`) is kept in `applied_intents`, and a retry gets that outcome back without writing
+anything. Intents older than 7 days fail `EXPIRED`. While primary, the Hub prunes dedupe
+records older than 30 days at start and every 24 h. That prune is a maintenance write outside
+`apply()` and writes no change rows. The property suite (`crates/arena-core/tests/proptest_apply.rs`)
+runs 64 cases by default; set `PROPTEST_CASES` for more.
+
 ### Seeding a dev branch
 
 Every branch write goes through `apply()` and lands in the append-only `changes` log. To get a
@@ -164,8 +174,10 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | ulid                         | =3.0.0        | `Cargo.toml`          |
 | rmp-serde                    | =1.3.1        | `Cargo.toml`          |
 | chrono-tz                    | =0.10.4       | `Cargo.toml`          |
+| sha2                         | =0.10.9       | `Cargo.toml`          |
 | tempfile                     | =3.27.0       | `Cargo.toml`          |
 | tower                        | =0.5.3        | `Cargo.toml`          |
+| proptest                     | =1.12.0       | `Cargo.toml`          |
 
 ## Generated protocol types and the message catalogue
 

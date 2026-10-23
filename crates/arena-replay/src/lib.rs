@@ -92,7 +92,9 @@ mod tests {
     use std::sync::Arc;
 
     use arena_core::{HubStatus, LeaseInfo, ManualClock, Role, Writer, status_channel};
-    use arena_proto::{Actor, ActorKind, BranchBootstrap, Intent, IntentKind, IntentPayload};
+    use arena_proto::{
+        Actor, ActorKind, BranchBootstrap, Intent, IntentKind, IntentPayload, SettingsSet,
+    };
     use arena_store::{LeaseRow, RowValue, Store, write_lease};
 
     const T0: i64 = 1_800_000_000_000;
@@ -263,6 +265,112 @@ mod tests {
         let (_b, mut dest) = empty();
         let err = dest.write_tx_mut(|tx| replay(changes, tx)).unwrap_err();
         assert!(err.message.contains("deletes missing row"), "{err}");
+        assert!(dest.rows(Table::Branch).unwrap().is_empty());
+    }
+
+    fn settings_set(key: &str, value: &str, base_rev: i64) -> Intent {
+        Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: IntentKind::SettingsSet,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: T0,
+            base_rev: Some(base_rev),
+            actor: Actor {
+                kind: ActorKind::System,
+                id: "test".into(),
+            },
+            elevated_by: None,
+            payload: IntentPayload::SettingsSet(SettingsSet {
+                key: key.into(),
+                value: value.into(),
+            }),
+        }
+    }
+
+    /// Bootstraps and edits under epoch `9:Z`, then hands the lease to `10:A` and edits the same
+    /// setting again. `10:A` sorts before `9:Z` as text, so only numeric ordering gets this right.
+    #[tokio::test]
+    async fn multi_epoch_replay_orders_numerically_and_resets_seq() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        let mut store = Store::open(&path, T0).unwrap();
+        let lease = |counter, id: &str| LeaseRow {
+            counter,
+            hub_instance_id: id.into(),
+            provisional: false,
+            renewed_at: T0,
+            expires_at: T0 + 15_000,
+        };
+        store
+            .write_tx(|tx| write_lease(tx, &lease(9, "Z")))
+            .unwrap();
+        let mut status = HubStatus::opened(store.schema_version().unwrap(), "Z");
+        status.role = Role::Primary;
+        status.lease = Some(LeaseInfo::from(&lease(9, "Z")));
+        let (status_tx, rx) = status_channel(status);
+        let writer = Writer::spawn(store, Arc::new(ManualClock::new(T0)), rx).unwrap();
+        let mut boot = settings_set("x", "x", 0);
+        boot.kind = IntentKind::BranchBootstrap;
+        boot.base_rev = None;
+        boot.payload = IntentPayload::BranchBootstrap(BranchBootstrap {
+            name: "Dev Branch".into(),
+            branch_code: "DEV01".into(),
+            currency: "INR".into(),
+            tz: "Asia/Kolkata".into(),
+            day_start_min: 360,
+            fy_start_month: 4,
+        });
+        writer.submit_intent(boot).await.unwrap();
+        writer
+            .submit_intent(settings_set("hub.locale", "en-NZ", 1))
+            .await
+            .unwrap();
+        Store::open(&path, T0)
+            .unwrap()
+            .write_tx(|tx| write_lease(tx, &lease(10, "A")))
+            .unwrap();
+        status_tx.send_modify(|s| s.lease = Some(LeaseInfo::from(&lease(10, "A"))));
+        let applied = writer
+            .submit_intent(settings_set("hub.locale", "en-TT", 2))
+            .await
+            .unwrap();
+        assert_eq!(
+            (applied.changes[0].epoch.as_str(), applied.changes[0].seq),
+            ("10:A", 1),
+            "seq restarts at 1 in a new epoch"
+        );
+        writer.close().await;
+
+        let source = Store::open(&path, T0).unwrap();
+        let changes = source.changes().unwrap();
+        let epochs: Vec<&str> = changes.iter().map(|c| c.epoch.as_str()).collect();
+        assert_eq!(epochs.last(), Some(&"10:A"));
+        assert!(epochs[..epochs.len() - 1].iter().all(|e| *e == "9:Z"));
+
+        // Fed in text order (10:A first), replay still applies 9:Z first: the later epoch wins.
+        let mut text_order = changes.clone();
+        text_order.sort_by(|a, b| (&a.epoch, a.seq).cmp(&(&b.epoch, b.seq)));
+        assert_eq!(text_order[0].epoch, "10:A");
+        let (_b, mut dest) = empty();
+        dest.write_tx_mut(|tx| replay(text_order, tx)).unwrap();
+        for table in Table::ALL {
+            assert_eq!(dest.rows(table).unwrap(), source.rows(table).unwrap());
+        }
+        let locale = dest
+            .rows(Table::Settings)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["key"] == RowValue::Text("hub.locale".into()))
+            .unwrap();
+        assert_eq!(locale["value"], RowValue::Text("en-TT".into()));
+        assert_eq!(locale["rev"], RowValue::Integer(3));
+
+        // An epoch whose first change is seq 2 is refused.
+        let mut gapped = changes;
+        gapped.last_mut().unwrap().seq = 2;
+        let (_c, mut dest) = empty();
+        let err = dest.write_tx_mut(|tx| replay(gapped, tx)).unwrap_err();
+        assert!(err.message.contains("seq gap in epoch 10:A"), "{err}");
         assert!(dest.rows(Table::Branch).unwrap().is_empty());
     }
 

@@ -1,5 +1,6 @@
 //! **validate.** Payload checks; a failure is `VALIDATION_FAILED` naming the field.
 
+use super::{Target, settings_set};
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
 /// ISO 4217 alpha-3 codes this build accepts as a branch currency.
@@ -17,7 +18,7 @@ fn invalid(field: &str, message: impl Into<String>) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
 }
 
-pub(super) fn validate(intent: &Intent) -> Result<(), AppError> {
+pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError> {
     if intent.kind != intent.payload.kind() {
         return Err(invalid(
             "kind",
@@ -33,6 +34,13 @@ pub(super) fn validate(intent: &Intent) -> Result<(), AppError> {
                 return Err(invalid("base_rev", "branch.bootstrap takes no base_rev"));
             }
             validate_bootstrap(b)
+        }
+        IntentPayload::SettingsSet(s) => {
+            let row = match target {
+                Target::Setting(row) => row.as_ref(),
+                Target::None => None,
+            };
+            settings_set::validate(s, row)
         }
     }
 }

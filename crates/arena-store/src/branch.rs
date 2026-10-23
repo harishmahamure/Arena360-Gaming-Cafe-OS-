@@ -226,6 +226,57 @@ pub fn insert_setting(
     Ok(())
 }
 
+/// The key and `rev` of one existing setting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingRef {
+    pub branch_id: String,
+    pub key: String,
+    pub rev: i64,
+}
+
+/// The branch's setting `key`, if it exists. A database holds one branch, so the key alone
+/// identifies the row.
+pub fn find_setting(conn: &Connection, key: &str) -> Result<Option<SettingRef>, AppError> {
+    conn.query_row(
+        "SELECT s.branch_id, s.key, s.rev FROM settings s
+         JOIN branch b ON b.branch_id = s.branch_id
+         WHERE s.key = ?1",
+        [key],
+        |r| {
+            Ok(SettingRef {
+                branch_id: r.get(0)?,
+                key: r.get(1)?,
+                rev: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Sets one setting's `value` (the stamp step then bumps `rev` and `updated_at`). Fails
+/// `INTERNAL` if the row does not exist.
+pub fn update_setting_value(
+    conn: &Connection,
+    branch_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE settings SET value = ?3 WHERE branch_id = ?1 AND key = ?2",
+            params![branch_id, key, value],
+        )
+        .map_err(db_error)?;
+    if n != 1 {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            format!("no settings row {branch_id}/{key}"),
+        ));
+    }
+    Ok(())
+}
+
 fn key_where(table: Table) -> String {
     table
         .primary_key()
@@ -717,6 +768,42 @@ mod tests {
         );
         assert!(store.write_tx(|tx| has_branch_data(tx)).unwrap());
         assert_eq!(store.rows(Table::Branch).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn find_and_update_a_setting() {
+        let (_dir, mut store) = store();
+        store
+            .write_tx(|tx| {
+                assert_eq!(find_setting(tx, "k")?, None);
+                insert_branch(
+                    tx,
+                    &NewBranch {
+                        branch_id: "B",
+                        name: "N",
+                        branch_code: "C",
+                        currency: "INR",
+                        tz: "UTC",
+                        day_start_min: 0,
+                        fy_start_month: 1,
+                    },
+                )?;
+                insert_setting(tx, "B", "k", "v")?;
+                let found = find_setting(tx, "k")?.unwrap();
+                assert_eq!((found.branch_id.as_str(), found.rev), ("B", 0));
+                update_setting_value(tx, "B", "k", "w")?;
+                let row = read_row(
+                    tx,
+                    &RowKey::Settings {
+                        branch_id: "B".into(),
+                        key: "k".into(),
+                    },
+                )?;
+                assert_eq!(row["value"], RowValue::Text("w".into()));
+                assert!(update_setting_value(tx, "B", "nope", "x").is_err());
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

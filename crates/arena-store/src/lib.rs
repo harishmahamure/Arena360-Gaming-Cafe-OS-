@@ -4,6 +4,7 @@
 //! them back), refuses a schema newer than this binary and applies the embedded migrations.
 
 mod branch;
+mod dedupe;
 mod migrations;
 
 use std::fs::{File, OpenOptions, TryLockError};
@@ -14,9 +15,14 @@ use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 pub use branch::{
-    ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, Table, branch_exists, delete_row,
-    dump_table, has_branch_data, insert_branch, insert_change, insert_setting, next_change_seq,
-    read_changes, read_row, stamp_row, upsert_row,
+    ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, SettingRef, Table, branch_exists,
+    delete_row, dump_table, find_setting, has_branch_data, insert_branch, insert_change,
+    insert_setting, next_change_seq, read_changes, read_row, stamp_row, update_setting_value,
+    upsert_row,
+};
+pub use dedupe::{
+    AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
+    insert_applied_intent, prune_applied_intents,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
@@ -212,6 +218,11 @@ impl Store {
     /// Every row of a change-log table, ordered by primary key.
     pub fn rows(&self, table: Table) -> Result<Vec<Row>, AppError> {
         dump_table(&self.conn, table)
+    }
+
+    /// How many `applied_intents` (dedupe) records exist, outside any write transaction.
+    pub fn applied_intent_count(&self) -> Result<i64, AppError> {
+        count_applied_intents(&self.conn)
     }
 
     /// Takes the process-level writer lock (`<db>.lock`), so two processes on one data dir can
@@ -577,8 +588,8 @@ mod tests {
             write_lease(&conn, &lease).unwrap();
         }
         let store = Store::open(&path, T).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 2);
-        for table in ["branch", "settings", "changes"] {
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        for table in ["branch", "settings", "changes", "applied_intents"] {
             let exists: bool = store
                 .conn
                 .query_row(
@@ -590,6 +601,45 @@ mod tests {
             assert!(exists, "{table}");
         }
         assert_eq!(store.lease().unwrap(), Some(lease));
+    }
+
+    #[test]
+    fn v2_database_upgrades_to_v3_keeping_its_rows() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &migrations::MIGRATIONS[..2] {
+                conn.execute_batch(m.sql).unwrap();
+                record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            insert_branch(
+                &conn,
+                &NewBranch {
+                    branch_id: "B",
+                    name: "N",
+                    branch_code: "C",
+                    currency: "INR",
+                    tz: "UTC",
+                    day_start_min: 0,
+                    fy_start_month: 1,
+                },
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.rows(Table::Branch).unwrap().len(), 1);
+        let index: bool = store
+            .conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index'
+                                AND name = 'applied_intents_applied_at')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(index);
+        assert_eq!(count_applied_intents(&store.conn).unwrap(), 0);
     }
 
     #[test]

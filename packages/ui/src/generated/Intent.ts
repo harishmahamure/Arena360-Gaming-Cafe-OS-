@@ -14,7 +14,8 @@ export type Intent = {
   intent_id: string;
   kind: IntentKind;
   /**
-   * A client ULID; dedupe comes in Story 1.8.
+   * A client ULID (26 Crockford base32 characters). A missing or malformed key fails
+   * `BAD_FRAME` before any transaction; a key already applied returns its stored outcome.
    */
   idempotency_key: string;
   /**

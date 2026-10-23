@@ -12,6 +12,9 @@ pub enum IntentKind {
     /// Creates the branch row and its default settings, once.
     #[serde(rename = "branch.bootstrap")]
     BranchBootstrap,
+    /// Sets the value of one existing branch setting (an edit: carries `base_rev`).
+    #[serde(rename = "settings.set")]
+    SettingsSet,
 }
 
 impl IntentKind {
@@ -19,6 +22,7 @@ impl IntentKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::BranchBootstrap => "branch.bootstrap",
+            Self::SettingsSet => "settings.set",
         }
     }
 }
@@ -39,6 +43,15 @@ pub struct BranchBootstrap {
     pub fy_start_month: u8,
 }
 
+/// The payload of `settings.set`: the setting `key` (which must already exist) and its new
+/// TEXT `value`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SettingsSet {
+    pub key: String,
+    pub value: String,
+}
+
 /// The intent's payload, tagged by its kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
@@ -46,6 +59,8 @@ pub struct BranchBootstrap {
 pub enum IntentPayload {
     #[serde(rename = "branch.bootstrap")]
     BranchBootstrap(BranchBootstrap),
+    #[serde(rename = "settings.set")]
+    SettingsSet(SettingsSet),
 }
 
 impl IntentPayload {
@@ -53,6 +68,7 @@ impl IntentPayload {
     pub fn kind(&self) -> IntentKind {
         match self {
             Self::BranchBootstrap(_) => IntentKind::BranchBootstrap,
+            Self::SettingsSet(_) => IntentKind::SettingsSet,
         }
     }
 }
@@ -64,7 +80,8 @@ pub struct Intent {
     /// A ULID minted by the client.
     pub intent_id: String,
     pub kind: IntentKind,
-    /// A client ULID; dedupe comes in Story 1.8.
+    /// A client ULID (26 Crockford base32 characters). A missing or malformed key fails
+    /// `BAD_FRAME` before any transaction; a key already applied returns its stored outcome.
     pub idempotency_key: String,
     /// When the client issued the intent, UTC ms.
     #[ts(type = "number")]
@@ -115,6 +132,28 @@ mod tests {
             "\"branch.bootstrap\""
         );
         assert_eq!(IntentKind::BranchBootstrap.as_str(), "branch.bootstrap");
+    }
+
+    #[test]
+    fn settings_set_round_trips() {
+        let intent = Intent {
+            kind: IntentKind::SettingsSet,
+            base_rev: Some(3),
+            payload: IntentPayload::SettingsSet(SettingsSet {
+                key: "idle_lock_minutes".into(),
+                value: "7".into(),
+            }),
+            ..bootstrap()
+        };
+        let json = serde_json::to_value(&intent).unwrap();
+        assert_eq!(json["kind"], "settings.set");
+        assert_eq!(json["payload"]["kind"], "settings.set");
+        assert_eq!(json["payload"]["key"], "idle_lock_minutes");
+        assert_eq!(json["base_rev"], 3);
+        let back: Intent = serde_json::from_value(json).unwrap();
+        assert_eq!(back, intent);
+        assert_eq!(back.payload.kind(), IntentKind::SettingsSet);
+        assert_eq!(IntentKind::SettingsSet.as_str(), "settings.set");
     }
 
     #[test]

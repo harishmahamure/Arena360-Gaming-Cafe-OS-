@@ -13,4 +13,5 @@ export type IntentKind =
   | "console.plan_requested"
   | "staff.upsert"
   | "role.upsert"
-  | "audit.read_granted";
+  | "audit.read_granted"
+  | "kiosk.log";

@@ -165,6 +165,7 @@
         onSessionUnlocked: (e) => {
           if (locked && !unlocking) void finishUnlock(e);
         },
+        onDevicesChanged: () => void refresh(),
         onResync: () => void refresh(),
         // Refused: find out whether the session is still there (sign-in otherwise).
         onClosed: () => void invalidate(SESSION_DEPENDENCY),

@@ -15,6 +15,8 @@ export type EventHandlers = {
   onSessionLocked?: () => void;
   /** `session.unlocked`: this session was unlocked, possibly by another member's PIN. */
   onSessionUnlocked?: (event: UnlockOk) => void;
+  /** `devices.changed`: a device came online or went offline; reload the snapshot. */
+  onDevicesChanged?: () => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
   /** The Hub closed or refused the stream (signed out, revoked, or the Hub restarted). */
@@ -71,6 +73,7 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
       }
     });
     es.addEventListener("resync", () => handlers.onResync());
+    es.addEventListener("devices.changed", () => handlers.onDevicesChanged?.());
     es.addEventListener("session.locked", () => handlers.onSessionLocked?.());
     es.addEventListener("session.unlocked", (ev) => {
       try {

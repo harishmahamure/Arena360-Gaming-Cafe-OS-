@@ -6,6 +6,36 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "arena-kiosk-svc"
+path = "src/main.rs"
+
 [dependencies]
 arena-kiosk-core.workspace = true
 arena-proto.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+ulid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+windows-service.workspace = true
+
+[features]
+# Dev-only fixtures (`arena-kiosk-svc dev provision`). Never enabled in release builds; real
+# pairing replaces it in Epic 2.
+dev-fixtures = []
+
+[dev-dependencies]
+arena-api.workspace = true
+arena-core.workspace = true
+arena-store.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "test-util"] }

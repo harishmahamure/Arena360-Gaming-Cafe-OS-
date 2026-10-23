@@ -28,6 +28,7 @@ const MODULE_LABELS: Record<string, MessageKey> = {
   staff: "hub.audit.module.staff",
   role: "hub.audit.module.role",
   audit: "hub.audit.module.audit",
+  kiosk: "hub.audit.module.kiosk",
 };
 
 const OP_LABELS: Record<ChangeOpKind, MessageKey> = {

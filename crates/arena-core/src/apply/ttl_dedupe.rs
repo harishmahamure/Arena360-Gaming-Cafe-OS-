@@ -193,7 +193,11 @@ pub(super) fn ttl_dedupe(
         return Err(AppError::with_field(
             ErrorCode::ValidationFailed,
             "issued_at",
-            "issued_at is too far in the future",
+            // The measured skew, so a client can log how far its clock is ahead.
+            format!(
+                "issued_at is too far in the future ({} ms ahead of the hub clock)",
+                intent.issued_at - now_ms
+            ),
         ));
     }
     Ok(None)

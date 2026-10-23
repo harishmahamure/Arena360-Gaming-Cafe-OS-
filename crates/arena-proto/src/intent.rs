@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::actor::{Actor, ElevatedBy};
+use crate::kiosk::KioskLog;
 use crate::permission::{Permission, Requirement};
 use crate::scope::ClientClass;
 
@@ -21,6 +22,7 @@ pub enum IntentCategory {
     Kitchen,
     Console,
     Audit,
+    Kiosk,
 }
 
 /// What an intent asks for, as `domain.verb`.
@@ -59,11 +61,14 @@ pub enum IntentKind {
     /// when it issues the read ticket), so the grant shows in the audit log.
     #[serde(rename = "audit.read_granted")]
     AuditReadGranted,
+    /// One event a kiosk recorded (device actor), queued offline and replayed in order.
+    #[serde(rename = "kiosk.log")]
+    KioskLog,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 10] = [
+    pub const ALL: [IntentKind; 11] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -74,6 +79,7 @@ impl IntentKind {
         Self::StaffUpsert,
         Self::RoleUpsert,
         Self::AuditReadGranted,
+        Self::KioskLog,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -89,6 +95,7 @@ impl IntentKind {
             Self::StaffUpsert => "staff.upsert",
             Self::RoleUpsert => "role.upsert",
             Self::AuditReadGranted => "audit.read_granted",
+            Self::KioskLog => "kiosk.log",
         }
     }
 
@@ -108,6 +115,7 @@ impl IntentKind {
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
+            Self::KioskLog => IntentCategory::Kiosk,
         }
     }
 
@@ -123,6 +131,7 @@ impl IntentKind {
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
+            Self::KioskLog => Requirement::Device,
         }
     }
 
@@ -144,7 +153,8 @@ impl IntentKind {
             | Self::ConsolePlanRequested
             | Self::StaffUpsert
             | Self::RoleUpsert
-            | Self::AuditReadGranted => None,
+            | Self::AuditReadGranted
+            | Self::KioskLog => None,
         }
     }
 
@@ -352,6 +362,8 @@ pub enum IntentPayload {
     RoleUpsert(RoleUpsert),
     #[serde(rename = "audit.read_granted")]
     AuditReadGranted(AuditReadGranted),
+    #[serde(rename = "kiosk.log")]
+    KioskLog(KioskLog),
 }
 
 impl IntentPayload {
@@ -367,6 +379,7 @@ impl IntentPayload {
             Self::StaffUpsert(_) => IntentKind::StaffUpsert,
             Self::RoleUpsert(_) => IntentKind::RoleUpsert,
             Self::AuditReadGranted(_) => IntentKind::AuditReadGranted,
+            Self::KioskLog(_) => IntentKind::KioskLog,
         }
     }
 }
@@ -490,6 +503,7 @@ mod tests {
                 "device.revoke" => Requirement::Perm(Permission::DeviceRemote),
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
                 "console.plan_requested" => Requirement::Phone,
+                "kiosk.log" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),
             };
             assert_eq!(kind.requirement(), want, "{}", kind.as_str());

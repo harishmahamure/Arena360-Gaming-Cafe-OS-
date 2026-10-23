@@ -160,6 +160,9 @@ pub struct SnapshotDevice {
     pub class: ClientClass,
     /// The floor zone; always `null` until zones exist, so every device is unassigned.
     pub zone: Option<String>,
+    /// Whether the device has a live paired session with this Hub right now.
+    #[serde(default)]
+    pub online: bool,
 }
 
 #[cfg(test)]
@@ -175,6 +178,7 @@ mod tests {
                 label: "Dev Kiosk".into(),
                 class: ClientClass::Paired,
                 zone: None,
+                online: true,
             }],
             locale: None,
             ui: SnapshotUi::default(),
@@ -183,7 +187,7 @@ mod tests {
             serde_json::to_value(&s).unwrap(),
             serde_json::json!({
                 "branch": null,
-                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null}],
+                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true}],
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5}
             })

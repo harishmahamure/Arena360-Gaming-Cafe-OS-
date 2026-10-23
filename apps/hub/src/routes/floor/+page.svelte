@@ -34,6 +34,10 @@
             <li class="device" data-device-id={device.device_id}>
               <span class="label type-hub-title">{device.label}</span>
               <StatusBadge state="unassigned" />
+              <!-- Presence in words (never colour alone): a live paired session or not. -->
+              <span class="presence type-hub-body" data-testid="device-presence"
+                >{device.online ? t("hub.floor.online") : t("hub.floor.offline")}</span
+              >
             </li>
           {/each}
         </ul>
@@ -54,7 +58,8 @@
     margin: 0;
   }
 
-  .muted {
+  .muted,
+  .presence {
     color: var(--text-muted);
   }
 

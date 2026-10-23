@@ -127,6 +127,10 @@ pub(super) fn mutate(
             Target::Branch(b) => super::read_grants::mutate(tx, g, b.as_ref()),
             _ => Err(mismatch()),
         },
+        IntentPayload::KioskLog(l) => match target {
+            Target::Branch(b) => super::kiosk_log::mutate(tx, intent, l, b.as_ref()),
+            _ => Err(mismatch()),
+        },
     }
 }
 

@@ -44,7 +44,8 @@ impl ClientClass {
     }
 }
 
-const PAIRED_SCOPE: &[IntentKind] = &[];
+/// Paired apps (the Kiosk service): kiosk events only so far.
+const PAIRED_SCOPE: &[IntentKind] = &[IntentKind::KioskLog];
 /// Kitchen intents only (none exist yet).
 const KDS_SCOPE: &[IntentKind] = &[];
 const PHONE_SCOPE: &[IntentKind] = &[IntentKind::ConsolePlanRequested];
@@ -96,7 +97,7 @@ mod tests {
             class_scope(ClientClass::Phone),
             &[IntentKind::ConsolePlanRequested]
         );
-        assert!(class_scope(ClientClass::Paired).is_empty());
+        assert_eq!(class_scope(ClientClass::Paired), &[IntentKind::KioskLog]);
         for kind in IntentKind::ALL {
             assert_eq!(
                 in_scope(ClientClass::Phone, kind),

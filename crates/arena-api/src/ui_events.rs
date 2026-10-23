@@ -9,6 +9,8 @@
 //! - `event: session.locked`, data `{}`, and `event: session.unlocked`, data
 //!   [`UnlockOk`](arena_proto::UnlockOk): this stream's own session was locked or unlocked (from
 //!   another window sharing the token), so every window locks and unlocks together.
+//! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN; the
+//!   view reloads the snapshot (which carries each device's `online`).
 //! - `event: resync`, data `{}`: this stream fell behind and missed events, or the Hub's role
 //!   changed (the stream then closes so the client reopens it). The view reloads the snapshot.
 //!
@@ -95,6 +97,7 @@ impl EventsHub {
             clock: Arc::clone(auth.clock()),
             events: auth.writer().map(WriterHandle::subscribe),
             status: auth.status().cloned(),
+            presence: auth.presence().changes(),
             tick: auth.events_config().tick,
         };
         tokio::spawn(task.run());
@@ -121,6 +124,7 @@ struct HubTask {
     clock: Arc<dyn Clock>,
     events: Option<broadcast::Receiver<Applied>>,
     status: Option<watch::Receiver<HubStatus>>,
+    presence: Option<watch::Receiver<u64>>,
     tick: Duration,
 }
 
@@ -247,6 +251,18 @@ impl HubTask {
                         // Demoted or shutting down: clients reopen and find out.
                         self.events = None;
                         let _ = self.tx.send(Pushed::Reset);
+                    }
+                },
+                changed = async {
+                    match &mut self.presence {
+                        Some(rx) => rx.changed().await.is_ok(),
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if changed {
+                        self.send("devices.changed", "{}".into(), false);
+                    } else {
+                        self.presence = None;
                     }
                 },
                 changed = async {
@@ -538,6 +554,28 @@ mod tests {
         let (event, data) = next_event(&mut frames).await.unwrap();
         assert_eq!(event, "applied");
         assert_eq!(data, serde_json::json!({ "intent_id": id }));
+    }
+
+    #[tokio::test]
+    async fn a_device_coming_online_or_going_offline_is_pushed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (status, mut frames) = open(&hub, Some(&token)).await;
+        assert_eq!(status, StatusCode::OK);
+        // Give the stream's hub task a moment to subscribe.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some("D1".into()), tx);
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(
+            (event.as_str(), data),
+            ("devices.changed", serde_json::json!({}))
+        );
+        drop(session);
+        let (event, _) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "devices.changed");
     }
 
     #[tokio::test]

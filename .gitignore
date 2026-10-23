@@ -19,3 +19,6 @@ test-results/
 
 # Hub sidecar copied in by the installer job (never committed)
 apps/hub/src-tauri/binaries/
+
+# Kiosk service sidecar copied in by the installer job (never committed)
+apps/kiosk/src-tauri/binaries/

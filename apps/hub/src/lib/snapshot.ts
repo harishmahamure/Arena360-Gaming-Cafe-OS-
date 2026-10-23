@@ -26,6 +26,8 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
       ok: true,
       snapshot: {
         ...snapshot,
+        // A Hub from before device presence sends no `online`: offline.
+        devices: snapshot.devices.map((d) => ({ ...d, online: d.online === true })),
         locale: snapshot.locale ?? null,
         // A missing or malformed `ui` block falls back to the defaults.
         ui: isSnapshotUi(snapshot.ui) ? snapshot.ui : { idle_lock_minutes: 5 },

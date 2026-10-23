@@ -69,8 +69,20 @@ function newHub(): Hub {
       ["idle_lock_minutes", { value: "5", rev: 1 }],
     ]),
     devices: [
-      { device_id: "01JDEVKIOSK0000000000000001", label: "Kiosk 1", class: "paired", zone: null },
-      { device_id: "01JDEVKIOSK0000000000000002", label: "Kiosk 2", class: "paired", zone: null },
+      {
+        device_id: "01JDEVKIOSK0000000000000001",
+        label: "Kiosk 1",
+        class: "paired",
+        zone: null,
+        online: false,
+      },
+      {
+        device_id: "01JDEVKIOSK0000000000000002",
+        label: "Kiosk 2",
+        class: "paired",
+        zone: null,
+        online: false,
+      },
     ],
     idleLockMinutes: 5,
     locks: 0,

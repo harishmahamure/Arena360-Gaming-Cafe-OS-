@@ -9,6 +9,7 @@ pub mod currency;
 mod error;
 mod frame;
 mod intent;
+mod kiosk;
 mod permission;
 mod scope;
 mod snapshot;
@@ -31,6 +32,10 @@ pub use intent::{
     AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceRegister, DeviceRevoke,
     DeviceVersionReported, Intent, IntentCategory, IntentKind, IntentPayload, PermEffect,
     ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffUpsert, reasons_json,
+};
+pub use kiosk::{
+    KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
+    MAX_KIOSK_LOG_DETAIL_CHARS,
 };
 pub use permission::{Permission, Requirement};
 pub use scope::{ClientClass, class_scope, in_scope};

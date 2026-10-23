@@ -18,7 +18,13 @@ const CORS = {
 const SEEDED: HubSnapshot = {
   branch: { name: "Dev Branch", branch_code: "DEV01" },
   devices: [
-    { device_id: "01JDEVKIOSK0000000000000000", label: "Dev Kiosk", class: "paired", zone: null },
+    {
+      device_id: "01JDEVKIOSK0000000000000000",
+      label: "Dev Kiosk",
+      class: "paired",
+      zone: null,
+      online: false,
+    },
   ],
   locale: {
     currency: "INR",
@@ -147,6 +153,7 @@ test("seeded: the header names the branch and the floor lists Dev Kiosk as unass
   await expect(item).toHaveCount(1);
   await expect(item).toContainText("Dev Kiosk");
   await expect(item).toContainText("Unassigned");
+  await expect(item.getByTestId("device-presence")).toHaveText(en["hub.floor.offline"]);
   const border = await item.evaluate((el) => {
     const s = getComputedStyle(el);
     const probe = document.createElement("span");
@@ -159,6 +166,30 @@ test("seeded: the header names the branch and the floor lists Dev Kiosk as unass
   expect(border.style).toBe("dashed");
   expect(border.width).toBe("2px");
   expect(border.color).toBe(border.expected);
+});
+
+test("each device says in words whether it is online", async ({ page }) => {
+  await open(page, "/floor", {
+    ...SEEDED,
+    devices: [
+      {
+        device_id: "01JDEVKIOSK0000000000000001",
+        label: "Kiosk 1",
+        class: "paired",
+        zone: null,
+        online: true,
+      },
+      {
+        device_id: "01JDEVKIOSK0000000000000002",
+        label: "Kiosk 2",
+        class: "paired",
+        zone: null,
+        online: false,
+      },
+    ],
+  });
+  const presence = page.getByTestId("device-presence");
+  await expect(presence).toHaveText([en["hub.floor.online"], en["hub.floor.offline"]]);
 });
 
 test("not seeded: the floor says the branch is not set up", async ({ page }) => {

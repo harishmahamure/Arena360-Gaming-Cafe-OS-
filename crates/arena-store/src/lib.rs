@@ -22,12 +22,12 @@ pub use audit::{
     list_staff_names, previous_row_image,
 };
 pub use branch::{
-    BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, NewReadGrant, Row, RowKey,
-    RowValue, SettingRef, SettingRow, Table, branch_exists, current_branch_id, delete_row,
-    dump_table, find_branch_locale, find_branch_summary, find_setting, has_branch_data,
-    insert_branch, insert_change, insert_read_grant, insert_setting, list_settings,
-    next_change_seq, read_changes, read_row, stamp_row, update_setting, update_setting_value,
-    upsert_row,
+    BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, NewDeviceEvent, NewReadGrant,
+    Row, RowKey, RowValue, SettingRef, SettingRow, Table, branch_exists, current_branch_id,
+    delete_row, dump_table, find_branch_locale, find_branch_summary, find_setting, has_branch_data,
+    insert_branch, insert_change, insert_device_event, insert_read_grant, insert_setting,
+    list_settings, next_change_seq, read_changes, read_row, stamp_row, update_setting,
+    update_setting_value, upsert_row,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,

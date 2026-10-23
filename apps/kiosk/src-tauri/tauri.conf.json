@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Arena 360 Kiosk",
-        "width": 1280,
-        "height": 800
+        "fullscreen": true,
+        "decorations": false,
+        "resizable": false
       }
     ],
     "security": {

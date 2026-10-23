@@ -5,6 +5,7 @@ import type { BranchSeedDefaults } from "./BranchSeedDefaults";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
+import type { KioskLog } from "./KioskLog";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffUpsert } from "./StaffUpsert";
@@ -21,4 +22,5 @@ export type IntentPayload =
   | ({ kind: "device.version_reported" } & DeviceVersionReported)
   | ({ kind: "staff.upsert" } & StaffUpsert)
   | ({ kind: "role.upsert" } & RoleUpsert)
-  | ({ kind: "audit.read_granted" } & AuditReadGranted);
+  | ({ kind: "audit.read_granted" } & AuditReadGranted)
+  | ({ kind: "kiosk.log" } & KioskLog);

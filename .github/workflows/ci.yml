@@ -34,6 +34,8 @@ jobs:
       - run: cargo clippy --locked -p arena-hub --features dev-fixtures --all-targets -- -D warnings
       - run: cargo test --locked -p arena-hub --features dev-fixtures
       - run: cargo test --locked -p arena-api --features dev-fixtures
+      - run: cargo clippy --locked -p arena-kiosk-svc --features dev-fixtures --all-targets -- -D warnings
+      - run: cargo test --locked -p arena-kiosk-svc --features dev-fixtures
 
   checks:
     name: checks (${{ matrix.os }})
@@ -138,8 +140,38 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  kiosk-installer:
+    name: installer (kiosk, windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kiosk-installer
+      - run: pnpm install --frozen-lockfile
+      - run: cargo build --locked --release -p arena-kiosk-svc
+      # The service Tauri bundles from `externalBin` (gitignored; only this job creates it).
+      - name: Stage the arena-kiosk-svc sidecar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force apps/kiosk/src-tauri/binaries | Out-Null
+          Copy-Item target/release/arena-kiosk-svc.exe apps/kiosk/src-tauri/binaries/arena-kiosk-svc-x86_64-pc-windows-msvc.exe
+      - run: pnpm --filter @arena/kiosk tauri build --config src-tauri/tauri.installer.conf.json --bundles nsis -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
   a11y:
-    name: a11y (gallery, hub shell)
+    name: a11y (gallery, hub shell, kiosk ui)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -156,6 +188,8 @@ jobs:
       - run: pnpm --filter @arena/hub check
       - run: pnpm --filter @arena/hub build
       - run: pnpm --filter @arena/hub test:shell
+      - run: pnpm --filter @arena/kiosk check
+      - run: pnpm --filter @arena/kiosk test:ui
       - name: Upload the Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -166,12 +200,14 @@ jobs:
             apps/gallery/test-results/
             apps/hub/playwright-report/
             apps/hub/test-results/
+            apps/kiosk/playwright-report/
+            apps/kiosk/test-results/
           retention-days: 14
 
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [rust, checks, build, a11y, installer]
+    needs: [rust, checks, build, a11y, installer, kiosk-installer]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed

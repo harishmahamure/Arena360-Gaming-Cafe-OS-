@@ -74,6 +74,33 @@ impl std::fmt::Display for Release {
     }
 }
 
+/// Which devices have a live `paired` session with this Hub (the floor's Online / Offline).
+#[derive(Clone, Default)]
+pub struct Presence(Option<Arc<registry::Registry>>);
+
+impl Presence {
+    /// A handle that reports every device offline (no LAN server, tests).
+    pub fn none() -> Self {
+        Self(None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn of(registry: Arc<registry::Registry>) -> Self {
+        Self(Some(registry))
+    }
+
+    /// Whether `device_id` has a live paired session right now.
+    pub fn online(&self, device_id: &str) -> bool {
+        self.0.as_ref().is_some_and(|r| r.is_online(device_id))
+    }
+
+    /// A receiver that changes whenever a paired device session opens or closes (`None` for
+    /// [`Presence::none`]).
+    pub fn changes(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.0.as_ref().map(|r| r.presence_changes())
+    }
+}
+
 /// Everything a LAN session needs from the Hub.
 pub struct LanHub {
     /// The writer, when this Hub started as primary.
@@ -89,6 +116,7 @@ pub struct LanHub {
     /// Bounds concurrent argon2id token checks across all connections.
     verify_permits: Arc<tokio::sync::Semaphore>,
     throttle: throttle::HelloThrottle,
+    kiosk_log_rate: throttle::KioskLogRate,
 }
 
 impl LanHub {
@@ -110,12 +138,18 @@ impl LanHub {
             registry: Arc::new(registry::Registry::default()),
             verify_permits: Arc::new(tokio::sync::Semaphore::new(VERIFY_CONCURRENCY)),
             throttle: throttle::HelloThrottle::default(),
+            kiosk_log_rate: throttle::KioskLogRate::default(),
         }
     }
 
     /// How many sessions are connected.
     pub fn session_count(&self) -> usize {
         self.registry.len()
+    }
+
+    /// The handle the Hub UI's snapshot reads device presence through.
+    pub fn presence(&self) -> Presence {
+        Presence(Some(Arc::clone(&self.registry)))
     }
 
     /// Whether intents can be served now: a writer exists and the Hub is primary.

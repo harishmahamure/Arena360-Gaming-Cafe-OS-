@@ -599,6 +599,19 @@ impl Ctx<'_> {
             return Err(app(ErrorCode::BadFrame, "malformed intent.submit"));
         };
         debug_assert_eq!(frame.rid, rid);
+        // A chatty kiosk cannot flood the change log: 60 events a minute per device. Over the
+        // limit is HUB_SLOW, which the kiosk treats as transient (it keeps the event queued).
+        if submit.intent.payload.kind() == IntentKind::KioskLog
+            && !self
+                .hub
+                .kiosk_log_rate
+                .take(self.authed.device_id().unwrap_or("-"))
+        {
+            return Err(app(
+                ErrorCode::HubSlow,
+                "too many kiosk events from this device; retry later",
+            ));
+        }
         Ok(bind_to_session(submit.intent, &self.authed.actor))
     }
 

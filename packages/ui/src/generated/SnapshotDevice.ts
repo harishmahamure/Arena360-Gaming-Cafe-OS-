@@ -12,4 +12,8 @@ export type SnapshotDevice = {
    * The floor zone; always `null` until zones exist, so every device is unassigned.
    */
   zone: string | null;
+  /**
+   * Whether the device has a live paired session with this Hub right now.
+   */
+  online: boolean;
 };

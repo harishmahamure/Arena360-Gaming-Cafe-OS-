@@ -34,11 +34,12 @@ pub enum Table {
     RolePerms,
     Staff,
     ReadGrants,
+    DeviceEvents,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 7] = [
+    pub const ALL: [Table; 8] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -46,6 +47,7 @@ impl Table {
         Table::RolePerms,
         Table::Staff,
         Table::ReadGrants,
+        Table::DeviceEvents,
     ];
 
     /// The SQL table name.
@@ -58,6 +60,7 @@ impl Table {
             Self::RolePerms => "role_perms",
             Self::Staff => "staff",
             Self::ReadGrants => "read_grants",
+            Self::DeviceEvents => "device_events",
         }
     }
 
@@ -71,13 +74,19 @@ impl Table {
             Self::RolePerms => &["role_id", "permission"],
             Self::Staff => &["staff_id"],
             Self::ReadGrants => &["grant_id"],
+            Self::DeviceEvents => &["event_id"],
         }
     }
 
     /// Whether the table has a `created_at` column (stamped on insert).
     pub fn has_created_at(self) -> bool {
         match self {
-            Self::Branch | Self::Devices | Self::Roles | Self::Staff | Self::ReadGrants => true,
+            Self::Branch
+            | Self::Devices
+            | Self::Roles
+            | Self::Staff
+            | Self::ReadGrants
+            | Self::DeviceEvents => true,
             Self::Settings | Self::RolePerms => false,
         }
     }
@@ -104,6 +113,7 @@ pub enum RowKey {
     RolePerms { role_id: String, permission: String },
     Staff { staff_id: String },
     ReadGrants { grant_id: String },
+    DeviceEvents { event_id: String },
 }
 
 impl RowKey {
@@ -116,6 +126,7 @@ impl RowKey {
             Self::RolePerms { .. } => Table::RolePerms,
             Self::Staff { .. } => Table::Staff,
             Self::ReadGrants { .. } => Table::ReadGrants,
+            Self::DeviceEvents { .. } => Table::DeviceEvents,
         }
     }
 
@@ -132,6 +143,7 @@ impl RowKey {
             } => format!("{role_id}/{permission}"),
             Self::Staff { staff_id } => staff_id.clone(),
             Self::ReadGrants { grant_id } => grant_id.clone(),
+            Self::DeviceEvents { event_id } => event_id.clone(),
         }
     }
 
@@ -166,6 +178,9 @@ impl RowKey {
             Table::ReadGrants => Self::ReadGrants {
                 grant_id: text("grant_id")?,
             },
+            Table::DeviceEvents => Self::DeviceEvents {
+                event_id: text("event_id")?,
+            },
         })
     }
 
@@ -181,6 +196,7 @@ impl RowKey {
             } => vec![role_id, permission],
             Self::Staff { staff_id } => vec![staff_id],
             Self::ReadGrants { grant_id } => vec![grant_id],
+            Self::DeviceEvents { event_id } => vec![event_id],
         }
     }
 }
@@ -324,7 +340,8 @@ pub fn has_branch_data(conn: &Connection) -> Result<bool, AppError> {
         "SELECT EXISTS (SELECT 1 FROM branch) OR EXISTS (SELECT 1 FROM settings)
              OR EXISTS (SELECT 1 FROM devices) OR EXISTS (SELECT 1 FROM roles)
              OR EXISTS (SELECT 1 FROM role_perms) OR EXISTS (SELECT 1 FROM staff)
-             OR EXISTS (SELECT 1 FROM read_grants) OR EXISTS (SELECT 1 FROM changes)",
+             OR EXISTS (SELECT 1 FROM read_grants) OR EXISTS (SELECT 1 FROM device_events)
+             OR EXISTS (SELECT 1 FROM changes)",
         [],
         |r| r.get(0),
     )
@@ -391,6 +408,38 @@ pub fn insert_read_grant(conn: &Connection, g: &NewReadGrant<'_>) -> Result<(), 
             g.requester_staff_id,
             g.approver_staff_id,
             g.verifier_version
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// A kiosk event (`kiosk.log`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewDeviceEvent<'a> {
+    pub event_id: &'a str,
+    pub branch_id: &'a str,
+    pub device_id: &'a str,
+    pub at: i64,
+    pub level: &'a str,
+    pub code: &'a str,
+    pub detail: &'a str,
+}
+
+/// Inserts a device-event row with `rev = 0` and zero timestamps, for the stamp step to set.
+pub fn insert_device_event(conn: &Connection, e: &NewDeviceEvent<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO device_events (event_id, branch_id, device_id, at, level, code, detail,
+                                    rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, 0)",
+        params![
+            e.event_id,
+            e.branch_id,
+            e.device_id,
+            e.at,
+            e.level,
+            e.code,
+            e.detail
         ],
     )
     .map_err(db_error)?;

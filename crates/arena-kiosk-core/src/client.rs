@@ -58,8 +58,11 @@ pub enum ClientError {
     BadInput(String),
     /// TCP connect or I/O failed.
     Io(String),
-    /// The TLS handshake failed, including a certificate that does not match the pin.
+    /// The TLS handshake failed for a reason other than the pin.
     Tls(String),
+    /// The Hub presented a certificate whose SHA-256 fingerprint is not the pinned one. There
+    /// is no fallback: the connect fails. Both fingerprints are lower-case hex.
+    PinMismatch { expected: String, presented: String },
     /// The WebSocket upgrade failed.
     Handshake(String),
     /// No reply within [`REQUEST_TIMEOUT`].
@@ -87,6 +90,13 @@ impl std::fmt::Display for ClientError {
             Self::BadInput(m) => write!(f, "bad input: {m}"),
             Self::Io(m) => write!(f, "i/o: {m}"),
             Self::Tls(m) => write!(f, "tls: {m}"),
+            Self::PinMismatch {
+                expected,
+                presented,
+            } => write!(
+                f,
+                "tls: the hub certificate {presented} does not match the pinned {expected}"
+            ),
             Self::Handshake(m) => write!(f, "websocket: {m}"),
             Self::HubSlow => f.write_str("HUB_SLOW: the hub did not answer in time"),
             Self::Hub(e) => write!(f, "{e}"),
@@ -111,11 +121,18 @@ pub fn parse_fingerprint(text: &str) -> Result<[u8; 32], ClientError> {
     Ok(out)
 }
 
-/// Accepts only the certificate whose SHA-256 is pinned.
+/// Lower-case hex of `bytes`.
+pub fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Accepts only the certificate whose SHA-256 is pinned. A rejected certificate's fingerprint
+/// is kept in `presented`, so the connect can report both.
 #[derive(Debug)]
 struct PinnedVerifier {
     pin: [u8; 32],
     provider: Arc<CryptoProvider>,
+    presented: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
 impl ServerCertVerifier for PinnedVerifier {
@@ -131,6 +148,9 @@ impl ServerCertVerifier for PinnedVerifier {
         if got == self.pin {
             Ok(ServerCertVerified::assertion())
         } else {
+            if let Ok(mut p) = self.presented.lock() {
+                *p = Some(got);
+            }
             Err(rustls::Error::InvalidCertificate(
                 CertificateError::ApplicationVerificationFailure,
             ))
@@ -174,13 +194,24 @@ impl ServerCertVerifier for PinnedVerifier {
 
 /// A rustls client configuration that trusts only the pinned certificate.
 pub fn pinned_config(pinned_fingerprint: &str) -> Result<Arc<ClientConfig>, ClientError> {
+    pinned_config_with(pinned_fingerprint, Arc::default())
+}
+
+fn pinned_config_with(
+    pinned_fingerprint: &str,
+    presented: Arc<Mutex<Option<[u8; 32]>>>,
+) -> Result<Arc<ClientConfig>, ClientError> {
     let pin = parse_fingerprint(pinned_fingerprint)?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let config = ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_safe_default_protocol_versions()
         .map_err(|e| ClientError::Tls(e.to_string()))?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedVerifier { pin, provider }))
+        .with_custom_certificate_verifier(Arc::new(PinnedVerifier {
+            pin,
+            provider,
+            presented,
+        }))
         .with_no_client_auth();
     Ok(Arc::new(config))
 }
@@ -188,7 +219,9 @@ pub fn pinned_config(pinned_fingerprint: &str) -> Result<Arc<ClientConfig>, Clie
 /// Opens a pinned-TLS WebSocket to `url` (`wss://host[:port][/path]`), without any protocol
 /// handshake. [`HubClient::connect`] builds on it.
 pub async fn connect_ws(url: &str, pinned_fingerprint: &str) -> Result<HubStream, ClientError> {
-    let config = pinned_config(pinned_fingerprint)?;
+    let presented: Arc<Mutex<Option<[u8; 32]>>> = Arc::default();
+    let config = pinned_config_with(pinned_fingerprint, Arc::clone(&presented))?;
+    let expected = hex_lower(&parse_fingerprint(pinned_fingerprint)?);
     let uri: Uri = url
         .parse()
         .map_err(|e| ClientError::BadInput(format!("url: {e}")))?;
@@ -217,7 +250,13 @@ pub async fn connect_ws(url: &str, pinned_fingerprint: &str) -> Result<HubStream
     )
     .await
     .map_err(|_| ClientError::Tls("tls handshake timed out".into()))?
-    .map_err(|e| ClientError::Tls(e.to_string()))?;
+    .map_err(|e| match presented.lock().ok().and_then(|p| *p) {
+        Some(got) => ClientError::PinMismatch {
+            expected: expected.clone(),
+            presented: hex_lower(&got),
+        },
+        None => ClientError::Tls(e.to_string()),
+    })?;
     let (ws, _) = timeout(REQUEST_TIMEOUT, tokio_tungstenite::client_async(url, tls))
         .await
         .map_err(|_| ClientError::Handshake("upgrade timed out".into()))?

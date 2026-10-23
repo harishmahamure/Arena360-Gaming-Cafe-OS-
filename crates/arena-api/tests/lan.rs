@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use arena_api::lan::{HubCert, LanHub, bind_lan, serve_lan};
+use arena_api::lan::{HubCert, LanHub, Presence, bind_lan, serve_lan};
 use arena_core::devices::{format_token, hash_token_secret, new_token_secret};
 use arena_core::{
     DeviceDirectory, HubStatus, LeaseInfo, ManualClock, Role, Writer, WriterHandle, status_channel,
@@ -73,6 +73,7 @@ struct TestHub {
     paired_token: String,
     kds_token: String,
     writer: Option<WriterHandle>,
+    presence: Presence,
     _status: watch::Sender<HubStatus>,
     _stop: oneshot::Sender<()>,
 }
@@ -180,6 +181,7 @@ async fn start(version: &str, primary: bool) -> TestHub {
         cert.server_config().unwrap(),
         version,
     ));
+    let presence = hub.presence();
     let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
         .await
         .unwrap();
@@ -198,6 +200,7 @@ async fn start(version: &str, primary: bool) -> TestHub {
         paired_token,
         kds_token,
         writer,
+        presence,
         _status: status_tx,
         _stop: stop_tx,
     }
@@ -741,7 +744,7 @@ async fn a_wrong_pinned_fingerprint_fails_the_connect() {
         .await
         .err()
         .unwrap();
-    assert!(matches!(err, ClientError::Tls(_)), "{err:?}");
+    assert!(matches!(err, ClientError::PinMismatch { .. }), "{err:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -759,4 +762,98 @@ async fn a_follower_answers_hello_then_refuses_every_intent_not_primary() {
     assert_eq!(err.code(), Some(ErrorCode::NotPrimary));
     // A follower never records the reported version.
     assert_eq!(hub.device_version(), None);
+}
+
+// ---- Story 1.16: kiosk.log from a paired session, and presence ----
+
+fn kiosk_log_body(actor: Actor) -> serde_json::Value {
+    serde_json::to_value(IntentSubmit {
+        intent: intent(
+            actor,
+            IntentPayload::KioskLog(arena_proto::KioskLog {
+                level: arena_proto::KioskLogLevel::Info,
+                code: "app_started".into(),
+                detail: String::new(),
+            }),
+            None,
+        ),
+    })
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_session_logs_kiosk_events_as_itself_and_shows_online() {
+    let hub = start("0.1.0", true).await;
+    assert!(!hub.presence.online(&hub.paired_id));
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    assert!(hub.presence.online(&hub.paired_id));
+    // A forged actor is replaced by the session's device.
+    let frame = client
+        .request("intent.submit", kiosk_log_body(owner()))
+        .await
+        .unwrap();
+    let FrameBody::IntentResult(r) = frame.body else {
+        panic!("{frame:?}")
+    };
+    assert_eq!(r.applied.changes[0].tbl, "device_events");
+    let change = Store::open_reader(&hub.path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        (change.actor_kind.as_str(), change.actor_id.as_str()),
+        ("device", hub.paired_id.as_str())
+    );
+    drop(client);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while hub.presence.online(&hub.paired_id) {
+        assert!(Instant::now() < deadline, "still online after the close");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kds_session_may_not_log_kiosk_events() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    let mut submit = kiosk_log_body(system());
+    submit["v"] = 1.into();
+    submit["kind"] = "intent.submit".into();
+    submit["rid"] = "k1".into();
+    send(&mut ws, &submit.to_string()).await;
+    let reply = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&reply).1, ErrorCode::Forbidden);
+    assert!(!hub.presence.online("anything"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kiosk_log_is_rate_limited_per_device_as_hub_slow() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for i in 0..60 {
+        client
+            .request("intent.submit", kiosk_log_body(owner()))
+            .await
+            .unwrap_or_else(|e| panic!("event {i}: {e}"));
+    }
+    let err = client
+        .request("intent.submit", kiosk_log_body(owner()))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::HubSlow));
 }

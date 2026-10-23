@@ -64,6 +64,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Branch(b) => super::read_grants::validate(intent, g, b.as_ref()),
             _ => Err(internal_target()),
         },
+        IntentPayload::KioskLog(l) => match target {
+            Target::Branch(b) => super::kiosk_log::validate(intent, l, b.as_ref()),
+            _ => Err(internal_target()),
+        },
     }
 }
 

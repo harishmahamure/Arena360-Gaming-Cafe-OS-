@@ -189,7 +189,14 @@ async fn a_wrong_fingerprint_fails_with_no_fallback() {
         .await
         .err()
         .unwrap();
-    assert!(matches!(err, ClientError::Tls(_)), "{err:?}");
+    // Both fingerprints are reported, so the log line can name them.
+    assert_eq!(
+        err,
+        ClientError::PinMismatch {
+            expected: wrong,
+            presented: hub.fingerprint.clone(),
+        }
+    );
 }
 
 #[tokio::test]

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The kiosk window may only listen to the events its Rust shell emits (hub-status, restore-state); its own commands are the IPC bridge to the Kiosk service.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

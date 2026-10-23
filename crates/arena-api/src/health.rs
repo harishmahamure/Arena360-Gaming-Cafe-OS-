@@ -154,6 +154,7 @@ pub(crate) async fn ui_guard(
 struct SnapshotState {
     reader: Arc<SnapshotReader>,
     clock: Arc<dyn Clock>,
+    presence: crate::lan::Presence,
 }
 
 async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Response {
@@ -164,7 +165,12 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
     let reader = state.reader;
     let read = tokio::task::spawn_blocking(move || reader.snapshot(now)).await;
     match read {
-        Ok(Ok(snapshot)) => Json(snapshot).into_response(),
+        Ok(Ok(mut snapshot)) => {
+            for d in &mut snapshot.devices {
+                d.online = state.presence.online(&d.device_id);
+            }
+            Json(snapshot).into_response()
+        }
         Ok(Err(e)) => {
             tracing::warn!(code = e.code.as_str(), detail = %e.message, "ui snapshot failed");
             // Only the code: the message may carry database details.
@@ -183,11 +189,20 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
 
 /// The local Hub UI's read API (merged into the loopback health server):
 /// `GET /ui/snapshot` returns a [`arena_proto::HubSnapshot`], its locale resolved at `clock`'s
-/// now. Only the [`UI_ALLOWED_ORIGINS`] may read it from a browser.
-pub fn ui_router(reader: Arc<SnapshotReader>, clock: Arc<dyn Clock>) -> Router {
+/// now, each device's `online` read from the LAN registry through `presence`. Only the
+/// [`UI_ALLOWED_ORIGINS`] may read it from a browser.
+pub fn ui_router(
+    reader: Arc<SnapshotReader>,
+    clock: Arc<dyn Clock>,
+    presence: crate::lan::Presence,
+) -> Router {
     Router::new()
         .route("/ui/snapshot", get(ui_snapshot))
-        .with_state(SnapshotState { reader, clock })
+        .with_state(SnapshotState {
+            reader,
+            clock,
+            presence,
+        })
         .layer(axum::middleware::from_fn(ui_guard))
 }
 
@@ -470,7 +485,10 @@ mod tests {
             req: Request<Body>,
         ) -> (StatusCode, axum::http::HeaderMap, Value) {
             let clock = Arc::new(ManualClock::new(1_800_000_000_000));
-            let res = ui_router(reader, clock).oneshot(req).await.unwrap();
+            let res = ui_router(reader, clock, crate::lan::Presence::none())
+                .oneshot(req)
+                .await
+                .unwrap();
             let status = res.status();
             let headers = res.headers().clone();
             let bytes = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
@@ -495,7 +513,7 @@ mod tests {
                 body,
                 json!({
                     "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
-                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null}],
+                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false}],
                     "locale": {
                         "currency": "INR",
                         "exponent": 2,

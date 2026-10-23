@@ -166,7 +166,7 @@ mod tests {
                 reason: None,
                 payload,
             };
-            writer
+            let device = writer
                 .submit_intent(submit(
                     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                         class: arena_proto::ClientClass::Kds,
@@ -239,6 +239,20 @@ mod tests {
                 id: "hub".into(),
             };
             writer.submit_intent(grant).await.unwrap();
+            // An event the device logged (device actor).
+            let mut log = submit(
+                IntentPayload::KioskLog(arena_proto::KioskLog {
+                    level: arena_proto::KioskLogLevel::Info,
+                    code: "app_started".into(),
+                    detail: String::new(),
+                }),
+                None,
+            );
+            log.actor = Actor {
+                kind: ActorKind::Device,
+                id: device.changes[0].row_id.clone(),
+            };
+            writer.submit_intent(log).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

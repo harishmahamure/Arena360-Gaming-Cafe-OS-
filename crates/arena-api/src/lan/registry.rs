@@ -39,13 +39,26 @@ struct Entry {
 }
 
 /// The set of live sessions.
-#[derive(Default)]
 pub(crate) struct Registry {
     sessions: Mutex<HashMap<u64, Entry>>,
     next_id: AtomicU64,
     next_event: AtomicU64,
     /// Set by [`Registry::kill_all`]: a session registered afterwards starts killed.
     shutting_down: AtomicBool,
+    /// Bumped whenever a paired device session is added or removed (device presence).
+    presence: watch::Sender<u64>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            sessions: Mutex::default(),
+            next_id: AtomicU64::default(),
+            next_event: AtomicU64::default(),
+            shutting_down: AtomicBool::default(),
+            presence: watch::channel(0).0,
+        }
+    }
 }
 
 /// A registered session: its kill switch and two receivers (writer task, reader loop) created
@@ -69,8 +82,14 @@ pub(crate) fn browser_tables(class: ClientClass) -> &'static [&'static str] {
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
-        if let Ok(mut map) = self.registry.sessions.lock() {
-            map.remove(&self.id);
+        let removed = self
+            .registry
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(&self.id));
+        if removed.is_some_and(|e| e.class == ClientClass::Paired && e.device_id.is_some()) {
+            self.registry.presence.send_modify(|n| *n += 1);
         }
     }
 }
@@ -125,6 +144,7 @@ impl Registry {
         let (kill, reader_kill) = watch::channel(None);
         let kill = Arc::new(kill);
         let writer_kill = kill.subscribe();
+        let presence = class == ClientClass::Paired && device_id.is_some();
         if let Ok(mut map) = self.sessions.lock() {
             map.insert(
                 id,
@@ -141,6 +161,9 @@ impl Registry {
                 set_kill(&kill, Kill::Drop);
             }
         }
+        if presence {
+            self.presence.send_modify(|n| *n += 1);
+        }
         SessionGuard {
             registry: Arc::clone(self),
             id,
@@ -148,6 +171,23 @@ impl Registry {
             writer_kill,
             reader_kill,
         }
+    }
+
+    /// Bumped whenever a paired device session is added or removed.
+    pub(crate) fn presence_changes(&self) -> watch::Receiver<u64> {
+        self.presence.subscribe()
+    }
+
+    /// Whether `device_id` has a live (not closing) `paired` session.
+    pub(crate) fn is_online(&self, device_id: &str) -> bool {
+        let Ok(map) = self.sessions.lock() else {
+            return false;
+        };
+        map.values().any(|e| {
+            e.class == ClientClass::Paired
+                && e.device_id.as_deref() == Some(device_id)
+                && e.kill.borrow().is_none()
+        })
     }
 
     /// How many sessions are connected.
@@ -359,6 +399,31 @@ mod tests {
         assert_eq!(*fast_kill_rx.borrow(), Some(Kill::Error(revoked_error())));
         drop(slow);
         assert_eq!(reg.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn only_a_live_paired_session_counts_as_online() {
+        let reg = Arc::new(Registry::default());
+        assert!(!reg.is_online("P"));
+        let (tx, _rx) = mpsc::channel(8);
+        let paired = reg.register(ClientClass::Paired, Some("P".into()), tx);
+        let (tx, _rx2) = mpsc::channel(8);
+        let _kds = reg.register(ClientClass::Kds, Some("K".into()), tx);
+        assert!(reg.is_online("P"));
+        assert!(!reg.is_online("K"), "a kds session is not a paired one");
+        let mut changes = reg.presence_changes();
+        assert!(!changes.has_changed().unwrap());
+        reg.kill_device("P", Kill::Drop);
+        assert!(!reg.is_online("P"), "a closing session is offline");
+        drop(paired);
+        assert!(!reg.is_online("P"));
+        assert!(changes.has_changed().unwrap(), "the close bumps presence");
+        changes.mark_unchanged();
+        drop(_kds);
+        assert!(
+            !changes.has_changed().unwrap(),
+            "a kds session is not presence"
+        );
     }
 
     #[tokio::test]

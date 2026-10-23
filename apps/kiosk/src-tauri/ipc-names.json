@@ -1,0 +1,12 @@
+{
+  "events": {
+    "hubStatus": "hub-status",
+    "restoreState": "restore-state"
+  },
+  "commands": {
+    "reportAppState": "report_app_state",
+    "hubStatus": "hub_status",
+    "takeRestoreState": "take_restore_state",
+    "heartbeat": "heartbeat"
+  }
+}

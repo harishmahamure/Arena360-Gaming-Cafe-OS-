@@ -401,6 +401,8 @@ pub struct UiAuth {
     events: std::sync::OnceLock<Arc<crate::ui_events::EventsHub>>,
     /// The audit viewer's read-only connection, opened on first use.
     audit: std::sync::OnceLock<Arc<arena_core::AuditReader>>,
+    /// Device presence on the LAN: `/ui/events` pushes `devices.changed` when it changes.
+    presence: crate::lan::Presence,
 }
 
 impl std::fmt::Debug for UiAuth {
@@ -436,7 +438,19 @@ impl UiAuth {
             events_config: crate::ui_events::EventsConfig::default(),
             events: std::sync::OnceLock::new(),
             audit: std::sync::OnceLock::new(),
+            presence: crate::lan::Presence::none(),
         }
+    }
+
+    /// Pushes `devices.changed` to `/ui/events` streams whenever a device comes online or
+    /// goes offline on the LAN.
+    pub fn with_presence(mut self, presence: crate::lan::Presence) -> Self {
+        self.presence = presence;
+        self
+    }
+
+    pub(crate) fn presence(&self) -> &crate::lan::Presence {
+        &self.presence
     }
 
     /// The audit viewer's reader, opened on the snapshot reader's database the first time.
@@ -1709,6 +1723,8 @@ pub(crate) mod tests {
         pub(crate) counter_role: String,
         pub(crate) manager_role: String,
         pub(crate) auth: Arc<UiAuth>,
+        /// The LAN registry behind the auth's presence (tests register sessions in it).
+        pub(crate) lan: Arc<crate::lan::registry::Registry>,
     }
 
     pub(crate) fn intent_as(actor: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
@@ -1810,6 +1826,7 @@ pub(crate) mod tests {
                 .unwrap();
             ids.push(applied.changes[0].row_id.clone());
         }
+        let lan = Arc::new(crate::lan::registry::Registry::default());
         let auth = Arc::new(
             UiAuth::new(
                 Arc::new(StaffDirectory::open(&path).unwrap()),
@@ -1818,9 +1835,11 @@ pub(crate) mod tests {
                 clock.clone(),
             )
             .with_status(status_tx.subscribe())
-            .with_events_config(config),
+            .with_events_config(config)
+            .with_presence(crate::lan::Presence::of(Arc::clone(&lan))),
         );
         Hub {
+            lan,
             _status: status_tx,
             _dir: dir,
             path,

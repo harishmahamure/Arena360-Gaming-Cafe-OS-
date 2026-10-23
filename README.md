@@ -92,9 +92,10 @@ The three ports must differ. Tests pass free ports; production uses the defaults
 - **Health:** `GET 127.0.0.1:<port>/healthz` returns `db_open`, `role`, `lease`, `epoch`,
   `schema_version`, `self_instance_id`, `tls_fingerprint` and `now`. It binds loopback only.
 - **UI snapshot:** `GET 127.0.0.1:<port>/ui/snapshot` on the same loopback server returns
-  `HubSnapshot {branch: {name, branch_code} | null, devices: [{device_id, label, class, zone}],
-locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` until zones
-  exist; `locale` is `null` before bootstrap, see **Branch locale** below). It
+  `HubSnapshot {branch: {name, branch_code} | null, devices: [{device_id, label, class, zone,
+online}], locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` until
+  zones exist; `online` is true while the device has a live paired LAN session, read from the
+  LAN registry, and the floor shows it as the words Online / Offline; `locale` is `null` before bootstrap, see **Branch locale** below). It
   reads through `arena-core` on its own read-only connection. CORS allows only
   `tauri://localhost`, `http(s)://tauri.localhost` and the vite origin `http://localhost:5173`;
   another `Origin`, or a `Host` that is not `127.0.0.1`/`localhost`/`[::1]`, gets 403.
@@ -299,11 +300,16 @@ The Hub listens on `0.0.0.0:7400` and `0.0.0.0:7401`; no other inbound port is o
   tables, none yet); clients never poll. If the push fan-out falls behind, every session is
   dropped and clients reconnect. Each session has its own
   bounded queue, and a session that falls behind is dropped.
+- **Paired scope.** A paired session may submit `kiosk.log{level: info|warn|error, code, detail}`
+  (requirement: a live device actor), which writes one `device_events` row (migration 0009;
+  `at` is the intent's `issued_at`, when the kiosk recorded it). Opening or closing a paired
+  session pushes `devices.changed` on `/ui/events`, and the Hub UI reloads the snapshot.
 - **Revocation.** `device.revoke` closes the device's sessions with `TOKEN_REVOKED` within 1 s,
   and later hellos with that token are refused.
 - **Client.** `arena-kiosk-core` has `HubClient::connect(url, pinned_fingerprint, hello)`:
   pinned TLS, `request(kind, body)` with a 5 s `HUB_SLOW` timeout per request, and
-  `events()`.
+  `events()`. A certificate that does not match the pin fails `PinMismatch{expected,
+presented}`, never falling back.
 - **Firewall.** `scripts/windows/firewall.ps1` (run elevated) adds inbound allow rules for TCP
   7400 and 7401 (`-LanPort`/`-WebPort` to match non-default Hub ports) on the Private profile
   only, and warns when the active network is not Private; `-Remove` deletes them. The Hub installer story
@@ -474,6 +480,141 @@ submitted; a live region announces "2 of 4", never the digits; a lockout shows a
 and `ReasonPicker` (radio options from catalogue keys, then Confirm; a refusal shows inline),
 both in the gallery with a stubbed `device.revoke` flow that asks for the reason, then the PIN.
 
+## Running the Kiosk
+
+The Kiosk is two processes with a privilege split:
+
+- **`arena-kiosk-svc`** (LocalSystem Windows service) holds the device token, the pinned-TLS
+  Hub connection and the offline intent queue. It is the only part that talks to the Hub.
+- **`arena-kiosk-ui`** (Tauri, `apps/kiosk`) runs as the standard `player` account. It talks
+  only to the service, over an ACL'd named pipe; its webview has no Hub socket, no token and no
+  admin rights. The window is full screen with no decorations.
+
+`arena-kiosk-core` holds the platform-neutral parts both use: the Hub client, the reconnect
+back-off, the IPC messages, the watchdog state machine and the queue ordering rules.
+
+| Command                                                                               | What it does                                                   |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `arena-kiosk-svc --console [--data-dir <path>] [--app <path>]`                        | Runs in the foreground on any OS (dev; `--app` is relaunched)  |
+| `arena-kiosk-svc service install` / `uninstall` / `run`                               | Windows: register (auto-start, LocalSystem), remove, SCM entry |
+| `arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>` | `dev-fixtures` builds only: write the config and the token     |
+
+- **Data dir:** `--data-dir`, else `%PROGRAMDATA%\Arena360\Kiosk` on Windows, else
+  `ARENA_KIOSK_DATA_DIR`, else `~/.arena360/kiosk`. It holds `config.json`
+  (`{hub_addr, hub_fingerprint, device_id, player_user}`, default `player_user` `player`; an
+  IPv6 `hub_addr` must be bracketed; a file carrying a token is refused), `token.bin`,
+  `entropy.bin` (Windows), `queue.db`, `logs/` (tracing JSON, the Hub's 14 d / 50 MB ring with a
+  `kiosk-` prefix) and, off Windows, the socket `ipc/kiosk.sock` (0600, in a 0700 directory).
+  Files are written through fresh `create_new` temp files and a rename.
+- **Data dir ACL (Windows).** At every service start and in `service install` the directory
+  gets the protected DACL `D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` (SYSTEM and Administrators
+  only, nothing inherited from `ProgramData`), read back and verified; the service does not
+  start when it cannot be set. A `config.json`, `token.bin` or `entropy.bin` not owned by
+  SYSTEM or Administrators is refused.
+- **Token at rest.** Windows: DPAPI with machine scope (`CryptProtectData` +
+  `CRYPTPROTECT_LOCAL_MACHINE`) plus optional entropy from `entropy.bin` (32 bytes from
+  `BCryptGenRandom`, generated once inside the protected folder), so only SYSTEM and
+  Administrators can decrypt it; the token is never written unencrypted. Elsewhere (dev and
+  tests only) a 0600 file, with a `warn` line saying it is not encrypted.
+- **Hub link.** `hello{class: paired, versions: {app: <crate version>}}` over pinned TLS. A
+  certificate that does not match the pin is refused with an `error` line naming both
+  fingerprints; there is no unpinned fallback. An unreachable Hub is retried with full-jitter
+  exponential back-off between 2 and 30 s, reset by a successful hello, and the app shows
+  "Reconnecting…". `TOKEN_REVOKED` / `TOKEN_INVALID` (at hello or pushed later) stop fast
+  reconnects: the app is told `token_rejected` and the service tries once every 30 s until a
+  re-provision lets it in (the config and token are re-read on every try).
+- **Offline queue.** Kiosk events are `kiosk.log` intents whose ULID ids and `issued_at` are set
+  when the event happens, stored in `queue.db` (at most 10 000; past that the oldest are dropped
+  with a `warn`). On every connect (and whenever an event is queued while connected) the queue
+  is replayed oldest first, one at a time: `Applied` or a deterministic refusal deletes the
+  entry. A transient error (`HUB_SLOW` — including the Hub's 60-a-minute per-device `kiosk.log`
+  limit —, `NOT_PRIMARY`, `UNSUPPORTED`, `BAD_FRAME`, a closed link…) or a `VALIDATION_FAILED`
+  on `issued_at` (this kiosk's clock is ahead; logged once per connection with the skew the Hub
+  measured) keeps the entry and stops the replay until the next connect, or until a 30 s timer
+  set when it stopped. Entries older than 7 days are dropped with a `warn` line. The Hub's
+  dedupe makes a replay after a crash apply once. An app `log` request is checked against the
+  Hub's `kiosk.log` rules first (`VALIDATION_FAILED` in the reply).
+- **IPC.** JSON lines (`arena_kiosk_core::ipc::IpcMsg`): `ping{n}`/`pong{n}`,
+  `hub_status{state: connected|reconnecting|token_rejected}`, `app_state{json}`,
+  `restore_state{json}`, `request{rid, kind, body}` / `reply{rid, body, error?}` (kinds: `log`,
+  `hub_status`). Windows: `\\.\pipe\arena-kiosk-v1`, created first-instance-only with remote
+  clients rejected and the DACL `D:P(A;;GA;;;SY)(A;;0x12018b;;;<player SID>)`: SYSTEM, and the
+  player (a `SidTypeUser` account) with `FILE_GENERIC_READ | FILE_WRITE_DATA |
+FILE_WRITE_ATTRIBUTES` only, so it cannot create pipe instances; no Everyone, Users,
+  Authenticated Users, Interactive, Anonymous or Administrators. The service accepts a client
+  only when its process image (`GetNamedPipeClientProcessId`) is the installed
+  `arena-kiosk-ui.exe`; the app accepts the pipe only when its server runs as SYSTEM
+  (`GetNamedPipeServerProcessId`, else the pipe owner). Every 30 s the service re-reads
+  `player_user` and rebinds when it changed or did not resolve (until then the pipe is
+  SYSTEM-only). Elsewhere: the socket. One app connection at a time; the newest wins. The Tauri
+  shell forwards `hub_status` to the webview as the event `hub-status` (`KioskHubStatus`) and
+  the first `restore_state` of the process as `restore-state`, and sends the webview's latest
+  route up as `app_state` on every (re)connect. The event and command names are in
+  `apps/kiosk/src-tauri/ipc-names.json`, read by both the shell's tests and the webview.
+- **Watchdog.** The service pings the app every 2 s. The shell answers only while the webview's
+  `heartbeat` command (every 1 s) is at most 3 s old, so a hung webview counts as hung. After 3
+  missed pongs (or no app connected for 3 ticks after a 10 s grace) the service relaunches the
+  app, and restarts back off (2, 4, 8 … up to 60 s more each time until a pong). It launches
+  only into a console session whose user is `player_user` (`WTSGetActiveConsoleSessionId` +
+  `WTSQueryUserToken` + `CreateProcessAsUserW`), suspended inside a kill-on-close job object;
+  a restart terminates that job (WebView2's children included) and waits for it to exit. While
+  there is no player session, or the pipe is not open to a resolved player, nothing counts as a
+  miss and one `kiosk.log{warn, no_session}` is queued; each restart queues
+  `kiosk.log{warn, app_restarted}`. The desktop is never exposed during the restart because the
+  player's shell is the kiosk itself (Story 1.17's shell replacement, no Explorer behind it).
+- **Service host.** `service install` protects the data folder, then creates the service (an
+  existing one is reconfigured; one still marked for deletion is retried for up to 10 s), sets
+  restart-on-failure and starts it; a service it created is deleted again if a later step
+  fails. `service uninstall` treats only "not installed" as done; a service that does not stop
+  within 15 s is an error and is not deleted.
+- **Dev loop** (any OS):
+
+  ```sh
+  cargo run -p arena-hub --features dev-fixtures -- dev seed     # prints the device token
+  cargo run -p arena-hub                                          # healthz shows tls_fingerprint
+  export ARENA_KIOSK_DATA_DIR=/tmp/kiosk                          # the service and the app
+  cargo run -p arena-kiosk-svc --features dev-fixtures -- dev provision \
+    --hub 127.0.0.1:7400 --fingerprint <tls_fingerprint> --token <device token>
+  cargo run -p arena-kiosk-svc -- --console
+  pnpm --filter @arena/kiosk tauri dev                           # connects to ipc/kiosk.sock
+  ```
+
+  The app finds the socket through `ARENA_KIOSK_DATA_DIR` (else `~/.arena360/kiosk`): when the
+  service runs with `--data-dir <path>`, set `ARENA_KIOSK_DATA_DIR=<path>` for the app too.
+
+- **Installer.** `apps/kiosk/src-tauri/tauri.installer.conf.json` (installer build only): a
+  per-machine NSIS bundle with the WebView2 bootstrapper embedded
+  (`webviewInstallMode: embedBootstrapper`), `arena-kiosk-svc` as an `externalBin`, and
+  `src-tauri/windows/hooks.nsh`. The hooks refuse Windows builds older than 17134, a 32-bit OS
+  and less than 4 GB of installed RAM (`GetPhysicallyInstalledSystemMemory`), each with the
+  text of its catalogue key (`kiosk.installer.*`; `scripts/kiosk-installer.test.mjs` checks
+  them). Before an install or uninstall they run `arena-kiosk-svc service uninstall`; after
+  install, `service install`. CI builds it in the `installer (kiosk, windows)` job (part of
+  `ci-ok`); locally on Windows:
+
+  ```sh
+  cargo build --locked --release -p arena-kiosk-svc
+  mkdir apps/kiosk/src-tauri/binaries   # gitignored
+  cp target/release/arena-kiosk-svc.exe apps/kiosk/src-tauri/binaries/arena-kiosk-svc-x86_64-pc-windows-msvc.exe
+  pnpm --filter @arena/kiosk tauri build --config src-tauri/tauri.installer.conf.json --bundles nsis
+  ```
+
+- **Release benchmark.** The `kiosk-idle` job of `release-bench.yml` installs the Kiosk on the
+  reference i3 and runs `scripts/bench/kiosk-idle.ps1`. The machine's console must be signed in
+  as the player account and the runner must be an administrator (the data folder is
+  SYSTEM/Administrators only). The script lets the service's watchdog launch the app into the
+  player's session and waits for the service's `app connected` log line; after 5 minutes idle
+  with no player (game) session, the service, the app and its WebView2 processes together stay
+  under 80 MB working set, with 0 % GPU engine use.
+- **Tests.** `cargo test -p arena-kiosk-svc` drives the service against an in-process Hub LAN
+  server (connect and online, pin mismatch, Hub down and back, offline queue order and
+  exactly-once, a replay after a crash, a follower Hub keeping the queue until a primary applies
+  it, revocation and re-provision, the watchdog with a mock launcher, newest connection wins).
+  On Windows CI the pipe tests check the DACL read back from a real pipe, that a second
+  instance is denied, the client image check and sequential connects. `pnpm --filter
+@arena/kiosk test:ui` (Playwright, the Tauri shell stubbed in the page) covers the status
+  line, the heartbeat and state restore.
+
 ## Pinned versions
 
 This table is checked against the manifests by `pnpm check:pins`. Change the manifest and this
@@ -526,6 +667,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | rcgen                        | =0.14.10      | `Cargo.toml`          |
 | argon2                       | =0.6.0        | `Cargo.toml`          |
 | futures-util                 | =0.3.34       | `Cargo.toml`          |
+| windows                      | =0.62.2       | `Cargo.toml`          |
+| windows-service              | =0.8.1        | `Cargo.toml`          |
 | tempfile                     | =3.27.0       | `Cargo.toml`          |
 | tower                        | =0.5.3        | `Cargo.toml`          |
 | proptest                     | =1.12.0       | `Cargo.toml`          |

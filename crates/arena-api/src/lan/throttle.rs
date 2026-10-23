@@ -109,3 +109,63 @@ mod tests {
         assert!(!t.is_blocked(ip, t0 + Duration::from_secs(62)));
     }
 }
+
+/// `kiosk.log` intents a device may burst.
+pub const KIOSK_LOG_BURST: f64 = 60.0;
+/// `kiosk.log` intents a device earns back per second (60 a minute).
+pub const KIOSK_LOG_PER_SEC: f64 = 1.0;
+
+/// A per-device token bucket for `kiosk.log` (shared by all of a device's sessions).
+#[derive(Default)]
+pub(crate) struct KioskLogRate {
+    buckets: Mutex<HashMap<String, (f64, Instant)>>,
+}
+
+impl KioskLogRate {
+    /// Takes one token for `device_id`; `false` when the device is over its rate.
+    pub(crate) fn take(&self, device_id: &str) -> bool {
+        self.take_at(device_id, Instant::now())
+    }
+
+    fn take_at(&self, device_id: &str, now: Instant) -> bool {
+        let Ok(mut map) = self.buckets.lock() else {
+            return false;
+        };
+        if map.len() >= SWEEP_AT {
+            map.retain(|_, (_, at)| now.duration_since(*at) < Duration::from_secs(60));
+        }
+        let (tokens, at) = map
+            .entry(device_id.to_owned())
+            .or_insert((KIOSK_LOG_BURST, now));
+        *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * KIOSK_LOG_PER_SEC)
+            .min(KIOSK_LOG_BURST);
+        *at = now;
+        if *tokens >= 1.0 {
+            *tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod kiosk_log_rate_tests {
+    use super::*;
+
+    #[test]
+    fn sixty_a_minute_per_device() {
+        let r = KioskLogRate::default();
+        let t0 = Instant::now();
+        for _ in 0..60 {
+            assert!(r.take_at("D", t0));
+        }
+        assert!(
+            !r.take_at("D", t0),
+            "the 61st in the same instant is refused"
+        );
+        assert!(r.take_at("E", t0), "another device has its own bucket");
+        assert!(r.take_at("D", t0 + Duration::from_secs(1)));
+        assert!(!r.take_at("D", t0 + Duration::from_secs(1)));
+    }
+}

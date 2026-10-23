@@ -1,7 +1,8 @@
 name: Release benchmark
 
-# Hub idle budgets on the reference hardware (2015 i3 + HDD): arena-hub < 50 MB, Hub UI +
-# WebView2 < 250 MB, no GPU use. Not part of ci-ok; runs on demand and on release tags.
+# Idle budgets on the reference hardware (2015 i3 + HDD): arena-hub < 50 MB, Hub UI + WebView2
+# < 250 MB; Kiosk service + app + WebView2 < 80 MB; no GPU use. Not part of ci-ok; runs on
+# demand and on release tags.
 
 on:
   workflow_dispatch:
@@ -89,6 +90,71 @@ jobs:
         run: |
           Get-Process -Name arena-hub-ui, arena-hub -ErrorAction SilentlyContinue | Stop-Process -Force
           $uninstall = Join-Path $env:LOCALAPPDATA "Arena 360 Hub\uninstall.exe"
+          if (Test-Path $uninstall) {
+            $p = Start-Process -FilePath $uninstall -ArgumentList "/S" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "uninstaller exited $($p.ExitCode)" }
+          } else {
+            Write-Host "nothing to uninstall ($uninstall not found)"
+          }
+
+  kiosk-installer:
+    name: build the Kiosk installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kiosk-installer
+      - run: pnpm install --frozen-lockfile
+      - run: cargo build --locked --release -p arena-kiosk-svc
+      - name: Stage the arena-kiosk-svc sidecar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force apps/kiosk/src-tauri/binaries | Out-Null
+          Copy-Item target/release/arena-kiosk-svc.exe apps/kiosk/src-tauri/binaries/arena-kiosk-svc-x86_64-pc-windows-msvc.exe
+      - run: pnpm --filter @arena/kiosk tauri build --config src-tauri/tauri.installer.conf.json --bundles nsis -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  kiosk-idle:
+    name: kiosk idle (reference i3)
+    needs: kiosk-installer
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kiosk-installer
+          path: bench/kiosk-installer
+      - name: Install the Kiosk
+        shell: pwsh
+        run: |
+          Get-Process -Name arena-kiosk-ui -ErrorAction SilentlyContinue | Stop-Process -Force
+          $setup = Get-ChildItem bench/kiosk-installer -Filter *.exe | Select-Object -First 1
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
+      - name: Idle budgets
+        shell: pwsh
+        run: |
+          $ui = Join-Path $env:ProgramFiles "Arena 360 Kiosk\arena-kiosk-ui.exe"
+          & scripts/bench/kiosk-idle.ps1 -UiExe $ui
+          exit $LASTEXITCODE
+      - name: Uninstall the Kiosk
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process -Name arena-kiosk-ui -ErrorAction SilentlyContinue | Stop-Process -Force
+          $uninstall = Join-Path $env:ProgramFiles "Arena 360 Kiosk\uninstall.exe"
           if (Test-Path $uninstall) {
             $p = Start-Process -FilePath $uninstall -ArgumentList "/S" -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "uninstaller exited $($p.ExitCode)" }

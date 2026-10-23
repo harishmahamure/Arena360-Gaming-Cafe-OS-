@@ -5,4 +5,4 @@
  * may reach a `staff`, `money` or `device` intent.
  */
 export type IntentCategory =
-  "branch" | "settings" | "device" | "staff" | "money" | "kitchen" | "console" | "audit";
+  "branch" | "settings" | "device" | "staff" | "money" | "kitchen" | "console" | "audit" | "kiosk";

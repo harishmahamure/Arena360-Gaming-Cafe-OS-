@@ -232,6 +232,14 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     });
     let mut lease_job = Some(tokio::spawn(lease.run()));
 
+    let lan_hub = Arc::new(LanHub::new(
+        writer.clone(),
+        status_rx.clone(),
+        Arc::clone(&clock),
+        devices,
+        server_tls,
+        env!("CARGO_PKG_VERSION"),
+    ));
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let ui_auth = Arc::new(
         arena_api::UiAuth::new(
@@ -240,11 +248,16 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             writer.clone(),
             Arc::clone(&clock),
         )
-        .with_status(status_rx.clone()),
+        .with_status(status_rx.clone())
+        .with_presence(lan_hub.presence()),
     );
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
     let mut router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
-        .merge(arena_api::ui_router(snapshots, Arc::clone(&clock)))
+        .merge(arena_api::ui_router(
+            snapshots,
+            Arc::clone(&clock),
+            lan_hub.presence(),
+        ))
         .merge(arena_api::ui_auth_router(ui_auth));
     #[cfg(feature = "dev-fixtures")]
     {
@@ -261,14 +274,6 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         "healthz, ui snapshot and ui auth listening on loopback"
     );
 
-    let lan_hub = Arc::new(LanHub::new(
-        writer.clone(),
-        status_rx,
-        Arc::clone(&clock),
-        devices,
-        server_tls,
-        env!("CARGO_PKG_VERSION"),
-    ));
     let (lan_stop_tx, lan_stop_rx) = oneshot::channel::<()>();
     let lan = tokio::spawn(serve_lan(lan_listeners, lan_hub, async {
         let _ = lan_stop_rx.await;

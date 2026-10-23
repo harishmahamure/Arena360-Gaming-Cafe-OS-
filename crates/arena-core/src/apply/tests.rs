@@ -1293,6 +1293,82 @@ async fn a_revoked_or_unknown_device_actor_is_forbidden_before_anything_else() {
     assert_eq!(err.message, "the device is revoked or unknown");
 }
 
+// ---- Story 1.16: kiosk.log ----
+
+fn kiosk_log(device_id: &str, code: &str, detail: &str) -> Intent {
+    let mut i = device_intent(
+        ActorKind::Device,
+        IntentPayload::KioskLog(arena_proto::KioskLog {
+            level: arena_proto::KioskLogLevel::Warn,
+            code: code.into(),
+            detail: detail.into(),
+        }),
+    );
+    i.actor.id = device_id.into();
+    i
+}
+
+#[tokio::test]
+async fn kiosk_log_writes_a_device_event_once_from_a_live_device_only() {
+    let mut f = primary();
+    let (id, _) = with_device(&mut f).await;
+    // Recorded offline a minute ago: `at` is when the kiosk recorded it.
+    let mut first = kiosk_log(&id, "app_restarted", "3 missed pings");
+    first.issued_at = T0 - 60_000;
+    let applied = f.writer.submit_intent(first.clone()).await.unwrap();
+    assert_eq!(applied.changes.len(), 1);
+    assert_eq!(
+        (applied.changes[0].tbl.as_str(), applied.changes[0].op),
+        ("device_events", ChangeOp::Insert)
+    );
+    // A replay after a crash (same key, same body) returns the stored outcome, no new row.
+    assert_eq!(f.writer.submit_intent(first).await.unwrap(), applied);
+    let store = reopen(&f);
+    let rows = store.rows(Table::DeviceEvents).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["device_id"], RowValue::Text(id.clone()));
+    assert_eq!(rows[0]["at"], RowValue::Integer(T0 - 60_000));
+    assert_eq!(rows[0]["level"], RowValue::Text("warn".into()));
+    assert_eq!(rows[0]["code"], RowValue::Text("app_restarted".into()));
+    assert_eq!(rows[0]["rev"], RowValue::Integer(1));
+    let change = store.changes().unwrap().pop().unwrap();
+    assert_eq!(
+        (change.intent_kind.as_str(), change.actor_kind.as_str()),
+        ("kiosk.log", "device")
+    );
+
+    // Only a device may log, and only a live one.
+    for actor in [ActorKind::Owner, ActorKind::System, ActorKind::Staff] {
+        let mut i = kiosk_log(&id, "x", "");
+        i.actor.kind = actor;
+        assert_eq!(
+            expect_err(&f, i).await.code,
+            ErrorCode::PermissionDenied,
+            "{actor:?}"
+        );
+    }
+    let err = expect_err(&f, kiosk_log("01JNOPEAAAAAAAAAAAAAAAAAAA", "x", "")).await;
+    assert_eq!(err.code, ErrorCode::PermissionDenied);
+
+    for (code, detail, field) in [
+        ("", "", "code"),
+        ("Has Caps", "", "code"),
+        (&*"x".repeat(65), "", "code"),
+        ("ok", &*"d".repeat(501), "detail"),
+        ("ok", "bell\u{7}", "detail"),
+    ] {
+        let err = expect_err(&f, kiosk_log(&id, code, detail)).await;
+        assert_eq!(err.field.as_deref(), Some(field), "{code:?} {detail:?}");
+    }
+    let mut edit = kiosk_log(&id, "ok", "");
+    edit.base_rev = Some(1);
+    assert_eq!(
+        expect_err(&f, edit).await.field.as_deref(),
+        Some("base_rev")
+    );
+    assert_eq!(reopen(&f).rows(Table::DeviceEvents).unwrap().len(), 1);
+}
+
 // ---- Story 1.11: roles, staff and the permission step ----
 
 mod rbac_matrix {

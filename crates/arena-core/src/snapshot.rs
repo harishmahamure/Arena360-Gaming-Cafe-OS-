@@ -45,6 +45,9 @@ pub fn build_snapshot(
                     device_id: d.device_id,
                     label: d.label,
                     zone: None,
+                    // Presence is the LAN registry's, not the database's: the snapshot
+                    // handler fills it in.
+                    online: false,
                 })
             })
             .collect(),
@@ -241,6 +244,7 @@ mod tests {
                     label: "Dev Kiosk".into(),
                     class: ClientClass::Paired,
                     zone: None,
+                    online: false,
                 }],
                 locale: Some(SnapshotLocale {
                     currency: "INR".into(),

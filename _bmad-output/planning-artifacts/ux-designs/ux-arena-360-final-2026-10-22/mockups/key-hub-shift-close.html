@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hub Shift Close</title>
+<style>
+/* GOVERNED BY (spine is the contract; this mock only illustrates):
+   EXPERIENCE.md: Component Patterns rows denomination-counter (blind count), variance-readout (counted − expected),
+     inline-pin; Voice (staff: plain, no blame); State Patterns 'No printer'; Journey 5.
+   DESIGN.md: Layout & Spacing (Hub desktop: panels 40 apart, padding 24), Components denomination-counter,
+     variance-readout (figureGap 32, overThreshold warning border), inline-pin, text-field, focus-ring.
+   Tokens: DESIGN.md frontmatter — colours (Cinema Electric, hub/staff mood) and the AIRY Hub spacing set
+   (hub-gutter 32 · hub-section-gap 40 · hub-panel-padding 24 · hub-tile-padding 16 · hub-header-height 72 ·
+   hub-rail-width 88 · floor-grid-gap 24 · phone: hub-gutter-phone 16 · floor-grid-gap-phone 12 · bottom bar 64).
+   Rendered at true 1:1 on a scrollable canvas (no scaling). Font: Sora stack, no network. No JS. */
+:root{
+  /* colours — DESIGN.md frontmatter (Cinema Electric, hub/staff mood) */
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--text-muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;
+  --ok:#5FE6A0;--warning:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --ring-in:#FF4FA8;--ring-out:#F5F2FF;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;
+  --st-free:#5FE6A0;--st-session:#7FB2FF;--st-paused:#5C82BD;--st-reserved:#C8A2FF;--st-order:#FFBE3D;
+  --st-maint:#8A85A8;--st-offline:#FF5C5C;--st-unassigned:#ACA5CC;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --r-xs:6px;--r-sm:10px;--r-md:16px;--r-lg:20px;--r-xl:24px;--r-full:9999px;
+  /* spacing scale {spacing.1}…{spacing.12} */
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:40px;--s8:56px;--s9:64px;--s10:80px;--s11:96px;--s12:128px;
+  --touch:44px;
+  /* Hub spacing tokens (airy console-dashboard) */
+  --hub-gutter:32px;--hub-gutter-phone:16px;--hub-section-gap:40px;--hub-panel-padding:24px;
+  --hub-tile-padding:16px;--hub-header-height:72px;--hub-rail-width:88px;
+  --floor-grid-gap:24px;--floor-grid-gap-phone:12px;
+  --font:"Sora","Segoe UI","Roboto",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:#05040f}
+/* True 1:1 canvas: the page is as wide as its frames and scrolls; nothing is scaled down. */
+body{background:#05040f;color:var(--text);font-family:var(--font);font-size:15px;line-height:1.45;padding:var(--s6);width:max-content;min-width:100%}
+.tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mock-cap{width:1920px;margin:0 0 var(--s5);color:var(--text-muted);font-size:14px;display:flex;flex-direction:column;gap:var(--s2)}
+.mock-cap h1{color:var(--text);font-size:20px;font-weight:600}
+.mock-cap .tags{display:flex;flex-wrap:wrap;gap:var(--s2)}
+.open,.assume{display:inline-block;border:1px dashed var(--warning);color:var(--warning);background:#1E1606;border-radius:var(--r-xs);padding:2px 8px;font-size:12px;font-weight:700;letter-spacing:.02em}
+.assume{border-color:var(--info);color:var(--info);background:#0E1730}
+.resolved{display:inline-block;border:1px solid var(--ok);color:var(--ok);border-radius:var(--r-xs);padding:2px 8px;font-size:12px;font-weight:700;letter-spacing:.02em}
+/* desktop frame 1920×1080 */
+.frame{width:1920px;height:1080px;flex:none;position:relative;overflow:hidden;background:var(--hub-bg);border:1px solid var(--hub-line);border-radius:8px;display:grid;grid-template-columns:var(--hub-rail-width) 1fr;grid-template-rows:var(--hub-header-height) minmax(0,1fr)}
+.focus{outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+/* hub-rail */
+.rail{grid-row:1/3;background:var(--hub-bg);border-right:1px solid var(--hub-line);display:flex;flex-direction:column;align-items:center;gap:var(--s2);padding:var(--s4) var(--s2)}
+.rail .mark{width:44px;height:44px;border-radius:50%;border:2px solid var(--text);display:grid;place-items:center;font-weight:300;font-size:18px;margin-bottom:var(--s4);flex:none}
+.rail a{width:72px;min-height:64px;border-radius:var(--r-sm);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s1);color:var(--text-muted);text-decoration:none}
+.rail a b{font-size:20px;line-height:1;font-weight:400}
+.rail a span{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.rail a.on{background:var(--hub-line);color:var(--text)}
+.rail .sp{flex:1}
+/* hub-header: height 72, padding 0 32, item gap 24 */
+.hdr{background:var(--hub-header);border-bottom:1px solid var(--hub-line);display:flex;align-items:center;gap:var(--s5);padding:0 var(--hub-gutter);min-width:0}
+.hdr .branch{font-size:18px;font-weight:600;white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:var(--s2);min-height:32px;padding:6px 14px;border-radius:var(--r-full);font-size:13px;font-weight:700;white-space:nowrap}
+.chip-rule{background:var(--chip-rule-bg);color:var(--chip-rule-text)}
+.chip-off{background:var(--chip-off-bg);color:var(--chip-off-text)}
+.chip-off i{width:8px;height:8px;border-radius:50%;background:var(--chip-off-text)}
+.backup{font-size:13px;font-weight:500;color:var(--text-muted);background:none;border:0;font-family:inherit;min-height:44px;padding:0;text-decoration:underline;text-underline-offset:3px;white-space:nowrap}
+.grow{flex:1}
+.hdr-alert{display:inline-flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s4) 0 var(--s3);border-radius:var(--r-full);background:var(--hub-tile);border:1px solid var(--border-strong);color:var(--text);font:inherit;font-size:13px;font-weight:500;white-space:nowrap}
+.abadge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;border-radius:var(--r-full);background:var(--danger);color:var(--on-danger);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.clock{font-size:13px;color:var(--text-muted);white-space:nowrap}
+.staff{display:inline-flex;align-items:center;gap:var(--s2);font-size:13px;font-weight:500;white-space:nowrap}
+.staff .av{width:36px;height:36px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);display:grid;place-items:center;font-weight:700}
+/* main area: gutter 32 */
+.main{padding:var(--hub-gutter);overflow-y:auto;overflow-x:hidden;position:relative;min-height:0}
+/* zones: 40 apart; header row 16 above grid */
+.zone+.zone{margin-top:var(--hub-section-gap)}
+.zh{display:flex;align-items:center;gap:var(--s4);min-height:44px;margin-bottom:var(--s4)}
+.zh h2{font-size:18px;font-weight:600;white-space:nowrap}
+.zh .meta{font-size:13px;font-weight:500;color:var(--text-muted);white-space:nowrap}
+.zh .count{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);white-space:nowrap}
+.zh .grow{flex:1;height:1px;background:var(--hub-line)}
+.collapse{width:44px;height:44px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font:inherit;font-size:16px;display:grid;place-items:center;flex:none}
+.zone.collapsed{background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--s4) var(--s5)}
+.zone.collapsed .zh{margin:0}
+.zsum{display:flex;gap:var(--s4);align-items:center;flex-wrap:wrap}
+.zsum span{font-size:13px;font-weight:500;color:var(--text-muted);white-space:nowrap}
+.zsum i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px;vertical-align:1px}
+.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:var(--floor-grid-gap)}
+/* floor-tile: min-height 128, padding 16, 3px state bar */
+.tile{position:relative;min-height:var(--s12);background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--hub-tile-padding);display:flex;flex-direction:column;gap:var(--s3);overflow:hidden;color:var(--text);min-width:0}
+.tile::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--c,transparent)}
+.tile .r1{display:flex;align-items:center;gap:var(--s2);min-height:24px}
+.tile .nm{font-size:18px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .glyph{color:var(--text-muted);font-size:16px}
+.corner{margin-left:auto;display:flex;align-items:center;gap:var(--s1);flex:none}
+.tile .r2{display:flex;align-items:baseline;gap:var(--s2)}
+.tile .big{font-size:26px;font-weight:800;line-height:1.1;white-space:nowrap}
+.tile .unit{font-size:13px;font-weight:500;color:var(--text-muted)}
+.tile .r3{display:flex;flex-direction:column;gap:var(--s1);margin-top:auto}
+.tile .r3a{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.tile .who{font-size:13px;font-weight:500;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .sub{font-size:13px;font-weight:500;color:var(--text-muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:var(--r-xs);border:1px solid currentColor;color:var(--c);background:var(--hub-tile);white-space:nowrap;line-height:1.3;flex:none}
+.obadge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:3px 6px;border-radius:var(--r-xs);background:var(--st-order);color:var(--hub-tile);white-space:nowrap;line-height:1.2}
+.s-free{--c:var(--st-free)}.s-sess{--c:var(--st-session)}.s-paused{--c:var(--st-paused)}.s-res{--c:var(--st-reserved)}
+.s-maint{--c:var(--st-maint)}.s-off{--c:var(--st-offline)}
+.s-un{--c:var(--st-unassigned);border:2px dashed var(--st-unassigned)}
+.s-un::after{display:none}
+.s-paused .big{color:var(--st-paused)}
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);min-height:44px;padding:0 var(--s5);border-radius:var(--r-full);font:inherit;font-size:15px;font-weight:700;white-space:nowrap;cursor:pointer}
+.btn-p{background:var(--accent);color:var(--on-accent);border:0;font-weight:800}
+.btn-s{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong)}
+.btn-p[disabled]{background:var(--surface-2);color:var(--text-muted);border:1px dashed var(--border-strong)}
+.btn-s.sel{background:var(--text);color:var(--bg);border-color:var(--text)}
+.btn-s[disabled]{color:var(--text-muted);border-style:dashed}
+/* fields */
+.field{display:flex;flex-direction:column;gap:var(--s2);min-width:0}
+.field label,.field .fl{font-size:13px;font-weight:500;color:var(--text-muted)}
+.input{min-height:44px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:0 var(--s3);display:flex;align-items:center;font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden}
+.input.ph{color:var(--text-muted)}
+.input.focused{border:2px solid var(--accent);outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+.input.err{border:2px solid var(--danger)}
+.ferr{font-size:13px;font-weight:600;color:var(--danger)}
+/* inline-pin */
+.pin{display:flex;gap:var(--s2)}
+.pin span{width:44px;height:48px;border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--border-strong);display:grid;place-items:center}
+.pin span.f::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--text)}
+.pin span.cur{outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+/* undo-toast: padding 16 24 */
+.undo{display:flex;align-items:center;gap:var(--s5);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--s2) var(--s2) var(--s2) var(--s5);min-height:60px;font-size:15px;min-width:560px}
+.undo .msg{flex:1;white-space:nowrap}
+.undo .left{color:var(--text-muted);font-size:13px;white-space:nowrap}
+.undo .act{min-height:44px;padding:0 var(--s4);border-radius:var(--r-sm);background:none;border:0;color:var(--accent);font:inherit;font-weight:800;font-size:15px;text-decoration:underline;text-underline-offset:3px}
+/* bill-breakdown: padding 24, row gap 12 */
+.bill{background:var(--hub-tile);border:1px solid var(--hub-line);border-radius:var(--r-md);padding:var(--hub-panel-padding);display:flex;flex-direction:column;gap:var(--s3)}
+.bill .ln{display:flex;justify-content:space-between;gap:var(--s4);font-size:15px}
+.bill .ln span:last-child{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.bill .ln.m{color:var(--text-muted);font-size:13px}
+.bill .tot{border-top:1px solid var(--border-strong);padding-top:var(--s4);margin-top:var(--s1);display:flex;justify-content:space-between;align-items:baseline;gap:var(--s4)}
+.bill .tot b{font-size:26px;font-weight:800;line-height:1.1}
+.h3{font-size:18px;font-weight:600;line-height:1.3}
+.lbl{font-size:13px;font-weight:500;color:var(--text-muted)}
+.micro{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+.close{width:44px;height:44px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-size:16px;flex:none}
+/* alternate-state strip under a frame */
+.alt{margin-top:var(--s7);width:1920px;display:flex;gap:var(--hub-section-gap);align-items:flex-start}
+.altcard{background:var(--surface);border:1px solid var(--hub-line);border-radius:var(--r-xl);padding:var(--hub-panel-padding);flex:1;display:flex;flex-direction:column;gap:var(--s4);min-width:0}
+
+.frame.shift .main{display:grid;grid-template-columns:640px minmax(0,1fr);gap:var(--hub-section-gap);align-content:start;align-items:start}
+.panel{background:var(--surface);border:1px solid var(--hub-line);border-radius:var(--r-xl);padding:var(--hub-panel-padding);display:flex;flex-direction:column;gap:var(--s5)}
+.phead{display:flex;flex-direction:column;gap:var(--s1)}
+.dns{display:flex;flex-direction:column;gap:var(--s3)}
+.dn{display:grid;grid-template-columns:110px 1fr 140px;gap:var(--s4);align-items:center}
+.dn .d{font-weight:700}
+.dn .s{text-align:right;font-size:18px;font-weight:600}
+.dtot{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid var(--border-strong);padding-top:var(--s4)}
+.dtot b{font-size:26px;font-weight:800}
+.toggle{display:inline-flex;align-items:center;gap:var(--s3);min-height:44px}
+.toggle i{width:44px;height:26px;border-radius:13px;border:1px solid var(--border-strong);background:var(--surface-2);position:relative}
+.toggle i::after{content:"";position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:var(--text-muted)}
+.vr3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s6)}
+.fig{background:var(--hub-tile);border:1px solid var(--hub-line);border-radius:var(--r-md);padding:var(--hub-panel-padding);display:flex;flex-direction:column;gap:var(--s2)}
+.fig b{display:block;font-size:26px;font-weight:800;line-height:1.1;white-space:nowrap}
+.fig .sgn{font-size:13px;font-weight:600;color:var(--text)}
+.fig.diff{border:2px solid var(--warning)}
+.over{align-self:flex-start;display:inline-flex;gap:6px;align-items:center;color:var(--warning);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--warning);border-radius:var(--r-xs);padding:2px 6px}
+.reasons{display:flex;flex-wrap:wrap;gap:var(--s2)}
+a.u{color:var(--text);text-decoration:underline;text-underline-offset:3px;min-height:44px;display:inline-flex;align-items:center}
+.blind{background:var(--hub-tile);border:1px dashed var(--border-strong);border-radius:var(--r-md);padding:var(--hub-panel-padding);color:var(--text-muted)}
+.gate{border-top:1px solid var(--hub-line);padding-top:var(--s5);display:flex;flex-direction:column;gap:var(--s5)}
+.sumline{display:flex;gap:var(--s4);align-items:center;flex-wrap:wrap}
+
+</style></head><body>
+<div class="mock-cap "><h1>Hub · Shift close — Windows 1920×1080 (1:1)</h1><div>Rohit counted ₹4,850 blind; only then does Expected appear. Difference = counted − expected: −₹140 means short. It is over the ₹100 threshold, so Neha's PIN + a reason are entered in place. Amber, never red. Panels pad 24 and sit 40 apart; the three figures sit 32 apart.</div><div class="tags"><span class="resolved">Variance shown as counted − expected (+ over, − short)</span></div></div><div class="frame shift"><nav class="rail" aria-label="Hub"><span class="mark" aria-label="Arena 360">A</span><a href="#"><b aria-hidden="true">▦</b><span>Floor</span></a><a href="#"><b aria-hidden="true">₹</b><span>POS</span></a><a href="#"><b aria-hidden="true">☺</b><span>Players</span></a><a href="#"><b aria-hidden="true">◷</b><span>Sessions</span></a><a href="#"><b aria-hidden="true">▤</b><span>Inventory</span></a><a href="#" class="on" aria-current="page"><b aria-hidden="true">⇄</b><span>Shift</span></a><a href="#"><b aria-hidden="true">▥</b><span>Reports</span></a><a href="#"><b aria-hidden="true">⚙</b><span>Settings</span></a><span class="sp"></span><a href="#"><b aria-hidden="true">⛁</b><span>System</span></a></nav><header class="hdr">
+  <span class="branch">Arena 360 · Koramangala</span>
+  <span class="chip chip-rule">⚡ Happy hour −20% · until 6:00 pm</span>
+  <span class="chip chip-off" role="status"><i aria-hidden="true"></i>Internet offline · working locally</span>
+  <button class="backup tnum" title="Opens System">Backup: last upload 4:58 pm · 3 batches pending</button>
+  <span class="grow"></span>
+  <button class="hdr-alert" aria-label="3 alerts"><span class="abadge tnum">3</span>Alerts</button>
+  <span class="clock tnum">Thu 23 Oct · 5:41 pm</span>
+  <span class="staff"><span class="av">R</span>Rohit · Counter</span>
+</header><main class="main"><section class="panel" aria-label="Count cash"><div class="phead"><div class="h3">Close shift</div><div class="lbl">Rohit · opened 9:00 am · float <span class="tnum">₹1,000</span></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:center"><span class="micro">Count the drawer</span><span class="toggle"><i aria-hidden="true"></i><span class="lbl">Single total</span></span></div>
+  <div class="dns"><div class="dn"><span class="micro">Note</span><span class="micro">Count</span><span class="micro" style="text-align:right">Subtotal</span></div><div class="dn"><span class="d tnum">₹500</span><div class="input tnum">6</div><span class="s tnum">₹3,000</span></div><div class="dn"><span class="d tnum">₹200</span><div class="input tnum">5</div><span class="s tnum">₹1,000</span></div><div class="dn"><span class="d tnum">₹100</span><div class="input tnum">4</div><span class="s tnum">₹400</span></div><div class="dn"><span class="d tnum">₹50</span><div class="input tnum">5</div><span class="s tnum">₹250</span></div><div class="dn"><span class="d tnum">₹20</span><div class="input tnum">6</div><span class="s tnum">₹120</span></div><div class="dn"><span class="d tnum">₹10</span><div class="input tnum">4</div><span class="s tnum">₹40</span></div><div class="dn"><span class="d tnum">Coins</span><div class="input tnum">₹40 total</div><span class="s tnum">₹40</span></div></div>
+  <div class="dtot"><span class="lbl">Counted cash</span><b class="tnum">₹4,850</b></div>
+</section>
+<section class="panel" aria-label="Cash check">
+  <div class="phead"><div class="h3">Cash check</div><div class="lbl">Difference = counted − expected · + means extra cash, − means short</div></div>
+  <div class="vr3">
+    <div class="fig"><span class="lbl">Counted</span><b class="tnum">₹4,850</b></div>
+    <div class="fig"><span class="lbl">Expected</span><b class="tnum">₹4,990</b></div>
+    <div class="fig diff"><span class="lbl">Difference</span><b class="tnum">−₹140</b><span class="sgn">short</span><span class="over">⚠ Over threshold</span></div>
+  </div>
+  <div class="sumline"><span class="lbl" role="status">Counted ₹4,850. Expected ₹4,990. Difference −₹140 short. Threshold ₹100.</span><a href="#" class="u">Breakdown</a></div>
+  <div class="gate">
+    <div class="field"><span class="fl">Manager PIN</span><div style="display:flex;align-items:center;gap:var(--s4)"><div class="pin"><span class="f"></span><span class="f"></span><span class="f"></span><span class="f"></span></div><span class="lbl">Neha · Manager</span></div></div>
+    <div class="field"><span class="fl">Reason</span><div class="reasons"><button class="btn btn-s">Counting error</button><button class="btn btn-s sel">Unrecorded expense</button><button class="btn btn-s">Change float mismatch</button><button class="btn btn-s">Other</button></div></div>
+    <div class="field"><label for="note">Note</label><div class="input focused" id="note">Paid ₹140 to milk vendor, slip not entered</div></div>
+  </div>
+  <div style="display:flex;gap:var(--s4);align-items:center"><button class="btn btn-p" style="font-size:18px">Close shift · print Z-report</button><span class="lbl">Prints if a printer is available. Vikram gets a variance alert.</span></div>
+</section>
+</main></div>
+<div class="alt">
+  <div class="altcard"><div class="micro">Before the count is entered (blind)</div>
+    <div class="vr3" style="grid-template-columns:1fr 2fr"><div class="fig"><span class="lbl">Counted</span><b class="tnum">—</b></div><div class="blind">Expected cash shows after you enter the count.</div></div></div>
+  <div class="altcard"><div class="micro">Within threshold (≤ ₹100) · short</div>
+    <div class="vr3"><div class="fig"><span class="lbl">Counted</span><b class="tnum">₹4,950</b></div><div class="fig"><span class="lbl">Expected</span><b class="tnum">₹4,990</b></div><div class="fig"><span class="lbl">Difference</span><b class="tnum">−₹40</b><span class="sgn">short</span></div></div>
+    <div style="display:flex;gap:var(--s4);align-items:center"><button class="btn btn-p">Close shift · print Z-report</button><span class="lbl">No PIN needed.</span></div></div>
+  <div class="altcard"><div class="micro">Within threshold · over</div>
+    <div class="vr3"><div class="fig"><span class="lbl">Counted</span><b class="tnum">₹5,050</b></div><div class="fig"><span class="lbl">Expected</span><b class="tnum">₹4,990</b></div><div class="fig"><span class="lbl">Difference</span><b class="tnum">+₹60</b><span class="sgn">over</span></div></div>
+    <div class="lbl">Counted ₹5,050. Expected ₹4,990. Difference +₹60 over.</div></div>
+</div>
+</body></html>

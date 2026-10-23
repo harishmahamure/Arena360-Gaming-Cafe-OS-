@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Partner Portal</title>
+<style>
+/* KEY SCREEN — Partner portal (staff mood; Imran, partner / installer). Every state in DARK and LIGHT ("Cool paper").
+   Re-rendered 2026-10-23 to match the updated spines.
+   Frames: A · approved, established (1440, dark then light) — referral link + code, metric row, referred cafés, payouts with
+           accrued / pending below ₹500 / paid / TDS / GST-invoice status.
+           B · just approved, KYC needed before first payout (1024, dark | light).
+           C · application under review, three-step tracker (1024, dark | light).
+   Governing spine sections:
+   DESIGN.md — Colors (dark tokens; Light theme `*-light` Cool paper: hub-bg/hub-header → bg-light, hub-tile → surface-light,
+               hub-line → line-light; accent-text-light for links/focus; warning-text-light for warning ink), Typography (web-display,
+               web-body, hub-numeric, hub-title, hub-label, hub-micro; tabular figures), Layout & Spacing (Web surfaces: partner portal staff
+               mood, ≈1200 content; web-gutter 56, web-app-section-gap 56, web-card-padding 32, web-header-height 80),
+               Components: card, metric-figure, status-badge, button-primary, button-secondary, tab-control (theme-toggle in footer), focus-ring.
+   EXPERIENCE.md — IA Other surfaces (Partner portal: Referred cafés · Payouts · Referral link · KYC; home composition; before approval
+               "Under review" tracker; after approval KYC: PAN, bank, GSTIN optional), Pricing and partner terms (10% commission; payouts
+               monthly bank transfer by the 10th, ₹500 minimum rolls over, TDS deducted, GST invoice from GST-registered partners),
+               State Patterns (Application under review; KYC pending; Below payout minimum; Empty partner portal), Voice (staff plain;
+               money/legal formal), Key Flows Journey 9 (incl. failures: below ₹500, KYC not done, "Upload GST invoice").
+   Sample data: café names other than Vikram's, payout dates and amounts are sample data. TDS at 2% (subject to tax advice); domain partners.arena360.in.
+   Spacing scale 4·8·12·16·24·32·40·56·64·80·96·128. */
+/* ── Theme tokens: DESIGN.md Colors (dark "Cinema Electric") + Light theme "Cool paper" (-light). Owner app + web only. ── */
+.th-dark{
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;--accent-text:#FF4FA8;
+  --ok:#5FE6A0;--warning:#FFBE3D;--warning-ink:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;--metric:#F5F2FF;
+  --focus-outline:2px solid #FF4FA8;--focus-shadow:0 0 0 6px #F5F2FF;
+  color-scheme:dark;background:var(--bg);color:var(--text);
+}
+.th-light{
+  --bg:#F6F5FC;--surface:#FFFFFF;--surface-2:#ECEAF7;--line:#DCD8EE;--border-strong:#7A72A8;
+  --text:#16123A;--muted:#555075;--accent:#D4127A;--on-accent:#FFFFFF;--accent-text:#AD0E63;
+  --ok:#0E7A46;--warning:#FFBE3D;--warning-ink:#8F5300;--on-warning:#1E1300;--danger:#C21F2E;--on-danger:#FFFFFF;--info:#1F56C2;
+  --chip-rule-bg:#FCE4F0;--chip-rule-text:#940B54;--chip-off-bg:#FDE6E6;--chip-off-text:#A3141F;
+  /* hub tones map: hub-bg/hub-header -> bg-light, hub-tile -> surface-light, hub-line -> line-light */
+  --hub-bg:#F6F5FC;--hub-header:#F6F5FC;--hub-tile:#FFFFFF;--hub-line:#DCD8EE;--metric:#16123A;
+  --focus-outline:2px solid #AD0E63;--focus-shadow:none;
+  color-scheme:light;background:var(--bg);color:var(--text);
+}
+.focus{outline:var(--focus-outline);outline-offset:2px;box-shadow:var(--focus-shadow)}
+/* light theme: warning fills always edged with warning-ink (1.5:1 on bg) */
+.th-light .warn-fill{border:1px solid var(--warning-ink)}
+
+*{box-sizing:border-box}
+html,body{margin:0;background:#2B2940;color:#F5F2FF;font-family:Sora,"Sora Variable",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.tnum{font-variant-numeric:tabular-nums}
+/* presentation page (not product UI) */
+.page-h{max-width:2200px;margin:56px auto 40px;padding:0 40px}
+.page-h h1{font-weight:300;font-size:32px;margin:0}
+.page-h p{color:#CFCAE6;font-size:15px;margin:8px 0 0;max-width:1040px;line-height:1.6}
+.cap{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#CFCAE6;font-weight:700;margin:0 0 16px}
+.row{display:flex;gap:56px;align-items:flex-start;justify-content:center;padding:0 40px;margin:0 auto 80px;flex-wrap:wrap}
+.col{flex:none}
+.notes{max-width:2200px;margin:0 auto 80px;padding:0 40px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.notes div{border:1px solid #4A4570;border-radius:16px;padding:24px;font-size:13px;line-height:1.65;color:#CFCAE6}
+.notes b{display:block;color:#F5F2FF;font-weight:600;margin-bottom:8px;font-size:14px}
+
+/* browser frame */
+.browser{width:1440px;border:1px solid #4A4570;border-radius:16px;overflow:hidden}
+.browser.narrow{width:1024px}
+.chrome{height:44px;background:#000;display:flex;align-items:center;gap:16px;padding:0 16px}
+.th-light .chrome{background:#D9D6E8}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#3A3558;display:block}
+.th-light .dots i{background:#B4AFCC}
+.url{flex:1;max-width:520px;height:28px;border-radius:8px;background:var(--surface-2);color:var(--muted);font-size:13px;display:flex;align-items:center;padding:0 12px}
+
+/* product UI */
+.app{background:var(--hub-bg);color:var(--text)}
+a{color:inherit;text-decoration:underline;text-underline-offset:3px}
+.app a.link{color:var(--accent-text)}
+.th-dark .app a.link{color:var(--text)}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:9999px;font-family:inherit;text-decoration:none;white-space:nowrap;cursor:pointer}
+.btn-primary{background:var(--accent);color:var(--on-accent);border:0;padding:12px 32px;font-size:16px;font-weight:800}
+.btn-secondary{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);padding:10px 24px;font-size:15px;font-weight:600}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:32px}
+.badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;background:var(--hub-tile);line-height:1.2;white-space:nowrap}
+.b-ok{color:var(--ok)}.b-info{color:var(--info)}.b-warn{color:var(--warning-ink)}.b-muted{color:var(--muted)}
+.label{font-size:13px;font-weight:500;color:var(--muted);line-height:1.4}
+.micro{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.numeric{font-size:26px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--metric)}
+.sr{position:absolute;left:-9999px}
+
+.p-head{height:80px;background:var(--hub-header);border-bottom:1px solid var(--hub-line);display:flex;align-items:center;gap:40px;padding:0 56px}
+.narrow .p-head{padding:0 40px;gap:24px}
+.wordmark{font-weight:800;font-size:18px;text-decoration:none;white-space:nowrap}
+.wordmark span{font-weight:500;color:var(--muted);margin-left:8px}
+.p-nav{display:flex;gap:8px;flex:1}
+.p-nav a{min-height:44px;display:flex;align-items:center;padding:0 16px;border-radius:10px;font-size:15px;font-weight:500;text-decoration:none;color:var(--muted);white-space:nowrap}
+.p-nav a[aria-current]{background:var(--hub-line);color:var(--text);font-weight:600}
+.p-nav .tag{margin-left:8px}
+.who{font-size:14px;display:flex;gap:24px;align-items:center;white-space:nowrap}
+.who a{min-height:44px;display:inline-flex;align-items:center}
+
+.wrap{max-width:1312px;margin:0 auto;padding:56px 56px 96px}
+.narrow .wrap{padding:56px 40px 80px}
+.titlerow{display:flex;align-items:center;gap:24px;margin-bottom:40px}
+h1.t{font-size:40px;font-weight:300;line-height:1.15;margin:0}
+h2.sec{font-size:18px;font-weight:600;line-height:1.3;margin:0 0 24px}
+.section{margin-top:56px}
+
+.top{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.ref{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:56px;align-items:end}
+.ref h2{margin:0 0 16px}
+.linkbox{display:flex;gap:12px;align-items:center}
+.input{flex:1;min-width:0;min-height:44px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;padding:8px 16px;font-size:15px;display:flex;align-items:center;font-variant-numeric:tabular-nums;color:var(--text)}
+.code{font-size:22px;font-weight:600;letter-spacing:.06em;font-variant-numeric:tabular-nums;margin:8px 0 0}
+.mf{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+
+.tbl{background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:16px;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th,td{padding:16px 24px;border-bottom:1px solid var(--hub-line);text-align:left;vertical-align:top}
+tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
+thead th{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--hub-header);white-space:nowrap;vertical-align:bottom}
+tbody th{font-weight:600}
+.r{text-align:right !important;font-variant-numeric:tabular-nums}
+.sub{display:block;font-weight:400;font-size:13px;color:var(--muted);margin-top:4px;line-height:1.4}
+.formal{font-size:14px;color:var(--muted);margin:24px 0 0;max-width:880px;line-height:1.6}
+.terms{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;margin-top:24px}
+.terms div{border-top:1px solid var(--line);padding-top:16px}
+.terms b{display:block;font-size:15px;font-weight:600;margin-top:4px}
+
+/* KYC */
+.kyc-banner{display:flex;gap:24px;align-items:center;border:1px solid var(--warning-ink);border-radius:16px;padding:24px;background:var(--surface)}
+.kyc-banner p{margin:0;flex:1}
+.form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px 24px;margin-top:32px}
+.field label{display:block;font-size:13px;font-weight:600;margin-bottom:8px}
+.field .opt{font-weight:500;color:var(--muted)}
+.field .help{font-size:13px;color:var(--muted);margin-top:8px;line-height:1.4}
+.field.full{grid-column:1/-1}
+.actions{display:flex;gap:16px;align-items:center;margin-top:32px}
+
+/* tracker */
+.steps{list-style:none;margin:32px 0 0;padding:0;display:flex;flex-direction:column;gap:16px}
+.steps li{display:flex;gap:16px;align-items:center;min-height:44px}
+.steps .meta{color:var(--muted);font-size:13px;margin-left:auto;white-space:nowrap}
+.dot{width:28px;height:28px;border-radius:50%;border:1px solid var(--border-strong);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none;font-variant-numeric:tabular-nums}
+.dot.ok{background:var(--ok);border-color:var(--ok);color:var(--on-warning)}
+.th-light .dot.ok{color:#FFFFFF}
+.dot.now{border:2px solid var(--text);color:var(--text)}
+.steps li.later{color:var(--muted)}
+
+/* footer + theme-toggle (tab-control) */
+.p-foot{border-top:1px solid var(--hub-line);padding:24px 56px;display:flex;align-items:center;gap:24px;font-size:13px;color:var(--muted)}
+.narrow .p-foot{padding:24px 40px}
+.p-foot .sp{flex:1}
+.tabc{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:9999px;padding:4px}
+.tabc span{min-height:44px;display:inline-flex;align-items:center;padding:0 24px;border-radius:9999px;color:var(--muted);font-size:14px;font-weight:600}
+.tabc span[aria-selected="true"]{background:var(--text);color:var(--bg)}
+</style></head>
+<body>
+<header class="page-h">
+  <h1>Partner portal</h1>
+  <p>Imran, partner and installer. A: approved and established, with referred cafés and a payout history. B: just approved, KYC needed before the first payout. C: application under review. Every state is shown in the dark theme and the light “Cool paper” theme; the theme follows the OS, with System · Light · Dark in the footer. <b>Sample data:</b> café names (other than Vikram’s), payout dates and amounts are illustrative.</p>
+</header>
+
+<div class="row"><div class="col th-dark" style="background:transparent">
+<p class="cap">A · approved, established · Dark · 1440</p>
+<div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">partners.arena360.in/</div></div>
+<div class="app">
+  <header class="p-head">
+    <a class="wordmark" href="#">Arena 360<span>Partners</span></a>
+    <nav class="p-nav" aria-label="Partner portal"><a href="#" aria-current="page">Referred cafés</a><a href="#">Payouts</a><a href="#">Referral link</a><a href="#">KYC</a></nav>
+    <div class="who"><span>Imran</span><a href="#">Log out</a></div>
+  </header>
+  <main class="wrap">
+    <div class="titlerow"><h1 class="t">Referred cafés</h1><span class="badge b-ok">Partner · Approved</span></div>
+
+    <div class="top">
+      <section class="card ref" aria-labelledby="rl-dark">
+        <div>
+          <h2 id="rl-dark" class="micro">Your referral link</h2>
+          <div class="linkbox"><div class="input" aria-label="Referral link">arena360.in/r/IMRN4827</div><button class="btn btn-secondary focus" type="button">Copy link</button></div>
+        </div>
+        <div>
+          <div class="label">Referral code</div>
+          <div class="code">IMRN4827</div>
+          <div class="label" style="margin-top:8px">A café counts as yours when it signs up with this link or code.</div>
+        </div>
+      </section>
+      <section class="card mf" aria-label="Payout this month">
+        <div class="label">Payout this month · October 2026</div>
+        <div class="numeric">₹959.60</div>
+        <span class="badge b-info">Accruing</span>
+        <span class="micro">As of 2 min ago · includes ₹459.80 rolled over</span>
+      </section>
+      <section class="card mf" aria-label="Active paying cafés">
+        <div class="label">Active, paying cafés</div>
+        <div class="numeric">3</div>
+        <span class="micro">As of 2 min ago</span>
+      </section>
+      <section class="card mf" aria-label="Commission rate">
+        <div class="label">Commission rate</div>
+        <div class="numeric">10%</div>
+        <span class="label">of subscription revenue, each month the café stays active and paying</span>
+      </section>
+    </div>
+
+    <section class="section" aria-labelledby="rc-dark">
+      <h2 id="rc-dark" class="sec">Cafés you referred</h2>
+      <div class="tbl">
+        <table>
+          <thead><tr><th scope="col">Café</th><th scope="col">Signed up</th><th scope="col" class="r">Branches</th><th scope="col">Plan</th><th scope="col">Status</th><th scope="col" class="r">Subscription / month</th><th scope="col" class="r">Your 10% / month</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Vikram’s café<span class="sub">Pune · Owner: Vikram</span></th><td class="tnum">22 Oct 2026</td><td class="r">2</td><td>Basic</td><td><span class="badge b-ok">Active · paying</span></td><td class="r">₹400.00</td><td class="r"><b>₹40.00</b></td></tr>
+            <tr><th scope="row">Level Up Lounge<span class="sub">Nashik · sample</span></th><td class="tnum">14 Jun 2026</td><td class="r">2</td><td>Premium</td><td><span class="badge b-ok">Active · paying</span></td><td class="r">₹3,998.00</td><td class="r"><b>₹399.80</b></td></tr>
+            <tr><th scope="row">Respawn Café<span class="sub">Pune · sample</span></th><td class="tnum">3 Aug 2026</td><td class="r">3</td><td>Basic</td><td><span class="badge b-ok">Active · paying</span></td><td class="r">₹600.00</td><td class="r"><b>₹60.00</b></td></tr>
+            <tr><th scope="row">Pixel Point<span class="sub">Kolhapur · sample</span></th><td class="tnum">9 Oct 2026</td><td class="r">1</td><td>Free</td><td><span class="badge b-muted">Free plan</span></td><td class="r">₹0.00</td><td class="r">₹0.00</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="po-dark">
+      <h2 id="po-dark" class="sec">Payouts</h2>
+      <p class="label" style="margin:0 0 8px">Sample data — payout dates, café names and amounts are illustrative.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th scope="col">Month</th><th scope="col" class="r">Accrued (10%)</th><th scope="col" class="r">Rolled over</th><th scope="col" class="r">TDS deducted</th><th scope="col" class="r">Net payout</th><th scope="col">Status</th><th scope="col">GST invoice</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">October 2026<span class="sub">Pays by 10 Nov 2026</span></th><td class="r">₹499.80</td><td class="r">₹459.80</td><td class="r">Shown at payout</td><td class="r"><b>₹959.60</b></td><td><span class="badge b-info">Accruing</span></td><td><span class="badge b-warn">Needed</span><span class="sub"><a class="link" href="#">Upload GST invoice</a></span></td></tr>
+            <tr><th scope="row">September 2026</th><td class="r">₹459.80</td><td class="r">₹0.00</td><td class="r">—</td><td class="r">—</td><td><span class="badge b-warn">Pending</span><span class="sub">Pending — below ₹500 minimum, rolls over</span></td><td><span class="label">Not needed</span></td></tr>
+            <tr><th scope="row">August 2026</th><td class="r">₹459.80</td><td class="r">₹399.80</td><td class="r">−₹17.19</td><td class="r"><b>₹842.41</b></td><td><span class="badge b-ok">Paid</span><span class="sub">Bank transfer · 9 Sep 2026</span></td><td><span class="badge b-ok">Received</span></td></tr>
+            <tr><th scope="row">July 2026</th><td class="r">₹399.80</td><td class="r">₹0.00</td><td class="r">—</td><td class="r">—</td><td><span class="badge b-muted">Rolled over</span><span class="sub">Below ₹500 minimum, added to August</span></td><td><span class="label">Not needed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="terms">
+        <div><span class="label">Paid</span><b>Monthly, by the 10th</b><span class="sub">Bank transfer for the previous month</span></div>
+        <div><span class="label">Minimum</span><b>₹500</b><span class="sub">A lower balance rolls over to next month</span></div>
+        <div><span class="label">TDS</span><b>2%, deducted at payout</b><span class="sub">Subject to tax advice; shown on each payout statement</span></div>
+        <div><span class="label">GST invoice</span><b>GST-registered partners</b><span class="sub">Upload one per payout; held until received</span></div>
+      </div>
+      <p class="formal">Payouts are calculated monthly at 10% of the subscription revenue received from each referred café for each month it remains active and paying. Cafés on the Free plan generate no payout. Leads are not exclusive by territory. <a class="link" href="#">Partner terms</a></p>
+    </section>
+  </main>
+  <footer class="p-foot"><span>© 2026 Arena 360</span><a href="#">Partner terms</a><a href="#">Help</a><span class="sp"></span><span>Theme</span><div class="tabc" role="tablist" aria-label="Theme"><span role="tab" aria-selected="false">System</span><span role="tab" aria-selected="false">Light</span><span role="tab" aria-selected="true">Dark</span></div></footer>
+</div></div>
+</div>
+</div>
+<div class="row"><div class="col th-light" style="background:transparent">
+<p class="cap">A · approved, established · Light · Cool paper · 1440</p>
+<div class="browser"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">partners.arena360.in/</div></div>
+<div class="app">
+  <header class="p-head">
+    <a class="wordmark" href="#">Arena 360<span>Partners</span></a>
+    <nav class="p-nav" aria-label="Partner portal"><a href="#" aria-current="page">Referred cafés</a><a href="#">Payouts</a><a href="#">Referral link</a><a href="#">KYC</a></nav>
+    <div class="who"><span>Imran</span><a href="#">Log out</a></div>
+  </header>
+  <main class="wrap">
+    <div class="titlerow"><h1 class="t">Referred cafés</h1><span class="badge b-ok">Partner · Approved</span></div>
+
+    <div class="top">
+      <section class="card ref" aria-labelledby="rl-light">
+        <div>
+          <h2 id="rl-light" class="micro">Your referral link</h2>
+          <div class="linkbox"><div class="input" aria-label="Referral link">arena360.in/r/IMRN4827</div><button class="btn btn-secondary focus" type="button">Copy link</button></div>
+        </div>
+        <div>
+          <div class="label">Referral code</div>
+          <div class="code">IMRN4827</div>
+          <div class="label" style="margin-top:8px">A café counts as yours when it signs up with this link or code.</div>
+        </div>
+      </section>
+      <section class="card mf" aria-label="Payout this month">
+        <div class="label">Payout this month · October 2026</div>
+        <div class="numeric">₹959.60</div>
+        <span class="badge b-info">Accruing</span>
+        <span class="micro">As of 2 min ago · includes ₹459.80 rolled over</span>
+      </section>
+      <section class="card mf" aria-label="Active paying cafés">
+        <div class="label">Active, paying cafés</div>
+        <div class="numeric">3</div>
+        <span class="micro">As of 2 min ago</span>
+      </section>
+      <section class="card mf" aria-label="Commission rate">
+        <div class="label">Commission rate</div>
+        <div class="numeric">10%</div>
+        <span class="label">of subscription revenue, each month the café stays active and paying</span>
+      </section>
+    </div>
+
+    <section class="section" aria-labelledby="rc-light">
+      <h2 id="rc-light" class="sec">Cafés you referred</h2>
+      <div class="tbl">
+        <table>
+          <thead><tr><th scope="col">Café</th><th scope="col">Signed up</th><th scope="col" class="r">Branches</th><th scope="col">Plan</th><th scope="col">Status</th><th scope="col" class="r">Subscription / month</th><th scope="col" class="r">Your 10% / month</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Vikram’s café<span class="sub">Pune · Owner: Vikram</span></th><td class="tnum">22 Oct 2026</td><td class="r">2</td><td>Basic</td><td><span class="badge b-ok">Active · paying</span></td><td class="r">₹400.00</td><td class="r"><b>₹40.00</b></td></tr>
+            <tr><th scope="row">Level Up Lounge<span class="sub">Nashik · sample</span></th><td class="tnum">14 Jun 2026</td><td class="r">2</td><td>Premium</td><td><span class="badge b-ok">Active · paying</span></td><td class="r">₹3,998.00</td><td class="r"><b>₹399.80</b></td></tr>
+            <tr><th scope="row">Respawn Café<span class="sub">Pune · sample</span></th><td class="tnum">3 Aug 2026</td><td class="r">3</td><td>Basic</td><td><span class="badge b-ok">Active · paying</span></td><td class="r">₹600.00</td><td class="r"><b>₹60.00</b></td></tr>
+            <tr><th scope="row">Pixel Point<span class="sub">Kolhapur · sample</span></th><td class="tnum">9 Oct 2026</td><td class="r">1</td><td>Free</td><td><span class="badge b-muted">Free plan</span></td><td class="r">₹0.00</td><td class="r">₹0.00</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="po-light">
+      <h2 id="po-light" class="sec">Payouts</h2>
+      <p class="label" style="margin:0 0 8px">Sample data — payout dates, café names and amounts are illustrative.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th scope="col">Month</th><th scope="col" class="r">Accrued (10%)</th><th scope="col" class="r">Rolled over</th><th scope="col" class="r">TDS deducted</th><th scope="col" class="r">Net payout</th><th scope="col">Status</th><th scope="col">GST invoice</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">October 2026<span class="sub">Pays by 10 Nov 2026</span></th><td class="r">₹499.80</td><td class="r">₹459.80</td><td class="r">Shown at payout</td><td class="r"><b>₹959.60</b></td><td><span class="badge b-info">Accruing</span></td><td><span class="badge b-warn">Needed</span><span class="sub"><a class="link" href="#">Upload GST invoice</a></span></td></tr>
+            <tr><th scope="row">September 2026</th><td class="r">₹459.80</td><td class="r">₹0.00</td><td class="r">—</td><td class="r">—</td><td><span class="badge b-warn">Pending</span><span class="sub">Pending — below ₹500 minimum, rolls over</span></td><td><span class="label">Not needed</span></td></tr>
+            <tr><th scope="row">August 2026</th><td class="r">₹459.80</td><td class="r">₹399.80</td><td class="r">−₹17.19</td><td class="r"><b>₹842.41</b></td><td><span class="badge b-ok">Paid</span><span class="sub">Bank transfer · 9 Sep 2026</span></td><td><span class="badge b-ok">Received</span></td></tr>
+            <tr><th scope="row">July 2026</th><td class="r">₹399.80</td><td class="r">₹0.00</td><td class="r">—</td><td class="r">—</td><td><span class="badge b-muted">Rolled over</span><span class="sub">Below ₹500 minimum, added to August</span></td><td><span class="label">Not needed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="terms">
+        <div><span class="label">Paid</span><b>Monthly, by the 10th</b><span class="sub">Bank transfer for the previous month</span></div>
+        <div><span class="label">Minimum</span><b>₹500</b><span class="sub">A lower balance rolls over to next month</span></div>
+        <div><span class="label">TDS</span><b>2%, deducted at payout</b><span class="sub">Subject to tax advice; shown on each payout statement</span></div>
+        <div><span class="label">GST invoice</span><b>GST-registered partners</b><span class="sub">Upload one per payout; held until received</span></div>
+      </div>
+      <p class="formal">Payouts are calculated monthly at 10% of the subscription revenue received from each referred café for each month it remains active and paying. Cafés on the Free plan generate no payout. Leads are not exclusive by territory. <a class="link" href="#">Partner terms</a></p>
+    </section>
+  </main>
+  <footer class="p-foot"><span>© 2026 Arena 360</span><a href="#">Partner terms</a><a href="#">Help</a><span class="sp"></span><span>Theme</span><div class="tabc" role="tablist" aria-label="Theme"><span role="tab" aria-selected="false">System</span><span role="tab" aria-selected="true">Light</span><span role="tab" aria-selected="false">Dark</span></div></footer>
+</div></div>
+</div>
+</div>
+
+<div class="row"><div class="col th-dark" style="background:transparent">
+<p class="cap">B · just approved, KYC needed · Dark · 1024</p>
+<div class="browser narrow"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">partners.arena360.in/kyc</div></div>
+<div class="app">
+  <header class="p-head">
+    <a class="wordmark" href="#">Arena 360<span>Partners</span></a>
+    <nav class="p-nav" aria-label="Partner portal"><a href="#">Referred cafés</a><a href="#">Payouts</a><a href="#" aria-current="page">KYC</a></nav>
+    <div class="who"><a href="#">Log out</a></div>
+  </header>
+  <main class="wrap">
+    <div class="kyc-banner" role="status"><span class="badge b-warn">KYC</span><p><b>KYC needed before first payout.</b> <span class="label">Your referral link works now; payouts start once KYC is done.</span></p></div>
+    <div class="titlerow" style="margin-top:56px"><h1 class="t">KYC details</h1></div>
+    <section class="card" aria-labelledby="kyc-dark">
+      <h2 id="kyc-dark" class="sec" style="margin-bottom:8px">For bank payouts and tax</h2>
+      <p class="label" style="margin:0">We use these only to pay you and to deduct TDS.</p>
+      <div class="form">
+        <div class="field"><label>PAN</label><div class="input">ABCDE1234F</div></div>
+        <div class="field"><label>Account holder name</label><div class="input">Imran Shaikh</div></div>
+        <div class="field"><label>Bank account number</label><div class="input">0000 1234 5678</div></div>
+        <div class="field"><label>IFSC</label><div class="input">HDFC0001234</div></div>
+        <div class="field full"><label>GSTIN <span class="opt">(optional)</span></label><div class="input" style="color:var(--muted)">27ABCDE1234F1Z5</div><div class="help">Add it if you’re GST-registered. You’ll then upload a GST invoice for each payout.</div></div>
+      </div>
+      <div class="actions"><button class="btn btn-primary focus" type="button">Submit KYC</button><span class="label">You can edit these later.</span></div>
+    </section>
+  </main>
+  <footer class="p-foot"><span>© 2026 Arena 360</span><span class="sp"></span><span>Theme</span><div class="tabc" role="tablist" aria-label="Theme"><span role="tab" aria-selected="false">System</span><span role="tab" aria-selected="false">Light</span><span role="tab" aria-selected="true">Dark</span></div></footer>
+</div></div>
+</div>
+<div class="col th-light" style="background:transparent">
+<p class="cap">B · just approved, KYC needed · Light · Cool paper · 1024</p>
+<div class="browser narrow"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">partners.arena360.in/kyc</div></div>
+<div class="app">
+  <header class="p-head">
+    <a class="wordmark" href="#">Arena 360<span>Partners</span></a>
+    <nav class="p-nav" aria-label="Partner portal"><a href="#">Referred cafés</a><a href="#">Payouts</a><a href="#" aria-current="page">KYC</a></nav>
+    <div class="who"><a href="#">Log out</a></div>
+  </header>
+  <main class="wrap">
+    <div class="kyc-banner" role="status"><span class="badge b-warn">KYC</span><p><b>KYC needed before first payout.</b> <span class="label">Your referral link works now; payouts start once KYC is done.</span></p></div>
+    <div class="titlerow" style="margin-top:56px"><h1 class="t">KYC details</h1></div>
+    <section class="card" aria-labelledby="kyc-light">
+      <h2 id="kyc-light" class="sec" style="margin-bottom:8px">For bank payouts and tax</h2>
+      <p class="label" style="margin:0">We use these only to pay you and to deduct TDS.</p>
+      <div class="form">
+        <div class="field"><label>PAN</label><div class="input">ABCDE1234F</div></div>
+        <div class="field"><label>Account holder name</label><div class="input">Imran Shaikh</div></div>
+        <div class="field"><label>Bank account number</label><div class="input">0000 1234 5678</div></div>
+        <div class="field"><label>IFSC</label><div class="input">HDFC0001234</div></div>
+        <div class="field full"><label>GSTIN <span class="opt">(optional)</span></label><div class="input" style="color:var(--muted)">27ABCDE1234F1Z5</div><div class="help">Add it if you’re GST-registered. You’ll then upload a GST invoice for each payout.</div></div>
+      </div>
+      <div class="actions"><button class="btn btn-primary focus" type="button">Submit KYC</button><span class="label">You can edit these later.</span></div>
+    </section>
+  </main>
+  <footer class="p-foot"><span>© 2026 Arena 360</span><span class="sp"></span><span>Theme</span><div class="tabc" role="tablist" aria-label="Theme"><span role="tab" aria-selected="false">System</span><span role="tab" aria-selected="true">Light</span><span role="tab" aria-selected="false">Dark</span></div></footer>
+</div></div>
+</div>
+</div>
+
+<div class="row"><div class="col th-dark" style="background:transparent">
+<p class="cap">C · application under review · Dark · 1024</p>
+<div class="browser narrow"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">partners.arena360.in/</div></div>
+<div class="app">
+  <header class="p-head">
+    <a class="wordmark" href="#">Arena 360<span>Partners</span></a>
+    <span style="flex:1"></span>
+    <div class="who"><span>Imran</span><a href="#">Log out</a></div>
+  </header>
+  <main class="wrap">
+    <div class="titlerow"><h1 class="t">Your application</h1><span class="badge b-info">Under review</span></div>
+    <section class="card" aria-labelledby="st-dark">
+      <h2 id="st-dark" class="sec" style="margin-bottom:8px">We’re reviewing your application.</h2>
+      <p style="margin:0">We’ll message you on WhatsApp when you’re approved, with your login link. Your referral link and code appear here after approval.</p>
+      <ol class="steps" aria-label="Application progress">
+        <li><span class="dot ok" aria-hidden="true">✓</span>Application submitted<span class="meta tnum">20 Oct 2026</span></li>
+        <li aria-current="step"><span class="dot now" aria-hidden="true">2</span><b>Review</b><span class="meta">In progress</span></li>
+        <li class="later"><span class="dot" aria-hidden="true">3</span>Approved: referral link and code issued</li>
+      </ol>
+    </section>
+    <section class="card" style="margin-top:56px" aria-labelledby="ap-dark">
+      <h2 id="ap-dark" class="sec" style="margin-bottom:16px">What you sent</h2>
+      <div class="form" style="margin-top:0">
+        <div><div class="label">Name · type</div><div>Imran Shaikh · Installer</div></div>
+        <div><div class="label">Business · city</div><div>Shaikh IT Services · Pune</div></div>
+        <div><div class="label">Phone</div><div class="tnum">+91 98220 41736 · verified</div></div>
+        <div><div class="label">Cafés served</div><div class="tnum">6</div></div>
+      </div>
+    </section>
+    <p class="label" style="margin-top:32px">Questions about the partner programme? <a class="link" href="#">Read the partner terms</a></p>
+  </main>
+  <footer class="p-foot"><span>© 2026 Arena 360</span><span class="sp"></span><span>Theme</span><div class="tabc" role="tablist" aria-label="Theme"><span role="tab" aria-selected="false">System</span><span role="tab" aria-selected="false">Light</span><span role="tab" aria-selected="true">Dark</span></div></footer>
+</div></div>
+</div>
+<div class="col th-light" style="background:transparent">
+<p class="cap">C · application under review · Light · Cool paper · 1024</p>
+<div class="browser narrow"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">partners.arena360.in/</div></div>
+<div class="app">
+  <header class="p-head">
+    <a class="wordmark" href="#">Arena 360<span>Partners</span></a>
+    <span style="flex:1"></span>
+    <div class="who"><span>Imran</span><a href="#">Log out</a></div>
+  </header>
+  <main class="wrap">
+    <div class="titlerow"><h1 class="t">Your application</h1><span class="badge b-info">Under review</span></div>
+    <section class="card" aria-labelledby="st-light">
+      <h2 id="st-light" class="sec" style="margin-bottom:8px">We’re reviewing your application.</h2>
+      <p style="margin:0">We’ll message you on WhatsApp when you’re approved, with your login link. Your referral link and code appear here after approval.</p>
+      <ol class="steps" aria-label="Application progress">
+        <li><span class="dot ok" aria-hidden="true">✓</span>Application submitted<span class="meta tnum">20 Oct 2026</span></li>
+        <li aria-current="step"><span class="dot now" aria-hidden="true">2</span><b>Review</b><span class="meta">In progress</span></li>
+        <li class="later"><span class="dot" aria-hidden="true">3</span>Approved: referral link and code issued</li>
+      </ol>
+    </section>
+    <section class="card" style="margin-top:56px" aria-labelledby="ap-light">
+      <h2 id="ap-light" class="sec" style="margin-bottom:16px">What you sent</h2>
+      <div class="form" style="margin-top:0">
+        <div><div class="label">Name · type</div><div>Imran Shaikh · Installer</div></div>
+        <div><div class="label">Business · city</div><div>Shaikh IT Services · Pune</div></div>
+        <div><div class="label">Phone</div><div class="tnum">+91 98220 41736 · verified</div></div>
+        <div><div class="label">Cafés served</div><div class="tnum">6</div></div>
+      </div>
+    </section>
+    <p class="label" style="margin-top:32px">Questions about the partner programme? <a class="link" href="#">Read the partner terms</a></p>
+  </main>
+  <footer class="p-foot"><span>© 2026 Arena 360</span><span class="sp"></span><span>Theme</span><div class="tabc" role="tablist" aria-label="Theme"><span role="tab" aria-selected="false">System</span><span role="tab" aria-selected="true">Light</span><span role="tab" aria-selected="false">Dark</span></div></footer>
+</div></div>
+</div>
+</div>
+
+<div class="notes">
+  <div><b>Payout terms</b>10% of subscription revenue for each month a referred café stays active and paying. Paid by bank transfer by the 10th for the previous month. A balance below ₹500 shows “Pending — below ₹500 minimum, rolls over” and is added to next month. TDS is deducted and shown per payout.</div>
+  <div><b>GST invoice and KYC</b>GST-registered partners upload a GST invoice for each payout; until then the row shows “Upload GST invoice” and the payout is held. After approval, KYC (PAN, bank details, GSTIN optional) is asked for before the first payout: “KYC needed before first payout”.</div>
+  <div><b>Light theme</b>Hub tones map to the light set (hub-bg and hub-header → bg-light, hub-tile → surface-light, hub-line → line-light). Links and the focus ring use accent-text-light; warning ink and edges use warning-text-light. Focus is shown on “Copy link” (A) and “Submit KYC” (B).</div>
+</div>
+</body></html>

@@ -1,0 +1,37 @@
+---
+name: Arena 360 Upstream Changes
+updated: 2026-10-23
+---
+
+# Upstream Changes
+
+Changes the PRD and journey docs still need, so they match the UX spines (`DESIGN.md`, `EXPERIENCE.md`). Rows are referenced by name, not line number.
+
+| Spine decision | Source to update | Applied 2026-10-23 |
+|---|---|---|
+| **No UPI dynamic QR this phase**; UPI and card recorded manually by reference (UPI: last 4 digits, required) | PRD: POS "UPI QR" row (dynamic QR, webhook), cross-cutting Payments "UPI dynamic QR via Razorpay and PhonePe", Money scope "UPI QR", onboarding step 8 "UPI provider keys". Journeys: §2 Settle "UPI QR" | Applied (PRD POS, scope, onboarding step 8, cross-cutting Payments; Journeys §2) |
+| **No Kiosk attract-screen ads in Phase 1** (PRD "every 15 min on Free" → none); no ad slot on Pi idle either | PRD: Ads decision, Attract screen row, Ads cross-cutting, tier table "Ads on attract screen", ad placement rule 1, Pi "Idle screen" row "ad slot on Free". Journeys: §3 Attract | Applied (PRD decisions, Attract, Ads cross-cutting, tier table, rule 1, Pi idle; Journeys §3) |
+| **Kiosk (table) orders are Basic+**; Free orders go through the counter POS | PRD: tier table "Kiosk app … orders" on Free | Applied (PRD tier table, Kiosk Orders row) |
+| **Credit override once per player per day** (manager PIN) | PRD: Credit row "override once". Journeys: §2 "Rest to credit" | Applied (PRD Credit row; Journeys §2) |
+| **No player OTP** | PRD: Sign-up row "OTP optional per branch" (conflicts with the PRD's own no-OTP statements) | Applied (PRD Sign-up row) |
+| **Owner app is one responsive web app + PWA with web push** | PRD: Owner app intro "phone app and a web app"; Notifications "push for owner app" | Applied (PRD Owner app intro, Alerts, Notifications) |
+| **Android Hub on Tauri 2 mobile** | PRD: Free-tier Hub note, and architecture: confirm AdMob banner and interstitial inside Tauri 2 mobile | Applied in PRD (decision, Free-tier Hub note); architecture confirmation of AdMob in Tauri 2 mobile not applicable here (architecture docs out of scope) |
+| **Time-up mode is a per-branch setting** with two modes, "clean up" and "staff handles" | PRD: Configuration "auto-lock behaviour" | Applied (PRD Configuration, Kiosk Time-up; Journeys §3) |
+| Architecture doc title | PRD: summary still cites "Gamezone SaaS — Low-Level Architecture" | Not applicable: the same title is also cited by the High-Level and Low-Level Design docs, so it was left unchanged for consistency |
+| **QR-from-Hub Kiosk login dropped**; login = username + password or staff-start | PRD: Kiosk "Login" row still says "or QR from Hub" — remove. Journeys: §3 Login | Applied (PRD Login row; Journeys §3) |
+| **Shift variance = counted − expected** (+ over, − short) | PRD: Shift close and variance rows ("expected minus counted") | Applied (PRD Shift row; Journeys §5) |
+| **Kiosk while Hub unreachable**: running sessions continue; new login, orders and Extend disabled | PRD: Kiosk offline behaviour. Journeys: §8 | Applied (PRD new Kiosk "Hub unreachable" row; Journeys §8) |
+| **Extend allowed during the 2-min grace** | PRD: time-up / grace row | Applied (PRD Prepaid, Extend, Time-up rows; Journeys §3) |
+| Journeys doc | Title "Arena360" (no space); add a Journey 8 section; add Journey 9 (partner) and Journey 10 (console) | Applied (retitled; Journeys 8, 9, 10 added) |
+| **No rewarded ads.** Free Android Hub: AdMob banner + interstitial after every 2nd completed settle, skippable after 5 s, never over an open cart or tile sheet | PRD: Ads decision "Rewarded ads via AdMob", Free-tier Hub decision "rewarded and interstitial", tier table "Rewarded ads (player watches 30 s …)", ad placement rule 2 (reward and daily cap), Risks "Rewarded-ad inventory" | Applied (PRD decisions, tier table, Free-tier Hub note, rules 1-3, Ads cross-cutting, Ad inventory) |
+| **Subscription prices shown GST-exclusive** ("₹200/branch/month + 18% GST"); GST itemised on the invoice | PRD: Marketing "Pricing" row; Owner app "Subscription" row; Pricing section | Applied (PRD Tiers intro, Pricing, Subscription) |
+| **Yearly billing = 10× monthly** (2 months free), paid tiers only; Monthly/Yearly toggle on Pricing, cycle switch in Subscription | PRD: Marketing "Pricing" row "yearly discount"; Owner app "Subscription" row; Pricing section | Applied (PRD Pricing, Subscription, Tiers yearly note) |
+| **Add-on prices** (per branch/month, + GST): +20 devices ₹50 · Tunnel for remote devices ₹200 · additional owner login ₹50; PPP bands elsewhere | PRD: Pricing section "Add-ons (any tier)" (no prices) | Applied (PRD Add-ons) |
+| **Refund policy**: full refund within 7 days of first payment; then cancel anytime, active to end of paid period, then Free; no partial refunds | PRD: Marketing "Pricing" FAQ "on cancellation", "FAQ" row "refunds"; Owner app "Subscription" row ("upgrade/downgrade mid-cycle prorated" must not imply partial refunds on cancel) | Applied (PRD Tiers refunds note, Pricing, FAQ, Subscription) |
+| **Sign-up consent**: one required checkbox for Terms, Privacy Policy and service messages (WhatsApp/SMS); no marketing consent | PRD: Kiosk "Sign-up" row "consent text"; Console "Player alert" row | Applied (PRD Sign-up, Console Player alert, Notifications) |
+| **Partner payout terms**: monthly bank transfer by the 10th, ₹500 minimum (rolls over), TDS deducted, GST invoice from GST-registered partners | PRD: Partners section "Reseller margin and territory" row; Marketing "Partners" row | Applied (PRD Resolved in second pass, Partners row; Journeys §9) |
+| **Partner application**: light apply (name, phone OTP, email, city, business, type, cafés served); KYC (PAN, bank, optional GSTIN) after approval; approval by WhatsApp only | PRD: Marketing "Partners" row. Journeys: Journey 9 | Applied (PRD Partners row; Journeys §9) |
+| **Partner co-branded Kiosk screen dropped**; branch customisation stays logo-only | PRD: Marketing "Partners" row "co-branded kiosk screen" | Applied (PRD Partners row; Journeys §9) |
+| **Onboarding pairing: no QR**; the 8-character code is typed into the Hub installer; a bad code retries in place | PRD: Onboarding "3. Install Hub" row "pairing code shown large with QR". Journeys: "Pairing code" row "with a QR that encodes it" | Applied (PRD onboarding step 3; Journeys §1) |
+| **Pi QR start: no login, pay at the counter**; staff confirm and start from the Hub; phone then shows a live timer only; TV warnings at 5 and 1 min switch to the Pi input for 5 s; controller check (Returned / Missing) after time-up | PRD: Console "Start by QR" row "logs in, picks plan" (and "or Tunnel on Premium"); Console scope (v1.1). Journeys: Journey 10 | Applied (PRD Pi rows; Journeys §10) |
+| **Game media is global only**: curated and flash-screened by the Arena 360 team; no owner local media upload or matching UI | Earlier UX and source notes that allowed owner local uploads (not in the PRD); architecture: media sync carries global media only | Applied in PRD (Library row); architecture media sync not applicable here (architecture docs out of scope) |

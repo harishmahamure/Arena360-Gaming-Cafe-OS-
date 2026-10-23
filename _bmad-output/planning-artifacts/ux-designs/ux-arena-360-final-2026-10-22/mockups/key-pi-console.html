@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pi Console Screens</title>
+<style>
+/* Governing spine sections (spines win on conflict):
+   DESIGN Components: Player (Pi / QR) tv-idle, tv-warning, tv-lock, qr-start-page, live-timer; logo-slot, scrim, plan-picker, button-primary;
+     Staff: floor-tile-console, status-badge, alert-badge, tile-sheet · Layout & Spacing: Pi / QR screens · Typography: Kiosk ramp (TV), hub ramp (tile)
+   EXPERIENCE Component Patterns: Player (Pi / QR) rows; Staff floor-tile-console · Voice: TV warning, TV time-up, QR start waiting, QR live timer
+     · IA: Pi / QR (v1.1) · Journey 10 steps 1, 2, 5, 6, 7, 8
+   Placeholder art = CSS gradients standing in for control-plane game video (FIFA / GT7). QR = CSS stand-in, not scannable. */
+:root{
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--text-muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;
+  --ok:#5FE6A0;--warning:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;
+  --scrim:linear-gradient(0deg,rgba(10,8,22,0.92) 0%,rgba(10,8,22,0.15) 55%,rgba(10,8,22,0.15) 100%),linear-gradient(90deg,rgba(10,8,22,0.85) 0%,rgba(10,8,22,0.75) 45%,rgba(10,8,22,0) 70%);
+  --font:"Sora",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --page:#05040e;--annot:#e9e4ff;
+  --s:.5;
+}
+@media (max-width:1040px){:root{--s:.4}}
+@media (max-width:860px){:root{--s:.3}}
+@media (max-width:660px){:root{--s:.18}}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--page)}
+body{color:var(--text);font:16px/1.5 var(--font);padding:24px 16px 64px}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.doc{max-width:1100px;margin:0 0 8px}
+.doc .dn{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-muted)}
+.doc h1{font-weight:300;font-size:32px;line-height:1.15;margin:6px 0 8px}
+.doc p{color:var(--text-muted);max-width:860px}
+.doc ul{margin:12px 0 0 18px;color:var(--text-muted);font-size:14px}
+.doc li b{color:var(--text);font-weight:600}
+h2.sec{font-size:16px;font-weight:600;margin:36px 0 10px}
+h2.sec small{font-weight:400;color:var(--text-muted);margin-left:8px}
+.notes{margin:10px 0 0 18px;color:var(--text-muted);font-size:13px;max-width:1000px}
+.open{display:inline-block;font:500 13px/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--annot);background:#000;border:1px dashed var(--annot);border-radius:6px;padding:4px 8px;margin-top:8px}
+.row{display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start}
+
+/* ---- TV frame (1920×1080, scaled) ---- */
+.tvwrap{display:inline-block;padding:10px;background:#000;border-radius:14px;border:1px solid var(--line);max-width:100%}
+.frame{position:relative;overflow:hidden;width:calc(1920px*var(--s));height:calc(1080px*var(--s))}
+.tv{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden;background:var(--bg);font-family:var(--font);transform:scale(var(--s));transform-origin:0 0}
+.media{position:absolute;inset:0}
+.scrim{position:absolute;inset:0;background:var(--scrim)}
+.ph-label{position:absolute;right:64px;top:40px;font:500 16px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.45);letter-spacing:.1em;text-transform:uppercase}
+.art-fifa{background:
+  radial-gradient(ellipse at 70% 30%,rgba(255,255,255,.35) 0,transparent 30%),
+  repeating-linear-gradient(90deg,rgba(255,255,255,.05) 0 120px,transparent 120px 240px),
+  linear-gradient(180deg,#0d2a5c 0%,#0f4d2e 48%,#1f8a3c 49%,#166b2f 100%)}
+.art-fifa::before{content:"";position:absolute;left:58%;top:52%;width:560px;height:300px;border:4px solid rgba(255,255,255,.35);border-radius:50%;transform:perspective(600px) rotateX(55deg)}
+.art-fifa::after{content:"";position:absolute;left:58%;top:49%;width:6px;height:520px;background:rgba(255,255,255,.3);transform:perspective(600px) rotateX(55deg)}
+.art-gt7{background:
+  radial-gradient(circle at 82% 22%,#ffd7a1 0 6%,transparent 18%),
+  linear-gradient(170deg,transparent 60%,#26222e 60.2%,#1a1720 100%),
+  linear-gradient(180deg,#ff9a5a 0%,#c9406a 35%,#3a1d5a 62%,#141020 100%)}
+.art-gt7::before{content:"";position:absolute;right:300px;top:560px;width:720px;height:150px;border-radius:120px 200px 30px 30px;background:linear-gradient(180deg,#e2283c,#7a0e1e)}
+.art-gt7::after{content:"";position:absolute;right:360px;top:660px;width:600px;height:90px;background:radial-gradient(circle at 15% 50%,#111 0 40px,transparent 41px),radial-gradient(circle at 85% 50%,#111 0 40px,transparent 41px)}
+
+/* logo-slot */
+.logo{position:absolute;left:64px;top:56px;display:flex;align-items:center;gap:16px;z-index:3}
+.mark{width:64px;height:64px;border-radius:50%;border:2px solid var(--text);display:grid;place-items:center;font-weight:300;font-size:24px}
+.wm{display:flex;flex-direction:column;gap:6px;font-weight:300;font-size:28px;letter-spacing:.24em;line-height:1}
+.wm small{font-weight:600;font-size:16px;letter-spacing:.04em}
+
+/* tv-idle */
+.idle-copy{position:absolute;left:64px;bottom:72px;width:820px;z-index:3}
+.eyebrow{font-weight:600;font-size:16px;line-height:1.2;letter-spacing:.14em;text-transform:uppercase}
+.tvno{font-weight:300;font-size:48px;line-height:1.1;margin:12px 0 4px}
+.tvno b{font-weight:200;font-size:144px;line-height:.9;letter-spacing:.02em;display:block}
+.rates{margin-top:28px;display:flex;gap:16px}
+.rate{background:var(--bg);border:1px solid var(--border-strong);border-radius:20px;padding:18px 24px;min-width:200px}
+.rate .l{font-weight:600;font-size:18px;color:var(--text-muted)}
+.rate .p{font-weight:600;font-size:28px;line-height:1.2;margin-top:4px}
+.idle-note{margin-top:20px;font-size:20px;line-height:1.45}
+.qrblock{position:absolute;right:64px;bottom:72px;z-index:3;display:flex;flex-direction:column;align-items:center;gap:20px}
+.qrframe{background:#fff;border-radius:16px;padding:28px}
+.qr{position:relative;width:380px;height:380px;background:
+  repeating-linear-gradient(0deg,transparent 0 19px,#fff 19px 38px),
+  repeating-linear-gradient(90deg,#000 0 19px,#fff 19px 57px,#000 57px 76px,#fff 76px 95px);
+  background-color:#000}
+.qr::before{content:"";position:absolute;inset:0;background:
+  repeating-linear-gradient(45deg,transparent 0 23px,rgba(255,255,255,.9) 23px 30px)}
+.qr i{position:absolute;width:110px;height:110px;background:#fff;border:16px solid #000;box-shadow:0 0 0 12px #fff;z-index:2}
+.qr i::after{content:"";position:absolute;inset:14px;background:#000}
+.qr i.a{left:0;top:0}.qr i.b{right:0;top:0}.qr i.c{left:0;bottom:0}
+.qrlabel{font-weight:800;font-size:24px;line-height:1;background:var(--bg);border:1px solid var(--border-strong);border-radius:9999px;padding:16px 32px}
+.qrsub{font-size:18px;font-weight:600;color:var(--text);background:var(--bg);padding:6px 14px;border-radius:9999px}
+
+/* tv-warning */
+.warn{position:absolute;inset:0;background:var(--bg);border:8px solid var(--warning);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:36px;text-align:center}
+.warn .big{font-weight:200;font-size:144px;line-height:.9;letter-spacing:.02em}
+.warn .msg{font-weight:300;font-size:48px;line-height:1.1}
+.warn .tag{display:inline-flex;align-items:center;gap:12px;font-weight:600;font-size:18px;letter-spacing:.14em;text-transform:uppercase;color:var(--warning)}
+.warn .tag i{width:14px;height:14px;border-radius:50%;background:var(--warning)}
+.warn .foot{position:absolute;bottom:48px;left:0;right:0;font-size:20px;color:var(--text-muted)}
+
+/* tv-lock */
+.lock{position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;text-align:center}
+.lock .msg{font-weight:300;font-size:48px;line-height:1.1}
+.lock .count{font-weight:200;font-size:144px;line-height:.9;letter-spacing:.02em}
+.lock .cl{font-weight:600;font-size:18px;color:var(--text-muted);letter-spacing:.14em;text-transform:uppercase}
+.lock .body{font-size:20px;line-height:1.45;color:var(--text)}
+.lock .ring{width:520px;height:8px;border-radius:9999px;background:var(--surface-2);overflow:hidden}
+.lock .ring b{display:block;height:100%;width:71%;background:var(--warning)}
+.lock .tvn{position:absolute;right:64px;top:64px;font-weight:600;font-size:28px}
+
+/* ---- phone frame 390×844 ---- */
+.phone{width:390px;height:844px;flex:none;border-radius:44px;border:10px solid #000;outline:1px solid var(--line);background:var(--bg);overflow:hidden;position:relative;max-width:100%}
+.status{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;font-size:14px;font-weight:600}
+.url{margin:0 16px 8px;height:32px;border-radius:10px;background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-muted)}
+.pbody{padding:8px 16px 24px}
+.phead{display:flex;align-items:center;justify-content:space-between;padding:8px 0 20px;border-bottom:1px solid var(--line)}
+.phead .lg{display:flex;align-items:center;gap:10px}
+.phead .mark{width:40px;height:40px;font-size:16px}
+.phead .wm{font-size:16px;gap:4px;letter-spacing:.2em}
+.phead .wm small{font-size:12px}
+.phead .tv{position:static;transform:none;width:auto;height:auto;background:none;font-weight:600;font-size:28px;line-height:1.2;overflow:visible}
+.ph-h{font-weight:300;font-size:30px;line-height:1.15;margin:22px 0 6px}
+.ph-p{font-size:16px;color:var(--text-muted);margin-bottom:18px}
+.plan{display:flex;align-items:center;justify-content:space-between;min-height:72px;padding:14px 18px;margin-bottom:12px;background:var(--surface);border:1px solid var(--border-strong);border-radius:20px}
+.plan.sel{border:2px solid var(--text);padding:13px 17px}
+.plan .n{font-weight:600;font-size:18px}
+.plan .d{font-size:14px;color:var(--text-muted)}
+.plan .p{font-weight:600;font-size:22px}
+.plan .rd{width:22px;height:22px;border-radius:50%;border:2px solid var(--border-strong);margin-right:14px;flex:none}
+.plan.sel .rd{border-color:var(--text);background:radial-gradient(circle,var(--text) 0 5px,transparent 6px)}
+.plan .lft{display:flex;align-items:center}
+.btnp{display:flex;align-items:center;justify-content:center;width:100%;min-height:56px;border-radius:9999px;background:var(--accent);color:var(--on-accent);font-weight:800;font-size:20px;margin-top:8px}
+.fine{font-size:13px;color:var(--text-muted);text-align:center;margin-top:12px}
+.sent{margin-top:20px;padding:20px;border-radius:20px;background:var(--surface-2);border:1px solid var(--border-strong)}
+.sent .t{display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px}
+.sent .t i{width:12px;height:12px;border-radius:50%;background:var(--ok);flex:none}
+.sent .b{font-size:16px;margin-top:6px}
+.sent .m{font-size:14px;color:var(--text-muted);margin-top:10px}
+.timer{margin-top:28px;background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:28px 22px 30px;text-align:center}
+.timer .lbl{font-weight:600;font-size:18px;color:var(--text-muted)}
+.timer .fig{font-weight:200;font-size:96px;line-height:1;margin:16px 0 8px;letter-spacing:.01em}
+.timer .unit{font-size:14px;color:var(--text-muted)}
+.timer .note{font-size:20px;line-height:1.45;margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
+.meta{margin-top:18px;display:flex;justify-content:space-between;font-size:14px;color:var(--text-muted);padding:0 4px}
+.live{display:inline-flex;align-items:center;gap:8px}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+
+/* ---- Hub (staff mood) ---- */
+.hub{width:1000px;max-width:100%;background:var(--hub-bg);border:1px solid var(--line);border-radius:12px;padding:32px;display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start}
+.zh{width:100%;display:flex;gap:16px;align-items:baseline;font-size:15px}
+.zh h3{font-weight:600;font-size:18px}
+.zh span{font-size:13px;color:var(--text-muted)}
+.tile{position:relative;width:260px;min-height:148px;background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.tile::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--c)}
+.tile .r1{display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px}
+.tile .r1 .corner{margin-left:auto}
+.tile .big{font-weight:800;font-size:26px;line-height:1.1}
+.tile .r3{display:flex;flex-direction:column;gap:6px}
+.tile .r3a{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tile .sub{font-size:13px;font-weight:500;color:var(--text-muted)}
+.sb{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:6px;border:1px solid currentColor;color:var(--c);background:var(--hub-tile);line-height:1.3;white-space:nowrap}
+.sb.w{--c:var(--warning)}
+.focusring{outline:2px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 6px var(--text)}
+.sheet{flex:1;min-width:300px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:24px}
+.sheet .h{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.sheet .h b{font-weight:600;font-size:18px}
+.sheet .h span{font-size:13px;color:var(--text-muted)}
+.sheet .sec{margin-top:20px;padding:18px;border-radius:16px;background:var(--hub-tile);border:1px solid var(--warning)}
+.sheet .sec .t{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--warning)}
+.sheet .sec p{font-size:15px;margin:8px 0 16px}
+.sheet .btns{display:flex;gap:24px;flex-wrap:wrap}
+.hbtn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 24px;border-radius:9999px;font-weight:700;font-size:15px}
+.hbtn.p{background:var(--accent);color:var(--on-accent)}
+.hbtn.s{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong)}
+.bill{margin-top:20px;font-size:15px}
+.bill div{display:flex;justify-content:space-between;padding:4px 0;color:var(--text-muted)}
+.bill div.tot{color:var(--text);font-weight:800;font-size:20px;border-top:1px solid var(--hub-line);margin-top:6px;padding-top:10px}
+.paid{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--ok);border:1px solid var(--ok);border-radius:6px;padding:2px 6px;margin-left:8px;vertical-align:middle}
+</style></head>
+<body>
+<header class="doc"><div class="dn">Arena 360 · Pi / QR key screens (v1.1)</div><h1>Console session — TV 3</h1>
+<p>Journey 10 end to end at Arena 360 · Koramangala: the TV between sessions, the no-login phone page the QR opens, the live timer, the 5-min TV warning, the time-up lock, and the controller check on the Hub tile. Player mood (Cinema Electric, dark only, no blur) on the TV and phone; staff mood on the Hub.</p>
+<ul><li><b>DESIGN</b> Components: Player (Pi / QR) tv-idle, tv-warning, tv-lock, qr-start-page, live-timer · logo-slot, scrim, plan-picker · Staff floor-tile-console, status-badge, tile-sheet · Layout &amp; Spacing: Pi / QR screens</li>
+<li><b>EXPERIENCE</b> Component Patterns: Player (Pi / QR) and floor-tile-console · Voice: Pi/QR fixed lines · Journey 10 steps 1, 2, 5, 6, 7, 8</li></ul></header>
+
+<h2 class="sec">1 · TV idle <small>tv-idle · 1920×1080 · Journey 10 step 1</small></h2>
+<div class="tvwrap"><div class="frame"><div class="tv" role="img" aria-label="TV 3 idle screen with QR">
+  <div class="media art-fifa"></div><div class="scrim"></div>
+  <div class="ph-label">muted game video · FIFA placeholder</div>
+  <div class="logo"><span class="mark" aria-hidden="true">A</span><span class="wm">ARENA 360<small>Koramangala</small></span></div>
+  <div class="idle-copy">
+    <div class="tvno"><b>TV 3</b></div>
+    <div class="rates num">
+      <div class="rate"><div class="l">30 min</div><div class="p">₹70</div></div>
+      <div class="rate"><div class="l">1 hour</div><div class="p">₹120</div></div>
+      <div class="rate"><div class="l">2 hours</div><div class="p">₹220</div></div>
+    </div>
+  </div>
+  <div class="qrblock"><div class="qrframe"><div class="qr"><i class="a"></i><i class="b"></i><i class="c"></i></div></div><div class="qrlabel">Scan to start</div></div>
+</div></div></div>
+<ul class="notes"><li>Logo top-left; "TV 3" and rates bottom-left inside the scrim copy zone; QR (380px + white quiet zone, 16px radius) bottom-right. No ads.</li><li>Media falls back video → cover → <code>bg</code>; HC drops the video.</li></ul>
+
+<h2 class="sec">2 · Phone start page and 3 · live timer <small>qr-start-page · live-timer · 390×844 · Journey 10 steps 2 and 5</small></h2>
+<div class="row">
+  <div class="phone" aria-label="QR start page after request">
+    <div class="status num"><span>7:58</span><span>Arena360-Guest · 5G</span></div>
+    <div class="url">arena360.local/tv/3</div>
+    <div class="pbody">
+      <div class="phead"><div class="lg"><span class="mark" aria-hidden="true">A</span><span class="wm">ARENA 360<small>Koramangala</small></span></div><span class="tv">TV 3</span></div>
+      <div class="plan num"><span class="lft"><span class="rd"></span><span><span class="n">30 min</span></span></span><span class="p">₹70</span></div>
+      <div class="plan sel num"><span class="lft"><span class="rd"></span><span><span class="n">1 hour</span></span></span><span class="p">₹120</span></div>
+      <div class="plan num"><span class="lft"><span class="rd"></span><span><span class="n">2 hours</span></span></span><span class="p">₹220</span></div>
+      <div class="sent" role="status">
+        <div class="b">Waiting for the counter — pay at the counter to start.</div>
+      </div>
+    </div>
+  </div>
+  <div class="phone" aria-label="Live timer page">
+    <div class="status num"><span>8:31</span><span>Arena360-Guest · 5G</span></div>
+    <div class="url">arena360.local/tv/3</div>
+    <div class="pbody">
+      <div class="phead"><div class="lg"><span class="mark" aria-hidden="true">A</span><span class="wm">ARENA 360<small>Koramangala</small></span></div><span class="tv">TV 3</span></div>
+      <div class="timer">
+        <div class="lbl">Time left on TV 3</div>
+        <div class="fig num">27:14</div>
+        <div class="unit">min : sec</div>
+        <div class="note">Extend at the counter</div>
+      </div>
+    </div>
+  </div>
+</div>
+<ul class="notes"><li>Start page shown after Request: the picked plan keeps its 2px <code>text</code> border; the button is replaced by the waiting card (pre-request it is one primary "Request" button in that slot).</li><li>Live timer: one <code>surface</code> card, 96px Sora 200 tabular, no actions. Off Wi-Fi it keeps the last value with "Reconnect to café Wi-Fi to update".</li></ul>
+
+<h2 class="sec">4 · TV warning <small>tv-warning · 5 s · Journey 10 step 6</small></h2>
+<div class="tvwrap"><div class="frame"><div class="tv" role="img" aria-label="5 minute warning">
+  <div class="warn">
+    <div class="big num">5 min left</div>
+    <div class="msg">ask at the counter to extend</div>
+    <div class="foot">Arena 360 · Koramangala</div>
+  </div>
+</div></div></div>
+<ul class="notes"><li>Solid <code>bg</code>, 8px <code>warning</code> frame, minutes in <code>kiosk-display</code>, line in <code>kiosk-headline</code>. Full copy: "5 min left — ask at the counter to extend"; the 1-min screen is identical with "1 min left".</li></ul>
+
+<h2 class="sec">5 · TV time-up lock <small>tv-lock · no grace · Journey 10 step 7</small></h2>
+<div class="tvwrap"><div class="frame"><div class="tv" role="img" aria-label="Time's up lock">
+  <div class="lock">
+    <div class="logo"><span class="mark" aria-hidden="true">A</span><span class="wm">ARENA 360<small>Koramangala</small></span></div>
+    <div class="tvn">TV 3</div>
+    <div class="msg">Time's up — see the counter.</div>
+  </div>
+</div></div></div>
+<ul class="notes"><li>Solid <code>bg</code> with <code>logo-slot</code> and "Time's up — see the counter." in <code>kiosk-headline</code>. No grace: the TV locks immediately at time-up and is held until staff end the session (CEC standby or smart plug per branch), then back to tv-idle.</li></ul>
+
+<h2 class="sec">6 · Hub controller check <small>floor-tile-console + tile-sheet · Journey 10 step 8</small></h2>
+<div class="hub">
+  <div class="zh"><h3>Consoles</h3><span>PS5 / Xbox · ₹120/hr · timed from Hub</span></div>
+  <div class="tile focusring" style="--c:var(--ok)" role="button" tabindex="0">
+    <div class="r1"><span aria-hidden="true">🎮</span><span>PS5 · TV 3</span></div>
+    <div class="big num">Free</div>
+    <div class="r3"><div class="r3a"><span class="sb" style="--c:var(--ok)">Free</span><span class="sb w">Check controllers</span></div><span class="sub">TV 3 · ended 8:59 pm</span></div>
+  </div>
+  <div class="sheet" aria-label="PS5 TV 3 sheet">
+    <div class="h"><b>PS5 · TV 3</b><span class="num">Guest 12 · 7:59–8:59 pm</span></div>
+    <div class="sec">
+      <div class="t">Check controllers</div>
+      <div class="btns"><span class="hbtn p">Returned</span><span class="hbtn s">Missing</span></div>
+    </div>
+    <div class="bill num">
+      <div><span>1 hour · PS5</span><span>₹120.00</span></div>
+      <div class="tot"><span>Total <span class="paid">PAID · UPI</span></span><span>₹120.00</span></div>
+    </div>
+  </div>
+</div>
+<ul class="notes"><li>After end, the tile is Free with a "CHECK CONTROLLERS" <code>status-badge</code> in <code>warning</code> until Returned or Missing is tapped; either choice is logged against the session.</li></ul>
+</body></html>

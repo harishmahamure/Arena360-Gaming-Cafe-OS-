@@ -8,13 +8,14 @@
 /*
   KEY SCREEN — Kitchen display board, LAN tablet landscape 1280×800 (Sunita, Koregaon Park)
   Governing spine sections:
-    DESIGN.md  — Layout & Spacing (AIRY posture; Kitchen row: gutter 24, column gap 24, ticket padding 16, ticket gap 16, header 64; tablet landscape, four status columns New → Preparing → Ready → Served, tickets newest-first);
-                 Components: kitchen-ticket (hub-tile, border-strong, seat in hub-numeric, items + modifiers, order id, elapsed tabular,
-                 "NEW" alert-badge until advanced, Ready = state-free edge + "READY" tag), alert-badge, undo-toast (Kitchen: bottom of screen);
-                 Colors (hub-bg / hub-header / hub-tile / hub-line, state-free), Typography (hub-* ramp; nothing below 11px), Elevation (staff: no shadows)
-    EXPERIENCE — IA (Kitchen display single screen); Component Patterns: kitchen-ticket, undo-toast, alert-badge;
-                 Interaction Primitives (one tap + Undo; Kitchen chimes on each new order; every sound has a persistent alert-badge twin);
-                 State Patterns (Empty kitchen column = header only; LAN loss = open); Key Flows Journey 4 steps 4–5; Accessibility (live region for new tickets)
+    DESIGN.md  — Layout & Spacing (AIRY posture; Kitchen display: four status columns New → Preparing → Ready → Served,
+                 column gap 24, ticket gap 16, header 64; kitchen-top-bar order: branch · clock · "5 open · oldest 9 min" · LAN status · mute toggle);
+                 Components: kitchen-top-bar (hub-header, LAN status-badge CONNECTED ok / RECONNECTING warning, 44px mute toggle, struck bell + "Chime off" when muted),
+                 kitchen-ticket (NEW alert-badge + danger edge, Ready = state-free edge + READY tag, Served muted,
+                 Cancelled = muted ink + CANCELLED status-badge, no cancel control), alert-badge, status-badge, undo-toast.
+    EXPERIENCE — Component Patterns: kitchen-top-bar, kitchen-ticket, undo-toast, alert-badge; Interaction Primitives (one tap + Undo;
+                 chime + persistent badge twin); State Patterns: Empty kitchen column, LAN loss (tickets stay, advances move and sync on reconnect, no per-ticket marker,
+                 "Reconnecting", no new orders until reconnect); Journey 4; Accessibility (live region for new tickets).
 */
 :root{
   --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;--surface-2:#201A3D;--border-strong:#8178B5;
@@ -71,113 +72,43 @@ body{background:#05040f;color:var(--text);font-family:Sora,"Sora Variable",syste
 .undo{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:16px;display:flex;align-items:center;gap:24px;padding:16px 16px 16px 24px;font-size:15px;min-width:560px}
 .undo a{margin-left:auto;color:var(--accent);font-weight:700;text-decoration:underline;text-underline-offset:3px;min-height:44px;min-width:96px;display:inline-flex;align-items:center;justify-content:center}
 .undo .tm{font-size:13px;color:var(--muted)}
+
+.screen + .cap{margin-top:56px}
+.bar{gap:24px}
+.bar .t{white-space:nowrap}
+.bar .clk{font-size:15px;font-weight:600}
+.bar .oc{font-size:13px;font-weight:500;color:var(--muted);white-space:nowrap}
+.sbadge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;line-height:1.2;background:var(--hub-tile);white-space:nowrap}
+.sbadge i{width:8px;height:8px;border-radius:50%;background:currentColor}
+.sb-ok{color:var(--free)} .sb-warn{color:var(--warning)} .sb-muted{color:var(--muted)}
+.mute{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:44px;height:44px;padding:0 12px;border-radius:9999px;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font:inherit;font-size:13px;font-weight:600}
+.mute .bell{display:inline-flex;line-height:1;position:relative}
+.tk .seat{white-space:nowrap}
+.tk .id{align-items:center}\n.tk .id .qi{display:inline-flex;align-items:center;gap:8px}
+.mute.off .bell::after{content:"";position:absolute;left:-3px;right:-3px;top:50%;height:2px;background:var(--text);transform:rotate(-45deg)}
+.tk.cancelled{border-color:var(--hub-line)}
+.tk.cancelled .seat,.tk.cancelled li,.tk.cancelled .age{color:var(--muted)}
+.tk.cancelled li{text-decoration:line-through;text-decoration-color:var(--muted)}
+.ann.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 </style>
 </head>
 <body>
 <header class="page-h">
   <h1>Kitchen display · Koregaon Park</h1>
-  <p>Sunita’s LAN tablet at 8:41 pm. A new order from PC 07 has just chimed and is held with a “NEW” badge; she has just moved PC 12 to Preparing, so Undo is showing.</p>
+  <p>Sunita’s LAN tablet. Top: 8:41 pm, connected. A new order from PC 07 has just chimed and is held with a “NEW” badge; she has just moved PC 12 to Preparing, so Undo is showing. The counter has cancelled PC 18’s order, so it is greyed “Cancelled” and about to leave the board. Bottom: 8:44 pm, the tablet has lost the LAN and the chime is muted.</p>
 </header>
-
-<div class="cap">LAN tablet · 1280 × 800 landscape · rendered 1:1</div>
-<div class="tablet"><div class="screen" role="main">
-  <div class="bar">
-    <span class="t">Kitchen</span><span class="m">Koregaon Park</span>
-    <div class="r">
-      <span class="m num">8:41 pm</span>
-    </div>
-  </div>
-
-  <div class="cols">
-    <!-- NEW -->
-    <section class="col" aria-labelledby="c-new">
-      <div class="col-h"><h2 id="c-new">New</h2><span class="c num">2</span></div>
-      <div class="stack" aria-live="polite">
-        <article class="tk new focus" aria-label="PC 07, new order">
-          <div class="h"><span class="seat num">PC 07</span><span class="alert-badge">New</span><span class="age num">0:42</span></div>
-          <ul>
-            <li><span class="q num">1×</span>Masala Maggi<span class="mod">Extra spicy</span></li>
-            <li><span class="q num">1×</span>Cold coffee<span class="mod">Less sugar</span></li>
-          </ul>
-          <div class="id"><span class="num">#K-2043</span><span>Aman</span></div>
-        </article>
-        <article class="tk new" aria-label="PC 15, new order">
-          <div class="h"><span class="seat num">PC 15</span><span class="alert-badge">New</span><span class="age num">2:18</span></div>
-          <ul>
-            <li><span class="q num">2×</span>Veg sandwich</li>
-          </ul>
-          <div class="id"><span class="num">#K-2042</span><span>Guest</span></div>
-        </article>
-      </div>
-    </section>
-
-    <!-- PREPARING -->
-    <section class="col" aria-labelledby="c-prep">
-      <div class="col-h"><h2 id="c-prep">Preparing</h2><span class="c num">2</span></div>
-      <div class="stack">
-        <article class="tk" aria-label="PC 12, preparing">
-          <div class="h"><span class="seat num">PC 12</span><span class="age num">4:10</span></div>
-          <ul>
-            <li><span class="q num">1×</span>Veg sandwich<span class="mod">No onion</span></li>
-            <li><span class="q num">2×</span>Cold coffee</li>
-          </ul>
-          <div class="id"><span class="num">#K-2041</span><span>Karan</span></div>
-        </article>
-        <article class="tk" aria-label="TV 3, preparing">
-          <div class="h"><span class="seat num">TV 3</span><span class="age num">7:55</span></div>
-          <ul>
-            <li><span class="q num">2×</span>Masala Maggi</li>
-          </ul>
-          <div class="id"><span class="num">#K-2039</span><span>Guest</span></div>
-        </article>
-      </div>
-    </section>
-
-    <!-- READY -->
-    <section class="col" aria-labelledby="c-ready">
-      <div class="col-h"><h2 id="c-ready">Ready</h2><span class="c num">1</span></div>
-      <div class="stack">
-        <article class="tk ready" aria-label="PC 03, ready">
-          <div class="h"><span class="seat num">PC 03</span><span class="tag-ready">READY</span><span class="age num">11:32</span></div>
-          <ul>
-            <li><span class="q num">1×</span>Cold coffee</li>
-            <li><span class="q num">1×</span>Veg sandwich</li>
-          </ul>
-          <div class="id"><span class="num">#K-2037</span><span>Guest</span></div>
-        </article>
-      </div>
-    </section>
-
-    <!-- SERVED -->
-    <section class="col" aria-labelledby="c-served">
-      <div class="col-h"><h2 id="c-served">Served</h2><span class="c num">2</span></div>
-      <div class="stack">
-        <article class="tk served" aria-label="PC 09, served">
-          <div class="h"><span class="seat num">PC 09</span><span class="age num">18:04</span></div>
-          <ul><li><span class="q num">1×</span>Masala Maggi</li></ul>
-          <div class="id"><span class="num">#K-2035</span><span>Guest</span></div>
-        </article>
-        <article class="tk served" aria-label="PC 21, served">
-          <div class="h"><span class="seat num">PC 21</span><span class="age num">24:40</span></div>
-          <ul><li><span class="q num">3×</span>Cold coffee</li></ul>
-          <div class="id"><span class="num">#K-2033</span><span>Guest</span></div>
-        </article>
-      </div>
-    </section>
-  </div>
-
-  <div class="undo" role="status">
-    <span><b class="num">PC 12</b> · <span class="num">#K-2041</span> moved to Preparing</span>
-    <span class="tm num">8 s</span>
-    <a href="#">Undo</a>
-  </div>
-</div></div>
-<div style="max-width:1300px;margin:0 auto"><span class="open">[open] The Kitchen top bar’s contents beyond branch and clock, and the LAN-loss state, are not designed.</span></div>
-
+<div class="cap">Connected · LAN tablet · 1280 × 800 landscape · rendered 1:1</div>
+<div class="tablet"><div class="screen" role="main"><div class="bar"><span class="t">Koregaon Park</span><span class="clk num">8:41 pm</span><span class="oc num">5 open · oldest 9 min</span><div class="r"><span class="sbadge sb-ok" role="status"><i aria-hidden="true"></i>Connected</span><button class="mute" aria-pressed="false" aria-label="Mute chime"><span class="bell" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span></button></div></div><div class="cols"><section class="col" aria-labelledby="a-new"><div class="col-h"><h2 id="a-new">New</h2><span class="c num">2</span></div><div class="stack" aria-live="polite"><article class="tk new focus" aria-label="PC 07, new order"><div class="h"><span class="seat num">PC 07</span><span class="alert-badge">New</span><span class="age num">0:42</span></div><ul><li><span class="q num">1×</span>Masala Maggi<span class="mod">Extra spicy</span></li><li><span class="q num">1×</span>Cold coffee<span class="mod">Less sugar</span></li></ul><div class="id"><span class="qi"><span class="num">#K-2043</span></span><span>Aman</span></div></article><article class="tk new" aria-label="PC 15, new order"><div class="h"><span class="seat num">PC 15</span><span class="alert-badge">New</span><span class="age num">2:18</span></div><ul><li><span class="q num">2×</span>Veg sandwich</li></ul><div class="id"><span class="qi"><span class="num">#K-2042</span></span><span>Guest</span></div></article></div></section><section class="col" aria-labelledby="a-prep"><div class="col-h"><h2 id="a-prep">Preparing</h2><span class="c num">2</span></div><div class="stack"><article class="tk " aria-label="PC 12"><div class="h"><span class="seat num">PC 12</span><span class="age num">4:10</span></div><ul><li><span class="q num">1×</span>Veg sandwich<span class="mod">No onion</span></li><li><span class="q num">2×</span>Cold coffee</li></ul><div class="id"><span class="qi"><span class="num">#K-2041</span></span><span>Karan</span></div></article><article class="tk " aria-label="TV 3"><div class="h"><span class="seat num">TV 3</span><span class="age num">7:55</span></div><ul><li><span class="q num">2×</span>Masala Maggi</li></ul><div class="id"><span class="qi"><span class="num">#K-2039</span></span><span>Guest</span></div></article><article class="tk cancelled" aria-label="PC 18, cancelled at the counter"><div class="h"><span class="seat num">PC 18</span><span class="sbadge sb-muted">Cancelled</span><span class="age num">6:02</span></div><ul><li><span class="q num">1×</span>French fries</li><li><span class="q num">1×</span>Coke 300 ml</li></ul><div class="id"><span class="qi"><span class="num">#K-2040</span></span><span>Guest 16</span></div></article></div></section><section class="col" aria-labelledby="a-ready"><div class="col-h"><h2 id="a-ready">Ready</h2><span class="c num">1</span></div><div class="stack"><article class="tk ready" aria-label="PC 03, ready"><div class="h"><span class="seat num">PC 03</span><span class="tag-ready">READY</span><span class="age num">9:12</span></div><ul><li><span class="q num">1×</span>Cold coffee</li><li><span class="q num">1×</span>Veg sandwich</li></ul><div class="id"><span class="qi"><span class="num">#K-2037</span></span><span>Guest</span></div></article></div></section><section class="col" aria-labelledby="a-served"><div class="col-h"><h2 id="a-served">Served</h2><span class="c num">2</span></div><div class="stack"><article class="tk served" aria-label="PC 09"><div class="h"><span class="seat num">PC 09</span><span class="age num">18:04</span></div><ul><li><span class="q num">1×</span>Masala Maggi</li></ul><div class="id"><span class="qi"><span class="num">#K-2035</span></span><span>Guest</span></div></article><article class="tk served" aria-label="PC 21"><div class="h"><span class="seat num">PC 21</span><span class="age num">24:40</span></div><ul><li><span class="q num">3×</span>Cold coffee</li></ul><div class="id"><span class="qi"><span class="num">#K-2033</span></span><span>Guest</span></div></article></div></section></div><div class="undo" role="status"><span><b class="num">PC 12</b> · <span class="num">#K-2041</span> moved to Preparing</span><span class="tm num">8 s</span><a href="#">Undo</a></div></div></div>
+<div class="cap" style="margin-top:56px">LAN loss · tickets stay and can still be advanced · 8:44 pm</div>
+<div class="tablet"><div class="screen" role="main"><div class="bar"><span class="t">Koregaon Park</span><span class="clk num">8:44 pm</span><span class="oc num">5 open · oldest 12 min</span><div class="r"><span class="sbadge sb-warn" role="status"><i aria-hidden="true"></i>Reconnecting</span><button class="mute off" aria-pressed="true" aria-label="Chime off, tap to turn on"><span class="bell" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>Chime off</button></div></div><div class="cols"><section class="col" aria-labelledby="b-new"><div class="col-h"><h2 id="b-new">New</h2><span class="c num">1</span></div><div class="stack" aria-live="polite"><article class="tk new" aria-label="PC 15, new order"><div class="h"><span class="seat num">PC 15</span><span class="alert-badge">New</span><span class="age num">5:18</span></div><ul><li><span class="q num">2×</span>Veg sandwich</li></ul><div class="id"><span class="qi"><span class="num">#K-2042</span></span><span>Guest</span></div></article></div></section><section class="col" aria-labelledby="b-prep"><div class="col-h"><h2 id="b-prep">Preparing</h2><span class="c num">2</span></div><div class="stack"><article class="tk " aria-label="PC 07, preparing"><div class="h"><span class="seat num">PC 07</span><span class="age num">3:42</span></div><ul><li><span class="q num">1×</span>Masala Maggi<span class="mod">Extra spicy</span></li><li><span class="q num">1×</span>Cold coffee<span class="mod">Less sugar</span></li></ul><div class="id"><span class="qi"><span class="num">#K-2043</span></span><span>Aman</span></div></article><article class="tk " aria-label="TV 3"><div class="h"><span class="seat num">TV 3</span><span class="age num">10:55</span></div><ul><li><span class="q num">2×</span>Masala Maggi</li></ul><div class="id"><span class="qi"><span class="num">#K-2039</span></span><span>Guest</span></div></article></div></section><section class="col" aria-labelledby="b-ready"><div class="col-h"><h2 id="b-ready">Ready</h2><span class="c num">2</span></div><div class="stack"><article class="tk ready" aria-label="PC 12, ready"><div class="h"><span class="seat num">PC 12</span><span class="tag-ready">READY</span><span class="age num">7:10</span></div><ul><li><span class="q num">1×</span>Veg sandwich<span class="mod">No onion</span></li><li><span class="q num">2×</span>Cold coffee</li></ul><div class="id"><span class="qi"><span class="num">#K-2041</span></span><span>Karan</span></div></article><article class="tk ready" aria-label="PC 03, ready"><div class="h"><span class="seat num">PC 03</span><span class="tag-ready">READY</span><span class="age num">12:12</span></div><ul><li><span class="q num">1×</span>Cold coffee</li><li><span class="q num">1×</span>Veg sandwich</li></ul><div class="id"><span class="qi"><span class="num">#K-2037</span></span><span>Guest</span></div></article></div></section><section class="col" aria-labelledby="b-served"><div class="col-h"><h2 id="b-served">Served</h2><span class="c num">2</span></div><div class="stack"><article class="tk served" aria-label="PC 09"><div class="h"><span class="seat num">PC 09</span><span class="age num">21:04</span></div><ul><li><span class="q num">1×</span>Masala Maggi</li></ul><div class="id"><span class="qi"><span class="num">#K-2035</span></span><span>Guest</span></div></article><article class="tk served" aria-label="PC 21"><div class="h"><span class="seat num">PC 21</span><span class="age num">27:40</span></div><ul><li><span class="q num">3×</span>Cold coffee</li></ul><div class="id"><span class="qi"><span class="num">#K-2033</span></span><span>Guest</span></div></article></div></section></div></div></div>
 <div class="ann">
-  <div><b>New-order chime + persistent badge</b>Each new order chimes once. The red “NEW” alert-badge and red ticket edge stay until Sunita advances the ticket, so a missed chime is never a missed order. New tickets are announced in a polite live region.</div>
+  <div><b>Top bar</b>Branch · clock · “5 open · oldest 9 min” (New + Preparing + Ready; a cancelled ticket is not counted) · LAN status (CONNECTED in ok, RECONNECTING in warning) · 44px mute-chime toggle. Muted shows a struck-through bell and “Chime off”; the “NEW” badge and danger edge still show on new tickets.</div>
   <div><b>One tap advances, Undo for 5–10 s</b>Tapping a ticket moves it one stage (New → Preparing → Ready → Served). The undo-toast sits at the bottom of the screen; a new advance replaces it and commits the previous one. Focus ring shown on PC 07. Airy rhythm: gutter and column gap 24, ticket padding and gap 16, header 64. Each column scrolls on its own, newest on top.</div>
-  <div><b>Ready / Served</b>Ready gains a free-green edge + “READY” tag (colour + text). Served stays readable in muted ink. Cancel after Preparing needs a reason and lands in the waste report.<span class="open">[open] Where the cancel control sits on a ticket is not designed.</span></div>
+  <div><b>Cancelled (from the Hub only)</b>Tickets have no cancel control. When the counter cancels (after preparing, with a reason that lands in the waste report), the ticket’s ink drops to muted, a “CANCELLED” status-badge replaces the stage tag, then it leaves the board.</div>
+</div>
+<div class="ann two" style="margin-top:24px">
+  <div><b>LAN loss</b>Tickets stay visible and Sunita can keep advancing them: PC 07 → Preparing and PC 12 → Ready simply move to their new column and sync on reconnect. There is no per-ticket marker: RECONNECTING in the top bar is the only offline signal; new orders can’t arrive until the LAN is back.</div>
+  <div><b>Ready / Served</b>Ready gains a free-green edge + “READY” tag (colour + text). Served stays readable in muted ink. Each new order chimes once and is announced in a polite live region; the NEW badge is the persistent visual twin of the chime.</div>
 </div>
 </body>
 </html>

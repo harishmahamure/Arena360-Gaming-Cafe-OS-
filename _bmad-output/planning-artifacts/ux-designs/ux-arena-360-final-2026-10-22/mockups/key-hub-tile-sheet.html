@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hub Tile Sheet</title>
+<style>
+/* GOVERNED BY (spine is the contract; this mock only illustrates):
+   EXPERIENCE.md: Component Patterns rows tile-sheet, inline-pin, bill-breakdown, undo-toast, chip-rule;
+     Interaction Primitives (no modal blocks a sale; money actions one tap + Undo; manager PIN inline);
+     State Patterns 'Credit block'; Journey 2 steps 5-6, Journey 7 steps 3-4.
+   DESIGN.md: Layout & Spacing (Hub desktop: sheets use hub-panel-padding), Components tile-sheet (sectionGap 24),
+     inline-pin, bill-breakdown (padding 24, rowGap 12), undo-toast, button-secondary, focus-ring.
+   Tokens: DESIGN.md frontmatter — colours (Cinema Electric, hub/staff mood) and the AIRY Hub spacing set
+   (hub-gutter 32 · hub-section-gap 40 · hub-panel-padding 24 · hub-tile-padding 16 · hub-header-height 72 ·
+   hub-rail-width 88 · floor-grid-gap 24 · phone: hub-gutter-phone 16 · floor-grid-gap-phone 12 · bottom bar 64).
+   Rendered at true 1:1 on a scrollable canvas (no scaling). Font: Sora stack, no network. No JS. */
+:root{
+  /* colours — DESIGN.md frontmatter (Cinema Electric, hub/staff mood) */
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--text-muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;
+  --ok:#5FE6A0;--warning:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --ring-in:#FF4FA8;--ring-out:#F5F2FF;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;
+  --st-free:#5FE6A0;--st-session:#7FB2FF;--st-paused:#5C82BD;--st-reserved:#C8A2FF;--st-order:#FFBE3D;
+  --st-maint:#8A85A8;--st-offline:#FF5C5C;--st-unassigned:#ACA5CC;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --r-xs:6px;--r-sm:10px;--r-md:16px;--r-lg:20px;--r-xl:24px;--r-full:9999px;
+  /* spacing scale {spacing.1}…{spacing.12} */
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:40px;--s8:56px;--s9:64px;--s10:80px;--s11:96px;--s12:128px;
+  --touch:44px;
+  /* Hub spacing tokens (airy console-dashboard) */
+  --hub-gutter:32px;--hub-gutter-phone:16px;--hub-section-gap:40px;--hub-panel-padding:24px;
+  --hub-tile-padding:16px;--hub-header-height:72px;--hub-rail-width:88px;
+  --floor-grid-gap:24px;--floor-grid-gap-phone:12px;
+  --font:"Sora","Segoe UI","Roboto",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:#05040f}
+/* True 1:1 canvas: the page is as wide as its frames and scrolls; nothing is scaled down. */
+body{background:#05040f;color:var(--text);font-family:var(--font);font-size:15px;line-height:1.45;padding:var(--s6);width:max-content;min-width:100%}
+.tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mock-cap{width:1920px;margin:0 0 var(--s5);color:var(--text-muted);font-size:14px;display:flex;flex-direction:column;gap:var(--s2)}
+.mock-cap h1{color:var(--text);font-size:20px;font-weight:600}
+.mock-cap .tags{display:flex;flex-wrap:wrap;gap:var(--s2)}
+.open,.assume{display:inline-block;border:1px dashed var(--warning);color:var(--warning);background:#1E1606;border-radius:var(--r-xs);padding:2px 8px;font-size:12px;font-weight:700;letter-spacing:.02em}
+.assume{border-color:var(--info);color:var(--info);background:#0E1730}
+.resolved{display:inline-block;border:1px solid var(--ok);color:var(--ok);border-radius:var(--r-xs);padding:2px 8px;font-size:12px;font-weight:700;letter-spacing:.02em}
+/* desktop frame 1920×1080 */
+.frame{width:1920px;height:1080px;flex:none;position:relative;overflow:hidden;background:var(--hub-bg);border:1px solid var(--hub-line);border-radius:8px;display:grid;grid-template-columns:var(--hub-rail-width) 1fr;grid-template-rows:var(--hub-header-height) minmax(0,1fr)}
+.focus{outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+/* hub-rail */
+.rail{grid-row:1/3;background:var(--hub-bg);border-right:1px solid var(--hub-line);display:flex;flex-direction:column;align-items:center;gap:var(--s2);padding:var(--s4) var(--s2)}
+.rail .mark{width:44px;height:44px;border-radius:50%;border:2px solid var(--text);display:grid;place-items:center;font-weight:300;font-size:18px;margin-bottom:var(--s4);flex:none}
+.rail a{width:72px;min-height:64px;border-radius:var(--r-sm);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s1);color:var(--text-muted);text-decoration:none}
+.rail a b{font-size:20px;line-height:1;font-weight:400}
+.rail a span{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.rail a.on{background:var(--hub-line);color:var(--text)}
+.rail .sp{flex:1}
+/* hub-header: height 72, padding 0 32, item gap 24 */
+.hdr{background:var(--hub-header);border-bottom:1px solid var(--hub-line);display:flex;align-items:center;gap:var(--s5);padding:0 var(--hub-gutter);min-width:0}
+.hdr .branch{font-size:18px;font-weight:600;white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:var(--s2);min-height:32px;padding:6px 14px;border-radius:var(--r-full);font-size:13px;font-weight:700;white-space:nowrap}
+.chip-rule{background:var(--chip-rule-bg);color:var(--chip-rule-text)}
+.chip-off{background:var(--chip-off-bg);color:var(--chip-off-text)}
+.chip-off i{width:8px;height:8px;border-radius:50%;background:var(--chip-off-text)}
+.backup{font-size:13px;font-weight:500;color:var(--text-muted);background:none;border:0;font-family:inherit;min-height:44px;padding:0;text-decoration:underline;text-underline-offset:3px;white-space:nowrap}
+.grow{flex:1}
+.hdr-alert{display:inline-flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s4) 0 var(--s3);border-radius:var(--r-full);background:var(--hub-tile);border:1px solid var(--border-strong);color:var(--text);font:inherit;font-size:13px;font-weight:500;white-space:nowrap}
+.abadge{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;border-radius:var(--r-full);background:var(--danger);color:var(--on-danger);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.clock{font-size:13px;color:var(--text-muted);white-space:nowrap}
+.staff{display:inline-flex;align-items:center;gap:var(--s2);font-size:13px;font-weight:500;white-space:nowrap}
+.staff .av{width:36px;height:36px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);display:grid;place-items:center;font-weight:700}
+/* main area: gutter 32 */
+.main{padding:var(--hub-gutter);overflow-y:auto;overflow-x:hidden;position:relative;min-height:0}
+/* zones: 40 apart; header row 16 above grid */
+.zone+.zone{margin-top:var(--hub-section-gap)}
+.zh{display:flex;align-items:center;gap:var(--s4);min-height:44px;margin-bottom:var(--s4)}
+.zh h2{font-size:18px;font-weight:600;white-space:nowrap}
+.zh .meta{font-size:13px;font-weight:500;color:var(--text-muted);white-space:nowrap}
+.zh .count{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);white-space:nowrap}
+.zh .grow{flex:1;height:1px;background:var(--hub-line)}
+.collapse{width:44px;height:44px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font:inherit;font-size:16px;display:grid;place-items:center;flex:none}
+.zone.collapsed{background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--s4) var(--s5)}
+.zone.collapsed .zh{margin:0}
+.zsum{display:flex;gap:var(--s4);align-items:center;flex-wrap:wrap}
+.zsum span{font-size:13px;font-weight:500;color:var(--text-muted);white-space:nowrap}
+.zsum i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px;vertical-align:1px}
+.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:var(--floor-grid-gap)}
+/* floor-tile: min-height 128, padding 16, 3px state bar */
+.tile{position:relative;min-height:var(--s12);background:var(--hub-tile);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--hub-tile-padding);display:flex;flex-direction:column;gap:var(--s3);overflow:hidden;color:var(--text);min-width:0}
+.tile::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--c,transparent)}
+.tile .r1{display:flex;align-items:center;gap:var(--s2);min-height:24px}
+.tile .nm{font-size:18px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .glyph{color:var(--text-muted);font-size:16px}
+.corner{margin-left:auto;display:flex;align-items:center;gap:var(--s1);flex:none}
+.tile .r2{display:flex;align-items:baseline;gap:var(--s2)}
+.tile .big{font-size:26px;font-weight:800;line-height:1.1;white-space:nowrap}
+.tile .unit{font-size:13px;font-weight:500;color:var(--text-muted)}
+.tile .r3{display:flex;flex-direction:column;gap:var(--s1);margin-top:auto}
+.tile .r3a{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.tile .who{font-size:13px;font-weight:500;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .sub{font-size:13px;font-weight:500;color:var(--text-muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:var(--r-xs);border:1px solid currentColor;color:var(--c);background:var(--hub-tile);white-space:nowrap;line-height:1.3;flex:none}
+.obadge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:3px 6px;border-radius:var(--r-xs);background:var(--st-order);color:var(--hub-tile);white-space:nowrap;line-height:1.2}
+.s-free{--c:var(--st-free)}.s-sess{--c:var(--st-session)}.s-paused{--c:var(--st-paused)}.s-res{--c:var(--st-reserved)}
+.s-maint{--c:var(--st-maint)}.s-off{--c:var(--st-offline)}
+.s-un{--c:var(--st-unassigned);border:2px dashed var(--st-unassigned)}
+.s-un::after{display:none}
+.s-paused .big{color:var(--st-paused)}
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);min-height:44px;padding:0 var(--s5);border-radius:var(--r-full);font:inherit;font-size:15px;font-weight:700;white-space:nowrap;cursor:pointer}
+.btn-p{background:var(--accent);color:var(--on-accent);border:0;font-weight:800}
+.btn-s{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong)}
+.btn-p[disabled]{background:var(--surface-2);color:var(--text-muted);border:1px dashed var(--border-strong)}
+.btn-s.sel{background:var(--text);color:var(--bg);border-color:var(--text)}
+.btn-s[disabled]{color:var(--text-muted);border-style:dashed}
+/* fields */
+.field{display:flex;flex-direction:column;gap:var(--s2);min-width:0}
+.field label,.field .fl{font-size:13px;font-weight:500;color:var(--text-muted)}
+.input{min-height:44px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:0 var(--s3);display:flex;align-items:center;font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden}
+.input.ph{color:var(--text-muted)}
+.input.focused{border:2px solid var(--accent);outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+.input.err{border:2px solid var(--danger)}
+.ferr{font-size:13px;font-weight:600;color:var(--danger)}
+/* inline-pin */
+.pin{display:flex;gap:var(--s2)}
+.pin span{width:44px;height:48px;border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--border-strong);display:grid;place-items:center}
+.pin span.f::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--text)}
+.pin span.cur{outline:2px solid var(--ring-in);outline-offset:2px;box-shadow:0 0 0 6px var(--ring-out)}
+/* undo-toast: padding 16 24 */
+.undo{display:flex;align-items:center;gap:var(--s5);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:var(--r-md);padding:var(--s2) var(--s2) var(--s2) var(--s5);min-height:60px;font-size:15px;min-width:560px}
+.undo .msg{flex:1;white-space:nowrap}
+.undo .left{color:var(--text-muted);font-size:13px;white-space:nowrap}
+.undo .act{min-height:44px;padding:0 var(--s4);border-radius:var(--r-sm);background:none;border:0;color:var(--accent);font:inherit;font-weight:800;font-size:15px;text-decoration:underline;text-underline-offset:3px}
+/* bill-breakdown: padding 24, row gap 12 */
+.bill{background:var(--hub-tile);border:1px solid var(--hub-line);border-radius:var(--r-md);padding:var(--hub-panel-padding);display:flex;flex-direction:column;gap:var(--s3)}
+.bill .ln{display:flex;justify-content:space-between;gap:var(--s4);font-size:15px}
+.bill .ln span:last-child{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.bill .ln.m{color:var(--text-muted);font-size:13px}
+.bill .tot{border-top:1px solid var(--border-strong);padding-top:var(--s4);margin-top:var(--s1);display:flex;justify-content:space-between;align-items:baseline;gap:var(--s4)}
+.bill .tot b{font-size:26px;font-weight:800;line-height:1.1}
+.h3{font-size:18px;font-weight:600;line-height:1.3}
+.lbl{font-size:13px;font-weight:500;color:var(--text-muted)}
+.micro{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+.close{width:44px;height:44px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-size:16px;flex:none}
+/* alternate-state strip under a frame */
+.alt{margin-top:var(--s7);width:1920px;display:flex;gap:var(--hub-section-gap);align-items:flex-start}
+.altcard{background:var(--surface);border:1px solid var(--hub-line);border-radius:var(--r-xl);padding:var(--hub-panel-padding);flex:1;display:flex;flex-direction:column;gap:var(--s4);min-width:0}
+
+.main.withsheet{padding-right:calc(600px + var(--hub-gutter) * 2)}
+.sel-tile{border:2px solid var(--text)}
+.sheet{position:absolute;top:calc(var(--hub-header-height) + var(--hub-gutter));right:var(--hub-gutter);bottom:var(--hub-gutter);width:600px;background:var(--surface);border:1px solid var(--hub-line);border-radius:var(--r-xl);padding:var(--hub-panel-padding);display:flex;flex-direction:column;gap:var(--s5);overflow-y:auto;z-index:4}
+.sheet .hd{display:flex;align-items:flex-start;gap:var(--s4)}
+.sheet .hd .t{flex:1;display:flex;flex-direction:column;gap:var(--s2)}
+.sheet .hd .h3{display:flex;gap:var(--s3);align-items:center}
+.sheet .meta{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);align-items:center}
+.acts{display:flex;flex-direction:column;gap:var(--s4)}
+.acts .grp{display:flex;gap:var(--s2);flex-wrap:wrap}
+.acts .grp.danger{padding-top:var(--s4);border-top:1px solid var(--hub-line)}
+.pinbox{border:2px solid var(--warning);border-radius:var(--r-md);padding:var(--hub-panel-padding);background:var(--hub-tile);display:flex;flex-direction:column;gap:var(--s3)}
+.pinbox .why{color:var(--warning);font-weight:600}
+.pinbox .row{display:flex;align-items:flex-end;gap:var(--s4);margin-top:var(--s1)}
+.sec{display:flex;flex-direction:column;gap:var(--s3)}
+.undo.float{position:absolute;bottom:var(--hub-gutter);left:calc(var(--hub-rail-width) + (1920px - var(--hub-rail-width) - 600px - var(--hub-gutter)) / 2);transform:translateX(-50%);z-index:5}
+
+</style></head><body>
+<div class="mock-cap "><h1>Hub · Tile sheet open + Undo toast — Windows 1920×1080 (1:1)</h1><div>Rohit just ended PC-12 (Undo toast, bottom-centre of the floor) and opened Karan's PC-06. Extend hits the credit limit, so the manager PIN renders inline in the sheet — the floor stays live and tappable (four columns while the sheet is docked). Sheet padding 24, sections 24 apart; Lock and End sit in their own group below a divider.</div><div class="tags"><span class="open">[open: sheet placement — right-docked shown; spine only says non-modal sheet]</span><span class="open">[open: whether kiosk cleanup waits for the Undo window]</span><span class="resolved">Receipt prints at once only if a printer is available (End itself prints nothing)</span></div></div><div class="frame"><nav class="rail" aria-label="Hub"><span class="mark" aria-label="Arena 360">A</span><a href="#" class="on" aria-current="page"><b aria-hidden="true">▦</b><span>Floor</span></a><a href="#"><b aria-hidden="true">₹</b><span>POS</span></a><a href="#"><b aria-hidden="true">☺</b><span>Players</span></a><a href="#"><b aria-hidden="true">◷</b><span>Sessions</span></a><a href="#"><b aria-hidden="true">▤</b><span>Inventory</span></a><a href="#"><b aria-hidden="true">⇄</b><span>Shift</span></a><a href="#"><b aria-hidden="true">▥</b><span>Reports</span></a><a href="#"><b aria-hidden="true">⚙</b><span>Settings</span></a><span class="sp"></span><a href="#"><b aria-hidden="true">⛁</b><span>System</span></a></nav><header class="hdr">
+  <span class="branch">Arena 360 · Koramangala</span>
+  <span class="chip chip-rule">⚡ Happy hour −20% · until 6:00 pm</span>
+  <span class="chip chip-off" role="status"><i aria-hidden="true"></i>Internet offline · working locally</span>
+  <button class="backup tnum" title="Opens System">Backup: last upload 4:58 pm · 3 batches pending</button>
+  <span class="grow"></span>
+  <button class="hdr-alert" aria-label="3 alerts"><span class="abadge tnum">3</span>Alerts</button>
+  <span class="clock tnum">Thu 23 Oct · 5:41 pm</span>
+  <span class="staff"><span class="av">R</span>Rohit · Counter</span>
+</header><main class="main withsheet" aria-label="Floor view"><section class="zone"><div class="zh"><h2>Zone A · Pro</h2><span class="meta">RTX 4070 · 240 Hz · ₹100/hr</span><span class="count tnum">6 devices</span><span class="grow" aria-hidden="true"></span><button class="collapse" aria-expanded="true" aria-label="Collapse Zone A · Pro">⌃</button></div><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="nm">PC-01</span><span class="corner"><span class="obadge">ORDER</span><span class="abadge">NEW</span></span></div><div class="r2"><span class="big tnum">1h 12m</span><span class="unit">left</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Aman</span></div><span class="sub">Prepaid pack</span></div></div><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="nm">PC-02</span></div><div class="r2"><span class="big tnum">2h 05m</span><span class="unit">elapsed</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Guest 14</span></div><span class="sub">Postpaid</span></div></div><div class="tile s-free " tabindex="0" role="button"><div class="r1"><span class="nm">PC-03</span></div><div class="r2"><span class="big tnum">Free</span></div><div class="r3"><div class="r3a"><span class="sb">Free</span></div><span class="sub">₹100/hr · tap to start</span></div></div><div class="tile s-paused " tabindex="0" role="button"><div class="r1"><span class="nm">PC-04</span></div><div class="r2"><span class="big tnum">38m</span><span class="unit">left</span></div><div class="r3"><div class="r3a"><span class="sb"><span aria-hidden="true">❚❚ </span>Paused</span><span class="who">Sneha</span></div><span class="sub">Player stepped away</span></div></div><div class="tile s-res " tabindex="0" role="button"><div class="r1"><span class="nm">PC-05</span></div><div class="r2"><span class="big tnum">6:30 pm</span></div><div class="r3"><div class="r3a"><span class="sb">Reserved</span><span class="who">Team Phoenix</span></div><span class="sub">Reserved · 5 PCs</span></div></div><div class="tile s-sess  sel-tile" tabindex="0" role="button"><div class="r1"><span class="nm">PC-06</span><span class="corner"><span class="obadge">READY</span></span></div><div class="r2"><span class="big tnum">52m</span><span class="unit">elapsed</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Karan</span></div><span class="sub">Credit</span></div></div></div></section><section class="zone collapsed"><div class="zh"><h2>Zone C · Lounge</h2><span class="meta">RTX 3060 · ₹70/hr</span><span class="count tnum">8 devices</span><span class="zsum"><span style="--c:var(--st-session)"><i></i>5 in session</span><span style="--c:var(--st-free)"><i></i>2 free</span><span style="--c:var(--st-order)"><i></i>1 order</span></span><span style="flex:1"></span><span class="abadge tnum" aria-label="1 alert in zone">1</span><button class="collapse" aria-expanded="false" aria-label="Expand Zone C · Lounge">⌄</button></div></section><section class="zone"><div class="zh"><h2>Zone B · Standard</h2><span class="meta">GTX 1660 · 144 Hz · ₹80/hr</span><span class="count tnum">12 devices</span><span class="grow" aria-hidden="true"></span><button class="collapse" aria-expanded="true" aria-label="Collapse Zone B · Standard">⌃</button></div><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="tile s-free " tabindex="0" role="button"><div class="r1"><span class="nm">PC-07</span></div><div class="r2"><span class="big tnum">Free</span></div><div class="r3"><div class="r3a"><span class="sb">Free</span></div><span class="sub">₹80/hr · tap to start</span></div></div><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="nm">PC-08</span><span class="corner"><span class="abadge">CALL</span></span></div><div class="r2"><span class="big tnum">24m</span><span class="unit">left</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Vivek</span></div><span class="sub">Prepaid wallet</span></div></div><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="nm">PC-09</span></div><div class="r2"><span class="big tnum">1h 40m</span><span class="unit">elapsed</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Guest 15</span></div><span class="sub">Postpaid</span></div></div><div class="tile s-maint " tabindex="0" role="button"><div class="r1"><span class="nm">PC-10</span></div><div class="r2"><span class="big tnum">Maintenance</span></div><div class="r3"><div class="r3a"><span class="sb">Maintenance</span></div><span class="sub">Headset swap</span></div></div><div class="tile s-off " tabindex="0" role="button"><div class="r1"><span class="nm">PC-11</span></div><div class="r2"><span class="big tnum">Offline</span></div><div class="r3"><div class="r3a"><span class="sb">Offline</span></div><span class="sub">Last seen 4:02 pm</span></div></div><div class="tile s-free " tabindex="0" role="button"><div class="r1"><span class="nm">PC-12</span></div><div class="r2"><span class="big tnum">Free</span></div><div class="r3"><div class="r3a"><span class="sb">Free</span></div><span class="sub">₹80/hr · tap to start</span></div></div><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="nm">PC-13</span></div><div class="r2"><span class="big tnum">6m</span><span class="unit">left</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Ishaan</span></div><span class="sub">Prepaid pack</span></div></div><div class="tile s-free " tabindex="0" role="button"><div class="r1"><span class="nm">PC-14</span></div><div class="r2"><span class="big tnum">Free</span></div><div class="r3"><div class="r3a"><span class="sb">Free</span></div><span class="sub">₹80/hr · tap to start</span></div></div><div class="tile s-res " tabindex="0" role="button"><div class="r1"><span class="nm">PC-15</span></div><div class="r2"><span class="big tnum">7:00 pm</span></div><div class="r3"><div class="r3a"><span class="sb">Reserved</span><span class="who">Meera</span></div><span class="sub">Reserved · 1 PC</span></div></div><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="nm">PC-16</span></div><div class="r2"><span class="big tnum">3h 10m</span><span class="unit">left</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Rahul</span></div><span class="sub">Prepaid pack</span></div></div><div class="tile s-free " tabindex="0" role="button"><div class="r1"><span class="nm">PC-17</span></div><div class="r2"><span class="big tnum">Free</span></div><div class="r3"><div class="r3a"><span class="sb">Free</span></div><span class="sub">₹80/hr · tap to start</span></div></div><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="nm">PC-18</span></div><div class="r2"><span class="big tnum">18m</span><span class="unit">elapsed</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Guest 16</span></div><span class="sub">Postpaid</span></div></div></div></section><section class="zone"><div class="zh"><h2>Consoles</h2><span class="meta">PS5 / Xbox · ₹120/hr · timed from Hub</span><span class="count tnum">4 devices</span><span class="grow" aria-hidden="true"></span><button class="collapse" aria-expanded="true" aria-label="Collapse Consoles">⌃</button></div><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="glyph" aria-hidden="true">🎮</span><span class="nm">PS5 · TV 1</span></div><div class="r2"><span class="big tnum">35m</span><span class="unit">left</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Aditya +1</span></div><span class="sub">Postpaid</span></div></div><div class="tile s-free " tabindex="0" role="button"><div class="r1"><span class="glyph" aria-hidden="true">🎮</span><span class="nm">PS5 · TV 2</span></div><div class="r2"><span class="big tnum">Free</span></div><div class="r3"><div class="r3a"><span class="sb">Free</span></div><span class="sub">₹120/hr · tap to start</span></div></div><div class="tile s-sess " tabindex="0" role="button"><div class="r1"><span class="glyph" aria-hidden="true">🎮</span><span class="nm">PS5 · TV 3</span><span class="corner"><span class="abadge">TIME UP</span></span></div><div class="r2"><span class="big tnum">0m</span><span class="unit">left</span></div><div class="r3"><div class="r3a"><span class="sb">In session</span><span class="who">Guest 12</span></div><span class="sub">Time's up</span></div></div><div class="tile s-maint " tabindex="0" role="button"><div class="r1"><span class="glyph" aria-hidden="true">🎮</span><span class="nm">Xbox · TV 4</span></div><div class="r2"><span class="big tnum">Maintenance</span></div><div class="r3"><div class="r3a"><span class="sb">Maintenance</span></div><span class="sub">Controller charging</span></div></div></div></section><section class="zone"><div class="zh"><h2>Unassigned</h2><span class="meta">New devices before grouping</span><span class="count tnum">2 devices</span><span class="grow" aria-hidden="true"></span><button class="collapse" aria-expanded="true" aria-label="Collapse Unassigned">⌃</button></div><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="tile s-un " tabindex="0" role="button"><div class="r1"><span class="nm">DESKTOP-7K2Q</span></div><div class="r2"><span class="big tnum">—</span></div><div class="r3"><div class="r3a"><span class="sb">Unassigned</span></div><span class="sub">New device · assign to group</span></div></div><div class="tile s-un " tabindex="0" role="button"><div class="r1"><span class="nm">DESKTOP-9F1M</span></div><div class="r2"><span class="big tnum">—</span></div><div class="r3"><div class="r3a"><span class="sb">Unassigned</span></div><span class="sub">New device · assign to group</span></div></div></div></section></main><aside class="sheet" aria-label="PC-06 sheet" role="region">
+  <div class="hd"><div class="t">
+    <div class="h3">PC-06 · Karan <span class="sb" style="--c:var(--st-session)">In session</span></div>
+    <div class="meta lbl"><span>Zone A · Pro · ₹100/hr · Credit player · started 4:49 pm</span><span class="chip chip-rule" style="min-height:24px;padding:2px 10px;font-size:12px">⚡ Happy hour −20%</span></div>
+  </div><button class="close" aria-label="Close sheet (Esc)">✕</button></div>
+  <div class="acts">
+    <div class="grp"><button class="btn btn-s sel">Extend</button><button class="btn btn-s">Order</button><button class="btn btn-s">Transfer</button><button class="btn btn-s">Pause</button></div>
+    <div class="grp danger"><button class="btn btn-s">Lock</button><button class="btn btn-s">End</button></div>
+  </div>
+  <div class="pinbox" role="group" aria-labelledby="pinwhy">
+    <div id="pinwhy" class="why">⚠ Credit limit reached. Outstanding <span class="tnum">₹960</span> of <span class="tnum">₹1,000</span>.</div>
+    <div class="lbl">Extend 1 hr · <span class="tnum">₹80</span> needs a manager override (once per player per day).</div>
+    <div class="row"><div class="field"><label for="p">Manager PIN</label>
+      <div class="pin" id="p"><span class="f"></span><span class="f"></span><span class="cur"></span><span></span></div></div>
+      <span class="lbl" style="padding-bottom:14px">Neha · Manager</span></div>
+  </div>
+  <div class="sec">
+    <div class="micro">Bill so far</div>
+    <div class="bill">
+      <div class="ln"><span>PC-06 · 4:49–5:30 pm · 41 min × ₹100/hr</span><span>₹68.33</span></div>
+      <div class="ln"><span>PC-06 · 5:30–5:41 pm · 11 min × ₹80/hr (Happy hour)</span><span>₹14.67</span></div>
+      <div class="ln"><span>Masala Maggi × 1</span><span>₹70.00</span></div>
+      <div class="ln"><span>Cold coffee × 1</span><span>₹90.00</span></div>
+      <div class="ln m"><span>Subtotal</span><span>₹243.00</span></div>
+      <div class="ln m"><span>GST 18% (included)</span><span>₹37.07</span></div>
+      <div class="ln m"><span>Paid so far</span><span>₹0.00</span></div>
+      <div class="tot"><span class="lbl">Remaining</span><b class="tnum">₹243.00</b></div>
+    </div>
+  </div>
+</aside><div class="undo float" role="status"><span class="msg"><b>Session ended</b> · PC-12 · Aman · Bill <span class="tnum">₹150.00</span></span><span class="left tnum">8 s</span><button class="act">Undo</button></div></div>
+</body></html>

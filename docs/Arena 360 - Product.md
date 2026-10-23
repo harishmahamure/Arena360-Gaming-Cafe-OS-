@@ -31,8 +31,8 @@ Arena 360 is a local-first management system for gaming cafes and game zones: a 
 | Topic | Decision | Consequence |
 | --- | --- | --- |
 | Scope | Everything in this PRD ships at launch; the phase labels below are delivery waves inside one release, not separate releases | Launch date moves out; see sequencing note under Scope |
-| Free-tier Hub | Free plan runs the Hub on Android (tablet or phone) only; the Windows Hub build is for paid tiers | AdMob serves rewarded and interstitial ads on Android; Windows build carries no ad SDK |
-| Ads | Rewarded ads via AdMob on the Android Hub; attract-screen ads on kiosks served from the Hub's creative pack | No direct ad sales team needed at launch |
+| Free-tier Hub | Free plan runs the Hub on Android (tablet or phone) only, built on Tauri 2 mobile from the shared web UI; the Windows Hub build is for paid tiers | AdMob serves a banner and an interstitial (after every 2nd completed settle, skippable after 5 s) on Android only; Windows build carries no ad SDK (revised 23 Oct 2026, UX) |
+| Ads | AdMob banner and interstitial on the Free Android Hub only; no Kiosk attract-screen or Pi idle-screen ads in Phase 1 | No direct ad sales team needed at launch; no ad ever on a player screen (revised 23 Oct 2026, UX) |
 | WhatsApp | Gupshup as the WhatsApp Business provider | SMS fallback also via Gupshup |
 | OTP | Mandatory on Owner app sign-up and new-device login; player sign-up at kiosk needs no OTP | SMS cost only on owner side |
 | Kiosk OS | Windows 10 and later (Windows 7 dropped) | Kiosk and Windows Hub built on Tauri (WebView2); one shared web UI and design-token codebase. Revised 22 Oct 2026 in UX planning, superseding .NET Framework 4.8 (WPF) on Windows 7 SP1 |
@@ -66,7 +66,7 @@ Everything in this document is launch scope. The MVP, v1.1 and v2 columns are de
 | Pricing | Per group, time-window and date-based dynamic pricing, coupons | Happy-hour automation across branches | Demand-based suggestions |
 | POS and inventory | Products, bundles with components, stock-in, waste, expiry, low-stock alerts | Supplier records, purchase orders, stock count with variance | Central purchasing across branches |
 | Kitchen | KOT printing, kitchen display page, order status | Prep stations, item-level timing | — |
-| Money | Split payment, UPI QR, cash drawer, GST invoices, shifts with variance, expenses, deposits | Refund approvals, petty cash ledger | Accounting export (Tally, Zoho) |
+| Money | Split payment, UPI and card recorded by reference (revised 23 Oct 2026, UX), cash drawer, GST invoices, shifts with variance, expenses, deposits | Refund approvals, petty cash ledger | Accounting export (Tally, Zoho) |
 | Users | Branch users, roles, fine-grained permissions, PIN for manager actions | Staff attendance | Payroll hints |
 | Kiosk | Login, signup, overlay HUD, orders, game library, lockdown, launcher logout | Cafe-owned launcher vault, game requests | Streaming/cloud gaming hooks |
 | Owner app | Dashboards, exports, alerts, commands, MFA | Scheduled reports, branch comparison | Franchise roll-ups |
@@ -87,7 +87,7 @@ The Hub runs the floor. Everything below works with the internet down and is one
 | Profile | Username and password (username unique per branch), phone (unique per branch), name, optional email, DOB, notes, tags | Create in under 15 s at counter; phone lookup finds a player in 1 tap | MVP |
 | Guest | Start a session without a profile; convert to profile later | Guest sessions appear in reports as "Guest"; conversion keeps history | MVP |
 | Wallet | Prepaid balance in paise; top-up by cash, UPI, card; full ledger | Balance never negative; every change has a ledger row with actor | MVP |
-| Credit | Postpaid limit per player, overdue days, reminder cycle (3, 7, 14 days) via WhatsApp/SMS | Session start blocked when limit exceeded; manager PIN can override once | MVP |
+| Credit | Postpaid limit per player, overdue days, reminder cycle (3, 7, 14 days) via WhatsApp/SMS | Session start blocked when limit exceeded; manager PIN can override once per player per day (revised 23 Oct 2026, UX) | MVP |
 | Packs owned | Time packs with hours remaining and expiry | Expired packs greyed; partial use deducts minutes | MVP |
 | Import | CSV of players with phone, name, balance, credit limit | Dry-run shows conflicts before commit | MVP |
 | Loyalty, referrals | Points per rupee, redeem as wallet credit; referral bonus on first paid session | Configurable rates per branch | v1.1 |
@@ -97,7 +97,7 @@ The Hub runs the floor. Everything below works with the internet down and is one
 | Feature | Requirement | Acceptance criteria | Phase |
 | --- | --- | --- | --- |
 | Postpaid walk-in | Open session on a device; billed at end at the device group's rate | Rate shown on start; bill computed to the minute, rounded by config (default 15 min, min 30 min) | MVP |
-| Prepaid | Start on a pack or wallet; time counts down | Kiosk shows remaining time; auto-lock at zero with configurable grace (default 2 min) | MVP |
+| Prepaid | Start on a pack or wallet; time counts down | Kiosk shows remaining time; auto-lock at zero with configurable grace (default 2 min); Extend stays available during grace (revised 23 Oct 2026, UX) | MVP |
 | Pause / resume | Staff pause with reason (power cut, hardware) | Paused time is not billed; resume restores timer | MVP |
 | Extend | From Hub or kiosk, charged to wallet, pack or credit | Extension writes a ledger row; cannot extend past branch closing time | MVP |
 | Transfer | Move a session to another device in the same group, or across groups with rate change from that moment | Old device locks, new device unlocks within 5 s | MVP |
@@ -149,7 +149,7 @@ The POS is a single screen: product grid on the left, cart on the right, settle 
 | Product grid | Categories, images, favourites, barcode scan | Sale of a scanned item in 1 scan + 1 tap | MVP |
 | Cart to session | Attach an order to a running session so it settles with the bill | Order appears on the kiosk overlay as "ordered" | MVP |
 | Split payment | Any mix of cash, UPI, card, wallet, credit; remainder tracked | Settlement blocked until remainder is zero or moved to credit | MVP |
-| UPI QR | Dynamic QR with exact amount via Razorpay/PhonePe; auto-confirm on webhook when online, manual confirm offline | Offline confirmations flagged for reconciliation | MVP |
+| UPI and card | Recorded manually by reference: UPI needs the last 4 digits of the reference (required); card needs the terminal reference. No dynamic UPI QR or payment webhook this phase | Settling never depends on the internet; references print on the receipt and appear in the Z-report (revised 23 Oct 2026, UX) | MVP |
 | Receipts | Thermal print, WhatsApp, or none; GST fields when enabled | Sequential invoice number per branch, never reused | MVP |
 | Refund / void | Reason, manager PIN, original invoice reference; stock returned if flagged | Refund appears as negative line in shift report | MVP |
 
@@ -179,7 +179,7 @@ The POS is a single screen: product grid on the left, cart on the right, settle 
 
 | Feature | Requirement | Acceptance criteria | Phase |
 | --- | --- | --- | --- |
-| Shift | Open with float, close with counted cash; system expected vs counted = variance | Variance over threshold requires manager PIN and reason | MVP |
+| Shift | Open with float, close with counted cash; variance = counted − expected (+ over, − short); expected cash hidden until counted cash is entered | Variance over threshold requires manager PIN and reason (revised 23 Oct 2026, UX) | MVP |
 | Cash drawer | Kick on cash sale; drawer open count in shift report | Drawer event logged | MVP |
 | Cash deposit | Move cash from drawer to safe or bank with slip reference | Expected drawer cash reduces accordingly | MVP |
 | Expenses | Category, amount, paid from drawer or owner, receipt photo | Petty cash reduces drawer expectation | MVP |
@@ -218,11 +218,11 @@ Access is role-based with a fixed permission catalogue; owners compose roles, th
 | --- | --- | --- |
 | Currency and locale | Currency code, symbol position, number format, timezone | MVP |
 | Tax | GST on/off, GSTIN, default rates, inclusive/exclusive pricing, invoice prefix and sequence | MVP |
-| Billing rules | Rounding unit, minimum billing, grace period, auto-lock behaviour | MVP |
+| Billing rules | Rounding unit, minimum billing, grace period, time-up mode per branch: "clean up" (end non-allow-listed processes, sign out launchers, clear temp files and clipboard, reset volume, return to attract) or "staff handles" (lock screen held over the paused game until staff act) (revised 23 Oct 2026, UX) | MVP |
 | Receipts | Printer (ESC/POS over USB, LAN or Bluetooth), paper width, logo, footer text, WhatsApp template | MVP |
 | Opening hours | Per day; used by passes, dynamic pricing and "branch offline" alerts | MVP |
 | Notifications | WhatsApp provider keys, SMS provider, templates for credit reminder, low balance, session ending | MVP |
-| Ads (Free tier) | Consent view; ad slots cannot be disabled on Free | MVP |
+| Ads (Free tier) | Consent view; Android Hub ad slots (banner, interstitial) cannot be disabled on Free (revised 23 Oct 2026, UX) | MVP |
 | Language | English only (revised 22 Oct 2026; other languages deferred, strings stay externalised) | MVP (English) |
 
 **Reports (on the Hub, offline)**
@@ -243,7 +243,7 @@ Access is role-based with a fixed permission catalogue; owners compose roles, th
 | --- | --- | --- | --- |
 | Backup export | One-tap export of the branch database to file or USB; restore from file with confirmation | Export under 10 s for a 1 GB DB | MVP |
 | Cloud backup status | Last upload time, last successful ingest, pending batches | Visible in Hub header | MVP (paid) |
-| Standby | Pair a second PC as standby; promote button with confirmation | Promotion completes under 10 s; kiosks reconnect automatically | MVP (paid) |
+| Standby | Pair a second PC as standby; promote with a manager PIN inline; if promotion fails, a manager can force promote with PIN after a warning that data since the last sync may be lost (audited, owner alerted); a returning old main Hub locks itself ("This PC is no longer the main Hub", offer to become standby) and never serves kiosks | Promotion completes under 10 s; kiosks reconnect automatically (revised 23 Oct 2026, UX) | MVP (paid) |
 | Audit log | Every change with actor, time, before/after | Filter by actor, module, date | MVP |
 | Offline indicator | Internet and cloud reachability shown; nothing else changes | No feature degrades on LAN when offline | MVP |
 | Updates | Hub checks for updates daily; installs on restart with rollback | Staged rollout by percentage from control plane | v1.1 |
@@ -267,22 +267,23 @@ The Kiosk is a Windows app that owns the PC between sessions and stays out of th
 
 | Feature | Requirement | Acceptance criteria | Phase |
 | --- | --- | --- | --- |
-| Attract screen | Idle loop: branch branding, current rates, promotions; ad slot on Free tier | Ad every 15 min minimum per entitlement; no ads on Basic/Premium | MVP |
-| Login | Username + password, or QR from Hub, or staff starts from Hub (walk-in) | Login under 3 s on LAN | MVP |
-| Sign-up | Username, password, phone, name; OTP optional per branch; consent text | Creates profile on Hub; duplicates blocked by username and by phone | MVP |
+| Attract screen | Idle loop: branch branding, game video, current rates, active dynamic rule, promotions; no ad slot in Phase 1 | No ads on any tier (revised 23 Oct 2026, UX) | MVP |
+| Login | Username + password, or staff starts from Hub (walk-in) | Login under 3 s on LAN (revised 23 Oct 2026, UX) | MVP |
+| Sign-up | Username, password, phone, name; no OTP; one required consent checkbox, unticked by default: "I agree to the Terms and Privacy Policy and to receive service messages on WhatsApp/SMS." No marketing consent | Creates profile on Hub; account creation blocked until consent is ticked; duplicates blocked by username and by phone (revised 23 Oct 2026, UX) | MVP |
 | Session start | Choose plan or pack when prepaid; postpaid shows rate and starts | Shows device group rate and any active dynamic rule | MVP |
 | Overlay HUD | Small always-on-top widget: time left or elapsed, balance, hotkey to expand | Does not steal focus from games; hides in fullscreen exclusive mode with a toast on warnings | MVP |
 | Warnings | At 10 and 5 minutes and 60 seconds; low balance | Toast plus sound; configurable | MVP |
-| Extend | From overlay, charged to wallet, pack or credit; blocked if credit limit hit | Extension reflected on Hub floor view within 2 s | MVP |
-| Time-up | Lock screen with grace countdown; game left running for grace period; then kill allow-listed processes if configured | Player has a visible countdown; no data loss within grace | MVP |
-| Orders | Menu with images, cart, order to seat; status updates from kitchen | Order reaches Hub POS and KOT within 3 s | MVP |
+| Extend | From overlay or from the time-up lock screen during grace, charged to wallet, pack or credit; blocked if credit limit hit | Extension reflected on Hub floor view within 2 s (revised 23 Oct 2026, UX) | MVP |
+| Time-up | Lock screen with grace countdown over the still-visible game, with Extend available; then the branch's time-up mode applies: clean up or staff handles (see Configuration) | Player has a visible countdown; no data loss within grace (revised 23 Oct 2026, UX) | MVP |
+| Orders | Menu with images, cart, order to seat; status updates from kitchen. Basic and above; on Free, orders go through the counter POS | Order reaches Hub POS and KOT within 3 s (revised 23 Oct 2026, UX) | MVP |
+| Hub unreachable | Running sessions continue on the last known time; "Reconnecting…" shows; new login, orders and Extend are disabled with "Counter is reconnecting — try again shortly." | Player is never locked out; kiosk reconciles with the Hub on reconnect (revised 23 Oct 2026, UX) | MVP |
 | Messages | Staff broadcast or per-seat message appears as toast | Delivered within 2 s | MVP |
 
 **Games and launchers**
 
 | Feature | Requirement | Acceptance criteria | Phase |
 | --- | --- | --- | --- |
-| Library | Hub holds the catalogue: name, executable, launcher (Steam, Epic, Riot, standalone), art, category, age rating | Edit once on Hub, every kiosk updates | MVP |
+| Library | Hub holds the catalogue: name, executable, launcher (Steam, Epic, Riot, standalone), category, age rating. Game media (art, video) is global only: curated and flash-screened by the Arena 360 team; no owner media upload or matching UI; devices cache global media, else launcher cover or exe icon | Edit once on Hub, every kiosk updates (revised 23 Oct 2026, UX) | MVP |
 | Auto-scan | Kiosk scans Steam, Epic, Riot and common folders on first run; proposes entries to Hub | Manager approves in bulk | MVP |
 | Launch | One click from the kiosk game grid; booster applied | Launch logged with player and time | MVP |
 | Launcher logout | At session end, kiosk signs out Steam, Epic, Riot, Discord and browser profiles; clears saved credentials | Next player never sees previous accounts (test plan) | MVP |
@@ -301,7 +302,7 @@ Consoles (PS5, Xbox, Switch) cannot run the Kiosk app, so a Raspberry Pi per TV 
 | --- | --- | --- |
 | Device type | Console registered manually with group (PS5, Xbox) and TV number | Appears on floor view like a PC |
 | Session | Staff start from Hub; same postpaid, pack and pass rules | Timer and warnings on Hub floor view |
-| Player alert | Optional WhatsApp or SMS at 5 minutes | Sent only if player profile has consent |
+| Player alert | Optional WhatsApp or SMS at 5 minutes | Sent only if the player profile has the sign-up service-message consent (revised 23 Oct 2026, UX) |
 | End | Staff end session; time-up shows alert on Hub, staff walk over | Audit records who ended it |
 
 **v1.1 — Pi controller**
@@ -310,19 +311,19 @@ Consoles (PS5, Xbox, Switch) cannot run the Kiosk app, so a Raspberry Pi per TV 
 | --- | --- | --- |
 | Hardware | Raspberry Pi Zero 2 W or Pi 4 with HDMI to TV; console on another HDMI input; optional smart plug for consoles without CEC | Reference BOM under ₹4,000 per TV |
 | Pairing | Pi pairs to Hub with a 6-digit code like a kiosk; shows its TV number on screen | Visible on floor view within 60 s |
-| Idle screen | Pi output shown on TV when no session: branch branding, rates, QR code to start; ad slot on Free | QR encodes branch and TV id |
-| Start by QR | Player scans with phone, lands on a Hub page via LAN (or Tunnel on Premium), logs in, picks plan; Hub tells Pi to switch TV input to console (CEC) | Input switch within 3 s of start |
+| Idle screen | Pi output shown on TV when no session: branch branding, TV number, game video, console rates, QR code to start; no ad slot | QR encodes branch and TV id (revised 23 Oct 2026, UX) |
+| Start by QR | Player scans with phone on the cafe Wi-Fi, lands on a Hub page via LAN with no login, picks a console plan and requests; pays at the counter; staff confirm and start from the Hub, which tells Pi to switch TV input to console (CEC); the phone then shows a live timer only | Request appears on the Hub tile with sound; input switch within 3 s of start (revised 23 Oct 2026, UX) |
 | Start by staff | Same from Hub | Same |
-| Time and warnings | Pi overlays nothing on the console input; warnings go to player's phone and to the TV by switching briefly to the Pi input at 5 and 1 minutes (configurable) | Switch-back is automatic |
-| Time-up | Pi switches TV to its own input with a lock screen; optional CEC standby to console, or smart plug off after grace | Console not powered off mid-save during grace |
-| Controller check | Pi can prompt staff to confirm controllers returned at end | Logged against session |
+| Time and warnings | Pi overlays nothing on the console input; warnings go to the live timer on the player's phone and to the TV by switching to the Pi input for 5 s at 5 and 1 minutes | Switch-back is automatic (revised 23 Oct 2026, UX) |
+| Time-up | No grace on consoles: Pi switches TV to its own input with a lock screen ("Time's up — see the counter.") at once; staff handle the overrun; CEC standby or smart plug per branch | Hub tile raises a time-up alert until acknowledged (revised 23 Oct 2026, UX) |
+| Controller check | After time-up the Hub tile prompts staff to mark controllers Returned or Missing | Logged against session (revised 23 Oct 2026, UX) |
 | Remote commands | Power on/off, input switch, message to TV from Hub | Result within 5 s |
 
 Consoles without CEC support (older TVs) fall back to the smart-plug path; the PRD treats CEC as best effort and the plug as the guarantee.
 
 ## Owner app
 
-The Owner app is a phone app and a web app on the same account, reading the cloud mirror and writing commands. It never needs the branch to be open. On Free tier it shows subscription, pairing and support only; dashboards start at Basic.
+The Owner app is one responsive web app, phone to desktop, installable as a PWA with web push alerts (revised 23 Oct 2026, UX), reading the cloud mirror and writing commands. It never needs the branch to be open. On Free tier it shows subscription, pairing and support only; dashboards start at Basic.
 
 **Dashboards and reports**
 
@@ -339,7 +340,7 @@ The Owner app is a phone app and a web app on the same account, reading the clou
 | Audit | Searchable change log from the mirrored `changes` table | Filter by branch, actor, module | MVP |
 | Exports | CSV and PDF for every report; scheduled email or WhatsApp daily/weekly | Scheduled reports arrive by 8 am local | MVP (export), v1.1 (scheduled) |
 
-**Alerts** (push and WhatsApp, thresholds per tenant)
+**Alerts** (web push and WhatsApp, thresholds per tenant; (revised 23 Oct 2026, UX))
 
 | Alert | Trigger | Phase |
 | --- | --- | --- |
@@ -369,7 +370,7 @@ The Owner app is a phone app and a web app on the same account, reading the clou
 | Feature | Requirement | Phase |
 | --- | --- | --- |
 | MFA | TOTP required on new device; backup codes; SMS fallback optional | MVP |
-| Subscription | Tier per branch, add-ons, invoices, payment method, upgrade/downgrade mid-cycle prorated | MVP |
+| Subscription | Tier per branch, add-ons, billing cycle switch (Monthly or Yearly), invoices with GST itemised, payment method, cancel; prices shown GST-exclusive; upgrade/downgrade mid-cycle prorated; cancellation follows the refund policy (no partial refunds) (revised 23 Oct 2026, UX) | MVP |
 | Branches | Create, rename, timezone, pairing codes, standby pairing | MVP |
 | Live view | Premium: connect to a Hub through the Tunnel for second-by-second floor view | Premium |
 | Team | Additional owner-level logins with read-only or full roles | v1.1 |
@@ -384,15 +385,15 @@ The site sells one promise: run your cafe offline, see it from anywhere, pay les
 | --- | --- | --- |
 | Home | Hero with floor view illustration, three-step story (install, pair, play), logos of cafes, CTA to get started | MVP |
 | Product | Per app: Hub, Kiosk, Console, Owner, with illustrated walkthroughs and a 90-second demo video each | MVP |
-| Pricing | Per-branch pricing: Free (1 branch, ads), Basic ₹200, Premium ₹1,999; add-ons; yearly discount; FAQ on what happens offline and on cancellation | MVP |
+| Pricing | Per-branch pricing shown GST-exclusive ("₹200/branch/month + 18% GST"): Free (1 branch, ads on the Android Hub), Basic ₹200, Premium ₹1,999; Monthly/Yearly toggle (yearly = 10× monthly, paid tiers only); add-ons with prices; Partners tab; FAQ on what happens offline and on cancellation and refunds (see Tiers) (revised 23 Oct 2026, UX) | MVP |
 | Demo | Interactive sandbox Hub in the browser with sample data (same web UI, in-memory DB) | v1.1 |
 | Compare | Versus ggLeap, Smartlaunch, iCafe: offline, price, hardware needs, migration | v1.1 |
 | Get started | Sign-up form: name, phone, email, cafe name, city; OTP; lands in onboarding | MVP |
 | Downloads | Hub and Kiosk installers, Pi image, system requirements, checksums | MVP |
 | Help centre | Setup guides, troubleshooting, printer and CEC compatibility lists | MVP |
-| FAQ | Billing, data ownership, offline, ads, refunds | MVP |
+| FAQ | Billing, data ownership, offline, ads, refunds (full refund within 7 days of first payment; no partial refunds after) (revised 23 Oct 2026, UX) | MVP |
 | Status and changelog | Cloud status, release notes | v1.1 |
-| Partners | Reseller and installer program: margin, lead sharing, co-branded kiosk screen | v1.1 |
+| Partners | Reseller and installer program: margin, lead sharing, payout terms (see Resolved in second pass). Light application (name, phone OTP, email, city, business name, type reseller/installer, cafes served); approval by WhatsApp only, with a login link to the partner portal at partners.arena360.in (separate login); KYC after approval (PAN, bank details, optional GSTIN) before first payout. Branch customisation stays logo-only (revised 23 Oct 2026, UX) | v1.1 |
 | Legal | Terms, privacy, data processing, ad policy | MVP |
 
 **Onboarding wizard** (web, after sign-up; resumable)
@@ -401,12 +402,12 @@ The site sells one promise: run your cafe offline, see it from anywhere, pay les
 | --- | --- | --- |
 | 1. Tenant | Cafe name, country, currency, timezone, GST registered yes/no and GSTIN | Tenant and first branch created |
 | 2. Tier | Pick Free, Basic or Premium per branch; payment if paid; Free needs no card | Entitlement issued |
-| 3. Install Hub | Download link; pairing code shown large with QR; page waits for the Hub to pair | Hub heartbeat received |
+| 3. Install Hub | Download link; 8-character pairing code shown large with Copy and a 15-min countdown, no QR; owner types it into the Hub installer, and a bad code retries in place; page waits for the Hub to pair | Hub heartbeat received (revised 23 Oct 2026, UX) |
 | 4. Devices | Hub auto-discovers kiosks that have the Kiosk app; wizard shows them arriving; create groups and drag devices in; add consoles manually | At least one device in a group |
 | 5. Plans | Choose a template (Indian cafe, console lounge, VR arcade) or import CSV; edit rates per group | At least one rate per group |
 | 6. Products | Template menu or CSV import; mark kitchen items | Optional; can skip |
 | 7. Staff | Invite by phone; pick role; set PIN | At least one manager |
-| 8. Printer and payments | Detect ESC/POS printer; add UPI provider keys (optional) | Test print succeeded or skipped |
+| 8. Printer and payments | Detect ESC/POS printer; UPI and card are recorded by reference, so no payment provider keys | Test print succeeded or skipped (revised 23 Oct 2026, UX) |
 | 9. Test session | Start a 2-minute session on one device from the wizard; watch it lock | Session completed |
 | 10. Go live | Checklist: opening hours, backup location, standby PC (paid), ad consent (Free) | Branch marked live; owner app dashboard unlocks |
 
@@ -423,9 +424,9 @@ These apply to every app and are tested as a group before each release.
 | Offline | Every Hub and Kiosk feature works with the WAN down; cloud features queue and resume | 8-hour offline soak test with 20 kiosks, zero data loss |
 | Tax | GST inclusive or exclusive per branch; rates per item; HSN; sequential invoice numbers per branch and financial year; credit notes for refunds; B2B invoice with customer GSTIN | Sample month reconciles to GSTR-1 format export |
 | Hardware | ESC/POS printers (USB, LAN, Bluetooth), cash drawer via printer kick, USB barcode scanners (keyboard wedge), Pi Zero 2 W and Pi 4, HDMI-CEC TVs, Tuya or Tapo smart plugs | Compatibility list on the help centre; tested devices badge |
-| Payments | UPI dynamic QR via Razorpay and PhonePe; card via external terminal with reference entry; cash | Webhook confirm within 10 s online; manual confirm offline flagged |
-| Notifications | WhatsApp Business API (via provider), SMS fallback, push for owner app | Templates versioned; opt-in stored per player |
-| Ads (Free) | Attract-screen and Hub-banner slots served from a cached creative pack; impressions batched to the change log; no ads during a session on a player screen | Impression counts within 2% of cloud tally |
+| Payments | UPI recorded manually by reference (last 4 digits, required); card via external terminal with reference entry; cash | Settling never depends on the internet; references on receipt and Z-report (revised 23 Oct 2026, UX) |
+| Notifications | WhatsApp Business API (via provider), SMS fallback, web push for the Owner app PWA; player messages are service messages only | Templates versioned; sign-up consent stored per player (revised 23 Oct 2026, UX) |
+| Ads (Free) | AdMob banner and interstitial on the Android Hub only; no ad on any player screen (Kiosk or Pi) | Interstitial never over an open cart or tile sheet; upgrade removes ads within one heartbeat (revised 23 Oct 2026, UX) |
 | Languages | UI strings externalised; English only at MVP (revised 22 Oct 2026); number and date formats by locale | No hard-coded strings in release build |
 | Accessibility | Touch targets 44 px minimum on Hub; high-contrast theme; keyboard shortcuts for POS | Counter flow possible without mouse |
 | Performance | Hub idle under 50 MB RAM, UI actions under 100 ms on LAN, floor view 60 devices without lag on a 2015 PC | Benchmark on reference hardware per release |
@@ -439,13 +440,14 @@ These apply to every app and are tested as a group before each release.
 
 ## Tiers and ads
 
-Pricing is per branch per month. Free is a complete single-branch product funded by ads; Basic removes ads and adds the cloud; Premium adds resilience and remote access.
+Pricing is per branch per month, shown GST-exclusive ("₹200/branch/month + 18% GST") with GST itemised on the invoice (revised 23 Oct 2026, UX). Free is a complete single-branch product funded by ads; Basic removes ads and adds the cloud; Premium adds resilience and remote access.
 
 | Capability | Free (₹0, 1 branch) | Basic (₹200) | Premium (₹1,999) |
 | --- | --- | --- | --- |
 | Hub: sessions, players, plans, devices, groups, dynamic pricing | ✓ | ✓ | ✓ |
 | POS, inventory, waste, expiry, shifts, expenses, GST invoices | ✓ | ✓ | ✓ |
-| Kiosk app, lockdown, overlay, orders, game library | ✓ | ✓ | ✓ |
+| Kiosk app, lockdown, overlay, game library | ✓ | ✓ | ✓ |
+| Kiosk (table) orders (revised 23 Oct 2026, UX) | — (counter POS) | ✓ | ✓ |
 | Console as timed device | ✓ | ✓ | ✓ |
 | Pi controller (v1.1) | ✓ | ✓ | ✓ |
 | Branch users and RBAC | 3 users | Unlimited | Unlimited |
@@ -461,22 +463,25 @@ Pricing is per branch per month. Free is a complete single-branch product funded
 | Off-site standby (STUN/TURN) | — | — | ✓ |
 | Live owner view | — | — | ✓ |
 | Scheduled reports | — | ✓ | ✓ |
-| Ads on attract screen | Every 15 min | — | — |
 | Ads on Hub banner | ✓ | — | — |
-| Rewarded ads (player watches 30 s for bonus minutes, cafe sets the reward) | Optional | — | — |
+| Ads on Hub interstitial (after every 2nd completed settle, skippable after 5 s) (revised 23 Oct 2026, UX) | ✓ | — | — |
 | Support | Community and help centre | Email, 24 h | Chat, 4 h |
 
-**Free-tier Hub on Android.** The Free plan runs the Hub as an Android app on a tablet or phone at the counter; it serves kiosks on the LAN exactly as the Windows Hub does, with the same SQLite and change log. Ads are delivered by AdMob inside the Android app: a banner on the Hub screen and rewarded video that the cafe can offer players for bonus minutes. Upgrading to Basic unlocks the Windows Hub build and removes ads on both. Standby and Tunnel features require the Windows build.
+**Free-tier Hub on Android.** The Free plan runs the Hub as an Android app on a tablet or phone at the counter; it serves kiosks on the LAN exactly as the Windows Hub does, with the same SQLite and change log. The Android Hub is built on Tauri 2 mobile from the same web UI as the Windows Hub. Ads are delivered by AdMob inside the Android app: a banner on the Hub screen and an interstitial after every 2nd completed settle, skippable after 5 s, never while a cart or tile sheet is open and deferred if another sale starts (revised 23 Oct 2026, UX). Upgrading to Basic unlocks the Windows Hub build and removes ads on both. Standby and Tunnel features require the Windows build.
 
 **Ad placement rules**
 
-1. Ads never appear on a player screen during a paid session. They appear on the attract screen between sessions and on the Hub banner.
-2. Rewarded ads are opt-in by the cafe; the cafe sets the reward (minutes or wallet credit) and the daily cap per player.
-3. Creative packs are downloaded daily and served from the Hub, so ads work offline; impressions are recorded in the change log and uploaded with the daily heartbeat.
+1. Ads never appear on a player screen (Kiosk or Pi), in or between sessions. They appear only on the Free Android Hub: the banner and the interstitial (revised 23 Oct 2026, UX).
+2. The interstitial shows after every 2nd completed settle, is skippable after 5 s, and never covers an open cart or tile sheet (revised 23 Oct 2026, UX).
+3. AdMob serves and counts the ads inside the Android Hub; no creative packs are sent to kiosks (revised 23 Oct 2026, UX).
 4. No adult, gambling or alcohol categories; owner can block categories.
 5. A Free branch that upgrades stops showing ads within one heartbeat; a lapsed paid branch resumes ads only after the entitlement expires.
 
-**Add-ons** (any tier): extra devices in blocks of 20, Tunnel for remote devices, additional owner logins.
+**Add-ons** (any tier, per branch per month, + GST): +20 devices ₹50, Tunnel for remote devices ₹200, additional owner login ₹50; other regions follow the PPP bands below (revised 23 Oct 2026, UX).
+
+**Yearly billing.** Paid tiers can be billed yearly at 10× monthly (2 months free): Basic ₹2,000 and Premium ₹19,990 per branch per year + GST. Monthly/Yearly toggle on the Pricing page; cycle switch in Owner app Subscription (revised 23 Oct 2026, UX).
+
+**Refunds.** Full refund within 7 days of the first payment. After that, cancel anytime: the plan stays active to the end of the paid period (monthly or yearly), then the branch drops to Free. No partial refunds (revised 23 Oct 2026, UX).
 
 **Regional pricing (purchasing-power parity).** India is the anchor at ₹200 and ₹1,999; other regions are set so the price feels like the Indian one locally, roughly 2.5× the raw exchange rate for high-income markets.
 
@@ -521,7 +526,7 @@ Region is set from the tenant's billing country at sign-up and verified by payme
 | Question | Decision |
 | --- | --- |
 | WhatsApp Business provider | Gupshup |
-| Rewarded-ad inventory | AdMob on the Android Hub (Free tier only); no Windows ad SDK |
+| Ad inventory | AdMob banner and interstitial on the Android Hub (Free tier only), banner and interstitial only; no Windows ad SDK (revised 23 Oct 2026, UX) |
 | OTP on sign-up | Mandatory for the Owner app; none for player sign-up at kiosk |
 | Minimum Windows version for Kiosk | Windows 10 (revised 22 Oct 2026; was Windows 7 SP1) |
 | Console packs shared with PCs | Never; consoles always have separate groups and packs |
@@ -532,7 +537,7 @@ Region is set from the tenant's billing country at sign-up and verified by payme
 
 | Question | Decision | Consequence |
 | --- | --- | --- |
-| Reseller margin and territory | 10% of subscription revenue for every month the referred tenant stays active and paying; leads are not exclusive by territory | Control plane tracks `referral_code` on the tenant and computes payouts monthly; partner dashboard shows active referred tenants |
+| Reseller margin and territory | 10% of subscription revenue for every month the referred tenant stays active and paying; leads are not exclusive by territory | Control plane tracks `referral_code` on the tenant and computes payouts monthly; payout by bank transfer by the 10th for the previous month, ₹500 minimum (lower balance rolls over), TDS deducted at 2% (subject to tax advice), GST-registered partners upload a GST invoice; partner portal (partners.arena360.in) shows referred tenants, accrued, pending, paid, TDS and invoice status (revised 23 Oct 2026, UX) |
 | Android Hub minimum spec | 3 GB RAM, 20 GB free storage, Android 9 or later | Play Store listing enforces it; installer checks free space before first run |
 | Payment providers | Razorpay only. India in INR; other countries in local currency where Razorpay supports it, otherwise USD. Autopay (recurring mandate) is mandatory on every paid plan | One billing integration; no Stripe or regional PSPs; a country Razorpay cannot bill in is not sold to until it can |
 

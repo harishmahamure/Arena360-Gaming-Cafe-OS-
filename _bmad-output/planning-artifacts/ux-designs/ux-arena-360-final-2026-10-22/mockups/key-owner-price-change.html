@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Owner Price Change</title>
+<style>
+/*
+  KEY SCREEN — Owner app · remote price change (Journey 6), phone 390 wide, rendered 1:1, DARK and LIGHT ("Cool paper")
+  Governing spine sections:
+    EXPERIENCE — Key Flows: Journey 6 (Manage → Pricing: Plans & rates · Pricing rules · Coupons → edit rate → one branch or
+                 All branches → preview affected branches with online/offline status → send, no MFA prompt → command-row
+                 "Waiting for branch" (or "Queued on this device" first when the phone is offline) → Applied; failures:
+                 "Device/Hub revoked", "Couldn't apply at branch" + Retry, 7-day Expired + Resend);
+                 Information Architecture (Owner app Manage → Pricing; rule rows show schedule, branches, status; command-row list);
+                 Component Patterns: owner-nav, command-row (Today / Earlier grouping; only valid commands can be sent; MFA only for
+                 sensitive commands), tab-control; State Patterns: Data age / pending command, No network (Owner PWA);
+                 Offline & Sync; Voice and Tone (staff: plain, neutral, no blame; fixed staff and owner lines)
+    DESIGN.md  — Colors (dark tokens; Light theme "Cool paper" -light tokens and mapping: hub-bg → bg-light, hub-tile → surface-light,
+                 hub-line → line-light; accent-light fills only, accent-text-light for ink and focus);
+                 Layout & Spacing (airy; Owner app phone: gutter 16, section gap 56, card padding 24, header 64, tab bar 64);
+                 Components: owner-nav, command-row, status-badge (pending = info, applied = ok, rejected = danger, expired = text-muted),
+                 tab-control, chip-rule, chip-offline, text-field, button-primary, button-secondary, card, focus-ring (dark double
+                 ring; light single 2px accent-text ring); Typography: web-display, web-body, hub-numeric, hub-label, hub-micro
+  Spacing scale 4·8·12·16·24·32·40·56·64·80·96·128 — no off-scale values in the product UI below.
+*/
+/* ── Theme tokens: DESIGN.md Colors (dark "Cinema Electric") + Light theme "Cool paper" (-light). Owner app + web only. ── */
+.th-dark{
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;--accent-text:#FF4FA8;
+  --ok:#5FE6A0;--warning:#FFBE3D;--warning-ink:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;--metric:#F5F2FF;
+  --focus-outline:2px solid #FF4FA8;--focus-shadow:0 0 0 6px #F5F2FF;
+  color-scheme:dark;background:var(--bg);color:var(--text);
+}
+.th-light{
+  --bg:#F6F5FC;--surface:#FFFFFF;--surface-2:#ECEAF7;--line:#DCD8EE;--border-strong:#7A72A8;
+  --text:#16123A;--muted:#555075;--accent:#D4127A;--on-accent:#FFFFFF;--accent-text:#AD0E63;
+  --ok:#0E7A46;--warning:#FFBE3D;--warning-ink:#8F5300;--on-warning:#1E1300;--danger:#C21F2E;--on-danger:#FFFFFF;--info:#1F56C2;
+  --chip-rule-bg:#FCE4F0;--chip-rule-text:#940B54;--chip-off-bg:#FDE6E6;--chip-off-text:#A3141F;
+  /* hub tones map: hub-bg/hub-header -> bg-light, hub-tile -> surface-light, hub-line -> line-light */
+  --hub-bg:#F6F5FC;--hub-header:#F6F5FC;--hub-tile:#FFFFFF;--hub-line:#DCD8EE;--metric:#16123A;
+  --focus-outline:2px solid #AD0E63;--focus-shadow:none;
+  color-scheme:light;background:var(--bg);color:var(--text);
+}
+.focus{outline:var(--focus-outline);outline-offset:2px;box-shadow:var(--focus-shadow)}
+/* light theme: warning fills always edged with warning-ink (1.5:1 on bg) */
+.th-light .warn-fill{border:1px solid var(--warning-ink)}
+
+:root{--owner-gutter-phone:16px;--owner-section-gap:56px;--owner-card-padding-phone:24px;--owner-header-height:64px;--tab-bar:64px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#1d1b2a;color:#F5F2FF;font-family:Sora,"Sora Variable",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:56px 40px 80px;-webkit-font-smoothing:antialiased}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+a{color:inherit}
+
+/* ── presentation page (not product UI) ── */
+.page-h{max-width:2280px;margin:0 auto 40px}
+.page-h h1{font-weight:300;font-size:32px;letter-spacing:-.01em}
+.page-h p{color:#C9C4E0;font-size:15px;margin-top:8px;max-width:1100px;line-height:1.6}
+.theme-h{max-width:2280px;margin:0 auto 24px;font-size:14px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#F5F2FF}
+.theme-h span{color:#C9C4E0;font-weight:500;letter-spacing:0;text-transform:none;margin-left:12px}
+.stage{display:flex;gap:56px;align-items:flex-start;max-width:2280px;margin:0 auto 80px;background:transparent}
+.step{flex:none;width:410px}
+.cap{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#C9C4E0;font-weight:700;margin-bottom:16px;line-height:1.5;min-height:36px}
+.notes{max-width:2280px;margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.notes div{border:1px solid #3a3654;border-radius:16px;padding:24px;font-size:13px;line-height:1.65;color:#C9C4E0}
+.notes b{display:block;color:#F5F2FF;font-weight:600;margin-bottom:8px;font-size:14px}
+
+/* frame: 390 viewport; grows past 844 only when content is longer (fold marked) */
+.phone{width:410px;min-height:864px;border-radius:48px;border:10px solid #000;outline:1px solid #3a3654;background:var(--bg);color:var(--text);overflow:hidden;display:flex;flex-direction:column;position:relative}
+.fold{position:absolute;left:0;right:0;top:844px;border-top:1px dashed var(--border-strong)}
+
+/* ── product UI ── */
+.app-h{height:var(--owner-header-height);display:flex;align-items:center;gap:16px;padding:0 var(--owner-gutter-phone);border-bottom:1px solid var(--hub-line);background:var(--hub-header);flex:none}
+.back{color:var(--text);text-decoration:underline;text-underline-offset:3px;font-size:15px;min-height:44px;display:inline-flex;align-items:center}
+.app-h .t{font-size:15px;font-weight:600}
+.app-h .brand{font-weight:800;font-size:15px;margin-left:auto;color:var(--muted)}
+.body{flex:1;padding:40px var(--owner-gutter-phone) 40px}
+.h1{font-size:32px;font-weight:300;line-height:1.2;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:15px;margin-top:8px;line-height:1.5}
+.gap-sec{margin-top:40px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:var(--owner-card-padding-phone)}
+.card + .card{margin-top:24px}
+.card h2{font-size:18px;font-weight:600;line-height:1.3;margin-bottom:16px}
+.chip-rule{background:var(--chip-rule-bg);color:var(--chip-rule-text);border-radius:9999px;padding:8px 16px;font-size:13px;font-weight:500;display:inline-block;line-height:1.2}
+.chip-off{background:var(--chip-off-bg);color:var(--chip-off-text);border-radius:9999px;padding:4px 12px;font-size:13px;font-weight:500;white-space:nowrap;line-height:1.5}
+label,.lbl{display:block;font-size:13px;font-weight:500;color:var(--muted);margin:24px 0 8px}
+.field{background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;min-height:56px;padding:0 16px;font-size:18px;color:var(--text);display:flex;align-items:center;gap:8px}
+.field.focus{border:2px solid var(--accent-text);outline:var(--focus-outline);outline-offset:2px;box-shadow:var(--focus-shadow)}
+.field .unit{color:var(--muted);margin-left:auto;font-size:15px}
+.was{font-size:13px;color:var(--muted);margin-top:12px}
+.radio{display:flex;align-items:center;gap:16px;min-height:56px;font-size:15px;border-top:1px solid var(--line)}
+.radio:first-child{border-top:0}
+.radio .dot{width:24px;height:24px;border-radius:50%;border:2px solid var(--border-strong);flex:none;display:grid;place-items:center}
+.radio.on .dot{border-color:var(--text)}
+.radio.on .dot::after{content:"";width:12px;height:12px;border-radius:50%;background:var(--text)}
+.actions{margin-top:40px;display:flex;flex-direction:column;gap:12px}
+.btn{display:flex;align-items:center;justify-content:center;min-height:56px;border-radius:9999px;font-weight:800;font-size:16px;width:100%;text-decoration:none}
+.btn-p{background:var(--accent);color:var(--on-accent)}
+.btn-s{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);font-weight:600}
+.btn-sm{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 24px;border-radius:9999px;background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text);font-size:14px;font-weight:600;text-decoration:none}
+.row{display:flex;justify-content:space-between;gap:16px;align-items:center;padding:16px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0;padding-top:0}
+.row:last-child{padding-bottom:0}
+.row .n{font-size:15px;font-weight:600}
+.row .s{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.5}
+.big{font-size:26px;font-weight:800;line-height:1.15;color:var(--metric)}
+.big .arrow{color:var(--muted);font-weight:400;font-size:20px;margin:0 8px}
+.big .u{font-size:15px;font-weight:400;color:var(--muted);margin-left:8px}
+.status{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;background:var(--hub-tile);white-space:nowrap;display:inline-block;line-height:1.2}
+.st-ok{color:var(--ok)}.st-info{color:var(--info)}.st-danger{color:var(--danger)}.st-muted{color:var(--muted)}
+.fine{font-size:13px;color:var(--muted);line-height:1.6;margin-top:24px}
+
+/* tab-control (Pricing sections) */
+.tabs{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:9999px;padding:4px;margin-top:32px}
+.tabs a{flex:1;min-height:44px;display:flex;align-items:center;justify-content:center;border-radius:9999px;font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;white-space:nowrap;padding:0 8px}
+.tabs a[aria-selected="true"]{background:var(--text);color:var(--bg)}
+
+/* pricing rule rows */
+.rule{display:block;background:var(--surface);border-bottom:1px solid var(--line);padding:24px;text-decoration:none}
+.rule:last-child{border-bottom:0}
+.rule-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.rule-l{font-size:15px;font-weight:600;margin-top:16px;line-height:1.4}
+.rule-s{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.5}
+
+/* command-row */
+.list{border:1px solid var(--line);border-radius:24px;overflow:hidden}
+.cmd{background:var(--surface);border-bottom:1px solid var(--line);padding:16px 24px}
+.cmd:last-child{border-bottom:0}
+.cmd .what{font-size:15px;font-weight:600;line-height:1.4}
+.cmd .scope{font-size:13px;color:var(--muted);margin-top:4px}
+.cmd .meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;font-size:13px;color:var(--muted);line-height:1.5}
+.cmd .reason{font-size:14px;margin-top:12px;line-height:1.5}
+.cmd .reason.muted{color:var(--muted);font-size:13px}
+.cmd .act{margin-top:16px}
+.sec{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.sec-gap{margin-top:32px}
+
+/* owner-nav (phone tab bar) */
+.ic{width:24px;height:24px;flex:none}
+.tabbar{height:var(--tab-bar);border-top:1px solid var(--border-strong);background:var(--hub-bg);display:grid;grid-template-columns:repeat(5,1fr);flex:none}
+.tabbar a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-decoration:none;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;min-height:44px}
+.tabbar a[aria-current]{color:var(--text);background:var(--hub-line)}
+</style>
+</head>
+<body>
+<header class="page-h">
+  <h1>Owner app · Change a price remotely (Journey 6)</h1>
+  <p>Vikram opens Manage → Pricing and lowers the Happy Hour rate for both Pune branches. Price changes send without an MFA prompt. Koregaon Park is online and applies within a minute; Baner is offline, so its row waits. Frame 5 shows the remaining command-row states. Every frame is shown in the dark theme and in the light “Cool paper” theme.</p>
+</header>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-today" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></symbol>
+  <symbol id="i-reports" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 20V12M12 20V5M19 20v-6"/></symbol>
+  <symbol id="i-alerts" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20h4"/></symbol>
+  <symbol id="i-manage" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+  <symbol id="i-account" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></symbol>
+</svg>
+<h2 class="theme-h">Dark<span>Cinema Electric, staff mood</span></h2>
+<main class="stage th-dark" style="background:transparent">
+<!-- 1 · MANAGE → PRICING -->
+<section class="step" aria-label="Manage, Pricing rules (dark)">
+  <div class="cap">1 · Manage → Pricing · Pricing rules</div>
+  <div class="phone">
+    <div class="fold"></div>
+    <header class="app-h"><a class="back" href="#">‹ Manage</a><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Pricing</h1>
+      <p class="sub">2 branches · Basic</p>
+      <div class="tabs" role="tablist" aria-label="Pricing sections">
+        <a role="tab" aria-selected="false" href="#">Plans &amp; rates</a>
+        <a role="tab" aria-selected="true" href="#">Pricing rules</a>
+        <a role="tab" aria-selected="false" href="#">Coupons</a>
+      </div>
+      <div class="list gap-sec" role="tabpanel">
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Happy Hour</span><span class="status st-ok">Active</span></div>
+          <div class="rule-l num">Mon–Fri · 2:00–5:00 pm</div>
+          <div class="rule-s">PC Standard · All branches · ₹40 per hour</div>
+        </a>
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Late night</span><span class="status st-ok">Active</span></div>
+          <div class="rule-l num">Fri–Sat · 11:00 pm–2:00 am</div>
+          <div class="rule-s">PC Pro · Koregaon Park · ₹70 per hour</div>
+        </a>
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Exam week</span><span class="status st-info">Scheduled</span></div>
+          <div class="rule-l num">2–8 Nov · all day</div>
+          <div class="rule-s">All groups · Baner · 20% off</div>
+        </a>
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Diwali weekend</span><span class="status st-muted">Ended</span></div>
+          <div class="rule-l num">17–19 Oct · all day</div>
+          <div class="rule-s">All groups · All branches · 15% off</div>
+        </a>
+      </div>
+      <div class="actions"><a class="btn btn-s" href="#">New pricing rule</a></div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 2 · EDIT -->
+<section class="step" aria-label="Edit rate (dark)">
+  <div class="cap">2 · Edit the rate, choose one branch or all</div>
+  <div class="phone">
+    <header class="app-h"><a class="back" href="#">‹ Pricing</a><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Happy Hour</h1>
+      <p class="sub">Pricing rule · Mon–Fri, 2:00–5:00 pm · PC Standard</p>
+      <div class="card gap-sec">
+        <span class="chip-rule">Happy Hour</span>
+        <label>Hourly rate</label>
+        <div class="field focus num"><span>₹</span><span>35</span><span class="unit">per hour</span></div>
+        <p class="was num">Currently ₹40 per hour</p>
+        <div class="lbl" style="margin-top:32px">Apply to</div>
+        <div role="radiogroup">
+          <div class="radio"><span class="dot"></span>Koregaon Park</div>
+          <div class="radio"><span class="dot"></span>Baner</div>
+          <div class="radio on"><span class="dot"></span>All branches</div>
+        </div>
+      </div>
+      <div class="actions"><a class="btn btn-p" href="#">Preview changes</a></div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 3 · PREVIEW -->
+<section class="step" aria-label="Preview (dark)">
+  <div class="cap">3 · Preview affected branches, then send</div>
+  <div class="phone">
+    <header class="app-h"><a class="back" href="#">‹ Edit</a><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Check before sending</h1>
+      <p class="sub">Happy Hour · PC Standard</p>
+      <div class="gap-sec">
+        <div class="card"><div class="big num">₹40<span class="arrow">→</span>₹35<span class="u">per hour</span></div></div>
+        <div class="card">
+          <h2>Affected branches · 2</h2>
+          <div class="row"><div><div class="n">Koregaon Park</div><div class="s">Applies when the Hub next checks in</div></div><span class="status st-ok">Online</span></div>
+          <div class="row"><div><div class="n">Baner</div><div class="s">Offline since <span class="num">6:12 pm</span>. Waits until it reconnects.</div></div><span class="chip-off">Offline</span></div>
+        </div>
+      </div>
+      <p class="fine">Changes not picked up within 7 days expire and can be sent again.</p>
+      <div class="actions">
+        <a class="btn btn-p" href="#">Send to 2 branches</a>
+        <a class="btn btn-s" href="#">Back to edit</a>
+      </div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 4 · CHANGES -->
+<section class="step" aria-label="Changes (dark)">
+  <div class="cap">4 · Changes · one row per branch</div>
+  <div class="phone">
+    <header class="app-h"><span class="t">Manage</span><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Changes</h1>
+      <p class="sub">One row per branch. Status updates on its own.</p>
+      <div class="gap-sec">
+        <h2 class="sec">Today</h2>
+        <div class="list" aria-live="polite">
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div>
+            <div class="scope">Koregaon Park</div>
+            <div class="meta"><span class="status st-ok">Applied</span><span class="num">Queued 8:12 pm · applied 8:13 pm</span></div>
+          </div>
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div>
+            <div class="scope">Baner</div>
+            <div class="meta"><span class="status st-info">Waiting for branch</span><span class="num">Queued 8:12 pm</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="sec-gap">
+        <h2 class="sec">Earlier</h2>
+        <div class="list">
+          <div class="cmd">
+            <div class="what num">Cold coffee price ₹90 → ₹100</div>
+            <div class="scope">All branches</div>
+            <div class="meta"><span class="status st-ok">Applied</span><span class="num">20 Oct, 11:02 am</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 5 · STATES -->
+<section class="step" aria-label="Command row states (dark)">
+  <div class="cap">5 · command-row states</div>
+  <div class="phone">
+    <div class="fold"></div>
+    <header class="app-h"><span class="t">Manage</span><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Changes</h1>
+
+      <div class="gap-sec">
+        <h2 class="sec">Phone offline</h2>
+        <div class="list"><div class="cmd">
+          <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">All branches</div>
+          <div class="meta"><span class="status st-info">Queued on this device</span><span class="num">8:12 pm</span></div>
+          <p class="reason muted">Sends when this phone is back online, then shows “Waiting for branch”.</p>
+        </div></div>
+      </div>
+
+      <div class="sec-gap">
+        <h2 class="sec">Rejected</h2>
+        <div class="list">
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">Baner</div>
+            <div class="meta"><span class="status st-danger">Rejected</span><span class="num">Queued 8:12 pm</span></div>
+            <p class="reason">Device/Hub revoked</p>
+          </div>
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">Koregaon Park</div>
+            <div class="meta"><span class="status st-danger">Rejected</span><span class="num">Queued 8:12 pm</span></div>
+            <p class="reason">Couldn't apply at branch</p>
+            <div class="act"><a class="btn-sm" href="#">Retry</a></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec-gap">
+        <h2 class="sec">Expired after 7 days</h2>
+        <div class="list"><div class="cmd">
+          <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">Baner</div>
+          <div class="meta"><span class="status st-muted">Expired</span><span class="num">Queued 15 Oct · no check-in for 7 days</span></div>
+          <div class="act"><a class="btn-sm" href="#">Resend</a></div>
+        </div></div>
+      </div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+</main>
+<h2 class="theme-h">Light<span>“Cool paper” (-light tokens)</span></h2>
+<main class="stage th-light" style="background:transparent">
+<!-- 1 · MANAGE → PRICING -->
+<section class="step" aria-label="Manage, Pricing rules (light)">
+  <div class="cap">1 · Manage → Pricing · Pricing rules</div>
+  <div class="phone">
+    <div class="fold"></div>
+    <header class="app-h"><a class="back" href="#">‹ Manage</a><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Pricing</h1>
+      <p class="sub">2 branches · Basic</p>
+      <div class="tabs" role="tablist" aria-label="Pricing sections">
+        <a role="tab" aria-selected="false" href="#">Plans &amp; rates</a>
+        <a role="tab" aria-selected="true" href="#">Pricing rules</a>
+        <a role="tab" aria-selected="false" href="#">Coupons</a>
+      </div>
+      <div class="list gap-sec" role="tabpanel">
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Happy Hour</span><span class="status st-ok">Active</span></div>
+          <div class="rule-l num">Mon–Fri · 2:00–5:00 pm</div>
+          <div class="rule-s">PC Standard · All branches · ₹40 per hour</div>
+        </a>
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Late night</span><span class="status st-ok">Active</span></div>
+          <div class="rule-l num">Fri–Sat · 11:00 pm–2:00 am</div>
+          <div class="rule-s">PC Pro · Koregaon Park · ₹70 per hour</div>
+        </a>
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Exam week</span><span class="status st-info">Scheduled</span></div>
+          <div class="rule-l num">2–8 Nov · all day</div>
+          <div class="rule-s">All groups · Baner · 20% off</div>
+        </a>
+        <a class="rule" href="#">
+          <div class="rule-top"><span class="chip-rule">Diwali weekend</span><span class="status st-muted">Ended</span></div>
+          <div class="rule-l num">17–19 Oct · all day</div>
+          <div class="rule-s">All groups · All branches · 15% off</div>
+        </a>
+      </div>
+      <div class="actions"><a class="btn btn-s" href="#">New pricing rule</a></div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 2 · EDIT -->
+<section class="step" aria-label="Edit rate (light)">
+  <div class="cap">2 · Edit the rate, choose one branch or all</div>
+  <div class="phone">
+    <header class="app-h"><a class="back" href="#">‹ Pricing</a><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Happy Hour</h1>
+      <p class="sub">Pricing rule · Mon–Fri, 2:00–5:00 pm · PC Standard</p>
+      <div class="card gap-sec">
+        <span class="chip-rule">Happy Hour</span>
+        <label>Hourly rate</label>
+        <div class="field focus num"><span>₹</span><span>35</span><span class="unit">per hour</span></div>
+        <p class="was num">Currently ₹40 per hour</p>
+        <div class="lbl" style="margin-top:32px">Apply to</div>
+        <div role="radiogroup">
+          <div class="radio"><span class="dot"></span>Koregaon Park</div>
+          <div class="radio"><span class="dot"></span>Baner</div>
+          <div class="radio on"><span class="dot"></span>All branches</div>
+        </div>
+      </div>
+      <div class="actions"><a class="btn btn-p" href="#">Preview changes</a></div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 3 · PREVIEW -->
+<section class="step" aria-label="Preview (light)">
+  <div class="cap">3 · Preview affected branches, then send</div>
+  <div class="phone">
+    <header class="app-h"><a class="back" href="#">‹ Edit</a><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Check before sending</h1>
+      <p class="sub">Happy Hour · PC Standard</p>
+      <div class="gap-sec">
+        <div class="card"><div class="big num">₹40<span class="arrow">→</span>₹35<span class="u">per hour</span></div></div>
+        <div class="card">
+          <h2>Affected branches · 2</h2>
+          <div class="row"><div><div class="n">Koregaon Park</div><div class="s">Applies when the Hub next checks in</div></div><span class="status st-ok">Online</span></div>
+          <div class="row"><div><div class="n">Baner</div><div class="s">Offline since <span class="num">6:12 pm</span>. Waits until it reconnects.</div></div><span class="chip-off">Offline</span></div>
+        </div>
+      </div>
+      <p class="fine">Changes not picked up within 7 days expire and can be sent again.</p>
+      <div class="actions">
+        <a class="btn btn-p" href="#">Send to 2 branches</a>
+        <a class="btn btn-s" href="#">Back to edit</a>
+      </div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 4 · CHANGES -->
+<section class="step" aria-label="Changes (light)">
+  <div class="cap">4 · Changes · one row per branch</div>
+  <div class="phone">
+    <header class="app-h"><span class="t">Manage</span><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Changes</h1>
+      <p class="sub">One row per branch. Status updates on its own.</p>
+      <div class="gap-sec">
+        <h2 class="sec">Today</h2>
+        <div class="list" aria-live="polite">
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div>
+            <div class="scope">Koregaon Park</div>
+            <div class="meta"><span class="status st-ok">Applied</span><span class="num">Queued 8:12 pm · applied 8:13 pm</span></div>
+          </div>
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div>
+            <div class="scope">Baner</div>
+            <div class="meta"><span class="status st-info">Waiting for branch</span><span class="num">Queued 8:12 pm</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="sec-gap">
+        <h2 class="sec">Earlier</h2>
+        <div class="list">
+          <div class="cmd">
+            <div class="what num">Cold coffee price ₹90 → ₹100</div>
+            <div class="scope">All branches</div>
+            <div class="meta"><span class="status st-ok">Applied</span><span class="num">20 Oct, 11:02 am</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+
+<!-- 5 · STATES -->
+<section class="step" aria-label="Command row states (light)">
+  <div class="cap">5 · command-row states</div>
+  <div class="phone">
+    <div class="fold"></div>
+    <header class="app-h"><span class="t">Manage</span><span class="brand">Arena 360</span></header>
+    <div class="body">
+      <h1 class="h1">Changes</h1>
+
+      <div class="gap-sec">
+        <h2 class="sec">Phone offline</h2>
+        <div class="list"><div class="cmd">
+          <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">All branches</div>
+          <div class="meta"><span class="status st-info">Queued on this device</span><span class="num">8:12 pm</span></div>
+          <p class="reason muted">Sends when this phone is back online, then shows “Waiting for branch”.</p>
+        </div></div>
+      </div>
+
+      <div class="sec-gap">
+        <h2 class="sec">Rejected</h2>
+        <div class="list">
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">Baner</div>
+            <div class="meta"><span class="status st-danger">Rejected</span><span class="num">Queued 8:12 pm</span></div>
+            <p class="reason">Device/Hub revoked</p>
+          </div>
+          <div class="cmd">
+            <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">Koregaon Park</div>
+            <div class="meta"><span class="status st-danger">Rejected</span><span class="num">Queued 8:12 pm</span></div>
+            <p class="reason">Couldn't apply at branch</p>
+            <div class="act"><a class="btn-sm" href="#">Retry</a></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec-gap">
+        <h2 class="sec">Expired after 7 days</h2>
+        <div class="list"><div class="cmd">
+          <div class="what num">Happy Hour rate ₹40 → ₹35 /h</div><div class="scope">Baner</div>
+          <div class="meta"><span class="status st-muted">Expired</span><span class="num">Queued 15 Oct · no check-in for 7 days</span></div>
+          <div class="act"><a class="btn-sm" href="#">Resend</a></div>
+        </div></div>
+      </div>
+    </div>
+    <nav class="tabbar" aria-label="Owner app">
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a>
+      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+    </nav>
+
+  </div>
+</section>
+</main>
+<div class="notes">
+  <div><b>Status is colour + word</b>Every command-row carries a status-badge: pending (Queued on this device, Waiting for branch) = info, applied = ok, rejected = danger, expired = text-muted. Changes are announced politely (aria-live). Rejections show only “Device/Hub revoked” or “Couldn't apply at branch” + Retry; Expired offers Resend. The app offers only valid targets, so other failures don't reach the list.</div>
+  <div><b>Pricing and sending</b>Manage → Pricing has three sections under a tab-control: Plans &amp; rates · Pricing rules · Coupons. Rule rows show schedule, group, branches and status. Price, product and plan changes send with no MFA prompt; fresh MFA is kept for staff users and roles, revoking a device or Hub, and backup restore.</div>
+  <div><b>Themes and rhythm</b>Light theme maps every token to its -light twin: accent fills carry white ink, focus is a single 2px accent-text ring. Dark keeps the double ring (accent inner, white outer). Gutter 16 · header 64 · tab bar 64 with Manage active · card padding 24 · 40 between title and content. Dashed lines in frames 1 and 5 mark the 844 fold.</div>
+</div>
+</body>
+</html>

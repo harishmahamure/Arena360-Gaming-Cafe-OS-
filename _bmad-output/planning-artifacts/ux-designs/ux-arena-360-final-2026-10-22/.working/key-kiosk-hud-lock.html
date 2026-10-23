@@ -4,7 +4,7 @@
 <style>
 /* Governing spine sections (spines win on conflict):
    DESIGN Components: hud-pill, hud-toast, button-warning, button-secondary, lock-screen (variant a: grace countdown), scrim · Colors: HUD toast · Typography: hud-numeric, kiosk-display (tabular) · Elevation: HUD toast shadow
-   EXPERIENCE Component Patterns: hud-pill, hud-toast, extend-options (entry), lock-screen · Interaction Primitives: Keyboard (global Extend hotkey), HUD never steals focus · Accessibility Floor: Timed warnings · Voice: "10 min left. Extend?" · Journey 3 steps 6–9
+   EXPERIENCE Component Patterns: hud-pill, hud-toast, extend-options (entry), lock-screen · Interaction Primitives: Keyboard (global Extend hotkey), HUD never steals focus · Accessibility Floor: Timed warnings + known limitation (fullscreen-exclusive = taskbar flash + sound) · Voice: "10 min left. Extend?" · Journey 3 steps 6–9
    Placeholder art = CSS gradients standing in for control-plane cover art / muted game video. */
 
 :root{
@@ -234,7 +234,7 @@ h2.sec small{font-weight:400;color:var(--text-muted);margin-left:8px}
 .hk2{display:flex;align-items:center;gap:8px;font-size:18px}
 
 </style></head><body>
-<header class="doc"><div class="dn">Arena 360 · Kiosk key screen · Overlay HUD</div><h1>Kiosk HUD & Time-up</h1><p>Top: in-game, with the always-on-top HUD pill (time left and balance) and the persistent amber 10-minute warning toast (Extend, Dismiss and the Extend hotkey key cap). The HUD never takes focus. Bottom: time's up, with the 2-minute grace countdown in display digits over the still-visible game under the scrim, and Extend still on offer.</p><ul><li><b>DESIGN</b> Components: hud-pill, hud-toast, button-warning, button-secondary, lock-screen (variant a: grace countdown), scrim · Colors: HUD toast · Typography: hud-numeric, kiosk-display (tabular) · Elevation: HUD toast shadow</li><li><b>EXPERIENCE</b> Component Patterns: hud-pill, hud-toast, extend-options (entry), lock-screen · Interaction Primitives: Keyboard (global Extend hotkey), HUD never steals focus · Accessibility Floor: Timed warnings · Voice: "10 min left. Extend?" · Journey 3 steps 6–9</li></ul></header>
+<header class="doc"><div class="dn">Arena 360 · Kiosk key screen · Overlay HUD</div><h1>Kiosk HUD & Time-up</h1><p>Top: in-game, with the always-on-top HUD pill (time left and balance) and the persistent amber 10-minute warning toast (Extend, Dismiss and the Extend hotkey key cap). The HUD never takes focus. Bottom: time's up, with the 2-minute grace countdown in display digits over the still-visible game under the scrim, and Extend still on offer.</p><ul><li><b>DESIGN</b> Components: hud-pill, hud-toast, button-warning, button-secondary, lock-screen (variant a: grace countdown), scrim · Colors: HUD toast · Typography: hud-numeric, kiosk-display (tabular) · Elevation: HUD toast shadow</li><li><b>EXPERIENCE</b> Component Patterns: hud-pill, hud-toast, extend-options (entry), lock-screen · Interaction Primitives: Keyboard (global Extend hotkey), HUD never steals focus · Accessibility Floor: Timed warnings + known limitation (fullscreen-exclusive = taskbar flash + sound) · Voice: "10 min left. Extend?" · Journey 3 steps 6–9</li></ul></header>
 <main>
 <section aria-label="HUD · 10-min warning">
 <h2 class="sec">HUD · 10-min warning <small>persistent until dismissed or time-up</small></h2>
@@ -252,7 +252,7 @@ h2.sec small{font-weight:400;color:var(--text-muted);margin-left:8px}
  </div>
 </div>
 </div></div></div>
-<ul class="notes"><li>Warning toasts at 10, 5 and 1 min (plus low balance) come with a sound and stay until dismissed. They never steal focus from the game.</li><li>The kiosk time chip turns amber with a ⚠ at 10 min in the shell too. The HUD pill hides in fullscreen-exclusive games; at 5 and 1 min the kiosk briefly forces a visible warning so none is sound-only.</li><li>The hotkey opens the expanded HUD (extend-options) with focus on the first option.</li></ul>
+<ul class="notes"><li>Warning toasts at 10, 5 and 1 min (plus low balance) come with a sound and stay until dismissed. They never steal focus from the game.</li><li>The kiosk time chip turns amber with a ⚠ at 10 min in the shell too. The HUD pill hides in fullscreen-exclusive games and no overlay is forced over the game; at 5 and 1 min the kiosk instead flashes its taskbar button and plays the warning sound.</li><li><b>Known limitation (accepted):</b> in true fullscreen-exclusive games the taskbar flash may be invisible, so the 5- and 1-min warnings can be effectively sound-only for deaf and hard-of-hearing players. The 10-min chip warning, the grace lock screen and Extend by hotkey still apply (EXPERIENCE.md Accessibility Floor).</li><li>The hotkey opens the expanded HUD (extend-options) with focus on the first option.</li></ul>
 </section><section aria-label="Time-up · grace countdown">
 <h2 class="sec">Time-up · grace countdown <small>lock-screen variant (a)</small></h2>
 <div class="browser"><div class="bbar"><i></i><i></i><i></i><span>Overlay HUD · PC-07 · 1920×1080 · scaled to fit</span></div>

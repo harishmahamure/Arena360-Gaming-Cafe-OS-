@@ -6,58 +6,69 @@
 <title>Owner Today</title>
 <style>
 /*
-  KEY SCREEN — Owner app · Today (phone 390 wide + desktop web 1440 wide), rendered 1:1
+  KEY SCREEN — Owner app · Today. Phone 390 + desktop web 1440, each in DARK (Cinema Electric) and LIGHT ("Cool paper"), rendered 1:1.
   Governing spine sections:
-    DESIGN.md  — Brand & Style (staff mood); Colors; Typography (web-display, web-body, hub-numeric, hub-label, hub-micro);
-                 Layout & Spacing (AIRY posture; Owner app row: gutter 40 / phone 16, section gap 56, card padding 32 / phone 24,
-                 header 64, sidebar 256; phone tab bar 64); Elevation (staff: no shadows); Shapes;
-                 Components: owner-nav, card, metric-figure, status-badge, chip-offline, alert-badge, tier-lock, focus-ring
-    EXPERIENCE — Information Architecture (Owner app: owner-nav Today · Reports · Alerts · Manage · Account; Live view in sidebar,
-                 locked below Premium; Today per branch + "Needs attention"); Component Patterns (owner-nav, metric-figure, status-badge,
-                 tier-lock); State Patterns (Data age / pending command; Owner PWA no-network = open); Tier Gating; Voice (staff)
-  Variance = counted − expected (+ over, − short). Cash variance on Today cards is an ASSUMPTION (confirm at mock walkthrough).
-  Spacing scale 4·8·12·16·24·32·40·56·64·80·96·128 — no off-scale values in the product UI below.
+    DESIGN.md  — Colors (dark tokens; Light theme `*-light` "Cool paper": mapping hub-bg/hub-header→bg-light, hub-tile→surface-light,
+                 hub-line→line-light; accent-light fills only, accent-text-light for links + focus; warning-text-light for warning ink/edges);
+                 Typography (web-display, web-body, hub-numeric, hub-label, hub-micro); Layout & Spacing › Owner app
+                 (gutter 40/16, section gap 56, card padding 32/24, header 64, sidebar 256, tab bar 64; Live view button on each phone card);
+                 Components › Owner and Web (metric-figure incl. per-shift cash variance, owner-nav, command-row status), tier-lock, focus-ring.
+    EXPERIENCE — Information Architecture › Owner app (Today; Live view sidebar on desktop / card button on phone, locked below Premium);
+                 Component Patterns › metric-figure, owner-nav, command-row; State Patterns (Data age / pending command; No network › Owner PWA
+                 "Queued on this device" → "Waiting for branch"); Offline & Sync; Tier Gating; Voice (staff register).
+  Variance = counted − expected (+ over, − short); over threshold = warning edge + label (confirmed).
+  Spacing scale 4·8·12·16·24·32·40·56·64·80·96·128 — no off-scale values in product UI.
 */
-:root{
+/* ── Theme tokens: DESIGN.md Colors (dark "Cinema Electric") + Light theme "Cool paper" (-light). Owner app + web only. ── */
+.th-dark{
   --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
-  --text:#F5F2FF;--muted:#ACA5CC;--accent:#FF4FA8;
-  --ok:#5FE6A0;--warning:#FFBE3D;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
-  --chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
-  --hub-bg:#0B0920;--hub-tile:#141030;--hub-line:#2A2350;
-  /* owner spacing tokens */
-  --owner-gutter:40px;--owner-gutter-phone:16px;--owner-section-gap:56px;
-  --owner-card-padding:32px;--owner-card-padding-phone:24px;--owner-header-height:64px;--owner-sidebar-width:256px;--tab-bar:64px;
+  --text:#F5F2FF;--muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;--accent-text:#FF4FA8;
+  --ok:#5FE6A0;--warning:#FFBE3D;--warning-ink:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;--metric:#F5F2FF;
+  --focus-outline:2px solid #FF4FA8;--focus-shadow:0 0 0 6px #F5F2FF;
+  color-scheme:dark;background:var(--bg);color:var(--text);
 }
+.th-light{
+  --bg:#F6F5FC;--surface:#FFFFFF;--surface-2:#ECEAF7;--line:#DCD8EE;--border-strong:#7A72A8;
+  --text:#16123A;--muted:#555075;--accent:#D4127A;--on-accent:#FFFFFF;--accent-text:#AD0E63;
+  --ok:#0E7A46;--warning:#FFBE3D;--warning-ink:#8F5300;--on-warning:#1E1300;--danger:#C21F2E;--on-danger:#FFFFFF;--info:#1F56C2;
+  --chip-rule-bg:#FCE4F0;--chip-rule-text:#940B54;--chip-off-bg:#FDE6E6;--chip-off-text:#A3141F;
+  /* hub tones map: hub-bg/hub-header -> bg-light, hub-tile -> surface-light, hub-line -> line-light */
+  --hub-bg:#F6F5FC;--hub-header:#F6F5FC;--hub-tile:#FFFFFF;--hub-line:#DCD8EE;--metric:#16123A;
+  --focus-outline:2px solid #AD0E63;--focus-shadow:none;
+  color-scheme:light;background:var(--bg);color:var(--text);
+}
+.focus{outline:var(--focus-outline);outline-offset:2px;box-shadow:var(--focus-shadow)}
+/* light theme: warning fills always edged with warning-ink (1.5:1 on bg) */
+.th-light .warn-fill{border:1px solid var(--warning-ink)}
+
+:root{--owner-gutter:40px;--owner-gutter-phone:16px;--owner-section-gap:56px;--owner-card-padding:32px;--owner-card-padding-phone:24px;--owner-header-height:64px;--owner-sidebar-width:256px;--tab-bar:64px}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#05040f;color:var(--text);font-family:Sora,"Sora Variable",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:56px 40px 80px;-webkit-font-smoothing:antialiased}
+body{background:#1d1b2a;color:#EDEAF8;font-family:Sora,"Sora Variable",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:56px 40px 80px;-webkit-font-smoothing:antialiased}
 .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
 a{color:inherit}
-
-/* ── presentation page (not product UI) ── */
-.page-h{max-width:1960px;margin:0 auto 40px}
-.page-h h1{font-weight:300;font-size:32px;letter-spacing:-.01em}
-.page-h p{color:var(--muted);font-size:15px;margin-top:8px;max-width:960px;line-height:1.6}
-.stage{display:flex;gap:64px;align-items:flex-start;max-width:1960px;margin:0 auto}
-.cap{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:16px}
-.notes{max-width:1960px;margin:56px auto 0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
-.notes div{border:1px solid var(--hub-line);border-radius:16px;padding:24px;font-size:13px;line-height:1.65;color:var(--muted)}
-.notes b{display:block;color:var(--text);font-weight:600;margin-bottom:8px;font-size:14px}
-.open{display:block;font-size:12px;line-height:1.5;color:var(--warning);border:1px dashed var(--warning);border-radius:6px;padding:8px 12px;margin-top:12px}
-.fold{position:absolute;left:0;right:0;top:844px;border-top:1px dashed #5a4f8a;pointer-events:none}
-
+/* presentation chrome (not product UI) */
+.page-h{max-width:1900px;margin:0 auto 40px}
+.page-h h1{font-weight:300;font-size:32px}
+.page-h p{color:#B9B4D2;font-size:15px;margin-top:8px;max-width:1040px;line-height:1.6}
+.row{display:flex;gap:48px;align-items:flex-start;max-width:1900px;margin:0 auto 80px;flex-wrap:wrap}
+.cap{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#B9B4D2;font-weight:700;margin-bottom:16px;max-width:410px;line-height:1.5}
+.cap.wide{max-width:none}
+.notes{max-width:1900px;margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.notes div{border:1px solid #3a3655;border-radius:16px;padding:24px;font-size:13px;line-height:1.65;color:#B9B4D2}
+.notes b{display:block;color:#EDEAF8;font-weight:600;margin-bottom:8px;font-size:14px}
+.fold{position:absolute;left:0;right:0;top:844px;border-top:1px dashed var(--border-strong);pointer-events:none;opacity:.6}
 /* device frames */
-.phone{width:410px;min-height:864px;border-radius:48px;border:10px solid #000;outline:1px solid var(--hub-line);background:var(--bg);overflow:hidden;position:relative;flex:none;display:flex;flex-direction:column}
-.browser{width:1442px;flex:none;border-radius:16px;border:1px solid var(--hub-line);overflow:hidden;background:var(--bg)}
+.phone{width:410px;min-height:864px;border-radius:48px;border:10px solid #000;overflow:hidden;position:relative;flex:none;display:flex;flex-direction:column}
+.browser{width:1442px;flex:none;border-radius:16px;border:1px solid #3a3655;overflow:hidden}
 .browser .bar{height:40px;background:#000;display:flex;align-items:center;gap:8px;padding:0 16px}
-.browser .bar i{width:12px;height:12px;border-radius:50%;background:var(--hub-line);display:block}
-.browser .bar .url{margin-left:16px;flex:1;max-width:520px;height:24px;border-radius:8px;background:var(--hub-tile);color:var(--muted);font-size:12px;display:flex;align-items:center;padding:0 12px}
-
-/* ── product UI ── */
+.browser .bar i{width:12px;height:12px;border-radius:50%;background:#2A2350;display:block}
+.browser .bar .url{margin-left:16px;flex:1;max-width:520px;height:24px;border-radius:8px;background:#141030;color:#ACA5CC;font-size:12px;display:flex;align-items:center;padding:0 12px}
+/* product UI */
 .h1{font-size:40px;font-weight:300;line-height:1.15;letter-spacing:-.01em}
 .sub{color:var(--muted);font-size:16px;margin-top:8px;line-height:1.5}
-.sec-h{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
-
-/* owner-nav */
+.sec-h{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
 .ic{width:24px;height:24px;flex:none}
 .sidebar{width:var(--owner-sidebar-width);background:var(--hub-bg);border-right:1px solid var(--hub-line);display:flex;flex-direction:column;flex:none;padding:0 24px 32px}
 .sidebar .brand{height:var(--owner-header-height);display:flex;align-items:center;font-weight:800;font-size:16px;letter-spacing:.02em;margin-bottom:24px}
@@ -66,83 +77,70 @@ a{color:inherit}
 .sidebar a[aria-current]{background:var(--hub-line);color:var(--text);font-weight:600}
 .sidebar a .tail{margin-left:auto}
 .sidebar .split{height:1px;background:var(--hub-line);margin:16px 0}
-.sidebar .locked{color:var(--muted)}
 .sidebar .acct{margin-top:auto}
-.tabbar{height:var(--tab-bar);border-top:1px solid var(--border-strong);background:var(--hub-bg);display:grid;grid-template-columns:repeat(5,1fr);flex:none;position:sticky;bottom:0}
+.lock-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.tabbar{height:var(--tab-bar);border-top:1px solid var(--border-strong);background:var(--hub-bg);display:grid;grid-template-columns:repeat(5,1fr);flex:none;margin-top:auto}
 .tabbar a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-decoration:none;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;position:relative;min-height:44px}
 .tabbar a[aria-current]{color:var(--text);background:var(--hub-line)}
 .tabbar .dot{position:absolute;top:8px;left:calc(50% + 4px)}
-.focus{outline:2px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 6px var(--text)}
-
-/* header */
-.app-h{height:var(--owner-header-height);display:flex;align-items:center;gap:24px;border-bottom:1px solid var(--hub-line);flex:none}
+.app-h{height:var(--owner-header-height);display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--hub-line);background:var(--hub-header);flex:none}
 .phone .app-h{padding:0 var(--owner-gutter-phone)}
 .brand-m{font-weight:800;font-size:16px;letter-spacing:.02em}
 .h-meta{font-size:13px;font-weight:500;color:var(--muted)}
 .avatar{width:32px;height:32px;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-strong);display:grid;place-items:center;font-size:13px;font-weight:600}
-
-/* badges */
 .status{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;background:var(--hub-tile);white-space:nowrap;line-height:1.2}
-.st-ok{color:var(--ok)}.st-info{color:var(--info)}
+.st-ok{color:var(--ok)}.st-info{color:var(--info)}.st-muted{color:var(--muted);border-style:dashed}
 .chip-off{background:var(--chip-off-bg);color:var(--chip-off-text);border-radius:9999px;font-size:13px;font-weight:500;padding:4px 12px;white-space:nowrap;line-height:1.5}
 .alert-badge{background:var(--danger);color:var(--on-danger);border-radius:9999px;font-size:11px;font-weight:700;letter-spacing:.06em;padding:4px 8px;text-transform:uppercase;white-space:nowrap;line-height:1.2;display:inline-block}
-.assume{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px dashed var(--border-strong);border-radius:6px;padding:2px 6px;margin-left:8px;vertical-align:1px;white-space:nowrap}
-
-/* card + metric-figure */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:var(--owner-card-padding)}
 .phone .card{padding:var(--owner-card-padding-phone)}
 .card-h{display:flex;align-items:center;gap:12px;margin-bottom:32px}
 .card-h h3{font-size:18px;font-weight:600;line-height:1.3;flex:1}
 .metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px 24px}
-.desk .metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
 .m .l{font-size:13px;font-weight:500;color:var(--muted);line-height:1.4}
-.m .v{font-size:26px;font-weight:800;line-height:1.15;margin-top:8px}
+.m .v{font-size:26px;font-weight:800;line-height:1.15;margin-top:8px;color:var(--metric)}
 .m .v .w{font-size:13px;font-weight:500;color:var(--muted);margin-left:4px}
 .m .age{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:8px}
 .m.wide{grid-column:1/-1}
-.desk .m.wide{grid-column:span 2}
 .m.var{border-top:1px solid var(--line);padding-top:24px}
-.m.over{border:1px solid var(--warning);border-radius:16px;padding:16px}
-.m .flag{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--warning);margin-left:12px}
+.m.over{border:1px solid var(--warning-ink);border-radius:16px;padding:16px}
+.m .flag{display:block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--warning-ink);margin-top:8px}
 .stale .v{color:var(--muted)}
-.pending{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:32px;font-size:13px;color:var(--muted);line-height:1.5}
+.pending{display:flex;flex-direction:column;gap:12px;margin-top:32px}
+.pending .pr{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--muted);line-height:1.5}
 .foot{margin-top:32px;padding-top:24px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between}
-
-/* needs attention */
+.lv-btn{margin-top:24px;width:100%;min-height:44px;border-radius:9999px;border:1px solid var(--border-strong);background:transparent;color:var(--muted);font:inherit;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:12px;padding:0 24px;opacity:1}
+.lv-btn .lock-tag{color:var(--muted)}
+.lv-note{margin-top:8px;font-size:13px;color:var(--muted);text-align:center;line-height:1.5}
+.lv-note a{color:var(--accent-text);text-decoration:underline;text-underline-offset:3px;font-weight:600}
 .na ul{list-style:none}
 .na li{display:flex;gap:16px;align-items:flex-start;padding:24px 0;border-top:1px solid var(--line)}
 .na li:first-child{border-top:0;padding-top:0}
 .na li:last-child{padding-bottom:0}
 .na .t{font-size:15px;line-height:1.5}
 .na .meta{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.5}
-.na .go{margin-left:auto;font-size:13px;text-decoration:underline;text-underline-offset:3px;min-height:44px;display:inline-flex;align-items:center;white-space:nowrap;margin-top:-12px}
-
-/* tier-lock */
-.tier{display:flex;gap:12px;align-items:center;color:var(--muted);font-size:13px;font-weight:500;flex-wrap:wrap}
-.tier a{color:var(--text);text-decoration:underline;text-underline-offset:3px;min-height:44px;display:inline-flex;align-items:center}
-
-/* layouts */
+.na .go{margin-left:auto;font-size:13px;color:var(--accent-text);text-decoration:underline;text-underline-offset:3px;min-height:44px;display:inline-flex;align-items:center;white-space:nowrap;margin-top:-12px}
+.net{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:24px;padding:16px;border:1px solid var(--border-strong);border-radius:16px;background:var(--surface-2);font-size:13px;line-height:1.5;color:var(--text)}
 .phone .body{flex:1;padding:40px var(--owner-gutter-phone) var(--owner-section-gap)}
 .phone .phone-sec{margin-top:var(--owner-section-gap)}
 .phone .stack{display:flex;flex-direction:column;gap:32px}
-.desk-wrap{display:flex;min-height:1180px}
+.desk-wrap{display:flex;min-height:1100px}
 .desk-main{flex:1;display:flex;flex-direction:column;min-width:0}
 .desk-main .app-h{padding:0 var(--owner-gutter)}
 .desk{max-width:1200px;width:100%;padding:var(--owner-gutter);padding-bottom:80px}
 .desk .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px;align-items:stretch}
 .desk .two .card{display:flex;flex-direction:column}
 .desk .two .foot{margin-top:auto}
-.desk .two .card>*:nth-last-child(2){margin-bottom:32px}
+.desk .two .metrics{margin-bottom:32px}
 .desk .sec{margin-top:var(--owner-section-gap)}
+.desk .m.var{border-top:0;padding-top:0}
 </style>
 </head>
 <body>
 <header class="page-h">
-  <h1>Owner app · Today</h1>
-  <p>Vikram, two Pune branches, Basic tier. Koregaon Park is live. Baner went offline at 6:12 pm, so its figures keep their last values and their data age keeps growing. Phone: bottom tab bar. Desktop: 256px left sidebar. Live view is locked below Premium.</p>
+  <h1>Owner app · Today — dark and light</h1>
+  <p>Vikram, two Pune branches, Basic tier. Koregaon Park is live; Baner went offline at 6:12 pm, so its figures keep their last values in muted ink and their data age grows. Each phone branch card ends with a Live view button, locked below Premium. Columns 3–4: Vikram’s phone has no connection, so Today shows saved figures and a new rate change waits as “Queued on this device”. Theme follows the OS; switch in Account → Theme.</p>
 </header>
-
-<!-- shared icon sprites -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-today" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></symbol>
   <symbol id="i-reports" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 20V12M12 20V5M19 20v-6"/></symbol>
@@ -152,160 +150,272 @@ a{color:inherit}
   <symbol id="i-live" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/></symbol>
   <symbol id="i-lock" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="6" width="10" height="7" rx="1.5"/><path d="M3.5 6V4a2.5 2.5 0 0 1 5 0v2"/></symbol>
 </svg>
-
-<main class="stage">
-
-<!-- ─────────────── PHONE 390 ─────────────── -->
-<section aria-label="Phone">
-  <div class="cap">Phone · 390 wide · full scroll length (dashed line = 844 fold)</div>
-  <div class="phone">
-    <div class="fold"></div>
-    <header class="app-h">
-      <span class="brand-m">Arena 360</span>
-      <span class="h-meta" style="margin-left:auto">2 branches</span>
-    </header>
-
-    <div class="body">
-      <h1 class="h1">Today</h1>
-      <p class="sub">Thursday, 22 October · <span class="num">8:41 pm</span></p>
-
-      <div class="phone-sec stack">
-        <!-- Branch 1 online -->
-        <article class="card" aria-labelledby="p-b1">
-          <div class="card-h"><h3 id="p-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div>
-          <div class="metrics">
-            <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 1 min ago</div></div>
-            <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 1 min ago</div></div>
-            <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 1 min ago</div></div>
-            <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 1 min ago</div></div>
-            <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span><span class="flag">Over threshold</span></div><div class="age">closed 2:05 pm<span class="assume">Assumption</span></div></div>
-          </div>
-          <div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div>
-        </article>
-
-        <!-- Branch 2 offline -->
-        <article class="card" aria-labelledby="p-b2">
-          <div class="card-h"><h3 id="p-b2">Baner</h3><span class="chip-off">Branch offline</span></div>
-          <div class="metrics stale">
-            <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 29 min ago</div></div>
-            <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 29 min ago</div></div>
-            <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 29 min ago</div></div>
-            <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 29 min ago</div></div>
-            <div class="m wide var"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">closed 2:31 pm<span class="assume">Assumption</span></div></div>
-          </div>
-          <div class="pending"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div>
-          <div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div>
-        </article>
-      </div>
-
-      <section class="phone-sec" aria-labelledby="p-na">
-        <h2 class="sec-h" id="p-na">Needs attention</h2>
-        <div class="card na">
-          <ul aria-live="polite">
-            <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: “Change given twice” · Neha approved</div></div></li>
-            <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally.</div></div></li>
-          </ul>
-        </div>
-      </section>
-
-      <section class="phone-sec" aria-labelledby="p-lv">
-        <h2 class="sec-h" id="p-lv">Live view</h2>
-        <div class="card">
-          <div class="tier"><svg class="ic" style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg><span>Available on Premium</span><a href="#">Upgrade</a></div>
-        </div>
-      </section>
+<main>
+<div class="row">
+  <section aria-label="Phone dark"><div class="cap">Phone · 390 · Dark · online</div><div class="phone th-dark">
+  <div class="fold"></div>
+  <header class="app-h"><span class="brand-m">Arena 360</span><span class="h-meta" style="margin-left:auto">2 branches</span></header>
+  <div class="body">
+    <h1 class="h1">Today</h1>
+    <p class="sub">Thursday, 22 October · <span class="num">8:41 pm</span></p>
+    
+    <div class="phone-sec stack">
+      <article class="card" aria-labelledby="pd-b1"><div class="card-h"><h3 id="pd-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div><div class="metrics">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 1 min ago</div></div>
+  <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span></div><span class="flag">Over threshold</span><div class="age">counted − expected · closed 2:05 pm</div></div>
+</div><div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="pd-b1-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="pd-b1-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
+      <article class="card" aria-labelledby="pd-b2"><div class="card-h"><h3 id="pd-b2">Baner</h3><span class="chip-off">Branch offline</span></div><div class="metrics stale">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m wide var"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">counted − expected · closed 2:31 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="pd-b2-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="pd-b2-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
     </div>
-
-    <nav class="tabbar" aria-label="Owner app">
-      <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
-      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
-      <a href="#" aria-label="Alerts, 2 new"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg><span class="alert-badge dot">2</span>Alerts</a>
-      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
-      <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
-    </nav>
+    <section class="phone-sec" aria-labelledby="pd-na">
+      <h2 class="sec-h" id="pd-na">Needs attention</h2>
+      <div class="card na"><ul>
+        <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: Counting error · Neha approved</div></div></li>
+        <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally.</div></div></li>
+      </ul></div>
+    </section>
   </div>
-  <span class="open" style="max-width:410px">[open] Live view’s entry point on phone is not decided. Shown here as a locked Today section.</span>
-</section>
-
-<!-- ─────────────── DESKTOP 1440 ─────────────── -->
-<section aria-label="Desktop web">
-  <div class="cap">Desktop web · 1440 wide · sidebar 256 · content max 1200 · full page length</div>
-  <div class="browser">
-    <div class="bar"><i></i><i></i><i></i><div class="url">app.arena360.in/today</div></div>
-    <div class="desk-wrap">
-      <aside class="sidebar">
-        <div class="brand">Arena 360</div>
-        <nav aria-label="Owner app">
-          <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
-          <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
-          <a href="#" class="focus"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts<span class="alert-badge tail" aria-label="2 new">2</span></a>
-          <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
-          <div class="split" role="presentation"></div>
-          <a href="#" class="locked" aria-label="Live view, available on Premium"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="tail" style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></a>
-          <a href="#" class="acct"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
-        </nav>
-      </aside>
-
-      <div class="desk-main">
-        <header class="app-h">
-          <span class="h-meta">Thursday, 22 October · <span class="num">8:41 pm</span></span>
-          <span class="h-meta" style="margin-left:auto">2 branches</span>
-          <span class="avatar" aria-label="Vikram">V</span>
-        </header>
-
-        <div class="desk">
-          <h1 class="h1">Today</h1>
-          <p class="sub">Figures come from each branch’s last sync. Offline branches keep their last values.</p>
-
-          <section class="sec" aria-label="Branches">
-            <div class="two">
-              <article class="card" aria-labelledby="d-b1">
-                <div class="card-h"><h3 id="d-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div>
-                <div class="metrics">
-                  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 1 min ago</div></div>
-                  <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 1 min ago</div></div>
-                  <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 1 min ago</div></div>
-                  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 1 min ago</div></div>
-                  <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span><span class="flag">Over threshold</span></div><div class="age">closed 2:05 pm<span class="assume">Assumption</span></div></div>
-                </div>
-                <div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div>
-              </article>
-
-              <article class="card" aria-labelledby="d-b2">
-                <div class="card-h"><h3 id="d-b2">Baner</h3><span class="chip-off">Branch offline</span></div>
-                <div class="metrics stale">
-                  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 29 min ago</div></div>
-                  <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 29 min ago</div></div>
-                  <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 29 min ago</div></div>
-                  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 29 min ago</div></div>
-                  <div class="m wide var" style="border-top:0;padding-top:0"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">closed 2:31 pm<span class="assume">Assumption</span></div></div>
-                </div>
-                <div class="pending"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div>
-                <div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div>
-              </article>
-            </div>
-          </section>
-
-          <section class="sec" aria-labelledby="d-na">
-            <h2 class="sec-h" id="d-na">Needs attention</h2>
-            <div class="card na">
-              <ul aria-live="polite">
-                <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: “Change given twice” · Neha approved</div></div><a class="go" href="#">Open shift report</a></li>
-                <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally. Changes wait until it reconnects.</div></div><a class="go" href="#">View branch</a></li>
-              </ul>
-            </div>
-          </section>
-        </div>
+  <nav class="tabbar" aria-label="Owner app">
+    <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+    <a href="#" aria-label="Alerts, 2 new"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg><span class="alert-badge dot">2</span>Alerts</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+  </nav>
+</div></section>
+  <section aria-label="Phone light"><div class="cap">Phone · 390 · Light (Cool paper) · online</div><div class="phone th-light">
+  <div class="fold"></div>
+  <header class="app-h"><span class="brand-m">Arena 360</span><span class="h-meta" style="margin-left:auto">2 branches</span></header>
+  <div class="body">
+    <h1 class="h1">Today</h1>
+    <p class="sub">Thursday, 22 October · <span class="num">8:41 pm</span></p>
+    
+    <div class="phone-sec stack">
+      <article class="card" aria-labelledby="pl-b1"><div class="card-h"><h3 id="pl-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div><div class="metrics">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 1 min ago</div></div>
+  <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span></div><span class="flag">Over threshold</span><div class="age">counted − expected · closed 2:05 pm</div></div>
+</div><div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="pl-b1-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="pl-b1-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
+      <article class="card" aria-labelledby="pl-b2"><div class="card-h"><h3 id="pl-b2">Baner</h3><span class="chip-off">Branch offline</span></div><div class="metrics stale">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m wide var"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">counted − expected · closed 2:31 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="pl-b2-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="pl-b2-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
+    </div>
+    <section class="phone-sec" aria-labelledby="pl-na">
+      <h2 class="sec-h" id="pl-na">Needs attention</h2>
+      <div class="card na"><ul>
+        <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: Counting error · Neha approved</div></div></li>
+        <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally.</div></div></li>
+      </ul></div>
+    </section>
+  </div>
+  <nav class="tabbar" aria-label="Owner app">
+    <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+    <a href="#" aria-label="Alerts, 2 new"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg><span class="alert-badge dot">2</span>Alerts</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+  </nav>
+</div></section>
+  <section aria-label="Phone dark offline"><div class="cap">Phone · Dark · this device offline</div><div class="phone th-dark">
+  <div class="fold"></div>
+  <header class="app-h"><span class="brand-m">Arena 360</span><span class="chip-off" style="margin-left:auto">No connection</span></header>
+  <div class="body">
+    <h1 class="h1">Today</h1>
+    <p class="sub">Thursday, 22 October · <span class="num">8:44 pm</span></p>
+    <div class="net" role="status"><span>Showing saved figures. Changes you make wait here as <b>Queued on this device</b> and send when you’re back online.</span></div>
+    <div class="phone-sec stack">
+      <article class="card" aria-labelledby="pdo-b1"><div class="card-h"><h3 id="pdo-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div><div class="metrics">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 4 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 4 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 4 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 4 min ago</div></div>
+  <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span></div><span class="flag">Over threshold</span><div class="age">counted − expected · closed 2:05 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-muted">Queued on this device</span><span>Weekend rate ₹90/h · <span class="num">8:44 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="pdo-b1-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="pdo-b1-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
+      <article class="card" aria-labelledby="pdo-b2"><div class="card-h"><h3 id="pdo-b2">Baner</h3><span class="chip-off">Branch offline</span></div><div class="metrics stale">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m wide var"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">counted − expected · closed 2:31 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="pdo-b2-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="pdo-b2-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
+    </div>
+    <section class="phone-sec" aria-labelledby="pdo-na">
+      <h2 class="sec-h" id="pdo-na">Needs attention</h2>
+      <div class="card na"><ul>
+        <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: Counting error · Neha approved</div></div></li>
+        <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally.</div></div></li>
+      </ul></div>
+    </section>
+  </div>
+  <nav class="tabbar" aria-label="Owner app">
+    <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+    <a href="#" aria-label="Alerts, 2 new"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg><span class="alert-badge dot">2</span>Alerts</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+  </nav>
+</div></section>
+  <section aria-label="Phone light offline"><div class="cap">Phone · Light · this device offline</div><div class="phone th-light">
+  <div class="fold"></div>
+  <header class="app-h"><span class="brand-m">Arena 360</span><span class="chip-off" style="margin-left:auto">No connection</span></header>
+  <div class="body">
+    <h1 class="h1">Today</h1>
+    <p class="sub">Thursday, 22 October · <span class="num">8:44 pm</span></p>
+    <div class="net" role="status"><span>Showing saved figures. Changes you make wait here as <b>Queued on this device</b> and send when you’re back online.</span></div>
+    <div class="phone-sec stack">
+      <article class="card" aria-labelledby="plo-b1"><div class="card-h"><h3 id="plo-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div><div class="metrics">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 4 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 4 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 4 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 4 min ago</div></div>
+  <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span></div><span class="flag">Over threshold</span><div class="age">counted − expected · closed 2:05 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-muted">Queued on this device</span><span>Weekend rate ₹90/h · <span class="num">8:44 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="plo-b1-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="plo-b1-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
+      <article class="card" aria-labelledby="plo-b2"><div class="card-h"><h3 id="plo-b2">Baner</h3><span class="chip-off">Branch offline</span></div><div class="metrics stale">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 32 min ago</div></div>
+  <div class="m wide var"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">counted − expected · closed 2:31 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div><button class="lv-btn" aria-disabled="true" aria-describedby="plo-b2-lv"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></button><p class="lv-note" id="plo-b2-lv">Available on Premium · <a href="#">Upgrade</a></p></article>
+    </div>
+    <section class="phone-sec" aria-labelledby="plo-na">
+      <h2 class="sec-h" id="plo-na">Needs attention</h2>
+      <div class="card na"><ul>
+        <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: Counting error · Neha approved</div></div></li>
+        <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally.</div></div></li>
+      </ul></div>
+    </section>
+  </div>
+  <nav class="tabbar" aria-label="Owner app">
+    <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+    <a href="#" aria-label="Alerts, 2 new"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg><span class="alert-badge dot">2</span>Alerts</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+    <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+  </nav>
+</div></section>
+</div>
+<div class="row"><section aria-label="Desktop dark"><div class="cap wide">Desktop web · 1440 · Dark · sidebar 256 · content max 1200</div><div class="browser">
+  <div class="bar"><i></i><i></i><i></i><div class="url">app.arena360.in/today</div></div>
+  <div class="desk-wrap th-dark">
+    <aside class="sidebar">
+      <div class="brand">Arena 360</div>
+      <nav aria-label="Owner app">
+        <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+        <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+        <a href="#" class="focus"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts<span class="alert-badge tail" aria-label="2 new">2</span></a>
+        <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+        <div class="split" role="presentation"></div>
+        <a href="#" aria-label="Live view, available on Premium"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="tail lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></a>
+        <a href="#" class="acct"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+      </nav>
+    </aside>
+    <div class="desk-main">
+      <header class="app-h">
+        <span class="h-meta">Thursday, 22 October · <span class="num">8:41 pm</span></span>
+        <span class="h-meta" style="margin-left:auto">2 branches</span>
+        <span class="avatar" aria-label="Vikram">V</span>
+      </header>
+      <div class="desk">
+        <h1 class="h1">Today</h1>
+        <p class="sub">Figures come from each branch’s last sync. Offline branches keep their last values.</p>
+        <section class="sec" aria-label="Branches"><div class="two">
+          <article class="card" aria-labelledby="dd-b1"><div class="card-h"><h3 id="dd-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div><div class="metrics">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 1 min ago</div></div>
+  <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span></div><span class="flag">Over threshold</span><div class="age">counted − expected · closed 2:05 pm</div></div>
+</div><div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div></article>
+          <article class="card" aria-labelledby="dd-b2"><div class="card-h"><h3 id="dd-b2">Baner</h3><span class="chip-off">Branch offline</span></div><div class="metrics stale">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m wide var"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">counted − expected · closed 2:31 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div></article>
+        </div></section>
+        <section class="sec" aria-labelledby="dd-na">
+          <h2 class="sec-h" id="dd-na">Needs attention</h2>
+          <div class="card na"><ul>
+            <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: Counting error · Neha approved</div></div><a class="go" href="#">Open shift report</a></li>
+            <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally. Changes wait until it reconnects.</div></div><a class="go" href="#">View branch</a></li>
+          </ul></div>
+        </section>
       </div>
     </div>
   </div>
-</section>
+</div></section></div>
+<div class="row"><section aria-label="Desktop light"><div class="cap wide">Desktop web · 1440 · Light (Cool paper)</div><div class="browser">
+  <div class="bar"><i></i><i></i><i></i><div class="url">app.arena360.in/today</div></div>
+  <div class="desk-wrap th-light">
+    <aside class="sidebar">
+      <div class="brand">Arena 360</div>
+      <nav aria-label="Owner app">
+        <a href="#" aria-current="page"><svg class="ic" aria-hidden="true"><use href="#i-today"/></svg>Today</a>
+        <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-reports"/></svg>Reports</a>
+        <a href="#" class="focus"><svg class="ic" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts<span class="alert-badge tail" aria-label="2 new">2</span></a>
+        <a href="#"><svg class="ic" aria-hidden="true"><use href="#i-manage"/></svg>Manage</a>
+        <div class="split" role="presentation"></div>
+        <a href="#" aria-label="Live view, available on Premium"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg>Live view<span class="tail lock-tag"><svg style="width:12px;height:14px" aria-hidden="true"><use href="#i-lock"/></svg>Premium</span></a>
+        <a href="#" class="acct"><svg class="ic" aria-hidden="true"><use href="#i-account"/></svg>Account</a>
+      </nav>
+    </aside>
+    <div class="desk-main">
+      <header class="app-h">
+        <span class="h-meta">Thursday, 22 October · <span class="num">8:41 pm</span></span>
+        <span class="h-meta" style="margin-left:auto">2 branches</span>
+        <span class="avatar" aria-label="Vikram">V</span>
+      </header>
+      <div class="desk">
+        <h1 class="h1">Today</h1>
+        <p class="sub">Figures come from each branch’s last sync. Offline branches keep their last values.</p>
+        <section class="sec" aria-label="Branches"><div class="two">
+          <article class="card" aria-labelledby="dl-b1"><div class="card-h"><h3 id="dl-b1">Koregaon Park</h3><span class="status st-ok">Open</span></div><div class="metrics">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹18,420</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">14</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹6,350</div><div class="age">as of 1 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">3</div><div class="age">as of 1 min ago</div></div>
+  <div class="m wide over"><div class="l">Cash variance · morning shift</div><div class="v num">−₹150<span class="w">short</span></div><span class="flag">Over threshold</span><div class="age">counted − expected · closed 2:05 pm</div></div>
+</div><div class="foot"><span>Last sync <span class="num">8:40 pm</span></span><span class="alert-badge">1 alert</span></div></article>
+          <article class="card" aria-labelledby="dl-b2"><div class="card-h"><h3 id="dl-b2">Baner</h3><span class="chip-off">Branch offline</span></div><div class="metrics stale">
+  <div class="m"><div class="l">Revenue so far</div><div class="v num">₹9,780</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Sessions live</div><div class="v num">9</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Cash in drawer</div><div class="v num">₹4,120</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m"><div class="l">Staff on shift</div><div class="v num">2</div><div class="age">as of 2 h 29 min ago</div></div>
+  <div class="m wide var"><div class="l">Cash variance · morning shift</div><div class="v num">+₹20<span class="w">over</span></div><div class="age">counted − expected · closed 2:31 pm</div></div>
+</div><div class="pending"><div class="pr"><span class="status st-info">Waiting for branch</span><span>Happy Hour rate · queued <span class="num">8:12 pm</span></span></div></div><div class="foot"><span>Last sync <span class="num">6:12 pm</span></span><span class="alert-badge">1 alert</span></div></article>
+        </div></section>
+        <section class="sec" aria-labelledby="dl-na">
+          <h2 class="sec-h" id="dl-na">Needs attention</h2>
+          <div class="card na"><ul>
+            <li><span class="alert-badge">Variance</span><div><div class="t">Koregaon Park · Rohit · <span class="num">−₹150</span> short</div><div class="meta">Reason: Counting error · Neha approved</div></div><a class="go" href="#">Open shift report</a></li>
+            <li><span class="alert-badge">Offline</span><div><div class="t">Baner offline since <span class="num">6:12 pm</span></div><div class="meta">The branch keeps working locally. Changes wait until it reconnects.</div></div><a class="go" href="#">View branch</a></li>
+          </ul></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div></section></div>
 </main>
-
 <div class="notes">
-  <div><b>owner-nav</b>Phone: 64px bottom tab bar with icon and label, active tab filled in hub-line, border-strong top edge. Desktop: 256px sidebar on hub-bg. Live view sits in the sidebar, locked below Premium with a lock and tier label. The focus ring (accent inner, white outer) is shown on “Alerts”.</div>
-  <div><b>Variance on cards: assumption</b>Cash variance is counted − expected: + means over, − means short. Over threshold gets a warning border and the “Over threshold” label, never red. Showing variance on Today cards is an assumption from mock review; it is tagged “Assumption” here until the walkthrough confirms it.</div>
-  <div><b>Airy rhythm</b>Gutter 40 (phone 16) · section gap 56 · card padding 32 (phone 24) · header 64. An offline branch never looks broken: the figures stay, the ink drops to muted, and the data age grows. Content is the same at both widths.<span class="open">[open] The Owner PWA’s own no-network state is not designed beyond data age.</span></div>
+  <div><b>owner-nav and Live view</b>Phone: 64px bottom tab bar, active tab filled hub-line, border-strong top edge. Each branch card ends with a Live view button carrying tier-lock (“Premium”, Upgrade). Desktop: Live view sits in the 256px sidebar with the same lock. Focus ring shown on “Alerts”: accent + white outer ring in dark; a single 2px accent-text ring in light.</div>
+  <div><b>Cash variance</b>Per-shift variance = counted − expected, signed, “over”/“short”. Over threshold gets a warning edge and “Over threshold” label (warning in dark, warning-text-light in light), never red. Offline branch: figures drop to muted ink, “Branch offline” chip, growing data age, queued commands listed as “Waiting for branch”.</div>
+  <div><b>Owner PWA offline</b>With no connection on this device, Today shows cached figures with their data age and a “No connection” chip. A command made now shows “Queued on this device”; once sent it becomes “Waiting for branch”. Airy rhythm: gutter 40/16 · section gap 56 · card padding 32/24 · header 64.</div>
 </div>
 </body>
 </html>

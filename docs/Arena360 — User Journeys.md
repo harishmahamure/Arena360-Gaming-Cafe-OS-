@@ -1,10 +1,10 @@
-# Arena360 — User Journeys
+# Arena 360 — User Journeys
 
 Oct 22, 2026 · @Harish
 
-## The eight journeys
+## The ten journeys
 
-Eight journeys cover a cafe's day and an owner's week; every screen in the PRD exists to serve one of them. Each journey below is drawn as a flow with the actor, the app and the system step, followed by the steps as a checklist of what must be true.
+Ten journeys cover a cafe's day, an owner's week and a partner's referral (revised 23 Oct 2026, UX); every screen in the PRD exists to serve one of them. Each journey below is drawn as a flow with the actor, the app and the system step, followed by the steps as a checklist of what must be true.
 
 | # | Journey | Driven by | Apps | The moment it must not fail |
 | --- | --- | --- | --- | --- |
@@ -16,6 +16,8 @@ Eight journeys cover a cafe's day and an owner's week; every screen in the PRD e
 | 6 | Owner changes a price remotely | Owner | Owner app, cloud, Hub | Price lands once, exactly, and the owner sees it did |
 | 7 | Credit player | Player, staff, owner | Hub, WhatsApp, Owner app | Block at the limit, not after |
 | 8 | Hub fails, standby promoted | Counter staff | Hub standby, Kiosk | Kiosks reconnect by themselves |
+| 9 | Partner refers a cafe | Partner | Marketing site, Partner portal, WhatsApp | The referred cafe is attributed and the payout arrives |
+| 10 | Console session | Player, counter staff | Pi, phone, Hub | Nobody overruns unnoticed |
 
 Colour in the flows: green boxes are the one step the journey exists for, grey boxes are everything around it, and a dashed box is a branch the design must handle but hopes not to see.
 
@@ -31,8 +33,8 @@ The wizard is resumable at every step, and steps 6 to 8 can be skipped and finis
 | --- | --- | --- | --- |
 | Sign up | Owner | Marketing site | Phone OTP verified; owner account exists with MFA pending |
 | Create branch | Owner | Onboarding web | Tenant, first branch, currency, timezone, GST flag saved; tier chosen (Free needs no card) |
-| Pairing code | Cloud | Onboarding web | 8-character single-use code, 15-minute expiry, shown large with a QR that encodes it |
-| Install Hub | Owner | Counter PC or Android tablet | Installer asks only for the code; Free tier offers Android only |
+| Pairing code | Cloud | Onboarding web | 8-character single-use code, 15-minute expiry, shown large with Copy and a countdown; no QR (revised 23 Oct 2026, UX) |
+| Install Hub | Owner | Counter PC or Android tablet | Owner types the code; installer asks for nothing else and a bad code retries in place; Free tier offers Android only (revised 23 Oct 2026, UX) |
 | Hub paired | Hub, cloud | Hub | Hub holds a device token and a signed entitlement; onboarding page advances on the first heartbeat |
 | Kiosks pair | Owner or staff | Each gaming PC | Kiosk app finds the Hub by mDNS and asks for the 6-digit code from the Hub screen; each PC appears on the floor view as unassigned |
 | Groups and plans | Owner | Onboarding web or Hub | At least one group with one hourly rate; template or CSV import with dry-run |
@@ -40,7 +42,7 @@ The wizard is resumable at every step, and steps 6 to 8 can be skipped and finis
 | Test session | Owner | Hub and one kiosk | A 2-minute session starts, the kiosk HUD counts down, the screen locks at zero |
 | Go live | Owner | Onboarding web | Checklist: opening hours, backup location, ad consent on Free; Owner app dashboard unlocks |
 
-Failure branches: an expired or mistyped code shows a plain message on the Hub and a "generate a new code" button on the web page; a kiosk that cannot see the Hub shows the Hub's IP to type manually.
+Failure branches: an expired or mistyped code shows an inline error in the Hub installer, which retries in place (revised 23 Oct 2026, UX), and a "generate a new code" button on the web page; a kiosk that cannot see the Hub shows the Hub's IP to type manually.
 
 ## 2. Walk-in postpaid session
 
@@ -54,11 +56,11 @@ The default way a cafe is used: the player sits, plays, and pays at the counter 
 | Find player | Staff | Hub floor view → sheet | Phone lookup in one field; "Guest" is one tap; a guest can be converted to a profile at settlement |
 | Start postpaid | Staff | Session sheet | Tap a free tile, the sheet shows the device group rate and any active dynamic rule; one tap starts |
 | Kiosk unlocks | Hub → Kiosk | Gaming PC | Unlock within 2 s; HUD shows elapsed time and the rate |
-| Plays, orders | Player | Kiosk | Orders from the kiosk attach to the running session and print a KOT |
+| Plays, orders | Player | Kiosk | Orders from the kiosk (Basic and above) attach to the running session and print a KOT (revised 23 Oct 2026, UX) |
 | Session ends | Player or staff | Kiosk HUD or Hub tile | Player taps "I'm done" on the HUD, or staff end from the tile; the PC locks and shows "Pay at counter" |
 | Bill computed | Hub | Session sheet | Minutes × rate with the branch rounding unit and minimum, plus orders, plus GST if enabled; the sheet shows the breakdown |
-| Settle | Staff | Session sheet | Any mix of cash, UPI QR, card reference, wallet; the sheet will not close with a remainder |
-| Rest to credit | Staff | Session sheet | Only for a profiled player with credit enabled; blocked at the limit with a manager-PIN override, once |
+| Settle | Staff | Session sheet | Any mix of cash, UPI by reference (last 4 digits, required), card reference, wallet; the sheet will not close with a remainder (revised 23 Oct 2026, UX) |
+| Rest to credit | Staff | Session sheet | Only for a profiled player with credit enabled; blocked at the limit with a manager-PIN override, once per player per day (revised 23 Oct 2026, UX) |
 | Receipt | Hub | Printer or WhatsApp | Sequential invoice number; WhatsApp receipt needs the player's consent |
 | PC back to free | Kiosk | Gaming PC | Launchers signed out, saved credentials cleared, attract screen up; tile turns green |
 
@@ -74,15 +76,15 @@ A player with a pack or wallet balance never needs the counter: login, pick a pl
 
 | Step | Actor | Where | What must be true |
 | --- | --- | --- | --- |
-| Attract screen | Kiosk | Gaming PC | Branding, current rates and the active dynamic rule; an ad slot every 15 minutes on Free only |
-| Login | Player | Kiosk | Username and password in one screen; three failures lock the kiosk login for 60 s and tell the Hub |
+| Attract screen | Kiosk | Gaming PC | Branding, game video, current rates and the active dynamic rule; no ads (revised 23 Oct 2026, UX) |
+| Login | Player | Kiosk | Username and password only, in one screen (staff can also start from the Hub); three failures lock the kiosk login for 60 s and tell the Hub (revised 23 Oct 2026, UX) |
 | Pick plan | Player | Kiosk | Shows only plans valid for this device's group; packs show hours left and expiry; wallet shows balance and the hourly rate |
 | Hub approves | Hub | — | One transaction: debit wallet or pack, write session, append change log; refusal returns a typed reason |
 | Plays | Player | Kiosk | HUD counts down; game grid and library available; orders allowed |
 | Warnings | Kiosk | HUD | Toast and sound at 10, 5 and 1 minutes; the HUD turns amber at 10 |
-| Extend? | Player | HUD | One tap opens extend options; the Hub prices them live; no extension past closing time |
+| Extend? | Player | HUD or lock screen | One tap opens extend options, also during grace; the Hub prices them live; no extension past closing time (revised 23 Oct 2026, UX) |
 | Time up | Kiosk | Full screen | Grace countdown (default 2 min) over the still-visible game so the player can save |
-| Lock screen | Kiosk | Gaming PC | Allow-listed processes closed if the branch configures it; otherwise game left paused for staff |
+| Lock screen | Kiosk | Gaming PC | Per-branch time-up mode: "clean up" ends non-allow-listed processes, or "staff handles" holds the lock over the paused game for staff (revised 23 Oct 2026, UX) |
 | Cleanup | Kiosk | Gaming PC | Steam, Epic, Riot, Discord and browser profiles signed out; credentials cleared; back to attract |
 
 The test that matters: time-up during a ranked match must leave the match running through the grace period, and the next player must never see the previous player's accounts.
@@ -119,10 +121,10 @@ The Hub knows what should be in the drawer; closing is counting what is. Staff s
 | Sales all day | Staff | Hub | Every settlement records method; cash sales kick the drawer and add to expected cash |
 | Deposits, spend | Staff or manager | Hub | Cash deposits to safe or bank and petty-cash expenses reduce expected cash, each with a reference or receipt photo |
 | Close shift | Staff | Hub shift sheet | A denomination counter or a single total; the sheet never shows expected cash until counted cash is entered |
-| Variance shown | Hub | Shift sheet | Expected minus counted, signed, with the breakdown one tap away |
+| Variance shown | Hub | Shift sheet | Counted minus expected, signed (+ over, − short), with the breakdown one tap away (revised 23 Oct 2026, UX) |
 | Within threshold | Hub | Shift sheet | Threshold per branch (default ₹100); close completes with no PIN |
 | Over threshold | Manager | Shift sheet | Manager PIN and a reason from a list plus free text; both go in the audit log |
-| Owner alerted | Cloud | Owner app | Push and WhatsApp with branch, staff, amount and reason; shown on the Owner home under "needs attention" |
+| Owner alerted | Cloud | Owner app | Web push and WhatsApp with branch, staff, amount and reason; shown on the Owner home under "needs attention" |
 | Z-report prints | Hub | Printer, Owner app | Sales by type and method, expected vs counted, variance, waste, expenses, refunds; the same numbers the Owner app shows |
 | Next shift opens | Staff | Hub | Closing cash becomes the next float unless a deposit was made |
 
@@ -167,3 +169,53 @@ Regulars play on credit; the Hub enforces the limit before every spend rather th
 | Balance drops | Hub | Ledger | Outstanding reduces; credit reopens automatically if it was paused |
 
 Free tier: credit works, reminders do not (no WhatsApp sending on Free); staff see the overdue list on the Hub instead.
+
+## 8. Hub fails, standby promoted
+
+The main Hub PC dies during a Saturday rush. Sessions keep running on the kiosks, staff promote the standby with a PIN, and the kiosks find the new main Hub by themselves (revised 23 Oct 2026, UX).
+
+| Step | Actor | Where | What must be true |
+| --- | --- | --- | --- |
+| Main Hub dies | Hub | Counter PC | Kiosks show "Reconnecting…"; running sessions continue on the last known time; the player is never locked out |
+| Kiosk while Hub unreachable | Kiosk | Gaming PC | New login, orders and Extend are disabled with "Counter is reconnecting — try again shortly." |
+| Open standby | Counter staff | Standby PC | The standby Hub shows "Promote to main" |
+| Promote | Counter staff, manager | Standby Hub | A manager's PIN entered inline; promotion completes under 10 s |
+| Kiosks reconnect | Kiosk → Hub | Gaming PC | Kiosks find the new main Hub by themselves and sessions reconcile; no player notices |
+| Promote fails | Manager | Standby Hub | A warning says data since the last sync may be lost; a manager can force promote with PIN; the forced promote is audited and the owner is alerted |
+| Old main returns | Hub | Old counter PC | Split-brain lock: it shows "This PC is no longer the main Hub" with "Make this the standby" and never serves kiosks |
+
+The rule that keeps the money right: only one main Hub ever serves kiosks.
+
+## 9. Partner refers a cafe
+
+A reseller or installer (Imran in the UX spine) applies, is approved by WhatsApp, and earns 10% of each referred cafe's subscription every month it stays active and paying. Partners get no kiosk branding; branch customisation stays logo-only (revised 23 Oct 2026, UX).
+
+| Step | Actor | Where | What must be true |
+| --- | --- | --- | --- |
+| Apply | Partner | Marketing site, Pricing → Partners | Light form: name, phone (OTP), email, city, business name, type (reseller or installer), cafes served |
+| Under review | Partner | Partner portal | Only the application status shows until approval |
+| Approved | Arena 360 team | WhatsApp | Approval by WhatsApp only, with the login link to the partner portal (partners.arena360.in, separate login) |
+| KYC | Partner | Partner portal | PAN, bank details, GSTIN optional; required before the first payout |
+| Share link | Partner | Partner portal | Referral link and code shown; a cafe owner signs up through it |
+| Cafe referred | Control plane | Partner portal | The tenant carries the `referral_code`; the cafe is listed as referred with 10% accruing monthly |
+| Payout | Control plane | Bank, Partner portal | Bank transfer by the 10th for the previous month; TDS at 2% (subject to tax advice) shown on each payout; GST-registered partners upload a GST invoice |
+
+Failure branches: a balance under ₹500 shows as pending and rolls over; missing KYC holds the payout with "KYC needed before first payout"; a GST-registered partner without an uploaded invoice is held with "Upload GST invoice".
+
+## 10. Console session
+
+Two friends play on a PS5 at TV 3. With the Pi (v1.1) they request from a phone with no login and pay at the counter; without a Pi, staff start from the tile and the tile alone carries the warnings and time-up (revised 23 Oct 2026, UX).
+
+| Step | Actor | Where | What must be true |
+| --- | --- | --- | --- |
+| TV idle | Pi | TV | Branch logo, TV number, console rates and a large "Scan to start" QR; no ads |
+| Scan and request | Player | Phone | Hub page over the cafe LAN with no login; pick a console plan and tap Request; "Waiting for the counter — pay at the counter to start." |
+| Request on Hub | Hub | Floor view tile | The console tile raises a "REQUEST" badge with sound; the requested plan is pre-selected in the sheet |
+| Pay and start | Counter staff | Session sheet | Player pays at the counter or is looked up (or Guest); postpaid, pack and pass rules apply; Start switches the TV to the console within 3 s |
+| Live timer | Hub → phone | Phone | The phone shows time left only, over the LAN, with "Extend at the counter"; a WhatsApp/SMS at 5 min goes out only with consent |
+| Warnings | Pi | TV | At 5 and 1 min the TV switches to the Pi input for 5 s, then back to the game; the tile shows the warning states |
+| Time-up | Pi, Hub | TV, floor view | No grace: the TV locks at once with "Time's up — see the counter."; CEC standby or smart plug per branch; the tile raises "TIME UP" with sound until acknowledged |
+| End and settle | Counter staff | Session sheet | Staff end and settle; Undo until a receipt prints |
+| Controller check | Counter staff | Floor view tile | Staff tap Returned or Missing; logged against the session; TV returns to idle |
+
+Failure branches: extend is done at the counter and the phone and TV pick up the new time; a refused request shows "Ask at the counter." on the phone; a phone that leaves the cafe Wi-Fi keeps its last value with "Reconnect to cafe Wi-Fi to update".

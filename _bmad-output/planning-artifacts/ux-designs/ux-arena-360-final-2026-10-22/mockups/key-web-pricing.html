@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pricing</title>
+<style>
+/* KEY SCREEN — Marketing site Pricing (Cafés and Partners tabs), 1440 browser, DARK (Cinema Electric) and LIGHT (Cool paper). Re-rendered 2026-10-23.
+   Governing spine sections:
+   DESIGN.md — Colors (dark tokens + Light theme "Cool paper" -light tokens; accent-light fills only, accent-text-light for magenta ink, focus-ring-light single 2px ring);
+               Typography (web-display 40/300 page + section titles; web-body 16/400; kiosk-headline 48/300 for prices; kiosk-title 28/600 tier names; hub-title 18/600; tabular ₹);
+               Layout & Spacing → Web surfaces (Pricing: tab-control Cafés · Partners; Monthly · Yearly tab-control above three EQUAL plan cards, no emphasised plan;
+               one primary "Get started" above the table) + spacing tokens web-gutter 56, web-section-gap 128, web-card-padding 32, web-header-height 80;
+               Components: tab-control, theme-toggle (footer), card, button-primary (one per view), button-secondary, focus-ring.
+   EXPERIENCE.md — Information Architecture (Marketing site → Pricing, Cafés tab and Partners tab; Pricing and partner terms (displayed values));
+               Component Patterns: tab-control (ARIA tabs; selected tab in URL; Monthly · Yearly swaps every price); Voice and Tone (money/legal formal);
+               Ads (no rewarded ads; no ads on player screens); Journey 9 step 1 (partner apply fields).
+   Frames: 1 Cafés · Monthly · dark  |  2 Cafés · Yearly · light  |  3 Partners · dark  |  4 Partners · light.
+   Spacing map: header 80 · gutter 56 · page top/bottom 128 · section → section 128 · title → content 40 · tab-control → tiers 56 · card gap 32 · card padding 32 · cell 16/24. */
+/* ── Theme tokens: DESIGN.md Colors (dark "Cinema Electric") + Light theme "Cool paper" (-light). Owner app + web only. ── */
+.th-dark{
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;--accent-text:#FF4FA8;
+  --ok:#5FE6A0;--warning:#FFBE3D;--warning-ink:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;--metric:#F5F2FF;
+  --focus-outline:2px solid #FF4FA8;--focus-shadow:0 0 0 6px #F5F2FF;
+  color-scheme:dark;background:var(--bg);color:var(--text);
+}
+.th-light{
+  --bg:#F6F5FC;--surface:#FFFFFF;--surface-2:#ECEAF7;--line:#DCD8EE;--border-strong:#7A72A8;
+  --text:#16123A;--muted:#555075;--accent:#D4127A;--on-accent:#FFFFFF;--accent-text:#AD0E63;
+  --ok:#0E7A46;--warning:#FFBE3D;--warning-ink:#8F5300;--on-warning:#1E1300;--danger:#C21F2E;--on-danger:#FFFFFF;--info:#1F56C2;
+  --chip-rule-bg:#FCE4F0;--chip-rule-text:#940B54;--chip-off-bg:#FDE6E6;--chip-off-text:#A3141F;
+  /* hub tones map: hub-bg/hub-header -> bg-light, hub-tile -> surface-light, hub-line -> line-light */
+  --hub-bg:#F6F5FC;--hub-header:#F6F5FC;--hub-tile:#FFFFFF;--hub-line:#DCD8EE;--metric:#16123A;
+  --focus-outline:2px solid #AD0E63;--focus-shadow:none;
+  color-scheme:light;background:var(--bg);color:var(--text);
+}
+.focus{outline:var(--focus-outline);outline-offset:2px;box-shadow:var(--focus-shadow)}
+/* light theme: warning fills always edged with warning-ink (1.5:1 on bg) */
+.th-light .warn-fill{border:1px solid var(--warning-ink)}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:#1E1C2B;color:#E9E6F5;font-family:Sora,"Sora Variable",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:16px;line-height:1.5;padding:56px 40px 96px;-webkit-font-smoothing:antialiased}
+.tnum,.price,.aprice,.example{font-variant-numeric:tabular-nums}
+.page-h{width:1440px;margin:0 auto 40px}
+.page-h h1{font-weight:300;font-size:32px;margin:0}
+.page-h p{color:#B9B4D0;font-size:15px;line-height:1.6;max-width:1040px;margin:8px 0 0}
+.cap{width:1440px;margin:0 auto 16px;color:#B9B4D0;font-size:12px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
+.browser{width:1440px;margin:0 auto 96px;border:1px solid #3A3558;border-radius:16px;overflow:hidden;font-family:inherit}
+.browser a{color:var(--text);text-decoration:underline;text-underline-offset:3px}
+.chrome{height:44px;background:#000;display:flex;align-items:center;gap:16px;padding:0 16px}
+.th-light .chrome{background:#D9D6E8}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#3A3558;display:block}
+.th-light .dots i{background:#A9A4C4}
+.url{flex:1;max-width:640px;height:28px;border-radius:8px;background:var(--surface);color:var(--muted);font-size:13px;display:flex;align-items:center;padding:0 12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:9999px;font-family:inherit;font-weight:800;white-space:nowrap}
+.browser a.btn{text-decoration:none}
+.browser a.btn-primary{background:var(--accent);color:var(--on-accent);padding:16px 40px;font-size:18px}
+.browser a.btn-secondary{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);padding:12px 24px;font-size:16px;font-weight:600}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px}
+.label{font-size:13px;font-weight:500;color:var(--muted);line-height:1.5}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.site-head{height:80px;display:flex;align-items:center;gap:56px;padding:0 56px;border-bottom:1px solid var(--line)}
+.browser a.wordmark{font-weight:800;font-size:20px;letter-spacing:.02em;text-decoration:none}.wordmark b{color:var(--accent-text)}
+.site-nav{display:flex;gap:40px;flex:1}.site-nav a{font-size:16px;font-weight:500}.site-nav a[aria-current]{font-weight:800}
+.wrap{padding:128px 56px}
+.wrap h1{font-size:40px;font-weight:300;line-height:1.15;margin:0 0 16px}
+.sub{color:var(--muted);margin:0 0 40px;max-width:720px}
+.tab-control{display:inline-flex;gap:4px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:9999px}
+.browser .tab-control a{min-height:44px;display:flex;align-items:center;padding:0 24px;border-radius:9999px;text-decoration:none;font-weight:600;font-size:16px;color:var(--muted)}
+.browser .tab-control a[aria-selected=true],.browser .tab-control a[aria-checked=true]{background:var(--text);color:var(--bg)}
+.cycle{display:flex;align-items:center;gap:24px;margin-top:56px}
+.tiers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px;margin:40px 0 32px}
+.tier{padding:32px;display:flex;flex-direction:column;gap:24px}
+.tier h2{font-size:28px;font-weight:600;line-height:1.2;margin:0}
+.tier p{margin:0}
+.pr{display:flex;flex-direction:column;gap:8px;align-items:flex-start;min-height:128px}
+.price{font-size:48px;font-weight:300;line-height:1}
+.per{font-size:14px;color:var(--muted)}
+.save{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ok);border:1px solid currentColor;border-radius:6px;padding:4px 8px;line-height:1.2}
+.tier ul{margin:0;padding:0 0 0 20px;display:flex;flex-direction:column;gap:12px}
+.tier .btn{margin-top:auto;align-self:flex-start}
+.gst{font-size:14px;color:var(--muted);margin:0}
+.cta{display:flex;align-items:center;gap:24px;margin-top:56px}
+h2.sec{font-size:40px;font-weight:300;line-height:1.15;margin:128px 0 40px}
+table{width:100%;border-collapse:collapse;font-size:15px}
+caption{text-align:left;color:var(--muted);font-size:13px;padding-bottom:16px}
+th,td{padding:16px 24px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+thead th{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--surface)}
+thead th:first-child{border-top-left-radius:16px}thead th:last-child{border-top-right-radius:16px}
+td.c,th.c{text-align:center;width:22%}
+tbody th{font-weight:400}
+.yes{color:var(--ok);font-weight:700}.no{color:var(--muted)}
+.grp th{background:var(--bg);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:40px}
+.addons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px}
+.addons .card,.faq .card{padding:32px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.addons h3,.faq h3{margin:0;font-size:18px;font-weight:600;line-height:1.3}.addons p,.faq p{margin:0}
+.aprice{display:flex;align-items:baseline;gap:8px}.aprice .tnum{font-size:26px;font-weight:800}
+.faq{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px}
+.foot{padding:56px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:40px;font-size:14px;color:var(--muted)}
+.foot nav{display:flex;gap:24px;flex:1}
+.foot .tab-control.sm a{font-size:14px;padding:0 16px}
+.partner{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:32px;margin-top:56px;align-items:start}
+.partner .card{padding:40px}
+.partner h2.sec{margin:0 0 40px}
+.h3{font-size:18px;font-weight:600;line-height:1.3;margin:56px 0 24px}
+.partner dl{margin:0;display:grid;grid-template-columns:176px 1fr;gap:24px 40px}
+.partner dt{color:var(--muted);font-size:14px}.partner dd{margin:0}
+.apply{margin-top:56px;display:flex;flex-direction:column;gap:16px;align-items:flex-start}
+.apply p{margin:0;max-width:600px}
+.example th,.example td{padding:16px 0;font-weight:400}
+.example td{text-align:right;white-space:nowrap;padding-left:24px}
+.example .tot th,.example .tot td{font-weight:700;border-bottom:0}
+.notes{width:1440px;margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.notes div{border:1px solid #3A3558;border-radius:16px;padding:24px;font-size:13px;line-height:1.65;color:#B9B4D0}
+.notes b{display:block;color:#F5F2FF;font-weight:600;margin-bottom:8px;font-size:14px}
+</style></head>
+<body>
+<header class="page-h"><h1>Marketing site · Pricing</h1><p>Cafés tab in Monthly (dark) and Yearly (light, Cool paper), then the Partners tab in both themes. Three equal plan cards with no emphasised plan; one primary “Get started” above the comparison table. Prices exclude GST. The theme follows the OS by default; the footer toggle overrides it.</p></header>
+<div class="cap">1 · Cafés · Monthly · dark · focus on “Get started”</div>
+<div class="browser th-dark"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360.in/pricing?tab=cafes&amp;billing=monthly</div></div><header class="site-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<nav class="site-nav" aria-label="Main"><a href="#">Product</a><a href="#" aria-current="page">Pricing</a><a href="#">Downloads</a><a href="#">Help</a><a href="#">FAQ</a></nav>
+<a class="btn btn-secondary" href="#">Get started</a></header><main class="wrap"><h1>Pricing</h1><p class="sub">Each branch is billed separately. Every plan runs your café offline.</p>
+<div class="tab-control" role="tablist" aria-label="Pricing for"><a role="tab" aria-selected="true" href="#">Cafés</a><a role="tab" aria-selected="false" class="" href="#">Partners</a></div>
+<div class="cycle"><div class="tab-control" role="tablist" aria-label="Billing cycle"><a role="tab" aria-selected="true" href="#">Monthly</a><a role="tab" aria-selected="false" class="" href="#">Yearly · 2 months free</a></div>
+<span class="label">Yearly is 10× the monthly price, on Basic and Premium.</span></div>
+<div class="tiers">
+<section class="card tier" aria-labelledby="d-free"><h2 id="d-free">Free</h2><div class="pr"><span class="price">₹0</span><span class="per">1 branch</span></div>
+<p>One branch, supported by ads on the Android Hub. No card required.</p>
+<ul><li>Hub on an Android tablet or phone</li><li>Up to 20 devices and 3 users</li><li>POS, inventory, shifts and GST invoices</li><li>Ads on the Android Hub only, never on player screens</li></ul>
+<a class="btn btn-secondary" href="#">Choose Free</a></section>
+<section class="card tier" aria-labelledby="d-basic"><h2 id="d-basic">Basic</h2><div class="pr"><span class="price">₹200</span><span class="per">per branch per month + 18% GST</span></div>
+<p>Removes ads and adds the cloud.</p>
+<ul><li>Hub on Windows PC or Android</li><li>Up to 60 devices, unlimited users</li><li>Kiosk food orders and kitchen display</li><li>Owner app, cloud backup, multi-branch</li></ul>
+<a class="btn btn-secondary" href="#">Choose Basic</a></section>
+<section class="card tier" aria-labelledby="d-prem"><h2 id="d-prem">Premium</h2><div class="pr"><span class="price">₹1,999</span><span class="per">per branch per month + 18% GST</span></div>
+<p>Adds resilience and remote access.</p>
+<ul><li>Up to 200 devices</li><li>Live view of the floor</li><li>Off-site standby and remote devices</li><li>1-minute cloud backup, 3-year retention</li></ul>
+<a class="btn btn-secondary" href="#">Choose Premium</a></section>
+</div>
+<p class="gst">Prices in Indian rupees (₹), exclusive of GST. 18% GST is itemised on your invoice.</p>
+<div class="cta"><a class="btn btn-primary focus" href="#">Get started</a><span class="label">Start on Free. No card needed until you choose a paid plan.</span></div>
+<h2 class="sec">Compare plans</h2>
+<table><caption>Plan comparison. Prices and limits apply per branch.</caption><thead><tr><th scope="col">Capability</th><th scope="col" class="c">Free</th><th scope="col" class="c">Basic</th><th scope="col" class="c">Premium</th></tr></thead><tbody><tr class="grp"><th scope="rowgroup" colspan="4">Run the branch</th></tr><tr><th scope="row">Hub: sessions, players, plans, devices, groups, dynamic pricing</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Hub runs on</th><td class="c">Android tablet or phone</td><td class="c">Windows PC or Android</td><td class="c">Windows PC or Android</td></tr><tr><th scope="row">POS, inventory, waste, expiry, shifts, expenses, GST invoices</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Kiosk app, lockdown, in-game overlay, game library</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Food and drink orders from the Kiosk</th><td class="c">Counter only</td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Kitchen order tickets and kitchen display</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Consoles as timed devices</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Branch users</th><td class="c"><span class="tnum">3</span></td><td class="c">Unlimited</td><td class="c">Unlimited</td></tr><tr><th scope="row">Maximum devices</th><td class="c"><span class="tnum">20</span></td><td class="c"><span class="tnum">60</span></td><td class="c"><span class="tnum">200</span></td></tr><tr><th scope="row">Local reports and CSV export</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr class="grp"><th scope="rowgroup" colspan="4">Cloud and owner</th></tr><tr><th scope="row">Backup</th><td class="c">Manual export</td><td class="c">Cloud, 5-minute batches, 1-year retention</td><td class="c">Cloud, 1-minute batches, 3-year retention</td></tr><tr><th scope="row">Owner app dashboards, alerts, exports</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Remote price and staff changes from the Owner app</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Multi-branch</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Scheduled reports</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Live view</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr class="grp"><th scope="rowgroup" colspan="4">Resilience</th></tr><tr><th scope="row">Standby Hub on the café network</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Remote devices via Tunnel</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c">Add-on</td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Off-site standby</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr class="grp"><th scope="rowgroup" colspan="4">Advertising and support</th></tr><tr><th scope="row">Advertising on the Android Hub (banner, and a skippable ad after every second completed sale)</th><td class="c">Yes</td><td class="c">None</td><td class="c">None</td></tr><tr><th scope="row">Advertising on player screens (Kiosk, TV)</th><td class="c">None</td><td class="c">None</td><td class="c">None</td></tr><tr><th scope="row">Support</th><td class="c">Community and help centre</td><td class="c">Email, response within 24 hours</td><td class="c">Chat, response within 4 hours</td></tr></tbody></table>
+<h2 class="sec">Add-ons</h2>
+<p class="sub" style="margin-top:-16px">Per branch per month, + 18% GST. Available on any plan.</p>
+<div class="addons">
+<div class="card"><h3>+20 devices</h3><p class="aprice"><span class="tnum">₹50</span><span class="per">per branch per month</span></p><p>Adds 20 devices to your plan’s limit. Add as many blocks as you need.</p></div>
+<div class="card"><h3>Tunnel for remote devices</h3><p class="aprice"><span class="tnum">₹200</span><span class="per">per branch per month</span></p><p>Connect devices outside the café network. Included in Premium.</p></div>
+<div class="card"><h3>Additional owner login</h3><p class="aprice"><span class="tnum">₹50</span><span class="per">per branch per month</span></p><p>A separate Owner app login for a partner or manager.</p></div>
+</div>
+<h2 class="sec">Frequently asked questions</h2>
+<div class="faq">
+<div class="card"><h3>What is your refund policy?</h3><p>You receive a full refund if you cancel within 7 days of your first payment.</p><p>After that, you may cancel at any time. Your plan stays active until the end of the period you paid for, monthly or yearly, and the branch then moves to Free. Partial refunds are not issued.</p></div>
+<div class="card"><h3>Is GST included in the price?</h3><p>No. Prices are shown exclusive of GST. 18% GST is added and itemised on each invoice.</p></div>
+<div class="card"><h3>What happens when the internet is down?</h3><p>Every Hub and Kiosk feature keeps working on the café network. Cloud features queue and resume when the connection returns.</p></div>
+<div class="card"><h3>Can I switch between monthly and yearly?</h3><p>Yes, in the Owner app under Subscription. Yearly billing is 10× the monthly price, so two months are free.</p></div>
+<div class="card"><h3>Who owns my data?</h3><p>You do. Export the full branch database and all reports at any time, including on Free.</p></div>
+<div class="card"><h3>Are there ads on my players’ screens?</h3><p>No. On Free, ads appear only on the Android Hub at the counter. Paid plans have no ads.</p></div>
+</div></main><footer class="foot"><span>Arena 360</span><nav aria-label="Footer"><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Refund policy</a><a href="#">Ad policy</a></nav>
+<div class="tab-control sm" role="radiogroup" aria-label="Theme"><a role="radio" aria-checked="false" href="#">System</a><a role="radio" aria-checked="false" href="#">Light</a><a role="radio" aria-checked="true" href="#">Dark</a></div></footer></div>
+<div class="cap">2 · Cafés · Yearly (10× monthly, 2 months free) · light, Cool paper · focus on the Yearly tab</div>
+<div class="browser th-light"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360.in/pricing?tab=cafes&amp;billing=yearly</div></div><header class="site-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<nav class="site-nav" aria-label="Main"><a href="#">Product</a><a href="#" aria-current="page">Pricing</a><a href="#">Downloads</a><a href="#">Help</a><a href="#">FAQ</a></nav>
+<a class="btn btn-secondary" href="#">Get started</a></header><main class="wrap"><h1>Pricing</h1><p class="sub">Each branch is billed separately. Every plan runs your café offline.</p>
+<div class="tab-control" role="tablist" aria-label="Pricing for"><a role="tab" aria-selected="true" href="#">Cafés</a><a role="tab" aria-selected="false" class="" href="#">Partners</a></div>
+<div class="cycle"><div class="tab-control" role="tablist" aria-label="Billing cycle"><a role="tab" aria-selected="false" href="#">Monthly</a><a role="tab" aria-selected="true" class="focus" href="#">Yearly · 2 months free</a></div>
+<span class="label">Yearly is 10× the monthly price, on Basic and Premium.</span></div>
+<div class="tiers">
+<section class="card tier" aria-labelledby="l-free"><h2 id="l-free">Free</h2><div class="pr"><span class="price">₹0</span><span class="per">1 branch · no billing cycle</span></div>
+<p>One branch, supported by ads on the Android Hub. No card required.</p>
+<ul><li>Hub on an Android tablet or phone</li><li>Up to 20 devices and 3 users</li><li>POS, inventory, shifts and GST invoices</li><li>Ads on the Android Hub only, never on player screens</li></ul>
+<a class="btn btn-secondary" href="#">Choose Free</a></section>
+<section class="card tier" aria-labelledby="l-basic"><h2 id="l-basic">Basic</h2><div class="pr"><span class="price">₹2,000</span><span class="per">per branch per year + 18% GST</span><span class="save">2 months free</span></div>
+<p>Removes ads and adds the cloud.</p>
+<ul><li>Hub on Windows PC or Android</li><li>Up to 60 devices, unlimited users</li><li>Kiosk food orders and kitchen display</li><li>Owner app, cloud backup, multi-branch</li></ul>
+<a class="btn btn-secondary" href="#">Choose Basic</a></section>
+<section class="card tier" aria-labelledby="l-prem"><h2 id="l-prem">Premium</h2><div class="pr"><span class="price">₹19,990</span><span class="per">per branch per year + 18% GST</span><span class="save">2 months free</span></div>
+<p>Adds resilience and remote access.</p>
+<ul><li>Up to 200 devices</li><li>Live view of the floor</li><li>Off-site standby and remote devices</li><li>1-minute cloud backup, 3-year retention</li></ul>
+<a class="btn btn-secondary" href="#">Choose Premium</a></section>
+</div>
+<p class="gst">Prices in Indian rupees (₹), exclusive of GST. 18% GST is itemised on your invoice.</p>
+<div class="cta"><a class="btn btn-primary" href="#">Get started</a><span class="label">Start on Free. No card needed until you choose a paid plan.</span></div>
+<h2 class="sec">Compare plans</h2>
+<table><caption>Plan comparison. Prices and limits apply per branch.</caption><thead><tr><th scope="col">Capability</th><th scope="col" class="c">Free</th><th scope="col" class="c">Basic</th><th scope="col" class="c">Premium</th></tr></thead><tbody><tr class="grp"><th scope="rowgroup" colspan="4">Run the branch</th></tr><tr><th scope="row">Hub: sessions, players, plans, devices, groups, dynamic pricing</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Hub runs on</th><td class="c">Android tablet or phone</td><td class="c">Windows PC or Android</td><td class="c">Windows PC or Android</td></tr><tr><th scope="row">POS, inventory, waste, expiry, shifts, expenses, GST invoices</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Kiosk app, lockdown, in-game overlay, game library</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Food and drink orders from the Kiosk</th><td class="c">Counter only</td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Kitchen order tickets and kitchen display</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Consoles as timed devices</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Branch users</th><td class="c"><span class="tnum">3</span></td><td class="c">Unlimited</td><td class="c">Unlimited</td></tr><tr><th scope="row">Maximum devices</th><td class="c"><span class="tnum">20</span></td><td class="c"><span class="tnum">60</span></td><td class="c"><span class="tnum">200</span></td></tr><tr><th scope="row">Local reports and CSV export</th><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr class="grp"><th scope="rowgroup" colspan="4">Cloud and owner</th></tr><tr><th scope="row">Backup</th><td class="c">Manual export</td><td class="c">Cloud, 5-minute batches, 1-year retention</td><td class="c">Cloud, 1-minute batches, 3-year retention</td></tr><tr><th scope="row">Owner app dashboards, alerts, exports</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Remote price and staff changes from the Owner app</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Multi-branch</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Scheduled reports</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Live view</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr class="grp"><th scope="rowgroup" colspan="4">Resilience</th></tr><tr><th scope="row">Standby Hub on the café network</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Remote devices via Tunnel</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c">Add-on</td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr><th scope="row">Off-site standby</th><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="no" aria-hidden="true">—</span><span class="sr">Not included</span></td><td class="c"><span class="yes" aria-hidden="true">✓</span><span class="sr">Included</span></td></tr><tr class="grp"><th scope="rowgroup" colspan="4">Advertising and support</th></tr><tr><th scope="row">Advertising on the Android Hub (banner, and a skippable ad after every second completed sale)</th><td class="c">Yes</td><td class="c">None</td><td class="c">None</td></tr><tr><th scope="row">Advertising on player screens (Kiosk, TV)</th><td class="c">None</td><td class="c">None</td><td class="c">None</td></tr><tr><th scope="row">Support</th><td class="c">Community and help centre</td><td class="c">Email, response within 24 hours</td><td class="c">Chat, response within 4 hours</td></tr></tbody></table>
+<h2 class="sec">Add-ons</h2>
+<p class="sub" style="margin-top:-16px">Per branch per month, + 18% GST. Available on any plan.</p>
+<div class="addons">
+<div class="card"><h3>+20 devices</h3><p class="aprice"><span class="tnum">₹50</span><span class="per">per branch per month</span></p><p>Adds 20 devices to your plan’s limit. Add as many blocks as you need.</p></div>
+<div class="card"><h3>Tunnel for remote devices</h3><p class="aprice"><span class="tnum">₹200</span><span class="per">per branch per month</span></p><p>Connect devices outside the café network. Included in Premium.</p></div>
+<div class="card"><h3>Additional owner login</h3><p class="aprice"><span class="tnum">₹50</span><span class="per">per branch per month</span></p><p>A separate Owner app login for a partner or manager.</p></div>
+</div>
+<h2 class="sec">Frequently asked questions</h2>
+<div class="faq">
+<div class="card"><h3>What is your refund policy?</h3><p>You receive a full refund if you cancel within 7 days of your first payment.</p><p>After that, you may cancel at any time. Your plan stays active until the end of the period you paid for, monthly or yearly, and the branch then moves to Free. Partial refunds are not issued.</p></div>
+<div class="card"><h3>Is GST included in the price?</h3><p>No. Prices are shown exclusive of GST. 18% GST is added and itemised on each invoice.</p></div>
+<div class="card"><h3>What happens when the internet is down?</h3><p>Every Hub and Kiosk feature keeps working on the café network. Cloud features queue and resume when the connection returns.</p></div>
+<div class="card"><h3>Can I switch between monthly and yearly?</h3><p>Yes, in the Owner app under Subscription. Yearly billing is 10× the monthly price, so two months are free.</p></div>
+<div class="card"><h3>Who owns my data?</h3><p>You do. Export the full branch database and all reports at any time, including on Free.</p></div>
+<div class="card"><h3>Are there ads on my players’ screens?</h3><p>No. On Free, ads appear only on the Android Hub at the counter. Paid plans have no ads.</p></div>
+</div></main><footer class="foot"><span>Arena 360</span><nav aria-label="Footer"><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Refund policy</a><a href="#">Ad policy</a></nav>
+<div class="tab-control sm" role="radiogroup" aria-label="Theme"><a role="radio" aria-checked="false" href="#">System</a><a role="radio" aria-checked="true" href="#">Light</a><a role="radio" aria-checked="false" href="#">Dark</a></div></footer></div>
+<div class="cap">3 · Partners · dark · focus on the Partners tab</div>
+<div class="browser th-dark"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360.in/pricing?tab=partners</div></div><header class="site-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<nav class="site-nav" aria-label="Main"><a href="#">Product</a><a href="#" aria-current="page">Pricing</a><a href="#">Downloads</a><a href="#">Help</a><a href="#">FAQ</a></nav>
+<a class="btn btn-secondary" href="#">Get started</a></header><main class="wrap"><h1>Pricing</h1><p class="sub">For resellers and installers who set up Arena 360 for cafés.</p>
+<div class="tab-control" role="tablist" aria-label="Pricing for"><a role="tab" aria-selected="false" href="#">Cafés</a><a role="tab" aria-selected="true" class="focus" href="#">Partners</a></div>
+<div class="partner">
+<section class="card" aria-label="Partner programme">
+<h2 class="sec">Partner programme</h2>
+<dl>
+<dt>Commission</dt><dd>10% of the subscription revenue of each café you refer, for every month that café stays active and paying.</dd>
+<dt>How referrals count</dt><dd>A café counts as yours when it signs up with your referral link or code.</dd>
+<dt>Territory</dt><dd>Leads are not exclusive by territory.</dd>
+</dl>
+<h3 class="h3">Payout terms</h3>
+<dl>
+<dt>Schedule</dt><dd>Monthly bank transfer, made by the 10th for the previous month.</dd>
+<dt>Minimum</dt><dd><span class="tnum">₹500</span>. A lower balance rolls over to the next month.</dd>
+<dt>Tax</dt><dd>TDS is deducted from each payout. GST-registered partners upload a GST invoice before payout.</dd>
+<dt>KYC</dt><dd>After approval, add your PAN and bank details (GSTIN optional) before your first payout.</dd>
+</dl>
+<div class="apply"><a class="btn btn-primary" href="#">Apply to become a partner</a>
+<p class="label">You’ll need your name, phone (verified by OTP), email, city, business name, partner type (reseller or installer) and the number of cafés you serve. We notify approval on WhatsApp with your portal login link.</p></div>
+</section>
+<aside class="card" aria-labelledby="ex-h">
+<h3 id="ex-h" class="h3" style="margin-top:0">Worked example</h3>
+<p class="label" style="margin:0 0 24px">Commission earned in October, paid by 10 November.</p>
+<table class="example"><tbody>
+<tr><th scope="row">Café A · 2 branches on Basic</th><td>₹400.00</td></tr>
+<tr><th scope="row">Café B · 3 branches on Premium</th><td>₹5,997.00</td></tr>
+<tr><th scope="row">Subscription revenue (excl. GST)</th><td>₹6,397.00</td></tr>
+<tr><th scope="row">Commission at 10%</th><td>₹639.70</td></tr>
+<tr><th scope="row">TDS deducted</th><td>As applicable</td></tr>
+<tr class="tot"><th scope="row">Paid by 10 November</th><td>₹639.70 less TDS</td></tr>
+</tbody></table>
+<p class="label" style="margin:24px 0 0">If Café B had not signed up, October’s commission would be ₹40.00. That is below the ₹500 minimum, so it would roll over to November.</p>
+</aside>
+</div></main><footer class="foot"><span>Arena 360</span><nav aria-label="Footer"><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Refund policy</a><a href="#">Ad policy</a></nav>
+<div class="tab-control sm" role="radiogroup" aria-label="Theme"><a role="radio" aria-checked="false" href="#">System</a><a role="radio" aria-checked="false" href="#">Light</a><a role="radio" aria-checked="true" href="#">Dark</a></div></footer></div>
+<div class="cap">4 · Partners · light, Cool paper</div>
+<div class="browser th-light"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">arena360.in/pricing?tab=partners</div></div><header class="site-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<nav class="site-nav" aria-label="Main"><a href="#">Product</a><a href="#" aria-current="page">Pricing</a><a href="#">Downloads</a><a href="#">Help</a><a href="#">FAQ</a></nav>
+<a class="btn btn-secondary" href="#">Get started</a></header><main class="wrap"><h1>Pricing</h1><p class="sub">For resellers and installers who set up Arena 360 for cafés.</p>
+<div class="tab-control" role="tablist" aria-label="Pricing for"><a role="tab" aria-selected="false" href="#">Cafés</a><a role="tab" aria-selected="true" class="" href="#">Partners</a></div>
+<div class="partner">
+<section class="card" aria-label="Partner programme">
+<h2 class="sec">Partner programme</h2>
+<dl>
+<dt>Commission</dt><dd>10% of the subscription revenue of each café you refer, for every month that café stays active and paying.</dd>
+<dt>How referrals count</dt><dd>A café counts as yours when it signs up with your referral link or code.</dd>
+<dt>Territory</dt><dd>Leads are not exclusive by territory.</dd>
+</dl>
+<h3 class="h3">Payout terms</h3>
+<dl>
+<dt>Schedule</dt><dd>Monthly bank transfer, made by the 10th for the previous month.</dd>
+<dt>Minimum</dt><dd><span class="tnum">₹500</span>. A lower balance rolls over to the next month.</dd>
+<dt>Tax</dt><dd>TDS is deducted from each payout. GST-registered partners upload a GST invoice before payout.</dd>
+<dt>KYC</dt><dd>After approval, add your PAN and bank details (GSTIN optional) before your first payout.</dd>
+</dl>
+<div class="apply"><a class="btn btn-primary" href="#">Apply to become a partner</a>
+<p class="label">You’ll need your name, phone (verified by OTP), email, city, business name, partner type (reseller or installer) and the number of cafés you serve. We notify approval on WhatsApp with your portal login link.</p></div>
+</section>
+<aside class="card" aria-labelledby="ex-h">
+<h3 id="ex-h" class="h3" style="margin-top:0">Worked example</h3>
+<p class="label" style="margin:0 0 24px">Commission earned in October, paid by 10 November.</p>
+<table class="example"><tbody>
+<tr><th scope="row">Café A · 2 branches on Basic</th><td>₹400.00</td></tr>
+<tr><th scope="row">Café B · 3 branches on Premium</th><td>₹5,997.00</td></tr>
+<tr><th scope="row">Subscription revenue (excl. GST)</th><td>₹6,397.00</td></tr>
+<tr><th scope="row">Commission at 10%</th><td>₹639.70</td></tr>
+<tr><th scope="row">TDS deducted</th><td>As applicable</td></tr>
+<tr class="tot"><th scope="row">Paid by 10 November</th><td>₹639.70 less TDS</td></tr>
+</tbody></table>
+<p class="label" style="margin:24px 0 0">If Café B had not signed up, October’s commission would be ₹40.00. That is below the ₹500 minimum, so it would roll over to November.</p>
+</aside>
+</div></main><footer class="foot"><span>Arena 360</span><nav aria-label="Footer"><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Refund policy</a><a href="#">Ad policy</a></nav>
+<div class="tab-control sm" role="radiogroup" aria-label="Theme"><a role="radio" aria-checked="false" href="#">System</a><a role="radio" aria-checked="true" href="#">Light</a><a role="radio" aria-checked="false" href="#">Dark</a></div></footer></div>
+<div class="notes">
+<div><b>Equal plans, one primary</b>Free, Basic and Premium share one card treatment. Each card has a secondary “Choose” button; the only primary action on the Cafés tab is “Get started” above the comparison table. The header “Get started” stays secondary.</div>
+<div><b>Monthly · Yearly</b>A second tab-control swaps every displayed price in place. Yearly is 10× monthly, labelled “2 months free”, on paid plans only. The selected tab and cycle are in the URL. Prices show “+ 18% GST”; GST is itemised on the invoice.</div>
+<div><b>Light theme</b>Cool paper tokens: accent-light fills with white ink, accent-text-light for the single 2px focus ring. Checks use ok-light (≥4.5:1). No rewarded ads; ads only on the Free Android Hub.</div>
+</div>
+</body></html>

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Onboarding Install Hub</title>
+<style>
+/*
+  KEY SCREEN — Onboarding wizard, step 3 "Install Hub" (staff mood; Vikram, Pune). Re-rendered 2026-10-23.
+  Shown in DARK (Cinema Electric) and LIGHT ("Cool paper", -light tokens) at desktop 1440 and phone 390.
+  State A: waiting for the Hub's first heartbeat. State B: code expired + Hub installer bad-code retry in place.
+  Governing spine sections:
+    DESIGN.md  — Colors (dark + Light theme "Cool paper": mapping hub-bg/hub-header -> bg-light, hub-tile -> surface-light,
+                 hub-line -> line-light; accent-light fills only, accent-text-light for links + focus; warning fills edged in warning-text-light);
+                 Typography (web-hero 64/200 for the step title at >=1024; web-display 40/300 below 1024 and for the pairing code, tabular;
+                 web-body; hub-label; hub-micro); Layout & Spacing — Web surfaces (onboarding: wizard-progress left column 256,
+                 web-gutter 56 / phone 16, web-app-section-gap 56, web-card-padding 32 / phone 24, web-header-height 80 / phone 64;
+                 below 840px wizard-progress = 10 horizontal dots + current step name);
+                 Components: wizard-progress, pairing-code (code grouped 4 + 4, "Copy code" button-secondary beside it, countdown,
+                 surface card with border-strong edge, NO QR), card, status-badge, button-primary (one per view), button-secondary, focus-ring.
+    EXPERIENCE.md — IA (Onboarding wizard: typed code, no QR); Component Patterns: wizard-progress (aria-current="step";
+                 Can skip on Products, Staff, Printer & payments; done steps link back), pairing-code (8-char single use, typed into the
+                 Hub installer, 15-min countdown announced at milestones, auto-advance on first heartbeat, Expired -> "Generate a new code",
+                 bad/expired code in the installer retries in place: inline error, field cleared, no restart);
+                 Voice (staff; "That code didn't work. Get a new code from your browser."); Key Flows Journey 1 steps 3-5 + Failures.
+  The Hub installer is a Hub surface, so it stays dark in both columns (Kiosk/Hub/Kitchen never use the light theme).
+  Spacing scale 4·8·12·16·24·32·40·56·64·80·96·128 inside product UI.
+*/
+/* ── Theme tokens: DESIGN.md Colors (dark "Cinema Electric") + Light theme "Cool paper" (-light). Owner app + web only. ── */
+.th-dark{
+  --bg:#09071A;--surface:#16122C;--surface-2:#201A3D;--line:#362D5C;--border-strong:#8178B5;
+  --text:#F5F2FF;--muted:#ACA5CC;--accent:#FF4FA8;--on-accent:#1A0010;--accent-text:#FF4FA8;
+  --ok:#5FE6A0;--warning:#FFBE3D;--warning-ink:#FFBE3D;--on-warning:#1E1300;--danger:#FF5C5C;--on-danger:#1A0505;--info:#7FB2FF;
+  --chip-rule-bg:#3D0F2A;--chip-rule-text:#FFA3D1;--chip-off-bg:#3D1418;--chip-off-text:#FF9A9A;
+  --hub-bg:#0B0920;--hub-header:#110E28;--hub-tile:#141030;--hub-line:#2A2350;--metric:#F5F2FF;
+  --focus-outline:2px solid #FF4FA8;--focus-shadow:0 0 0 6px #F5F2FF;
+  color-scheme:dark;background:var(--bg);color:var(--text);
+}
+.th-light{
+  --bg:#F6F5FC;--surface:#FFFFFF;--surface-2:#ECEAF7;--line:#DCD8EE;--border-strong:#7A72A8;
+  --text:#16123A;--muted:#555075;--accent:#D4127A;--on-accent:#FFFFFF;--accent-text:#AD0E63;
+  --ok:#0E7A46;--warning:#FFBE3D;--warning-ink:#8F5300;--on-warning:#1E1300;--danger:#C21F2E;--on-danger:#FFFFFF;--info:#1F56C2;
+  --chip-rule-bg:#FCE4F0;--chip-rule-text:#940B54;--chip-off-bg:#FDE6E6;--chip-off-text:#A3141F;
+  /* hub tones map: hub-bg/hub-header -> bg-light, hub-tile -> surface-light, hub-line -> line-light */
+  --hub-bg:#F6F5FC;--hub-header:#F6F5FC;--hub-tile:#FFFFFF;--hub-line:#DCD8EE;--metric:#16123A;
+  --focus-outline:2px solid #AD0E63;--focus-shadow:none;
+  color-scheme:light;background:var(--bg);color:var(--text);
+}
+.focus{outline:var(--focus-outline);outline-offset:2px;box-shadow:var(--focus-shadow)}
+/* light theme: warning fills always edged with warning-ink (1.5:1 on bg) */
+.th-light .warn-fill{border:1px solid var(--warning-ink)}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#2B2838;color:#F5F2FF;font-family:Sora,"Sora Variable",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:56px 40px 96px;-webkit-font-smoothing:antialiased;line-height:1.5}
+.tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+/* presentation (not product UI) */
+.page-h{max-width:1916px;margin:0 auto 40px}
+.page-h h1{font-weight:300;font-size:32px}
+.page-h p{color:#C9C4E0;font-size:15px;margin-top:8px;max-width:1100px;line-height:1.6}
+.state-h{max-width:1916px;margin:80px auto 24px;font-size:20px;font-weight:600}
+.state-h span{display:block;font-size:14px;font-weight:400;color:#C9C4E0;margin-top:4px}
+.row{display:flex;gap:64px;align-items:flex-start;max-width:1916px;margin:0 auto 56px}
+.cap{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#C9C4E0;font-weight:700;margin-bottom:16px}
+.notes{max-width:1916px;margin:64px auto 0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.notes div{border:1px solid #4A4566;border-radius:16px;padding:24px;font-size:13px;line-height:1.65;color:#C9C4E0}
+.notes b{display:block;color:#F5F2FF;font-weight:600;margin-bottom:8px;font-size:14px}
+
+/* frames */
+.browser{width:1442px;flex:none;border-radius:16px;border:1px solid #4A4566;overflow:hidden}
+.chrome{height:40px;background:#000;display:flex;align-items:center;gap:8px;padding:0 16px}
+.th-light .chrome{background:#D9D6E8}
+.chrome i{width:12px;height:12px;border-radius:50%;background:#4A4566;display:block}
+.th-light .chrome i{background:#A9A4C6}
+.chrome .url{margin-left:16px;flex:1;max-width:520px;height:24px;border-radius:8px;background:var(--hub-tile);color:var(--muted);font-size:12px;display:flex;align-items:center;padding:0 12px}
+.phone{width:410px;border-radius:48px;border:10px solid #000;overflow:hidden;flex:none}
+
+/* product UI */
+a{color:var(--text);text-decoration:underline;text-underline-offset:3px}
+.th-light a{color:var(--accent-text)}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:9999px;font-family:inherit;text-decoration:none!important;white-space:nowrap}
+.btn-primary{background:var(--accent);color:var(--on-accent)!important;padding:16px 32px;font-size:18px;font-weight:800}
+.btn-secondary{background:var(--surface-2);color:var(--text)!important;border:1px solid var(--border-strong);padding:0 24px;font-size:15px;font-weight:600}
+.label{font-size:13px;font-weight:500;color:var(--muted);line-height:1.4}
+.micro{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);line-height:1.2}
+.badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:6px;padding:4px 8px;background:var(--hub-tile);line-height:1.2;white-space:nowrap}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.app{background:var(--hub-bg)}
+.w-head{height:80px;background:var(--hub-header);border-bottom:1px solid var(--hub-line);display:flex;align-items:center;gap:32px;padding:0 56px;font-size:14px}
+.wordmark{font-weight:800;font-size:18px;text-decoration:none!important;color:var(--text)!important}
+.wordmark b{color:var(--accent)}
+.th-light .wordmark b{color:var(--accent-text)}
+.w-head .sp{flex:1}
+.shell{max-width:1312px;margin:0 auto;display:grid;grid-template-columns:256px minmax(0,1fr);gap:56px;padding:56px 56px 96px}
+
+/* wizard-progress (desktop) */
+.progress h2{margin:0 0 16px;padding:0 12px}
+.progress ol{list-style:none;display:flex;flex-direction:column;gap:4px}
+.progress li{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 12px;border-radius:10px;font-size:15px;color:var(--muted)}
+.progress li a{color:inherit!important;text-decoration:none}
+.progress .n{width:28px;height:28px;border-radius:50%;border:1px solid var(--border-strong);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.progress li.done{color:var(--text)}
+.progress li.done .n{background:var(--ok);border-color:var(--ok);color:var(--on-warning)}
+.th-light .progress li.done .n{color:#FFFFFF}
+.progress li.cur{background:var(--hub-line);color:var(--text);font-weight:600}
+.progress li.cur .n{border:2px solid var(--text);color:var(--text)}
+.progress .skip{margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+
+/* step content */
+.hero{font-size:64px;font-weight:200;line-height:1.0;letter-spacing:-.01em;margin-bottom:24px}
+.lede{color:var(--muted);max-width:640px;font-size:16px}
+.how{list-style:none;margin:56px 0;display:flex;flex-direction:column;gap:16px}
+.how li{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:24px 32px;display:grid;grid-template-columns:160px minmax(0,1fr) auto;gap:32px;align-items:center;min-height:96px}
+.how p{font-size:15px}
+.pc{background:var(--surface);border:1px solid var(--border-strong);border-radius:24px;padding:32px}
+.code-row{display:flex;align-items:center;gap:32px;margin:16px 0 24px;flex-wrap:wrap}
+.code{font-size:40px;font-weight:300;letter-spacing:.12em;font-variant-numeric:tabular-nums;line-height:1.15;white-space:nowrap}
+.code .gap{display:inline-block;width:.5em}
+.meta{display:flex;align-items:center;gap:24px;flex-wrap:wrap;font-size:15px}
+.wait{margin-top:32px;display:flex;align-items:center;gap:16px;background:var(--hub-tile);border:1px solid var(--line);border-radius:16px;padding:24px}
+.th-light .wait{background:var(--surface-2)}
+.pulse{width:16px;height:16px;border-radius:50%;border:2px solid var(--info);position:relative;flex:none}
+.pulse:after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--info)}
+.foot-actions{margin-top:56px;display:flex;gap:32px;align-items:center;flex-wrap:wrap;font-size:15px}
+.expired .code{color:var(--muted);text-decoration:line-through;text-decoration-thickness:2px}
+.err{margin-top:32px;display:flex;align-items:flex-start;gap:16px;background:var(--hub-tile);border:2px solid var(--warning-ink);border-radius:16px;padding:24px}
+.th-light .err{background:var(--surface)}
+.err .ico{color:var(--warning-ink);font-weight:800;font-size:18px;line-height:1.4;flex:none}
+
+/* phone (below 840): dots + step name; hero drops to web-display */
+.ph-head{height:64px;background:var(--hub-header);border-bottom:1px solid var(--hub-line);display:flex;align-items:center;gap:16px;padding:0 16px}
+.ph-body{padding:32px 16px 56px}
+.dots{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+.dots i{width:14px;height:14px;border-radius:50%;border:1px solid var(--border-strong);display:block;flex:none}
+.dots i.d{background:var(--ok);border-color:var(--ok)}
+.dots i.c{background:var(--text);border:2px solid var(--text);box-shadow:0 0 0 2px var(--hub-bg),0 0 0 4px var(--text);margin:0 4px}
+.ph-step{font-size:13px;font-weight:500;color:var(--text)}
+.ph-body h1{font-size:40px;font-weight:300;line-height:1.15;margin:40px 0 16px}
+.ph-body .lede{font-size:16px}
+.ph-body .pc{padding:24px;margin-top:40px}
+.ph-body .code{font-size:34px}
+.ph-body .code-row{gap:16px}
+.ph-body .stack{display:flex;flex-direction:column;gap:16px;margin-top:40px}
+.ph-body .stack .btn{width:100%}
+
+/* Hub installer (Hub surface: always dark) */
+.inst{width:410px;flex:none;border-radius:16px;border:1px solid #4A4566;overflow:hidden}
+.inst .chrome{justify-content:flex-start}
+.inst .chrome span{margin-left:12px;font-size:12px;color:var(--muted)}
+.inst-body{background:var(--hub-bg);padding:32px 24px}
+.inst-body h2{font-size:18px;font-weight:600;margin-bottom:8px}
+.field-l{display:block;font-size:13px;font-weight:500;margin:32px 0 8px}
+.field{height:56px;border-radius:10px;border:2px solid var(--danger);background:var(--hub-tile);display:flex;align-items:center;padding:0 16px;font-size:20px;letter-spacing:.12em;color:var(--muted)}
+.field .caret{width:2px;height:28px;background:var(--text);display:block}
+.ferr{display:flex;gap:8px;align-items:flex-start;color:var(--danger);font-size:14px;margin-top:12px;line-height:1.45}
+.inst-actions{display:flex;justify-content:flex-end;gap:16px;margin-top:40px}
+</style></head>
+<body>
+<header class="page-h"><h1>Onboarding wizard · step 3 “Install Hub”</h1>
+<p>Vikram sets up his Koregaon Park branch. Dark (Cinema Electric) and light (Cool paper) themes; default follows the OS, with a System · Light · Dark toggle in the web footer. The code is typed into the Hub installer: there is no QR. Desktop 1440 shows wizard-progress in a 256px left column; phone 390 shows 10 horizontal dots and the current step name.</p></header>
+
+<div class="state-h">State A · waiting for the Hub’s first heartbeat<span>Focus shown on “Download Hub for Windows” (desktop) and “Copy code” (phone). The countdown is announced at milestones only. On the first heartbeat the page advances to step 4 and focus moves to its heading.</span></div>
+<div class="row"><div><div class="cap">Dark · desktop 1440</div><div class="browser th-dark"><div class="chrome"><i></i><i></i><i></i><div class="url">arena360.in/setup/install-hub</div></div>
+<div class="app"><header class="w-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<span class="label">Setting up <b style="color:var(--text)">Level Up Gaming · Koregaon Park</b></span><span class="sp"></span>
+<span class="label">Progress is saved. You can come back to this later.</span><span>Vikram</span></header><div class="shell"><nav class="progress" aria-label="Setup steps"><h2 class="micro">Step 3 of 10</h2><ol><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Café details</a><span class="sr">, done — edit</span></li><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Subscription tier</a><span class="sr">, done — edit</span></li><li class="cur" aria-current="step"><span class="n">3</span>Install Hub</li><li><span class="n">4</span>Devices</li><li><span class="n">5</span>Rate plans</li><li><span class="n">6</span>Products<span class="skip">Can skip</span></li><li><span class="n">7</span>Staff<span class="skip">Can skip</span></li><li><span class="n">8</span>Printer &amp; payments<span class="skip">Can skip</span></li><li><span class="n">9</span>Test session</li><li><span class="n">10</span>Go live</li></ol></nav><main><h1 class="hero" tabindex="-1">Install the Hub</h1>
+<p class="lede">The Hub runs your branch from the counter PC. Install it, then type the code below into the installer. Nothing else needs typing: the code carries your café, branch and plan.</p>
+<ol class="how">
+<li><div class="micro">1 · Download</div><p>On the counter PC, download the Hub for Windows 10 or 11.</p><a class="btn btn-primary focus" href="#">Download Hub for Windows</a></li>
+<li><div class="micro">2 · Install</div><p>Run the installer. It asks for one thing: the pairing code.</p><a href="#">System requirements</a></li>
+<li><div class="micro">3 · Type the code</div><p>Type the code exactly as shown. This page moves on by itself once the Hub connects.</p><span></span></li>
+</ol><section class="pc" aria-labelledby="pc-h">
+  <h2 class="micro">Pairing code</h2>
+  <div class="code-row"><div class="code" aria-label="Pairing code K 7 Q M, 4 X R 2">K7QM<span class="gap"></span>4XR2</div><a class="btn btn-secondary" href="#">Copy code</a></div>
+  <div class="meta"><span class="badge" style="color:var(--info)">Single use</span><span class="tnum" role="timer" aria-live="off">Expires in <b>12:48</b></span></div>
+  <div class="wait" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span>
+    <div><b>Waiting for the Hub to connect…</b><br><span class="label">Keep this page open. Step 4 opens as soon as the Hub checks in.</span></div></div>
+</section>
+<div class="foot-actions"><a href="#">Installing on an Android tablet or phone instead?</a><a href="#">Help with installing</a></div></main></div></div></div></div><div><div class="cap">Dark · phone 390</div><div class="phone th-dark"><div class="app"><header class="ph-head"><a class="wordmark" href="#">Arena <b>360</b></a><span class="sp" style="flex:1"></span><span class="label">Saved</span></header>
+<div class="ph-body"><div class="dots" role="img" aria-label="Step 3 of 10"><i class="d"></i><i class="d"></i><i class="c"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="ph-step">Step 3 of 10 · Install Hub</div><h1>Install the Hub</h1><p class="lede">Install the Hub on the counter PC, then type this code into the installer.</p>
+<div class="stack"><a class="btn btn-primary" href="#">Download Hub for Windows</a><a href="#" style="text-align:center;font-size:15px">Installing on an Android tablet or phone?</a></div>
+<section class="pc" aria-labelledby="pc-h">
+  <h2 class="micro">Pairing code</h2>
+  <div class="code-row"><div class="code" aria-label="Pairing code K 7 Q M, 4 X R 2">K7QM<span class="gap"></span>4XR2</div><a class="btn btn-secondary focus" href="#">Copy code</a></div>
+  <div class="meta"><span class="badge" style="color:var(--info)">Single use</span><span class="tnum" role="timer" aria-live="off">Expires in <b>12:48</b></span></div>
+  <div class="wait" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span>
+    <div><b>Waiting for the Hub to connect…</b><br><span class="label">Keep this page open. Step 4 opens as soon as the Hub checks in.</span></div></div>
+</section></div></div></div></div></div>
+<div class="row"><div><div class="cap">Light · Cool paper · desktop 1440</div><div class="browser th-light"><div class="chrome"><i></i><i></i><i></i><div class="url">arena360.in/setup/install-hub</div></div>
+<div class="app"><header class="w-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<span class="label">Setting up <b style="color:var(--text)">Level Up Gaming · Koregaon Park</b></span><span class="sp"></span>
+<span class="label">Progress is saved. You can come back to this later.</span><span>Vikram</span></header><div class="shell"><nav class="progress" aria-label="Setup steps"><h2 class="micro">Step 3 of 10</h2><ol><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Café details</a><span class="sr">, done — edit</span></li><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Subscription tier</a><span class="sr">, done — edit</span></li><li class="cur" aria-current="step"><span class="n">3</span>Install Hub</li><li><span class="n">4</span>Devices</li><li><span class="n">5</span>Rate plans</li><li><span class="n">6</span>Products<span class="skip">Can skip</span></li><li><span class="n">7</span>Staff<span class="skip">Can skip</span></li><li><span class="n">8</span>Printer &amp; payments<span class="skip">Can skip</span></li><li><span class="n">9</span>Test session</li><li><span class="n">10</span>Go live</li></ol></nav><main><h1 class="hero" tabindex="-1">Install the Hub</h1>
+<p class="lede">The Hub runs your branch from the counter PC. Install it, then type the code below into the installer. Nothing else needs typing: the code carries your café, branch and plan.</p>
+<ol class="how">
+<li><div class="micro">1 · Download</div><p>On the counter PC, download the Hub for Windows 10 or 11.</p><a class="btn btn-primary focus" href="#">Download Hub for Windows</a></li>
+<li><div class="micro">2 · Install</div><p>Run the installer. It asks for one thing: the pairing code.</p><a href="#">System requirements</a></li>
+<li><div class="micro">3 · Type the code</div><p>Type the code exactly as shown. This page moves on by itself once the Hub connects.</p><span></span></li>
+</ol><section class="pc" aria-labelledby="pc-h">
+  <h2 class="micro">Pairing code</h2>
+  <div class="code-row"><div class="code" aria-label="Pairing code K 7 Q M, 4 X R 2">K7QM<span class="gap"></span>4XR2</div><a class="btn btn-secondary" href="#">Copy code</a></div>
+  <div class="meta"><span class="badge" style="color:var(--info)">Single use</span><span class="tnum" role="timer" aria-live="off">Expires in <b>12:48</b></span></div>
+  <div class="wait" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span>
+    <div><b>Waiting for the Hub to connect…</b><br><span class="label">Keep this page open. Step 4 opens as soon as the Hub checks in.</span></div></div>
+</section>
+<div class="foot-actions"><a href="#">Installing on an Android tablet or phone instead?</a><a href="#">Help with installing</a></div></main></div></div></div></div><div><div class="cap">Light · Cool paper · phone 390</div><div class="phone th-light"><div class="app"><header class="ph-head"><a class="wordmark" href="#">Arena <b>360</b></a><span class="sp" style="flex:1"></span><span class="label">Saved</span></header>
+<div class="ph-body"><div class="dots" role="img" aria-label="Step 3 of 10"><i class="d"></i><i class="d"></i><i class="c"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="ph-step">Step 3 of 10 · Install Hub</div><h1>Install the Hub</h1><p class="lede">Install the Hub on the counter PC, then type this code into the installer.</p>
+<div class="stack"><a class="btn btn-primary" href="#">Download Hub for Windows</a><a href="#" style="text-align:center;font-size:15px">Installing on an Android tablet or phone?</a></div>
+<section class="pc" aria-labelledby="pc-h">
+  <h2 class="micro">Pairing code</h2>
+  <div class="code-row"><div class="code" aria-label="Pairing code K 7 Q M, 4 X R 2">K7QM<span class="gap"></span>4XR2</div><a class="btn btn-secondary focus" href="#">Copy code</a></div>
+  <div class="meta"><span class="badge" style="color:var(--info)">Single use</span><span class="tnum" role="timer" aria-live="off">Expires in <b>12:48</b></span></div>
+  <div class="wait" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span>
+    <div><b>Waiting for the Hub to connect…</b><br><span class="label">Keep this page open. Step 4 opens as soon as the Hub checks in.</span></div></div>
+</section></div></div></div></div></div>
+
+<div class="state-h">State B · code expired, and the installer retries in place<span>In the browser the code is struck through and “Generate a new code” is the one primary action. In the Hub installer a bad or expired code shows an inline error and clears the field; the installer stays on the same screen, so there is nothing to restart.</span></div>
+<div class="row"><div><div class="cap">Dark · desktop 1440 · expired</div><div class="browser th-dark"><div class="chrome"><i></i><i></i><i></i><div class="url">arena360.in/setup/install-hub</div></div>
+<div class="app"><header class="w-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<span class="label">Setting up <b style="color:var(--text)">Level Up Gaming · Koregaon Park</b></span><span class="sp"></span>
+<span class="label">Progress is saved. You can come back to this later.</span><span>Vikram</span></header><div class="shell"><nav class="progress" aria-label="Setup steps"><h2 class="micro">Step 3 of 10</h2><ol><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Café details</a><span class="sr">, done — edit</span></li><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Subscription tier</a><span class="sr">, done — edit</span></li><li class="cur" aria-current="step"><span class="n">3</span>Install Hub</li><li><span class="n">4</span>Devices</li><li><span class="n">5</span>Rate plans</li><li><span class="n">6</span>Products<span class="skip">Can skip</span></li><li><span class="n">7</span>Staff<span class="skip">Can skip</span></li><li><span class="n">8</span>Printer &amp; payments<span class="skip">Can skip</span></li><li><span class="n">9</span>Test session</li><li><span class="n">10</span>Go live</li></ol></nav><main><h1 class="hero">Install the Hub</h1>
+<p class="lede" style="margin-bottom:56px">The Hub runs your branch from the counter PC. Install it, then type the code below into the installer.</p><section class="pc expired" aria-labelledby="pc-h2">
+  <h2 class="micro">Pairing code</h2>
+  <div class="code-row"><div class="code" aria-label="Expired pairing code">K7QM<span class="gap"></span>4XR2</div></div>
+  <div class="meta"><span class="badge" style="color:var(--muted)">Expired</span><span class="label">Codes last 15 minutes and work once.</span></div>
+  <div class="err" role="alert" tabindex="-1"><span class="ico" aria-hidden="true">!</span>
+    <div><b>This code has expired.</b><br><span class="label" style="color:var(--text)">Generate a new code and type it into the Hub installer. The installer is still open and waiting; no need to restart it.</span>
+    <div style="margin-top:24px"><a class="btn btn-primary focus" href="#">Generate a new code</a></div></div></div>
+</section>
+<div class="foot-actions"><a href="#">Help with installing</a></div></main></div></div></div></div><div><div class="cap">Light · Cool paper · phone 390 · expired</div><div class="phone th-light"><div class="app"><header class="ph-head"><a class="wordmark" href="#">Arena <b>360</b></a><span class="sp" style="flex:1"></span><span class="label">Saved</span></header>
+<div class="ph-body"><div class="dots" role="img" aria-label="Step 3 of 10"><i class="d"></i><i class="d"></i><i class="c"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="ph-step">Step 3 of 10 · Install Hub</div><h1>Install the Hub</h1><p class="lede">Install the Hub on the counter PC, then type this code into the installer.</p><section class="pc expired" aria-labelledby="pc-h2">
+  <h2 class="micro">Pairing code</h2>
+  <div class="code-row"><div class="code" aria-label="Expired pairing code">K7QM<span class="gap"></span>4XR2</div></div>
+  <div class="meta"><span class="badge" style="color:var(--muted)">Expired</span><span class="label">Codes last 15 minutes and work once.</span></div>
+  <div class="err" role="alert" tabindex="-1"><span class="ico" aria-hidden="true">!</span>
+    <div><b>This code has expired.</b><br><span class="label" style="color:var(--text)">Generate a new code and type it into the Hub installer. The installer is still open and waiting; no need to restart it.</span>
+    <div style="margin-top:24px"><a class="btn btn-primary" href="#">Generate a new code</a></div></div></div>
+</section></div></div></div></div></div>
+<div class="row"><div><div class="cap">Light · Cool paper · desktop 1440 · expired</div><div class="browser th-light"><div class="chrome"><i></i><i></i><i></i><div class="url">arena360.in/setup/install-hub</div></div>
+<div class="app"><header class="w-head"><a class="wordmark" href="#">Arena <b>360</b></a>
+<span class="label">Setting up <b style="color:var(--text)">Level Up Gaming · Koregaon Park</b></span><span class="sp"></span>
+<span class="label">Progress is saved. You can come back to this later.</span><span>Vikram</span></header><div class="shell"><nav class="progress" aria-label="Setup steps"><h2 class="micro">Step 3 of 10</h2><ol><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Café details</a><span class="sr">, done — edit</span></li><li class="done"><span class="n" aria-hidden="true">✓</span><a href="#">Subscription tier</a><span class="sr">, done — edit</span></li><li class="cur" aria-current="step"><span class="n">3</span>Install Hub</li><li><span class="n">4</span>Devices</li><li><span class="n">5</span>Rate plans</li><li><span class="n">6</span>Products<span class="skip">Can skip</span></li><li><span class="n">7</span>Staff<span class="skip">Can skip</span></li><li><span class="n">8</span>Printer &amp; payments<span class="skip">Can skip</span></li><li><span class="n">9</span>Test session</li><li><span class="n">10</span>Go live</li></ol></nav><main><h1 class="hero">Install the Hub</h1>
+<p class="lede" style="margin-bottom:56px">The Hub runs your branch from the counter PC. Install it, then type the code below into the installer.</p><section class="pc expired" aria-labelledby="pc-h2">
+  <h2 class="micro">Pairing code</h2>
+  <div class="code-row"><div class="code" aria-label="Expired pairing code">K7QM<span class="gap"></span>4XR2</div></div>
+  <div class="meta"><span class="badge" style="color:var(--muted)">Expired</span><span class="label">Codes last 15 minutes and work once.</span></div>
+  <div class="err" role="alert" tabindex="-1"><span class="ico" aria-hidden="true">!</span>
+    <div><b>This code has expired.</b><br><span class="label" style="color:var(--text)">Generate a new code and type it into the Hub installer. The installer is still open and waiting; no need to restart it.</span>
+    <div style="margin-top:24px"><a class="btn btn-primary focus" href="#">Generate a new code</a></div></div></div>
+</section>
+<div class="foot-actions"><a href="#">Help with installing</a></div></main></div></div></div></div><div><div class="cap">Hub installer · counter PC · always dark</div><div class="inst th-dark"><div class="chrome"><i></i><i></i><i></i><span>Arena 360 Hub — Setup</span></div>
+<div class="inst-body"><div class="micro">Pair this Hub</div><h2 style="margin-top:12px">Type the pairing code from your browser</h2>
+<p class="label">8 characters, shown on the Install Hub step of setup.</p>
+<label class="field-l" for="pc-in">Pairing code</label>
+<div class="field" id="pc-in" role="textbox" aria-invalid="true" aria-describedby="pc-err"><span class="caret" aria-hidden="true"></span></div>
+<div class="ferr" id="pc-err" role="alert"><span aria-hidden="true" style="font-weight:800">!</span><span>That code didn't work. Get a new code from your browser.</span></div>
+<div class="inst-actions"><a class="btn btn-secondary" href="#">Quit setup</a><a class="btn btn-primary" href="#" style="font-size:16px;padding:0 32px">Pair</a></div>
+</div></div></div></div>
+
+<div class="notes">
+<div><b>pairing-code</b>An 8-character single-use code in web-display with tabular figures, grouped 4 + 4, with a “Copy code” secondary button beside it and a 15-minute countdown. It sits in a surface card with a border-strong edge. No QR: the owner types the code into the installer on the counter PC.</div>
+<div><b>wizard-progress</b>Desktop: “Step 3 of 10”, then one 44px row per step. Done steps have an ok check and link back for edits; the current step has a hub-line fill and a 2px ring; later steps are muted; Products, Staff and Printer &amp; payments carry “Can skip”. Below 840px it becomes 10 dots (done = ok fill, current = text fill with a 2px ring, later = border-strong ring) plus “Step 3 of 10 · Install Hub”.</div>
+<div><b>Light theme</b>Hub tones map to bg-light, surface-light and line-light. The magenta fill (accent-light) carries white ink, and links and the focus ring use accent-text-light as a single 2px ring. The expired message gets a warning-text-light edge. The Hub installer is a Hub surface, so it stays dark.</div>
+</div>
+</body></html>

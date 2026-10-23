@@ -7,10 +7,25 @@
   import Clock from "../lib/Clock.svelte";
   import Icon from "../lib/Icon.svelte";
   import MoreSheet from "../lib/MoreSheet.svelte";
+  import LockOverlay from "../lib/LockOverlay.svelte";
+  import { createIdleTracker } from "../lib/idle.js";
+  import { setUiSettings, uiSettings } from "../lib/ui-settings.svelte";
   import { BOTTOM_BAR, MORE, SCREENS, screenOf, shortcutTarget, type Screen } from "../lib/nav";
   import { SNAPSHOT_DEPENDENCY } from "../lib/snapshot";
-  import { SESSION_DEPENDENCY, getToken, safeRedirect, signOut } from "../lib/auth";
-  import { connectEvents } from "../lib/events";
+  import {
+    SESSION_DEPENDENCY,
+    getLocalLocked,
+    getToken,
+    lockSession,
+    onSessionLocked,
+    safeRedirect,
+    setLocalLocked,
+    signOut,
+    unlockSession,
+    type LockResult,
+  } from "../lib/auth";
+  import { connectEvents, uiOf } from "../lib/events";
+  import type { UnlockOk } from "@arena/ui/generated";
   import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
   import type { LayoutData } from "./$types";
 
@@ -40,6 +55,24 @@
   );
 
   let moreOpen = $state(false);
+  /** The idle lock is up: the shell stays mounted but inert behind the overlay. */
+  let locked = $state(false);
+  /** What had focus when the screen locked (it gets focus back on unlock). */
+  let lockedFrom: HTMLElement | null = null;
+  /** Who the lock screen names (kept while the Hub is unreachable). */
+  let lockedName = $state("");
+  /** Whether that member has a PIN (without one, the lock screen says to sign out). */
+  let lockedHasPin = $state(true);
+  /** Announced after an unlock that switched the member. */
+  let announcement = $state("");
+  /** The `/ui/lock` call in flight, which an unlock waits for. */
+  let lockAttempt: Promise<LockResult> | null = null;
+  /** Bumped on every unlock, so a stale lock retry loop stops. */
+  let lockGeneration = 0;
+  /** This window is sending a PIN (its own `session.unlocked` event is then not news). */
+  let unlocking = false;
+  /** Waits before retrying `/ui/lock`, in seconds (then 30 s each). */
+  const LOCK_RETRY_DELAYS = [1, 2, 4, 8, 15, 30];
   let moreButton: HTMLButtonElement | undefined = $state();
   let mainEl: HTMLElement | undefined = $state();
   let refreshing = $state(false);
@@ -63,7 +96,7 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
-    if (gated) return;
+    if (gated || locked) return;
     const target = shortcutTarget(event, document.activeElement);
     if (!target) return;
     event.preventDefault();
@@ -107,7 +140,12 @@
   // The branch locale comes from each (re)loaded snapshot, then live from `/ui/events`.
   $effect(() => {
     const locale = data.hub.ok ? (data.hub.snapshot.locale ?? null) : null;
-    if (data.hub.ok) untrack(() => setLocale(locale));
+    const ui = data.hub.ok ? data.hub.snapshot.ui : null;
+    if (data.hub.ok)
+      untrack(() => {
+        setLocale(locale);
+        setUiSettings(ui);
+      });
   });
 
   // While someone is signed in, this view listens to the Hub's push stream, keyed on the token
@@ -118,7 +156,15 @@
     if (!token) return;
     return untrack(() => {
       return connectEvents(token, {
-        onSettingsChanged: (e) => applySettingsChanged(e.locale, e.keys),
+        onSettingsChanged: (e) => {
+          applySettingsChanged(e.locale, e.keys);
+          setUiSettings(uiOf(e));
+        },
+        // Another window sharing this session locked or unlocked it.
+        onSessionLocked: () => lockScreen(false),
+        onSessionUnlocked: (e) => {
+          if (locked && !unlocking) void finishUnlock(e);
+        },
         onResync: () => void refresh(),
         // Refused: find out whether the session is still there (sign-in otherwise).
         onClosed: () => void invalidate(SESSION_DEPENDENCY),
@@ -133,8 +179,125 @@
 
   async function onSignOut() {
     await signOut();
+    lockGeneration++;
+    locked = false;
     await invalidate(SESSION_DEPENDENCY);
   }
+
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  /** Tells the Hub, retrying with a back-off while it does not answer and the lock stands. */
+  async function tellHubLocked() {
+    const generation = lockGeneration;
+    for (let i = 0; ; i++) {
+      lockAttempt = lockSession();
+      const result = await lockAttempt;
+      lockAttempt = null;
+      if (result === "signed_out") return void invalidate(SESSION_DEPENDENCY);
+      if (result === "locked") return;
+      await sleep(LOCK_RETRY_DELAYS[Math.min(i, LOCK_RETRY_DELAYS.length - 1)] * 1000);
+      if (!locked || generation !== lockGeneration) return;
+    }
+  }
+
+  /**
+   * Covers the screen at once; `tellHub` is off when the Hub already holds the session locked.
+   */
+  function lockScreen(tellHub: boolean) {
+    if (staff) {
+      lockedName = staff.display_name;
+      lockedHasPin = data.session.state !== "signed_in" || data.session.hasPin;
+    }
+    setLocalLocked(true);
+    if (locked) return;
+    const active = document.activeElement;
+    lockedFrom = active instanceof HTMLElement && active !== document.body ? active : null;
+    moreOpen = false;
+    announcement = "";
+    locked = true;
+    if (tellHub) void tellHubLocked();
+  }
+
+  /** Uncovers the screen once the Hub has unlocked the session (here or in another window). */
+  async function finishUnlock(result: UnlockOk) {
+    setLocalLocked(false);
+    lockGeneration++;
+    // Catch up on what changed while locked (and on who is signed in now) before uncovering.
+    await Promise.all([invalidate(SNAPSHOT_DEPENDENCY), invalidate(SESSION_DEPENDENCY)]);
+    locked = false;
+    announcement = result.switched
+      ? t("hub.lock.switched", { name: result.staff.display_name })
+      : "";
+    await tick();
+    const back = lockedFrom;
+    lockedFrom = null;
+    if (back?.isConnected) back.focus({ preventScroll: true });
+    else focusEl(mainEl?.querySelector("h1"));
+  }
+
+  /** The PIN typed on the lock screen. */
+  async function unlock(pin: string) {
+    unlocking = true;
+    try {
+      // The Hub must hold the session locked before it checks a PIN.
+      if (lockAttempt) await lockAttempt;
+      let outcome = await unlockSession(pin);
+      if (outcome.kind === "not_locked" && (await lockSession()) === "locked") {
+        outcome = await unlockSession(pin);
+      }
+      if (outcome.kind === "signed_out") {
+        lockGeneration++;
+        locked = false;
+        await invalidate(SESSION_DEPENDENCY);
+        return { ok: true } as const;
+      }
+      if (outcome.kind === "rejected") return { ok: false, message: "hub.lock.rejected" } as const;
+      if (outcome.kind === "locked") {
+        return { ok: false, message: "ui.pin.locked", retryAfterS: outcome.retryAfterS } as const;
+      }
+      if (outcome.kind === "unreachable" || outcome.kind === "not_locked") {
+        return { ok: false, message: "ui.pin.unreachable" } as const;
+      }
+      if (outcome.kind === "error") return { ok: false, message: "ui.pin.failed" } as const;
+      await finishUnlock(outcome);
+      return { ok: true } as const;
+    } finally {
+      unlocking = false;
+    }
+  }
+
+  // One idle countdown per signed-in view. Its length is read when each period starts, so a
+  // new setting never shortens the countdown in progress. It stops while gated.
+  const idleTracker = createIdleTracker({
+    minutes: () => uiSettings.idleLockMinutes,
+    onIdle: () => lockScreen(true),
+    target: typeof window === "undefined" ? null : window,
+  });
+  const tracking = $derived(!gated && !locked);
+  $effect(() => {
+    if (!tracking) return;
+    untrack(() => idleTracker.start());
+    return () => idleTracker.stop();
+  });
+
+  // The Hub holds this session locked (a reload, or another window locked it), or this window
+  // was locked before a reload: lock here too.
+  $effect(() => {
+    const signedIn = data.session.state === "signed_in";
+    const hubLocked = signedIn && data.session.state === "signed_in" && data.session.locked;
+    if (hubLocked) untrack(() => lockScreen(false));
+    else if (signedIn) untrack(() => getLocalLocked() && !locked && lockScreen(true));
+  });
+
+  // Signed out: nothing to unlock.
+  $effect(() => {
+    if (signedOut) untrack(() => (locked = false));
+  });
+
+  onMount(() => {
+    onSessionLocked(() => lockScreen(false));
+    return () => onSessionLocked(null);
+  });
 
   // Every load result: back off while unreachable; on recovery stop retrying and move focus
   // to the screen's heading.
@@ -211,7 +374,7 @@
 {/snippet}
 
 {#if gated}
-  <div class="gate">
+  <div class="gate" inert={locked} aria-hidden={locked ? "true" : undefined}>
     <header class="hub-header">
       <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
       <Clock />
@@ -225,7 +388,7 @@
     </main>
   </div>
 {:else}
-  <div class="shell" inert={moreOpen}>
+  <div class="shell" inert={moreOpen || locked} aria-hidden={locked ? "true" : undefined}>
     <header class="hub-header">
       <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
       <div class="header-end">
@@ -301,6 +464,17 @@
 {#if moreOpen}
   <MoreSheet id="hub-more-sheet" current={current?.id} onclose={closeMore} />
 {/if}
+
+{#if locked}
+  <LockOverlay
+    name={staff?.display_name ?? lockedName}
+    hasPin={lockedHasPin}
+    onunlock={unlock}
+    onsignout={onSignOut}
+  />
+{/if}
+
+<p class="visually-hidden" aria-live="polite" data-testid="hub-announce">{announcement}</p>
 
 <style>
   :global(body) {

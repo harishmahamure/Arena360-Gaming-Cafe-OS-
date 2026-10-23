@@ -37,8 +37,8 @@ pub use rusqlite::Transaction;
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff_with_role, find_role,
     find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
-    insert_staff, list_pin_candidates, list_role_perms, list_roles, role_perm_effect,
-    update_role_name, update_staff,
+    insert_staff, list_pin_candidates, list_role_perms, list_roles, list_unlock_candidates,
+    role_perm_effect, update_role_name, update_staff,
 };
 
 /// The transaction `apply()` and the replayer run in.
@@ -369,6 +369,19 @@ impl Store {
             return Ok(Vec::new());
         }
         list_pin_candidates(&self.conn, permissions, exclude, limit)
+    }
+
+    /// Up to `limit` active staff with a PIN, `first` ahead of the others (see
+    /// [`list_unlock_candidates`]).
+    pub fn unlock_candidates(
+        &self,
+        first: &str,
+        limit: usize,
+    ) -> Result<Vec<PinCandidate>, AppError> {
+        if !self.table_exists("staff")? {
+            return Ok(Vec::new());
+        }
+        list_unlock_candidates(&self.conn, first, limit)
     }
 
     /// The branch's locale columns, outside any write transaction (`None` before bootstrap).

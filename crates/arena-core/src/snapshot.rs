@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use arena_proto::{
     AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SnapshotBranch, SnapshotDevice,
-    SnapshotLocale,
+    SnapshotLocale, SnapshotUi,
 };
 use arena_store::{BranchSummary, DeviceRow, Store};
 
@@ -19,9 +19,11 @@ pub fn build_snapshot(
     branch: Option<BranchSummary>,
     devices: Vec<DeviceRow>,
     locale: Option<SnapshotLocale>,
+    ui: SnapshotUi,
 ) -> HubSnapshot {
     HubSnapshot {
         locale,
+        ui,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -52,9 +54,28 @@ pub fn build_snapshot(
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, locale) = store
-        .read_consistent(|s| Ok((s.branch_summary()?, s.devices()?, read_locale(s, now_ms)?)))?;
-    Ok(build_snapshot(branch, devices, locale))
+    let (branch, devices, locale, ui) = store.read_consistent(|s| {
+        Ok((
+            s.branch_summary()?,
+            s.devices()?,
+            read_locale(s, now_ms)?,
+            read_ui(s)?,
+        ))
+    })?;
+    Ok(build_snapshot(branch, devices, locale, ui))
+}
+
+/// The setting behind [`SnapshotUi::idle_lock_minutes`].
+pub const KEY_IDLE_LOCK_MINUTES: &str = "idle_lock_minutes";
+
+/// The Hub UI settings (the defaults before bootstrap).
+fn read_ui(store: &Store) -> Result<SnapshotUi, AppError> {
+    let settings = store.settings()?;
+    let value = settings
+        .iter()
+        .find(|s| s.key == KEY_IDLE_LOCK_MINUTES)
+        .map(|s| s.value.as_str());
+    Ok(SnapshotUi::from_setting(value))
 }
 
 /// The locale in effect at `now_ms` (`None` before bootstrap).
@@ -114,6 +135,15 @@ impl SnapshotReader {
                 next_rollover(&rows, now_ms),
             )))
         })
+    }
+
+    /// The Hub UI settings now (the defaults before bootstrap). Blocking (SQLite).
+    pub fn ui(&self) -> Result<SnapshotUi, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        read_ui(&store)
     }
 
     /// The branch locale in effect at `now_ms` (`None` before bootstrap). Blocking (SQLite).
@@ -214,6 +244,7 @@ mod tests {
                     fy_start_month: 1,
                     pending: None,
                 }),
+                ui: SnapshotUi::default(),
             }
         );
     }
@@ -230,6 +261,7 @@ mod tests {
                 branch: None,
                 devices: vec![],
                 locale: None,
+                ui: SnapshotUi::default(),
             }
         );
     }
@@ -246,6 +278,10 @@ mod tests {
             revoked_at: None,
             rev: 1,
         };
-        assert!(build_snapshot(None, vec![row], None).devices.is_empty());
+        assert!(
+            build_snapshot(None, vec![row], None, SnapshotUi::default())
+                .devices
+                .is_empty()
+        );
     }
 }

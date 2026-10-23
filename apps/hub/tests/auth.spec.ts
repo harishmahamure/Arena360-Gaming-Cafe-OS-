@@ -11,6 +11,7 @@ const SNAPSHOT: HubSnapshot = {
   branch: { name: "Dev Branch", branch_code: "DEV01" },
   devices: [],
   locale: null,
+  ui: { idle_lock_minutes: 5 },
 };
 const CORS = {
   "access-control-allow-origin": "http://localhost:5173",

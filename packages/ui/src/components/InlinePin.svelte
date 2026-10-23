@@ -20,7 +20,9 @@
    * submits on its own. Esc clears the PIN, calls `oncancel` and returns focus to
    * `returnFocusTo` (not while a PIN is being checked). The PIN lives only in this component's
    * state and is cleared the moment it is submitted, whatever the outcome. The live region
-   * announces how many cells are filled, never the digits.
+   * announces how many cells are filled, never the digits. `label` names the PIN input and
+   * `submitLabel` the ✓ key; with `cancellable` off there is no Cancel button (Esc still clears
+   * the PIN and calls `oncancel`).
    */
   let {
     minLength = 4,
@@ -30,6 +32,9 @@
     message = "ui.pin.prompt",
     returnFocusTo = null,
     autofocus = true,
+    label = "ui.pin.label",
+    submitLabel = "ui.pin.key_submit",
+    cancellable = true,
   }: {
     minLength?: 4 | 5 | 6;
     maxLength?: 4 | 5 | 6;
@@ -40,6 +45,12 @@
     returnFocusTo?: HTMLElement | null;
     /** Focus the PIN as soon as it opens (the gallery's static samples turn this off). */
     autofocus?: boolean;
+    /** The PIN input's accessible name. */
+    label?: MessageKey;
+    /** The ✓ key's accessible name. */
+    submitLabel?: MessageKey;
+    /** Show the Cancel button. */
+    cancellable?: boolean;
   } = $props();
 
   const id = $props.id();
@@ -206,7 +217,7 @@
       inputmode="numeric"
       autocomplete="off"
       maxlength={cells}
-      aria-label={t("ui.pin.label")}
+      aria-label={t(label)}
       aria-describedby={feedback ? describedWithFeedback : promptId}
       aria-invalid={feedback && feedback.message !== "ui.pin.incomplete" ? "true" : undefined}
       readonly={busy || locked}
@@ -257,22 +268,24 @@
     <button
       type="button"
       class="ui-interactive key key--submit"
-      aria-label={t("ui.pin.key_submit")}
+      aria-label={t(submitLabel)}
       aria-disabled={locked ? "true" : undefined}
       aria-describedby={locked ? feedbackId : undefined}
       onclick={() => void submit()}><span aria-hidden="true">✓</span></button
     >
   </div>
 
-  <div class="actions">
-    <Button
-      label="ui.pin.cancel"
-      variant="secondary"
-      onclick={cancel}
-      disabled={busy}
-      disabledReason="ui.pin.checking"
-    />
-  </div>
+  {#if cancellable}
+    <div class="actions">
+      <Button
+        label="ui.pin.cancel"
+        variant="secondary"
+        onclick={cancel}
+        disabled={busy}
+        disabledReason="ui.pin.checking"
+      />
+    </div>
+  {/if}
 </div>
 
 <style>

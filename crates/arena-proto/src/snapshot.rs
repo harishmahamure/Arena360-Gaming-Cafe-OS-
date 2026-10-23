@@ -16,6 +16,41 @@ pub struct HubSnapshot {
     pub devices: Vec<SnapshotDevice>,
     /// The branch locale in effect now, or `null` before the branch is set up.
     pub locale: Option<SnapshotLocale>,
+    /// Hub UI behaviour settings.
+    pub ui: SnapshotUi,
+}
+
+/// The Hub UI settings every open view follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotUi {
+    /// Minutes without input before a signed-in Hub UI locks (1–30; the setting
+    /// `idle_lock_minutes`).
+    pub idle_lock_minutes: u8,
+}
+
+impl SnapshotUi {
+    /// The idle lock used when the setting is missing or unreadable.
+    pub const DEFAULT_IDLE_LOCK_MINUTES: u8 = 5;
+    /// The setting's allowed range.
+    pub const IDLE_LOCK_RANGE: std::ops::RangeInclusive<u8> = 1..=30;
+
+    /// From the setting's TEXT value: anything missing or out of range is the default.
+    pub fn from_setting(value: Option<&str>) -> Self {
+        let idle_lock_minutes = value
+            .and_then(|v| v.parse::<u8>().ok())
+            .filter(|m| Self::IDLE_LOCK_RANGE.contains(m))
+            .unwrap_or(Self::DEFAULT_IDLE_LOCK_MINUTES);
+        Self { idle_lock_minutes }
+    }
+}
+
+impl Default for SnapshotUi {
+    fn default() -> Self {
+        Self {
+            idle_lock_minutes: Self::DEFAULT_IDLE_LOCK_MINUTES,
+        }
+    }
 }
 
 /// Where the currency symbol goes: `₹1.00` or `1.00 €`.
@@ -97,6 +132,8 @@ pub struct SettingsChangedEvent {
     pub locale: Option<SnapshotLocale>,
     /// The setting keys the intent wrote.
     pub keys: Vec<String>,
+    /// The Hub UI settings now in effect.
+    pub ui: SnapshotUi,
 }
 
 /// `event: applied` on `GET /ui/events`: any other committed intent.
@@ -140,15 +177,29 @@ mod tests {
                 zone: None,
             }],
             locale: None,
+            ui: SnapshotUi::default(),
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
             serde_json::json!({
                 "branch": null,
                 "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null}],
-                "locale": null
+                "locale": null,
+                "ui": {"idle_lock_minutes": 5}
             })
         );
+    }
+
+    #[test]
+    fn ui_block_reads_the_setting_or_falls_back() {
+        assert_eq!(SnapshotUi::from_setting(Some("10")).idle_lock_minutes, 10);
+        for bad in [None, Some("0"), Some("31"), Some("five"), Some("")] {
+            assert_eq!(
+                SnapshotUi::from_setting(bad).idle_lock_minutes,
+                5,
+                "{bad:?}"
+            );
+        }
     }
 }
 

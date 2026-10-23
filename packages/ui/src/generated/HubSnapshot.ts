@@ -2,6 +2,7 @@
 import type { SnapshotBranch } from "./SnapshotBranch";
 import type { SnapshotDevice } from "./SnapshotDevice";
 import type { SnapshotLocale } from "./SnapshotLocale";
+import type { SnapshotUi } from "./SnapshotUi";
 
 /**
  * What the Hub UI needs to draw its shell and the floor placeholder.
@@ -19,4 +20,8 @@ export type HubSnapshot = {
    * The branch locale in effect now, or `null` before the branch is set up.
    */
   locale: SnapshotLocale | null;
+  /**
+   * Hub UI behaviour settings.
+   */
+  ui: SnapshotUi;
 };

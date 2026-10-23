@@ -506,7 +506,8 @@ mod tests {
                         "day_start_min": 360,
                         "fy_start_month": 4,
                         "pending": null
-                    }
+                    },
+                    "ui": {"idle_lock_minutes": 5}
                 })
             );
         }
@@ -516,7 +517,10 @@ mod tests {
             let (_dir, r) = reader(false);
             let (status, _, body) = send(r, get(None)).await;
             assert_eq!(status, StatusCode::OK);
-            assert_eq!(body, json!({"branch": null, "devices": [], "locale": null}));
+            assert_eq!(
+                body,
+                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5}})
+            );
         }
 
         #[tokio::test]

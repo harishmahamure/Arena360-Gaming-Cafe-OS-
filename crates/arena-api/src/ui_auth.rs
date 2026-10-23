@@ -7,7 +7,8 @@
 //!   (429) with `retry_after_s`. A success resets the count. The lockout is in memory, keyed
 //!   by login, and timed by the injected [`Clock`].
 //! - `POST /ui/auth/sign-out` (bearer token) ends the session.
-//! - `GET /ui/me` (bearer token) answers the session's [`SessionStaff`], or 401.
+//! - `GET /ui/me` (bearer token) answers the session's [`SessionStaff`] and whether it is
+//!   locked ([`UiMe`]), or 401.
 //! - `POST /ui/elevate {items: [{intent_kind, key?}], pin}` (bearer token) checks a manager's
 //!   PIN for exactly the listed intents (1–10; `settings.set` items name their setting key),
 //!   which the signed-in member cannot do alone. A follower refuses first (`NOT_PRIMARY`), an
@@ -28,6 +29,20 @@
 //!   the intent (kind, and the key of a `settings.set`; else `PIN_REQUIRED`) and becomes
 //!   `elevated_by{pin, staff_id, hub, verifier_version}`, which `apply()` re-checks. A refusal
 //!   (nothing applied) gives the item back.
+//! - `POST /ui/lock` (bearer token) idle-locks the session (204): until it is unlocked,
+//!   `/ui/intent` and `/ui/elevate` answer `SESSION_LOCKED` (423) and the session's tickets are
+//!   dropped. Nothing else stops: `/ui/events` keeps streaming and the Hub keeps applying.
+//! - `POST /ui/unlock {pin}` (bearer token) only unlocks a locked session (otherwise
+//!   `VALIDATION_FAILED` on `session`, 409, before any PIN check). It checks the PIN against
+//!   the session's own member first, then the other active staff with a PIN (at most 50 checks,
+//!   argon2id). The own PIN unlocks the session as it was; another member's unlocks it and
+//!   re-binds it to them (so every later intent carries their actor, and tickets issued before
+//!   are refused), and [`UnlockOk`] says so. No match is `PIN_REJECTED` with one fixed message
+//!   ("that PIN can't unlock this screen"). Five failures in a row, counted both per staff member and per token, pause
+//!   unlocking: 60 s, doubling with each further pause (at most 15 min) until a successful
+//!   unlock (`AUTH_LOCKED` with `retry_after_s`); signing out still works. Locking and
+//!   unlocking push `session.locked` / `session.unlocked` to `/ui/events` streams of the same
+//!   token. `ui.locked` / `ui.unlocked` are logged with staff ids only, never the PIN.
 //! - `GET /ui/settings` (bearer token) lists the branch settings with their `rev`, so an edit
 //!   can carry `base_rev`.
 //!
@@ -47,7 +62,8 @@ use arena_core::{Clock, SnapshotReader, StaffDirectory, WriterHandle};
 use arena_proto::{
     ActorKind, AppError, ElevateDrop, ElevateOk, ElevateRequest, ElevatedBy, ElevationItem,
     ElevationKind, ElevationMode, ErrorCode, IntentKind, IntentResult, MAX_TICKET_USES, Permission,
-    Requirement, SessionStaff, SignInOk, SignInRequest, UiError, UiIntentRequest,
+    Requirement, SessionStaff, SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk,
+    UnlockRequest,
 };
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -78,6 +94,9 @@ const MAX_CONCURRENT_PIN_CHECKS: usize = 2;
 struct Ticket {
     /// The session token it was issued to.
     session: String,
+    /// The staff member the session acted as when it was issued (a re-bound session cannot
+    /// redeem it).
+    requester: String,
     /// The approving staff member.
     staff_id: String,
     verifier_version: i64,
@@ -209,10 +228,138 @@ impl Lockout {
     }
 }
 
+/// The first unlock pause; each further consecutive pause doubles it.
+pub const UNLOCK_PAUSE_MS: i64 = 60_000;
+/// The longest unlock pause.
+pub const UNLOCK_PAUSE_MAX_MS: i64 = 15 * 60_000;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct UnlockEntry {
+    failures: u32,
+    in_flight: u32,
+    locked_until: Option<i64>,
+    /// Pauses in a row since the last successful unlock.
+    pauses: u32,
+}
+
+impl UnlockEntry {
+    fn idle(&self, now_ms: i64) -> bool {
+        self.failures == 0
+            && self.in_flight == 0
+            && self.pauses == 0
+            && self.locked_until.is_none_or(|u| u <= now_ms)
+    }
+}
+
+/// Unlock attempts, counted under several keys at once (the staff member and the token): any
+/// key at its limit refuses. Each pause doubles the previous one (60 s, 120 s, … 15 min); only
+/// a successful unlock resets the doubling.
+#[derive(Debug, Default)]
+pub struct UnlockThrottle {
+    entries: HashMap<String, UnlockEntry>,
+}
+
+impl UnlockThrottle {
+    /// Reserves one attempt under every key, or `Err(retry_after_s)` (nothing reserved).
+    pub fn begin(&mut self, keys: &[String], now_ms: i64) -> Result<(), u32> {
+        if self.entries.len() >= MAX_LOCKOUT_ENTRIES {
+            self.entries.retain(|_, e| !e.idle(now_ms));
+        }
+        let mut wait: Option<u32> = None;
+        for key in keys {
+            let e = self.entries.entry(key.clone()).or_default();
+            match e.locked_until {
+                Some(until) if until > now_ms => {
+                    wait = wait.max(Some(retry_after(until, now_ms)));
+                }
+                Some(_) => {
+                    e.locked_until = None;
+                    e.failures = 0;
+                }
+                None => {}
+            }
+            if e.failures + e.in_flight >= LOCKOUT_FAILURES {
+                wait = wait.max(Some(retry_after(now_ms + UNLOCK_PAUSE_MS, now_ms)));
+            }
+        }
+        if let Some(w) = wait {
+            return Err(w);
+        }
+        for key in keys {
+            if let Some(e) = self.entries.get_mut(key) {
+                e.in_flight += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases a reservation without counting it either way.
+    pub fn release(&mut self, keys: &[String], now_ms: i64) {
+        for key in keys {
+            if let Some(e) = self.entries.get_mut(key) {
+                e.in_flight = e.in_flight.saturating_sub(1);
+                if e.idle(now_ms) {
+                    self.entries.remove(key);
+                }
+            }
+        }
+    }
+
+    /// Settles a reservation. A success resets every key; a failure counts, and the fifth in a
+    /// row pauses that key (answers the longest pause now in force, if any, and the pauses).
+    pub fn finish(&mut self, keys: &[String], now_ms: i64, success: bool) -> Option<(u32, u32)> {
+        let mut paused: Option<(u32, u32)> = None;
+        for key in keys {
+            let Some(e) = self.entries.get_mut(key) else {
+                continue;
+            };
+            e.in_flight = e.in_flight.saturating_sub(1);
+            if success {
+                *e = UnlockEntry {
+                    in_flight: e.in_flight,
+                    ..UnlockEntry::default()
+                };
+            } else {
+                e.failures += 1;
+                if e.failures >= LOCKOUT_FAILURES {
+                    e.failures = 0;
+                    e.pauses = e.pauses.saturating_add(1);
+                    let factor = 1i64 << e.pauses.saturating_sub(1).min(10);
+                    let pause = UNLOCK_PAUSE_MS
+                        .saturating_mul(factor)
+                        .min(UNLOCK_PAUSE_MAX_MS);
+                    e.locked_until = Some(now_ms + pause);
+                }
+                if let Some(until) = e.locked_until.filter(|u| *u > now_ms) {
+                    let r = retry_after(until, now_ms);
+                    if paused.is_none_or(|(w, _)| r > w) {
+                        paused = Some((r, e.pauses));
+                    }
+                }
+            }
+            if e.idle(now_ms) {
+                self.entries.remove(key);
+            }
+        }
+        paused
+    }
+
+    /// Forgets `key` (a token whose session ended).
+    pub fn forget(&mut self, key: &str) {
+        self.entries.remove(key);
+    }
+}
+
+fn unlock_keys(staff_id: &str, token: &str) -> [String; 2] {
+    [format!("staff:{staff_id}"), format!("token:{token}")]
+}
+
 #[derive(Debug, Clone)]
 struct Session {
     staff: SessionStaff,
     created_at: i64,
+    /// Idle-locked: intents and elevation are refused until a PIN unlocks it.
+    locked: bool,
 }
 
 /// The state behind the auth routes.
@@ -225,6 +372,11 @@ pub struct UiAuth {
     /// PIN elevation failures, keyed by the requesting staff id (so a new session does not
     /// reset them).
     elevate_lockout: Mutex<Lockout>,
+    /// Unlock failures, keyed by the locked session's staff id and by token.
+    unlock_lockout: Mutex<UnlockThrottle>,
+    /// Tests: an unlock that matched a PIN signals the first and waits for the second.
+    #[cfg(test)]
+    unlock_pause: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// Bounds the argon2id PIN checks running at once.
     pin_checks: Arc<tokio::sync::Semaphore>,
     /// Elevation tickets, keyed by ticket.
@@ -261,6 +413,9 @@ impl UiAuth {
             clock,
             lockout: Mutex::new(Lockout::default()),
             elevate_lockout: Mutex::new(Lockout::exact()),
+            unlock_lockout: Mutex::new(UnlockThrottle::default()),
+            #[cfg(test)]
+            unlock_pause: Mutex::new(None),
             pin_checks: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PIN_CHECKS)),
             tickets: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
@@ -335,6 +490,22 @@ impl UiAuth {
         self.ended.subscribe()
     }
 
+    /// The session behind `token` when it may act: `SESSION_LOCKED` while it is locked.
+    async fn acting_session(&self, token: &str) -> Result<SessionStaff, UiError> {
+        let (me, locked) = self.session_state(token).await?;
+        if locked {
+            return Err(session_locked());
+        }
+        Ok(me)
+    }
+
+    /// Pushes a `session.*` event to the `/ui/events` streams of `token` (if any are open).
+    fn push_session(&self, token: &str, name: &'static str, data: String) {
+        if let Some(hub) = self.events.get() {
+            hub.push_session(token, name, data);
+        }
+    }
+
     fn session_ended(&self) {
         self.ended.send_modify(|n| *n = n.wrapping_add(1));
     }
@@ -349,6 +520,11 @@ impl UiAuth {
 
     /// Like [`session`](Self::session), for a token given directly (`/ui/events?token=`).
     pub(crate) async fn session_for(&self, token: &str) -> Result<SessionStaff, UiError> {
+        self.session_state(token).await.map(|(staff, _)| staff)
+    }
+
+    /// The session's staff and whether it is locked, both read under one lock.
+    async fn session_state(&self, token: &str) -> Result<(SessionStaff, bool), UiError> {
         let token = token.to_owned();
         let now = self.clock.now_ms();
         let cached = {
@@ -368,16 +544,31 @@ impl UiAuth {
             .await
             .map_err(|_| internal())?
             .map_err(ui_error)?;
+        self.store_refresh(&token, &cached.staff.staff_id, current)
+    }
+
+    /// Writes back the staff row read for `read_id`. A session re-bound meanwhile (an unlock
+    /// with another member's PIN) is left as it is and answered as it is now.
+    fn store_refresh(
+        &self,
+        token: &str,
+        read_id: &str,
+        current: Option<SessionStaff>,
+    ) -> Result<(SessionStaff, bool), UiError> {
         let mut sessions = self.sessions.lock().map_err(|_| internal())?;
+        let Some(s) = sessions.get_mut(token) else {
+            return Err(auth_failed());
+        };
+        if s.staff.staff_id != read_id {
+            return Ok((s.staff.clone(), s.locked));
+        }
         match current {
             Some(fresh) => {
-                if let Some(s) = sessions.get_mut(&token) {
-                    s.staff = fresh.clone();
-                }
-                Ok(fresh)
+                s.staff = fresh.clone();
+                Ok((fresh, s.locked))
             }
             None => {
-                sessions.remove(&token);
+                sessions.remove(token);
                 drop(sessions);
                 self.session_ended();
                 Err(auth_failed())
@@ -397,6 +588,15 @@ pub(crate) fn auth_failed() -> UiError {
     UiError {
         code: ErrorCode::AuthFailed,
         message: AUTH_FAILED_MESSAGE.into(),
+        field: None,
+        retry_after_s: None,
+    }
+}
+
+fn session_locked() -> UiError {
+    UiError {
+        code: ErrorCode::SessionLocked,
+        message: "this screen is locked; unlock it with a PIN".into(),
         field: None,
         retry_after_s: None,
     }
@@ -445,6 +645,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PinRequired
         | ErrorCode::PinRejected => StatusCode::FORBIDDEN,
         ErrorCode::ReasonRequired => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::SessionLocked => StatusCode::LOCKED,
         ErrorCode::BadFrame | ErrorCode::Unsupported => StatusCode::BAD_REQUEST,
         ErrorCode::ValidationFailed | ErrorCode::Expired => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Stale | ErrorCode::AlreadyBootstrapped | ErrorCode::IdempotencyConflict => {
@@ -538,6 +739,7 @@ async fn sign_in(State(auth): State<Arc<UiAuth>>, body: axum::body::Bytes) -> Re
                 Session {
                     staff: me.clone(),
                     created_at: now,
+                    locked: false,
                 },
             );
         }
@@ -557,6 +759,9 @@ async fn sign_out(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
             let removed = s.remove(token).is_some();
             drop(s);
             auth.drop_tickets(token);
+            if let Ok(mut l) = auth.unlock_lockout.lock() {
+                l.forget(&format!("token:{token}"));
+            }
             if removed {
                 auth.session_ended();
             }
@@ -567,10 +772,210 @@ async fn sign_out(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
 }
 
 async fn me(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
-    match auth.session(&headers).await {
-        Ok(me) => Json(me).into_response(),
-        Err(e) => fail(e),
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let (staff, locked) = match auth.session_state(&token).await {
+        Ok(state) => state,
+        Err(e) => return fail(e),
+    };
+    let dir = Arc::clone(&auth.staff);
+    let id = staff.staff_id.clone();
+    match tokio::task::spawn_blocking(move || dir.has_pin(&id)).await {
+        Ok(Ok(has_pin)) => Json(UiMe {
+            staff,
+            locked,
+            has_pin,
+        })
+        .into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
     }
+}
+
+/// `POST /ui/lock`: idle-locks the session and drops its tickets (204). Locking a locked
+/// session changes nothing.
+async fn lock(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.session_for(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    let newly = match auth.sessions.lock() {
+        Ok(mut sessions) => match sessions.get_mut(&token) {
+            Some(s) => !std::mem::replace(&mut s.locked, true),
+            None => return fail(auth_failed()),
+        },
+        Err(_) => return fail(internal()),
+    };
+    auth.drop_tickets(&token);
+    if newly {
+        tracing::info!(staff_id = %me.staff_id, at = auth.clock.now_ms(), "ui.locked");
+        auth.push_session(&token, "session.locked", "{}".into());
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// The one message for a PIN that unlocks nothing. It never names anyone.
+pub const UNLOCK_REJECTED_MESSAGE: &str = "that PIN can't unlock this screen";
+
+fn unlock_rejected() -> UiError {
+    UiError {
+        code: ErrorCode::PinRejected,
+        message: UNLOCK_REJECTED_MESSAGE.into(),
+        field: None,
+        retry_after_s: None,
+    }
+}
+
+fn not_locked() -> Response {
+    let e = UiError {
+        code: ErrorCode::ValidationFailed,
+        message: "this session is not locked".into(),
+        field: Some("session".into()),
+        retry_after_s: None,
+    };
+    (StatusCode::CONFLICT, Json(e)).into_response()
+}
+
+/// `POST /ui/unlock {pin}`: see the module docs.
+async fn unlock(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let (me, is_locked) = match auth.session_state(&token).await {
+        Ok(state) => state,
+        Err(e) => return fail(e),
+    };
+    let Ok(UnlockRequest { pin }) = serde_json::from_slice::<UnlockRequest>(&body) else {
+        return fail(bad_frame("the body must be {\"pin\"}"));
+    };
+    // Unlocking is no way to switch members on a live session (that is elevation's job).
+    if !is_locked {
+        return not_locked();
+    }
+    let current = me.staff_id.clone();
+    let keys = unlock_keys(&current, &token);
+    let reserved = match auth.unlock_lockout.lock() {
+        Ok(mut l) => l.begin(&keys, auth.clock.now_ms()),
+        Err(_) => return fail(internal()),
+    };
+    if let Err(retry_after_s) = reserved {
+        tracing::warn!(staff_id = %current, "ui unlock refused: paused");
+        return fail(locked(retry_after_s));
+    }
+    let release = || {
+        if let Ok(mut l) = auth.unlock_lockout.lock() {
+            l.release(&keys, auth.clock.now_ms());
+        }
+    };
+    let failed = || -> Response {
+        let now = auth.clock.now_ms();
+        let paused = auth
+            .unlock_lockout
+            .lock()
+            .ok()
+            .and_then(|mut l| l.finish(&keys, now, false));
+        tracing::warn!(staff_id = %current, "ui unlock refused");
+        match paused {
+            Some((retry, pauses)) => {
+                tracing::warn!(staff_id = %current, pauses, retry_after_s = retry, "ui unlock paused");
+                fail(locked(retry))
+            }
+            None => fail(unlock_rejected()),
+        }
+    };
+    let matched = {
+        let Ok(_permit) = Arc::clone(&auth.pin_checks).acquire_owned().await else {
+            release();
+            return fail(internal());
+        };
+        let staff = Arc::clone(&auth.staff);
+        let first = current.clone();
+        tokio::task::spawn_blocking(move || staff.match_unlock_pin(&first, &pin)).await
+    };
+    let matched_id = match matched {
+        Ok(Ok(Some(id))) => id,
+        Ok(Ok(None)) => return failed(),
+        Ok(Err(e)) => {
+            release();
+            return fail(ui_error(e));
+        }
+        Err(e) => {
+            release();
+            tracing::warn!(detail = %e, "unlock pin check task failed");
+            return fail(internal());
+        }
+    };
+    #[cfg(test)]
+    {
+        let pause = auth.unlock_pause.lock().ok().and_then(|p| p.clone());
+        if let Some((reached, resume)) = pause {
+            reached.notify_one();
+            resume.notified().await;
+        }
+    }
+    let switched = matched_id != current;
+    let staff = if switched {
+        match auth.current_staff(matched_id).await {
+            Ok(Some(fresh)) => fresh,
+            // Deactivated since the PIN matched: it unlocks nothing.
+            Ok(None) => return failed(),
+            Err(e) => {
+                release();
+                return fail(e);
+            }
+        }
+    } else {
+        me
+    };
+    match auth.sessions.lock() {
+        Ok(mut sessions) => match sessions.get_mut(&token) {
+            // Still locked by the same member (a concurrent unlock did not win first).
+            Some(s) if s.locked && s.staff.staff_id == current => {
+                s.staff = staff.clone();
+                s.locked = false;
+            }
+            Some(_) => {
+                drop(sessions);
+                release();
+                return not_locked();
+            }
+            None => {
+                drop(sessions);
+                release();
+                return fail(auth_failed());
+            }
+        },
+        Err(_) => {
+            release();
+            return fail(internal());
+        }
+    }
+    if let Ok(mut l) = auth.unlock_lockout.lock() {
+        l.finish(&keys, auth.clock.now_ms(), true);
+    }
+    let at = auth.clock.now_ms();
+    if switched {
+        // Approvals granted to the previous member never carry over.
+        auth.drop_tickets(&token);
+        tracing::info!(staff_id = %staff.staff_id, previous_staff_id = %current, at, "ui.unlocked");
+    } else {
+        tracing::info!(staff_id = %staff.staff_id, at, "ui.unlocked");
+    }
+    let ok = UnlockOk { staff, switched };
+    auth.push_session(
+        &token,
+        "session.unlocked",
+        serde_json::to_string(&ok).unwrap_or_default(),
+    );
+    Json(ok).into_response()
 }
 
 fn locked(retry_after_s: u32) -> UiError {
@@ -640,7 +1045,7 @@ async fn elevate(
     let Some(token) = bearer(&headers).map(str::to_owned) else {
         return fail(auth_failed());
     };
-    let me = match auth.session_for(&token).await {
+    let me = match auth.acting_session(&token).await {
         Ok(me) => me,
         Err(e) => return fail(e),
     };
@@ -736,40 +1141,15 @@ async fn elevate(
         Ok(t) => t,
         Err(e) => return fail(ui_error(e)),
     };
-    let now = auth.clock.now_ms();
-    match auth.tickets.lock() {
-        Ok(mut tickets) => {
-            tickets.retain(|_, t| t.expires_at > now);
-            // At most MAX_TICKETS_PER_SESSION per session: the oldest goes.
-            loop {
-                let mine: Vec<(&String, i64)> = tickets
-                    .iter()
-                    .filter(|(_, t)| t.session == token)
-                    .map(|(k, t)| (k, t.expires_at))
-                    .collect();
-                if mine.len() < MAX_TICKETS_PER_SESSION {
-                    break;
-                }
-                let oldest = mine
-                    .into_iter()
-                    .min_by_key(|(_, at)| *at)
-                    .map(|(k, _)| k.clone());
-                if let Some(k) = oldest {
-                    tickets.remove(&k);
-                }
-            }
-            tickets.insert(
-                ticket.clone(),
-                Ticket {
-                    session: token,
-                    staff_id: approver.clone(),
-                    verifier_version,
-                    expires_at: now + TICKET_TTL_MS,
-                    items: items.iter().cloned().map(|i| (i, false)).collect(),
-                },
-            );
-        }
-        Err(_) => return fail(internal()),
+    if let Err(e) = auth.issue_ticket(
+        &ticket,
+        &token,
+        &me.staff_id,
+        &approver,
+        verifier_version,
+        &items,
+    ) {
+        return fail(e);
     }
     tracing::info!(
         staff_id = %me.staff_id,
@@ -842,7 +1222,7 @@ impl UiAuth {
             tickets.remove(ticket);
             return Err(ui_error(pin_required()));
         }
-        if t.session != token {
+        if t.session != token || t.requester != intent.actor.id {
             return Err(ui_error(pin_required()));
         }
         let Some(index) = t.items.iter().position(|(item, used)| {
@@ -876,6 +1256,71 @@ impl UiAuth {
         }
     }
 
+    /// Stores a granted ticket for the session `token`, unless the session has been locked or
+    /// re-bound since the request was checked (`SESSION_LOCKED`): checked under the tickets
+    /// lock, so a lock's ticket drop cannot run between the check and the insert.
+    fn issue_ticket(
+        &self,
+        ticket: &str,
+        token: &str,
+        requester: &str,
+        approver: &str,
+        verifier_version: i64,
+        items: &[ElevationItem],
+    ) -> Result<(), UiError> {
+        let now = self.clock.now_ms();
+        let mut tickets = self.tickets.lock().map_err(|_| internal())?;
+        let still_acting = {
+            let sessions = self.sessions.lock().map_err(|_| internal())?;
+            sessions
+                .get(token)
+                .is_some_and(|s| !s.locked && s.staff.staff_id == requester)
+        };
+        if !still_acting {
+            return Err(session_locked());
+        }
+        tickets.retain(|_, t| t.expires_at > now);
+        // At most MAX_TICKETS_PER_SESSION per session: the oldest goes.
+        loop {
+            let mine: Vec<(&String, i64)> = tickets
+                .iter()
+                .filter(|(_, t)| t.session == token)
+                .map(|(k, t)| (k, t.expires_at))
+                .collect();
+            if mine.len() < MAX_TICKETS_PER_SESSION {
+                break;
+            }
+            let oldest = mine
+                .into_iter()
+                .min_by_key(|(_, at)| *at)
+                .map(|(k, _)| k.clone());
+            if let Some(k) = oldest {
+                tickets.remove(&k);
+            }
+        }
+        tickets.insert(
+            ticket.to_owned(),
+            Ticket {
+                session: token.to_owned(),
+                requester: requester.to_owned(),
+                staff_id: approver.to_owned(),
+                verifier_version,
+                expires_at: now + TICKET_TTL_MS,
+                items: items.iter().cloned().map(|i| (i, false)).collect(),
+            },
+        );
+        Ok(())
+    }
+
+    /// The staff member `id` as a session shows them now (`None` when gone or inactive).
+    async fn current_staff(&self, id: String) -> Result<Option<SessionStaff>, UiError> {
+        let dir = Arc::clone(&self.staff);
+        tokio::task::spawn_blocking(move || dir.current(&id))
+            .await
+            .map_err(|_| internal())?
+            .map_err(ui_error)
+    }
+
     /// Ends every ticket of the session `token`.
     fn drop_tickets(&self, token: &str) {
         if let Ok(mut tickets) = self.tickets.lock() {
@@ -892,7 +1337,7 @@ async fn intent(
     let Some(token) = bearer(&headers).map(str::to_owned) else {
         return fail(auth_failed());
     };
-    let me = match auth.session_for(&token).await {
+    let me = match auth.acting_session(&token).await {
         Ok(me) => me,
         Err(e) => return fail(e),
     };
@@ -968,6 +1413,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/auth/sign-in", post(sign_in))
         .route("/ui/auth/sign-out", post(sign_out))
         .route("/ui/me", get(me))
+        .route("/ui/lock", post(lock))
+        .route("/ui/unlock", post(unlock))
         .route("/ui/elevate", post(elevate))
         .route("/ui/elevate/drop", post(elevate_drop))
         .route("/ui/intent", post(intent))
@@ -1298,9 +1745,12 @@ pub(crate) mod tests {
         });
         assert!(!perms.contains(&"settings.edit"));
         assert_eq!(body["staff"], staff);
+        let mut me = staff.clone();
+        me["locked"] = json!(false);
+        me["has_pin"] = json!(true);
         assert_eq!(
             call(&hub, "GET", "/ui/me", Some(token), None).await,
-            (StatusCode::OK, staff)
+            (StatusCode::OK, me)
         );
         let (status, body) = call(&hub, "GET", "/ui/me", None, None).await;
         assert_eq!(
@@ -2048,11 +2498,14 @@ pub(crate) mod tests {
         let ticket = ok["ticket"].as_str().unwrap().to_owned();
         let (elevated, index) = hub
             .auth
-            .redeem(
-                &ticket,
-                &token,
-                &serde_json::from_value(currency_set(&hub, "EUR", None)["intent"].clone()).unwrap(),
-            )
+            .redeem(&ticket, &token, &{
+                let mut i: Intent =
+                    serde_json::from_value(currency_set(&hub, "EUR", None)["intent"].clone())
+                        .unwrap();
+                // As `/ui/intent` sets it: the session's member.
+                i.actor.id = hub.counter_id.clone();
+                i
+            })
             .unwrap();
         assert_eq!(elevated.id, hub.manager_id);
         hub.clock.advance(TICKET_TTL_MS);
@@ -2065,11 +2518,14 @@ pub(crate) mod tests {
         let ticket = ok["ticket"].as_str().unwrap().to_owned();
         let (_, index) = hub
             .auth
-            .redeem(
-                &ticket,
-                &token,
-                &serde_json::from_value(currency_set(&hub, "EUR", None)["intent"].clone()).unwrap(),
-            )
+            .redeem(&ticket, &token, &{
+                let mut i: Intent =
+                    serde_json::from_value(currency_set(&hub, "EUR", None)["intent"].clone())
+                        .unwrap();
+                // As `/ui/intent` sets it: the session's member.
+                i.actor.id = hub.counter_id.clone();
+                i
+            })
             .unwrap();
         hub.auth.drop_tickets(&token);
         hub.auth.refund(&ticket, index);
@@ -2271,5 +2727,583 @@ pub(crate) mod tests {
         body["intent"]["idempotency_key"] = json!(ulid::Ulid::generate().to_string());
         let (_, reply) = post_intent(&hub, &token, body).await;
         assert_eq!(reply["code"], "PIN_REQUIRED");
+    }
+
+    // ── Idle lock (story 1.14) ─────────────────────────────────────────────────────────
+
+    async fn unlock_with(hub: &Hub, token: &str, pin: &str) -> (StatusCode, Value) {
+        call(
+            hub,
+            "POST",
+            "/ui/unlock",
+            Some(token),
+            Some(json!({"pin": pin})),
+        )
+        .await
+    }
+
+    async fn lock_session(hub: &Hub, token: &str) {
+        let (status, body) = call(hub, "POST", "/ui/lock", Some(token), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    }
+
+    fn assert_session_locked(r: (StatusCode, Value)) {
+        assert_eq!(
+            (r.0, r.1["code"].as_str()),
+            (StatusCode::LOCKED, Some("SESSION_LOCKED")),
+            "{}",
+            r.1
+        );
+    }
+
+    fn footer_body(value: &str, hub: &Hub) -> Value {
+        set_body(hub, "receipt.footer", value, None)
+    }
+
+    #[tokio::test]
+    async fn a_locked_session_refuses_intents_and_elevation_until_its_own_pin_unlocks_it() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        // A ticket granted before the lock does not survive it.
+        let (_, ok) = elevate_currency(&hub, &counter, "2222").await;
+        let ticket = ok["ticket"].as_str().unwrap().to_owned();
+        lock_session(&hub, &token).await;
+        lock_session(&hub, &counter).await;
+        let (_, me) = call(&hub, "GET", "/ui/me", Some(&token), None).await;
+        assert_eq!(me["locked"], true);
+        let n = change_count(&hub);
+        assert_session_locked(post_intent(&hub, &token, footer_body("x", &hub)).await);
+        assert_session_locked(elevate_currency(&hub, &counter, "2222").await);
+        assert_eq!(change_count(&hub), n, "nothing applied while locked");
+        // The own PIN unlocks the same session for the same member.
+        let (status, ok) = unlock_with(&hub, &token, "2222").await;
+        assert_eq!(status, StatusCode::OK, "{ok}");
+        assert_eq!(ok["switched"], false);
+        assert_eq!(ok["staff"]["staff_id"], hub.manager_id.as_str());
+        let (_, me) = call(&hub, "GET", "/ui/me", Some(&token), None).await;
+        assert_eq!(
+            (me["locked"].as_bool(), me["staff_id"].as_str()),
+            (Some(false), Some(hub.manager_id.as_str()))
+        );
+        let (status, reply) = post_intent(&hub, &token, footer_body("after", &hub)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(last_change(&hub).actor_id, hub.manager_id);
+        // The counter's own PIN unlocks theirs; the pre-lock ticket is gone.
+        let (_, ok) = unlock_with(&hub, &counter, "3333").await;
+        assert_eq!(ok["switched"], false);
+        assert_pin_required(
+            post_intent(&hub, &counter, currency_set(&hub, "USD", Some(&ticket))).await,
+        );
+        // Locking and unlocking without a session is refused.
+        assert_eq!(
+            call(&hub, "POST", "/ui/lock", None, None).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                &hub,
+                "POST",
+                "/ui/unlock",
+                Some("nope"),
+                Some(json!({"pin": "2222"}))
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, body) = call(&hub, "POST", "/ui/unlock", Some(&token), Some(json!({}))).await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("BAD_FRAME"))
+        );
+    }
+
+    #[tokio::test]
+    async fn another_members_pin_unlocks_and_rebinds_the_session_to_them() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        lock_session(&hub, &token).await;
+        let (status, ok) = unlock_with(&hub, &token, "2222").await;
+        assert_eq!(status, StatusCode::OK, "{ok}");
+        assert_eq!(ok["switched"], true);
+        assert_eq!(ok["staff"]["staff_id"], hub.manager_id.as_str());
+        assert_eq!(ok["staff"]["display_name"], "Manager");
+        assert!(
+            ok["staff"]["permissions"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("settings.edit"))
+        );
+        let (_, me) = call(&hub, "GET", "/ui/me", Some(&token), None).await;
+        assert_eq!(me["staff_id"], hub.manager_id.as_str());
+        // The same token now acts as the manager, whatever actor the client sends.
+        let (status, reply) = post_intent(&hub, &token, currency_set(&hub, "USD", None)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let c = last_change(&hub);
+        assert_eq!(
+            (
+                c.actor_kind.as_str(),
+                c.actor_id.as_str(),
+                c.elevated_by_kind
+            ),
+            ("staff", hub.manager_id.as_str(), None)
+        );
+        // A Kitchen member's PIN rebinds as well (any active member with a PIN).
+        lock_session(&hub, &token).await;
+        let (_, ok) = unlock_with(&hub, &token, "4444").await;
+        assert_eq!(
+            (
+                ok["switched"].as_bool(),
+                ok["staff"]["display_name"].as_str()
+            ),
+            (Some(true), Some("Kitchen"))
+        );
+    }
+
+    #[tokio::test]
+    async fn five_wrong_unlock_pins_pause_unlocking_and_sign_out_still_works() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        lock_session(&hub, &token).await;
+        for i in 0..4 {
+            let (status, body) = unlock_with(&hub, &token, "9999").await;
+            assert_eq!(
+                (status, body),
+                (
+                    StatusCode::FORBIDDEN,
+                    json!({"code": "PIN_REJECTED", "message": UNLOCK_REJECTED_MESSAGE})
+                ),
+                "attempt {i}"
+            );
+        }
+        // Junk is a failure too.
+        let (status, body) = unlock_with(&hub, &token, "12ab").await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (StatusCode::TOO_MANY_REQUESTS, Some("AUTH_LOCKED"))
+        );
+        assert_eq!(body["retry_after_s"], 60);
+        // Even the right PIN waits.
+        let (_, body) = unlock_with(&hub, &token, "3333").await;
+        assert_eq!(body["code"], "AUTH_LOCKED");
+        hub.clock.advance(30_000);
+        let (_, body) = unlock_with(&hub, &token, "3333").await;
+        assert_eq!(body["retry_after_s"], 30);
+        assert_session_locked(post_intent(&hub, &token, footer_body("x", &hub)).await);
+        hub.clock.advance(30_000);
+        let (status, _) = unlock_with(&hub, &token, "3333").await;
+        assert_eq!(status, StatusCode::OK);
+        // Sign-out works while paused.
+        let other = token_for(&hub, "counter", "c-pass").await;
+        lock_session(&hub, &other).await;
+        for _ in 0..5 {
+            unlock_with(&hub, &other, "0000").await;
+        }
+        assert_eq!(
+            unlock_with(&hub, &other, "3333").await.1["code"],
+            "AUTH_LOCKED"
+        );
+        let (status, _) = call(&hub, "POST", "/ui/auth/sign-out", Some(&other), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            call(&hub, "GET", "/ui/me", Some(&other), None).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn the_hub_keeps_applying_while_a_session_is_locked() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let hash = arena_core::devices::hash_token_secret("secret-secret-secret").unwrap();
+        let owner = Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let device = hub
+            .writer
+            .submit_intent(intent_as(
+                owner.clone(),
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    class: arena_proto::ClientClass::Paired,
+                    label: "Kiosk 1".into(),
+                    token_hash: hash,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        lock_session(&hub, &token).await;
+        let mut revoke = intent_as(
+            owner,
+            IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                device_id: device.clone(),
+            }),
+            None,
+        );
+        revoke.reason = Some(arena_proto::ReasonCode::Lost);
+        hub.writer.submit_intent(revoke).await.unwrap();
+        unlock_with(&hub, &token, "3333").await;
+        let snap = hub.auth.reader().snapshot(hub.clock.now_ms()).unwrap();
+        assert!(snap.devices.iter().all(|d| d.device_id != device));
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_carries_the_idle_lock_and_out_of_range_values_are_refused() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        assert_eq!(
+            hub.auth.reader().snapshot(T0).unwrap().ui.idle_lock_minutes,
+            5
+        );
+        let n = change_count(&hub);
+        for bad in ["0", "31"] {
+            let (status, body) =
+                post_intent(&hub, &token, set_body(&hub, "idle_lock_minutes", bad, None)).await;
+            assert_eq!(
+                (status, body["code"].as_str(), body["field"].as_str()),
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Some("VALIDATION_FAILED"),
+                    Some("value")
+                ),
+                "{bad}"
+            );
+        }
+        assert_eq!(change_count(&hub), n);
+        let (status, body) = post_intent(
+            &hub,
+            &token,
+            set_body(&hub, "idle_lock_minutes", "10", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            hub.auth.reader().snapshot(T0).unwrap().ui.idle_lock_minutes,
+            10
+        );
+    }
+
+    /// Log lines written while the guard lives, as text.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn lock_and_unlock_log_the_staff_ids_and_never_the_pin() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let logs = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(logs.clone())
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        lock_session(&hub, &token).await;
+        unlock_with(&hub, &token, "9753").await;
+        unlock_with(&hub, &token, "3333").await;
+        lock_session(&hub, &token).await;
+        unlock_with(&hub, &token, "2222").await;
+        drop(guard);
+        let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let named = |msg: &str| -> Vec<&Value> {
+            lines
+                .iter()
+                .filter(|l| l["fields"]["message"] == msg)
+                .map(|l| &l["fields"])
+                .collect()
+        };
+        let locked = named("ui.locked");
+        assert_eq!(locked.len(), 2, "{text}");
+        assert_eq!(locked[0]["staff_id"], hub.counter_id.as_str());
+        assert_eq!(locked[0]["at"], T0);
+        let unlocked = named("ui.unlocked");
+        assert_eq!(unlocked.len(), 2, "{text}");
+        assert_eq!(unlocked[0]["staff_id"], hub.counter_id.as_str());
+        assert_eq!(unlocked[0].get("previous_staff_id"), None);
+        assert_eq!(unlocked[1]["staff_id"], hub.manager_id.as_str());
+        assert_eq!(unlocked[1]["previous_staff_id"], hub.counter_id.as_str());
+        for pin in ["9753", "3333", "2222"] {
+            assert!(!text.contains(pin), "a PIN reached the log: {text}");
+        }
+        assert!(
+            !text.contains("pin_len") && !text.contains("length"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlocking_a_session_that_is_not_locked_is_refused_before_any_pin_check() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let (status, body) = unlock_with(&hub, &token, "2222").await;
+        assert_eq!(
+            (status, body["code"].as_str(), body["field"].as_str()),
+            (
+                StatusCode::CONFLICT,
+                Some("VALIDATION_FAILED"),
+                Some("session")
+            )
+        );
+        // Still the counter, and no failure was counted.
+        let (_, me) = call(&hub, "GET", "/ui/me", Some(&token), None).await;
+        assert_eq!(me["staff_id"], hub.counter_id.as_str());
+        assert!(hub.auth.unlock_lockout.lock().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn unlock_pauses_double_up_to_fifteen_minutes_and_reset_on_success() {
+        let mut t = UnlockThrottle::default();
+        let keys = unlock_keys("S", "T");
+        let mut now = T0;
+        let mut pauses = Vec::new();
+        for _ in 0..6 {
+            let mut last = None;
+            for _ in 0..LOCKOUT_FAILURES {
+                t.begin(&keys, now).unwrap();
+                last = t.finish(&keys, now, false);
+            }
+            let (retry, _) = last.unwrap();
+            pauses.push(retry);
+            assert_eq!(t.begin(&keys, now), Err(retry));
+            now += i64::from(retry) * 1000;
+        }
+        assert_eq!(pauses, vec![60, 120, 240, 480, 900, 900]);
+        t.begin(&keys, now).unwrap();
+        t.finish(&keys, now, true);
+        for _ in 0..LOCKOUT_FAILURES {
+            t.begin(&keys, now).unwrap();
+            t.finish(&keys, now, false);
+        }
+        assert_eq!(
+            t.begin(&keys, now),
+            Err(60),
+            "a success restarts the doubling"
+        );
+        // Either key alone refuses: another token of the same member, or this token re-bound.
+        assert!(t.begin(&unlock_keys("S", "OTHER"), now).is_err());
+        assert!(t.begin(&unlock_keys("OTHER", "T"), now).is_err());
+        assert!(t.begin(&unlock_keys("OTHER", "OTHER"), now).is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_unlock_pause_follows_the_member_into_a_new_session_and_doubles() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        lock_session(&hub, &token).await;
+        for _ in 0..5 {
+            unlock_with(&hub, &token, "9999").await;
+        }
+        // A fresh session for the same member is still paused.
+        let fresh = token_for(&hub, "counter", "c-pass").await;
+        lock_session(&hub, &fresh).await;
+        let (status, body) = unlock_with(&hub, &fresh, "3333").await;
+        assert_eq!(
+            (
+                status,
+                body["code"].as_str(),
+                body["retry_after_s"].as_u64()
+            ),
+            (StatusCode::TOO_MANY_REQUESTS, Some("AUTH_LOCKED"), Some(60))
+        );
+        hub.clock.advance(60_000);
+        for _ in 0..5 {
+            unlock_with(&hub, &fresh, "9999").await;
+        }
+        let (_, body) = unlock_with(&hub, &token, "3333").await;
+        assert_eq!(body["retry_after_s"], 120, "the second pause doubles");
+        hub.clock.advance(120_000);
+        assert_eq!(unlock_with(&hub, &token, "3333").await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_switched_session_cannot_redeem_its_earlier_tickets() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let (_, ok) = elevate_currency(&hub, &token, "2222").await;
+        let ticket = ok["ticket"].as_str().unwrap().to_owned();
+        lock_session(&hub, &token).await;
+        let (_, ok) = unlock_with(&hub, &token, "4444").await;
+        assert_eq!(ok["switched"], true);
+        let n = change_count(&hub);
+        assert_pin_required(
+            post_intent(&hub, &token, currency_set(&hub, "USD", Some(&ticket))).await,
+        );
+        assert_eq!(change_count(&hub), n);
+    }
+
+    #[tokio::test]
+    async fn a_ticket_requested_before_the_session_changed_hands_is_refused() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let items = vec![ElevationItem {
+            intent_kind: IntentKind::SettingsSet,
+            key: Some("branch.currency".into()),
+        }];
+        let issue = || {
+            hub.auth
+                .issue_ticket("T1", &token, &hub.counter_id, &hub.manager_id, 1, &items)
+        };
+        lock_session(&hub, &token).await;
+        assert_eq!(issue().unwrap_err().code, ErrorCode::SessionLocked);
+        unlock_with(&hub, &token, "2222").await;
+        // Unlocked, but now acting as the manager: the counter's request is not theirs.
+        assert_eq!(issue().unwrap_err().code, ErrorCode::SessionLocked);
+        assert!(hub.auth.tickets.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_staff_refresh_never_reverts_a_rebound_session() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let stale = hub.auth.session_for(&token).await.unwrap();
+        lock_session(&hub, &token).await;
+        unlock_with(&hub, &token, "2222").await;
+        // A refresh that read the counter before the re-bind lands after it.
+        let (staff, locked) = hub
+            .auth
+            .store_refresh(&token, &hub.counter_id, Some(stale))
+            .unwrap();
+        assert_eq!(
+            (staff.staff_id.as_str(), locked),
+            (hub.manager_id.as_str(), false)
+        );
+        // Nor does a "member gone" answer for the old member end the session.
+        hub.auth
+            .store_refresh(&token, &hub.counter_id, None)
+            .unwrap();
+        let (_, me) = call(&hub, "GET", "/ui/me", Some(&token), None).await;
+        assert_eq!(me["staff_id"], hub.manager_id.as_str());
+    }
+
+    #[tokio::test]
+    async fn a_member_deactivated_after_their_pin_matched_unlocks_nothing() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        lock_session(&hub, &token).await;
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let resume = Arc::new(tokio::sync::Notify::new());
+        *hub.auth.unlock_pause.lock().unwrap() = Some((reached.clone(), resume.clone()));
+        let app = hub.app.clone();
+        let t = token.clone();
+        let pending = tokio::spawn(async move {
+            call_app(
+                &app,
+                "POST",
+                "/ui/unlock",
+                Some(&t),
+                Some(json!({"pin": "2222"})),
+            )
+            .await
+        });
+        reached.notified().await;
+        hub.writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "owner".into(),
+                },
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(hub.manager_id.clone()),
+                    login: "manager".into(),
+                    display_name: "Manager".into(),
+                    role_id: hub.manager_role.clone(),
+                    password_hash: None,
+                    pin_hash: None,
+                    active: false,
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        resume.notify_one();
+        let (status, body) = pending.await.unwrap();
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PIN_REJECTED"))
+        );
+        let keys = unlock_keys(&hub.counter_id, &token);
+        assert_eq!(
+            hub.auth.unlock_lockout.lock().unwrap().entries[&keys[0]].failures,
+            1,
+            "it counts as a failure"
+        );
+        let (_, me) = call(&hub, "GET", "/ui/me", Some(&token), None).await;
+        assert_eq!(
+            (me["locked"].as_bool(), me["staff_id"].as_str()),
+            (Some(true), Some(hub.counter_id.as_str()))
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_a_ticket_and_reading_settings_work_while_locked() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let (_, ok) = elevate_currency(&hub, &token, "2222").await;
+        let ticket = ok["ticket"].as_str().unwrap().to_owned();
+        lock_session(&hub, &token).await;
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/elevate/drop",
+            Some(&token),
+            Some(json!({"ticket": ticket})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, settings) = call(&hub, "GET", "/ui/settings", Some(&token), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            settings
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["key"] == "idle_lock_minutes")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_own_member_wins_when_two_share_a_pin() {
+        let hub = hub().await;
+        rotate_manager_pin(&hub, "3333", 1).await;
+        for (login, pw, id) in [
+            ("counter", "c-pass", hub.counter_id.clone()),
+            ("manager", "m-pass", hub.manager_id.clone()),
+        ] {
+            let token = token_for(&hub, login, pw).await;
+            lock_session(&hub, &token).await;
+            let (status, ok) = unlock_with(&hub, &token, "3333").await;
+            assert_eq!(status, StatusCode::OK, "{ok}");
+            assert_eq!(
+                (ok["switched"].as_bool(), ok["staff"]["staff_id"].as_str()),
+                (Some(false), Some(id.as_str())),
+                "{login}"
+            );
+        }
     }
 }

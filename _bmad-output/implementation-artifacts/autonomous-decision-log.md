@@ -193,3 +193,22 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - the approver must hold every needed permission, and PIN checks are capped at 2 at once.
 
   Two deviations, accepted: the throttle entry is kept on sign-out (dropping it would let a re-sign-in reset the count), and the LAN forged-elevation check is unit-tested at `bind_to_session` (no device intent can produce a change row yet).
+
+## Story 1.21: per-device high contrast
+
+- **Spec approval:** self-approved. Spec: `spec-1-21-high-contrast-theme-as-a-per-device-branch-setting.md`.
+- **Keys:** `display.hc.hub` and `display.hc.<device_id>` (`"true"`/`"false"`). Device registration and `seed_defaults` create the rows.
+- **Kiosk pre-paint:** the window starts hidden. It gets the theme from the service over IPC (1 s timeout, then the app's own cached file), sets `data-theme` through an init script, then shows.
+- **No theme control:** a script test forbids `theme-toggle` and `data-theme="light"` in the Hub, Kiosk and Kitchen sources.
+
+## Story 1.22: WAN-down operation and offline chip
+
+- **Spec approval:** self-approved. Spec: `spec-1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of.md`.
+- **Probe:**
+  - Internet: TCP connect to 1.1.1.1:443 / 8.8.8.8:443.
+  - Cloud: TLS plus `GET /healthz` to `--cloud-host`, which defaults to the placeholder `api.arena360.in:443` until the cloud epic.
+  - Every 30 s with a 3 s timeout, on its own task.
+- **Proof of no egress:** a CI Linux job runs the Epic 1 flows inside a network namespace with only `lo`, under `strace -e connect`. A new `crates/arena-e2e` driver runs them. Results are compared with a WAN-up run after masking ids and timestamps. The Windows-only enforcement is covered by 1.19, not here.
+- **8-hour outage:** a soak script. CI runs a 3-minute version; the 8 h run is a manual `release-bench` input.
+- **1.14 implementation choices, accepted:** `SESSION_LOCKED` returns HTTP 423; locking drops the session's tickets; the unlock throttle is keyed by staff id; `/ui/me` carries `locked` so a reloaded window re-locks; the idle field is on Settings → Branch.
+- **1.14 review outcome:** 16 fixes and 2 rejections. Key fixes: unlock is refused on an unlocked session (409), closing a silent user-switch bypass; the unlock pause doubles up to 15 min, keyed by staff id and by token; races between session reads, refresh write-back and ticket issue are closed; locks propagate across windows over SSE; the lock survives a reload (sessionStorage); a wake check catches up after sleep or a clock jump; the idle setting moved to a new Settings → Screen lock section.

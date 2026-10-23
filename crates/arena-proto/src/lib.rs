@@ -30,11 +30,12 @@ pub use permission::{Permission, Requirement};
 pub use scope::{ClientClass, class_scope, in_scope};
 pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
-    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLocale, SymbolPosition,
+    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLocale, SnapshotUi,
+    SymbolPosition,
 };
 pub use ui_auth::{
     ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_TICKET_USES, SessionStaff,
-    SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest,
+    SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk, UnlockRequest,
 };
 
 /// Returns this crate's name.

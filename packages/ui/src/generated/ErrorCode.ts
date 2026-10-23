@@ -23,4 +23,5 @@ export type ErrorCode =
   | "PERMISSION_DENIED"
   | "PIN_REQUIRED"
   | "PIN_REJECTED"
-  | "REASON_REQUIRED";
+  | "REASON_REQUIRED"
+  | "SESSION_LOCKED";

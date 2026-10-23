@@ -6,6 +6,9 @@
 //!   deferred tz / day-start / FY change came due at a business-day start; the data carries the
 //!   locale now in effect and the keys involved.
 //! - `event: applied`, data [`AppliedEvent`]: any other committed intent.
+//! - `event: session.locked`, data `{}`, and `event: session.unlocked`, data
+//!   [`UnlockOk`](arena_proto::UnlockOk): this stream's own session was locked or unlocked (from
+//!   another window sharing the token), so every window locks and unlocks together.
 //! - `event: resync`, data `{}`: this stream fell behind and missed events, or the Hub's role
 //!   changed (the stream then closes so the client reopens it). The view reloads the snapshot.
 //!
@@ -22,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
-use arena_proto::{AppliedEvent, SettingsChangedEvent, SnapshotLocale};
+use arena_proto::{AppliedEvent, SettingsChangedEvent, SnapshotLocale, SnapshotUi};
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -69,6 +72,12 @@ pub(crate) enum Pushed {
     },
     /// The Hub's role changed or its writer closed: `resync`, then close.
     Reset,
+    /// For the streams of one session token only.
+    Session {
+        token: Arc<str>,
+        name: &'static str,
+        data: Arc<str>,
+    },
 }
 
 /// The per-process fan-out (see the module docs).
@@ -90,6 +99,15 @@ impl EventsHub {
         };
         tokio::spawn(task.run());
         Arc::new(Self { tx })
+    }
+
+    /// Sends a `session.*` event to the streams of `token`.
+    pub(crate) fn push_session(&self, token: &str, name: &'static str, data: String) {
+        let _ = self.tx.send(Pushed::Session {
+            token: token.into(),
+            name,
+            data: data.into(),
+        });
     }
 
     fn subscribe(&self) -> broadcast::Receiver<Pushed> {
@@ -143,13 +161,22 @@ fn role_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Role> {
 }
 
 impl HubTask {
-    /// The locale now and its next rollover; `None` on a read failure (logged).
-    async fn read(&self) -> Option<(Option<SnapshotLocale>, Option<i64>)> {
+    /// The locale now, its next rollover and the Hub UI settings; `None` on a read failure
+    /// (logged).
+    async fn read(&self) -> Option<(Option<SnapshotLocale>, Option<i64>, SnapshotUi)> {
         let reader = Arc::clone(&self.reader);
         let now = self.clock.now_ms();
-        match tokio::task::spawn_blocking(move || reader.locale_and_rollover(now)).await {
-            Ok(Ok(Some((locale, at)))) => Some((Some(locale), at)),
-            Ok(Ok(None)) => Some((None, None)),
+        let read = move || {
+            // A failed UI-settings read never holds back the locale: the defaults go out.
+            let ui = reader.ui().unwrap_or_else(|e| {
+                tracing::warn!(code = e.code.as_str(), detail = %e.message, "ui events: ui settings read failed");
+                SnapshotUi::default()
+            });
+            Ok::<_, arena_proto::AppError>((reader.locale_and_rollover(now)?, ui))
+        };
+        match tokio::task::spawn_blocking(read).await {
+            Ok(Ok((Some((locale, at)), ui))) => Some((Some(locale), at, ui)),
+            Ok(Ok((None, ui))) => Some((None, None, ui)),
             Ok(Err(e)) => {
                 tracing::warn!(code = e.code.as_str(), detail = %e.message, "ui events: locale read failed");
                 None
@@ -172,7 +199,7 @@ impl HubTask {
     async fn run(mut self) {
         let mut role = role_of(&self.status);
         let (mut waiting, mut rollover) = match self.read().await {
-            Some((locale, at)) => (pending_keys(locale.as_ref()), at),
+            Some((locale, at, _)) => (pending_keys(locale.as_ref()), at),
             None => (Vec::new(), None),
         };
         loop {
@@ -202,10 +229,10 @@ impl HubTask {
                             continue;
                         }
                         match self.read().await {
-                            Some((locale, at)) => {
+                            Some((locale, at, ui)) => {
                                 waiting = pending_keys(locale.as_ref());
                                 rollover = at;
-                                let data = serde_json::to_string(&SettingsChangedEvent { locale, keys })
+                                let data = serde_json::to_string(&SettingsChangedEvent { locale, keys, ui })
                                     .unwrap_or_default();
                                 self.send("settings.changed", data, touches_staff);
                             }
@@ -245,7 +272,7 @@ impl HubTask {
                     }
                 } => {
                     if rollover.is_some_and(|at| self.clock.now_ms() >= at)
-                        && let Some((locale, at)) = self.read().await
+                        && let Some((locale, at, ui)) = self.read().await
                     {
                         let now_waiting = pending_keys(locale.as_ref());
                         let keys: Vec<String> =
@@ -253,7 +280,7 @@ impl HubTask {
                         waiting = now_waiting;
                         rollover = at;
                         let data =
-                            serde_json::to_string(&SettingsChangedEvent { locale, keys }).unwrap_or_default();
+                            serde_json::to_string(&SettingsChangedEvent { locale, keys, ui }).unwrap_or_default();
                         self.send("settings.changed", data, false);
                     }
                 },
@@ -354,6 +381,12 @@ pub(crate) async fn events(
                 Wake::Pushed(Ok(Pushed::Event { name, data, .. })) => {
                     let event = Event::default().event(name).data(&*data);
                     return Some((Ok::<_, Infallible>(event), st));
+                }
+                Wake::Pushed(Ok(Pushed::Session { token, name, data })) => {
+                    if *token == *st.token {
+                        let event = Event::default().event(name).data(&*data);
+                        return Some((Ok(event), st));
+                    }
                 }
                 Wake::Pushed(Ok(Pushed::Reset)) => {
                     st.closing = true;
@@ -679,5 +712,74 @@ mod tests {
         let (event, _) = next_event(&mut frames).await.unwrap();
         assert_eq!(event, "resync");
         assert_eq!(next_event(&mut frames).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_locked_session_keeps_receiving_and_gets_the_new_idle_lock() {
+        let hub = hub().await;
+        let manager_token = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, mut frames) = open(&hub, Some(&counter)).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = call(&hub, "POST", "/ui/lock", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (event, _) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "session.locked");
+        let set = serde_json::json!({ "intent": intent_as(
+            manager(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "idle_lock_minutes".into(),
+                value: "10".into(),
+            }),
+            Some(1),
+        ) });
+        let (status, body) =
+            call(&hub, "POST", "/ui/intent", Some(&manager_token), Some(set)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "settings.changed");
+        assert_eq!(data["keys"], serde_json::json!(["idle_lock_minutes"]));
+        assert_eq!(data["ui"], serde_json::json!({"idle_lock_minutes": 10}));
+    }
+
+    #[tokio::test]
+    async fn lock_and_unlock_reach_only_the_streams_of_the_same_token() {
+        let hub = hub().await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let other = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut mine) = open(&hub, Some(&counter)).await;
+        let (_, mut theirs) = open(&hub, Some(&other)).await;
+        let (status, _) = call(&hub, "POST", "/ui/lock", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (event, data) = next_event(&mut mine).await.unwrap();
+        assert_eq!(
+            (event.as_str(), data),
+            ("session.locked", serde_json::json!({}))
+        );
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/unlock",
+            Some(&counter),
+            Some(serde_json::json!({"pin": "2222"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (event, data) = next_event(&mut mine).await.unwrap();
+        assert_eq!(event, "session.unlocked");
+        assert_eq!(data["switched"], true);
+        assert_eq!(data["staff"]["staff_id"], hub.manager_id.as_str());
+        // The other token's stream heard nothing of it: its next event is a real change.
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&other),
+            Some(footer_set(manager(), 1)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (event, _) = next_event(&mut theirs).await.unwrap();
+        assert_eq!(event, "settings.changed");
     }
 }

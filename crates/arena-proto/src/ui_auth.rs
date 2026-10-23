@@ -27,6 +27,43 @@ pub struct SessionStaff {
     pub permissions: Vec<Permission>,
 }
 
+/// `GET /ui/me`: the signed-in staff member and whether the session is idle-locked (a
+/// reloaded view shows the lock again).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UiMe {
+    #[serde(flatten)]
+    pub staff: SessionStaff,
+    pub locked: bool,
+    /// Whether the member has a PIN (without one only signing out leaves the lock screen).
+    pub has_pin: bool,
+}
+
+/// `POST /ui/unlock`: a PIN typed on the lock screen. It goes nowhere else, and `Debug` never
+/// prints it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UnlockRequest {
+    pub pin: String,
+}
+
+impl std::fmt::Debug for UnlockRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnlockRequest")
+            .field("pin", &"<redacted>")
+            .finish()
+    }
+}
+
+/// An unlocked session: who now acts in it. `switched` is set when the PIN was another staff
+/// member's, so the session now belongs to them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UnlockOk {
+    pub staff: SessionStaff,
+    pub switched: bool,
+}
+
 /// A successful sign-in: the bearer token for this Hub process and who it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -134,6 +171,37 @@ mod tests {
         .unwrap();
         assert_eq!(req.items[0].key.as_deref(), Some("k"));
         assert!(!format!("{req:?}").contains("2468"));
+    }
+
+    #[test]
+    fn unlock_request_never_prints_its_pin() {
+        let req: UnlockRequest = serde_json::from_str(r#"{"pin":"2468"}"#).unwrap();
+        assert!(!format!("{req:?}").contains("2468"));
+    }
+
+    #[test]
+    fn me_flattens_the_staff_block() {
+        let me = UiMe {
+            staff: SessionStaff {
+                staff_id: "S".into(),
+                display_name: "Counter".into(),
+                role_name: "Counter".into(),
+                permissions: vec![],
+            },
+            locked: true,
+            has_pin: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&me).unwrap(),
+            serde_json::json!({
+                "staff_id": "S",
+                "display_name": "Counter",
+                "role_name": "Counter",
+                "permissions": [],
+                "locked": true,
+                "has_pin": true
+            })
+        );
     }
 
     #[test]

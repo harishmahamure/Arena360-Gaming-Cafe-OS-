@@ -66,6 +66,7 @@ function newHub(): Hub {
       ["branch.tz", { value: "Asia/Kolkata", rev: 1 }],
       ["branch.day_start_min", { value: "360", rev: 1 }],
       ["branch.fy_start_month", { value: "4", rev: 1 }],
+      ["idle_lock_minutes", { value: "5", rev: 1 }],
     ]),
     intents: [],
     elevations: [],
@@ -96,6 +97,7 @@ function snapshot(): HubSnapshot {
       fy_start_month: 4,
       pending: null,
     },
+    ui: { idle_lock_minutes: 5 },
   };
 }
 

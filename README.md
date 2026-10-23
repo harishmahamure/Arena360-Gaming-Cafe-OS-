@@ -104,12 +104,14 @@ locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` 
   | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
   | `POST /ui/auth/sign-in {login, password}`                       | `{token, staff: {staff_id, display_name, role_name, permissions}}`, or 401 `AUTH_FAILED` with one fixed message whatever was wrong (unknown login, wrong password, inactive staff)                                                                                                                     |
   | `POST /ui/auth/sign-out` (bearer)                               | 204; the token stops working                                                                                                                                                                                                                                                                           |
-  | `GET /ui/me` (bearer)                                           | the session's staff, or 401 `AUTH_FAILED`                                                                                                                                                                                                                                                              |
+  | `GET /ui/me` (bearer)                                           | the session's staff plus `locked` and `has_pin`, or 401 `AUTH_FAILED`                                                                                                                                                                                                                                  |
+  | `POST /ui/lock` (bearer)                                        | 204; the session is idle-locked: `/ui/intent` and `/ui/elevate` answer 423 `SESSION_LOCKED` and its tickets are dropped. See **Idle lock** below                                                                                                                                                       |
+  | `POST /ui/unlock {pin}` (bearer)                                | `{staff, switched}` for a locked session (else 409 `VALIDATION_FAILED` on `session`); own PIN first, another member's re-binds it; else 403 `PIN_REJECTED`                                                                                                                                             |
   | `POST /ui/elevate {items: [{intent_kind, key?}], pin}` (bearer) | `{ticket, items, expires_in_s}` when the PIN belongs to another active staff member whose role holds every permission the items need; otherwise 403 `PIN_REJECTED` with one fixed message. See **PIN elevation** below                                                                                 |
   | `POST /ui/elevate/drop {ticket}` (bearer)                       | 204; the ticket's unused approvals are given up                                                                                                                                                                                                                                                        |
   | `POST /ui/intent {intent, elevation_ticket?}` (bearer)          | `{applied}`; the intent runs as the session's `actor{staff, staff_id}` whatever actor was sent, and any client-supplied `elevated_by` is dropped. A ticket is redeemed for one matching approved item and becomes `elevated_by`; a bad one is 403 `PIN_REQUIRED`. Errors are `{code, message, field?}` |
   | `GET /ui/settings` (bearer)                                     | `[{key, value, rev}]`, so an edit can carry `base_rev`                                                                                                                                                                                                                                                 |
-  | `GET /ui/events?token=<token>`                                  | server-sent events: `settings.changed` `{locale, keys}` when an intent wrote `settings`, `applied` `{intent_id}` for any other intent, `resync` when the stream fell behind. A bad token is 401; the stream closes once its session ends                                                               |
+  | `GET /ui/events?token=<token>`                                  | server-sent events: `settings.changed` `{locale, keys, ui}` when an intent wrote `settings`, `applied` `{intent_id}` for any other intent, `resync` when the stream fell behind. A bad token is 401; the stream closes once its session ends                                                           |
 
   Five consecutive failed sign-ins for a login (compared without case) pause it for 60 s: every
   attempt in that window gets 429 `AUTH_LOCKED` with `retry_after_s`, and a success resets the
@@ -144,6 +146,29 @@ locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` 
   is the same intent. Change rows record the actor and `elevated_by_*` (`elevated_by_kind` is
   `pin` or `mfa`, migration 0007). A client's own `elevated_by` is stripped at `/ui/intent` and
   on the LAN. The PIN is never logged, stored or echoed, and goes nowhere but this loopback call.
+- **Idle lock:** a signed-in Hub UI locks after `idle_lock_minutes` (1–30, default 5; the
+  snapshot's `ui: {idle_lock_minutes}`, pushed in `settings.changed`, a failed read sending the
+  default) without input. It calls `POST /ui/lock`; until a PIN unlocks the session the Hub
+  refuses its intents and elevations with 423 `SESSION_LOCKED` (a ticket being issued is
+  re-checked against the lock under the tickets lock), and nothing else stops (`/ui/events`,
+  `/ui/settings`, `/ui/elevate/drop` and sign-out keep working, the writer keeps applying).
+  `POST /ui/unlock {pin}` works only on a locked session (otherwise 409 `VALIDATION_FAILED` on
+  `session`, before any PIN check, so it is never a way to switch members on a live screen). It
+  checks the session's own member first, then the other active staff with a PIN (argon2id, at
+  most 50 checks, sharing the two-at-once cap with elevation). The own PIN unlocks the session
+  unchanged; another member's PIN unlocks it and makes them its staff member (`switched: true`,
+  their staff block), so every later intent carries their actor, and tickets issued before the
+  switch are dropped and refused. A member deactivated between the match and the re-bind counts
+  as a failure. No match is 403 `PIN_REJECTED` with one fixed message, "that PIN can't unlock
+  this screen". Five failures in a row, counted per staff member and per token, pause unlocking
+  for 60 s, doubling with each further pause up to 15 min until a successful unlock (429
+  `AUTH_LOCKED` with `retry_after_s`; each pause logs a warning with the staff id and count);
+  a new session of the same member stays paused, and sign-out keeps working. Locking and
+  unlocking push `session.locked` / `session.unlocked` (`{staff, switched}`) to the
+  `/ui/events` streams of the same token. The Hub logs `ui.locked {staff_id, at}` and
+  `ui.unlocked {staff_id, previous_staff_id?, at}` at info, never the PIN or its length. A
+  re-bound session keeps its token and its 12 h lifetime, and a staff refresh in flight never
+  reverts it.
 - **Reasons:** `IntentKind::reasons()` lists the reason codes a kind requires (generated for the
   UI as `generated/reasons.json`, read through `reasonsFor()` / `reasonOptions()` in
   `@arena/ui`). Only `device.revoke` has any today (`lost`, `stolen`, `replaced`, `other`);
@@ -310,10 +335,31 @@ without `settings.edit` the fields stay editable, Save says "Needs manager appro
 the `InlinePin` in place, listing the fields it approves: the PIN asks `/ui/elevate` for one
 ticket covering exactly the changed fields, each `settings.set` carries it, unused approvals are
 dropped, and focus returns to Save; a lapsed approval asks again without a round trip; Esc clears the PIN and
-returns focus, and a `PIN_REQUIRED` answer asks for the PIN again) and **Receipt** (the
-"Receipt footer" control from Story 1.11). Every signed-in view listens to `/ui/events`: a
+returns focus, and a `PIN_REQUIRED` answer asks for the PIN again), **Receipt** (the
+"Receipt footer" control from Story 1.11) and **Screen lock** (`/settings/screen-lock`: the idle
+lock in minutes with "1–30 minutes" shown inline, checked before any round trip, saved with
+`settings.set` and the same manager approval for a Counter). Every signed-in view listens to `/ui/events`: a
 `settings.changed` updates the branch locale (the header clock's time zone, formatted amounts
-and a Settings form with no unsaved edits) in every open window without a reload. Money is
+and a Settings form with no unsaved edits) and the idle lock in every open window without a
+reload. **Idle lock:** `src/lib/idle.js` counts input idleness (`keydown`, `pointerdown`,
+`pointermove`, `wheel` and `touchstart` on `window`, throttled to one reset a second, one
+`setTimeout`); a period's length is read when it starts, so a new `idle_lock_minutes` applies
+from the next period and never shortens the countdown in progress. On `visibilitychange`,
+`focus` and `pageshow` it compares the wall clock with the last reset and locks at once if the
+machine slept past the period; a clock that went backwards restarts the period. Tracking stops
+while the shell is gated. When it runs out (signed-in
+screens only, never sign-in) `LockOverlay` covers the viewport (`role="dialog"`,
+`aria-modal`, an h1 "Locked", the staff member's name, an `InlinePin` and Sign out) while the
+shell behind it stays mounted with `inert` and `aria-hidden`, so the route, scroll position and
+unsaved fields survive. Digits, Backspace and Enter go to the PIN, Esc clears it without
+unlocking, Tab reaches Sign out, and five wrong PINs show the countdown. A member without a PIN is told
+to sign out. The overlay shows at once; the `/ui/lock` call is retried with a back-off while the
+Hub does not answer, and an unlock waits for it. The overlay also shows over the unreachable
+state. On unlock the UI reloads the snapshot and session (another member's PIN switches the
+header to them and announces "Now signed in as {name}"), removes `inert` and returns focus to
+what had it. A `SESSION_LOCKED` answer to any call, a `session.locked` event, a session the Hub
+holds locked, or this window's own `arena.hub.locked` sessionStorage flag after a reload all
+show the lock; a `session.unlocked` event lifts it in every window of the session. Money is
 formatted only through `formatMoney(minor, locale)` from `@arena/ui/format` (exact integer
 maths; Indian or international grouping; a leading `−` for negatives), paired with the
 `.tabular-nums` class.

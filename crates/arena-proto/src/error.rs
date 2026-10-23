@@ -49,6 +49,8 @@ pub enum ErrorCode {
     PinRejected,
     /// The intent kind needs a reason and none was given.
     ReasonRequired,
+    /// The Hub UI session is locked (idle lock): unlock it with a PIN first.
+    SessionLocked,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -86,6 +88,7 @@ impl ErrorCode {
             Self::PinRequired => "PIN_REQUIRED",
             Self::PinRejected => "PIN_REJECTED",
             Self::ReasonRequired => "REASON_REQUIRED",
+            Self::SessionLocked => "SESSION_LOCKED",
         }
     }
 }
@@ -181,6 +184,7 @@ mod tests {
             (ErrorCode::PinRequired, "PIN_REQUIRED"),
             (ErrorCode::PinRejected, "PIN_REJECTED"),
             (ErrorCode::ReasonRequired, "REASON_REQUIRED"),
+            (ErrorCode::SessionLocked, "SESSION_LOCKED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

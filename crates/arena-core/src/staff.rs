@@ -199,6 +199,40 @@ impl StaffDirectory {
             .map(|c| (c.staff_id, c.pin_verifier_version)))
     }
 
+    /// Whether the staff member `staff_id` has a PIN set (the lock screen says to sign out
+    /// otherwise). Blocking (SQLite).
+    pub fn has_pin(&self, staff_id: &str) -> Result<bool, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+        Ok(store
+            .staff_by_id_with_role(staff_id)?
+            .is_some_and(|(s, _)| s.pin_hash.is_some()))
+    }
+
+    /// Whose PIN `pin` is, for unlocking an idle-locked session of `current`: `current` is
+    /// checked first, then the other active staff with a PIN (at most [`MAX_PIN_CANDIDATES`]
+    /// checks in all), one by one with argon2id. A PIN that is not 4–6 digits, or no candidate,
+    /// still costs one argon2id check. The PIN is never logged. Blocking.
+    pub fn match_unlock_pin(&self, current: &str, pin: &str) -> Result<Option<String>, AppError> {
+        let candidates = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+            store.unlock_candidates(current, MAX_PIN_CANDIDATES)?
+        };
+        if !is_pin_shaped(pin) || candidates.is_empty() {
+            let _ = verify_secret(pin, dummy_hash());
+            return Ok(None);
+        }
+        Ok(candidates
+            .into_iter()
+            .find(|c| verify_secret(pin, &c.pin_hash))
+            .map(|c| c.staff_id))
+    }
+
     /// Verifies `login` and `password`. The row is read under the lock; the argon2id check
     /// runs after it is released. Unknown logins, members without a password, wrong passwords
     /// and inactive members all do one argon2id verification and fail `AUTH_FAILED`. Blocking.

@@ -1,16 +1,20 @@
 // The Hub's push stream (`GET /ui/events?token=`, server-sent events). Every open view
 // subscribes while someone is signed in; the Hub pushes, the UI never polls.
 
-import type { SettingsChangedEvent } from "@arena/ui/generated";
-import { isSnapshotLocale } from "./snapshot";
+import type { SettingsChangedEvent, UnlockOk } from "@arena/ui/generated";
+import { isSnapshotLocale, isSnapshotUi } from "./snapshot";
 
 export const EVENTS_URL = "http://127.0.0.1:7409/ui/events";
 /** Waits before reopening a stream the Hub closed or refused, in seconds (then 15 s each). */
 const REOPEN_DELAYS = [1, 2, 4, 8, 15];
 
 export type EventHandlers = {
-  /** `settings.changed`: the locale now in effect and the keys written. */
+  /** `settings.changed`: the locale and UI settings now in effect and the keys written. */
   onSettingsChanged: (event: SettingsChangedEvent) => void;
+  /** `session.locked`: this session was locked (in another window sharing it). */
+  onSessionLocked?: () => void;
+  /** `session.unlocked`: this session was unlocked, possibly by another member's PIN. */
+  onSessionUnlocked?: (event: UnlockOk) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
   /** The Hub closed or refused the stream (signed out, revoked, or the Hub restarted). */
@@ -27,6 +31,11 @@ export function isSettingsChanged(v: unknown): v is SettingsChangedEvent {
     Array.isArray(v.keys) &&
     v.keys.every((k) => typeof k === "string")
   );
+}
+
+/** The event's UI settings; a missing or malformed block means the defaults. */
+export function uiOf(event: SettingsChangedEvent): SettingsChangedEvent["ui"] {
+  return isSnapshotUi(event.ui) ? event.ui : { idle_lock_minutes: 5 };
 }
 
 /**
@@ -62,6 +71,19 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
       }
     });
     es.addEventListener("resync", () => handlers.onResync());
+    es.addEventListener("session.locked", () => handlers.onSessionLocked?.());
+    es.addEventListener("session.unlocked", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent<string>).data) as Partial<UnlockOk>;
+        if (typeof data?.switched === "boolean" && data.staff) {
+          handlers.onSessionUnlocked?.(data as UnlockOk);
+          return;
+        }
+      } catch {
+        // fall through
+      }
+      handlers.onResync();
+    });
     es.addEventListener("error", () => {
       if (es.readyState !== EventSource.CLOSED || stopped) return;
       handlers.onClosed();

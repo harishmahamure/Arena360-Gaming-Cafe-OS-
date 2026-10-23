@@ -262,6 +262,35 @@ pub fn list_pin_candidates(
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
+/// Up to `limit` active staff members with a PIN, `first` (when it qualifies) ahead of the
+/// others, the rest ordered by id: whose PIN may unlock an idle-locked Hub UI.
+pub fn list_unlock_candidates(
+    conn: &Connection,
+    first: &str,
+    limit: usize,
+) -> Result<Vec<PinCandidate>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT staff_id, pin_hash, pin_verifier_version
+             FROM staff
+             WHERE active = 1 AND pin_hash IS NOT NULL
+             ORDER BY staff_id <> ?1, staff_id
+             LIMIT ?2",
+        )
+        .map_err(db_error)?;
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let rows = stmt
+        .query_map(rusqlite::params![first, limit], |r| {
+            Ok(PinCandidate {
+                staff_id: r.get(0)?,
+                pin_hash: r.get(1)?,
+                pin_verifier_version: r.get(2)?,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 /// How many active staff members hold `role_id`.
 pub fn count_active_staff_with_role(conn: &Connection, role_id: &str) -> Result<i64, AppError> {
     conn.query_row(

@@ -15,6 +15,7 @@ import type {
   SettingEntry,
   SignInOk,
   UiError,
+  UnlockOk,
 } from "@arena/ui/generated";
 import { ulid } from "./ulid";
 
@@ -25,10 +26,43 @@ export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
 export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
 export const ELEVATE_DROP_URL = "http://127.0.0.1:7409/ui/elevate/drop";
 export const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
+export const LOCK_URL = "http://127.0.0.1:7409/ui/lock";
+export const UNLOCK_URL = "http://127.0.0.1:7409/ui/unlock";
 /** The `depends()` key for the session, so sign-in and sign-out re-run the layout load. */
 export const SESSION_DEPENDENCY = "hub:session";
 const TOKEN_KEY = "arena.hub.token";
+/** Set while this window shows the idle lock, so a reload shows it again. */
+const LOCKED_KEY = "arena.hub.locked";
 const TIMEOUT_MS = 5000;
+
+/** Whether this window last showed the idle lock (survives a reload). */
+export function getLocalLocked(): boolean {
+  try {
+    return sessionStorage.getItem(LOCKED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setLocalLocked(locked: boolean) {
+  try {
+    if (locked) sessionStorage.setItem(LOCKED_KEY, "1");
+    else sessionStorage.removeItem(LOCKED_KEY);
+  } catch {
+    // Storage unavailable: the Hub still holds the session locked.
+  }
+}
+
+let sessionLockedHandler: (() => void) | null = null;
+
+/** Called whenever the Hub answers `SESSION_LOCKED` (the layout locks the screen). */
+export function onSessionLocked(handler: (() => void) | null) {
+  sessionLockedHandler = handler;
+}
+
+function noticeLocked(err: UiError | null) {
+  if (err?.code === "SESSION_LOCKED") sessionLockedHandler?.();
+}
 
 export function getToken(): string | null {
   try {
@@ -41,15 +75,23 @@ export function getToken(): string | null {
 export function setToken(token: string | null) {
   try {
     if (token) sessionStorage.setItem(TOKEN_KEY, token);
-    else sessionStorage.removeItem(TOKEN_KEY);
+    else {
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(LOCKED_KEY);
+    }
   } catch {
     // Storage unavailable: the session lasts until the page reloads.
   }
 }
 
-/** Who is signed in: known, known to be nobody, or unknown (the Hub did not answer). */
+/**
+ * Who is signed in: known (and whether the Hub holds the session idle-locked), known to be
+ * nobody, or unknown (the Hub did not answer).
+ */
 export type Session =
-  { state: "signed_in"; staff: SessionStaff } | { state: "signed_out" } | { state: "unknown" };
+  | { state: "signed_in"; staff: SessionStaff; locked: boolean; hasPin: boolean }
+  | { state: "signed_out" }
+  | { state: "unknown" };
 
 /**
  * Where sign-in returns to: a same-app path from `redirectTo`, never another origin (`//x`),
@@ -100,8 +142,13 @@ export async function loadSession(fetcher: typeof fetch): Promise<Session> {
       return { state: "signed_out" };
     }
     if (!res.ok) return { state: "unknown" };
-    const staff: unknown = await res.json();
-    return isSessionStaff(staff) ? { state: "signed_in", staff } : { state: "unknown" };
+    const body: unknown = await res.json();
+    if (!isSessionStaff(body)) return { state: "unknown" };
+    const { locked, has_pin, ...staff } = body as SessionStaff & {
+      locked?: unknown;
+      has_pin?: unknown;
+    };
+    return { state: "signed_in", staff, locked: locked === true, hasPin: has_pin !== false };
   } catch {
     return { state: "unknown" };
   }
@@ -235,6 +282,7 @@ export async function submitIntent(
     }
   }
   const error = await errorOf(res);
+  noticeLocked(error);
   return error ? { kind: "error", error } : { kind: "unreachable" };
 }
 
@@ -291,6 +339,7 @@ export async function elevate(items: ElevationItem[], pin: string): Promise<Elev
     return { kind: "unreachable" };
   }
   const err = await errorOf(res);
+  noticeLocked(err);
   if (err?.code === "AUTH_LOCKED") {
     const s = err.retry_after_s;
     return { kind: "locked", retryAfterS: Number.isFinite(s) ? Math.max(1, Math.ceil(s!)) : 60 };
@@ -353,4 +402,84 @@ export async function loadSettings(): Promise<SettingsOutcome> {
   } catch {
     return { kind: "unreachable" };
   }
+}
+
+/** What one `POST /ui/lock` came to. */
+export type LockResult = "locked" | "signed_out" | "failed";
+
+/** `POST /ui/lock`: the Hub refuses this session's intents until it is unlocked. */
+export async function lockSession(): Promise<LockResult> {
+  const token = getToken();
+  if (!token) return "signed_out";
+  try {
+    const res = await fetch(LOCK_URL, {
+      method: "POST",
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (res.status === 401) {
+      setToken(null);
+      return "signed_out";
+    }
+    return res.ok ? "locked" : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
+export type UnlockOutcome =
+  | { kind: "unlocked"; staff: SessionStaff; switched: boolean }
+  | { kind: "rejected" }
+  | { kind: "locked"; retryAfterS: number }
+  | { kind: "signed_out" }
+  /** The Hub does not hold this session locked (its lock call has not landed). */
+  | { kind: "not_locked" }
+  | { kind: "error"; error: UiError }
+  | { kind: "unreachable" };
+
+/**
+ * `POST /ui/unlock`: the Hub checks the PIN against the signed-in member, then the other staff.
+ * Another member's PIN re-binds this session to them (`switched`). The PIN goes to this one
+ * loopback call only; the caller clears its own copy.
+ */
+export async function unlockSession(pin: string): Promise<UnlockOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  let res: Response;
+  try {
+    res = await fetch(UNLOCK_URL, {
+      method: "POST",
+      headers: { ...authHeaders(token), "content-type": "application/json" },
+      body: JSON.stringify({ pin }),
+      signal: AbortSignal.timeout(TIMEOUT_MS * 2),
+    });
+  } catch {
+    return { kind: "unreachable" };
+  }
+  if (res.status === 401) {
+    setToken(null);
+    return { kind: "signed_out" };
+  }
+  if (res.ok) {
+    try {
+      const body = (await res.json()) as Partial<UnlockOk>;
+      if (isSessionStaff(body.staff) && typeof body.switched === "boolean") {
+        return { kind: "unlocked", staff: body.staff, switched: body.switched };
+      }
+    } catch {
+      // fall through
+    }
+    return { kind: "unreachable" };
+  }
+  const err = await errorOf(res);
+  if (err?.code === "AUTH_LOCKED") {
+    const s = err.retry_after_s;
+    return { kind: "locked", retryAfterS: Number.isFinite(s) ? Math.max(1, Math.ceil(s!)) : 60 };
+  }
+  if (err?.code === "PIN_REJECTED") return { kind: "rejected" };
+  if (err?.code === "VALIDATION_FAILED" && err.field === "session") return { kind: "not_locked" };
+  return {
+    kind: "error",
+    error: err ?? { code: "INTERNAL", message: "the hub answered " + res.status }, // i18n-ignore (not shown)
+  };
 }

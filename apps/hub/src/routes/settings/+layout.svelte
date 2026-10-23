@@ -10,6 +10,7 @@
   const SECTIONS: { href: string; label: MessageKey }[] = [
     { href: "/settings/branch", label: "hub.settings.nav.branch" },
     { href: "/settings/receipt", label: "hub.settings.nav.receipt" },
+    { href: "/settings/screen-lock", label: "hub.settings.nav.screen_lock" },
   ];
   const section = $derived(SECTIONS.find((s) => page.url.pathname.startsWith(s.href)));
 </script>

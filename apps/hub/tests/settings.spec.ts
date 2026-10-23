@@ -63,6 +63,7 @@ function newHub(): Hub {
       ["branch.tz", { value: "Asia/Kolkata", rev: 1 }],
       ["branch.day_start_min", { value: "360", rev: 1 }],
       ["branch.fy_start_month", { value: "4", rev: 1 }],
+      ["idle_lock_minutes", { value: "5", rev: 1 }],
     ]),
     prior: new Map(),
     intents: [],
@@ -114,6 +115,7 @@ function snapshot(hub: Hub): HubSnapshot {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     devices: [],
     locale: locale(hub),
+    ui: { idle_lock_minutes: Number(hub.settings.get("idle_lock_minutes")?.value ?? 5) },
   };
 }
 
@@ -240,6 +242,7 @@ test("Settings opens on Branch, first in its sections, with the current values",
   await expect(sections.getByRole("link")).toHaveText([
     en["hub.settings.nav.branch"],
     en["hub.settings.nav.receipt"],
+    en["hub.settings.nav.screen_lock"],
   ]);
   await expect(sections.getByRole("link").first()).toHaveAttribute("aria-current", "page");
   await expect(page.getByLabel(en["hub.settings.branch.symbol_before"])).toBeChecked();

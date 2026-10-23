@@ -1,6 +1,6 @@
 // Reads the branch snapshot from the local Hub service over loopback (`GET /ui/snapshot`).
 
-import type { HubSnapshot, SnapshotLocale } from "@arena/ui/generated";
+import type { HubSnapshot, SnapshotLocale, SnapshotUi } from "@arena/ui/generated";
 
 /** The Hub service's loopback snapshot endpoint (the Tauri CSP allows only this host). */
 export const SNAPSHOT_URL = "http://127.0.0.1:7409/ui/snapshot";
@@ -20,8 +20,17 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
     if (!res.ok) return { ok: false };
     const snapshot: unknown = await res.json();
     if (!isHubSnapshot(snapshot)) return { ok: false };
-    // A Hub from before branch locales sends no `locale`: treat it as not set up.
-    return { ok: true, snapshot: { ...snapshot, locale: snapshot.locale ?? null } };
+    // A Hub from before branch locales sends no `locale`: treat it as not set up. One from
+    // before the idle lock sends no `ui`: the defaults apply.
+    return {
+      ok: true,
+      snapshot: {
+        ...snapshot,
+        locale: snapshot.locale ?? null,
+        // A missing or malformed `ui` block falls back to the defaults.
+        ui: isSnapshotUi(snapshot.ui) ? snapshot.ui : { idle_lock_minutes: 5 },
+      },
+    };
   } catch {
     return { ok: false };
   }
@@ -59,10 +68,16 @@ export function isSnapshotLocale(v: unknown): v is SnapshotLocale {
   );
 }
 
+/** Whether `v` has the `SnapshotUi` shape (`idle_lock_minutes` 1–30). */
+export function isSnapshotUi(v: unknown): v is SnapshotUi {
+  return isObject(v) && isInt(v.idle_lock_minutes, 1, 30);
+}
+
 /**
  * Whether `v` has the `HubSnapshot` shape: `branch` is null or `{name, branch_code}` strings,
  * each device has string `device_id`, `label` and `class` and a string-or-null `zone`, and
- * `locale` is null, absent or a `SnapshotLocale`.
+ * `locale` is null, absent or a `SnapshotLocale` (`ui` is not checked: a bad one means the
+ * defaults).
  * Anything else is treated like an unreachable Hub.
  */
 export function isHubSnapshot(v: unknown): v is HubSnapshot {

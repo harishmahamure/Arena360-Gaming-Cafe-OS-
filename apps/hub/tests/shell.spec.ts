@@ -31,8 +31,14 @@ const SEEDED: HubSnapshot = {
     fy_start_month: 4,
     pending: null,
   },
+  ui: { idle_lock_minutes: 5 },
 };
-const NOT_SEEDED: HubSnapshot = { branch: null, devices: [], locale: null };
+const NOT_SEEDED: HubSnapshot = {
+  branch: null,
+  devices: [],
+  locale: null,
+  ui: { idle_lock_minutes: 5 },
+};
 
 const RAIL = [
   ["floor", en["hub.nav.floor"]],

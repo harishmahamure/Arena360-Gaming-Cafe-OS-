@@ -6,6 +6,8 @@
 //! Logs carry ids, codes and counts only — no PII (see `logs.rs`).
 
 mod config;
+#[cfg(feature = "dev-fixtures")]
+mod dev;
 mod logs;
 
 use std::process::ExitCode;
@@ -31,6 +33,8 @@ async fn main() -> ExitCode {
         cfg!(windows),
     ) {
         Ok(config::Command::Run(cfg)) => cfg,
+        #[cfg(feature = "dev-fixtures")]
+        Ok(config::Command::DevSeed(cfg)) => return dev_seed(cfg).await,
         Ok(config::Command::Help) => {
             println!("{}", config::USAGE);
             return ExitCode::SUCCESS;
@@ -80,6 +84,29 @@ async fn main() -> ExitCode {
             tracing::error!(code = e.code.as_str(), detail = %e.message, "hub failed");
             eprintln!("arena-hub: {e}");
             ExitCode::from(EXIT_FAILURE)
+        }
+    }
+}
+
+/// Runs `dev seed` and prints the outcome: exit 0 on success, 2 on `SCHEMA_TOO_NEW` and 1
+/// otherwise (including `ALREADY_BOOTSTRAPPED` and `NOT_PRIMARY`).
+#[cfg(feature = "dev-fixtures")]
+async fn dev_seed(cfg: config::Config) -> ExitCode {
+    match dev::seed(&cfg, Arc::new(SystemClock)).await {
+        Ok(changes) => {
+            println!(
+                "dev seed: bootstrapped branch DEV01 in {} ({changes} changes)",
+                cfg.data_dir.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("dev seed: {e}");
+            if e.code == ErrorCode::SchemaTooNew {
+                ExitCode::from(EXIT_SCHEMA_TOO_NEW)
+            } else {
+                ExitCode::from(EXIT_FAILURE)
+            }
         }
     }
 }

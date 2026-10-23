@@ -13,4 +13,6 @@ export type ErrorCode =
   | "STALE"
   | "TOKEN_REVOKED"
   | "HUB_SLOW"
-  | "INTERNAL";
+  | "INTERNAL"
+  | "VALIDATION_FAILED"
+  | "ALREADY_BOOTSTRAPPED";

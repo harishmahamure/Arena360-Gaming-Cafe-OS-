@@ -1,16 +1,20 @@
 //! `arena-core`: the Hub domain. Time comes from an injected [`Clock`]; every write goes
-//! through the single [`Writer`] actor.
+//! through the single [`Writer`] actor, and every branch write goes through [`apply`].
 
+mod apply;
 mod clock;
+mod settings_defaults;
 mod status;
 mod writer;
 
 use arena_proto::AppError;
 use arena_store::{META_HUB_INSTANCE_ID, Store, insert_meta_if_absent};
 
+pub use apply::{Applied, ApplyCtx, ChangeMeta, KNOWN_CURRENCIES, apply, emit};
 pub use clock::{Clock, ManualClock, SystemClock};
+pub use settings_defaults::DEFAULT_SETTINGS;
 pub use status::{Epoch, HubStatus, LeaseInfo, Role, status_channel};
-pub use writer::{Writer, WriterHandle};
+pub use writer::{LeaseRenewal, Writer, WriterHandle};
 
 /// Returns this Hub's instance id, minting and persisting a ULID on first start.
 ///

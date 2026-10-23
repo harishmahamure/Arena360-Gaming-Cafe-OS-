@@ -11,6 +11,13 @@ arena-store.workspace = true
 arena-proto.workspace = true
 tokio.workspace = true
 ulid.workspace = true
+rmp-serde.workspace = true
+chrono-tz.workspace = true
+
+[features]
+# Exposes the closure job API (`WriterHandle::submit`) to other crates' tests.
+test-jobs = []
 
 [dev-dependencies]
 tempfile.workspace = true
+serde_json.workspace = true

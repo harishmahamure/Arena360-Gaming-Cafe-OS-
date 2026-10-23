@@ -28,6 +28,10 @@ pub enum ErrorCode {
     HubSlow,
     /// An unexpected storage or I/O failure on the Hub.
     Internal,
+    /// The intent's payload failed validation; `field` names the offending field.
+    ValidationFailed,
+    /// The branch has already been bootstrapped.
+    AlreadyBootstrapped,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -55,6 +59,8 @@ impl ErrorCode {
             Self::TokenRevoked => "TOKEN_REVOKED",
             Self::HubSlow => "HUB_SLOW",
             Self::Internal => "INTERNAL",
+            Self::ValidationFailed => "VALIDATION_FAILED",
+            Self::AlreadyBootstrapped => "ALREADY_BOOTSTRAPPED",
         }
     }
 }
@@ -66,6 +72,21 @@ impl AppError {
             code,
             message: message.into(),
             field: None,
+        }
+    }
+}
+
+impl AppError {
+    /// Builds an error naming the offending field.
+    pub fn with_field(
+        code: ErrorCode,
+        field: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            field: Some(field.into()),
         }
     }
 }
@@ -125,6 +146,8 @@ mod tests {
             (ErrorCode::TokenRevoked, "TOKEN_REVOKED"),
             (ErrorCode::HubSlow, "HUB_SLOW"),
             (ErrorCode::Internal, "INTERNAL"),
+            (ErrorCode::ValidationFailed, "VALIDATION_FAILED"),
+            (ErrorCode::AlreadyBootstrapped, "ALREADY_BOOTSTRAPPED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

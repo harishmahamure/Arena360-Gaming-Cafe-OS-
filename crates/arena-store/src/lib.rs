@@ -3,6 +3,7 @@
 //! [`Store::open`] opens SQLite in WAL mode with `synchronous=FULL` (both verified by reading
 //! them back), refuses a schema newer than this binary and applies the embedded migrations.
 
+mod branch;
 mod migrations;
 
 use std::fs::{File, OpenOptions, TryLockError};
@@ -12,9 +13,17 @@ use std::time::Duration;
 use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+pub use branch::{
+    ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, Table, branch_exists, delete_row,
+    dump_table, has_branch_data, insert_branch, insert_change, insert_setting, next_change_seq,
+    read_changes, read_row, stamp_row, upsert_row,
+};
 pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
+
+/// The transaction `apply()` and the replayer run in.
+pub type StoreTx<'a> = Transaction<'a>;
 
 /// The `hub_meta` key holding this Hub's instance id.
 pub const META_HUB_INSTANCE_ID: &str = "hub_instance_id";
@@ -81,7 +90,7 @@ impl Store {
         let mode: String = conn
             .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
             .map_err(db_error)?;
-        conn.execute_batch("PRAGMA synchronous=FULL")
+        conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON")
             .map_err(db_error)?;
         let mut store = Self {
             conn,
@@ -100,6 +109,16 @@ impl Store {
             return Err(AppError::new(
                 ErrorCode::Internal,
                 format!("synchronous is {sync}, expected 2 (FULL)"),
+            ));
+        }
+        let fk: i64 = store
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .map_err(db_error)?;
+        if fk != 1 {
+            return Err(AppError::new(
+                ErrorCode::Internal,
+                format!("foreign_keys is {fk}, expected 1"),
             ));
         }
         if store.try_lock_writer()? {
@@ -169,6 +188,30 @@ impl Store {
         let out = f(&tx)?; // dropping `tx` rolls back
         tx.commit().map_err(db_error)?;
         Ok(out)
+    }
+
+    /// Like [`Store::write_tx`], but hands `f` the transaction mutably (`apply()`, replay).
+    pub fn write_tx_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut StoreTx<'_>) -> Result<R, AppError>,
+    ) -> Result<R, AppError> {
+        let mut tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let out = f(&mut tx)?; // dropping `tx` rolls back
+        tx.commit().map_err(db_error)?;
+        Ok(out)
+    }
+
+    /// Every `changes` row, outside any write transaction.
+    pub fn changes(&self) -> Result<Vec<ChangeRecord>, AppError> {
+        read_changes(&self.conn)
+    }
+
+    /// Every row of a change-log table, ordered by primary key.
+    pub fn rows(&self, table: Table) -> Result<Vec<Row>, AppError> {
+        dump_table(&self.conn, table)
     }
 
     /// Takes the process-level writer lock (`<db>.lock`), so two processes on one data dir can
@@ -400,7 +443,7 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, migrations::MIGRATIONS.len() as i64);
         assert_eq!(applied_again, applied);
     }
 
@@ -515,6 +558,54 @@ mod tests {
         assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
         drop(store);
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn v1_database_upgrades_to_latest_keeping_the_lease() {
+        let (_dir, path) = temp_db();
+        let lease = LeaseRow {
+            counter: 3,
+            hub_instance_id: "01JV1".into(),
+            provisional: false,
+            renewed_at: 10,
+            expires_at: 20,
+        };
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(migrations::MIGRATIONS[0].sql).unwrap();
+            record_schema_version(&conn, 1, 0).unwrap();
+            write_lease(&conn, &lease).unwrap();
+        }
+        let store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 2);
+        for table in ["branch", "settings", "changes"] {
+            let exists: bool = store
+                .conn
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(exists, "{table}");
+        }
+        assert_eq!(store.lease().unwrap(), Some(lease));
+    }
+
+    #[test]
+    fn foreign_keys_are_on_and_orphan_settings_fail() {
+        let (_dir, path) = temp_db();
+        let mut store = Store::open(&path, T).unwrap();
+        let fk: i64 = store
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+        assert!(
+            store
+                .write_tx(|tx| insert_setting(tx, "no-such-branch", "k", "v"))
+                .is_err()
+        );
     }
 
     #[test]

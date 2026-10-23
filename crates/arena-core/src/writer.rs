@@ -3,16 +3,23 @@
 //! Each submitted job runs in one `BEGIN IMMEDIATE` transaction on a dedicated thread. Once the
 //! writer is closed (demotion or shutdown), every `submit` fails `NOT_PRIMARY`. A job that
 //! panics is rolled back and fails `INTERNAL`; the thread keeps running. If the thread exits
-//! for any other reason, the writer counts as closed and `submit` fails `INTERNAL`. Story 1.7
-//! replaces the closure job API with `apply()`.
+//! for any other reason, the writer counts as closed and `submit` fails `INTERNAL`.
+//!
+//! Branch writes go through [`WriterHandle::submit_intent`], which runs `apply()`, commits and
+//! then emits. The only other write is the lease renewal ([`WriterHandle::renew_lease`]). The
+//! closure API (`submit`) exists for tests only (`cfg(test)` or the `test-jobs` feature).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use arena_proto::{AppError, ErrorCode};
-use arena_store::{Store, Transaction};
-use tokio::sync::{mpsc, oneshot};
+use arena_proto::{AppError, ErrorCode, Intent};
+use arena_store::{LeaseRow, Store, read_lease, write_lease};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
+
+use crate::apply::{Applied, ApplyCtx, apply, emit};
+use crate::clock::Clock;
+use crate::status::{HubStatus, LeaseInfo};
 
 type Job = Box<dyn FnOnce(&mut Store) + Send>;
 
@@ -22,6 +29,16 @@ enum Msg {
 }
 
 const QUEUE_DEPTH: usize = 256;
+const EVENTS_DEPTH: usize = 1024;
+
+/// The outcome of one lease renewal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LeaseRenewal {
+    /// The row still held our epoch and was renewed.
+    Renewed(LeaseRow),
+    /// The row is missing or holds any other epoch (higher or not); nothing was written.
+    Superseded(Option<LeaseRow>),
+}
 
 fn not_primary() -> AppError {
     AppError::new(ErrorCode::NotPrimary, "this hub is not the primary writer")
@@ -53,7 +70,13 @@ pub struct Writer;
 
 impl Writer {
     /// Moves `store` (the write connection) onto the writer thread and returns its handle.
-    pub fn spawn(store: Store) -> Result<WriterHandle, AppError> {
+    /// Each intent reads its role and epoch from `status` when it runs, and its time from
+    /// `clock`.
+    pub fn spawn(
+        store: Store,
+        clock: Arc<dyn Clock>,
+        status: watch::Receiver<HubStatus>,
+    ) -> Result<WriterHandle, AppError> {
         let (tx, mut rx) = mpsc::channel::<Msg>(QUEUE_DEPTH);
         let flags = Arc::new(Flags::default());
         let actor_flags = Arc::clone(&flags);
@@ -84,7 +107,14 @@ impl Writer {
                 }
             })
             .map_err(|e| AppError::new(ErrorCode::Internal, format!("spawn writer thread: {e}")))?;
-        Ok(WriterHandle { tx, flags })
+        let (events, _) = broadcast::channel(EVENTS_DEPTH);
+        Ok(WriterHandle {
+            tx,
+            flags,
+            clock,
+            status,
+            events,
+        })
     }
 }
 
@@ -93,6 +123,9 @@ impl Writer {
 pub struct WriterHandle {
     tx: mpsc::Sender<Msg>,
     flags: Arc<Flags>,
+    clock: Arc<dyn Clock>,
+    status: watch::Receiver<HubStatus>,
+    events: broadcast::Sender<Applied>,
 }
 
 impl std::fmt::Debug for WriterHandle {
@@ -105,12 +138,96 @@ impl std::fmt::Debug for WriterHandle {
 }
 
 impl WriterHandle {
+    /// Runs `intent` through `apply()` in one `BEGIN IMMEDIATE` transaction, commits it and
+    /// then emits the [`Applied`] to every [`subscribe`](Self::subscribe)r. On any error
+    /// nothing is written and nothing is emitted.
+    pub async fn submit_intent(&self, intent: Intent) -> Result<Applied, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        let events = self.events.clone();
+        self.run_then(
+            move |store| {
+                let (role, epoch) = {
+                    let s = status.borrow();
+                    (s.role, s.lease.as_ref().map(LeaseInfo::epoch))
+                };
+                let ctx = ApplyCtx::new(clock.as_ref(), epoch, role);
+                // commit: `write_tx_mut` commits on Ok and rolls back on Err.
+                store.write_tx_mut(|tx| apply(tx, &ctx, &intent))
+            },
+            // emit: only after a successful commit, outside the panic guard (a committed intent
+            // is never reported as failed), on the writer thread so events keep commit order.
+            move |applied| emit(&events, applied),
+        )
+        .await
+    }
+
+    /// Receives every committed intent, in commit order.
+    ///
+    /// The broadcast is bounded (1024 events). A subscriber that falls further behind gets
+    /// `RecvError::Lagged` and has missed events: it must resync from the `changes` log rather
+    /// than assume it saw everything.
+    pub fn subscribe(&self) -> broadcast::Receiver<Applied> {
+        self.events.subscribe()
+    }
+
+    /// Renews the lease held as `held`: inside one transaction, re-reads the row and, only if it
+    /// still holds `held`'s epoch, extends it to `now + ttl_ms` (`now` read inside the job).
+    /// A `ttl_ms` of 0 releases it: the row expires now, so another Hub may take it at once.
+    pub async fn renew_lease(
+        &self,
+        held: LeaseRow,
+        ttl_ms: i64,
+        clock: Arc<dyn Clock>,
+    ) -> Result<LeaseRenewal, AppError> {
+        self.run(move |store| {
+            store.write_tx(|tx| {
+                match read_lease(tx)? {
+                    Some(row)
+                        if row.counter == held.counter
+                            && row.hub_instance_id == held.hub_instance_id => {}
+                    other => return Ok(LeaseRenewal::Superseded(other)),
+                }
+                let now = clock.now_ms();
+                let renewed = LeaseRow {
+                    renewed_at: now,
+                    expires_at: now + ttl_ms,
+                    ..held
+                };
+                write_lease(tx, &renewed)?;
+                Ok(LeaseRenewal::Renewed(renewed))
+            })
+        })
+        .await
+    }
+
     /// Runs `job` in one `BEGIN IMMEDIATE` transaction (committed on `Ok`, rolled back on
-    /// `Err` or panic). Fails `NOT_PRIMARY` once the writer is closed, `INTERNAL` if the job
-    /// panicked or the writer thread is gone.
+    /// `Err` or panic). Test-only: production writes go through `submit_intent`.
+    #[cfg(any(test, feature = "test-jobs"))]
     pub async fn submit<R, F>(&self, job: F) -> Result<R, AppError>
     where
-        F: FnOnce(&Transaction<'_>) -> Result<R, AppError> + Send + 'static,
+        F: FnOnce(&arena_store::Transaction<'_>) -> Result<R, AppError> + Send + 'static,
+        R: Send + 'static,
+    {
+        self.run(move |store| store.write_tx(job)).await
+    }
+
+    /// Runs `job` on the writer thread. Fails `NOT_PRIMARY` once the writer is closed,
+    /// `INTERNAL` if the job panicked or the writer thread is gone.
+    async fn run<R, F>(&self, job: F) -> Result<R, AppError>
+    where
+        F: FnOnce(&mut Store) -> Result<R, AppError> + Send + 'static,
+        R: Send + 'static,
+    {
+        self.run_then(job, |_| {}).await
+    }
+
+    /// Like [`run`](Self::run), then calls `after` on the writer thread with a successful
+    /// result, outside the panic guard and before replying.
+    async fn run_then<R, F, A>(&self, job: F, after: A) -> Result<R, AppError>
+    where
+        F: FnOnce(&mut Store) -> Result<R, AppError> + Send + 'static,
+        A: FnOnce(&R) + Send + 'static,
         R: Send + 'static,
     {
         if self.closed_by_close() {
@@ -122,8 +239,11 @@ impl WriterHandle {
         let (reply, result) = oneshot::channel();
         let job: Job = Box::new(move |store: &mut Store| {
             // Unwinding drops the transaction, which rolls it back.
-            let out = catch_unwind(AssertUnwindSafe(|| store.write_tx(job)))
+            let out = catch_unwind(AssertUnwindSafe(|| job(store)))
                 .unwrap_or_else(|_| Err(AppError::new(ErrorCode::Internal, "write job panicked")));
+            if let Ok(r) = &out {
+                after(r);
+            }
             let _ = reply.send(out);
         });
         if self.tx.send(Msg::Job(job)).await.is_err() {
@@ -182,10 +302,15 @@ mod tests {
         (dir, path, store)
     }
 
+    fn spawn(store: Store) -> WriterHandle {
+        let (_tx, rx) = crate::status_channel(HubStatus::opened(1, "H"));
+        Writer::spawn(store, Arc::new(crate::ManualClock::new(0)), rx).unwrap()
+    }
+
     #[tokio::test]
     async fn runs_jobs_and_commits() {
         let (_dir, _path, store) = open();
-        let w = Writer::spawn(store).unwrap();
+        let w = spawn(store);
         w.submit(|tx| set_meta(tx, "k", "v")).await.unwrap();
         let v = w.submit(|tx| get_meta(tx, "k")).await.unwrap();
         assert_eq!(v.as_deref(), Some("v"));
@@ -194,7 +319,7 @@ mod tests {
     #[tokio::test]
     async fn failed_job_rolls_back() {
         let (_dir, _path, store) = open();
-        let w = Writer::spawn(store).unwrap();
+        let w = spawn(store);
         let err = w
             .submit(|tx| {
                 set_meta(tx, "k", "v")?;
@@ -209,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn panicking_job_rolls_back_and_writer_survives() {
         let (_dir, _path, store) = open();
-        let w = Writer::spawn(store).unwrap();
+        let w = spawn(store);
         let err = w
             .submit(|tx| -> Result<(), AppError> {
                 set_meta(tx, "k", "v")?;
@@ -225,7 +350,7 @@ mod tests {
     #[tokio::test]
     async fn submit_after_close_is_not_primary() {
         let (_dir, _path, store) = open();
-        let w = Writer::spawn(store).unwrap();
+        let w = spawn(store);
         let other = w.clone();
         w.close().await;
         assert!(other.is_closed());
@@ -238,7 +363,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn job_queued_before_close_is_not_run() {
         let (_dir, path, store) = open();
-        let w = Writer::spawn(store).unwrap();
+        let w = spawn(store);
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let (started_tx, started_rx) = oneshot::channel::<()>();
 

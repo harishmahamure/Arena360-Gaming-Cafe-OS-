@@ -3,10 +3,14 @@
 //! TypeScript bindings are generated from these types with ts-rs (`pnpm gen:types`) into
 //! `packages/ui/src/generated`.
 
+mod actor;
 mod error;
+mod intent;
 mod permission;
 
+pub use actor::{Actor, ActorKind, ElevatedBy, ElevationMode};
 pub use error::{AppError, ErrorCode};
+pub use intent::{BranchBootstrap, Intent, IntentKind, IntentPayload};
 pub use permission::Permission;
 
 /// Returns this crate's name.

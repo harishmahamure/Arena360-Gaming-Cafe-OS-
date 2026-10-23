@@ -91,6 +91,28 @@ curl 127.0.0.1:7409/healthz
   `info`, e.g. `RUST_LOG=arena_tasks=debug`).
 - **Stopping:** Ctrl+C, or SIGTERM on Unix.
 
+### Seeding a dev branch
+
+Every branch write goes through `apply()` and lands in the append-only `changes` log. To get a
+branch to work on locally, build with the dev-only `dev-fixtures` feature (never enabled in
+default or release builds, where `dev` is an unknown command) and run:
+
+```sh
+cargo run -p arena-hub --features dev-fixtures -- dev seed --data-dir /tmp/hub
+```
+
+`dev` must be the first argument (`arena-hub --data-dir /tmp/hub dev seed` is rejected). It
+takes the lease once and submits `branch.bootstrap` as `actor{system, "dev-seed"}`: branch
+"Dev Branch", code `DEV01`, INR, `Asia/Kolkata`, business day from 06:00, financial year from
+April, plus the default settings. On exit it releases the lease (it expires immediately), so a
+real Hub can start on the same data dir straight away.
+
+| Exit code | Meaning                                                                        |
+| --------- | ------------------------------------------------------------------------------ |
+| 0         | The branch was bootstrapped                                                    |
+| 1         | `ALREADY_BOOTSTRAPPED`, `NOT_PRIMARY` (another process holds the db), or other |
+| 2         | `SCHEMA_TOO_NEW`: the database is newer than this binary                       |
+
 | Exit code | Meaning                                                              |
 | --------- | -------------------------------------------------------------------- |
 | 0         | Clean shutdown, `--help` or `--version`                              |
@@ -140,6 +162,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | tracing                      | =0.1.44       | `Cargo.toml`          |
 | tracing-subscriber           | =0.3.23       | `Cargo.toml`          |
 | ulid                         | =3.0.0        | `Cargo.toml`          |
+| rmp-serde                    | =1.3.1        | `Cargo.toml`          |
+| chrono-tz                    | =0.10.4       | `Cargo.toml`          |
 | tempfile                     | =3.27.0       | `Cargo.toml`          |
 | tower                        | =0.5.3        | `Cargo.toml`          |
 

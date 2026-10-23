@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 arena-proto.workspace = true
 rusqlite.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

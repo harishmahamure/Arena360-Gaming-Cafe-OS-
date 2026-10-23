@@ -7,10 +7,16 @@ pub(crate) struct Migration {
 }
 
 /// Every migration, in order. Append new files here; never edit or reorder applied ones.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: include_str!("../migrations/0001_init.sql"),
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: include_str!("../migrations/0001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("../migrations/0002_branch_settings_changes.sql"),
+    },
+];
 
 /// The schema version this binary writes.
 pub const LATEST_SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

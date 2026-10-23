@@ -31,6 +31,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - run: cargo clippy --locked -p arena-hub --features dev-fixtures --all-targets -- -D warnings
+      - run: cargo test --locked -p arena-hub --features dev-fixtures
 
   checks:
     name: checks (${{ matrix.os }})

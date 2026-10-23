@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arena_core::{Clock, Epoch, HubStatus, LeaseInfo, Role, Writer, WriterHandle};
+use arena_core::{Clock, HubStatus, LeaseInfo, LeaseRenewal, Role, Writer, WriterHandle};
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LeaseRow, Store, read_lease, write_lease};
 use tokio::sync::watch;
@@ -72,19 +72,6 @@ fn decide(existing: Option<LeaseRow>, own_id: &str, now: i64) -> Decision {
     }
 }
 
-enum Renewal {
-    Renewed(LeaseRow),
-    /// The row is missing or no longer ours (any other epoch, higher or not).
-    Superseded(Option<LeaseRow>),
-}
-
-fn epoch_of(row: &LeaseRow) -> Epoch {
-    Epoch {
-        counter: row.counter,
-        hub_instance_id: row.hub_instance_id.clone(),
-    }
-}
-
 /// The lease task for one Hub process.
 pub struct LeaseTask {
     clock: Arc<dyn Clock>,
@@ -136,7 +123,11 @@ impl LeaseTask {
         };
         match decision {
             Decision::Take(row) => {
-                task.writer = Some(Writer::spawn(store)?);
+                task.writer = Some(Writer::spawn(
+                    store,
+                    Arc::clone(&task.clock),
+                    task.status.subscribe(),
+                )?);
                 tracing::info!(
                     counter = row.counter,
                     hub_instance_id = %row.hub_instance_id,
@@ -188,42 +179,28 @@ impl LeaseTask {
         let (Some(writer), Some(held)) = (self.writer.clone(), self.held.clone()) else {
             return Ok(Tick::Idle);
         };
-        let own = epoch_of(&held);
         let held_expires_at = held.expires_at;
-        let clock = Arc::clone(&self.clock);
         #[cfg(test)]
         let fail = self.fail_renewals;
         #[cfg(not(test))]
         let fail = false;
-        let result = writer
-            .submit(move |tx| {
-                if fail {
-                    return Err(AppError::new(
-                        ErrorCode::Internal,
-                        "injected renewal failure",
-                    ));
-                }
-                match read_lease(tx)? {
-                    Some(row) if epoch_of(&row) == own => {}
-                    other => return Ok(Renewal::Superseded(other)),
-                }
-                let now = clock.now_ms();
-                let renewed = LeaseRow {
-                    renewed_at: now,
-                    expires_at: now + LEASE_TTL_MS,
-                    ..held
-                };
-                write_lease(tx, &renewed)?;
-                Ok(Renewal::Renewed(renewed))
-            })
-            .await;
+        let result = if fail {
+            Err(AppError::new(
+                ErrorCode::Internal,
+                "injected renewal failure",
+            ))
+        } else {
+            writer
+                .renew_lease(held, LEASE_TTL_MS, Arc::clone(&self.clock))
+                .await
+        };
         match result {
-            Ok(Renewal::Renewed(row)) => {
+            Ok(LeaseRenewal::Renewed(row)) => {
                 self.publish(Role::Primary, Some(&row));
                 self.held = Some(row);
                 Ok(Tick::Renewed)
             }
-            Ok(Renewal::Superseded(row)) => {
+            Ok(LeaseRenewal::Superseded(row)) => {
                 self.demote(row, "lease superseded").await;
                 Ok(Tick::Demoted)
             }
@@ -261,6 +238,19 @@ impl LeaseTask {
             "demoted; writer closed; follower"
         );
         self.publish(Role::Follower, seen.as_ref());
+    }
+
+    /// Shuts the task down for a one-shot run (`dev seed`): while primary, expires the lease
+    /// now through the writer (only if the row is still ours) so another Hub can start at once,
+    /// then closes the writer. A follower has nothing to release.
+    pub async fn release(mut self) -> Result<(), AppError> {
+        let (Some(writer), Some(held)) = (self.writer.take(), self.held.take()) else {
+            return Ok(());
+        };
+        let result = writer.renew_lease(held, 0, Arc::clone(&self.clock)).await;
+        writer.close().await;
+        self.publish(Role::Follower, None);
+        result.map(|_| ())
     }
 
     /// Renews every [`RENEW_INTERVAL`] until demoted. Returns at once for a follower.
@@ -583,6 +573,24 @@ mod tests {
         );
         assert_eq!(row_in(&f.path).unwrap().renewed_at, T0 + 3_000);
         runner.abort();
+    }
+
+    #[tokio::test]
+    async fn release_expires_the_lease_now_and_closes_the_writer() {
+        let f = fixture();
+        let task = start(&f).await;
+        let writer = task.writer().unwrap();
+        f.clock.set(T0 + 1_000);
+        task.release().await.unwrap();
+        assert!(writer.is_closed());
+        let row = row_in(&f.path).unwrap();
+        assert_eq!((row.renewed_at, row.expires_at), (T0 + 1_000, T0 + 1_000));
+        assert_eq!(f.rx.borrow().role, Role::Follower);
+        // Another instance may take the released lease immediately.
+        assert!(matches!(
+            decide(Some(row), OTHER, T0 + 1_000),
+            Decision::Take(_)
+        ));
     }
 
     #[test]

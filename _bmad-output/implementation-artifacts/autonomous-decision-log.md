@@ -43,3 +43,23 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - A fresh lease held by another instance means follower, even if its epoch is lower.
   - New error code `INTERNAL` for storage and I/O failures.
 - **1.6 review outcome:** 21 fixes and 6 rejections. Key fixes: a primary now demotes when its own lease expires; the writer lock is taken before any migration or write; a job panic is reported as INTERNAL instead of NOT_PRIMARY; SIGTERM is handled; a single day's log now counts toward the 50 MB cap.
+
+## Story 1.8: idempotent intents, row versions and property tests
+
+- **Spec approval:** self-approved. Spec: `spec-1-8-idempotent-intents-optimistic-row-versions-and-property-test.md`.
+- **First edit intent:** `settings.set` (key/value with `base_rev`), so the `STALE`/`rev` rules have a real edit to act on. Permission stub until 1.11: the system, owner and staff actors are allowed.
+- **Which outcomes are recorded for dedupe:** successes, plus deterministic rejections (VALIDATION_FAILED, STALE, ALREADY_BOOTSTRAPPED, FORBIDDEN), so a retry returns the same answer. Transient errors (NOT_PRIMARY, EXPIRED, INTERNAL) are never recorded.
+- **Idempotency key format:** must be a valid ULID; anything else is `BAD_FRAME`, before any transaction.
+- **Future-skew guard:** an `issued_at` more than 5 minutes in the future is rejected with `VALIDATION_FAILED`.
+- **Dedupe pruning:** a maintenance write outside `apply()`, producing no change rows. It runs at start and then every 24 h, only while primary.
+
+## Story 1.9: LAN protocol envelope, hello handshake and client classes
+
+- **Spec approval:** self-approved. Spec: `spec-1-9-lan-protocol-envelope-hello-handshake-and-client-classes.md`.
+- **Frame encoding:** JSON text frames for every class. Browser classes (kitchen, phone) can read them directly, and the TS types come from `arena-proto`. MessagePack stays inside the change log only.
+- **Release window:** a release is `major.minor`. The Hub accepts the same major with `client.minor >= hub.minor - 2`.
+- **Revoking while the Hub runs:** `dev revoke-device` calls a dev-only loopback endpoint (`POST /dev/revoke-device`, feature-gated), because the running Hub holds the writer lock.
+- **Class credentials in Epic 1:** `paired` and `kds` use device tokens from the `devices` table; `phone` is anonymous for now (its per-console token comes in a later epic). `paired` is TLS-only; `kds` and `phone` use plain `:7401/ws`.
+- **Firewall:** `scripts/windows/firewall.ps1` (Private profile only, ports 7400 and 7401) for a future installer story to call. There is no installer yet.
+- **Permission catalogue:** it starts with `device.remote` and `device.pair`. Story 1.11 adds the rest.
+- **1.7 review outcome:** 18 fixes, 3 rejections and 1 item deferred to 1.8 (the multi-epoch replay test). Key fixes: unverified `elevated_by` is rejected until 1.13; the epoch guard also checks lease expiry; time zones are validated with chrono-tz (=0.10.4); foreign keys are enforced; `dev seed` releases the lease when it exits.

@@ -15,6 +15,11 @@ arena-proto.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+ulid = { workspace = true, optional = true }
+
+[features]
+# Dev-only fixtures (`arena-hub dev seed`). Never enabled in release builds.
+dev-fixtures = ["dep:ulid"]
 
 [dev-dependencies]
 tempfile.workspace = true

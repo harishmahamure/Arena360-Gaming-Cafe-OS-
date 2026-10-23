@@ -1,0 +1,747 @@
+//! Branch rows, settings and the append-only `changes` log, plus the generic row access the
+//! change log and the replayer need. Only `apply()` (in `arena-core`) and the replayer write
+//! these tables.
+
+use std::collections::BTreeMap;
+
+use arena_proto::{AppError, ErrorCode};
+use rusqlite::types::{Value, ValueRef};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use serde::{Deserialize, Serialize};
+
+use crate::db_error;
+
+/// One column value of a row, as carried in a change's MessagePack map.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RowValue {
+    Null,
+    Integer(i64),
+    Real(f64),
+    Text(String),
+}
+
+/// A full row: column name to value.
+pub type Row = BTreeMap<String, RowValue>;
+
+/// A table the change log may carry (and the replayer may write).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Table {
+    Branch,
+    Settings,
+}
+
+impl Table {
+    /// Every change-log table.
+    pub const ALL: [Table; 2] = [Table::Branch, Table::Settings];
+
+    /// The SQL table name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Branch => "branch",
+            Self::Settings => "settings",
+        }
+    }
+
+    /// The primary-key columns, in order.
+    pub fn primary_key(self) -> &'static [&'static str] {
+        match self {
+            Self::Branch => &["branch_id"],
+            Self::Settings => &["branch_id", "key"],
+        }
+    }
+
+    /// Whether the table has a `created_at` column (stamped on insert).
+    pub fn has_created_at(self) -> bool {
+        match self {
+            Self::Branch => true,
+            Self::Settings => false,
+        }
+    }
+
+    /// The table with this SQL name, if it is a change-log table.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.name() == name)
+    }
+}
+
+/// The primary key of one written row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowKey {
+    Branch { branch_id: String },
+    Settings { branch_id: String, key: String },
+}
+
+impl RowKey {
+    pub fn table(&self) -> Table {
+        match self {
+            Self::Branch { .. } => Table::Branch,
+            Self::Settings { .. } => Table::Settings,
+        }
+    }
+
+    /// The `changes.row_id` form: the key columns joined by `/`.
+    pub fn row_id(&self) -> String {
+        match self {
+            Self::Branch { branch_id } => branch_id.clone(),
+            Self::Settings { branch_id, key } => format!("{branch_id}/{key}"),
+        }
+    }
+
+    /// Rebuilds the key of a `table` row from its key columns (`None` if one is missing or
+    /// not text).
+    pub fn from_row(table: Table, row: &Row) -> Option<Self> {
+        let text = |c: &str| match row.get(c) {
+            Some(RowValue::Text(t)) => Some(t.clone()),
+            _ => None,
+        };
+        Some(match table {
+            Table::Branch => Self::Branch {
+                branch_id: text("branch_id")?,
+            },
+            Table::Settings => Self::Settings {
+                branch_id: text("branch_id")?,
+                key: text("key")?,
+            },
+        })
+    }
+
+    fn values(&self) -> Vec<&str> {
+        match self {
+            Self::Branch { branch_id } => vec![branch_id],
+            Self::Settings { branch_id, key } => vec![branch_id, key],
+        }
+    }
+}
+
+/// The kind of write a change records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeOp {
+    Insert,
+    Update,
+    Delete,
+}
+
+impl ChangeOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Insert => "insert",
+            Self::Update => "update",
+            Self::Delete => "delete",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "insert" => Some(Self::Insert),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+}
+
+/// One row of the `changes` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeRecord {
+    pub epoch: String,
+    pub seq: i64,
+    pub tbl: String,
+    pub row_id: String,
+    pub op: ChangeOp,
+    /// The full row after the write, as a MessagePack map.
+    pub row: Vec<u8>,
+    pub intent_id: String,
+    pub intent_kind: String,
+    pub actor_kind: String,
+    pub actor_id: String,
+    pub elevated_by_kind: Option<String>,
+    pub elevated_by_id: Option<String>,
+    pub elevated_by_mode: Option<String>,
+    pub elevated_by_verifier_version: Option<i64>,
+    pub at: i64,
+}
+
+/// A new branch row (`rev` and timestamps are set by the stamp step).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewBranch<'a> {
+    pub branch_id: &'a str,
+    pub name: &'a str,
+    pub branch_code: &'a str,
+    pub currency: &'a str,
+    pub tz: &'a str,
+    pub day_start_min: u16,
+    pub fy_start_month: u8,
+}
+
+/// Whether a branch row exists.
+pub fn branch_exists(conn: &Connection) -> Result<bool, AppError> {
+    conn.query_row("SELECT EXISTS (SELECT 1 FROM branch)", [], |r| r.get(0))
+        .map_err(db_error)
+}
+
+/// Whether any change-log table or `changes` itself has a row.
+pub fn has_branch_data(conn: &Connection) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM branch) OR EXISTS (SELECT 1 FROM settings)
+             OR EXISTS (SELECT 1 FROM changes)",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// Inserts the branch row with `rev = 0` and zero timestamps, for the stamp step to set.
+pub fn insert_branch(conn: &Connection, b: &NewBranch<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO branch (branch_id, name, branch_code, currency, tz, day_start_min,
+                             fy_start_month, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, 0)",
+        params![
+            b.branch_id,
+            b.name,
+            b.branch_code,
+            b.currency,
+            b.tz,
+            b.day_start_min,
+            b.fy_start_month
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Inserts one setting with `rev = 0` and a zero timestamp, for the stamp step to set.
+pub fn insert_setting(
+    conn: &Connection,
+    branch_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO settings (branch_id, key, value, rev, updated_at) VALUES (?1, ?2, ?3, 0, 0)",
+        params![branch_id, key, value],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+fn key_where(table: Table) -> String {
+    table
+        .primary_key()
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("\"{c}\" = ?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+/// Stamps a written row: `rev + 1` and `updated_at = now`, plus `created_at = now` on an insert
+/// into a table that has it. Fails `INTERNAL` if the row does not exist.
+pub fn stamp_row(
+    conn: &Connection,
+    key: &RowKey,
+    now_ms: i64,
+    inserted: bool,
+) -> Result<(), AppError> {
+    let table = key.table();
+    let now_param = table.primary_key().len() + 1;
+    let created = if inserted && table.has_created_at() {
+        format!(", created_at = ?{now_param}")
+    } else {
+        String::new()
+    };
+    let sql = format!(
+        "UPDATE \"{}\" SET rev = rev + 1, updated_at = ?{now_param}{created} WHERE {}",
+        table.name(),
+        key_where(table)
+    );
+    let mut values: Vec<Value> = key
+        .values()
+        .into_iter()
+        .map(|v| Value::Text(v.to_owned()))
+        .collect();
+    values.push(Value::Integer(now_ms));
+    let changed = conn
+        .execute(&sql, params_from_iter(values))
+        .map_err(db_error)?;
+    if changed != 1 {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            format!("stamp: no {} row {}", table.name(), key.row_id()),
+        ));
+    }
+    Ok(())
+}
+
+fn row_from(r: &rusqlite::Row<'_>, names: &[String]) -> rusqlite::Result<Row> {
+    let mut row = Row::new();
+    for (i, name) in names.iter().enumerate() {
+        let v = match r.get_ref(i)? {
+            ValueRef::Null => RowValue::Null,
+            ValueRef::Integer(n) => RowValue::Integer(n),
+            ValueRef::Real(f) => RowValue::Real(f),
+            ValueRef::Text(t) => RowValue::Text(String::from_utf8_lossy(t).into_owned()),
+            ValueRef::Blob(_) => {
+                return Err(rusqlite::Error::InvalidColumnType(
+                    i,
+                    name.clone(),
+                    rusqlite::types::Type::Blob,
+                ));
+            }
+        };
+        row.insert(name.clone(), v);
+    }
+    Ok(row)
+}
+
+/// Reads the full row at `key`.
+pub fn read_row(conn: &Connection, key: &RowKey) -> Result<Row, AppError> {
+    let table = key.table();
+    let sql = format!(
+        "SELECT * FROM \"{}\" WHERE {}",
+        table.name(),
+        key_where(table)
+    );
+    let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+    let names: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    stmt.query_row(params_from_iter(key.values()), |r| row_from(r, &names))
+        .optional()
+        .map_err(db_error)?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::Internal,
+                format!("no {} row {}", table.name(), key.row_id()),
+            )
+        })
+}
+
+/// Every row of `table`, ordered by its primary key.
+pub fn dump_table(conn: &Connection, table: Table) -> Result<Vec<Row>, AppError> {
+    let sql = format!(
+        "SELECT * FROM \"{}\" ORDER BY {}",
+        table.name(),
+        table
+            .primary_key()
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+    let names: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let rows = stmt
+        .query_map([], |r| row_from(r, &names))
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// The next `seq` for `epoch`: one more than the highest so far (1 for a new epoch).
+pub fn next_change_seq(conn: &Connection, epoch: &str) -> Result<i64, AppError> {
+    let max: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM changes WHERE epoch = ?1",
+            [epoch],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    Ok(max + 1)
+}
+
+/// Appends one change row.
+pub fn insert_change(conn: &Connection, c: &ChangeRecord) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO changes (epoch, seq, tbl, row_id, op, row, intent_id, intent_kind,
+                              actor_kind, actor_id, elevated_by_kind, elevated_by_id,
+                              elevated_by_mode, elevated_by_verifier_version, at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![
+            c.epoch,
+            c.seq,
+            c.tbl,
+            c.row_id,
+            c.op.as_str(),
+            c.row,
+            c.intent_id,
+            c.intent_kind,
+            c.actor_kind,
+            c.actor_id,
+            c.elevated_by_kind,
+            c.elevated_by_id,
+            c.elevated_by_mode,
+            c.elevated_by_verifier_version,
+            c.at
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Every change row, ordered by epoch (numeric counter, then the epoch text) and `seq`.
+pub fn read_changes(conn: &Connection) -> Result<Vec<ChangeRecord>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT epoch, seq, tbl, row_id, op, row, intent_id, intent_kind, actor_kind,
+                    actor_id, elevated_by_kind, elevated_by_id, elevated_by_mode,
+                    elevated_by_verifier_version, at
+             FROM changes
+             ORDER BY CAST(substr(epoch, 1, instr(epoch, ':') - 1) AS INTEGER), epoch, seq",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| {
+            let op: String = r.get(4)?;
+            Ok(ChangeRecord {
+                epoch: r.get(0)?,
+                seq: r.get(1)?,
+                tbl: r.get(2)?,
+                row_id: r.get(3)?,
+                op: ChangeOp::parse(&op).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        format!("unknown op {op}").into(),
+                    )
+                })?,
+                row: r.get(5)?,
+                intent_id: r.get(6)?,
+                intent_kind: r.get(7)?,
+                actor_kind: r.get(8)?,
+                actor_id: r.get(9)?,
+                elevated_by_kind: r.get(10)?,
+                elevated_by_id: r.get(11)?,
+                elevated_by_mode: r.get(12)?,
+                elevated_by_verifier_version: r.get(13)?,
+                at: r.get(14)?,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+fn table_columns(conn: &Connection, table: Table) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM pragma_table_info(?1)")
+        .map_err(db_error)?;
+    let cols = stmt
+        .query_map([table.name()], |r| r.get::<_, String>(0))
+        .map_err(db_error)?;
+    cols.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+fn to_sql(v: &RowValue) -> Value {
+    match v {
+        RowValue::Null => Value::Null,
+        RowValue::Integer(n) => Value::Integer(*n),
+        RowValue::Real(f) => Value::Real(*f),
+        RowValue::Text(t) => Value::Text(t.clone()),
+    }
+}
+
+fn checked_columns(conn: &Connection, table: Table, row: &Row) -> Result<(), AppError> {
+    let known = table_columns(conn, table)?;
+    if let Some(bad) = row.keys().find(|c| !known.contains(c)) {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            format!("{} has no column {bad:?}", table.name()),
+        ));
+    }
+    if let Some(missing) = table.primary_key().iter().find(|c| !row.contains_key(**c)) {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            format!("{} row lacks key column {missing}", table.name()),
+        ));
+    }
+    Ok(())
+}
+
+/// Inserts `row` into `table`, or updates the existing row with the same primary key. Every
+/// column name is checked against the table's schema.
+pub fn upsert_row(conn: &Connection, table: Table, row: &Row) -> Result<(), AppError> {
+    checked_columns(conn, table, row)?;
+    let cols: Vec<&String> = row.keys().collect();
+    let quoted = |c: &str| format!("\"{c}\"");
+    let pk = table.primary_key();
+    let updates: Vec<String> = cols
+        .iter()
+        .filter(|c| !pk.contains(&c.as_str()))
+        .map(|c| format!("{0} = excluded.{0}", quoted(c)))
+        .collect();
+    let conflict = if updates.is_empty() {
+        "DO NOTHING".to_owned()
+    } else {
+        format!("DO UPDATE SET {}", updates.join(", "))
+    };
+    let sql = format!(
+        "INSERT INTO \"{}\" ({}) VALUES ({}) ON CONFLICT ({}) {}",
+        table.name(),
+        cols.iter()
+            .map(|c| quoted(c))
+            .collect::<Vec<_>>()
+            .join(", "),
+        (1..=cols.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        pk.iter().map(|c| quoted(c)).collect::<Vec<_>>().join(", "),
+        conflict
+    );
+    conn.execute(&sql, params_from_iter(row.values().map(to_sql)))
+        .map_err(db_error)?;
+    Ok(())
+}
+
+/// Deletes the row of `table` whose primary key matches `row`'s key columns. Returns the
+/// number of rows deleted (0 or 1).
+pub fn delete_row(conn: &Connection, table: Table, row: &Row) -> Result<usize, AppError> {
+    checked_columns(conn, table, row)?;
+    let sql = format!(
+        "DELETE FROM \"{}\" WHERE {}",
+        table.name(),
+        key_where(table)
+    );
+    let values: Vec<Value> = table
+        .primary_key()
+        .iter()
+        .map(|c| to_sql(&row[*c]))
+        .collect();
+    conn.execute(&sql, params_from_iter(values))
+        .map_err(db_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Store;
+
+    fn store() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("branch.db"), 0).unwrap();
+        (dir, store)
+    }
+
+    fn change(epoch: &str, seq: i64) -> ChangeRecord {
+        ChangeRecord {
+            epoch: epoch.into(),
+            seq,
+            tbl: "branch".into(),
+            row_id: "B".into(),
+            op: ChangeOp::Insert,
+            row: vec![0x80],
+            intent_id: "I".into(),
+            intent_kind: "branch.bootstrap".into(),
+            actor_kind: "system".into(),
+            actor_id: "test".into(),
+            elevated_by_kind: None,
+            elevated_by_id: None,
+            elevated_by_mode: None,
+            elevated_by_verifier_version: None,
+            at: 5,
+        }
+    }
+
+    #[test]
+    fn changes_is_append_only() {
+        let (_dir, mut store) = store();
+        store
+            .write_tx(|tx| insert_change(tx, &change("1:A", 1)))
+            .unwrap();
+        for sql in [
+            "UPDATE changes SET at = 6",
+            "DELETE FROM changes",
+            "DELETE FROM changes WHERE seq = 1",
+        ] {
+            let err = store
+                .write_tx(|tx| tx.execute(sql, []).map_err(db_error))
+                .unwrap_err();
+            assert!(
+                err.message.contains("changes is append-only"),
+                "{sql}: {err}"
+            );
+        }
+        assert_eq!(store.changes().unwrap(), vec![change("1:A", 1)]);
+    }
+
+    #[test]
+    fn change_checks_reject_unknown_enums() {
+        let (_dir, mut store) = store();
+        let bad_actor = ChangeRecord {
+            actor_kind: "robot".into(),
+            ..change("1:A", 1)
+        };
+        assert!(store.write_tx(|tx| insert_change(tx, &bad_actor)).is_err());
+        let bad_mode = ChangeRecord {
+            elevated_by_mode: Some("phone".into()),
+            ..change("1:A", 1)
+        };
+        assert!(store.write_tx(|tx| insert_change(tx, &bad_mode)).is_err());
+    }
+
+    #[test]
+    fn elevated_by_columns_round_trip_and_are_all_or_nothing() {
+        let (_dir, mut store) = store();
+        let elevated = ChangeRecord {
+            elevated_by_kind: Some("staff".into()),
+            elevated_by_id: Some("mgr".into()),
+            elevated_by_mode: Some("cached_verifier".into()),
+            elevated_by_verifier_version: Some(3),
+            ..change("1:A", 1)
+        };
+        store.write_tx(|tx| insert_change(tx, &elevated)).unwrap();
+        assert_eq!(store.changes().unwrap(), vec![elevated.clone()]);
+        let partial = ChangeRecord {
+            seq: 2,
+            elevated_by_verifier_version: None,
+            ..elevated
+        };
+        assert!(store.write_tx(|tx| insert_change(tx, &partial)).is_err());
+    }
+
+    #[test]
+    fn changes_order_by_numeric_epoch_counter() {
+        let (_dir, mut store) = store();
+        store
+            .write_tx(|tx| {
+                insert_change(tx, &change("10:A", 1))?;
+                insert_change(tx, &change("9:Z", 2))?;
+                insert_change(tx, &change("9:Z", 1))?;
+                insert_change(tx, &change("10:A", 2))
+            })
+            .unwrap();
+        let order: Vec<(String, i64)> = store
+            .changes()
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.epoch, c.seq))
+            .collect();
+        assert_eq!(
+            order,
+            [("9:Z", 1), ("9:Z", 2), ("10:A", 1), ("10:A", 2)]
+                .map(|(e, s)| (e.to_owned(), s))
+                .to_vec()
+        );
+    }
+
+    #[test]
+    fn next_seq_is_per_epoch() {
+        let (_dir, mut store) = store();
+        store
+            .write_tx(|tx| {
+                assert_eq!(next_change_seq(tx, "1:A")?, 1);
+                insert_change(tx, &change("1:A", 1))?;
+                insert_change(tx, &change("1:A", 2))?;
+                assert_eq!(next_change_seq(tx, "1:A")?, 3);
+                assert_eq!(next_change_seq(tx, "2:B")?, 1);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn insert_stamp_read_upsert_and_delete() {
+        let (_dir, mut store) = store();
+        let key = RowKey::Settings {
+            branch_id: "B".into(),
+            key: "k".into(),
+        };
+        let row = store
+            .write_tx(|tx| {
+                insert_branch(
+                    tx,
+                    &NewBranch {
+                        branch_id: "B",
+                        name: "N",
+                        branch_code: "C",
+                        currency: "INR",
+                        tz: "Asia/Kolkata",
+                        day_start_min: 0,
+                        fy_start_month: 1,
+                    },
+                )?;
+                let bkey = RowKey::Branch {
+                    branch_id: "B".into(),
+                };
+                stamp_row(tx, &bkey, 42, true)?;
+                let b = read_row(tx, &bkey)?;
+                assert_eq!(b["rev"], RowValue::Integer(1));
+                assert_eq!(b["created_at"], RowValue::Integer(42));
+                insert_setting(tx, "B", "k", "v")?;
+                stamp_row(tx, &key, 43, true)?;
+                stamp_row(tx, &key, 44, false)?;
+                read_row(tx, &key)
+            })
+            .unwrap();
+        assert_eq!(row["rev"], RowValue::Integer(2));
+        assert_eq!(row["updated_at"], RowValue::Integer(44));
+        assert_eq!(key.row_id(), "B/k");
+
+        let mut edited = row.clone();
+        edited.insert("value".into(), RowValue::Text("w".into()));
+        store
+            .write_tx(|tx| upsert_row(tx, Table::Settings, &edited))
+            .unwrap();
+        assert_eq!(store.rows(Table::Settings).unwrap(), vec![edited.clone()]);
+
+        let mut evil = edited.clone();
+        evil.insert("x\"; DROP TABLE branch; --".into(), RowValue::Null);
+        assert!(
+            store
+                .write_tx(|tx| upsert_row(tx, Table::Settings, &evil))
+                .is_err()
+        );
+
+        assert_eq!(
+            store
+                .write_tx(|tx| delete_row(tx, Table::Settings, &edited))
+                .unwrap(),
+            1
+        );
+        assert!(store.rows(Table::Settings).unwrap().is_empty());
+        assert_eq!(
+            store
+                .write_tx(|tx| delete_row(tx, Table::Settings, &edited))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            RowKey::from_row(Table::Settings, &edited),
+            Some(key.clone())
+        );
+        assert!(store.write_tx(|tx| has_branch_data(tx)).unwrap());
+        assert_eq!(store.rows(Table::Branch).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stamping_a_missing_row_fails() {
+        let (_dir, mut store) = store();
+        let err = store
+            .write_tx(|tx| {
+                stamp_row(
+                    tx,
+                    &RowKey::Branch {
+                        branch_id: "nope".into(),
+                    },
+                    1,
+                    true,
+                )
+            })
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Internal);
+    }
+
+    #[test]
+    fn table_allow_list() {
+        assert_eq!(Table::from_name("branch"), Some(Table::Branch));
+        assert_eq!(Table::from_name("settings"), Some(Table::Settings));
+        assert_eq!(Table::from_name("lease"), None);
+        assert_eq!(Table::from_name("changes"), None);
+    }
+}

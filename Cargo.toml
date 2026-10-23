@@ -33,6 +33,8 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["json", "env-filter"] }
 ulid = "=3.0.0"
+rmp-serde = "=1.3.1"
+chrono-tz = "=0.10.4"
 
 # Dev-only
 tempfile = "=3.27.0"

@@ -5,8 +5,13 @@ use std::path::PathBuf;
 
 use arena_api::DEFAULT_HEALTH_PORT;
 
+#[cfg(not(feature = "dev-fixtures"))]
 pub const USAGE: &str =
     "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--help] [--version]";
+#[cfg(feature = "dev-fixtures")]
+pub const USAGE: &str =
+    "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--help] [--version]
+       arena-hub dev seed [--data-dir <path>]";
 pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
 
 /// Resolved start-up configuration.
@@ -30,6 +35,9 @@ impl Config {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Run(Config),
+    /// `dev seed`: bootstrap a fixture branch (feature `dev-fixtures` only).
+    #[cfg(feature = "dev-fixtures")]
+    DevSeed(Config),
     Help,
     Version,
 }
@@ -40,9 +48,33 @@ pub fn parse(
     env: impl Fn(&str) -> Option<OsString>,
     windows: bool,
 ) -> Result<Command, String> {
+    #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
+    let mut args = args.into_iter().peekable();
+    #[cfg(feature = "dev-fixtures")]
+    if args.peek().is_some_and(|a| a == "dev") {
+        args.next();
+        return match args.next() {
+            Some(sub) if sub == "seed" => match parse_flags(args, &env, windows, false)? {
+                Command::Run(cfg) => Ok(Command::DevSeed(cfg)),
+                other => Ok(other),
+            },
+            Some(sub) => Err(format!("unknown dev command {}", sub.to_string_lossy())),
+            None => Err("dev needs a command (seed)".to_owned()),
+        };
+    }
+    parse_flags(args, &env, windows, true)
+}
+
+/// Parses the flags; `--health-port` is accepted only when `health` is set.
+fn parse_flags(
+    args: impl Iterator<Item = OsString>,
+    env: &impl Fn(&str) -> Option<OsString>,
+    windows: bool,
+    health: bool,
+) -> Result<Command, String> {
     let mut data_dir: Option<PathBuf> = None;
     let mut health_port = DEFAULT_HEALTH_PORT;
-    let mut args = args.into_iter();
+    let mut args = args;
     while let Some(arg) = args.next() {
         let arg = arg
             .into_string()
@@ -65,7 +97,7 @@ pub fn parse(
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Ok(Command::Version),
             "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
-            "--health-port" => {
+            "--health-port" if health => {
                 let v = value()?;
                 health_port = v
                     .to_str()
@@ -80,7 +112,7 @@ pub fn parse(
         Some(d) => d,
         None => match env(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
             Some(d) => PathBuf::from(d),
-            None => default_data_dir(&env, windows)?,
+            None => default_data_dir(env, windows)?,
         },
     };
     Ok(Command::Run(Config {
@@ -202,6 +234,43 @@ mod tests {
             c.data_dir,
             PathBuf::from(r"D:\PD").join("Arena360").join("Hub")
         );
+    }
+
+    #[test]
+    #[cfg(not(feature = "dev-fixtures"))]
+    fn dev_is_unknown_without_the_feature() {
+        let env = env_of(&[("HOME", "/h")]);
+        let err = parse(args(&["dev", "seed"]), &env, false).unwrap_err();
+        assert!(err.contains("unknown argument dev"), "{err}");
+        assert!(!USAGE.contains("dev"));
+    }
+
+    #[test]
+    #[cfg(feature = "dev-fixtures")]
+    fn dev_seed_parses_with_the_feature() {
+        let env = env_of(&[("HOME", "/h")]);
+        let cmd = parse(args(&["dev", "seed", "--data-dir", "/d"]), &env, false).unwrap();
+        let Command::DevSeed(cfg) = cmd else {
+            panic!("{cmd:?}")
+        };
+        assert_eq!(cfg.data_dir, PathBuf::from("/d"));
+        let cmd = parse(
+            args(&["dev", "seed"]),
+            env_of(&[(DATA_DIR_ENV, "/env")]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::DevSeed(Config {
+                data_dir: PathBuf::from("/env"),
+                health_port: DEFAULT_HEALTH_PORT,
+            })
+        );
+        assert!(parse(args(&["dev"]), &env, false).is_err());
+        assert!(parse(args(&["dev", "wipe"]), &env, false).is_err());
+        assert!(parse(args(&["dev", "seed", "--health-port", "1"]), &env, false).is_err());
+        assert!(parse(args(&["--data-dir", "/d", "dev", "seed"]), &env, false).is_err());
     }
 
     #[test]

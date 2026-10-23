@@ -1,0 +1,78 @@
+//! **mutate** and **stamp.**
+
+use arena_proto::{AppError, ErrorCode, Intent, IntentPayload};
+use arena_store::{
+    ChangeOp, NewBranch, Row, RowKey, StoreTx, branch_exists, insert_branch, insert_setting,
+    stamp_row,
+};
+
+use crate::settings_defaults::DEFAULT_SETTINGS;
+
+/// One row the intent wrote.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Written {
+    pub key: RowKey,
+    pub op: ChangeOp,
+    /// For a delete: the row as it was before the delete (read by mutate before deleting).
+    pub before: Option<Row>,
+}
+
+/// **mutate.** Writes the intent's rows (with `rev = 0` and zero timestamps on insert; `stamp`
+/// sets them) and returns them in write order.
+pub(super) fn mutate(tx: &StoreTx<'_>, intent: &Intent) -> Result<Vec<Written>, AppError> {
+    match &intent.payload {
+        IntentPayload::BranchBootstrap(b) => {
+            if branch_exists(tx)? {
+                return Err(AppError::new(
+                    ErrorCode::AlreadyBootstrapped,
+                    "this database already has a branch",
+                ));
+            }
+            let branch_id = ulid::Ulid::generate().to_string();
+            insert_branch(
+                tx,
+                &NewBranch {
+                    branch_id: &branch_id,
+                    name: b.name.trim(),
+                    branch_code: &b.branch_code,
+                    currency: &b.currency,
+                    tz: &b.tz,
+                    day_start_min: b.day_start_min,
+                    fy_start_month: b.fy_start_month,
+                },
+            )?;
+            let mut written = vec![Written {
+                key: RowKey::Branch {
+                    branch_id: branch_id.clone(),
+                },
+                op: ChangeOp::Insert,
+                before: None,
+            }];
+            for (key, value) in DEFAULT_SETTINGS {
+                insert_setting(tx, &branch_id, key, value)?;
+                written.push(Written {
+                    key: RowKey::Settings {
+                        branch_id: branch_id.clone(),
+                        key: (*key).to_owned(),
+                    },
+                    op: ChangeOp::Insert,
+                    before: None,
+                });
+            }
+            Ok(written)
+        }
+    }
+}
+
+/// **stamp.** `rev` goes 0 → 1 on insert and +1 on update; `created_at` (insert) and
+/// `updated_at` come from the clock.
+pub(super) fn stamp(tx: &StoreTx<'_>, written: &[Written], now_ms: i64) -> Result<(), AppError> {
+    for w in written {
+        match w.op {
+            ChangeOp::Insert => stamp_row(tx, &w.key, now_ms, true)?,
+            ChangeOp::Update => stamp_row(tx, &w.key, now_ms, false)?,
+            ChangeOp::Delete => {}
+        }
+    }
+    Ok(())
+}

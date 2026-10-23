@@ -1,13 +1,16 @@
 // Staff sign-in against the local Hub service over loopback (`/ui/auth/*`, `/ui/me`,
-// `/ui/intent`, `/ui/settings`). The bearer token lives for this Hub process only; the UI keeps
+// `/ui/elevate`, `/ui/intent`, `/ui/settings`). The bearer token lives for this Hub process only; the UI keeps
 // it in sessionStorage so a reload stays signed in until the Hub restarts or the staff member
 // signs out.
 
 import type {
+  ElevateOk,
+  ElevationItem,
   Intent,
   IntentPayload,
   IntentResult,
   Permission,
+  ReasonCode,
   SessionStaff,
   SettingEntry,
   SignInOk,
@@ -19,6 +22,8 @@ export const SIGN_IN_URL = "http://127.0.0.1:7409/ui/auth/sign-in";
 export const SIGN_OUT_URL = "http://127.0.0.1:7409/ui/auth/sign-out";
 export const ME_URL = "http://127.0.0.1:7409/ui/me";
 export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
+export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
+export const ELEVATE_DROP_URL = "http://127.0.0.1:7409/ui/elevate/drop";
 export const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
 /** The `depends()` key for the session, so sign-in and sign-out re-run the layout load. */
 export const SESSION_DEPENDENCY = "hub:session";
@@ -192,6 +197,7 @@ export async function submitIntent(
   payload: IntentPayload,
   idempotencyKey: string,
   baseRev?: number,
+  options: { elevationTicket?: string; reason?: ReasonCode } = {},
 ): Promise<IntentOutcome> {
   const token = getToken();
   if (!token) return { kind: "signed_out" };
@@ -203,6 +209,7 @@ export async function submitIntent(
     issued_at: now,
     base_rev: baseRev,
     actor: { kind: "staff", id: "session" },
+    reason: options.reason,
     payload,
   };
   let res: Response;
@@ -210,7 +217,7 @@ export async function submitIntent(
     res = await fetch(INTENT_URL, {
       method: "POST",
       headers: { ...authHeaders(token), "content-type": "application/json" },
-      body: JSON.stringify({ intent }),
+      body: JSON.stringify({ intent, elevation_ticket: options.elevationTicket }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch {
@@ -229,6 +236,86 @@ export async function submitIntent(
   }
   const error = await errorOf(res);
   return error ? { kind: "error", error } : { kind: "unreachable" };
+}
+
+export type ElevateOutcome =
+  | { kind: "ticket"; ticket: string; items: ElevationItem[]; expiresAt: number }
+  | { kind: "rejected" }
+  | { kind: "locked"; retryAfterS: number }
+  | { kind: "signed_out" }
+  | { kind: "error"; error: UiError }
+  | { kind: "unreachable" };
+
+/**
+ * `POST /ui/elevate`: asks the Hub to check a manager's PIN for exactly `items` (the intents
+ * the signed-in member is about to submit). The PIN goes to this one loopback call only and is
+ * not kept here; the caller clears its own copy. A match answers a short-lived ticket for
+ * `submitIntent`; `expiresAt` is when it lapses, on this clock.
+ */
+export async function elevate(items: ElevationItem[], pin: string): Promise<ElevateOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  let res: Response;
+  try {
+    res = await fetch(ELEVATE_URL, {
+      method: "POST",
+      headers: { ...authHeaders(token), "content-type": "application/json" },
+      body: JSON.stringify({ items, pin }),
+      signal: AbortSignal.timeout(TIMEOUT_MS * 2),
+    });
+  } catch {
+    return { kind: "unreachable" };
+  }
+  if (res.status === 401) {
+    setToken(null);
+    return { kind: "signed_out" };
+  }
+  if (res.ok) {
+    try {
+      const body = (await res.json()) as Partial<ElevateOk>;
+      if (
+        typeof body.ticket === "string" &&
+        Array.isArray(body.items) &&
+        typeof body.expires_in_s === "number"
+      ) {
+        return {
+          kind: "ticket",
+          ticket: body.ticket,
+          items: body.items,
+          expiresAt: Date.now() + body.expires_in_s * 1000,
+        };
+      }
+    } catch {
+      // fall through
+    }
+    return { kind: "unreachable" };
+  }
+  const err = await errorOf(res);
+  if (err?.code === "AUTH_LOCKED") {
+    const s = err.retry_after_s;
+    return { kind: "locked", retryAfterS: Number.isFinite(s) ? Math.max(1, Math.ceil(s!)) : 60 };
+  }
+  if (err?.code === "PIN_REJECTED") return { kind: "rejected" };
+  return {
+    kind: "error",
+    error: err ?? { code: "INTERNAL", message: "the hub answered " + res.status }, // i18n-ignore (not shown)
+  };
+}
+
+/** `POST /ui/elevate/drop`: gives up a ticket's unused approvals (best effort). */
+export async function dropElevation(ticket: string): Promise<void> {
+  const token = getToken();
+  if (!token) return;
+  try {
+    await fetch(ELEVATE_DROP_URL, {
+      method: "POST",
+      headers: { ...authHeaders(token), "content-type": "application/json" },
+      body: JSON.stringify({ ticket }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch {
+    // The ticket lapses within a minute anyway.
+  }
 }
 
 export type SettingsOutcome =

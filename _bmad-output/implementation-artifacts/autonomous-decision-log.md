@@ -169,3 +169,27 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - the rollover is pushed, and clients resync on reconnect;
   - the tz picker uses a generated `timezones.json` from chrono-tz.
 - **Local tooling:** the marketing (Astro) build needs Node 22.23.4, and the local Node is 22.22.3. Story verification builds every app except marketing; CI uses the pinned Node.
+
+## Story 1.19: kiosk escape suite
+
+- **Spec approval:** self-approved. Spec: `spec-1-19-automated-30-minute-kiosk-escape-suite-on-windows-10-and-11.md`.
+- **Architecture:** a Rust harness (`crates/arena-escape`) runs inside the player session on each VM, and a PowerShell/Hyper-V orchestrator (`scripts/escape/run-vm.ps1`) restores a `clean` checkpoint per run. The workflow runs on a self-hosted `[windows, hyperv]` runner on tags and on manual dispatch, and is not part of PR CI.
+- **Detector budget:** a forbidden window may be visible for at most 300 ms (the 200 ms kill budget plus margin) before it counts as an escape. An uncovered screen counts after 2 s.
+- **Case list:** `tests/escape/cases.yaml` is the single source; every case runs on both images. The order is randomised each pass, with the seed recorded in the report.
+- **Unverifiable here:** there's no Hyper-V runner or Windows images. Only the pure modules and the Windows compile are verified; real runs need the runner set up as described in `scripts/escape/README.md`.
+- **1.13 implementation choices, accepted:** migration 0007 rebuilds `changes` with the pin|mfa CHECK and adds a `reason` column; the fifth wrong PIN returns AUTH_LOCKED; a REASON_REQUIRED refusal gives the ticket use back; at most 4 live tickets per session; the hidden PIN input is a transparent password field over the cells; it replaces 1.12's 'Counter read-only' test.
+
+## Story 1.20: kiosk admin exit
+
+- **Spec approval:** self-approved. Spec: `spec-1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r.md`.
+- **Verifier contents:** the existing argon2id PIN hashes of active staff with `device.remote`, plus a version counter. It is pushed only to paired sessions and stored DPAPI-protected on the kiosk.
+- **Online PIN check:** the kiosk service sends the PIN to the Hub over the pinned-TLS LAN link to be verified there. That's the same trust model as the Hub UI's loopback, and it's documented in the README. Offline, the PIN is checked locally against the cached hashes.
+- **Stale verifier:** an offline exit made with an older verifier version is still applied, but flagged `stale_verifier` for review. A `verifier_history` table tells which version was current at `issued_at`.
+- **Exit duration:** 15 min, then Explorer is killed, enforcement resumes with a sweep, and a relock intent is queued. A service restart after the deadline re-locks immediately.
+- **Remote unlock:** `device.admin_unlock` is pushed to the device; the Hub UI waits up to 5 s for the kiosk's ack (via SSE), otherwise "Failed — retry".
+- **1.13 review outcome:** 23 fixes and 1 rejection. Security fixes:
+  - the PIN throttle is keyed by staff member, so it survives a new session, and only a real match resets it;
+  - tickets are bound to the exact approved items (kind + settings key), and those items are shown in the panel;
+  - the approver must hold every needed permission, and PIN checks are capped at 2 at once.
+
+  Two deviations, accepted: the throttle entry is kept on sign-out (dropping it would let a re-sign-in reset the count), and the LAN forged-elevation check is unit-tested at `bind_to_session` (no device intent can produce a change row yet).

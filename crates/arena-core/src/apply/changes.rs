@@ -45,10 +45,11 @@ pub(super) fn append_changes(
             elevated_by_kind: elevated.map(|e| e.kind.as_str().to_owned()),
             elevated_by_id: elevated.map(|e| e.id.clone()),
             elevated_by_mode: elevated.map(|e| e.mode.as_str().to_owned()),
-            elevated_by_verifier_version: elevated.map(|e| i64::from(e.verifier_version)),
+            elevated_by_verifier_version: elevated.map(|e| e.verifier_version),
             at: now_ms,
             business_day: day.map(|(d, _)| d.clone()),
             fy: day.map(|(_, fy)| fy.clone()),
+            reason: intent.reason.map(|r| r.as_str().to_owned()),
         };
         insert_change(tx, &record)?;
         metas.push(ChangeMeta {
@@ -89,6 +90,7 @@ mod tests {
                 id: "t".into(),
             },
             elevated_by: None,
+            reason: None,
             payload: IntentPayload::BranchBootstrap(BranchBootstrap {
                 name: "n".into(),
                 branch_code: "c".into(),

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, t } from "@arena/ui";
+  import { Button, InlinePin, t } from "@arena/ui";
   import { focusFirstInvalid } from "@arena/ui";
   import {
     CURRENCIES,
@@ -15,6 +15,8 @@
   import { page } from "$app/state";
   import {
     SESSION_DEPENDENCY,
+    dropElevation,
+    elevate,
     hasPermission,
     loadSettings,
     newIdempotencyKey,
@@ -99,12 +101,26 @@
   let formEl: HTMLFormElement | undefined = $state();
   /** One idempotency key per field edit, kept while that same edit is retried. */
   const pendingKeys = new Map<Field, { value: string; key: string }>();
+  /** Most intents one elevation ticket covers (the Hub caps it too). */
+  const MAX_TICKET_USES = 10;
+  /** The manager PIN is open in place of the Save action (a member without settings.edit). */
+  let approving = $state(false);
+  let approvalPrompt: MessageKey = $state("ui.pin.prompt");
+  /** The fields the open PIN approves (shown in the panel; one ticket item each). */
+  let approvalFields: Field[] = $state([]);
+  /** An approval from the Hub: its ticket, when it lapses (this clock) and what it covers. */
+  type Grant = { ticket: string; expiresAt: number; fields: Field[] };
+  let saveWrap: HTMLElement | undefined = $state();
+  const saveButton = $derived(saveWrap?.querySelector("button") ?? null);
 
   const staff = $derived.by(() => {
     const session = (page.data as { session?: { state: string; staff?: SessionStaff } }).session;
     return session?.state === "signed_in" ? (session.staff ?? null) : null;
   });
-  const canEdit = $derived(hasPermission(staff, "settings.edit"));
+  /** Any signed-in member may edit; without settings.edit a manager's PIN approves the save. */
+  const canEdit = $derived(staff !== null);
+  const needsApproval = $derived(!hasPermission(staff, "settings.edit"));
+  const locked = $derived(saving || approving);
   const changed = $derived(
     FIELDS.filter((f) => server[f] !== undefined && form[f] !== server[f]?.value),
   );
@@ -197,8 +213,59 @@
     }
   }
 
-  async function save() {
-    if (!canEdit || saving || loading || changed.length === 0) return;
+  function openApproval(prompt: MessageKey) {
+    approvalPrompt = prompt;
+    approvalFields = changed.slice(0, MAX_TICKET_USES);
+    approving = true;
+  }
+
+  /** The PIN typed in the inline panel: ask the Hub for a ticket covering exactly these edits. */
+  async function approve(pin: string) {
+    const fields = [...approvalFields];
+    const outcome = await elevate(
+      fields.map((f) => ({ intent_kind: "settings.set", key: KEYS[f] })),
+      pin,
+    );
+    if (outcome.kind === "signed_out") {
+      await signedOut();
+      return { ok: false, message: "ui.pin.unreachable" } as const;
+    }
+    if (outcome.kind === "rejected") return { ok: false, message: "ui.pin.rejected" } as const;
+    if (outcome.kind === "locked") {
+      return { ok: false, message: "ui.pin.locked", retryAfterS: outcome.retryAfterS } as const;
+    }
+    if (outcome.kind === "unreachable") {
+      return { ok: false, message: "ui.pin.unreachable" } as const;
+    }
+    if (outcome.kind === "error") return { ok: false, message: "ui.pin.failed" } as const;
+    if (!approving) {
+      // Cancelled meanwhile: nothing is saved, and the approval is given up.
+      void dropElevation(outcome.ticket);
+      return { ok: true } as const;
+    }
+    approving = false;
+    void save({ ticket: outcome.ticket, expiresAt: outcome.expiresAt, fields });
+    return { ok: true } as const;
+  }
+
+  async function save(grant?: Grant) {
+    if (!canEdit || saving || loading || changed.length === 0) {
+      if (grant) {
+        // Approved, but there is nothing (left) to save now: say so and give the approval up.
+        void dropElevation(grant.ticket);
+        status =
+          changed.length === 0
+            ? { tone: "ok", message: "hub.settings.branch.no_changes" }
+            : { tone: "refusal", message: "hub.settings.failed" };
+      }
+      return;
+    }
+    const ticket = grant?.ticket;
+    if (needsApproval && !grant) {
+      openApproval("ui.pin.prompt");
+      return;
+    }
+    let pinAgain = false;
     saving = true;
     status = null;
     errors = {};
@@ -212,6 +279,12 @@
         const value = form[f];
         const base = server[f];
         if (!base) continue;
+        if (grant && (Date.now() >= grant.expiresAt || !grant.fields.includes(f))) {
+          // The approval lapsed, or does not cover this field: ask again, without a round trip.
+          failedAt = f;
+          pinAgain = true;
+          break;
+        }
         let idem = pendingKeys.get(f);
         if (idem?.value !== value) {
           idem = { value, key: newIdempotencyKey() };
@@ -221,6 +294,7 @@
           { kind: "settings.set", key: KEYS[f], value },
           idem.key,
           base.rev,
+          { elevationTicket: ticket },
         );
         if (outcome.kind === "signed_out") return signedOut();
         if (outcome.kind === "applied") {
@@ -239,6 +313,9 @@
           errors = { [f]: "hub.settings.branch.stale" };
           status = { tone: "refusal", message: "hub.settings.branch.stale" };
           void invalidate(SNAPSHOT_DEPENDENCY);
+        } else if (outcome.kind === "error" && outcome.error.code === "PIN_REQUIRED") {
+          // The ticket ran out or expired, or the manager's PIN changed: ask for it again.
+          pinAgain = true;
         } else if (outcome.kind === "error" && outcome.error.code === "PERMISSION_DENIED") {
           pendingKeys.delete(f);
           status = { tone: "refusal", message: "hub.settings.branch.manager_only" };
@@ -269,10 +346,20 @@
       }
     } finally {
       saving = false;
+      // Approvals this save did not use are given up rather than left live.
+      if (grant && saved.length < grant.fields.length) void dropElevation(grant.ticket);
+    }
+    if (pinAgain) {
+      openApproval("ui.pin.again");
+      return;
     }
     if (Object.keys(errors).length) {
       await tick();
       focusFirstInvalid(formEl);
+    } else if (ticket && failedAt === null) {
+      // Approved and saved: back to Save.
+      await tick();
+      saveButton?.focus();
     }
   }
 
@@ -346,7 +433,7 @@
           class="control ui-interactive"
           class:invalid={!!errors.currency}
           bind:value={form.currency}
-          disabled={!canEdit || saving}
+          disabled={!canEdit || locked}
           aria-invalid={errors.currency ? "true" : undefined}
           aria-describedby={describedBy("currency")}
         >
@@ -375,7 +462,7 @@
                 name="symbol_position"
                 {value}
                 bind:group={form.symbol_position}
-                disabled={!canEdit || saving}
+                disabled={!canEdit || locked}
               />
               <span>{t(label)}</span>
             </label>
@@ -394,7 +481,7 @@
                 name="number_format"
                 {value}
                 bind:group={form.number_format}
-                disabled={!canEdit || saving}
+                disabled={!canEdit || locked}
               />
               <span class="tabular-nums">{t(label)}</span>
             </label>
@@ -411,7 +498,7 @@
             class="control ui-interactive"
             class:invalid={!!errors.tz}
             bind:value={form.tz}
-            disabled={!canEdit || saving}
+            disabled={!canEdit || locked}
             aria-invalid={errors.tz ? "true" : undefined}
             aria-describedby={describedBy("tz", pending?.tz ? "branch-tz-pending" : undefined)}
           >
@@ -428,7 +515,7 @@
             autocomplete="off"
             spellcheck="false"
             bind:value={form.tz}
-            disabled={!canEdit || saving}
+            disabled={!canEdit || locked}
             aria-invalid={errors.tz ? "true" : undefined}
             aria-describedby={describedBy("tz", pending?.tz ? "branch-tz-pending" : undefined)}
           />
@@ -454,7 +541,7 @@
           type="time"
           step="60"
           bind:value={() => toClock(form.day_start), (v) => (form.day_start = toMinutes(v))}
-          disabled={!canEdit || saving}
+          disabled={!canEdit || locked}
           aria-invalid={errors.day_start ? "true" : undefined}
           aria-describedby={describedBy(
             "day_start",
@@ -484,7 +571,7 @@
           class="control ui-interactive"
           class:invalid={!!errors.fy_start}
           bind:value={form.fy_start}
-          disabled={!canEdit || saving}
+          disabled={!canEdit || locked}
           aria-invalid={errors.fy_start ? "true" : undefined}
           aria-describedby={describedBy(
             "fy_start",
@@ -521,18 +608,27 @@
       </div>
 
       <div class="actions">
-        <Button
-          label="hub.settings.save"
-          type="submit"
-          disabled={!canEdit || saving || loading || changed.length === 0}
-          disabledReason={!canEdit
-            ? "hub.settings.branch.manager_only"
-            : saving
-              ? "hub.settings.saving"
-              : loading
-                ? "hub.settings.loading"
-                : "hub.settings.branch.no_changes"}
-        />
+        <span class="save" bind:this={saveWrap}>
+          <Button
+            label="hub.settings.save"
+            type="submit"
+            disabled={!canEdit || locked || loading || changed.length === 0}
+            disabledReason={!canEdit
+              ? "hub.settings.branch.manager_only"
+              : approving
+                ? "hub.settings.branch.needs_approval"
+                : saving
+                  ? "hub.settings.saving"
+                  : loading
+                    ? "hub.settings.loading"
+                    : "hub.settings.branch.no_changes"}
+          />
+        </span>
+        {#if needsApproval && !approving}
+          <p class="note type-hub-label" data-testid="branch-needs-approval">
+            {t("hub.settings.branch.needs_approval")}
+          </p>
+        {/if}
         <p
           class="status type-hub-label"
           class:refusal={status?.tone === "refusal"}
@@ -545,6 +641,21 @@
           {/if}
         </p>
       </div>
+      {#if approving}
+        <div class="approval" data-testid="branch-approval">
+          <p class="note type-hub-label" data-testid="branch-approval-items">
+            {t("hub.settings.branch.approves", {
+              fields: approvalFields.map((f) => t(LABELS[f])).join(", "),
+            })}
+          </p>
+          <InlinePin
+            message={approvalPrompt}
+            onsubmit={approve}
+            oncancel={() => (approving = false)}
+            returnFocusTo={saveButton}
+          />
+        </div>
+      {/if}
     </form>
   {/if}
 </section>
@@ -678,6 +789,11 @@
     margin: 0;
     min-height: 1lh;
     color: var(--text);
+  }
+
+  .approval {
+    display: grid;
+    gap: var(--space-2);
   }
 
   .status.refusal {

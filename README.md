@@ -100,14 +100,16 @@ locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` 
   another `Origin`, or a `Host` that is not `127.0.0.1`/`localhost`/`[::1]`, gets 403.
 - **Staff auth (same loopback server and origin guard):**
 
-  | Endpoint                                  | Answer                                                                                                                                                                                                                                   |
-  | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `POST /ui/auth/sign-in {login, password}` | `{token, staff: {staff_id, display_name, role_name, permissions}}`, or 401 `AUTH_FAILED` with one fixed message whatever was wrong (unknown login, wrong password, inactive staff)                                                       |
-  | `POST /ui/auth/sign-out` (bearer)         | 204; the token stops working                                                                                                                                                                                                             |
-  | `GET /ui/me` (bearer)                     | the session's staff, or 401 `AUTH_FAILED`                                                                                                                                                                                                |
-  | `POST /ui/intent {intent}` (bearer)       | `{applied}`; the intent runs as the session's `actor{staff, staff_id}` whatever actor was sent, and any `elevated_by` is dropped. Errors are `{code, message, field?}`                                                                   |
-  | `GET /ui/settings` (bearer)               | `[{key, value, rev}]`, so an edit can carry `base_rev`                                                                                                                                                                                   |
-  | `GET /ui/events?token=<token>`            | server-sent events: `settings.changed` `{locale, keys}` when an intent wrote `settings`, `applied` `{intent_id}` for any other intent, `resync` when the stream fell behind. A bad token is 401; the stream closes once its session ends |
+  | Endpoint                                                        | Answer                                                                                                                                                                                                                                                                                                 |
+  | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `POST /ui/auth/sign-in {login, password}`                       | `{token, staff: {staff_id, display_name, role_name, permissions}}`, or 401 `AUTH_FAILED` with one fixed message whatever was wrong (unknown login, wrong password, inactive staff)                                                                                                                     |
+  | `POST /ui/auth/sign-out` (bearer)                               | 204; the token stops working                                                                                                                                                                                                                                                                           |
+  | `GET /ui/me` (bearer)                                           | the session's staff, or 401 `AUTH_FAILED`                                                                                                                                                                                                                                                              |
+  | `POST /ui/elevate {items: [{intent_kind, key?}], pin}` (bearer) | `{ticket, items, expires_in_s}` when the PIN belongs to another active staff member whose role holds every permission the items need; otherwise 403 `PIN_REJECTED` with one fixed message. See **PIN elevation** below                                                                                 |
+  | `POST /ui/elevate/drop {ticket}` (bearer)                       | 204; the ticket's unused approvals are given up                                                                                                                                                                                                                                                        |
+  | `POST /ui/intent {intent, elevation_ticket?}` (bearer)          | `{applied}`; the intent runs as the session's `actor{staff, staff_id}` whatever actor was sent, and any client-supplied `elevated_by` is dropped. A ticket is redeemed for one matching approved item and becomes `elevated_by`; a bad one is 403 `PIN_REQUIRED`. Errors are `{code, message, field?}` |
+  | `GET /ui/settings` (bearer)                                     | `[{key, value, rev}]`, so an edit can carry `base_rev`                                                                                                                                                                                                                                                 |
+  | `GET /ui/events?token=<token>`                                  | server-sent events: `settings.changed` `{locale, keys}` when an intent wrote `settings`, `applied` `{intent_id}` for any other intent, `resync` when the stream fell behind. A bad token is 401; the stream closes once its session ends                                                               |
 
   Five consecutive failed sign-ins for a login (compared without case) pause it for 60 s: every
   attempt in that window gets 429 `AUTH_LOCKED` with `retry_after_s`, and a success resets the
@@ -118,6 +120,36 @@ locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` 
   role). A staff member holds at most 5 sessions; a sixth sign-in ends the oldest. A missing or
   unknown token is 401 `AUTH_FAILED`; signing out an unknown token is still 204.
 
+- **PIN elevation:** a member whose role lacks an intent's permission asks a manager to type
+  their PIN on the same screen. `POST /ui/elevate` takes the exact intents to approve
+  (`items`, 1–10; a `settings.set` item names its setting key). A follower refuses first
+  (`NOT_PRIMARY`), an unhandled kind is `UNSUPPORTED`, and a member who already holds every
+  permission gets `VALIDATION_FAILED` on `items`. Every item's requirement must be a
+  `Permission`; the PIN is checked with argon2id (at most two checks at once) against at most 50
+  active staff with a PIN whose role allows all of them, never the session's own member. A match
+  is an in-memory ticket of 128 random bits for this session, redeemable once per approved item
+  within 60 s; a session holds at most 4 (a fifth replaces the oldest), and signing out drops
+  them. A wrong PIN, a PIN whose role lacks the permission, the member's own PIN and a kind that
+  is not a permission all get the same 403 `PIN_REJECTED`, which never names anyone. Five
+  failures in a row pause elevation for that staff member, whatever the session, for 60 s (429
+  `AUTH_LOCKED` with `retry_after_s`, already on the fifth); a check that could not run counts
+  neither way. `POST /ui/intent` redeems one unused item that matches the intent (kind, and the
+  key of a `settings.set`; otherwise `PIN_REQUIRED`) into
+  `elevated_by{kind: pin, id: staff_id, mode: hub, verifier_version}`; a refusal (nothing was
+  applied) gives the item back, unless the ticket has lapsed or gone meanwhile. `apply()` checks
+  the permission against that member (active, holds it, not the actor, and the actor an active
+  staff member) instead of the actor and fails `PIN_REQUIRED` ("enter the PIN again") if their
+  `pin_verifier_version` moved on. Every `staff.upsert` with a new `pin_hash` bumps that version
+  by 1. The idempotency fingerprint leaves `elevated_by` out, so a retry after re-entering a PIN
+  is the same intent. Change rows record the actor and `elevated_by_*` (`elevated_by_kind` is
+  `pin` or `mfa`, migration 0007). A client's own `elevated_by` is stripped at `/ui/intent` and
+  on the LAN. The PIN is never logged, stored or echoed, and goes nowhere but this loopback call.
+- **Reasons:** `IntentKind::reasons()` lists the reason codes a kind requires (generated for the
+  UI as `generated/reasons.json`, read through `reasonsFor()` / `reasonOptions()` in
+  `@arena/ui`). Only `device.revoke` has any today (`lost`, `stolen`, `replaced`, `other`);
+  without one it fails `REASON_REQUIRED` (422, `field: "reason"`), and a reason a kind does not
+  list fails `VALIDATION_FAILED` on `reason`. The chosen code is recorded on each change row
+  (`changes.reason`).
 - **Branch locale:** the `branch.*` settings are authoritative (the `branch` row's columns are
   only the bootstrap values), and `branch.bootstrap` seeds them from its payload:
   `branch.currency` (ISO 4217, from `arena_proto::currency::CURRENCIES`),
@@ -242,7 +274,8 @@ Dev staff (`dev-fixtures` builds only; never in a release build):
 With the same feature, `arena-hub dev revoke-device <device_id> [--health-port <port>]` asks
 the running Hub to revoke a device through the dev-only loopback endpoint
 `POST /dev/revoke-device` on its health port (absent without the feature). The Hub applies
-`device.revoke` and closes that device's sessions.
+`device.revoke` (with the body's `reason`, `other` by default; an unknown reason is
+`VALIDATION_FAILED` on `reason`) and closes that device's sessions.
 
 | Exit code | Meaning                                                                        |
 | --------- | ------------------------------------------------------------------------------ |
@@ -273,7 +306,11 @@ its symbol, symbol position, number format, time zone, business day start and fi
 start month, with a live preview of 123456.78; Save submits one `settings.set` per changed field
 in order, each with its `base_rev`; field errors show inline, a STALE save shows the current
 value and asks to check it; a pending tz or day-start change says "Takes effect from {date}";
-without `settings.edit` the fields are read-only and Save says why) and **Receipt** (the
+without `settings.edit` the fields stay editable, Save says "Needs manager approval" and opens
+the `InlinePin` in place, listing the fields it approves: the PIN asks `/ui/elevate` for one
+ticket covering exactly the changed fields, each `settings.set` carries it, unused approvals are
+dropped, and focus returns to Save; a lapsed approval asks again without a round trip; Esc clears the PIN and
+returns focus, and a `PIN_REQUIRED` answer asks for the PIN again) and **Receipt** (the
 "Receipt footer" control from Story 1.11). Every signed-in view listens to `/ui/events`: a
 `settings.changed` updates the branch locale (the header clock's time zone, formatted amounts
 and a Settings form with no unsaved edits) in every open window without a reload. Money is
@@ -319,6 +356,13 @@ pnpm --filter @arena/hub test:shell                # Playwright: builds, then ru
   `scripts/bench/hub-idle.ps1`. After 5 minutes idle it requires `arena-hub` under 50 MB working
   set, the Hub UI plus its WebView2 processes under 250 MB, and 0 % GPU engine use by every Hub
   process.
+
+`@arena/ui` has `InlinePin` (PINs of `minLength`–`maxLength` digits, 4–6 by default: that many
+cells over a visually hidden numeric input, plus a keypad; digits, Backspace, Enter and Esc from
+the keyboard, and the last cell submits on its own; Esc and Cancel wait while a PIN is checked; the PIN is cleared the moment it is
+submitted; a live region announces "2 of 4", never the digits; a lockout shows a countdown)
+and `ReasonPicker` (radio options from catalogue keys, then Confirm; a refusal shows inline),
+both in the gallery with a stubbed `device.revoke` flow that asks for the reason, then the PIN.
 
 ## Pinned versions
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Generates the TypeScript protocol types from `arena-proto` with ts-rs, writes the `index.ts`
 // barrel and formats the folder with prettier. The same test run writes `currencies.json` (the
-// `arena_proto::currency` table). Output: packages/ui/src/generated (committed).
+// `arena_proto::currency` table), `timezones.json` and `reasons.json` (`IntentKind::reasons()`).
+// Output: packages/ui/src/generated (committed).
 
 import { spawnSync } from "node:child_process";
 import {

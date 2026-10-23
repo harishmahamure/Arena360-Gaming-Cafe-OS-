@@ -35,9 +35,10 @@ pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
 pub use staff::{
-    RoleRow, StaffRow, StaffWrite, count_active_staff_with_role, find_role, find_role_by_name,
-    find_staff, find_staff_by_login, insert_role, insert_role_perm, insert_staff, list_role_perms,
-    list_roles, role_perm_effect, update_role_name, update_staff,
+    PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff_with_role, find_role,
+    find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
+    insert_staff, list_pin_candidates, list_role_perms, list_roles, role_perm_effect,
+    update_role_name, update_staff,
 };
 
 /// The transaction `apply()` and the replayer run in.
@@ -353,6 +354,21 @@ impl Store {
             };
             Ok(find_role(&s.conn, &staff.role_id)?.map(|role| (staff, role)))
         })
+    }
+
+    /// Up to `limit` active staff with a PIN whose role allows every one of `permissions`,
+    /// other than `exclude`, outside any write transaction (empty before the staff table
+    /// exists).
+    pub fn pin_candidates(
+        &self,
+        permissions: &[&str],
+        exclude: &str,
+        limit: usize,
+    ) -> Result<Vec<PinCandidate>, AppError> {
+        if !self.table_exists("staff")? {
+            return Ok(Vec::new());
+        }
+        list_pin_candidates(&self.conn, permissions, exclude, limit)
     }
 
     /// The branch's locale columns, outside any write transaction (`None` before bootstrap).
@@ -810,6 +826,35 @@ mod tests {
             .unwrap();
         assert!(index);
         assert_eq!(count_applied_intents(&store.conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn v6_database_upgrades_to_v7_keeping_changes_and_triggers() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &migrations::MIGRATIONS[..6] {
+                conn.execute_batch(m.sql).unwrap();
+                record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO changes (epoch, seq, tbl, row_id, op, row, intent_id, intent_kind,
+                                      actor_kind, actor_id, at, business_day, fy)
+                 VALUES ('1:A', 1, 'branch', 'B', 'insert', x'80', 'I', 'branch.bootstrap',
+                         'system', 't', 5, '2027-01-01', 'FY2026-27')",
+                [],
+            )
+            .unwrap();
+        }
+        let mut store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        let changes = store.changes().unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].business_day.as_deref(), Some("2027-01-01"));
+        let err = store
+            .write_tx(|tx| tx.execute("DELETE FROM changes", []).map_err(db_error))
+            .unwrap_err();
+        assert!(err.message.contains("append-only"), "{err}");
     }
 
     #[test]

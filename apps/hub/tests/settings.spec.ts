@@ -5,8 +5,9 @@ import currencies from "../../../packages/ui/src/generated/currencies.json" with
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 
 // Settings → Branch: the locale form, the live preview, save in sequence with base_rev, inline
-// field errors, STALE, the deferred tz note, the Counter read-only state, live updates through
-// `/ui/events` across windows, and the header clock in the branch tz. The Hub's loopback API
+// field errors, STALE, the deferred tz note, live updates through
+// `/ui/events` across windows, and the header clock in the branch tz. (A Counter's save, which
+// needs a manager's PIN, is in elevation.spec.ts.) The Hub's loopback API
 // is stubbed with `page.route`; one stub state is shared by every window of a test.
 
 const HUB = "http://127.0.0.1:7409";
@@ -380,30 +381,6 @@ test("a tz change says when it takes effect, in the branch's own date", async ({
     "aria-describedby",
     /branch-tz-pending/,
   );
-});
-
-test("a Counter sees read-only fields and a disabled Save with its reason", async ({ page }) => {
-  const hub = newHub();
-  await openBranch(page, hub, "counter-token");
-  for (const label of [
-    "hub.settings.branch.currency",
-    "hub.settings.branch.symbol_before",
-    "hub.settings.branch.symbol_after",
-    "hub.settings.branch.number_indian",
-    "hub.settings.branch.number_international",
-    "hub.settings.branch.tz",
-    "hub.settings.branch.day_start",
-    "hub.settings.branch.fy_start",
-  ] as const) {
-    await expect(page.getByLabel(en[label], { exact: true })).toBeDisabled();
-  }
-  await expect(save(page)).toHaveAttribute("aria-disabled", "true");
-  await expect(page.getByTestId("settings-branch")).toContainText(
-    en["hub.settings.branch.manager_only"],
-  );
-  await save(page).click({ force: true });
-  expect(hub.intents).toEqual([]);
-  await expectNoSeriousAxe(page);
 });
 
 test("a save in one window updates another without a reload", async ({ browser }) => {

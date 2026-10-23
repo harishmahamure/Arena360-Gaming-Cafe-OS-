@@ -202,6 +202,66 @@ pub fn find_staff_by_login(conn: &Connection, login: &str) -> Result<Option<Staf
     .map_err(db_error)
 }
 
+/// A staff member whose PIN may approve an intent: their id, PIN hash and the PIN's
+/// `pin_verifier_version`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinCandidate {
+    pub staff_id: String,
+    pub pin_hash: String,
+    pub pin_verifier_version: i64,
+}
+
+/// Up to `limit` active staff members with a PIN whose role allows every one of
+/// `permissions`, other than `exclude`, ordered by id. No permissions means no candidates.
+pub fn list_pin_candidates(
+    conn: &Connection,
+    permissions: &[&str],
+    exclude: &str,
+    limit: usize,
+) -> Result<Vec<PinCandidate>, AppError> {
+    let mut wanted: Vec<&str> = permissions.to_vec();
+    wanted.sort_unstable();
+    wanted.dedup();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = (0..wanted.len())
+        .map(|i| format!("?{}", i + 4))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT s.staff_id, s.pin_hash, s.pin_verifier_version
+         FROM staff s
+         JOIN role_perms p ON p.role_id = s.role_id
+         WHERE s.active = 1 AND s.pin_hash IS NOT NULL AND s.staff_id <> ?1
+           AND p.effect = 'allow' AND p.permission IN ({placeholders})
+         GROUP BY s.staff_id
+         HAVING COUNT(DISTINCT p.permission) = ?2
+         ORDER BY s.staff_id
+         LIMIT ?3"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let count = i64::try_from(wanted.len()).unwrap_or(i64::MAX);
+    let mut values: Vec<rusqlite::types::Value> =
+        vec![exclude.to_owned().into(), count.into(), limit.into()];
+    values.extend(
+        wanted
+            .iter()
+            .map(|p| rusqlite::types::Value::from((*p).to_owned())),
+    );
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(values), |r| {
+            Ok(PinCandidate {
+                staff_id: r.get(0)?,
+                pin_hash: r.get(1)?,
+                pin_verifier_version: r.get(2)?,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 /// How many active staff members hold `role_id`.
 pub fn count_active_staff_with_role(conn: &Connection, role_id: &str) -> Result<i64, AppError> {
     conn.query_row(
@@ -338,6 +398,83 @@ mod tests {
                     },
                 )?;
                 assert!(!find_staff(tx, "S")?.unwrap().active);
+                // PIN candidates: active, with a PIN, an allow row, and not the excluded one.
+                insert_role(tx, "M", "B", "Manager", true)?;
+                insert_role_perm(tx, "M", "settings.edit", "allow")?;
+                insert_role_perm(tx, "R", "settings.edit", "deny")?;
+                let manager = StaffWrite {
+                    staff_id: "M1",
+                    login: "m1",
+                    role_id: "M",
+                    pin_hash: Some("$argon2id$p"),
+                    pin_verifier_version: 3,
+                    active: true,
+                    ..write.clone()
+                };
+                insert_staff(tx, &manager)?;
+                insert_staff(
+                    tx,
+                    &StaffWrite {
+                        staff_id: "M2",
+                        login: "m2",
+                        pin_hash: None,
+                        ..manager.clone()
+                    },
+                )?;
+                insert_staff(
+                    tx,
+                    &StaffWrite {
+                        staff_id: "M3",
+                        login: "m3",
+                        active: false,
+                        ..manager.clone()
+                    },
+                )?;
+                insert_staff(
+                    tx,
+                    &StaffWrite {
+                        staff_id: "M4",
+                        login: "m4",
+                        ..manager.clone()
+                    },
+                )?;
+                insert_staff(
+                    tx,
+                    &StaffWrite {
+                        staff_id: "C2",
+                        login: "c2",
+                        role_id: "R",
+                        pin_hash: Some("$argon2id$c"),
+                        active: true,
+                        ..write.clone()
+                    },
+                )?;
+                let ids =
+                    |c: Vec<PinCandidate>| c.into_iter().map(|c| c.staff_id).collect::<Vec<_>>();
+                assert_eq!(
+                    ids(list_pin_candidates(tx, &["settings.edit"], "", 50)?),
+                    ["M1", "M4"]
+                );
+                assert_eq!(
+                    ids(list_pin_candidates(tx, &["settings.edit"], "M1", 50)?),
+                    ["M4"]
+                );
+                assert_eq!(
+                    ids(list_pin_candidates(tx, &["settings.edit"], "", 1)?),
+                    ["M1"]
+                );
+                assert_eq!(
+                    list_pin_candidates(tx, &["settings.edit"], "", 1)?[0].pin_verifier_version,
+                    3
+                );
+                // Every permission must be allowed; duplicates count once.
+                insert_role_perm(tx, "M", "device.remote", "allow")?;
+                let both = ["settings.edit", "device.remote", "settings.edit"];
+                assert_eq!(ids(list_pin_candidates(tx, &both, "", 50)?), ["M1", "M4"]);
+                assert!(
+                    list_pin_candidates(tx, &["settings.edit", "pos.void"], "", 50)?.is_empty()
+                );
+                assert!(list_pin_candidates(tx, &[], "", 50)?.is_empty());
                 Ok(())
             })
             .unwrap();

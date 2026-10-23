@@ -138,6 +138,7 @@ mod tests {
                     id: "dev-seed".into(),
                 },
                 elevated_by: None,
+                reason: None,
                 payload: IntentPayload::BranchBootstrap(BranchBootstrap {
                     name: "Dev Branch".into(),
                     branch_code: "DEV01".into(),
@@ -162,6 +163,7 @@ mod tests {
                 base_rev,
                 actor: owner.clone(),
                 elevated_by: None,
+                reason: None,
                 payload,
             };
             writer
@@ -372,6 +374,7 @@ mod tests {
                 id: "test".into(),
             },
             elevated_by: None,
+            reason: None,
             payload: IntentPayload::SettingsSet(SettingsSet {
                 key: key.into(),
                 value: value.into(),

@@ -117,10 +117,76 @@ impl IntentKind {
         }
     }
 
+    /// The reasons this kind accepts, when it requires one (`None`: it takes no reason). A
+    /// total match, like [`requirement`](Self::requirement).
+    pub fn reasons(self) -> Option<&'static [ReasonCode]> {
+        match self {
+            Self::DeviceRevoke => Some(&[
+                ReasonCode::Lost,
+                ReasonCode::Stolen,
+                ReasonCode::Replaced,
+                ReasonCode::Other,
+            ]),
+            Self::BranchBootstrap
+            | Self::BranchSeedDefaults
+            | Self::SettingsSet
+            | Self::DeviceRegister
+            | Self::DeviceVersionReported
+            | Self::ConsolePlanRequested
+            | Self::StaffUpsert
+            | Self::RoleUpsert => None,
+        }
+    }
+
     /// Whether the Hub has a handler (a payload variant) for this kind yet.
     pub fn is_handled(self) -> bool {
         !matches!(self, Self::ConsolePlanRequested)
     }
+}
+
+/// Why an intent was done, for kinds that require one ([`IntentKind::reasons`]). The UI shows
+/// each code through the catalogue key `reason.<code>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum ReasonCode {
+    Lost,
+    Stolen,
+    Replaced,
+    Other,
+}
+
+impl ReasonCode {
+    /// Every code.
+    pub const ALL: [ReasonCode; 4] = [Self::Lost, Self::Stolen, Self::Replaced, Self::Other];
+
+    /// The stored and wire form, e.g. `stolen`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lost => "lost",
+            Self::Stolen => "stolen",
+            Self::Replaced => "replaced",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// The [`IntentKind::reasons`] table as the JSON object the UI reads:
+/// `{"device.revoke": ["lost", …]}` (kinds without reasons are left out).
+pub fn reasons_json() -> String {
+    let map: serde_json::Map<String, serde_json::Value> = IntentKind::ALL
+        .into_iter()
+        .filter_map(|k| {
+            let codes = k.reasons()?;
+            Some((
+                k.as_str().to_owned(),
+                codes.iter().map(|c| c.as_str()).collect::<Vec<_>>().into(),
+            ))
+        })
+        .collect();
+    let mut out = serde_json::to_string_pretty(&map).unwrap_or_else(|_| "{}".into());
+    out.push('\n');
+    out
 }
 
 /// The payload of `branch.bootstrap`.
@@ -301,6 +367,10 @@ pub struct Intent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub elevated_by: Option<ElevatedBy>,
+    /// Why, for kinds that require a reason; `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<ReasonCode>,
     pub payload: IntentPayload,
 }
 
@@ -321,6 +391,7 @@ mod tests {
                 id: "dev-seed".into(),
             },
             elevated_by: None,
+            reason: None,
             payload: IntentPayload::BranchBootstrap(BranchBootstrap {
                 name: "Dev Branch".into(),
                 branch_code: "DEV01".into(),
@@ -451,6 +522,50 @@ mod tests {
     }
 
     #[test]
+    fn only_device_revoke_requires_a_reason() {
+        for kind in IntentKind::ALL {
+            let want: Option<&[ReasonCode]> = match kind {
+                IntentKind::DeviceRevoke => Some(&ReasonCode::ALL),
+                _ => None,
+            };
+            assert_eq!(kind.reasons(), want, "{}", kind.as_str());
+        }
+        for code in ReasonCode::ALL {
+            let json = serde_json::to_string(&code).unwrap();
+            assert_eq!(json, format!("\"{}\"", code.as_str()));
+        }
+        let intent = Intent {
+            reason: Some(ReasonCode::Stolen),
+            ..bootstrap()
+        };
+        let json = serde_json::to_value(&intent).unwrap();
+        assert_eq!(json["reason"], "stolen");
+        assert_eq!(serde_json::from_value::<Intent>(json).unwrap(), intent);
+    }
+
+    #[test]
+    fn reasons_json_lists_kinds_with_reasons() {
+        let v: serde_json::Value = serde_json::from_str(&reasons_json()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"device.revoke": ["lost", "stolen", "replaced", "other"]})
+        );
+    }
+
+    /// `pnpm gen:types` writes the reasons table next to the generated TypeScript types.
+    #[cfg(feature = "export-ts")]
+    #[test]
+    fn export_reasons_json() {
+        let dir = std::env::var("TS_RS_EXPORT_DIR").unwrap_or_else(|_| "./bindings".into());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("reasons.json"),
+            reasons_json(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn kind_serializes_as_domain_verb() {
         assert_eq!(
             serde_json::to_string(&IntentKind::BranchBootstrap).unwrap(),
@@ -490,6 +605,7 @@ mod tests {
         assert_eq!(json["payload"]["currency"], "INR");
         assert!(json.get("base_rev").is_none());
         assert!(json.get("elevated_by").is_none());
+        assert!(json.get("reason").is_none());
         let back: Intent = serde_json::from_value(json).unwrap();
         assert_eq!(back, intent);
         assert_eq!(back.payload.kind(), IntentKind::BranchBootstrap);

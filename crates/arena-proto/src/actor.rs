@@ -57,14 +57,39 @@ impl ElevationMode {
     }
 }
 
-/// The actor whose PIN elevated an intent (Story 1.13 fills it in).
+/// How an elevation was proven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum ElevationKind {
+    /// A staff member's PIN.
+    Pin,
+    /// An owner's MFA approval (a later epic).
+    Mfa,
+}
+
+impl ElevationKind {
+    /// The stored and wire form, `pin` or `mfa`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pin => "pin",
+            Self::Mfa => "mfa",
+        }
+    }
+}
+
+/// Who approved an intent the actor could not do alone. Only the Hub sets it (from a redeemed
+/// elevation ticket); a client-supplied value is stripped at every edge. `id` is the approving
+/// staff member and `verifier_version` the `pin_verifier_version` their PIN was checked
+/// against.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct ElevatedBy {
-    pub kind: ActorKind,
+    pub kind: ElevationKind,
     pub id: String,
     pub mode: ElevationMode,
-    pub verifier_version: u32,
+    #[ts(type = "number")]
+    pub verifier_version: i64,
 }
 
 #[cfg(test)]
@@ -88,5 +113,9 @@ mod tests {
             "\"cached_verifier\""
         );
         assert_eq!(ElevationMode::Hub.as_str(), "hub");
+        for (kind, text) in [(ElevationKind::Pin, "pin"), (ElevationKind::Mfa, "mfa")] {
+            assert_eq!(serde_json::to_string(&kind).unwrap(), format!("\"{text}\""));
+            assert_eq!(kind.as_str(), text);
+        }
     }
 }

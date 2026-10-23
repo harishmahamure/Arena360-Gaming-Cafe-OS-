@@ -91,6 +91,7 @@ fn intent(clock: &dyn Clock, kind: ActorKind, payload: IntentPayload) -> Intent 
             id: "dev-seed".into(),
         },
         elevated_by: None,
+        reason: None,
         payload,
     }
 }

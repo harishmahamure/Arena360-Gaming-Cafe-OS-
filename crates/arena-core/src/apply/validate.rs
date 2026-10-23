@@ -22,6 +22,7 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
     if intent.intent_id.parse::<ulid::Ulid>().is_err() {
         return Err(invalid("intent_id", "intent_id must be a ULID"));
     }
+    validate_reason(intent)?;
     match &intent.payload {
         IntentPayload::BranchBootstrap(b) => {
             if intent.base_rev.is_some() {
@@ -59,6 +60,23 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Role(t) => staff_roles::validate_role(intent, r, t),
             _ => Err(internal_target()),
         },
+    }
+}
+
+/// A kind with reasons needs one of them (`REASON_REQUIRED` when absent); a reason the kind
+/// does not list — including any reason on a kind that takes none — fails on `reason`.
+fn validate_reason(intent: &Intent) -> Result<(), AppError> {
+    match (intent.payload.kind().reasons(), intent.reason) {
+        (Some(_), None) => Err(AppError::with_field(
+            ErrorCode::ReasonRequired,
+            "reason",
+            "choose a reason",
+        )),
+        (Some(list), Some(r)) if !list.contains(&r) => {
+            Err(invalid("reason", "this reason does not apply here"))
+        }
+        (None, Some(_)) => Err(invalid("reason", "this intent takes no reason")),
+        _ => Ok(()),
     }
 }
 

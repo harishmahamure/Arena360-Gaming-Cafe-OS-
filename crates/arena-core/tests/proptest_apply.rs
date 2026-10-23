@@ -291,6 +291,7 @@ impl Hub {
                 id: "proptest".into(),
             },
             elevated_by: None,
+            reason: None,
             payload,
         }
     }

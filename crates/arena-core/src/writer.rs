@@ -253,6 +253,7 @@ impl WriterHandle {
                             id: "hub-seed-defaults".into(),
                         },
                         elevated_by: None,
+                        reason: None,
                         payload: arena_proto::IntentPayload::BranchSeedDefaults(
                             arena_proto::BranchSeedDefaults::default(),
                         ),

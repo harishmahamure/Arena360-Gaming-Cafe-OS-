@@ -18,7 +18,7 @@
 //! `IDEMPOTENCY_CONFLICT`, frame errors and validation that depends on time or on other rows
 //! (`issued_at`, `key`, `kind`) are never recorded.
 
-use arena_proto::{Actor, AppError, ElevatedBy, ErrorCode, Intent, IntentKind, IntentPayload};
+use arena_proto::{Actor, AppError, ErrorCode, Intent, IntentKind, IntentPayload, ReasonCode};
 use arena_store::{
     AppliedIntentRecord, ChangeOp, StoreTx, find_applied_intent, insert_applied_intent,
 };
@@ -52,31 +52,36 @@ pub(crate) const RECORDABLE_FIELDS: &[&str] = &[
     "display_name",
     "password_hash",
     "pin_hash",
+    "reason",
 ];
 
 /// `VALIDATION_FAILED` field prefixes that depend only on the payload (`perms[i]`).
 pub(crate) const RECORDABLE_FIELD_PREFIXES: &[&str] = &["perms["];
 
-/// What the fingerprint covers: everything that decides an intent's outcome except its
-/// `intent_id`, `issued_at` and idempotency key.
+/// What the fingerprint covers: the intent's body — everything except its `intent_id`,
+/// `issued_at`, idempotency key and `elevated_by`. The elevation is who approved it, not what
+/// it asks for: a retry after re-entering a PIN (a new ticket, or another approver) is the same
+/// intent. The permission step still checks the elevation on every attempt.
 #[derive(Serialize)]
 struct FingerprintInput<'a> {
     kind: IntentKind,
     payload: &'a IntentPayload,
     base_rev: Option<i64>,
     actor: &'a Actor,
-    elevated_by: Option<&'a ElevatedBy>,
+    /// Left out when unset, so fingerprints of intents without a reason are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<ReasonCode>,
 }
 
 /// SHA-256 (lower-case hex) of the canonical MessagePack encoding of the intent's payload
-/// kind, payload, `base_rev`, actor and `elevated_by`.
+/// kind, payload, `base_rev`, actor and `reason` (never `elevated_by`).
 pub fn fingerprint(intent: &Intent) -> Result<String, AppError> {
     let input = FingerprintInput {
         kind: intent.payload.kind(),
         payload: &intent.payload,
         base_rev: intent.base_rev,
         actor: &intent.actor,
-        elevated_by: intent.elevated_by.as_ref(),
+        reason: intent.reason,
     };
     let bytes = rmp_serde::to_vec_named(&input)
         .map_err(|e| internal(format!("encode fingerprint: {e}")))?;
@@ -296,6 +301,7 @@ mod tests {
                 id: "a".into(),
             },
             elevated_by: None,
+            reason: None,
             payload: IntentPayload::SettingsSet(SettingsSet {
                 key: "k".into(),
                 value: "v".into(),
@@ -326,15 +332,19 @@ mod tests {
         let mut rev = base.clone();
         rev.base_rev = Some(2);
         let mut elevated = base.clone();
-        elevated.elevated_by = Some(ElevatedBy {
-            kind: ActorKind::Staff,
+        elevated.elevated_by = Some(arena_proto::ElevatedBy {
+            kind: arena_proto::ElevationKind::Pin,
             id: "m".into(),
             mode: arena_proto::ElevationMode::Hub,
             verifier_version: 1,
         });
-        for other in [value, actor, rev, elevated] {
+        let mut reason = base.clone();
+        reason.reason = Some(ReasonCode::Lost);
+        for other in [value, actor, rev, reason] {
             assert_ne!(fingerprint(&other).unwrap(), fp);
         }
+        // Who approved it is not part of the body.
+        assert_eq!(fingerprint(&elevated).unwrap(), fp);
     }
 
     #[test]
@@ -352,6 +362,8 @@ mod tests {
             ErrorCode::BadFrame,
             ErrorCode::IdempotencyConflict,
             ErrorCode::ValidationFailed,
+            ErrorCode::PinRequired,
+            ErrorCode::ReasonRequired,
         ] {
             assert!(!is_recordable(&e(code)), "{code:?}");
         }

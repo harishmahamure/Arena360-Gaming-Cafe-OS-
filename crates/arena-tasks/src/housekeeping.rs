@@ -395,6 +395,7 @@ mod tests {
                 id: "owner".into(),
             },
             elevated_by: None,
+            reason: None,
             payload: IntentPayload::SettingsSet(SettingsSet {
                 key: "branch.currency".into(),
                 value: "EUR".into(),

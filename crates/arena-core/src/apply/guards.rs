@@ -1,11 +1,14 @@
 //! The steps before any write: permission, epoch and base_rev (ttl_dedupe is in
 //! `ttl_dedupe.rs`).
 
-use arena_proto::{ActorKind, AppError, ErrorCode, Intent};
-use arena_store::{StoreTx, find_device, read_lease};
+use arena_proto::{
+    ActorKind, AppError, ElevatedBy, ElevationKind, ElevationMode, ErrorCode, Intent, Requirement,
+};
+use arena_store::{StoreTx, find_device, find_staff, read_lease};
 
 use super::{ApplyCtx, Target, devices, settings_set, staff_roles};
 use crate::rbac;
+use crate::staff::pin_required;
 use crate::status::{Epoch, Role};
 
 fn refused(message: &str) -> AppError {
@@ -13,9 +16,10 @@ fn refused(message: &str) -> AppError {
 }
 
 /// **permission.** Runs first, before any write: the actor must have an id, a device actor's
-/// row must exist and not be revoked, an elevation claim is refused (Hub-side PIN verification
-/// arrives in Story 1.13), and then the kind's requirement must hold (`rbac::check`). Every
-/// failure is `PERMISSION_DENIED`.
+/// row must exist and not be revoked, and then the kind's requirement must hold — against the
+/// actor, or, when the intent is elevated, against the elevating staff member
+/// ([`elevation`]). Every failure is `PERMISSION_DENIED`, except a PIN that changed since it was
+/// checked (`PIN_REQUIRED`).
 pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     if intent.actor.id.trim().is_empty() {
         return Err(refused("the actor has no id"));
@@ -27,12 +31,40 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
     {
         return Err(refused("the device is revoked or unknown"));
     }
-    // An elevation claim cannot be trusted until the Hub verifies PINs, so it is refused rather
-    // than written into the audit log.
-    if intent.elevated_by.is_some() {
-        return Err(refused("elevation not verified"));
+    match &intent.elevated_by {
+        Some(e) => elevation(tx, intent, e),
+        None => rbac::check(tx, intent),
     }
-    rbac::check(tx, intent)
+}
+
+/// The permission step of an elevated intent. Only the Hub's ticket path sets `elevated_by`
+/// (every edge strips a client's), and this re-checks everything the ticket was issued on:
+///
+/// - the elevation is a PIN verified at the Hub (`mfa` and `cached_verifier` are later stories);
+/// - the actor is an active staff member, and the elevating member is someone else;
+/// - the kind's requirement is a permission, and the elevating member is active and holds it;
+/// - the elevating member's `pin_verifier_version` is still the one the PIN was checked
+///   against, else `PIN_REQUIRED` (the PIN rotated: enter it again).
+fn elevation(tx: &StoreTx<'_>, intent: &Intent, e: &ElevatedBy) -> Result<(), AppError> {
+    let Requirement::Perm(p) = intent.payload.kind().requirement() else {
+        return Err(rbac::denied());
+    };
+    if e.kind != ElevationKind::Pin || e.mode != ElevationMode::Hub {
+        return Err(rbac::denied());
+    }
+    if intent.actor.kind != ActorKind::Staff || intent.actor.id == e.id {
+        return Err(rbac::denied());
+    }
+    if find_staff(tx, &intent.actor.id)?.is_none_or(|s| !s.active) {
+        return Err(rbac::denied());
+    }
+    if !rbac::staff_allows(tx, &e.id, p)? {
+        return Err(rbac::denied());
+    }
+    match find_staff(tx, &e.id)? {
+        Some(s) if s.pin_hash.is_some() && s.pin_verifier_version == e.verifier_version => Ok(()),
+        _ => Err(pin_required()),
+    }
 }
 
 /// **authorize.** The permission rules that depend on the loaded target.

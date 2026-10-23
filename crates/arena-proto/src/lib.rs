@@ -13,7 +13,7 @@ mod scope;
 mod snapshot;
 mod ui_auth;
 
-pub use actor::{Actor, ActorKind, ElevatedBy, ElevationMode};
+pub use actor::{Actor, ActorKind, ElevatedBy, ElevationKind, ElevationMode};
 pub use error::{AppError, ErrorCode};
 pub use frame::{
     AppliedSummary, ChangeOpKind, ChangeSummary, Envelope, ErrorFrame, EventFrame, FRAME_KINDS,
@@ -23,8 +23,8 @@ pub use frame::{
 };
 pub use intent::{
     BranchBootstrap, BranchSeedDefaults, DeviceRegister, DeviceRevoke, DeviceVersionReported,
-    Intent, IntentCategory, IntentKind, IntentPayload, PermEffect, RolePerm, RoleUpsert,
-    SettingsSet, StaffUpsert,
+    Intent, IntentCategory, IntentKind, IntentPayload, PermEffect, ReasonCode, RolePerm,
+    RoleUpsert, SettingsSet, StaffUpsert, reasons_json,
 };
 pub use permission::{Permission, Requirement};
 pub use scope::{ClientClass, class_scope, in_scope};
@@ -32,7 +32,10 @@ pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
     SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLocale, SymbolPosition,
 };
-pub use ui_auth::{SessionStaff, SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest};
+pub use ui_auth::{
+    ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_TICKET_USES, SessionStaff,
+    SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest,
+};
 
 /// Returns this crate's name.
 pub fn crate_name() -> &'static str {

@@ -225,6 +225,8 @@ pub struct ChangeRecord {
     pub business_day: Option<String>,
     /// The financial year of `business_day`, e.g. `FY2026-27`.
     pub fy: Option<String>,
+    /// The intent's reason code (e.g. `stolen`), for kinds that require one (migration 0007).
+    pub reason: Option<String>,
 }
 
 /// A new branch row (`rev` and timestamps are set by the stamp step).
@@ -599,8 +601,9 @@ pub fn insert_change(conn: &Connection, c: &ChangeRecord) -> Result<(), AppError
         "INSERT INTO changes (epoch, seq, tbl, row_id, op, row, intent_id, intent_kind,
                               actor_kind, actor_id, elevated_by_kind, elevated_by_id,
                               elevated_by_mode, elevated_by_verifier_version, at,
-                              business_day, fy)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                              business_day, fy, reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                 ?18)",
         params![
             c.epoch,
             c.seq,
@@ -618,7 +621,8 @@ pub fn insert_change(conn: &Connection, c: &ChangeRecord) -> Result<(), AppError
             c.elevated_by_verifier_version,
             c.at,
             c.business_day,
-            c.fy
+            c.fy,
+            c.reason
         ],
     )
     .map_err(db_error)?;
@@ -631,7 +635,7 @@ pub fn read_changes(conn: &Connection) -> Result<Vec<ChangeRecord>, AppError> {
         .prepare(
             "SELECT epoch, seq, tbl, row_id, op, row, intent_id, intent_kind, actor_kind,
                     actor_id, elevated_by_kind, elevated_by_id, elevated_by_mode,
-                    elevated_by_verifier_version, at, business_day, fy
+                    elevated_by_verifier_version, at, business_day, fy, reason
              FROM changes
              ORDER BY CAST(substr(epoch, 1, instr(epoch, ':') - 1) AS INTEGER), epoch, seq",
         )
@@ -663,6 +667,7 @@ pub fn read_changes(conn: &Connection) -> Result<Vec<ChangeRecord>, AppError> {
                 at: r.get(14)?,
                 business_day: r.get(15)?,
                 fy: r.get(16)?,
+                reason: r.get(17)?,
             })
         })
         .map_err(db_error)?;
@@ -789,6 +794,7 @@ mod tests {
             at: 5,
             business_day: Some("2027-01-01".into()),
             fy: Some("FY2026-27".into()),
+            reason: None,
         }
     }
 
@@ -829,13 +835,35 @@ mod tests {
             ..change("1:A", 1)
         };
         assert!(store.write_tx(|tx| insert_change(tx, &bad_mode)).is_err());
+        // Since 0007 the elevation kind is how it was proven, not an actor kind.
+        for kind in ["staff", "owner", "robot"] {
+            let bad_kind = ChangeRecord {
+                elevated_by_kind: Some(kind.into()),
+                elevated_by_id: Some("mgr".into()),
+                elevated_by_mode: Some("hub".into()),
+                elevated_by_verifier_version: Some(1),
+                ..change("1:A", 1)
+            };
+            assert!(
+                store.write_tx(|tx| insert_change(tx, &bad_kind)).is_err(),
+                "{kind}"
+            );
+        }
+        let mfa = ChangeRecord {
+            elevated_by_kind: Some("mfa".into()),
+            elevated_by_id: Some("owner".into()),
+            elevated_by_mode: Some("hub".into()),
+            elevated_by_verifier_version: Some(1),
+            ..change("1:A", 1)
+        };
+        store.write_tx(|tx| insert_change(tx, &mfa)).unwrap();
     }
 
     #[test]
     fn elevated_by_columns_round_trip_and_are_all_or_nothing() {
         let (_dir, mut store) = store();
         let elevated = ChangeRecord {
-            elevated_by_kind: Some("staff".into()),
+            elevated_by_kind: Some("pin".into()),
             elevated_by_id: Some("mgr".into()),
             elevated_by_mode: Some("cached_verifier".into()),
             elevated_by_verifier_version: Some(3),

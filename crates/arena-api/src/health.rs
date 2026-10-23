@@ -208,7 +208,8 @@ pub async fn serve_router(
 }
 
 /// Dev-only loopback endpoints (feature `dev-fixtures`, never in release builds):
-/// `POST /dev/revoke-device` with `{"device_id": "…"}` submits `device.revoke` as
+/// `POST /dev/revoke-device` with `{"device_id": "…", "reason"?: "lost"}` (the reason defaults
+/// to `other`) submits `device.revoke` as
 /// `actor{owner, "dev-revoke"}` (`device.remote` is a permission, which the owner holds) through the running Hub's writer. It answers 200 with
 /// `{"applied": …}`, or an error status with `{"error": AppError}`.
 #[cfg(feature = "dev-fixtures")]
@@ -240,8 +241,24 @@ pub fn dev_router(writer: Option<arena_core::WriterHandle>, clock: Arc<dyn Clock
         body: String,
     ) -> (StatusCode, Json<serde_json::Value>) {
         let fail = |e: AppError| (status_of(e.code), Json(serde_json::json!({ "error": e })));
-        let device_id = match serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
+        let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+        // A revoke records why; the dev route defaults to `other`, and refuses a reason it does
+        // not know.
+        let reason = match parsed.as_ref().and_then(|v| v.get("reason")) {
+            None => arena_proto::ReasonCode::Other,
+            Some(raw) => match serde_json::from_value(raw.clone()) {
+                Ok(r) => r,
+                Err(_) => {
+                    return fail(AppError::with_field(
+                        ErrorCode::ValidationFailed,
+                        "reason",
+                        "reason must be lost, stolen, replaced or other",
+                    ));
+                }
+            },
+        };
+        let device_id = match parsed
+            .as_ref()
             .and_then(|v| v.get("device_id")?.as_str().map(str::to_owned))
         {
             Some(id) => id,
@@ -269,6 +286,7 @@ pub fn dev_router(writer: Option<arena_core::WriterHandle>, clock: Arc<dyn Clock
                 id: "dev-revoke".into(),
             },
             elevated_by: None,
+            reason: Some(reason),
             payload: IntentPayload::DeviceRevoke(DeviceRevoke { device_id }),
         };
         match writer.submit_intent(intent).await {
@@ -360,6 +378,15 @@ mod tests {
         for (body, status) in [
             ("nope", StatusCode::BAD_REQUEST),
             (r#"{"device_id":"D"}"#, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                r#"{"device_id":"D","reason":"stolen"}"#,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            // An unknown reason is refused on `reason`, never taken as `other`.
+            (
+                r#"{"device_id":"D","reason":"bored"}"#,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
         ] {
             let res = app
                 .clone()

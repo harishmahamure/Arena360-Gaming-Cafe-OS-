@@ -3,6 +3,7 @@ import type { Actor } from "./Actor";
 import type { ElevatedBy } from "./ElevatedBy";
 import type { IntentKind } from "./IntentKind";
 import type { IntentPayload } from "./IntentPayload";
+import type { ReasonCode } from "./ReasonCode";
 
 /**
  * A request to change branch state. Every write goes through `apply()` as one of these.
@@ -28,5 +29,9 @@ export type Intent = {
   base_rev?: number;
   actor: Actor;
   elevated_by?: ElevatedBy;
+  /**
+   * Why, for kinds that require a reason; `None` otherwise.
+   */
+  reason?: ReasonCode;
   payload: IntentPayload;
 };

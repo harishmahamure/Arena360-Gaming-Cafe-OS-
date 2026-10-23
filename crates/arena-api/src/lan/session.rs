@@ -10,8 +10,9 @@
 //!
 //! **After hello.** Errors never close the session: an unparseable frame gets `BAD_FRAME`, an
 //! unknown kind `UNSUPPORTED`. `intent.submit` goes to the writer with the session's actor
-//! (`{device, device_id}`), overwriting any actor in the frame. A follower refuses every intent
-//! with `NOT_PRIMARY`; an intent outside the class scope gets `FORBIDDEN` and a `warn` line.
+//! (`{device, device_id}`), overwriting any actor in the frame and dropping any `elevated_by`.
+//! A follower refuses every intent with `NOT_PRIMARY`; an intent outside the class scope gets
+//! `FORBIDDEN` and a `warn` line.
 //!
 //! **Queues.** Replies and pushes share one bounded queue drained by the session's writer
 //! task, so a slow client only ever stalls itself; the fan-out drops a session whose queue is
@@ -269,6 +270,7 @@ fn report_version(hub: &LanHub, authed: &Authed, version: &str) {
             id: LAN_SYSTEM_ACTOR.to_owned(),
         },
         elevated_by: None,
+        reason: None,
         payload: IntentPayload::DeviceVersionReported(DeviceVersionReported {
             device_id: device.device_id.clone(),
             version: version.to_owned(),
@@ -597,9 +599,7 @@ impl Ctx<'_> {
             return Err(app(ErrorCode::BadFrame, "malformed intent.submit"));
         };
         debug_assert_eq!(frame.rid, rid);
-        let mut intent = submit.intent;
-        intent.actor = self.authed.actor.clone();
-        Ok(intent)
+        Ok(bind_to_session(submit.intent, &self.authed.actor))
     }
 
     async fn spawn_submit(
@@ -637,10 +637,52 @@ impl Ctx<'_> {
     }
 }
 
+/// What a LAN `intent.submit` becomes: the session's actor replaces the frame's, and any
+/// `elevated_by` is dropped (only the Hub's loopback ticket path may elevate).
+fn bind_to_session(mut intent: Intent, actor: &Actor) -> Intent {
+    intent.actor = actor.clone();
+    intent.elevated_by = None;
+    intent
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lan::HubCert;
+
+    #[test]
+    fn a_forged_elevation_is_dropped_and_the_actor_replaced() {
+        let device = Actor {
+            kind: ActorKind::Device,
+            id: "01JDEVICE".into(),
+        };
+        let forged = Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: IntentKind::DeviceRevoke,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: 0,
+            base_rev: None,
+            actor: Actor {
+                kind: ActorKind::Staff,
+                id: "01JCOUNTER".into(),
+            },
+            elevated_by: Some(arena_proto::ElevatedBy {
+                kind: arena_proto::ElevationKind::Pin,
+                id: "01JMANAGER".into(),
+                mode: arena_proto::ElevationMode::Hub,
+                verifier_version: 1,
+            }),
+            reason: Some(arena_proto::ReasonCode::Lost),
+            payload: IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                device_id: "01JOTHER".into(),
+            }),
+        };
+        let bound = bind_to_session(forged.clone(), &device);
+        assert_eq!(bound.elevated_by, None);
+        assert_eq!(bound.actor, device);
+        assert_eq!(bound.reason, forged.reason);
+        assert_eq!(bound.payload, forged.payload);
+    }
     use arena_core::{DeviceDirectory, HubStatus, ManualClock, status_channel};
     use arena_proto::parse_frame;
 

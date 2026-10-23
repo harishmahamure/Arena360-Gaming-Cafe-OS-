@@ -25,6 +25,34 @@ pub fn auth_failed() -> AppError {
     AppError::new(ErrorCode::AuthFailed, AUTH_FAILED_MESSAGE)
 }
 
+/// The one message for a PIN that approves nothing: wrong, someone without the permission, or
+/// the signed-in member's own. It never names anyone.
+pub const PIN_REJECTED_MESSAGE: &str = "that PIN can't approve this";
+
+/// A PIN that approves nothing.
+pub fn pin_rejected() -> AppError {
+    AppError::new(ErrorCode::PinRejected, PIN_REJECTED_MESSAGE)
+}
+
+/// Most staff whose PIN one elevation attempt checks.
+pub const MAX_PIN_CANDIDATES: usize = 50;
+
+/// PIN length bounds, in digits.
+pub const MIN_PIN_DIGITS: usize = 4;
+pub const MAX_PIN_DIGITS: usize = 6;
+
+/// Whether `pin` is 4–6 ASCII digits.
+pub fn is_pin_shaped(pin: &str) -> bool {
+    (MIN_PIN_DIGITS..=MAX_PIN_DIGITS).contains(&pin.len())
+        && pin.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// An elevation that no longer holds: no usable ticket, or the PIN changed since it was
+/// checked.
+pub fn pin_required() -> AppError {
+    AppError::new(ErrorCode::PinRequired, "enter the PIN again")
+}
+
 /// The argon2id PHC string of a password or PIN (random salt, default parameters). Blocking.
 pub fn hash_secret(secret: &str) -> Result<String, AppError> {
     hash_token_secret(secret)
@@ -86,6 +114,20 @@ pub fn new_session_token() -> Result<String, AppError> {
     Ok(base64url(&bytes[..32]))
 }
 
+/// A fresh elevation ticket: 16 bytes (128 bits) from the OS RNG, base64url (22 characters).
+pub fn new_elevation_ticket() -> Result<String, AppError> {
+    let salt = try_generate_salt()
+        .map_err(|e| AppError::new(ErrorCode::Internal, format!("os rng: {e}")))?;
+    let bytes: &[u8] = salt.as_ref();
+    if bytes.len() < 16 {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "os rng returned too few bytes",
+        ));
+    }
+    Ok(base64url(&bytes[..16]))
+}
+
 /// Reads `staff` on its own read-only connection (never through the writer), for sign-in.
 pub struct StaffDirectory {
     reader: Mutex<Store>,
@@ -125,6 +167,36 @@ impl StaffDirectory {
             role_name: role.name,
             permissions,
         }))
+    }
+
+    /// Finds whose PIN `pin` is among the active staff with a PIN whose role allows every one
+    /// of `permissions`, other than `exclude` (the signed-in member: nobody approves their own
+    /// intent), checking at most [`MAX_PIN_CANDIDATES`] of them one by one with argon2id.
+    /// Answers the match's `(staff_id, pin_verifier_version)`, or `None`. A PIN that is not 4–6
+    /// digits, or no candidate at all, still costs one argon2id check. The PIN is never logged.
+    /// Blocking.
+    pub fn match_pin(
+        &self,
+        permissions: &[Permission],
+        exclude: &str,
+        pin: &str,
+    ) -> Result<Option<(String, i64)>, AppError> {
+        let candidates = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+            let names: Vec<&str> = permissions.iter().map(|p| p.as_str()).collect();
+            store.pin_candidates(&names, exclude, MAX_PIN_CANDIDATES)?
+        };
+        if !is_pin_shaped(pin) || candidates.is_empty() {
+            let _ = verify_secret(pin, dummy_hash());
+            return Ok(None);
+        }
+        Ok(candidates
+            .into_iter()
+            .find(|c| verify_secret(pin, &c.pin_hash))
+            .map(|c| (c.staff_id, c.pin_verifier_version)))
     }
 
     /// Verifies `login` and `password`. The row is read under the lock; the argon2id check
@@ -183,6 +255,21 @@ mod tests {
         let t = new_session_token().unwrap();
         assert_eq!(t.len(), 43);
         assert_ne!(t, new_session_token().unwrap());
+        let ticket = new_elevation_ticket().unwrap();
+        assert_eq!(ticket.len(), 22);
+        assert_ne!(ticket, new_elevation_ticket().unwrap());
+    }
+
+    #[test]
+    fn pins_are_four_to_six_digits() {
+        for ok in ["0000", "12345", "999999"] {
+            assert!(is_pin_shaped(ok), "{ok}");
+        }
+        for bad in ["", "123", "1234567", "12a4", " 1234", "١٢٣٤"] {
+            assert!(!is_pin_shaped(bad), "{bad}");
+        }
+        assert_eq!(pin_rejected().code, ErrorCode::PinRejected);
+        assert_eq!(pin_required().code, ErrorCode::PinRequired);
     }
 
     #[test]

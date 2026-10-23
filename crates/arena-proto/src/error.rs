@@ -42,6 +42,13 @@ pub enum ErrorCode {
     AuthLocked,
     /// The actor does not hold the permission (or implicit principal) the intent requires.
     PermissionDenied,
+    /// The intent needs a manager PIN (again): no elevation, an unusable ticket, or the PIN
+    /// changed since it was checked.
+    PinRequired,
+    /// The PIN entered approves nothing. One fixed message; it never names anyone.
+    PinRejected,
+    /// The intent kind needs a reason and none was given.
+    ReasonRequired,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -76,6 +83,9 @@ impl ErrorCode {
             Self::AuthFailed => "AUTH_FAILED",
             Self::AuthLocked => "AUTH_LOCKED",
             Self::PermissionDenied => "PERMISSION_DENIED",
+            Self::PinRequired => "PIN_REQUIRED",
+            Self::PinRejected => "PIN_REJECTED",
+            Self::ReasonRequired => "REASON_REQUIRED",
         }
     }
 }
@@ -168,6 +178,9 @@ mod tests {
             (ErrorCode::AuthFailed, "AUTH_FAILED"),
             (ErrorCode::AuthLocked, "AUTH_LOCKED"),
             (ErrorCode::PermissionDenied, "PERMISSION_DENIED"),
+            (ErrorCode::PinRequired, "PIN_REQUIRED"),
+            (ErrorCode::PinRejected, "PIN_REJECTED"),
+            (ErrorCode::ReasonRequired, "REASON_REQUIRED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

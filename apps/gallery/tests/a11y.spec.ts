@@ -59,13 +59,18 @@ test("keyboard focus: every tab stop shows a visible indicator", async ({ page }
       shadow: s.boxShadow,
     };
   };
-  const expected = await page.evaluate(
-    (selector) =>
-      [...document.querySelectorAll<HTMLElement>(selector)].filter(
-        (el) => el.tabIndex >= 0 && el.offsetParent !== null,
-      ).length,
-    INTERACTIVE,
-  );
+  const expected = await page.evaluate((selector) => {
+    const seenGroups = new Set<string>();
+    return [...document.querySelectorAll<HTMLElement>(selector)].filter((el) => {
+      if (el.tabIndex < 0 || el.offsetParent === null) return false;
+      // A radio group is one tab stop.
+      if (el instanceof HTMLInputElement && el.type === "radio" && el.name) {
+        if (seenGroups.has(el.name)) return false;
+        seenGroups.add(el.name);
+      }
+      return true;
+    }).length;
+  }, INTERACTIVE);
   expect(expected).toBeGreaterThan(30);
 
   const seen: { label: string; focused: { outline: string; shadow: string }; forced: boolean }[] =

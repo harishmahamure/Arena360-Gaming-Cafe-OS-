@@ -86,6 +86,7 @@ fn intent(actor: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent
         base_rev,
         actor,
         elevated_by: None,
+        reason: payload.kind().reasons().map(|r| r[0]),
         payload,
     }
 }

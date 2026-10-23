@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arena_proto::{
-    Actor, ActorKind, AppError, BranchBootstrap, ElevatedBy, ElevationMode, ErrorCode, Intent,
-    IntentKind, IntentPayload, SettingsSet,
+    Actor, ActorKind, AppError, BranchBootstrap, ElevatedBy, ElevationKind, ElevationMode,
+    ErrorCode, Intent, IntentKind, IntentPayload, ReasonCode, SettingsSet,
 };
 use arena_store::{ChangeOp, LeaseRow, Row, RowValue, Store, Table, read_lease, write_lease};
 use tokio::sync::{broadcast, watch};
@@ -91,6 +91,7 @@ fn intent_with(actor: ActorKind, b: BranchBootstrap) -> Intent {
             id: "test".into(),
         },
         elevated_by: None,
+        reason: None,
         payload: IntentPayload::BranchBootstrap(b),
     }
 }
@@ -459,18 +460,19 @@ async fn unknown_envelope_kind_does_not_decode() {
 }
 
 #[tokio::test]
-async fn unverified_elevation_is_forbidden() {
+async fn an_elevated_system_intent_is_forbidden() {
+    // Only a permission can be lent by a PIN: a System requirement cannot be elevated.
     let f = primary();
     let mut intent = bootstrap();
     intent.elevated_by = Some(ElevatedBy {
-        kind: ActorKind::Staff,
+        kind: ElevationKind::Pin,
         id: "mgr".into(),
-        mode: ElevationMode::CachedVerifier,
-        verifier_version: 3,
+        mode: ElevationMode::Hub,
+        verifier_version: 1,
     });
     let err = expect_err(&f, intent).await;
     assert_eq!(err.code, ErrorCode::PermissionDenied);
-    assert_eq!(err.message, "elevation not verified");
+    assert_eq!(err.message, crate::rbac::denied().message);
     assert_nothing_written(&reopen(&f));
 }
 
@@ -648,6 +650,7 @@ fn set(key: &str, value: &str, base_rev: Option<i64>) -> Intent {
             id: "owner-1".into(),
         },
         elevated_by: None,
+        reason: None,
         payload: IntentPayload::SettingsSet(SettingsSet {
             key: key.into(),
             value: value.into(),
@@ -1064,6 +1067,8 @@ async fn values_are_validated_per_key() {
 fn device_intent(actor: ActorKind, body: IntentPayload) -> Intent {
     Intent {
         kind: body.kind(),
+        // A revoke needs a reason; the reason rows have their own tests.
+        reason: body.kind().reasons().map(|r| r[0]),
         payload: body,
         ..intent_with(actor, payload())
     }
@@ -2037,6 +2042,353 @@ mod rbac_matrix {
             let err = expect_err(&f, as_actor(owner(), custom_role(name, &[]), None)).await;
             assert_eq!(err.field.as_deref(), Some("name"), "{name}");
         }
+    }
+
+    // ---- Story 1.13: inline manager PIN elevation (the apply() rows of the matrix) ----
+
+    /// Registers a staff member with a PIN as the owner; returns the staff id.
+    async fn add_staff_pin(f: &Fixture, login: &str, role: &str, pin: &str) -> String {
+        let rid = role_id(f, role);
+        let applied = f
+            .writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    pin_hash: Some(hash_secret(pin).unwrap()),
+                    ..staff_body(login, &rid, Some("pw"))
+                }),
+                None,
+            ))
+            .await
+            .unwrap();
+        applied.changes[0].row_id.clone()
+    }
+
+    fn pin_by(id: &str, version: i64) -> ElevatedBy {
+        ElevatedBy {
+            kind: ElevationKind::Pin,
+            id: id.into(),
+            mode: ElevationMode::Hub,
+            verifier_version: version,
+        }
+    }
+
+    fn currency_rev(f: &Fixture) -> i64 {
+        match setting(&reopen(f), "branch.currency")["rev"] {
+            RowValue::Integer(n) => n,
+            ref other => panic!("rev is {other:?}"),
+        }
+    }
+
+    /// The Counter's `settings.set` of the currency, elevated by `by`.
+    fn counter_sets_currency(f: &Fixture, counter: &str, by: Option<ElevatedBy>) -> Intent {
+        Intent {
+            elevated_by: by,
+            ..as_actor(
+                staff_actor(counter),
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: "branch.currency".into(),
+                    value: "USD".into(),
+                }),
+                Some(currency_rev(f)),
+            )
+        }
+    }
+
+    struct Crew {
+        f: Fixture,
+        manager: String,
+        counter: String,
+        kitchen: String,
+    }
+
+    async fn crew() -> Crew {
+        let f = bootstrapped().await;
+        let manager = add_staff_pin(&f, "manager", ROLE_MANAGER, "2222").await;
+        let counter = add_staff_pin(&f, "counter", ROLE_COUNTER, "3333").await;
+        let kitchen = add_staff_pin(&f, "kitchen", ROLE_KITCHEN, "4444").await;
+        Crew {
+            f,
+            manager,
+            counter,
+            kitchen,
+        }
+    }
+
+    #[tokio::test]
+    async fn approve_records_the_counter_as_actor_and_the_manager_as_elevator() {
+        let c = crew().await;
+        let applied =
+            c.f.writer
+                .submit_intent(counter_sets_currency(
+                    &c.f,
+                    &c.counter,
+                    Some(pin_by(&c.manager, 1)),
+                ))
+                .await
+                .unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        let change = reopen(&c.f).changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (change.actor_kind.as_str(), change.actor_id.as_str()),
+            ("staff", c.counter.as_str())
+        );
+        assert_eq!(change.elevated_by_kind.as_deref(), Some("pin"));
+        assert_eq!(change.elevated_by_id.as_deref(), Some(c.manager.as_str()));
+        assert_eq!(change.elevated_by_mode.as_deref(), Some("hub"));
+        assert_eq!(change.elevated_by_verifier_version, Some(1));
+        assert_eq!(change.reason, None);
+        assert_eq!(
+            setting(&reopen(&c.f), "branch.currency")["value"],
+            RowValue::Text("USD".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn without_elevation_the_counter_is_denied() {
+        let c = crew().await;
+        let before = snapshot(&c.f);
+        let err = expect_err(&c.f, counter_sets_currency(&c.f, &c.counter, None)).await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        assert_eq!(snapshot(&c.f), before);
+    }
+
+    #[tokio::test]
+    async fn an_elevator_lacking_the_permission_self_or_inactive_is_denied() {
+        let c = crew().await;
+        for by in [
+            pin_by(&c.kitchen, 1),
+            pin_by(&c.counter, 1),
+            pin_by("01JNOBODYAAAAAAAAAAAAAAAAA", 1),
+            ElevatedBy {
+                mode: ElevationMode::CachedVerifier,
+                ..pin_by(&c.manager, 1)
+            },
+            ElevatedBy {
+                kind: ElevationKind::Mfa,
+                ..pin_by(&c.manager, 1)
+            },
+        ] {
+            let err = expect_err(
+                &c.f,
+                counter_sets_currency(&c.f, &c.counter, Some(by.clone())),
+            )
+            .await;
+            assert_eq!(err.code, ErrorCode::PermissionDenied, "{by:?}");
+            assert_eq!(err.message, crate::rbac::denied().message);
+        }
+        // A manager may not elevate themself either.
+        let mut own = counter_sets_currency(&c.f, &c.counter, Some(pin_by(&c.manager, 1)));
+        own.actor = staff_actor(&c.manager);
+        assert_eq!(
+            expect_err(&c.f, own).await.code,
+            ErrorCode::PermissionDenied
+        );
+        // A deactivated manager approves nothing.
+        let manager_role = role_id(&c.f, ROLE_MANAGER);
+        c.f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(c.manager.clone()),
+                    active: false,
+                    ..staff_body("manager", &manager_role, None)
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let err = expect_err(
+            &c.f,
+            counter_sets_currency(&c.f, &c.counter, Some(pin_by(&c.manager, 1))),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            setting(&reopen(&c.f), "branch.currency")["value"],
+            RowValue::Text("INR".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_device_or_deactivated_actor_is_never_elevated() {
+        let c = crew().await;
+        let secret = crate::devices::new_token_secret().unwrap();
+        let hash = crate::devices::hash_token_secret(&secret).unwrap();
+        let device =
+            c.f.writer
+                .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+        let before = snapshot(&c.f);
+        // A live device actor with a manager's elevation.
+        let mut by_device = counter_sets_currency(&c.f, &c.counter, Some(pin_by(&c.manager, 1)));
+        by_device.actor = Actor {
+            kind: ActorKind::Device,
+            id: device,
+        };
+        let err = expect_err(&c.f, by_device).await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        // A deactivated Counter with a valid manager elevation.
+        let counter_role = role_id(&c.f, ROLE_COUNTER);
+        c.f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(c.counter.clone()),
+                    active: false,
+                    ..staff_body("counter", &counter_role, None)
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let after_deactivate = snapshot(&c.f);
+        let err = expect_err(
+            &c.f,
+            counter_sets_currency(&c.f, &c.counter, Some(pin_by(&c.manager, 1))),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        assert_eq!(snapshot(&c.f), after_deactivate);
+        assert_ne!(before, after_deactivate);
+    }
+
+    #[tokio::test]
+    async fn a_rotated_pin_needs_entering_again() {
+        let c = crew().await;
+        let manager_role = role_id(&c.f, ROLE_MANAGER);
+        // The manager's PIN rotates between the elevation and the intent: version 1 -> 2.
+        c.f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(c.manager.clone()),
+                    pin_hash: Some(hash_secret("5555").unwrap()),
+                    ..staff_body("manager", &manager_role, None)
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let before = snapshot(&c.f);
+        let err = expect_err(
+            &c.f,
+            counter_sets_currency(&c.f, &c.counter, Some(pin_by(&c.manager, 1))),
+        )
+        .await;
+        assert_eq!(
+            (err.code, err.message.as_str()),
+            (ErrorCode::PinRequired, "enter the PIN again")
+        );
+        assert_eq!(snapshot(&c.f), before);
+        c.f.writer
+            .submit_intent(counter_sets_currency(
+                &c.f,
+                &c.counter,
+                Some(pin_by(&c.manager, 2)),
+            ))
+            .await
+            .unwrap();
+        // An edit that keeps the PIN keeps the version.
+        c.f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(c.manager.clone()),
+                    display_name: "Manager Two".into(),
+                    ..staff_body("manager", &manager_role, None)
+                }),
+                Some(2),
+            ))
+            .await
+            .unwrap();
+        let row = reopen(&c.f)
+            .rows(Table::Staff)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["staff_id"] == RowValue::Text(c.manager.clone()))
+            .unwrap();
+        assert_eq!(row["pin_verifier_version"], RowValue::Integer(2));
+    }
+
+    #[tokio::test]
+    async fn a_revoke_needs_a_reason_and_records_it() {
+        let c = crew().await;
+        let secret = crate::devices::new_token_secret().unwrap();
+        let hash = crate::devices::hash_token_secret(&secret).unwrap();
+        let device =
+            c.f.writer
+                .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+        let revoke = |reason: Option<ReasonCode>| Intent {
+            elevated_by: Some(pin_by(&c.manager, 1)),
+            reason,
+            ..as_actor(
+                staff_actor(&c.counter),
+                IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                    device_id: device.clone(),
+                }),
+                None,
+            )
+        };
+        let before = snapshot(&c.f);
+        let err = expect_err(&c.f, revoke(None)).await;
+        assert_eq!(
+            (err.code, err.field.as_deref()),
+            (ErrorCode::ReasonRequired, Some("reason"))
+        );
+        assert_eq!(snapshot(&c.f), before);
+        c.f.writer
+            .submit_intent(revoke(Some(ReasonCode::Stolen)))
+            .await
+            .unwrap();
+        let change = reopen(&c.f).changes().unwrap().pop().unwrap();
+        assert_eq!(change.intent_kind, "device.revoke");
+        assert_eq!(change.reason.as_deref(), Some("stolen"));
+        assert_eq!(change.actor_id, c.counter);
+        assert_eq!(change.elevated_by_id.as_deref(), Some(c.manager.as_str()));
+    }
+
+    #[tokio::test]
+    async fn match_pin_finds_only_other_staff_holding_the_permission() {
+        let c = crew().await;
+        let dir = StaffDirectory::open(&c.f.path).unwrap();
+        let p = &[Permission::SettingsEdit][..];
+        assert_eq!(
+            dir.match_pin(p, &c.counter, "2222").unwrap(),
+            Some((c.manager.clone(), 1))
+        );
+        // Wrong PIN, a PIN whose role lacks the permission, the member's own PIN, junk.
+        for pin in ["9999", "4444", "12", "abcd", "2222222"] {
+            assert_eq!(dir.match_pin(p, &c.counter, pin).unwrap(), None, "{pin}");
+        }
+        assert_eq!(dir.match_pin(p, &c.manager, "2222").unwrap(), None);
+        // Kitchen holds kitchen.use, but nobody else's role does: no candidates at all.
+        assert_eq!(
+            dir.match_pin(&[Permission::KitchenUse], &c.kitchen, "4444")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reason_on_a_kind_without_reasons_fails_on_reason() {
+        let c = crew().await;
+        let mut intent = counter_sets_currency(&c.f, &c.counter, Some(pin_by(&c.manager, 1)));
+        intent.reason = Some(ReasonCode::Other);
+        let err = expect_err(&c.f, intent).await;
+        assert_eq!(
+            (err.code, err.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("reason"))
+        );
     }
 }
 

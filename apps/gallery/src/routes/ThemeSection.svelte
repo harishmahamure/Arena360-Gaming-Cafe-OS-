@@ -3,10 +3,14 @@
     AlertBadge,
     Button,
     Card,
+    InlinePin,
+    ReasonPicker,
     StatusBadge,
     TabControl,
     TextField,
     focusFirstInvalid,
+    reasonOptions,
+    reasonsFor,
     t,
   } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
@@ -61,6 +65,63 @@
   let usernameError: MessageKey | null = $state(null);
   let passwordError: MessageKey | null = $state(null);
   let valid = $state(false);
+
+  // Manager approval: a stubbed check where 2222 is the only PIN that approves anything.
+  const DEMO_PIN = "2222";
+  const REVOKE = "device.revoke";
+  const REASONS = reasonOptions(REVOKE);
+  const check = async (pin: string) =>
+    pin === DEMO_PIN
+      ? ({ ok: true } as const)
+      : ({ ok: false, message: "ui.pin.rejected" } as const);
+
+  let sampleApproved = $state(false);
+  let sampleKey = $state(0);
+
+  // The reason-requiring flow: device.revoke needs a reason (the generated reasons table says
+  // so), so Revoke asks for it first, then the PIN, then the stubbed revoke applies.
+  let flow: "idle" | "pin" | "reason" = $state("idle");
+  let flowReason: string | null = null;
+  let flowStatus: { message: MessageKey; params?: Record<string, string> } | null = $state(null);
+  let revokeWrap: HTMLElement | undefined = $state();
+  const revokeButton = $derived(revokeWrap?.querySelector("button") ?? null);
+
+  /** The stubbed `device.revoke`: without a reason it is refused, as the Hub refuses it. */
+  function stubRevoke(reason: string | null): "REASON_REQUIRED" | "applied" {
+    return reason ? "applied" : "REASON_REQUIRED";
+  }
+
+  function startRevoke() {
+    flowStatus = null;
+    flowReason = null;
+    flow = reasonsFor(REVOKE) ? "reason" : "pin";
+  }
+
+  function chooseReason(reason: string) {
+    flowReason = reason;
+    flow = "pin";
+  }
+
+  async function flowPin(pin: string) {
+    const result = await check(pin);
+    if (!result.ok) return result;
+    if (stubRevoke(flowReason) === "REASON_REQUIRED") {
+      flow = "reason";
+      return result;
+    }
+    const label = REASONS.find((r) => r.value === flowReason)?.label ?? "reason.other";
+    flow = "idle";
+    flowStatus = { message: "gallery.approval.revoked", params: { reason: t(label) } };
+    await tick();
+    revokeButton?.focus();
+    return result;
+  }
+
+  function flowCancel() {
+    flow = "idle";
+    flowReason = null;
+    flowStatus = { message: "gallery.approval.cancelled" };
+  }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -221,6 +282,59 @@
       <Button type="submit" label="gallery.form.submit" />
       <p class="status" role="status">{valid ? t("gallery.form.valid") : ""}</p>
     </form>
+  </section>
+
+  <section class="group" aria-labelledby="{id}-approval">
+    <h3 id="{id}-approval">{t("gallery.section.approval")}</h3>
+    <p class="note">{t("gallery.approval.hint")}</p>
+    <div class="row">
+      <div class="cell" data-testid="pin-sample">
+        <span class="caption">{t("gallery.approval.pin")}</span>
+        {#key sampleKey}
+          <InlinePin
+            autofocus={false}
+            onsubmit={async (pin) => {
+              const result = await check(pin);
+              sampleApproved = result.ok;
+              return result;
+            }}
+            oncancel={() => {
+              sampleApproved = false;
+              sampleKey++;
+            }}
+          />
+        {/key}
+        <p class="status" role="status">{sampleApproved ? t("gallery.approval.approved") : ""}</p>
+      </div>
+      <div class="cell">
+        <span class="caption">{t("gallery.approval.reasons")}</span>
+        <ReasonPicker
+          autofocus={false}
+          options={REASONS}
+          onconfirm={() => Promise.reject(new Error("offline"))}
+          oncancel={() => {}}
+        />
+      </div>
+      <div class="cell" data-testid="reason-flow">
+        <span class="caption">{t("gallery.approval.flow")}</span>
+        <span bind:this={revokeWrap}>
+          <Button variant="warning" label="gallery.approval.revoke" onclick={startRevoke} />
+        </span>
+        {#if flow === "pin"}
+          <InlinePin onsubmit={flowPin} oncancel={flowCancel} returnFocusTo={revokeButton} />
+        {:else if flow === "reason"}
+          <ReasonPicker
+            options={REASONS}
+            onconfirm={chooseReason}
+            oncancel={flowCancel}
+            returnFocusTo={revokeButton}
+          />
+        {/if}
+        <p class="status" role="status">
+          {flowStatus ? t(flowStatus.message, flowStatus.params) : ""}
+        </p>
+      </div>
+    </div>
   </section>
 </section>
 

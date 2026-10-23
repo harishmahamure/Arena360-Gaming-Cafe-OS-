@@ -3,6 +3,8 @@ import type { Intent } from "./Intent";
 
 /**
  * `POST /ui/intent`: the session's staff actor replaces `intent.actor`, and any
- * `elevated_by` is dropped. A success answers [`IntentResult`](crate::IntentResult).
+ * client-supplied `elevated_by` is dropped. `elevation_ticket` (from `POST /ui/elevate`) is
+ * redeemed for one use: the Hub then sets `elevated_by` itself. A success answers
+ * [`IntentResult`](crate::IntentResult).
  */
-export type UiIntentRequest = { intent: Intent };
+export type UiIntentRequest = { intent: Intent; elevation_ticket?: string };

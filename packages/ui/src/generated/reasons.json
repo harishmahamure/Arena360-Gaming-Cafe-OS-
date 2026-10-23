@@ -1,0 +1,3 @@
+{
+  "device.revoke": ["lost", "stolen", "replaced", "other"]
+}

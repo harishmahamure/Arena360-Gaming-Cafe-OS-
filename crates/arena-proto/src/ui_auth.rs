@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::ErrorCode;
-use crate::intent::Intent;
+use crate::intent::{Intent, IntentKind};
 use crate::permission::Permission;
 
 /// `POST /ui/auth/sign-in`.
@@ -51,11 +51,65 @@ pub struct UiError {
 }
 
 /// `POST /ui/intent`: the session's staff actor replaces `intent.actor`, and any
-/// `elevated_by` is dropped. A success answers [`IntentResult`](crate::IntentResult).
+/// client-supplied `elevated_by` is dropped. `elevation_ticket` (from `POST /ui/elevate`) is
+/// redeemed for one use: the Hub then sets `elevated_by` itself. A success answers
+/// [`IntentResult`](crate::IntentResult).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct UiIntentRequest {
     pub intent: Intent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub elevation_ticket: Option<String>,
+}
+
+/// Most intents one elevation ticket may cover.
+pub const MAX_TICKET_USES: usize = 10;
+
+/// One intent an elevation approves: its kind and, for `settings.set`, the setting key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ElevationItem {
+    pub intent_kind: IntentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub key: Option<String>,
+}
+
+/// `POST /ui/elevate`: a manager's PIN, typed on this screen, approving exactly `items`
+/// (1–[`MAX_TICKET_USES`] intents; each is redeemed once). The PIN goes nowhere else, and
+/// `Debug` never prints it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ElevateRequest {
+    pub items: Vec<ElevationItem>,
+    pub pin: String,
+}
+
+impl std::fmt::Debug for ElevateRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElevateRequest")
+            .field("items", &self.items)
+            .field("pin", &"<redacted>")
+            .finish()
+    }
+}
+
+/// A granted elevation: a single-session ticket for the approved `items`, valid for
+/// `expires_in_s`. It never says whose PIN it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ElevateOk {
+    pub ticket: String,
+    pub items: Vec<ElevationItem>,
+    pub expires_in_s: u32,
+}
+
+/// `POST /ui/elevate/drop`: gives up a ticket's unused approvals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ElevateDrop {
+    pub ticket: String,
 }
 
 /// One branch setting, as `GET /ui/settings` lists them (the `rev` is the edit's `base_rev`).
@@ -71,6 +125,16 @@ pub struct SettingEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elevate_request_never_prints_its_pin() {
+        let req: ElevateRequest = serde_json::from_str(
+            r#"{"items":[{"intent_kind":"settings.set","key":"k"}],"pin":"2468"}"#,
+        )
+        .unwrap();
+        assert_eq!(req.items[0].key.as_deref(), Some("k"));
+        assert!(!format!("{req:?}").contains("2468"));
+    }
 
     #[test]
     fn ui_error_omits_unset_fields() {

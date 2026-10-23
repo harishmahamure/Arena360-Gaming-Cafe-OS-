@@ -1,6 +1,6 @@
 //! The app end of the Kiosk service channel. The webview never sees the channel: this Rust
-//! shell answers the service's pings, forwards `hub_status` and `restore_state` to the webview
-//! as the Tauri events `hub-status` and `restore-state`, and sends the webview's state up as
+//! shell answers the service's pings, forwards `hub_status`, `restore_state` and `toast` to the
+//! webview as the Tauri events `hub-status`, `restore-state` and `toast`, and sends the webview's state up as
 //! `app_state`. The webview has no Hub socket, no token and no admin rights.
 //!
 //! - **Liveness is the webview's.** The shell answers the service's `ping` only while the
@@ -26,6 +26,8 @@ use tokio::sync::{mpsc, watch};
 pub const HUB_STATUS_EVENT: &str = "hub-status";
 /// The Tauri event carrying the state to restore (the JSON the webview reported).
 pub const RESTORE_STATE_EVENT: &str = "restore-state";
+/// The Tauri event carrying a toast's catalogue key (e.g. `player.app.blocked`).
+pub const TOAST_EVENT: &str = "toast";
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
@@ -45,6 +47,8 @@ const RETRY: Duration = Duration::from_millis(500);
 pub enum Emit {
     HubStatus(KioskHubStatus),
     RestoreState(Value),
+    /// A catalogue key to show as a persistent toast.
+    Toast(String),
 }
 
 /// The shell's view of the channel, shared with the Tauri commands.
@@ -154,6 +158,7 @@ impl Bridge {
                 *lock(&self.restore) = Some(json.clone());
                 (None, Some(Emit::RestoreState(json)))
             }
+            IpcMsg::Toast { key } => (None, Some(Emit::Toast(key))),
             // Replies to requests and anything app-side are not for the shell.
             _ => (None, None),
         }
@@ -354,6 +359,7 @@ mod tests {
         let names: Value = serde_json::from_str(include_str!("../ipc-names.json")).unwrap();
         assert_eq!(names["events"]["hubStatus"], HUB_STATUS_EVENT);
         assert_eq!(names["events"]["restoreState"], RESTORE_STATE_EVENT);
+        assert_eq!(names["events"]["toast"], TOAST_EVENT);
         let mut listed: Vec<&str> = names["commands"]
             .as_object()
             .unwrap()
@@ -381,6 +387,18 @@ mod tests {
             (None, None),
             "a hung webview stops the pongs"
         );
+    }
+
+    #[test]
+    fn toasts_are_forwarded_every_time() {
+        let b = Bridge::default();
+        let key = arena_kiosk_core::ipc::TOAST_APP_BLOCKED.to_owned();
+        for _ in 0..2 {
+            assert_eq!(
+                b.on_message(IpcMsg::Toast { key: key.clone() }),
+                (None, Some(Emit::Toast(key.clone())))
+            );
+        }
     }
 
     #[test]

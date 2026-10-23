@@ -1,6 +1,10 @@
 //! The settings every branch starts with, written by `branch.bootstrap`. Every value is TEXT.
 
-use arena_proto::BranchBootstrap;
+use arena_proto::{
+    BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap, DEFAULT_PROCESS_ALLOW,
+    DEFAULT_PROCESS_BLOCK, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, ProcessList,
+    ProcessMode,
+};
 
 /// The branch locale keys. They are authoritative for the locale; the `branch` row's columns
 /// only hold the bootstrap values.
@@ -43,12 +47,30 @@ pub fn bootstrap_locale_settings(b: &BranchBootstrap) -> [(&'static str, String)
     ]
 }
 
-/// `(key, value)` pairs inserted at bootstrap, in this order.
+/// `(key, value)` pairs inserted at bootstrap, in this order. A branch bootstrapped before a
+/// key existed gets it from `branch.seed_defaults` when the Hub becomes primary.
 pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("idle_lock_minutes", "5"),
     ("hub.locale", "en-IN"),
     ("receipt.footer", ""),
+    // Story 1.18: the kiosk process lists (JSON arrays of `{path_glob, signer?}`).
+    (KEY_PROCESS_ALLOW, DEFAULT_PROCESS_ALLOW),
+    (KEY_PROCESS_BLOCK, DEFAULT_PROCESS_BLOCK),
+    // A new branch enforces; an upgraded one is backfilled in report mode ([`backfill_value`]).
+    (KEY_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE),
 ];
+
+/// The value `branch.seed_defaults` inserts for a default setting an existing branch lacks:
+/// the bootstrap default, except `kiosk.process_mode`, which is backfilled as `report` so an
+/// upgraded café's games are never killed before an operator has checked the reports and
+/// switched it to `enforce`.
+pub fn backfill_value<'a>(key: &str, bootstrap_default: &'a str) -> &'a str {
+    if key == KEY_PROCESS_MODE {
+        BACKFILL_PROCESS_MODE
+    } else {
+        bootstrap_default
+    }
+}
 
 /// The shape a setting's TEXT value must have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +87,9 @@ pub enum SettingRule {
     TimeZone,
     /// One of a fixed set of words.
     OneOf(&'static [&'static str]),
+    /// A kiosk process list: a JSON array of at most 500 `{path_glob, signer?}` rules
+    /// (`arena_proto::parse_process_rules`), up to `MAX_PROCESS_RULES_CHARS` long.
+    ProcessRules(ProcessList),
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -90,6 +115,15 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         SettingRule::Integer { min: 0, max: 1439 },
     ),
     (KEY_FY_START_MONTH, SettingRule::Integer { min: 1, max: 12 }),
+    (
+        KEY_PROCESS_ALLOW,
+        SettingRule::ProcessRules(ProcessList::Allow),
+    ),
+    (
+        KEY_PROCESS_BLOCK,
+        SettingRule::ProcessRules(ProcessList::Block),
+    ),
+    (KEY_PROCESS_MODE, SettingRule::OneOf(ProcessMode::VALUES)),
 ];
 
 /// The rule for `key`, if `key` is a known setting.
@@ -123,6 +157,15 @@ impl SettingRule {
             Self::Currency => arena_proto::currency::is_known_currency(value),
             Self::TimeZone => value.parse::<chrono_tz::Tz>().is_ok(),
             Self::OneOf(words) => words.contains(&value),
+            Self::ProcessRules(list) => arena_proto::parse_process_rules(list, value).is_ok(),
+        }
+    }
+
+    /// The longest value this rule takes, in characters.
+    pub fn max_chars(self) -> usize {
+        match self {
+            Self::ProcessRules(_) => arena_proto::MAX_PROCESS_RULES_CHARS,
+            _ => crate::apply::MAX_SETTING_VALUE_CHARS,
         }
     }
 }
@@ -237,6 +280,30 @@ mod tests {
     }
 
     #[test]
+    fn process_list_rules() {
+        let allow = setting_rule("kiosk.process_allow").unwrap();
+        let block = setting_rule("kiosk.process_block").unwrap();
+        assert!(allow.accepts(r#"[{"path_glob": "C:\\Games\\*.exe"}]"#));
+        assert!(
+            !allow.accepts(r#"[{"path_glob": "x.exe"}]"#),
+            "a name alone"
+        );
+        assert!(block.accepts(r#"[{"path_glob": "x.exe"}]"#));
+        assert!(!block.accepts("not json"));
+        assert!(!block.accepts("{}"));
+        let mode = setting_rule("kiosk.process_mode").unwrap();
+        assert!(mode.accepts("enforce") && mode.accepts("report"));
+        assert!(!mode.accepts("off") && !mode.accepts("Report"));
+        assert_eq!(backfill_value("kiosk.process_mode", "enforce"), "report");
+        assert_eq!(backfill_value("receipt.footer", ""), "");
+        assert_eq!(allow.max_chars(), arena_proto::MAX_PROCESS_RULES_CHARS);
+        assert_eq!(
+            setting_rule("receipt.footer").unwrap().max_chars(),
+            crate::apply::MAX_SETTING_VALUE_CHARS
+        );
+    }
+
+    #[test]
     fn keys_are_unique_and_required_ones_present() {
         let mut keys: Vec<_> = DEFAULT_SETTINGS.iter().map(|(k, _)| *k).collect();
         keys.sort_unstable();
@@ -246,6 +313,9 @@ mod tests {
             ("idle_lock_minutes", "5"),
             ("hub.locale", "en-IN"),
             ("receipt.footer", ""),
+            ("kiosk.process_allow", DEFAULT_PROCESS_ALLOW),
+            ("kiosk.process_block", DEFAULT_PROCESS_BLOCK),
+            ("kiosk.process_mode", "enforce"),
         ] {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
         }

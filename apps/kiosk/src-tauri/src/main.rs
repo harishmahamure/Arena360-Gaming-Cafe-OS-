@@ -12,7 +12,7 @@ mod shell;
 use std::sync::Arc;
 
 use arena_proto::KioskHubStatus;
-use bridge::{Bridge, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT};
+use bridge::{Bridge, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT, TOAST_EVENT};
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WindowEvent};
 
 fn crate_name() -> &'static str {
@@ -133,6 +133,7 @@ fn main() {
                     let _ = match e {
                         Emit::HubStatus(s) => handle.emit(HUB_STATUS_EVENT, s),
                         Emit::RestoreState(v) => handle.emit(RESTORE_STATE_EVENT, v),
+                        Emit::Toast(key) => handle.emit(TOAST_EVENT, key),
                     };
                 };
                 bridge.run(&emit).await;

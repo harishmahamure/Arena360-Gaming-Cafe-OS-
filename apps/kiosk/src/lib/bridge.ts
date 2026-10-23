@@ -1,7 +1,7 @@
 // The webview's only link to the outside: the Tauri shell, which relays the Kiosk service.
 // The webview has no Hub socket and no token; it hears the Hub link state as the `hub-status`
 // event and reports its own restorable state, which comes back as `restore-state` after a
-// restart. Outside Tauri (a plain browser in dev) every call is a no-op.
+// restart. Toasts the service raises (a blocked app was closed) arrive as `toast`. Outside Tauri (a plain browser in dev) every call is a no-op.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -11,6 +11,7 @@ import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 
 export const HUB_STATUS_EVENT = names.events.hubStatus;
 export const RESTORE_STATE_EVENT = names.events.restoreState;
+export const TOAST_EVENT = names.events.toast;
 const CMD = names.commands;
 /** How often the webview tells the shell it is alive (the shell answers pings only then). */
 export const HEARTBEAT_MS = 1000;
@@ -50,6 +51,22 @@ export async function onHubStatus(cb: (s: KioskHubStatus) => void): Promise<() =
 export async function onRestoreState(cb: (state: unknown) => void): Promise<() => void> {
   if (!inTauri()) return () => {};
   return listen<unknown>(RESTORE_STATE_EVENT, (e) => cb(e.payload));
+}
+
+/** The toasts the service may raise (catalogue keys); anything else is ignored. */
+export const TOAST_KEYS = ["player.app.blocked"] as const;
+export type ToastKey = (typeof TOAST_KEYS)[number];
+
+export function isToastKey(v: unknown): v is ToastKey {
+  return typeof v === "string" && (TOAST_KEYS as readonly string[]).includes(v);
+}
+
+/** Calls `cb` with every toast the service raises (e.g. after it closed a blocked app). */
+export async function onToast(cb: (key: ToastKey) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(TOAST_EVENT, (e) => {
+    if (isToastKey(e.payload)) cb(e.payload);
+  });
 }
 
 /** A state to restore that arrived before this page listened, once. */

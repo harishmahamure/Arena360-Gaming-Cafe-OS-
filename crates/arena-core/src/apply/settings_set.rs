@@ -14,7 +14,7 @@ use chrono::NaiveDate;
 
 use super::mutate::Written;
 use crate::locale;
-use crate::settings_defaults::{DEFERRED_KEYS, setting_rule};
+use crate::settings_defaults::{DEFERRED_KEYS, SettingRule, setting_rule};
 
 /// Longest value, in characters.
 pub const MAX_SETTING_VALUE_CHARS: usize = 4096;
@@ -45,17 +45,22 @@ pub(super) fn base_rev(intent: &Intent, row: Option<&SettingRef>) -> Result<(), 
 }
 
 /// **validate.** The key must name an existing, known setting; the value must fit the key's
-/// rule and the global length limit.
+/// rule and length limit (the global [`MAX_SETTING_VALUE_CHARS`], or the larger one of a kiosk
+/// process list, whose own error names the bad rule).
 pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), AppError> {
     let rule = match (row, setting_rule(&s.key)) {
         (Some(_), Some(rule)) => rule,
         _ => return Err(invalid("key", "no such setting")),
     };
-    if s.value.chars().count() > MAX_SETTING_VALUE_CHARS {
+    let max = rule.max_chars();
+    if s.value.chars().count() > max {
         return Err(invalid(
             "value",
-            format!("value must be at most {MAX_SETTING_VALUE_CHARS} characters"),
+            format!("value must be at most {max} characters"),
         ));
+    }
+    if let SettingRule::ProcessRules(list) = rule {
+        return arena_proto::parse_process_rules(list, &s.value).map(|_| ());
     }
     if !rule.accepts(&s.value) {
         return Err(invalid(

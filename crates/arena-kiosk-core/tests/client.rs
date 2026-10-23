@@ -170,7 +170,9 @@ async fn connects_with_the_pinned_fingerprint_and_receives_events() {
         .await
         .unwrap()
         .unwrap();
-    let HubEvent::Applied(s) = ev;
+    let HubEvent::Applied(s) = ev else {
+        panic!("{:?}", ev)
+    };
     assert_eq!(s.intent_id, "I");
     let reply = client
         .request("ping", serde_json::Value::Null)

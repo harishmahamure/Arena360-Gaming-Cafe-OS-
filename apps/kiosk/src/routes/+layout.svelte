@@ -9,10 +9,12 @@
     currentHubStatus,
     onHubStatus,
     onRestoreState,
+    onToast,
     reportAppState,
     restoredRoute,
     startHeartbeat,
     takeRestoreState,
+    type ToastKey,
   } from "../lib/bridge";
   import { installKioskGuards, placeOnPrimary } from "../lib/guards";
 
@@ -23,6 +25,12 @@
 
   /** The Hub link as the Kiosk service reports it (unknown until it says). */
   let hub: KioskHubState | null = $state(null);
+
+  /**
+   * The toast on screen: it stays until the player dismisses it, and the same toast again
+   * (another blocked app) replaces it rather than stacking.
+   */
+  let toast: ToastKey | null = $state(null);
 
   /** Where the player is: the path and query. */
   const here = () => page.url.pathname + page.url.search;
@@ -42,6 +50,7 @@
     void (async () => {
       const add = (stop: () => void) => (gone ? stop() : stops.push(stop));
       add(await onHubStatus((s) => (hub = s.state)));
+      add(await onToast((key) => (toast = key)));
       add(
         await onRestoreState((state) => {
           restore(state);
@@ -76,6 +85,21 @@
   {/if}
 </div>
 
+<!--
+  Persistent, polite and never focus-stealing: announced through aria-live, focus stays where
+  it was, and only its button dismisses it. The region itself lets clicks through.
+-->
+<div class="toasts" aria-live="polite" data-testid="toasts">
+  {#if toast}
+    <div class="toast" data-testid="toast">
+      <p class="type-kiosk-body">{t(toast)}</p>
+      <button type="button" class="dismiss type-kiosk-label" onclick={() => (toast = null)}>
+        {t("common.dismiss")}
+      </button>
+    </div>
+  {/if}
+</div>
+
 <style>
   /* The kiosk window is full screen; the app fills all of it. */
   .kiosk {
@@ -90,6 +114,50 @@
     top: var(--space-kiosk-margin);
     right: var(--space-kiosk-margin);
     pointer-events: none;
+  }
+
+  .toasts {
+    position: fixed;
+    right: 0;
+    bottom: var(--space-kiosk-margin);
+    left: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .toast {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    max-width: min(48rem, calc(100vw - 2 * var(--space-kiosk-margin)));
+    padding: var(--space-4) var(--space-5);
+    border: 2px solid var(--hud-toast-title);
+    border-radius: var(--radius-md);
+    background-color: var(--hud-toast-background);
+    box-shadow: var(--elevation-toast);
+    color: var(--hud-toast-foreground);
+    pointer-events: auto;
+  }
+
+  .toast p {
+    margin: 0;
+  }
+
+  .dismiss {
+    flex: none;
+    min-height: 48px;
+    padding: var(--space-2) var(--space-5);
+    border: 2px solid var(--hud-toast-title);
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--hud-toast-foreground);
+    cursor: pointer;
+  }
+
+  .dismiss:focus-visible {
+    outline: 3px solid var(--hud-toast-title);
+    outline-offset: 2px;
   }
 
   .pill {

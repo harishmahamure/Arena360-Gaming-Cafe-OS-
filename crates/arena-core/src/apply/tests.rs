@@ -2846,3 +2846,219 @@ mod seed_defaults {
         );
     }
 }
+
+// ---- Story 1.18: the kiosk process lists and kiosk.process_blocked ----
+
+mod process_lists {
+    use super::*;
+    use arena_proto::{
+        DEFAULT_PROCESS_ALLOW, DEFAULT_PROCESS_BLOCK, KioskProcessBlocked, ProcessBlockReason,
+        ProcessMode,
+    };
+
+    fn blocked(device_id: &str, exe: &str, path: &str, reason: ProcessBlockReason) -> Intent {
+        let mut i = device_intent(
+            ActorKind::Device,
+            IntentPayload::KioskProcessBlocked(KioskProcessBlocked {
+                exe_name: exe.into(),
+                path: path.into(),
+                reason,
+                mode: ProcessMode::Enforce,
+            }),
+        );
+        i.actor.id = device_id.into();
+        i
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_both_lists_with_the_defaults() {
+        let f = bootstrapped().await;
+        let s = reopen(&f);
+        assert_eq!(
+            setting(&s, "kiosk.process_allow")["value"],
+            RowValue::Text(DEFAULT_PROCESS_ALLOW.into())
+        );
+        assert_eq!(
+            setting(&s, "kiosk.process_block")["value"],
+            RowValue::Text(DEFAULT_PROCESS_BLOCK.into())
+        );
+        // A new branch enforces at once.
+        assert_eq!(
+            setting(&s, "kiosk.process_mode")["value"],
+            RowValue::Text("enforce".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_upgraded_branch_gets_the_lists_from_seed_defaults_once() {
+        let mut f = bootstrapped().await;
+        f.writer
+            .submit(|tx| {
+                tx.execute_batch("DELETE FROM settings WHERE key LIKE 'kiosk.%'")
+                    .map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+        while f.events.try_recv().is_ok() {}
+        let applied = f.writer.seed_defaults().await.unwrap().unwrap();
+        let mut ids: Vec<&str> = applied.changes.iter().map(|c| c.row_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids.len(), 3);
+        assert!(ids[0].ends_with("/kiosk.process_allow"), "{ids:?}");
+        assert!(ids[1].ends_with("/kiosk.process_block"), "{ids:?}");
+        assert!(ids[2].ends_with("/kiosk.process_mode"), "{ids:?}");
+        assert_eq!(
+            setting(&reopen(&f), "kiosk.process_block")["value"],
+            RowValue::Text(DEFAULT_PROCESS_BLOCK.into())
+        );
+        // An upgraded branch only reports until an operator switches it to enforce.
+        assert_eq!(
+            setting(&reopen(&f), "kiosk.process_mode")["value"],
+            RowValue::Text("report".into())
+        );
+        let mut edit = set("kiosk.process_mode", "enforce", Some(1));
+        edit.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(edit).await.unwrap();
+        let mut edit = set("kiosk.process_mode", "off", Some(2));
+        edit.issued_at = f.clock.now_ms();
+        assert_eq!(expect_err(&f, edit).await.code, ErrorCode::ValidationFailed);
+        assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn settings_set_takes_a_valid_list_and_names_the_bad_rule() {
+        let f = bootstrapped().await;
+        let games = r#"[{"path_glob": "C:\\Games\\*.exe"}]"#;
+        let mut edit = set("kiosk.process_allow", games, Some(1));
+        edit.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(edit).await.unwrap();
+        assert_eq!(
+            setting(&reopen(&f), "kiosk.process_allow")["value"],
+            RowValue::Text(games.into())
+        );
+        for bad in [
+            "nope",
+            "{}",
+            "[]",
+            r#"[{"path_glob": "game.exe"}]"#,
+            r#"[{"path_glob": "C:\\x.exe", "extra": 1}]"#,
+            r#"[{"path_glob": "C:\\Users\\*\\x.exe"}]"#,
+            r#"[{"path_glob": "C:\\x.exe", "signer": " Valve"}]"#,
+            r#"[{"path_glob": "C:\\Kiosk\\{install}\\x.exe"}]"#,
+        ] {
+            let mut edit = set("kiosk.process_allow", bad, Some(2));
+            edit.issued_at = f.clock.now_ms();
+            let err = expect_err(&f, edit).await;
+            assert_eq!(
+                (err.code, err.field.as_deref()),
+                (ErrorCode::ValidationFailed, Some("value")),
+                "{bad}"
+            );
+        }
+        for bad in [r#"[{"path_glob": "*.exe"}]"#, r#"[{"path_glob": "*"}]"#] {
+            let mut edit = set("kiosk.process_block", bad, Some(1));
+            edit.issued_at = f.clock.now_ms();
+            assert_eq!(
+                expect_err(&f, edit).await.code,
+                ErrorCode::ValidationFailed,
+                "{bad}"
+            );
+        }
+        let one = r#"{"path_glob": "x.exe"}"#;
+        let too_many = format!("[{}]", vec![one; 501].join(","));
+        let mut edit = set("kiosk.process_block", &too_many, Some(1));
+        edit.issued_at = f.clock.now_ms();
+        let err = expect_err(&f, edit).await;
+        assert!(err.message.contains("at most 500"), "{}", err.message);
+        // A list longer than the global 4096-character limit is fine.
+        let many = format!("[{}]", vec![one; 400].join(","));
+        assert!(many.len() > MAX_SETTING_VALUE_CHARS);
+        let mut edit = set("kiosk.process_block", &many, Some(1));
+        edit.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(edit).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn process_blocked_writes_one_device_event_from_a_live_device_only() {
+        let mut f = primary();
+        let (id, _) = with_device(&mut f).await;
+        let mut first = blocked(
+            &id,
+            "cmd.exe",
+            r"C:\Windows\System32\cmd.exe",
+            ProcessBlockReason::Blocked,
+        );
+        first.issued_at = T0 - 30_000;
+        let applied = f.writer.submit_intent(first.clone()).await.unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        assert_eq!(applied.changes[0].tbl, "device_events");
+        // Replayed after reconnect: the stored outcome, no second row.
+        assert_eq!(f.writer.submit_intent(first).await.unwrap(), applied);
+        let store = reopen(&f);
+        let rows = store.rows(Table::DeviceEvents).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["code"], RowValue::Text("process_blocked".into()));
+        assert_eq!(rows[0]["level"], RowValue::Text("warn".into()));
+        assert_eq!(
+            rows[0]["detail"],
+            RowValue::Text(r"cmd.exe (blocked): C:\Windows\System32\cmd.exe".into())
+        );
+        assert_eq!(rows[0]["at"], RowValue::Integer(T0 - 30_000));
+        let change = store.changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (change.intent_kind.as_str(), change.actor_kind.as_str()),
+            ("kiosk.process_blocked", "device")
+        );
+
+        for actor in [ActorKind::Owner, ActorKind::System, ActorKind::Staff] {
+            let mut i = blocked(&id, "x.exe", r"C:\x.exe", ProcessBlockReason::NotAllowed);
+            i.actor.kind = actor;
+            assert_eq!(
+                expect_err(&f, i).await.code,
+                ErrorCode::PermissionDenied,
+                "{actor:?}"
+            );
+        }
+        let err = expect_err(
+            &f,
+            blocked(
+                "01JNOPEAAAAAAAAAAAAAAAAAAA",
+                "x.exe",
+                r"C:\x.exe",
+                ProcessBlockReason::NotAllowed,
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        let err = expect_err(
+            &f,
+            blocked(&id, "", r"C:\x.exe", ProcessBlockReason::Signature),
+        )
+        .await;
+        assert_eq!(err.field.as_deref(), Some("exe_name"));
+        let mut edit = blocked(&id, "x.exe", r"C:\x.exe", ProcessBlockReason::Signature);
+        edit.base_rev = Some(1);
+        assert_eq!(
+            expect_err(&f, edit).await.field.as_deref(),
+            Some("base_rev")
+        );
+        assert_eq!(reopen(&f).rows(Table::DeviceEvents).unwrap().len(), 1);
+
+        // Report mode is stored as such; a long path is shortened to the kiosk.log cap.
+        let long = format!(r"C:\{}\game.exe", "d".repeat(900));
+        let mut report = blocked(&id, "game.exe", &long, ProcessBlockReason::NotAllowed);
+        if let IntentPayload::KioskProcessBlocked(p) = &mut report.payload {
+            p.mode = ProcessMode::Report;
+        }
+        f.writer.submit_intent(report).await.unwrap();
+        let rows = reopen(&f).rows(Table::DeviceEvents).unwrap();
+        let RowValue::Text(detail) = &rows[1]["detail"] else {
+            panic!("text detail")
+        };
+        assert_eq!(detail.chars().count(), crate::MAX_KIOSK_LOG_DETAIL_CHARS);
+        assert!(
+            detail.starts_with("game.exe (not_allowed, report only): …"),
+            "{detail}"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 //! `branch.seed_defaults`: brings an upgraded branch up to the current defaults. It inserts every
 //! default setting the branch lacks (the `branch.*` locale keys take the branch row's bootstrap
-//! columns), every built-in role it lacks, and every permission row a built-in role lacks, as
+//! columns; `kiosk.process_mode` is backfilled as `report`, not the bootstrap `enforce`), every built-in role it lacks, and every permission row a built-in role lacks, as
 //! ordinary change rows. Nothing that exists is changed. It is idempotent: with nothing missing
 //! it fails `ALREADY_BOOTSTRAPPED` and writes nothing, and the Hub only submits it when
 //! [`missing`] finds something.
@@ -16,7 +16,7 @@ use arena_store::{
 use super::mutate::Written;
 use crate::locale::branch_default;
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
-use crate::settings_defaults::{DEFAULT_SETTINGS, LOCALE_KEYS};
+use crate::settings_defaults::{DEFAULT_SETTINGS, LOCALE_KEYS, backfill_value};
 
 /// What an upgraded branch lacks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,7 +48,8 @@ pub fn missing(tx: &StoreTx<'_>) -> Result<Option<Missing>, AppError> {
     };
     for (key, value) in DEFAULT_SETTINGS {
         if !have.contains(*key) {
-            out.settings.push(((*key).to_owned(), (*value).to_owned()));
+            out.settings
+                .push(((*key).to_owned(), backfill_value(key, value).to_owned()));
         }
     }
     for key in LOCALE_KEYS {

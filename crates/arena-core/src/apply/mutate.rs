@@ -128,7 +128,18 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::KioskLog(l) => match target {
-            Target::Branch(b) => super::kiosk_log::mutate(tx, intent, l, b.as_ref()),
+            Target::Branch(b) => {
+                super::kiosk_log::mutate(tx, intent, super::kiosk_log::Event::Log(l), b.as_ref())
+            }
+            _ => Err(mismatch()),
+        },
+        IntentPayload::KioskProcessBlocked(p) => match target {
+            Target::Branch(b) => super::kiosk_log::mutate(
+                tx,
+                intent,
+                super::kiosk_log::Event::ProcessBlocked(p),
+                b.as_ref(),
+            ),
             _ => Err(mismatch()),
         },
     }

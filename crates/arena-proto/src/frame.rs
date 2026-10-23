@@ -14,6 +14,7 @@ use ts_rs::TS;
 use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::scope::ClientClass;
+use crate::ui_auth::SettingEntry;
 
 /// The only protocol version.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -56,10 +57,14 @@ pub enum FrameBody {
     Ping,
     #[serde(rename = "pong")]
     Pong,
+    #[serde(rename = "settings.get")]
+    SettingsGet(SettingsGet),
+    #[serde(rename = "settings.values")]
+    SettingsValues(SettingsValues),
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 8] = [
+pub const FRAME_KINDS: [&str; 10] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -68,6 +73,8 @@ pub const FRAME_KINDS: [&str; 8] = [
     "error",
     "ping",
     "pong",
+    "settings.get",
+    "settings.values",
 ];
 
 impl FrameBody {
@@ -82,6 +89,8 @@ impl FrameBody {
             Self::Error(_) => "error",
             Self::Ping => "ping",
             Self::Pong => "pong",
+            Self::SettingsGet(_) => "settings.get",
+            Self::SettingsValues(_) => "settings.values",
         }
     }
 }
@@ -166,6 +175,25 @@ pub struct IntentResult {
     pub applied: AppliedSummary,
 }
 
+/// Most keys one `settings.get` may ask for.
+pub const MAX_SETTINGS_GET_KEYS: usize = 32;
+
+/// Asks the Hub for the current value of branch settings. Paired sessions only, and only
+/// `kiosk.*` keys (`FORBIDDEN` otherwise); the reply is [`SettingsValues`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SettingsGet {
+    pub keys: Vec<String>,
+}
+
+/// Branch setting values: the reply to `settings.get` (keys the branch lacks are left out) and
+/// the body of the pushed `settings.changed` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SettingsValues {
+    pub values: Vec<SettingEntry>,
+}
+
 /// A state change pushed by the Hub. Clients never poll.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
@@ -174,6 +202,9 @@ pub enum HubEvent {
     /// An intent was committed (by any client or by the Hub itself).
     #[serde(rename = "applied")]
     Applied(AppliedSummary),
+    /// An intent wrote `kiosk.*` settings: their values now (paired sessions only).
+    #[serde(rename = "settings.changed")]
+    SettingsChanged(SettingsValues),
 }
 
 /// The body of an `event` frame.
@@ -389,6 +420,39 @@ mod tests {
         assert_eq!((e.rid.as_str(), e.error.code), ("3", ErrorCode::BadFrame));
         let long = format!(r#"{{"v":1,"kind":"ping","rid":"{}"}}"#, "r".repeat(129));
         assert_eq!(err(&long).error.code, ErrorCode::BadFrame);
+    }
+
+    #[test]
+    fn settings_frames_round_trip() {
+        let get = parse_frame(
+            r#"{"v":1,"kind":"settings.get","rid":"s1","keys":["kiosk.process_allow"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            get.body,
+            FrameBody::SettingsGet(SettingsGet {
+                keys: vec!["kiosk.process_allow".into()]
+            })
+        );
+        let values = SettingsValues {
+            values: vec![SettingEntry {
+                key: "kiosk.process_allow".into(),
+                value: "[]".into(),
+                rev: 2,
+            }],
+        };
+        let reply = Frame::new("s1", FrameBody::SettingsValues(values.clone()));
+        assert_eq!(parse_frame(&reply.to_text()).unwrap(), reply);
+        let ev = Frame::new(
+            "e",
+            FrameBody::Event(EventFrame {
+                event: HubEvent::SettingsChanged(values),
+            }),
+        );
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["event"]["kind"], "settings.changed");
+        assert_eq!(v["event"]["values"][0]["rev"], 2);
+        assert_eq!(parse_frame(&ev.to_text()).unwrap(), ev);
     }
 
     #[test]

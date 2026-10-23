@@ -1,5 +1,6 @@
-//! The running service: the Hub link and the app supervisor, sharing one [`Ctx`]. The console
-//! mode, the Windows service host and the integration tests all start it the same way.
+//! The running service: the Hub link, the app supervisor and (where the host provides one) the
+//! process enforcer, sharing one [`Ctx`]. The console mode, the Windows service host and the
+//! integration tests all start it the same way.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,7 +9,7 @@ use arena_kiosk_core::backoff::{MAX_DELAY, MIN_DELAY};
 use arena_kiosk_core::watchdog::{PING_INTERVAL, RESTART_GRACE};
 use arena_proto::{KioskHubState, KioskLogLevel};
 use serde_json::Value;
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Notify, broadcast, watch};
 use tokio::task::JoinHandle;
 
 use crate::clock::Clock;
@@ -16,6 +17,7 @@ use crate::config::KioskConfig;
 use crate::ipc::IpcServer;
 use crate::launcher::AppLauncher;
 use crate::paths::DataDir;
+use crate::procs::{EnforceOptions, ProcessApi, ProcessLists};
 use crate::queue::QueueDb;
 use crate::secret::SecretStore;
 
@@ -61,6 +63,11 @@ pub struct Ctx {
     pub hub_state: watch::Sender<KioskHubState>,
     /// The last `app_state` the app reported (sent back as `restore_state`).
     pub app_state: Mutex<Option<Value>>,
+    /// The process allow-list and block-list in effect (cached in `queue.db`, updated by the
+    /// Hub link).
+    pub lists: watch::Sender<Arc<ProcessLists>>,
+    /// Toast catalogue keys for the app (the supervisor forwards them as IPC `toast`).
+    pub toasts: broadcast::Sender<String>,
 }
 
 impl Ctx {
@@ -132,6 +139,8 @@ impl Runtime {
     ) -> std::io::Result<Self> {
         std::fs::create_dir_all(data.root())?;
         let queue = QueueDb::open(&data.queue())?;
+        let (lists, _) = watch::channel(Arc::new(ProcessLists::load(&queue)));
+        let (toasts, _) = broadcast::channel(16);
         let (hub_state, _) = watch::channel(KioskHubState::Reconnecting);
         let ctx = Arc::new(Ctx {
             data,
@@ -142,6 +151,8 @@ impl Runtime {
             queued: Notify::new(),
             hub_state,
             app_state: Mutex::new(None),
+            lists,
+            toasts,
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![
@@ -149,6 +160,17 @@ impl Runtime {
             tokio::spawn(crate::app::run(Arc::clone(&ctx), ipc, launcher, stop_rx)),
         ];
         Ok(Self { ctx, stop, tasks })
+    }
+
+    /// Starts enforcing the process lists in the player's session through `api` (Windows: the
+    /// real process control; tests: fakes). Without this call nothing is ever killed.
+    pub fn enforce(&mut self, api: ProcessApi, opts: EnforceOptions) {
+        self.tasks.push(tokio::spawn(crate::procs::run(
+            Arc::clone(&self.ctx),
+            api,
+            opts,
+            self.stop.subscribe(),
+        )));
     }
 
     /// The shared state (tests and the hosts read it).

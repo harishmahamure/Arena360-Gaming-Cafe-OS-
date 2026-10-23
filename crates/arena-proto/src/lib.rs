@@ -11,6 +11,7 @@ mod frame;
 mod intent;
 mod kiosk;
 mod permission;
+mod process;
 mod scope;
 mod snapshot;
 mod ui_auth;
@@ -25,8 +26,8 @@ pub use error::{AppError, ErrorCode};
 pub use frame::{
     AppliedSummary, ChangeOpKind, ChangeSummary, Envelope, ErrorFrame, EventFrame, FRAME_KINDS,
     Frame, FrameBody, FrameError, Hello, HelloOk, HubEvent, IntentResult, IntentSubmit,
-    MAX_RID_LEN, PROTOCOL_VERSION, Versions, check_envelope, parse_frame, parse_frame_value,
-    parse_json,
+    MAX_RID_LEN, MAX_SETTINGS_GET_KEYS, PROTOCOL_VERSION, SettingsGet, SettingsValues, Versions,
+    check_envelope, parse_frame, parse_frame_value, parse_json,
 };
 pub use intent::{
     AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceRegister, DeviceRevoke,
@@ -38,7 +39,16 @@ pub use kiosk::{
     MAX_KIOSK_LOG_DETAIL_CHARS,
 };
 pub use permission::{Permission, Requirement};
-pub use scope::{ClientClass, class_scope, in_scope};
+pub use process::{
+    ARENA_SIGNER_CN, BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, DEFAULT_PROCESS_ALLOW,
+    DEFAULT_PROCESS_BLOCK, INSTALL_DIR_TOKEN, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK,
+    KEY_PROCESS_MODE, KioskProcessBlocked, MAX_EXE_NAME_CHARS, MAX_PATH_GLOB_CHARS,
+    MAX_PROCESS_PATH_CHARS, MAX_PROCESS_RULES, MAX_PROCESS_RULES_CHARS, MAX_SIGNER_CHARS,
+    PATH_ELLIPSIS, PATH_TOKENS, ProcessBlockReason, ProcessList, ProcessMode, ProcessRule,
+    SYSTEM_DIR_TOKEN, is_catch_all_glob, is_file_name_glob, is_full_path_glob,
+    is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
+};
+pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
     SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLocale, SnapshotUi,

@@ -280,7 +280,7 @@ The Hub listens on `0.0.0.0:7400` and `0.0.0.0:7401`; no other inbound port is o
   upgrades for the browser classes (`kds`, `phone`), `/kitchen` and `/console/<tv>` return a
   placeholder page and everything else is 404.
 - **Frames.** UTF-8 JSON text `{v: 1, kind, rid, ...body}` with kinds `hello`, `hello.ok`,
-  `intent.submit`, `intent.result`, `event`, `error`, `ping`/`pong` (types in `arena-proto`,
+  `intent.submit`, `intent.result`, `event`, `error`, `ping`/`pong`, `settings.get`/`settings.values` (types in `arena-proto`,
   generated into `@arena/ui/generated`). Unknown fields are ignored; an unknown kind or a `v`
   other than 1 gets `UNSUPPORTED`, an unparseable frame `BAD_FRAME`, and neither closes the
   session.
@@ -303,7 +303,12 @@ The Hub listens on `0.0.0.0:7400` and `0.0.0.0:7401`; no other inbound port is o
 - **Paired scope.** A paired session may submit `kiosk.log{level: info|warn|error, code, detail}`
   (requirement: a live device actor), which writes one `device_events` row (migration 0009;
   `at` is the intent's `issued_at`, when the kiosk recorded it). Opening or closing a paired
-  session pushes `devices.changed` on `/ui/events`, and the Hub UI reloads the snapshot.
+  session pushes `devices.changed` on `/ui/events`, and the Hub UI reloads the snapshot. It may
+  also submit `kiosk.process_blocked{exe_name, path, reason, mode?}` (a `device_events` row with
+  `code=process_blocked`; both kinds share the 60/min per-device limit) and read branch settings
+  with `settings.get{keys}` — `kiosk.*` keys only, anything else refuses the whole request with
+  `FORBIDDEN`. An intent that writes `kiosk.*` settings is pushed to paired sessions as
+  `event{kind: "settings.changed", values}`; browser classes can neither read nor receive them.
 - **Revocation.** `device.revoke` closes the device's sessions with `TOKEN_REVOKED` within 1 s,
   and later hellos with that token are refused.
 - **Client.** `arena-kiosk-core` has `HubClient::connect(url, pinned_fingerprint, hello)`:
@@ -739,6 +744,94 @@ The automated 30-minute escape suite (Story 1.19) verifies all of this on real W
 11; CI here type-checks the Windows code and tests the pure plan (values, backup, created-key
 cleanup, protected-key SDDL capture), the key filter and its resync, the monitor union and the
 executor on an in-memory registry.
+
+## Kiosk process allow/block list
+
+The branch settings `kiosk.process_allow` and `kiosk.process_block` (JSON arrays of
+`{path_glob, signer?}`, at most 500 rules each, edited with `settings.set` under
+`settings.edit`) decide which programs may run in the player's session, and
+`kiosk.process_mode` (`enforce` | `report`) decides whether a disallowed program is killed or
+only reported. Every branch is seeded with the defaults in `arena-proto`
+(`DEFAULT_PROCESS_ALLOW` / `DEFAULT_PROCESS_BLOCK`): the kiosk app and service (`{install}\…`,
+signer `Arena 360`); the Windows session essentials under `{system}\System32` (signer
+`Microsoft Windows`, including `userinit.exe`, which Winlogon runs at every sign-in, and
+`backgroundTaskHost.exe`) and `{system}\SystemApps\*\TextInputHost.exe`; and WebView2's
+`msedgewebview2.exe` (signer `Microsoft Corporation`) in either Program Files, the per-user
+`C:\Users\*\AppData\Local\Microsoft\EdgeWebView\Application\*\` and a fixed-version runtime
+anywhere under `{install}\**\`. The block-list names `cmd.exe`, `powershell.exe`, `pwsh.exe`,
+`regedit.exe`, `taskmgr.exe`, `mmc.exe`, `explorer.exe`, `control.exe`, `msconfig.exe`,
+`wscript.exe`, `cscript.exe` and `mshta.exe` at any path.
+
+- **Mode and rollout.** A new branch (`branch.bootstrap`) starts in `enforce`. A branch that
+  existed before these settings gets them from the `branch.seed_defaults` backfill in `report`:
+  nothing is killed and no toast is shown, but every program that enforce mode would kill is
+  sent to the Hub as `kiosk.process_blocked{…, mode: "report"}` (stored with the detail
+  `<exe> (<reason>, report only): <path>`), once per running process. Check the Hub audit log
+  for those rows, add allow rules for the café's games and launchers, and then switch the
+  branch to enforcement with `settings.set{key: "kiosk.process_mode", value: "enforce"}`
+  (`base_rev` the setting's current `rev`, permission `settings.edit`); kiosks apply it live.
+  A kiosk that has never received a mode from its Hub (or whose cached copy is damaged) also
+  only reports.
+- **Rules.** `path_glob` is matched case-insensitively against the normalised full path: `*` is
+  any run within one folder, `**` any run across folders, `?` one character. Two placeholders
+  may start a rule (and nowhere else): `{install}` (the kiosk's install directory) and
+  `{system}` (`%SystemRoot%`, so the defaults work when Windows is not in `C:\Windows`).
+  `signer` is the Authenticode subject CN a valid signature must carry.
+- **Validation** (`settings.set` refuses with `VALIDATION_FAILED` on `value`, naming the rule;
+  the kiosk re-checks pushed values and keeps its previous list on a refusal): well-formed JSON,
+  at most 500 rules; allow rules must be full paths (`X:\…`, `{install}\…`, `{system}\…`); the
+  allow-list may not be empty; block rules may be a bare file name or a full path but not a
+  catch-all (only wildcards, optionally with `.exe`: `*`, `*.exe`, `C:\**`); a signer is 1–256
+  characters with no leading or trailing space; an allow rule without a signer may not sit under
+  a user-writable root (`X:\Users\`, `X:\ProgramData\`, `X:\Temp\`, `{system}\Temp\`, or a
+  wildcard first folder). `kiosk.process_mode` is `enforce` or `report`.
+- **Decision** (`arena_kiosk_core::procpolicy::decide`, pure): a block match kills; otherwise
+  an allow rule must match the path and, when it names a signer, a valid Authenticode signature
+  by exactly that CN. Nothing is ever allowed by file name alone, so a renamed `cmd.exe` is
+  killed as not allowed.
+- **Delivery.** The kiosk service asks `settings.get` for the three keys after every hello
+  (giving up after 5 s), applies `settings.changed` pushes live, and caches them in `queue.db`
+  (`kv`) with their revisions, so they apply offline and across restarts, and an older revision
+  never replaces a newer one (the defaults apply until the Hub has ever answered).
+- **Enforcement** (`arena-kiosk-svc` `procs`, Windows only). A WMI `Win32_ProcessStartTrace`
+  subscription reports each new process (WMI only; there is no ETW path). The service resolves
+  its session, token user and image path, verifies the signature when the decision depends on it
+  (`WinVerifyTrust`, embedded or through the system catalogs, cached by path, size and mtime and
+  verified once per file even under a burst) and calls `TerminateProcess` on a disallowed one.
+  The WMI path aims at 200 ms from creation to kill (the elapsed time is a `debug` log line);
+  this has not been measured yet and is confirmed on real Windows 10 and 11 by Story 1.19. When
+  the WMI watch is down, a sweep every 500 ms is the fallback, so a kill can then take up to
+  about 500 ms. Every running process is also swept at start, right after the watch
+  (re)subscribes, within 2 s of a settings change and every 10 s. Creation events are buffered
+  up to 1024 (beyond that a sweep is requested instead) and at most 8 checks run at once.
+- **Safety rules.** Only processes in the player's console session whose token user is the
+  configured player account are ever considered (never SYSTEM, LocalService, NetworkService,
+  DWM/UMFD or any other user, so `csrss`, `winlogon` and `dwm` are out of reach); the configured
+  kiosk app (its path re-read from `config.json` at every sweep) and the service image are never
+  killed, and neither is a WebView2 process (`msedgewebview2.exe`) descending from the kiosk app,
+  so the UI's runtime survives wherever it lives (every other program the app, as the player's
+  shell, starts is decided by the lists as usual); critical images such as `svchost.exe` and `csrss.exe` under
+  `System32` are never killed; a process whose details cannot be read is left alone (a `warn`
+  line once per pid and reason); the kill re-checks the process on the handle it terminates.
+- **Player and Hub.** After a kill the app shows "That app isn't allowed on this PC."
+  (`player.app.blocked`) as a polite (`aria-live`), non-focus-stealing toast that stays until
+  its Dismiss button is pressed; repeats collapse into it. The toast is only sent for a kill
+  that followed a creation event of a process with a visible top-level window, or one started
+  within the last 5 s by a process of the player's session; sweeps and background processes
+  never toast (the session-0 service cannot see the player's windows, so on Windows the 5 s rule
+  decides). Each kill (or report-mode find) is queued as `kiosk.process_blocked`, delivered
+  through the offline queue exactly once and shown in the Hub audit log.
+- **Caps.** The same path and reason within 5 s is reported once; at most 30
+  `kiosk.process_blocked` a minute leave a kiosk, and the rest are counted in one
+  `kiosk.log{warn, process_blocked_summary, "N more"}` a minute (the Hub's 60-a-minute limit is
+  shared by `kiosk.log` and `kiosk.process_blocked`). The stored detail is capped at 500
+  characters like a `kiosk.log` detail; a longer path is shortened from the left (`…`). A
+  failed kill is warned about once per pid and path and reported once as
+  `kiosk.log{error, kill_failed}`.
+
+There is no staff GUI for the lists yet; edit them with `settings.set`. The fake process table
+(`procs::fake`) drives the service tests; the Windows code is type-checked in CI and exercised by
+the Story 1.19 escape suite on real Windows.
 
 ## Pinned versions
 

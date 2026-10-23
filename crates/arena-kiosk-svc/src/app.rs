@@ -9,6 +9,8 @@
 //!   Restarts back off (see the watchdog). While the app cannot run at all (no player in the
 //!   console session, or the pipe not open to a resolved player) nothing counts as a miss, and
 //!   one `kiosk.log{warn, no_session}` is queued per such stretch.
+//! - A toast the process enforcer raises (`player.app.blocked`) is forwarded to the current app
+//!   as IPC `toast`; with no app connected it is dropped (the kill is still reported).
 //! - Requests: `log{level, code, detail}` queues a `kiosk.log`; `hub_status` answers the link
 //!   state. Anything else is `UNSUPPORTED`. The app gets nothing else: no Hub socket, no token.
 
@@ -109,6 +111,7 @@ pub(crate) async fn run<S: IpcServer>(
     let t = ctx.timings.clone();
     let mut dog = Watchdog::with_timings(now_ms(), t.ping_interval, t.restart_grace);
     let mut hub_state = ctx.hub_state.subscribe();
+    let mut toasts = ctx.toasts.subscribe();
     let mut current: Option<Current> = None;
     let mut held = false;
     loop {
@@ -193,6 +196,15 @@ pub(crate) async fn run<S: IpcServer>(
                     let _ = c.out.try_send(IpcMsg::HubStatus { state });
                 }
             }
+            toast = toasts.recv() => match toast {
+                Ok(key) => {
+                    if let Some(c) = &current {
+                        let _ = c.out.try_send(IpcMsg::Toast { key });
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            },
             _ = stop.changed() => break,
         }
     }

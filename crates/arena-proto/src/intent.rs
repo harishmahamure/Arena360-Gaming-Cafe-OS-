@@ -6,6 +6,7 @@ use ts_rs::TS;
 use crate::actor::{Actor, ElevatedBy};
 use crate::kiosk::KioskLog;
 use crate::permission::{Permission, Requirement};
+use crate::process::KioskProcessBlocked;
 use crate::scope::ClientClass;
 
 /// The domain an intent kind belongs to. Class scopes are checked against it: no browser class
@@ -64,11 +65,15 @@ pub enum IntentKind {
     /// One event a kiosk recorded (device actor), queued offline and replayed in order.
     #[serde(rename = "kiosk.log")]
     KioskLog,
+    /// The kiosk killed a disallowed process in the player session (device actor), queued
+    /// offline and replayed in order like `kiosk.log`.
+    #[serde(rename = "kiosk.process_blocked")]
+    KioskProcessBlocked,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 11] = [
+    pub const ALL: [IntentKind; 12] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -80,6 +85,7 @@ impl IntentKind {
         Self::RoleUpsert,
         Self::AuditReadGranted,
         Self::KioskLog,
+        Self::KioskProcessBlocked,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -96,6 +102,7 @@ impl IntentKind {
             Self::RoleUpsert => "role.upsert",
             Self::AuditReadGranted => "audit.read_granted",
             Self::KioskLog => "kiosk.log",
+            Self::KioskProcessBlocked => "kiosk.process_blocked",
         }
     }
 
@@ -115,7 +122,7 @@ impl IntentKind {
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
-            Self::KioskLog => IntentCategory::Kiosk,
+            Self::KioskLog | Self::KioskProcessBlocked => IntentCategory::Kiosk,
         }
     }
 
@@ -131,7 +138,7 @@ impl IntentKind {
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
-            Self::KioskLog => Requirement::Device,
+            Self::KioskLog | Self::KioskProcessBlocked => Requirement::Device,
         }
     }
 
@@ -154,7 +161,8 @@ impl IntentKind {
             | Self::StaffUpsert
             | Self::RoleUpsert
             | Self::AuditReadGranted
-            | Self::KioskLog => None,
+            | Self::KioskLog
+            | Self::KioskProcessBlocked => None,
         }
     }
 
@@ -364,6 +372,8 @@ pub enum IntentPayload {
     AuditReadGranted(AuditReadGranted),
     #[serde(rename = "kiosk.log")]
     KioskLog(KioskLog),
+    #[serde(rename = "kiosk.process_blocked")]
+    KioskProcessBlocked(KioskProcessBlocked),
 }
 
 impl IntentPayload {
@@ -380,6 +390,7 @@ impl IntentPayload {
             Self::RoleUpsert(_) => IntentKind::RoleUpsert,
             Self::AuditReadGranted(_) => IntentKind::AuditReadGranted,
             Self::KioskLog(_) => IntentKind::KioskLog,
+            Self::KioskProcessBlocked(_) => IntentKind::KioskProcessBlocked,
         }
     }
 }
@@ -503,7 +514,7 @@ mod tests {
                 "device.revoke" => Requirement::Perm(Permission::DeviceRemote),
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
                 "console.plan_requested" => Requirement::Phone,
-                "kiosk.log" => Requirement::Device,
+                "kiosk.log" | "kiosk.process_blocked" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),
             };
             assert_eq!(kind.requirement(), want, "{}", kind.as_str());

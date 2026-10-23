@@ -3,6 +3,10 @@
 //!
 //! Each row is one intent, stored whole as JSON with the ULID idempotency key and `issued_at`
 //! it got when the event happened. `seq` gives the creation order the replay follows.
+//!
+//! The same file holds a small `kv` table: the last branch settings the Hub sent this kiosk
+//! (the process allow-list and block-list), with their revision, so they apply offline and
+//! across restarts.
 
 use std::path::Path;
 
@@ -45,6 +49,11 @@ impl QueueDb {
                  idempotency_key TEXT NOT NULL UNIQUE,
                  issued_at       INTEGER NOT NULL,
                  intent          TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS kv (
+                 key   TEXT PRIMARY KEY,
+                 value TEXT NOT NULL,
+                 rev   INTEGER NOT NULL
              );",
         )
         .map_err(db)?;
@@ -113,6 +122,27 @@ impl QueueDb {
         }
     }
 
+    /// Every entry that decodes, oldest first (diagnostics and tests).
+    pub fn entries(&self) -> std::io::Result<Vec<Queued>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, intent FROM queue ORDER BY seq")
+            .map_err(db)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(db)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(seq, json)| {
+                serde_json::from_str::<Intent>(&json)
+                    .ok()
+                    .map(|intent| Queued { seq, intent })
+            })
+            .collect())
+    }
+
     /// Deletes entry `seq`.
     pub fn delete(&self, seq: i64) -> std::io::Result<()> {
         self.conn
@@ -150,6 +180,30 @@ impl QueueDb {
     /// Whether nothing waits.
     pub fn is_empty(&self) -> std::io::Result<bool> {
         self.len().map(|n| n == 0)
+    }
+
+    /// A cached setting: its value and revision.
+    pub fn kv_get(&self, key: &str) -> std::io::Result<Option<(String, i64)>> {
+        self.conn
+            .query_row(
+                "SELECT value, rev FROM kv WHERE key = ?1",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(db)
+    }
+
+    /// Caches a setting (replacing what was there).
+    pub fn kv_set(&self, key: &str, value: &str, rev: i64) -> std::io::Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO kv (key, value, rev) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, rev = excluded.rev",
+                params![key, value, rev],
+            )
+            .map_err(db)?;
+        Ok(())
     }
 }
 
@@ -211,6 +265,25 @@ mod tests {
         );
         assert_eq!(q.oldest().unwrap().unwrap().intent, fresh);
         assert!(q.drop_expired(7 * day + 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn settings_are_cached_and_survive_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue.db");
+        {
+            let q = QueueDb::open(&path).unwrap();
+            assert_eq!(q.kv_get("kiosk.process_allow").unwrap(), None);
+            q.kv_set("kiosk.process_allow", "[]", 1).unwrap();
+            q.kv_set("kiosk.process_allow", "[1]", 2).unwrap();
+        }
+        let q = QueueDb::open(&path).unwrap();
+        assert_eq!(
+            q.kv_get("kiosk.process_allow").unwrap(),
+            Some(("[1]".to_owned(), 2))
+        );
+        // The cache is not the queue.
+        assert!(q.is_empty().unwrap());
     }
 
     #[test]

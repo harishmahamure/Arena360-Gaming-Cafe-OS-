@@ -6,6 +6,7 @@ import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
 import type { KioskLog } from "./KioskLog";
+import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffUpsert } from "./StaffUpsert";
@@ -23,4 +24,5 @@ export type IntentPayload =
   | ({ kind: "staff.upsert" } & StaffUpsert)
   | ({ kind: "role.upsert" } & RoleUpsert)
   | ({ kind: "audit.read_granted" } & AuditReadGranted)
-  | ({ kind: "kiosk.log" } & KioskLog);
+  | ({ kind: "kiosk.log" } & KioskLog)
+  | ({ kind: "kiosk.process_blocked" } & KioskProcessBlocked);

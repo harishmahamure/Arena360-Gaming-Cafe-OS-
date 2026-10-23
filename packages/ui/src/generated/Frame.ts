@@ -5,6 +5,8 @@ import type { Hello } from "./Hello";
 import type { HelloOk } from "./HelloOk";
 import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
+import type { SettingsGet } from "./SettingsGet";
+import type { SettingsValues } from "./SettingsValues";
 
 /**
  * One frame: the envelope plus its kind-tagged body.
@@ -27,4 +29,6 @@ export type Frame = {
   | ({ kind: "error" } & ErrorFrame)
   | { kind: "ping" }
   | { kind: "pong" }
+  | ({ kind: "settings.get" } & SettingsGet)
+  | ({ kind: "settings.values" } & SettingsValues)
 );

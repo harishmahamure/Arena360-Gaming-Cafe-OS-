@@ -5,6 +5,8 @@ import type { Hello } from "./Hello";
 import type { HelloOk } from "./HelloOk";
 import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
+import type { SettingsGet } from "./SettingsGet";
+import type { SettingsValues } from "./SettingsValues";
 
 /**
  * A frame's body, tagged by `kind`.
@@ -17,4 +19,6 @@ export type FrameBody =
   | ({ kind: "event" } & EventFrame)
   | ({ kind: "error" } & ErrorFrame)
   | { kind: "ping" }
-  | { kind: "pong" };
+  | { kind: "pong" }
+  | ({ kind: "settings.get" } & SettingsGet)
+  | ({ kind: "settings.values" } & SettingsValues);

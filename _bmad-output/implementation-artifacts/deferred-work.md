@@ -13,3 +13,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-16-kiosk-privilege-split-locked-service-and-unprivileged-ui.md`
   summary: Add a CI install/uninstall smoke test (silent install, assert the service is running or the app is present, silent uninstall) for both the Hub and Kiosk installers.
   evidence: Both installer jobs only build the NSIS exe; the hooks are checked only as source text.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-18-kiosk-process-allow-block-list.md`
+  summary: Harden kiosk signature checks. Verify through the running image's file handle (with a file-ID + hash cache key), pin the Arena signer by issuer/thumbprint with a code-signing EKU check, and require a valid Microsoft signature for the WebView2-descendant exemption.
+  evidence: Today the check opens the file by path after start; signers match by CN only; any file named msedgewebview2.exe under the kiosk app is exempt.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-18-kiosk-process-allow-block-list.md`
+  summary: A Hub-side test that a failed kiosk-settings read drops paired sessions (`drop_paired`).
+  evidence: DeviceDirectory has no seam to inject a read failure.

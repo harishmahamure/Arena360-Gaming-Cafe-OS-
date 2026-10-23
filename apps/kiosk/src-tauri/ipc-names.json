@@ -1,7 +1,8 @@
 {
   "events": {
     "hubStatus": "hub-status",
-    "restoreState": "restore-state"
+    "restoreState": "restore-state",
+    "toast": "toast"
   },
   "commands": {
     "reportAppState": "report_app_state",

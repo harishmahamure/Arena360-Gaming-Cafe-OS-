@@ -1,8 +1,8 @@
 //! The local channel between the Kiosk service (`arena-kiosk-svc`, privileged) and the Kiosk
 //! app (`arena-kiosk-ui`, the unprivileged player session): one JSON object per line.
 //!
-//! The service sends `ping`, `hub_status`, `restore_state` and `reply`; the app sends `pong`,
-//! `app_state` and `request`. The app never talks to the Hub: everything it needs from the Hub
+//! The service sends `ping`, `hub_status`, `restore_state`, `toast` and `reply`; the app sends
+//! `pong`, `app_state` and `request`. The app never talks to the Hub: everything it needs from the Hub
 //! goes through a `request` the service answers. A line longer than [`MAX_LINE_BYTES`] or that
 //! does not parse is an error the reader skips (the connection stays up).
 
@@ -38,6 +38,9 @@ pub fn dev_data_dir(env: impl Fn(&str) -> Option<String>) -> std::path::PathBuf 
         .join("kiosk")
 }
 
+/// The catalogue key of the toast shown after the service killed a disallowed program.
+pub const TOAST_APP_BLOCKED: &str = "player.app.blocked";
+
 /// One IPC message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -61,6 +64,9 @@ pub enum IpcMsg {
         #[serde(default)]
         body: Value,
     },
+    /// Service → app: show the player the catalogue line `key` as a toast that stays until
+    /// dismissed (the same key again does not stack a second one).
+    Toast { key: String },
     /// Service → app: the answer to `request` `rid`: `body` on success, `error` otherwise.
     Reply {
         rid: String,
@@ -187,6 +193,13 @@ mod tests {
             IpcMsg::Pong { n: 1 }
         );
         assert!(IpcMsg::parse("{\"type\":\"shell\"}").is_err());
+        assert_eq!(
+            IpcMsg::Toast {
+                key: TOAST_APP_BLOCKED.into()
+            }
+            .to_line(),
+            "{\"type\":\"toast\",\"key\":\"player.app.blocked\"}\n"
+        );
     }
 
     #[tokio::test]

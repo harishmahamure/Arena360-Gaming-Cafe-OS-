@@ -361,7 +361,9 @@ async fn paired_hello_records_the_version_and_pushes_applies() {
         .await
         .unwrap()
         .unwrap();
-    let HubEvent::Applied(s) = first;
+    let HubEvent::Applied(s) = first else {
+        panic!("{:?}", first)
+    };
     assert_eq!(s.changes[0].tbl, "devices");
     assert_eq!(s.changes[0].row_id, hub.paired_id);
     assert_eq!(hub.device_version().as_deref(), Some("0.1.0"));
@@ -392,7 +394,9 @@ async fn paired_hello_records_the_version_and_pushes_applies() {
         .await
         .unwrap()
         .unwrap();
-    let HubEvent::Applied(s) = pushed;
+    let HubEvent::Applied(s) = pushed else {
+        panic!("{:?}", pushed)
+    };
     assert_eq!(s.intent_id, applied.intent_id);
     assert_eq!(s.changes[0].tbl, "settings");
 
@@ -856,4 +860,163 @@ async fn kiosk_log_is_rate_limited_per_device_as_hub_slow() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), Some(ErrorCode::HubSlow));
+}
+
+fn process_blocked_body(n: usize) -> serde_json::Value {
+    serde_json::to_value(IntentSubmit {
+        intent: intent(
+            owner(),
+            IntentPayload::KioskProcessBlocked(arena_proto::KioskProcessBlocked {
+                exe_name: format!("g{n}.exe"),
+                path: format!(r"C:\Games\g{n}.exe"),
+                reason: arena_proto::ProcessBlockReason::NotAllowed,
+                mode: arena_proto::ProcessMode::Report,
+            }),
+            None,
+        ),
+    })
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kiosk_events_share_one_rate_limit() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for i in 0..30 {
+        client
+            .request("intent.submit", kiosk_log_body(owner()))
+            .await
+            .unwrap_or_else(|e| panic!("log {i}: {e}"));
+        client
+            .request("intent.submit", process_blocked_body(i))
+            .await
+            .unwrap_or_else(|e| panic!("process_blocked {i}: {e}"));
+    }
+    for next in [kiosk_log_body(owner()), process_blocked_body(99)] {
+        let err = client.request("intent.submit", next).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::HubSlow));
+    }
+}
+
+// ---- Story 1.18: the kiosk process lists over settings.get and settings.changed ----
+
+fn settings_get_body(keys: &[&str]) -> serde_json::Value {
+    serde_json::json!({ "keys": keys })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_session_reads_kiosk_settings_only() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let frame = client
+        .request(
+            "settings.get",
+            settings_get_body(&["kiosk.process_allow", "kiosk.process_block", "kiosk.nope"]),
+        )
+        .await
+        .unwrap();
+    let FrameBody::SettingsValues(v) = frame.body else {
+        panic!("{frame:?}")
+    };
+    let keys: Vec<&str> = v.values.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(keys, ["kiosk.process_allow", "kiosk.process_block"]);
+    assert_eq!(v.values[0].value, arena_proto::DEFAULT_PROCESS_ALLOW);
+    assert_eq!(v.values[1].value, arena_proto::DEFAULT_PROCESS_BLOCK);
+
+    // Any other key refuses the whole request.
+    for keys in [
+        &["branch.currency"][..],
+        &["kiosk.process_allow", "receipt.footer"][..],
+    ] {
+        let err = client
+            .request("settings.get", settings_get_body(keys))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::Forbidden), "{keys:?}");
+    }
+    let err = client
+        .request("settings.get", settings_get_body(&[]))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::BadFrame));
+    // The session stays usable.
+    client
+        .request("ping", serde_json::Value::Null)
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn browser_classes_may_not_read_settings() {
+    let hub = start("0.1.0", true).await;
+    for (class, credential) in [
+        (ClientClass::Kds, hub.kds_token.clone()),
+        (ClientClass::Phone, String::new()),
+    ] {
+        let mut ws = hub.plain().await;
+        hello_ok(&mut ws, hub.hello(class, &credential, "0.1.0")).await;
+        send(
+            &mut ws,
+            r#"{"v":1,"kind":"settings.get","rid":"g1","keys":["kiosk.process_allow"]}"#,
+        )
+        .await;
+        let reply = recv(&mut ws).await.unwrap();
+        assert_eq!(error_of(&reply).0, "g1");
+        assert_eq!(error_of(&reply).1, ErrorCode::Forbidden, "{class:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kiosk_list_change_is_pushed_to_paired_sessions_but_not_browsers() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    let mut kds = hub.plain().await;
+    hello_ok(
+        &mut kds,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let games = r#"[{"path_glob": "C:\\Games\\*.exe"}]"#;
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "kiosk.process_allow".into(),
+                value: games.into(),
+            }),
+            Some(1),
+        ))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let values = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, events.next()).await.unwrap() {
+            Some(HubEvent::SettingsChanged(v)) => break v.values,
+            Some(HubEvent::Applied(_)) => continue,
+            None => panic!("closed"),
+        }
+    };
+    assert_eq!(values.len(), 1);
+    assert_eq!(
+        (
+            values[0].key.as_str(),
+            values[0].value.as_str(),
+            values[0].rev
+        ),
+        ("kiosk.process_allow", games, 2)
+    );
+    // The kds session hears nothing (no applied either: no table is on its list).
+    ping(&mut kds, "p1").await;
+    let next = tokio::time::timeout(Duration::from_millis(300), kds.next()).await;
+    assert!(next.is_err(), "kds got {next:?}");
 }

@@ -45,7 +45,7 @@ impl ClientClass {
 }
 
 /// Paired apps (the Kiosk service): kiosk events only so far.
-const PAIRED_SCOPE: &[IntentKind] = &[IntentKind::KioskLog];
+const PAIRED_SCOPE: &[IntentKind] = &[IntentKind::KioskLog, IntentKind::KioskProcessBlocked];
 /// Kitchen intents only (none exist yet).
 const KDS_SCOPE: &[IntentKind] = &[];
 const PHONE_SCOPE: &[IntentKind] = &[IntentKind::ConsolePlanRequested];
@@ -62,6 +62,16 @@ pub fn class_scope(class: ClientClass) -> &'static [IntentKind] {
 /// Whether a session of `class` may submit `kind`.
 pub fn in_scope(class: ClientClass, kind: IntentKind) -> bool {
     class_scope(class).contains(&kind)
+}
+
+/// The setting-key prefix a paired session may read with `settings.get` (and is pushed in
+/// `settings.changed`). Browser classes read no settings at all.
+pub const PAIRED_SETTINGS_PREFIX: &str = "kiosk.";
+
+/// Whether a session of `class` may read the branch setting `key`: only paired apps, and only
+/// `kiosk.*` keys.
+pub fn may_read_setting(class: ClientClass, key: &str) -> bool {
+    class == ClientClass::Paired && key.starts_with(PAIRED_SETTINGS_PREFIX)
 }
 
 #[cfg(test)]
@@ -97,12 +107,30 @@ mod tests {
             class_scope(ClientClass::Phone),
             &[IntentKind::ConsolePlanRequested]
         );
-        assert_eq!(class_scope(ClientClass::Paired), &[IntentKind::KioskLog]);
+        assert_eq!(
+            class_scope(ClientClass::Paired),
+            &[IntentKind::KioskLog, IntentKind::KioskProcessBlocked]
+        );
         for kind in IntentKind::ALL {
             assert_eq!(
                 in_scope(ClientClass::Phone, kind),
                 kind == IntentKind::ConsolePlanRequested
             );
+        }
+    }
+
+    #[test]
+    fn only_paired_sessions_read_settings_and_only_kiosk_keys() {
+        assert!(may_read_setting(ClientClass::Paired, "kiosk.process_allow"));
+        assert!(may_read_setting(ClientClass::Paired, "kiosk.process_block"));
+        assert!(!may_read_setting(ClientClass::Paired, "branch.currency"));
+        assert!(!may_read_setting(ClientClass::Paired, "kiosk"));
+        assert!(!may_read_setting(
+            ClientClass::Paired,
+            "Kiosk.process_allow"
+        ));
+        for class in [ClientClass::Kds, ClientClass::Phone] {
+            assert!(!may_read_setting(class, "kiosk.process_allow"));
         }
     }
 

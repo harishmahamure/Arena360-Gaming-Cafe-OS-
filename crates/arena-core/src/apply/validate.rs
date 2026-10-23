@@ -65,7 +65,17 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             _ => Err(internal_target()),
         },
         IntentPayload::KioskLog(l) => match target {
-            Target::Branch(b) => super::kiosk_log::validate(intent, l, b.as_ref()),
+            Target::Branch(b) => {
+                super::kiosk_log::validate(intent, super::kiosk_log::Event::Log(l), b.as_ref())
+            }
+            _ => Err(internal_target()),
+        },
+        IntentPayload::KioskProcessBlocked(p) => match target {
+            Target::Branch(b) => super::kiosk_log::validate(
+                intent,
+                super::kiosk_log::Event::ProcessBlocked(p),
+                b.as_ref(),
+            ),
             _ => Err(internal_target()),
         },
     }

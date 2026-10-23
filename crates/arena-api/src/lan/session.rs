@@ -12,7 +12,9 @@
 //! unknown kind `UNSUPPORTED`. `intent.submit` goes to the writer with the session's actor
 //! (`{device, device_id}`), overwriting any actor in the frame and dropping any `elevated_by`.
 //! A follower refuses every intent with `NOT_PRIMARY`; an intent outside the class scope gets
-//! `FORBIDDEN` and a `warn` line.
+//! `FORBIDDEN` and a `warn` line. `settings.get{keys}` answers `settings.values` on a primary or
+//! a follower, for paired sessions and `kiosk.*` keys only (anything else is `FORBIDDEN`, the
+//! whole request); keys the branch lacks are left out.
 //!
 //! **Queues.** Replies and pushes share one bounded queue drained by the session's writer
 //! task, so a slow client only ever stalls itself; the fan-out drops a session whose queue is
@@ -25,8 +27,9 @@ use std::time::Duration;
 use arena_core::{WriterHandle, devices::VerifiedDevice};
 use arena_proto::{
     Actor, ActorKind, AppError, ClientClass, DeviceVersionReported, ErrorCode, Frame, FrameBody,
-    Hello, HelloOk, Intent, IntentKind, IntentPayload, IntentResult, Versions, check_envelope,
-    in_scope, parse_frame, parse_frame_value, parse_json,
+    Hello, HelloOk, Intent, IntentKind, IntentPayload, IntentResult, MAX_SETTINGS_GET_KEYS,
+    SettingsValues, Versions, check_envelope, in_scope, may_read_setting, parse_frame,
+    parse_frame_value, parse_json,
 };
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -540,6 +543,10 @@ impl Ctx<'_> {
                 Ok(intent) => self.spawn_submit(rid, intent, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "settings.get" => match self.check_settings_get(value) {
+                Ok(keys) => self.spawn_settings_get(rid, keys, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             other => {
                 let e = app(
                     ErrorCode::Unsupported,
@@ -599,13 +606,16 @@ impl Ctx<'_> {
             return Err(app(ErrorCode::BadFrame, "malformed intent.submit"));
         };
         debug_assert_eq!(frame.rid, rid);
-        // A chatty kiosk cannot flood the change log: 60 events a minute per device. Over the
-        // limit is HUB_SLOW, which the kiosk treats as transient (it keeps the event queued).
-        if submit.intent.payload.kind() == IntentKind::KioskLog
-            && !self
-                .hub
-                .kiosk_log_rate
-                .take(self.authed.device_id().unwrap_or("-"))
+        // A chatty kiosk cannot flood the change log: 60 events a minute per device, kiosk.log
+        // and kiosk.process_blocked together. Over the limit is HUB_SLOW, which the kiosk treats
+        // as transient (it keeps the event queued).
+        if matches!(
+            submit.intent.payload.kind(),
+            IntentKind::KioskLog | IntentKind::KioskProcessBlocked
+        ) && !self
+            .hub
+            .kiosk_log_rate
+            .take(self.authed.device_id().unwrap_or("-"))
         {
             return Err(app(
                 ErrorCode::HubSlow,
@@ -613,6 +623,68 @@ impl Ctx<'_> {
             ));
         }
         Ok(bind_to_session(submit.intent, &self.authed.actor))
+    }
+
+    /// The keys of a `settings.get` this session may read: paired only, 1–32 `kiosk.*` keys.
+    fn check_settings_get(&self, value: Value) -> Result<Vec<String>, AppError> {
+        let class = self.authed.class;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::SettingsGet(get) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed settings.get"));
+        };
+        if get.keys.is_empty() || get.keys.len() > MAX_SETTINGS_GET_KEYS {
+            return Err(AppError::with_field(
+                ErrorCode::BadFrame,
+                "keys",
+                format!("keys must list 1–{MAX_SETTINGS_GET_KEYS} settings"),
+            ));
+        }
+        if let Some(key) = get.keys.iter().find(|k| !may_read_setting(class, k)) {
+            tracing::warn!(
+                class = class.as_str(),
+                device_id = self.authed.device_id().unwrap_or("-"),
+                "settings.get outside the session's class scope"
+            );
+            let key: String = key.chars().take(64).collect();
+            return Err(app(
+                ErrorCode::Forbidden,
+                format!("{key:?} may not be read by {} clients", class.as_str()),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut keys = get.keys;
+        keys.retain(|k| seen.insert(k.clone()));
+        Ok(keys)
+    }
+
+    async fn spawn_settings_get(
+        &self,
+        rid: String,
+        keys: Vec<String>,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let dir = Arc::clone(&self.hub.devices);
+        let out = self.out.clone();
+        tasks.spawn(async move {
+            let _permit = permit;
+            let read = tokio::task::spawn_blocking(move || dir.settings(&keys)).await;
+            let reply = match read {
+                Ok(Ok(values)) => {
+                    Frame::new(rid, FrameBody::SettingsValues(SettingsValues { values }))
+                }
+                Ok(Err(e)) => Frame::error(rid, e),
+                Err(e) => Frame::error(
+                    rid,
+                    app(ErrorCode::Internal, format!("settings read failed: {e}")),
+                ),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
     }
 
     async fn spawn_submit(

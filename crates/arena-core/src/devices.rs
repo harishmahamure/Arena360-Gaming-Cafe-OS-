@@ -168,6 +168,25 @@ impl DeviceDirectory {
         check_device_token(row.as_ref(), class, token)
     }
 
+    /// The branch settings among `keys` that exist, with their `rev`, in `keys` order (what a
+    /// paired device may read: the caller checks the keys against the class scope first).
+    pub fn settings(&self, keys: &[String]) -> Result<Vec<arena_proto::SettingEntry>, AppError> {
+        let rows = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?
+            .settings()?;
+        Ok(keys
+            .iter()
+            .filter_map(|k| rows.iter().find(|r| &r.key == k))
+            .map(|r| arena_proto::SettingEntry {
+                key: r.key.clone(),
+                value: r.value.clone(),
+                rev: r.rev,
+            })
+            .collect())
+    }
+
     /// Whether `device_id` is revoked (a missing device counts as revoked).
     pub fn is_revoked(&self, device_id: &str) -> Result<bool, AppError> {
         Ok(self

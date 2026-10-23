@@ -1,7 +1,8 @@
 //! The Kiosk service against a real, in-process Hub LAN server (`arena-api` on a seeded branch),
 //! with the app side played by a test client on the Unix socket. One test per non-installer row
 //! of the Story 1.16 matrix (the backoff bounds and the pipe ACL rows are unit tests in
-//! `arena-kiosk-core::backoff` and `ipc::acl`).
+//! `arena-kiosk-core::backoff` and `ipc::acl`). The Story 1.18 process enforcement runs here
+//! too, on the fake process table (`procs::fake`), against the same Hub.
 
 #![cfg(unix)]
 
@@ -750,4 +751,326 @@ async fn a_re_provision_after_revoke_reconnects_without_a_restart() {
     provision(&kiosk.data, &hub, &hub.cert.fingerprint);
     kiosk.wait_state(KioskHubState::Connected).await;
     eventually("the new device online", || hub.online()).await;
+}
+
+// ---- Story 1.18: process allow/block enforcement (fake process table) ----
+
+use arena_kiosk_core::ipc::TOAST_APP_BLOCKED;
+use arena_kiosk_svc::procs::fake::{FakeProc, FakeSystem};
+use arena_kiosk_svc::procs::{EnforceOptions, ProcessApi};
+use arena_proto::{IntentKind, KEY_PROCESS_ALLOW, KEY_PROCESS_MODE, ProcessRule, SettingsSet};
+
+const PLAYER_SID: &str = "S-1-5-21-1000-2000-3000-1001";
+const OTHER_SID: &str = "S-1-5-21-1000-2000-3000-1002";
+const SYSTEM_SID: &str = "S-1-5-18";
+const INSTALL: &str = r"C:\Program Files\Arena 360 Kiosk";
+
+/// The player's shell-launched process (pid 2, an allowed Steam client, plays the launcher).
+const LAUNCHER: u32 = 2;
+
+fn player_proc(path: &str) -> FakeProc {
+    FakeProc {
+        session_id: 1,
+        user_sid: PLAYER_SID.into(),
+        path: path.into(),
+        parent: Some(LAUNCHER),
+    }
+}
+
+fn fake_system() -> Arc<FakeSystem> {
+    let sys = Arc::new(FakeSystem::default());
+    sys.set_player("player", PLAYER_SID, 1);
+    sys.add_running(
+        LAUNCHER,
+        FakeProc {
+            parent: None,
+            ..player_proc(r"C:\Windows\System32\userinit.exe")
+        },
+    );
+    sys
+}
+
+fn enforce_opts() -> EnforceOptions {
+    EnforceOptions {
+        install_dir: Some(PathBuf::from(INSTALL)),
+        app_image: Some(PathBuf::from(format!(r"{INSTALL}\arena-kiosk-ui.exe"))),
+        app_config: None,
+        own_images: vec![PathBuf::from(format!(r"{INSTALL}\arena-kiosk-svc.exe"))],
+        system_root: r"C:\Windows".into(),
+    }
+}
+
+impl Kiosk {
+    /// Caches `kiosk.process_mode` as if the Hub had sent it before (rev 1), so the kiosk
+    /// starts in that mode while the Hub is down.
+    fn cache_mode(&self, mode: &str) {
+        std::fs::create_dir_all(self.data.root()).unwrap();
+        arena_kiosk_svc::queue::QueueDb::open(&self.data.queue())
+            .unwrap()
+            .kv_set(KEY_PROCESS_MODE, mode, 1)
+            .unwrap();
+    }
+
+    fn enforce(&mut self, sys: &Arc<FakeSystem>) {
+        self.runtime
+            .as_mut()
+            .unwrap()
+            .enforce(ProcessApi::of(Arc::clone(sys)), enforce_opts());
+    }
+
+    /// The queued `kiosk.process_blocked` intents.
+    fn blocked_queued(&self) -> usize {
+        self.rt()
+            .ctx()
+            .queue
+            .lock()
+            .unwrap()
+            .entries()
+            .unwrap()
+            .iter()
+            .filter(|q| q.intent.kind == IntentKind::KioskProcessBlocked)
+            .count()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blocked_launch_is_killed_toasted_and_reported_once_after_reconnect() {
+    let mut hub = Hub::seeded().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.cache_mode("enforce");
+    kiosk.start();
+    let sys = fake_system();
+    kiosk.enforce(&sys);
+    eventually("the creation watch", || sys.subscribed()).await;
+    let mut app = kiosk.app().await;
+    app.until(|m| matches!(m, IpcMsg::HubStatus { .. })).await;
+
+    // Offline: the Hub is down.
+    sys.spawn(100, player_proc(r"C:\Windows\System32\cmd.exe"));
+    app.until(|m| {
+        *m == IpcMsg::Toast {
+            key: TOAST_APP_BLOCKED.into(),
+        }
+    })
+    .await;
+    assert_eq!(sys.killed(), [100]);
+    assert!(!sys.alive(100));
+    eventually("the intent queued", || kiosk.blocked_queued() == 1).await;
+    // The same program again at once: killed, but not reported a second time.
+    sys.spawn(101, player_proc(r"C:\Windows\System32\cmd.exe"));
+    eventually("the second kill", || sys.killed() == [100, 101]).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(kiosk.blocked_queued(), 1);
+
+    hub.up().await;
+    kiosk.wait_state(KioskHubState::Connected).await;
+    eventually("the intent delivered", || kiosk.blocked_queued() == 0).await;
+    assert_eq!(hub.logged_of(&["process_blocked"]), ["process_blocked"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn running_offenders_are_swept_at_start_and_a_list_change_applies_live() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.cache_mode("enforce");
+    let sys = fake_system();
+    sys.add_running(200, player_proc(r"C:\Games\old.exe"));
+    kiosk.start();
+    let started = Instant::now();
+    kiosk.enforce(&sys);
+    eventually("the startup sweep", || sys.killed() == [200]).await;
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    // The service read the lists after hello and cached them.
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let cached = || ctx.queue.lock().unwrap().kv_get(KEY_PROCESS_ALLOW).unwrap();
+    eventually("the lists cached", || cached().is_some()).await;
+    let (_, rev) = cached().unwrap();
+
+    let games = ProcessRule {
+        path_glob: r"C:\Games\*.exe".into(),
+        signer: None,
+    };
+    let value = serde_json::to_string(std::slice::from_ref(&games)).unwrap();
+    hub.writer
+        .submit_intent(Intent {
+            base_rev: Some(rev),
+            ..intent(
+                owner(),
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: KEY_PROCESS_ALLOW.into(),
+                    value,
+                }),
+            )
+        })
+        .await
+        .unwrap();
+    eventually("the pushed list applied", || {
+        ctx.lists.borrow().allow == [games.clone()]
+    })
+    .await;
+    sys.spawn(201, player_proc(r"C:\Games\new.exe"));
+    sys.spawn(202, player_proc(r"C:\Temp\new.exe"));
+    eventually("the disallowed one killed", || sys.killed().contains(&202)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(sys.alive(201), "allowed by the new rule, with no restart");
+
+    // The cache holds across a restart with the Hub down.
+    kiosk.runtime.take().unwrap().shutdown().await;
+    hub.down().await;
+    kiosk.start();
+    assert_eq!(kiosk.rt().ctx().lists.borrow().allow, [games]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_the_players_own_processes_are_ever_killed() {
+    let hub = Hub::seeded().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.cache_mode("enforce");
+    let sys = fake_system();
+    let cmd = r"C:\Windows\System32\cmd.exe";
+    sys.add_running(
+        300,
+        FakeProc {
+            user_sid: SYSTEM_SID.into(),
+            ..player_proc(cmd)
+        },
+    );
+    sys.add_running(
+        301,
+        FakeProc {
+            session_id: 2,
+            ..player_proc(cmd)
+        },
+    );
+    sys.add_running(
+        302,
+        FakeProc {
+            user_sid: OTHER_SID.into(),
+            ..player_proc(cmd)
+        },
+    );
+    // The kiosk app itself, unsigned (a debug build): never killed.
+    sys.add_running(303, player_proc(&format!(r"{INSTALL}\arena-kiosk-ui.exe")));
+    // A critical Windows image somehow running as the player: never killed.
+    sys.add_running(304, player_proc(r"C:\Windows\System32\svchost.exe"));
+    sys.add_running(305, player_proc(cmd));
+    kiosk.start();
+    kiosk.enforce(&sys);
+    eventually("the player's cmd killed", || sys.killed() == [305]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(sys.killed(), [305]);
+    // With no player logged on, nothing is considered at all.
+    sys.set_player("someone-else", OTHER_SID, 1);
+    sys.spawn(306, player_proc(cmd));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(sys.alive(306));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signatures_decide_allowed_paths_and_are_cached_by_path_size_and_mtime() {
+    let hub = Hub::seeded().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.cache_mode("enforce");
+    let sys = fake_system();
+    let conhost = r"C:\Windows\System32\conhost.exe";
+    let dllhost = r"C:\Windows\System32\dllhost.exe";
+    let broker = r"C:\Windows\System32\RuntimeBroker.exe";
+    sys.sign(conhost, "Microsoft Windows", true);
+    sys.sign(dllhost, "Microsoft Windows", false);
+    sys.sign(broker, "Not Microsoft", true);
+    kiosk.start();
+    kiosk.enforce(&sys);
+    eventually("the creation watch", || sys.subscribed()).await;
+
+    sys.spawn(400, player_proc(conhost));
+    sys.spawn(401, player_proc(conhost));
+    sys.spawn(402, player_proc(dllhost));
+    sys.spawn(403, player_proc(broker));
+    sys.spawn(404, player_proc(r"C:\Temp\arena-kiosk-ui.exe"));
+    eventually("the three bad ones", || {
+        let mut k = sys.killed();
+        k.sort_unstable();
+        k == [402, 403, 404]
+    })
+    .await;
+    assert!(sys.alive(400) && sys.alive(401));
+    // conhost verified once for two launches; a changed file is verified again.
+    let before = sys.verifies();
+    sys.stamp_file(conhost, 2, 2);
+    sys.spawn(405, player_proc(conhost));
+    eventually("the re-verification", || sys.verifies() == before + 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(sys.alive(405));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_a_creation_watch_the_enforcer_polls() {
+    let hub = Hub::seeded().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.cache_mode("enforce");
+    let sys = fake_system();
+    sys.fail_subscribe();
+    kiosk.start();
+    kiosk.enforce(&sys);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // No event is ever sent; the fallback poll still finds it.
+    sys.add_running(500, player_proc(r"C:\Windows\System32\regedit.exe"));
+    eventually("the polled kill", || sys.killed() == [500]).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn report_mode_from_the_hub_kills_nothing_and_reports_once() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.cache_mode("enforce");
+    kiosk.start();
+    let sys = fake_system();
+    kiosk.enforce(&sys);
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let mode_rev = || ctx.queue.lock().unwrap().kv_get(KEY_PROCESS_MODE).unwrap();
+    // The seeded branch enforces (bootstrap); its rev replaces the cached one.
+    eventually("the hub's mode", || {
+        mode_rev().is_some_and(|(m, _)| m == "enforce")
+    })
+    .await;
+    let (_, rev) = mode_rev().unwrap();
+    hub.writer
+        .submit_intent(Intent {
+            base_rev: Some(rev),
+            ..intent(
+                owner(),
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: KEY_PROCESS_MODE.into(),
+                    value: "report".into(),
+                }),
+            )
+        })
+        .await
+        .unwrap();
+    eventually("report mode applied", || {
+        ctx.lists.borrow().mode == arena_proto::ProcessMode::Report
+    })
+    .await;
+    let mut app = kiosk.app().await;
+    app.until(|m| matches!(m, IpcMsg::HubStatus { .. })).await;
+    sys.spawn(600, player_proc(r"C:\Windows\System32\cmd.exe"));
+    eventually("the report delivered", || {
+        hub.logged_of(&["process_blocked"]) == ["process_blocked"]
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(sys.alive(600));
+    assert_eq!(sys.kill_attempts(), 0);
+    assert_eq!(hub.logged_of(&["process_blocked"]).len(), 1);
+    // No toast reached the app.
+    while let Ok(Ok(m)) =
+        tokio::time::timeout(Duration::from_millis(200), read_msg(&mut app.reader)).await
+    {
+        assert!(!matches!(m, IpcMsg::Toast { .. }), "{m:?}");
+    }
 }

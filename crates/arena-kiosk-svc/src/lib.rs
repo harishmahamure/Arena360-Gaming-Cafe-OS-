@@ -5,7 +5,8 @@
 //! (`arena-kiosk-ui`, the player's session) talks only to this service, over an ACL'd named pipe
 //! ([`ipc`]); the service pings it and restarts it when it stops answering ([`app`],
 //! [`launcher`]). `lockdown apply|restore` ([`lockdown`]) locks the player account down for
-//! the installer. Off Windows the same logic runs in console mode over a Unix socket, for dev
+//! the installer. [`procs`] kills programs the branch's process lists do not allow in the
+//! player's session. Off Windows the same logic runs in console mode over a Unix socket, for dev
 //! and CI.
 
 pub mod app;
@@ -22,6 +23,7 @@ pub mod launcher;
 pub mod lockdown;
 pub mod logs;
 pub mod paths;
+pub mod procs;
 pub mod queue;
 pub mod runtime;
 pub mod secret;

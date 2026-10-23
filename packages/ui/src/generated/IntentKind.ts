@@ -14,4 +14,5 @@ export type IntentKind =
   | "staff.upsert"
   | "role.upsert"
   | "audit.read_granted"
-  | "kiosk.log";
+  | "kiosk.log"
+  | "kiosk.process_blocked";

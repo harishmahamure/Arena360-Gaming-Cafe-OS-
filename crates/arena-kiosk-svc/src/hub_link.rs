@@ -9,15 +9,24 @@
 //!   reconnects stop: one try every 30 s until a try succeeds (after a re-provision).
 //! - **Replay:** on every connect, and whenever an event is queued, the queue is sent oldest
 //!   first, one at a time ([`arena_kiosk_core::queue`] has the rules).
+//! - **Settings:** after every hello the link asks `settings.get` for the process lists and
+//!   mode (waiting at most [`SETTINGS_TIMEOUT`]) and applies the answer; a pushed
+//!   `settings.changed` applies the same way, live. A failed or slow `settings.get` keeps the
+//!   cached values (they still apply offline). The applied revisions start from the cached
+//!   ones, so an older revision never replaces a newer one.
 
 use std::sync::Arc;
 
 use arena_kiosk_core::queue::{ReplayStep, classify};
 use arena_kiosk_core::{Backoff, ClientError, HubClient};
-use arena_proto::{ClientClass, ErrorCode, Hello, KioskHubState, Versions};
+use arena_proto::{ClientClass, ErrorCode, FrameBody, Hello, HubEvent, KioskHubState, Versions};
 use tokio::sync::watch;
 
+use crate::procs::{AppliedRevs, PROCESS_KEYS, apply_settings};
 use crate::runtime::Ctx;
+
+/// How long the link waits for the `settings.get` reply after hello.
+pub const SETTINGS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How one connection attempt ended.
 enum Ended {
@@ -152,6 +161,11 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
 /// While connected: replay the queue, then wait for new events, the close or shutdown.
 async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bool>) -> Ended {
     let mut events = client.events();
+    let mut revs = AppliedRevs::from_cache(&ctx.queue.lock().unwrap_or_else(|p| p.into_inner()));
+    tokio::select! {
+        () = fetch_settings(ctx, client, &mut revs) => {}
+        _ = stop.changed() => return Ended::Shutdown,
+    }
     // Set once when a replay stops; new events do not push it back.
     let mut retry_at: Option<tokio::time::Instant> = None;
     let mut skew_warned = false;
@@ -185,13 +199,35 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                     None => std::future::pending().await,
                 }
             } => {
-                // Nothing consumes Hub pushes yet (later stories: settings, unlock).
-                if ev.is_none() {
-                    events = None;
+                match ev {
+                    Some(HubEvent::SettingsChanged(values)) => {
+                        apply_settings(ctx, &values.values, &mut revs);
+                    }
+                    Some(HubEvent::Applied(_)) => {}
+                    None => events = None,
                 }
             }
             _ = stop.changed() => return Ended::Shutdown,
         }
+    }
+}
+
+/// Asks the Hub for the process lists and mode and applies them. A failure, or no answer
+/// within [`SETTINGS_TIMEOUT`], is logged and the cached values stay in effect.
+async fn fetch_settings(ctx: &Ctx, client: &HubClient, revs: &mut AppliedRevs) {
+    let body = serde_json::json!({ "keys": PROCESS_KEYS });
+    match tokio::time::timeout(SETTINGS_TIMEOUT, client.request("settings.get", body)).await {
+        Ok(Ok(frame)) => match frame.body {
+            FrameBody::SettingsValues(v) => apply_settings(ctx, &v.values, revs),
+            other => tracing::warn!(kind = other.kind(), "unexpected reply to settings.get"),
+        },
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "settings.get failed; keeping the cached process settings")
+        }
+        Err(_) => tracing::warn!(
+            timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
+            "settings.get timed out; keeping the cached process settings"
+        ),
     }
 }
 

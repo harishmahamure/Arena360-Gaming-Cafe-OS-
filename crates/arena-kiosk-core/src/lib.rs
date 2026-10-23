@@ -1,8 +1,8 @@
 //! `arena-kiosk-core`: the platform-neutral kiosk logic shared by the Kiosk service and the
 //! Kiosk app: the pinned-TLS Hub client, the reconnect back-off, the service ↔ app IPC
-//! messages, the app watchdog, the offline queue's ordering rules and the Windows lockdown's
-//! pure parts (the registry plan, the keyboard filter, the monitor union). It depends only on
-//! `arena-proto` among the workspace crates.
+//! messages, the app watchdog, the offline queue's ordering rules, the process allow/block
+//! decision and the Windows lockdown's pure parts (the registry plan, the keyboard filter, the
+//! monitor union). It depends only on `arena-proto` among the workspace crates.
 
 pub mod backoff;
 pub mod client;
@@ -10,6 +10,7 @@ pub mod ipc;
 pub mod keys;
 pub mod lockdown;
 pub mod monitors;
+pub mod procpolicy;
 pub mod queue;
 pub mod watchdog;
 

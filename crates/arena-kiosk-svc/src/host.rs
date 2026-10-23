@@ -1,5 +1,5 @@
 //! What the console mode and the Windows service host share: logs, the platform IPC
-//! transport, and running the [`Runtime`] until asked to stop.
+//! transport, the process enforcement (Windows), and running the [`Runtime`] until asked to stop.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -47,7 +47,10 @@ pub async fn run_until(
     )?;
     #[cfg(unix)]
     let ipc = crate::ipc::UnixIpcServer::bind(&data.socket())?;
-    let runtime = Runtime::start(
+    #[cfg(windows)]
+    let enforce = crate::procs::EnforceOptions::for_this_install(&data.config());
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut runtime = Runtime::start(
         data,
         secrets,
         Arc::new(SystemClock),
@@ -55,6 +58,14 @@ pub async fn run_until(
         ipc,
         launcher,
     )?;
+    // The process lists are enforced on Windows only (there is no player session elsewhere).
+    #[cfg(windows)]
+    runtime.enforce(
+        crate::procs::ProcessApi::of(std::sync::Arc::new(
+            crate::procs::windows::WinProcesses::new(),
+        )),
+        enforce,
+    );
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "kiosk service started");
     shutdown.await;
     tracing::info!("kiosk service stopping");

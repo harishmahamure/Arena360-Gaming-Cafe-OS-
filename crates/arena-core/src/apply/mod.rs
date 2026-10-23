@@ -47,7 +47,7 @@ use crate::status::{Epoch, Role};
 
 pub use devices::MAX_VERSION_LEN;
 pub use frame::{is_ulid, validate_frame};
-pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS};
+pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE};
 pub use settings_set::MAX_SETTING_VALUE_CHARS;
 pub(crate) use ttl_dedupe::record_rejection;
 pub use ttl_dedupe::{INTENT_TTL_MS, MAX_CLOCK_SKEW_MS, fingerprint};
@@ -107,7 +107,8 @@ pub(crate) enum Target {
     Staff(Box<staff_roles::StaffTarget>),
     /// `role.upsert`: the branch, the edited role and its rows, and the name's holder.
     Role(Box<staff_roles::RoleTarget>),
-    /// `audit.read_granted`, `kiosk.log`: the branch, if it has been bootstrapped.
+    /// `audit.read_granted`, `kiosk.log`, `kiosk.process_blocked`: the branch, if it has been
+    /// bootstrapped.
     Branch(Option<String>),
 }
 
@@ -122,7 +123,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::StaffUpsert(s) => Target::Staff(Box::new(staff_roles::load_staff(tx, intent, s)?)),
         P::RoleUpsert(r) => Target::Role(Box::new(staff_roles::load_role(tx, intent, r)?)),
         P::AuditReadGranted(_) => read_grants::load(tx)?,
-        P::KioskLog(_) => kiosk_log::load(tx)?,
+        P::KioskLog(_) | P::KioskProcessBlocked(_) => kiosk_log::load(tx)?,
     })
 }
 

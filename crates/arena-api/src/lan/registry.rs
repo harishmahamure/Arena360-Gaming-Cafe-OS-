@@ -2,7 +2,9 @@
 //!
 //! Every committed intent from the writer broadcast is pushed to every `paired` session as
 //! `event{kind:"applied"}`. Browser classes (`kds`, `phone`) only get the changes to tables on
-//! their allow-list ([`browser_tables`], empty for now), and nothing when none remain. Each
+//! their allow-list ([`browser_tables`], empty for now), and nothing when none remain. When the
+//! intent wrote `kiosk.*` settings, their values now follow as `event{kind:"settings.changed"}`,
+//! to `paired` sessions only (browser classes never see settings). Each
 //! session has its own bounded queue; a session whose queue is full is dropped, so a slow or
 //! failing client never blocks the others. After an intent that touched a `devices` row,
 //! sessions of a device that is now revoked get `TOKEN_REVOKED` and are closed. If the fan-out
@@ -17,7 +19,7 @@ use arena_core::ChangeOp;
 use arena_core::{Applied, DeviceDirectory};
 use arena_proto::{
     AppError, AppliedSummary, ChangeOpKind, ChangeSummary, ClientClass, ErrorCode, EventFrame,
-    Frame, FrameBody, HubEvent,
+    Frame, FrameBody, HubEvent, SettingEntry, SettingsValues, may_read_setting,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -246,6 +248,70 @@ impl Registry {
         }
     }
 
+    /// Pushes `settings.changed` with `values` to every `paired` session (each value is one a
+    /// paired session may read). A session whose queue is full or closed is dropped.
+    pub(crate) fn push_settings(&self, values: Vec<SettingEntry>) {
+        let values: Vec<SettingEntry> = values
+            .into_iter()
+            .filter(|v| may_read_setting(ClientClass::Paired, &v.key))
+            .collect();
+        if values.is_empty() {
+            return;
+        }
+        let n = self.next_event.fetch_add(1, Ordering::Relaxed);
+        let frame = Frame::new(
+            format!("ev-{n}"),
+            FrameBody::Event(EventFrame {
+                event: HubEvent::SettingsChanged(SettingsValues { values }),
+            }),
+        );
+        let msg = Message::text(frame.to_text());
+        let Ok(map) = self.sessions.lock() else {
+            return;
+        };
+        for (id, entry) in map.iter() {
+            if entry.class != ClientClass::Paired {
+                continue;
+            }
+            if entry.out.try_send(msg.clone()).is_err() {
+                tracing::warn!(session = id, "session queue full or closed; dropping it");
+                set_kill(&entry.kill, Kill::Drop);
+            }
+        }
+    }
+
+    /// Reads the `kiosk.*` settings `applied` wrote and pushes them (nothing when it wrote none).
+    async fn push_kiosk_settings(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
+        let keys = paired_setting_keys(applied);
+        if keys.is_empty() {
+            return;
+        }
+        let dir = Arc::clone(devices);
+        match tokio::task::spawn_blocking(move || dir.settings(&keys)).await {
+            Ok(Ok(values)) => self.push_settings(values),
+            Ok(Err(e)) => {
+                // The sessions would miss a list change: drop them so they reconnect and re-read.
+                tracing::warn!(
+                    code = e.code.as_str(),
+                    "kiosk settings read failed; dropping paired sessions"
+                );
+                self.drop_paired();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "kiosk settings read panicked; dropping paired sessions");
+                self.drop_paired();
+            }
+        }
+    }
+
+    fn drop_paired(&self) {
+        if let Ok(map) = self.sessions.lock() {
+            for entry in map.values().filter(|e| e.class == ClientClass::Paired) {
+                set_kill(&entry.kill, Kill::Drop);
+            }
+        }
+    }
+
     /// Closes every session of `device_id` with `kill`.
     pub(crate) fn kill_device(&self, device_id: &str, kill: Kill) {
         let Ok(map) = self.sessions.lock() else {
@@ -323,6 +389,7 @@ impl Registry {
             match events.recv().await {
                 Ok(applied) => {
                     self.push_applied(&applied);
+                    self.push_kiosk_settings(&devices, &applied).await;
                     let mut touched: Vec<String> = applied
                         .changes
                         .iter()
@@ -347,6 +414,21 @@ impl Registry {
             }
         }
     }
+}
+
+/// The setting keys `applied` wrote that a paired session may read (`settings` row ids are
+/// `branch_id/key`).
+pub(crate) fn paired_setting_keys(applied: &Applied) -> Vec<String> {
+    let mut keys: Vec<String> = applied
+        .changes
+        .iter()
+        .filter(|c| c.tbl == "settings")
+        .filter_map(|c| c.row_id.split_once('/').map(|(_, k)| k.to_owned()))
+        .filter(|k| may_read_setting(ClientClass::Paired, k))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
 }
 
 #[cfg(test)]
@@ -439,6 +521,63 @@ mod tests {
         assert!(paired_rx.try_recv().is_ok());
         assert!(kds_rx.try_recv().is_err());
         assert!(phone_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn only_kiosk_setting_writes_are_pushed_as_settings() {
+        let change = |tbl: &str, row_id: &str| ChangeMeta {
+            epoch: "1:H".into(),
+            seq: 1,
+            tbl: tbl.into(),
+            row_id: row_id.into(),
+            op: ChangeOp::Update,
+        };
+        let applied = Applied {
+            intent_id: "I".into(),
+            changes: vec![
+                change("settings", "B/kiosk.process_block"),
+                change("settings", "B/branch.currency"),
+                change("devices", "B/kiosk.process_allow"),
+                change("settings", "B/kiosk.process_allow"),
+            ],
+        };
+        assert_eq!(
+            paired_setting_keys(&applied),
+            ["kiosk.process_allow", "kiosk.process_block"]
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_changed_reaches_paired_sessions_only() {
+        let reg = Arc::new(Registry::default());
+        let (kds_tx, mut kds_rx) = mpsc::channel(8);
+        let _kds = reg.register(ClientClass::Kds, Some("K".into()), kds_tx);
+        let (phone_tx, mut phone_rx) = mpsc::channel(8);
+        let _phone = reg.register(ClientClass::Phone, None, phone_tx);
+        let (paired_tx, mut paired_rx) = mpsc::channel(8);
+        let _paired = reg.register(ClientClass::Paired, Some("P".into()), paired_tx);
+        let entry = |key: &str| SettingEntry {
+            key: key.into(),
+            value: "[]".into(),
+            rev: 2,
+        };
+        reg.push_settings(vec![entry("kiosk.process_allow"), entry("branch.currency")]);
+        let Some(Message::Text(t)) = paired_rx.recv().await else {
+            panic!("text")
+        };
+        let frame = arena_proto::parse_frame(t.as_str()).unwrap();
+        let FrameBody::Event(EventFrame {
+            event: HubEvent::SettingsChanged(v),
+        }) = frame.body
+        else {
+            panic!("{frame:?}")
+        };
+        assert_eq!(v.values, vec![entry("kiosk.process_allow")]);
+        assert!(kds_rx.try_recv().is_err());
+        assert!(phone_rx.try_recv().is_err());
+        // Nothing a paired session may read: nothing is sent.
+        reg.push_settings(vec![entry("branch.currency")]);
+        assert!(paired_rx.try_recv().is_err());
     }
 
     #[tokio::test]

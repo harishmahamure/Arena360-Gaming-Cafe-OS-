@@ -1,14 +1,5 @@
-//! `arena-api` placeholder.
+//! `arena-api`: the Hub's network edges. This story serves only the loopback `/healthz`.
 
-/// Returns this crate's name.
-pub fn crate_name() -> &'static str {
-    "arena-api"
-}
+pub mod health;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_name_is_set() {
-        assert_eq!(super::crate_name(), "arena-api");
-    }
-}
+pub use health::{DEFAULT_HEALTH_PORT, bind_health, router, serve_health};

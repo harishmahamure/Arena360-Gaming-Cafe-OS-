@@ -1,0 +1,28 @@
+//! Embedded, numbered, forward-only migrations.
+
+/// One migration: its number and its SQL.
+pub(crate) struct Migration {
+    pub version: u32,
+    pub sql: &'static str,
+}
+
+/// Every migration, in order. Append new files here; never edit or reorder applied ones.
+pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: include_str!("../migrations/0001_init.sql"),
+}];
+
+/// The schema version this binary writes.
+pub const LATEST_SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn versions_are_contiguous_from_one() {
+        for (i, m) in MIGRATIONS.iter().enumerate() {
+            assert_eq!(m.version as usize, i + 1);
+        }
+    }
+}

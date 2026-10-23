@@ -1,17 +1,195 @@
-//! `arena-hub` binary placeholder.
+//! `arena-hub`: the branch Hub service.
+//!
+//! Start-up: parse args, init logs, open the store (exit 2 on `SCHEMA_TOO_NEW`), load or mint
+//! the instance id, start the lease task and `/healthz`, then run until Ctrl+C or SIGTERM.
+//!
+//! Logs carry ids, codes and counts only — no PII (see `logs.rs`).
 
-fn crate_name() -> &'static str {
-    "arena-hub"
-}
+mod config;
+mod logs;
 
-fn main() {
-    println!("{}", crate_name());
-}
+use std::process::ExitCode;
+use std::sync::Arc;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_name_is_set() {
-        assert_eq!(super::crate_name(), "arena-hub");
+use arena_api::{bind_health, serve_health};
+use arena_core::{Clock, HubStatus, Role, SystemClock, load_or_mint_instance_id, status_channel};
+use arena_proto::{AppError, ErrorCode};
+use arena_store::{LATEST_SCHEMA_VERSION, Store};
+use arena_tasks::LeaseTask;
+use tokio::sync::oneshot;
+use tracing_subscriber::EnvFilter;
+
+const EXIT_FAILURE: u8 = 1;
+const EXIT_SCHEMA_TOO_NEW: u8 = 2;
+const EXIT_USAGE: u8 = 64;
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let cfg = match config::parse(
+        std::env::args_os().skip(1),
+        |k| std::env::var_os(k),
+        cfg!(windows),
+    ) {
+        Ok(config::Command::Run(cfg)) => cfg,
+        Ok(config::Command::Help) => {
+            println!("{}", config::USAGE);
+            return ExitCode::SUCCESS;
+        }
+        Ok(config::Command::Version) => {
+            println!("arena-hub {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("arena-hub: {e}\n{}", config::USAGE);
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let ring = match std::fs::create_dir_all(&cfg.data_dir)
+        .and_then(|()| logs::RingLog::open(cfg.logs_dir(), Arc::clone(&clock)))
+    {
+        Ok(ring) => ring,
+        Err(e) => {
+            eprintln!("arena-hub: cannot open logs: {e}");
+            return ExitCode::from(EXIT_FAILURE);
+        }
+    };
+    tracing_subscriber::fmt()
+        .json()
+        .with_ansi(false)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(Arc::new(ring))
+        .init();
+
+    match run(cfg, clock).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) if e.code == ErrorCode::SchemaTooNew => {
+            tracing::error!(
+                code = e.code.as_str(),
+                binary_schema_version = LATEST_SCHEMA_VERSION,
+                detail = %e.message,
+                "refusing to start"
+            );
+            eprintln!("arena-hub: {e}");
+            ExitCode::from(EXIT_SCHEMA_TOO_NEW)
+        }
+        Err(e) => {
+            tracing::error!(code = e.code.as_str(), detail = %e.message, "hub failed");
+            eprintln!("arena-hub: {e}");
+            ExitCode::from(EXIT_FAILURE)
+        }
     }
+}
+
+/// Resolves on Ctrl+C. If the handler cannot be installed, it logs and never resolves, so a
+/// handler failure is not mistaken for a shutdown request.
+async fn ctrl_c() {
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        tracing::error!(error = %e, "ctrl-c handler failed");
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Resolves on SIGTERM (Unix only; never resolves elsewhere or if the handler fails).
+async fn terminate() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+                return;
+            }
+            Err(e) => tracing::error!(error = %e, "sigterm handler failed"),
+        }
+    }
+    std::future::pending::<()>().await;
+}
+
+fn internal(message: String) -> AppError {
+    AppError::new(ErrorCode::Internal, message)
+}
+
+async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError> {
+    let mut store = Store::open(cfg.db_path(), clock.now_ms())?;
+    let schema_version = store.schema_version()?;
+    let instance_id = load_or_mint_instance_id(&mut store)?;
+    tracing::info!(
+        hub_instance_id = %instance_id,
+        schema_version,
+        writer_lock = store.holds_writer_lock(),
+        "store open"
+    );
+
+    let (status_tx, status_rx) =
+        status_channel(HubStatus::opened(schema_version, instance_id.clone()));
+    let listener = bind_health(cfg.health_port)
+        .await
+        .map_err(|e| internal(format!("bind 127.0.0.1:{}: {e}", cfg.health_port)))?;
+
+    let lease = LeaseTask::start(store, instance_id, Arc::clone(&clock), status_tx.clone()).await?;
+    let writer = lease.writer();
+    let mut lease_job = Some(tokio::spawn(lease.run()));
+
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let mut server = tokio::spawn(serve_health(listener, status_rx, clock, async {
+        let _ = stop_rx.await;
+    }));
+    tracing::info!(port = cfg.health_port, "healthz listening on loopback");
+
+    let outcome = loop {
+        tokio::select! {
+            () = ctrl_c() => {
+                tracing::info!(signal = "ctrl_c", "shutting down");
+                break Ok(());
+            }
+            () = terminate() => {
+                tracing::info!(signal = "sigterm", "shutting down");
+                break Ok(());
+            }
+            res = &mut server => {
+                let msg = match res {
+                    Ok(Ok(())) => "healthz server stopped unexpectedly".to_owned(),
+                    Ok(Err(e)) => format!("healthz server failed: {e}"),
+                    Err(e) => format!("healthz server task failed: {e}"),
+                };
+                tracing::error!(detail = %msg, "early exit");
+                break Err(internal(msg));
+            }
+            res = async { lease_job.as_mut().expect("guarded").await }, if lease_job.is_some() => {
+                lease_job = None;
+                match res {
+                    // Demotion (or a follower start) ends the lease task; keep serving healthz.
+                    Ok(()) => tracing::info!("lease task ended"),
+                    Err(e) => {
+                        let msg = format!("lease task failed: {e}");
+                        tracing::error!(detail = %msg, "early exit");
+                        break Err(internal(msg));
+                    }
+                }
+            }
+        }
+    };
+
+    // Healthz must not claim primary or an open database once the writer goes away.
+    status_tx.send_modify(|s| {
+        s.role = Role::Follower;
+        s.db_open = false;
+    });
+    if let Some(job) = lease_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(writer) = writer {
+        writer.close().await;
+    }
+    let _ = stop_tx.send(());
+    if !server.is_finished() {
+        let _ = server.await;
+    }
+    tracing::info!("stopped");
+    outcome
 }

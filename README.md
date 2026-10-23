@@ -65,6 +65,39 @@ Normal and build dependencies between workspace crates must follow this allow-li
 | `arena-replay` | `arena-store`, `arena-proto`                 |
 | `arena-cloud`  | `arena-proto`, `arena-replay`, `arena-store` |
 
+## Running the Hub
+
+```sh
+cargo run -p arena-hub -- --data-dir /tmp/hub
+curl 127.0.0.1:7409/healthz
+```
+
+| Flag                   | Meaning                                                    |
+| ---------------------- | ---------------------------------------------------------- |
+| `--data-dir <path>`    | Data directory (overrides `ARENA_HUB_DATA_DIR`)            |
+| `--health-port <port>` | Loopback port for `GET /healthz` (default `7409`, not `0`) |
+| `--help`, `-h`         | Print usage and exit 0                                     |
+| `--version`            | Print the version and exit 0                               |
+
+- **Data dir:** `--data-dir`, else `ARENA_HUB_DATA_DIR`, else `%PROGRAMDATA%\Arena360\Hub` on
+  Windows and `$XDG_DATA_HOME/arena360/hub` (falling back to `~/.local/share/arena360/hub`)
+  elsewhere. The database is `<data>/branch.db`; `<data>/branch.db.lock` is the process writer
+  lock, so a second process on the same dir starts as a read-only follower.
+- **Health:** `GET 127.0.0.1:<port>/healthz` returns `db_open`, `role`, `lease`, `epoch`,
+  `schema_version`, `self_instance_id` and `now`. It binds loopback only.
+- **Logs:** JSON lines in `<data>/logs/hub-YYYY-MM-DD.jsonl` (UTC), with `.N` part files when the
+  ring fills during a day. Files older than 14 days are deleted and the total is kept at or under
+  50 MB (oldest deleted first). Logs never contain PII. Set the level with `RUST_LOG` (default
+  `info`, e.g. `RUST_LOG=arena_tasks=debug`).
+- **Stopping:** Ctrl+C, or SIGTERM on Unix.
+
+| Exit code | Meaning                                                              |
+| --------- | -------------------------------------------------------------------- |
+| 0         | Clean shutdown, `--help` or `--version`                              |
+| 1         | Runtime failure (logs, store, port bind, or the healthz server died) |
+| 2         | `SCHEMA_TOO_NEW`: the database is newer than this binary             |
+| 64        | Bad command-line arguments                                           |
+
 ## Pinned versions
 
 This table is checked against the manifests by `pnpm check:pins`. Change the manifest and this
@@ -101,6 +134,14 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | serde                        | =1.0.229      | `Cargo.toml`          |
 | serde_json                   | =1.0.154      | `Cargo.toml`          |
 | ts-rs                        | =12.0.1       | `Cargo.toml`          |
+| tokio                        | =1.54.1       | `Cargo.toml`          |
+| axum                         | =0.8.9        | `Cargo.toml`          |
+| rusqlite                     | =0.40.2       | `Cargo.toml`          |
+| tracing                      | =0.1.44       | `Cargo.toml`          |
+| tracing-subscriber           | =0.3.23       | `Cargo.toml`          |
+| ulid                         | =3.0.0        | `Cargo.toml`          |
+| tempfile                     | =3.27.0       | `Cargo.toml`          |
+| tower                        | =0.5.3        | `Cargo.toml`          |
 
 ## Generated protocol types and the message catalogue
 

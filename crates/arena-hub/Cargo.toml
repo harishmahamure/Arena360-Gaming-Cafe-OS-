@@ -12,3 +12,9 @@ arena-tasks.workspace = true
 arena-core.workspace = true
 arena-store.workspace = true
 arena-proto.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

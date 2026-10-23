@@ -9,3 +9,10 @@ publish.workspace = true
 [dependencies]
 arena-core.workspace = true
 arena-proto.workspace = true
+axum.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tower.workspace = true

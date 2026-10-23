@@ -26,6 +26,8 @@ pub enum ErrorCode {
     TokenRevoked,
     /// The Hub did not answer in time.
     HubSlow,
+    /// An unexpected storage or I/O failure on the Hub.
+    Internal,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -38,6 +40,43 @@ pub struct AppError {
     #[ts(optional)]
     pub field: Option<String>,
 }
+
+impl ErrorCode {
+    /// The wire form of the code, e.g. `NOT_PRIMARY`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BadFrame => "BAD_FRAME",
+            Self::Unsupported => "UNSUPPORTED",
+            Self::Forbidden => "FORBIDDEN",
+            Self::NotPrimary => "NOT_PRIMARY",
+            Self::SchemaTooNew => "SCHEMA_TOO_NEW",
+            Self::Expired => "EXPIRED",
+            Self::Stale => "STALE",
+            Self::TokenRevoked => "TOKEN_REVOKED",
+            Self::HubSlow => "HUB_SLOW",
+            Self::Internal => "INTERNAL",
+        }
+    }
+}
+
+impl AppError {
+    /// Builds an error with no field.
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            field: None,
+        }
+    }
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code.as_str(), self.message)
+    }
+}
+
+impl std::error::Error for AppError {}
 
 #[cfg(test)]
 mod tests {
@@ -85,11 +124,13 @@ mod tests {
             (ErrorCode::Stale, "STALE"),
             (ErrorCode::TokenRevoked, "TOKEN_REVOKED"),
             (ErrorCode::HubSlow, "HUB_SLOW"),
+            (ErrorCode::Internal, "INTERNAL"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();
             assert_eq!(json, format!("\"{text}\""));
             assert_eq!(serde_json::from_str::<ErrorCode>(&json).unwrap(), code);
+            assert_eq!(code.as_str(), text);
         }
     }
 }

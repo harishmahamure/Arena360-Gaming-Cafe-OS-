@@ -12,4 +12,5 @@ export type ErrorCode =
   | "EXPIRED"
   | "STALE"
   | "TOKEN_REVOKED"
-  | "HUB_SLOW";
+  | "HUB_SLOW"
+  | "INTERNAL";

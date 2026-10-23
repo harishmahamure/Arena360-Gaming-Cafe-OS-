@@ -9,3 +9,8 @@ publish.workspace = true
 [dependencies]
 arena-store.workspace = true
 arena-proto.workspace = true
+tokio.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

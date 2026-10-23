@@ -26,3 +26,20 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Log ring:** daily JSONL files; files older than 14 days are deleted, then the oldest until the total is ≤ 50 MB.
 - **Review process:** to save context over 417 stories, I check each diff by running the verification commands and reading the `--stat`, instead of reading every line of large diffs. The three independent reviewers still read the full diff.
 - **1.5 review outcome:** 14 fixes and 10 rejections. Notable fix: disabled Buttons use `aria-disabled` and stay focusable, so the reason can be reached from the keyboard. AlertBadge keeps an empty live region mounted at count 0, so going from 0 to 1 is still announced.
+
+## Story 1.7: apply() and the gap-free change log
+
+- **Spec approval:** self-approved. Spec: `spec-1-7-every-change-goes-through-apply-into-a-gap-free-change-log-s.md`.
+- **Permission step before Story 1.11:** `branch.bootstrap` requires `actor.kind == system`; any other actor gets `FORBIDDEN`. Story 1.11 replaces this with the permission catalogue, so the Permission enum stays empty for now.
+- **New error codes:** `VALIDATION_FAILED` (with `field`) and `ALREADY_BOOTSTRAPPED`.
+- **Dev seed values:** "Dev Branch" / DEV01 / INR / Asia/Kolkata / business day starts 06:00 (360) / financial year starts in April. These are India defaults that match the product's target market.
+- **Default settings seeded:** `idle_lock_minutes=5`, `hub.locale=en-IN`, `receipt.footer=""`. Later stories add more.
+- **Currency validation:** a small const ISO 4217 table (INR, USD, EUR, GBP, AED, SGD and similar), to be widened later.
+- **Dev seed lease:** `dev seed` takes the lease one-shot, the same way as the Hub. If a live primary holds the lease, it fails with `NOT_PRIMARY`.
+- **business_day/fy stamping:** deferred to Story 1.12 (locale and timezone). The stamp step sets rev and timestamps only.
+- **1.6 implementation deviations, accepted:**
+  - An OS file lock on `branch.db.lock` gives one writer per data dir. Two processes on one dir share a `hub_instance_id`, so the lease row alone can't tell them apart.
+  - Taking another instance's expired lease bumps the counter, `(counter+1, own_id)`, so a paused old primary sees a higher epoch and demotes.
+  - A fresh lease held by another instance means follower, even if its epoch is lower.
+  - New error code `INTERNAL` for storage and I/O failures.
+- **1.6 review outcome:** 21 fixes and 6 rejections. Key fixes: a primary now demotes when its own lease expires; the writer lock is taken before any migration or write; a job panic is reported as INTERNAL instead of NOT_PRIMARY; SIGTERM is handled; a single day's log now counts toward the 50 MB cap.

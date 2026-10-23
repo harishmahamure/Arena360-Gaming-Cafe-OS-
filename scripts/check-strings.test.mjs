@@ -177,3 +177,21 @@ test("only the catalogue's own generated/messages folders are skipped", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a text attribute that is exactly a catalogue key is a key reference, checked as one", () => {
+  assert.deepEqual(lint(PAGE, '<TextField label="surface.hub" />\n'), []);
+  assert.deepEqual(lint(PAGE, '<TextField label="surface.nope" />\n'), [
+    `${PAGE}:1 unknown message key surface.nope`,
+  ]);
+  assert.deepEqual(lint(PAGE, '<input placeholder="app.name" />\n'), [
+    `${PAGE}:1 hard-coded string "app.name"`,
+  ]);
+  assert.deepEqual(lint(PAGE, '<button aria-label="surface.hub">x</button>\n'), [
+    `${PAGE}:1 hard-coded string "surface.hub"`,
+    `${PAGE}:1 hard-coded string "x"`,
+  ]);
+  assert.deepEqual(lint(PAGE, '<input placeholder="Search here" />\n'), [
+    `${PAGE}:1 hard-coded string "Search here"`,
+  ]);
+  assert.deepEqual(lint(PAGE, '<img alt="logo" />\n'), [`${PAGE}:1 hard-coded string "logo"`]);
+});

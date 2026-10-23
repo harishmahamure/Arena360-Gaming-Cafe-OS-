@@ -105,10 +105,35 @@ jobs:
       - if: matrix.os == 'windows-latest'
         run: pnpm --filter @arena/${{ matrix.app }} tauri build --no-bundle -- --locked
 
+  a11y:
+    name: a11y (gallery)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/gallery exec playwright install --with-deps chromium
+      - run: pnpm --filter @arena/gallery check
+      - run: pnpm --filter @arena/gallery build
+      - run: pnpm --filter @arena/gallery test:a11y
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-report
+          path: |
+            apps/gallery/playwright-report/
+            apps/gallery/test-results/
+          retention-days: 14
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [rust, checks, build]
+    needs: [rust, checks, build, a11y]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed

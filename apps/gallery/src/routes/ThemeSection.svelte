@@ -1,0 +1,308 @@
+<script lang="ts">
+  import {
+    AlertBadge,
+    Button,
+    Card,
+    StatusBadge,
+    TabControl,
+    TextField,
+    focusFirstInvalid,
+    t,
+  } from "@arena/ui";
+  import type { MessageKey } from "@arena/ui/messages";
+  import { tick } from "svelte";
+
+  let { theme, title }: { theme: "dark" | "hc" | "light"; title: MessageKey } = $props();
+
+  const id = $props.id();
+  const hubThemes = $derived(theme !== "light");
+
+  const VARIANTS = [
+    { variant: "primary", name: "gallery.variant.primary", label: "gallery.button.primary" },
+    { variant: "secondary", name: "gallery.variant.secondary", label: "gallery.button.secondary" },
+    { variant: "warning", name: "gallery.variant.warning", label: "gallery.button.warning" },
+  ] as const;
+
+  const FORCED = [
+    { state: "hover", name: "gallery.state.hover" },
+    { state: "pressed", name: "gallery.state.pressed" },
+    { state: "focus", name: "gallery.state.focused" },
+  ] as const;
+
+  const STATES = [
+    "free",
+    "in-session",
+    "paused",
+    "reserved",
+    "order-pending",
+    "maintenance",
+    "offline",
+    "unassigned",
+  ] as const;
+
+  const TABS = [
+    { id: "daily", label: "gallery.tabs.daily" },
+    { id: "monthly", label: "gallery.tabs.monthly" },
+    { id: "yearly", label: "gallery.tabs.yearly" },
+  ] as const;
+
+  const PANELS: Record<string, MessageKey> = {
+    daily: "gallery.tabs.panel_daily",
+    monthly: "gallery.tabs.panel_monthly",
+    yearly: "gallery.tabs.panel_yearly",
+  };
+
+  let alerts = $state(3);
+
+  // Demo form: submit validates, then focuses the first invalid field.
+  let form: HTMLFormElement | undefined = $state();
+  let username = $state("");
+  let password = $state("");
+  let usernameError: MessageKey | null = $state(null);
+  let passwordError: MessageKey | null = $state(null);
+  let valid = $state(false);
+
+  async function submit(event: SubmitEvent) {
+    event.preventDefault();
+    usernameError = username.trim() ? null : "gallery.form.required";
+    passwordError = password ? null : "gallery.form.required";
+    valid = !usernameError && !passwordError;
+    await tick();
+    focusFirstInvalid(form);
+  }
+</script>
+
+<section class="theme" data-theme={theme} aria-labelledby="{id}-title">
+  <h2 id="{id}-title">{t(title)}</h2>
+
+  <section class="group" aria-labelledby="{id}-buttons">
+    <h3 id="{id}-buttons">{t("gallery.section.buttons")}</h3>
+    {#each VARIANTS as v (v.variant)}
+      <h4>{t(v.name)}</h4>
+      <div class="row">
+        <div class="cell">
+          <span class="caption">{t("gallery.state.rest")}</span>
+          <Button variant={v.variant} label={v.label} />
+        </div>
+        {#each FORCED as f (f.state)}
+          <div class="cell">
+            <span class="caption">{t(f.name)}</span>
+            <Button variant={v.variant} label={v.label} forceState={f.state} />
+          </div>
+        {/each}
+        <div class="cell">
+          <span class="caption">{t("gallery.state.disabled")}</span>
+          <Button
+            variant={v.variant}
+            label={v.label}
+            disabled
+            disabledReason={v.variant === "warning"
+              ? "gallery.disabled.no_time"
+              : v.variant === "primary"
+                ? "gallery.disabled.no_device"
+                : "gallery.disabled.closed"}
+          />
+        </div>
+      </div>
+    {/each}
+  </section>
+
+  <section class="group" aria-labelledby="{id}-fields">
+    <h3 id="{id}-fields">{t("gallery.section.fields")}</h3>
+    <div class="row fields">
+      <div class="cell">
+        <span class="caption">{t("gallery.state.rest")}</span>
+        <TextField label="gallery.field.name" />
+      </div>
+      <div class="cell">
+        <span class="caption">{t("gallery.state.hover")}</span>
+        <TextField label="gallery.field.name" forceState="hover" />
+      </div>
+      <div class="cell">
+        <span class="caption">{t("gallery.state.focused")}</span>
+        <TextField label="gallery.field.name" forceState="focus" />
+      </div>
+      <div class="cell">
+        <span class="caption">{t("gallery.state.error")}</span>
+        <TextField
+          label="gallery.field.phone"
+          type="tel"
+          value="98450"
+          error="gallery.field.phone_invalid"
+        />
+      </div>
+      <div class="cell">
+        <span class="caption">{t("gallery.field.password")}</span>
+        <TextField label="gallery.field.password" type="password" autocomplete="off" />
+      </div>
+    </div>
+  </section>
+
+  <section class="group" aria-labelledby="{id}-badges">
+    <h3 id="{id}-badges">{t("gallery.section.badges")}</h3>
+    <h4>{t("gallery.section.status")}</h4>
+    {#if hubThemes}
+      <div class="row">
+        {#each STATES as state (state)}
+          <StatusBadge {state} />
+        {/each}
+      </div>
+    {:else}
+      <p class="note">{t("gallery.hub_only")}</p>
+    {/if}
+    <h4>{t("gallery.section.alerts")}</h4>
+    <div class="row">
+      <AlertBadge count={alerts} />
+      <AlertBadge tag="new" />
+      <AlertBadge tag="call" />
+      <AlertBadge tag="time-up" />
+      <AlertBadge tag="request" />
+      <Button variant="secondary" label="gallery.alert.add" onclick={() => alerts++} />
+    </div>
+  </section>
+
+  <section class="group" aria-labelledby="{id}-cards">
+    <h3 id="{id}-cards">{t("gallery.section.cards")}</h3>
+    <div class="row cards">
+      <Card>
+        <h4>{t("gallery.card.title")}</h4>
+        <p>{t("gallery.card.body")}</p>
+        <a class="link" href="#{id}-form">{t("gallery.card.link")}</a>
+      </Card>
+      <Card context="web">
+        <h4>{t("gallery.card.web_title")}</h4>
+        <p>{t("gallery.card.web_body")}</p>
+      </Card>
+    </div>
+  </section>
+
+  <section class="group" aria-labelledby="{id}-tabs">
+    <h3 id="{id}-tabs">{t("gallery.section.tabs")}</h3>
+    <div class="row">
+      <div class="cell">
+        <span class="caption">{t("gallery.state.rest")}</span>
+        <TabControl items={[...TABS]} label="gallery.tabs.label" selected="monthly">
+          {#snippet panel(selected)}{t(PANELS[selected])}{/snippet}
+        </TabControl>
+      </div>
+      <div class="cell">
+        <span class="caption">{t("gallery.state.focused")}</span>
+        <TabControl items={[...TABS]} label="gallery.tabs.label" forceState="focus" />
+      </div>
+    </div>
+  </section>
+
+  <section class="group" aria-labelledby="{id}-form">
+    <h3 id="{id}-form">{t("gallery.section.form")}</h3>
+    <form
+      class="demo-form"
+      bind:this={form}
+      onsubmit={submit}
+      oninput={() => (valid = false)}
+      novalidate
+    >
+      <TextField
+        label="gallery.field.username"
+        name="username"
+        autocomplete="username"
+        required
+        bind:value={username}
+        error={usernameError}
+      />
+      <TextField
+        label="gallery.field.password"
+        name="password"
+        type="password"
+        autocomplete="current-password"
+        required
+        bind:value={password}
+        error={passwordError}
+      />
+      <Button type="submit" label="gallery.form.submit" />
+      <p class="status" role="status">{valid ? t("gallery.form.valid") : ""}</p>
+    </form>
+  </section>
+</section>
+
+<style>
+  .theme {
+    padding: var(--space-6) var(--space-web-gutter-phone);
+    border-top: 1px solid var(--line);
+  }
+
+  h2 {
+    margin: 0 0 var(--space-5);
+    font-size: var(--type-hub-numeric-size);
+    font-weight: var(--type-hub-title-weight);
+  }
+
+  h3 {
+    margin: 0 0 var(--space-4);
+    font-size: var(--type-hub-title-size);
+    font-weight: var(--type-hub-title-weight);
+  }
+
+  h4 {
+    margin: var(--space-4) 0 var(--space-3);
+    font-size: var(--type-hub-label-size);
+    font-weight: var(--type-hub-title-weight);
+    color: var(--text-muted);
+  }
+
+  .group {
+    margin-bottom: var(--space-7);
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--space-5);
+  }
+
+  .cell {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .fields .cell {
+    flex: 1 1 16rem;
+  }
+
+  .cards > :global(*) {
+    flex: 1 1 18rem;
+  }
+
+  .caption,
+  .note {
+    color: var(--text-muted);
+    font-size: var(--type-hub-label-size);
+  }
+
+  .link {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--space-touch-min);
+    min-width: var(--space-touch-min);
+  }
+
+  .demo-form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-4);
+    max-width: 28rem;
+  }
+
+  .demo-form > :global([data-component="text-field"]) {
+    align-self: stretch;
+  }
+
+  .status {
+    margin: 0;
+    color: var(--ok);
+  }
+</style>

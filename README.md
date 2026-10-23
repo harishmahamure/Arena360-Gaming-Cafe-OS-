@@ -92,6 +92,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | @tauri-apps/api              | 2.12.4        | `pnpm-workspace.yaml` |
 | @tauri-apps/plugin-updater   | 2.14.0        | `pnpm-workspace.yaml` |
 | @fontsource-variable/sora    | 5.3.0         | `pnpm-workspace.yaml` |
+| @playwright/test             | 1.64.1        | `pnpm-workspace.yaml` |
+| @axe-core/playwright         | 4.14.0        | `pnpm-workspace.yaml` |
 | yaml                         | 2.9.1         | `package.json`        |
 | tauri                        | =2.12.5       | `Cargo.toml`          |
 | tauri-build                  | =2.7.4        | `Cargo.toml`          |

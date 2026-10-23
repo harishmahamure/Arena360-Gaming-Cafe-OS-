@@ -7,7 +7,7 @@ import en from "./en.json" with { type: "json" };
 /** @type {Record<string, string>} */
 export const messages = en;
 
-const isDev = (() => {
+export const isDev = (() => {
   try {
     // Vite and Astro set `import.meta.env.DEV`; elsewhere (Node, tests) treat as dev.
     const env = /** @type {any} */ (import.meta).env;
@@ -31,6 +31,58 @@ export function interpolate(template, params) {
   );
 }
 
+const ACCENTS = /** @type {Record<string, string>} */ ({
+  a: "á",
+  e: "é",
+  i: "í",
+  o: "ó",
+  u: "ú",
+  c: "ç",
+  n: "ñ",
+  y: "ý",
+  s: "š",
+  z: "ž",
+  A: "Á",
+  E: "É",
+  I: "Í",
+  O: "Ó",
+  U: "Ú",
+  C: "Ç",
+  N: "Ñ",
+  Y: "Ý",
+  S: "Š",
+  Z: "Ž",
+});
+
+let pseudo = false;
+
+/**
+ * Switches `t()` to the pseudo-locale: every message is accented and padded to at least 130%
+ * of its length, so layouts can be checked for clipping before translations exist.
+ * @param {boolean} on
+ */
+export function setPseudo(on) {
+  pseudo = Boolean(on);
+}
+
+/** Whether the pseudo-locale is on. */
+export const isPseudo = () => pseudo;
+
+/**
+ * The pseudo-locale form of a template: letters accented, `{name}` placeholders kept, and
+ * bracketed padding that adds at least 30% of the template's length.
+ * @param {string} template
+ * @returns {string}
+ */
+export function pseudoize(template) {
+  const accented = template
+    .split(/(\{\w+\})/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/[a-zA-Z]/g, (c) => ACCENTS[c] ?? c)))
+    .join("");
+  const extra = Math.ceil(template.length * 0.3);
+  return `[${accented} ${"~".repeat(Math.max(0, extra - 3))}]`;
+}
+
 /**
  * Looks up a message by key and interpolates its placeholders.
  * Throws on an unknown key in dev; returns the key itself in production builds.
@@ -44,5 +96,5 @@ export function t(key, params) {
     if (isDev) throw new Error(`unknown message key: ${key}`);
     return key;
   }
-  return interpolate(template, params);
+  return interpolate(pseudo ? pseudoize(template) : template, params);
 }

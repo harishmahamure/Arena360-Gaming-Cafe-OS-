@@ -164,7 +164,9 @@ function scriptViolations(file, text, src, offset) {
   return out;
 }
 
-function svelteViolations(file, text) {
+const KEY_SHAPE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/;
+
+function svelteViolations(file, text, keys) {
   const out = [];
   const ast = parse(text, { modern: true });
   const textAt = (index, value) =>
@@ -173,9 +175,10 @@ function svelteViolations(file, text) {
       line: lineOf(text, index),
       message: `hard-coded string "${collapse(value)}"`,
     });
-  const walk = (node) => {
+  // `owner` is the element whose attribute list is being walked.
+  const walk = (node, owner) => {
     if (!node || typeof node !== "object") return;
-    if (Array.isArray(node)) return node.forEach(walk);
+    if (Array.isArray(node)) return node.forEach((n) => walk(n, owner));
     if (node.type === "Text" && HAS_LETTER.test(node.data)) {
       textAt(node.start + node.raw.search(/\S/), node.data);
       return;
@@ -183,7 +186,21 @@ function svelteViolations(file, text) {
     if (node.type === "Attribute") {
       if (TEXT_ATTRIBUTES.has(node.name.toLowerCase()) && Array.isArray(node.value)) {
         for (const part of node.value) {
-          if (part.type === "Text" && HAS_LETTER.test(part.data)) textAt(part.start, part.data);
+          if (part.type !== "Text" || !HAS_LETTER.test(part.data)) continue;
+          // A component prop such as `<TextField label="gallery.field.name">` names a catalogue
+          // key. On a native element the browser would render the raw key, so it still fails.
+          const isComponent = /^[A-Z]/.test(owner?.name ?? "");
+          if (isComponent && node.value.length === 1 && KEY_SHAPE.test(part.data)) {
+            if (!keys.has(part.data)) {
+              out.push({
+                file,
+                line: lineOf(text, part.start),
+                message: `unknown message key ${part.data}`,
+              });
+            }
+            continue;
+          }
+          textAt(part.start, part.data);
         }
       }
       // Other attributes' literal text (class names, ids, ...) is not prose; expressions are.
@@ -197,7 +214,7 @@ function svelteViolations(file, text) {
     }
     for (const [key, value] of Object.entries(node)) {
       if (key === "parent" || key === "expression" || key === "metadata") continue;
-      if (value && typeof value === "object") walk(value);
+      if (value && typeof value === "object") walk(value, key === "attributes" ? node : undefined);
     }
   };
   walk(ast.fragment);
@@ -231,7 +248,7 @@ export function checkSource(file, text, keys) {
     found = file.endsWith(".astro")
       ? []
       : file.endsWith(".svelte")
-        ? svelteViolations(file, text)
+        ? svelteViolations(file, text, keys)
         : scriptViolations(file, text, text, 0);
   } catch (err) {
     return [

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { interpolate, messages, t } from "../packages/ui/src/messages/index.js";
+import { interpolate, messages, setPseudo, t } from "../packages/ui/src/messages/index.js";
 
 test("interpolation fills placeholders", () => {
   assert.equal(
@@ -48,4 +48,23 @@ test("null and undefined params leave the placeholder", () => {
   assert.equal(interpolate("Balance {balance}.", { balance: null }), "Balance {balance}.");
   assert.equal(interpolate("Balance {balance}.", { balance: undefined }), "Balance {balance}.");
   assert.equal(interpolate("{n} left", { n: 0 }), "0 left");
+});
+
+test("the pseudo-locale accents and lengthens every message by at least 30%", () => {
+  setPseudo(true);
+  try {
+    for (const key of Object.keys(messages)) {
+      const plain = messages[key];
+      const out = t(/** @type {any} */ (key));
+      assert.ok(out.length >= Math.ceil(plain.length * 1.3), `${key}: ${out}`);
+      if (/[aeiou]/i.test(plain.replace(/\{\w+\}/g, ""))) assert.match(out, /[áéíóú]/i, key);
+    }
+    assert.equal(
+      t("player.balance.insufficient", { balance: "₹40" }),
+      "[Báláñçé ₹40. Tóp úp át çóúñtér. ~~~~~~~~~]",
+    );
+  } finally {
+    setPseudo(false);
+  }
+  assert.equal(t("app.name"), "Arena 360");
 });

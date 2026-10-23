@@ -12,3 +12,7 @@ build/
 
 # Tauri-generated schemas
 apps/*/src-tauri/gen/
+
+# Playwright output
+playwright-report/
+test-results/

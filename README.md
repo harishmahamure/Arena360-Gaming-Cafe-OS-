@@ -12,17 +12,18 @@ corepack enable && pnpm install && cargo build --workspace && pnpm check
 ```
 
 `pnpm check` runs `cargo fmt --check`, `cargo clippy` (warnings denied), the prettier check, the
-layer check, the pin check and the check scripts' own tests. Run `cargo test --workspace` for the
+layer check, the pin check, the generated-types, protocol-type and string checks, and the check
+scripts' own tests. Run `cargo test --workspace` for the
 Rust tests.
 
 ## Layout
 
-| Path        | Contents                                                       |
-| ----------- | -------------------------------------------------------------- |
-| `crates/`   | Rust workspace crates (`crates/<name>`)                        |
-| `apps/`     | Svelte / Tauri / Astro apps (`apps/<name>`, see below)         |
-| `packages/` | Shared JS packages: `packages/ui` is `@arena/ui`               |
-| `scripts/`  | Repo checks: `check-layers.mjs`, `check-pins.mjs`, branch rule |
+| Path        | Contents                                                  |
+| ----------- | --------------------------------------------------------- |
+| `crates/`   | Rust workspace crates (`crates/<name>`)                   |
+| `apps/`     | Svelte / Tauri / Astro apps (`apps/<name>`, see below)    |
+| `packages/` | Shared JS packages: `packages/ui` is `@arena/ui`          |
+| `scripts/`  | Repo checks (`check-*.mjs`), `gen-types.mjs`, branch rule |
 
 Rust crates: `arena-proto`, `arena-store`, `arena-core`, `arena-api`, `arena-tasks`,
 `arena-replay`, `arena-cloud`, `arena-kiosk-core` (libraries) and `arena-hub`, `arena-kiosk-svc`,
@@ -93,6 +94,26 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | tauri                        | =2.12.5       | `Cargo.toml`          |
 | tauri-build                  | =2.7.4        | `Cargo.toml`          |
 | tauri-plugin-updater         | =2.14.0       | `Cargo.toml`          |
+| serde                        | =1.0.229      | `Cargo.toml`          |
+| serde_json                   | =1.0.154      | `Cargo.toml`          |
+| ts-rs                        | =12.0.1       | `Cargo.toml`          |
+
+## Generated protocol types and the message catalogue
+
+- **Type generator: ts-rs.** Protocol types live in `crates/arena-proto` and derive `TS`. Run
+  `pnpm gen:types` after changing them: it runs `cargo test -p arena-proto --features export-ts`
+  with `TS_RS_EXPORT_DIR` pointing at a temp folder, writes the `index.ts` barrel, formats the
+  output and only then replaces `packages/ui/src/generated`. Plain `cargo test` exports nothing.
+  Commit the output. Import protocol types only from `@arena/ui/generated`.
+- **Messages.** All user-visible text lives in `packages/ui/src/messages/en.json` (flat dotted
+  keys, `{name}` placeholders) and is read with `t(key, params?)` from `@arena/ui`. Exempt a line
+  from the string lint with `// i18n-ignore`, or put `<!-- i18n-ignore -->` on the line before.
+  `.astro` files are checked for unknown `t()` keys only.
+- **Gates.** `pnpm check:generated` regenerates and fails when the result differs from `HEAD`
+  (so commit regenerated output before running it locally),
+  `pnpm check:protocol` fails on hand-written protocol types or imports from anywhere but
+  `@arena/ui/generated`, and `pnpm check:strings` fails on hard-coded user-visible strings and
+  unknown message keys.
 
 `pnpm-workspace.yaml` also carries two pnpm install-policy settings:
 

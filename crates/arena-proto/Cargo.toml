@@ -7,3 +7,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+serde.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+# Export TypeScript bindings during `cargo test` (used by `pnpm gen:types`).
+export-ts = []

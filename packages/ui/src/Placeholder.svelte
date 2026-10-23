@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { t } from "./messages/index.js";
+
   let { surface }: { surface: string } = $props();
 </script>
 
 <main class="placeholder">
-  <h1>Arena 360</h1>
+  <h1>{t("app.name")}</h1>
   <p>{surface}</p>
 </main>
 

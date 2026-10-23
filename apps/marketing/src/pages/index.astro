@@ -1,14 +1,14 @@
 ---
-import { Placeholder } from "@arena/ui";
+import { Placeholder, t } from "@arena/ui";
 ---
 
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Arena 360</title>
+    <title>{t("app.name")}</title>
   </head>
   <body>
-    <Placeholder surface="Marketing" />
+    <Placeholder surface={t("surface.marketing")} />
   </body>
 </html>

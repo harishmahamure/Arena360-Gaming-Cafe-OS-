@@ -12,6 +12,13 @@
     "./Placeholder.svelte": {
       "svelte": "./src/Placeholder.svelte",
       "default": "./src/Placeholder.svelte"
+    },
+    "./generated": {
+      "types": "./src/generated/index.ts",
+      "default": "./src/generated/index.ts"
+    },
+    "./messages": {
+      "default": "./src/messages/index.js"
     }
   },
   "files": [

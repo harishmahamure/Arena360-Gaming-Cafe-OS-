@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Placeholder } from "@arena/ui";
+  import { Placeholder, t } from "@arena/ui";
 </script>
 
 <svelte:head>
-  <title>Arena 360 · Kitchen</title>
+  <title>{t("app.title", { surface: t("surface.kitchen") })}</title>
 </svelte:head>
 
-<Placeholder surface="Kitchen" />
+<Placeholder surface={t("surface.kitchen")} />

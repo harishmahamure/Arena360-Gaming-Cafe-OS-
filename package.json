@@ -10,10 +10,14 @@
     "build": "pnpm -r --filter \"./apps/*\" build",
     "check:layers": "node scripts/check-layers.mjs",
     "check:pins": "node scripts/check-pins.mjs",
+    "gen:types": "node scripts/gen-types.mjs",
+    "check:generated": "node scripts/check-generated.mjs",
+    "check:protocol": "node scripts/check-protocol-types.mjs",
+    "check:strings": "node scripts/check-strings.mjs",
     "test:scripts": "node --test scripts/*.test.mjs",
     "format:check": "prettier --check .",
     "check:rust": "cargo fmt --check && cargo clippy --locked --workspace --all-targets -- -D warnings",
-    "check": "pnpm run check:rust && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run test:scripts"
+    "check": "pnpm run check:rust && pnpm run check:generated && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run check:protocol && pnpm run check:strings && pnpm run test:scripts"
   },
   "devDependencies": {
     "prettier": "3.9.10",

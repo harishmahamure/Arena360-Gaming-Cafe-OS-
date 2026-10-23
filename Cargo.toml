@@ -24,3 +24,6 @@ arena-kiosk-core = { path = "crates/arena-kiosk-core" }
 tauri = "=2.12.5"
 tauri-build = "=2.7.4"
 tauri-plugin-updater = "=2.14.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+ts-rs = "=12.0.1"

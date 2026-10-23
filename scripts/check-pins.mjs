@@ -48,10 +48,17 @@ export function readNvmrc(text) {
   return v ? { node: v } : {};
 }
 
-/** package.json -> { pnpm, "node engines" } */
+/** Root devDependencies that carry a README pin row (exact versions). */
+export const PINNED_DEV_DEPENDENCIES = ["yaml"];
+
+/** package.json -> { pnpm, "node engines", ...PINNED_DEV_DEPENDENCIES } */
 export function readPackageJson(text) {
   const pkg = JSON.parse(text);
   const out = {};
+  for (const name of PINNED_DEV_DEPENDENCIES) {
+    const spec = pkg.devDependencies?.[name];
+    if (typeof spec === "string") out[name] = spec;
+  }
   if (typeof pkg.packageManager === "string") {
     const m = pkg.packageManager.match(/^pnpm@([^+]+)/);
     out.pnpm = m ? m[1] : pkg.packageManager;
@@ -142,7 +149,12 @@ export function comparePins(table, sources) {
   }
   for (const [source, items] of Object.entries(sources)) {
     for (const [item, version] of Object.entries(items)) {
-      if (EXACT[source] && !EXACT[source].test(version)) {
+      const exact =
+        EXACT[source] ??
+        (source === "package.json" && PINNED_DEV_DEPENDENCIES.includes(item)
+          ? EXACT["pnpm-workspace.yaml"]
+          : undefined);
+      if (exact && !exact.test(version)) {
         errors.push(`non-exact pin: ${item} (${source} ${version})`);
       }
       if (!seen.has(`${source}\u0000${item}`)) {

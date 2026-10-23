@@ -12,8 +12,8 @@ corepack enable && pnpm install && cargo build --workspace && pnpm check
 ```
 
 `pnpm check` runs `cargo fmt --check`, `cargo clippy` (warnings denied), the prettier check, the
-layer check, the pin check, the generated-types, protocol-type and string checks, and the check
-scripts' own tests. Run `cargo test --workspace` for the
+layer check, the pin check, the generated-types, protocol-type and string checks, the design-token
+gates (freshness, contrast, unknown tokens, raw hex), and the check scripts' own tests. Run `cargo test --workspace` for the
 Rust tests.
 
 ## Layout
@@ -91,6 +91,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | @tauri-apps/cli              | 2.12.4        | `pnpm-workspace.yaml` |
 | @tauri-apps/api              | 2.12.4        | `pnpm-workspace.yaml` |
 | @tauri-apps/plugin-updater   | 2.14.0        | `pnpm-workspace.yaml` |
+| @fontsource-variable/sora    | 5.3.0         | `pnpm-workspace.yaml` |
+| yaml                         | 2.9.1         | `package.json`        |
 | tauri                        | =2.12.5       | `Cargo.toml`          |
 | tauri-build                  | =2.7.4        | `Cargo.toml`          |
 | tauri-plugin-updater         | =2.14.0       | `Cargo.toml`          |
@@ -114,6 +116,33 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
   `pnpm check:protocol` fails on hand-written protocol types or imports from anywhere but
   `@arena/ui/generated`, and `pnpm check:strings` fails on hard-coded user-visible strings and
   unknown message keys.
+
+## Design tokens
+
+- **Source.** Colours, type ramps, spacing, radii and elevation come from the frontmatter of
+  `_bmad-output/planning-artifacts/ux-designs/ux-arena-360-final-2026-10-22/DESIGN.md` (the
+  `DESIGN_MD` constant in `scripts/gen-tokens.mjs`, shared by every token script). Run
+  `pnpm gen:tokens` after editing it and commit `packages/ui/src/tokens/` (`tokens.css`,
+  `tokens.ts`; generated, do not edit). Generation fails on an unresolved `{group.key}` reference
+  or a component colour without an `-hc` twin.
+- **Themes.** `--color-<name>` holds every raw colour. Component values with colour refs inside a
+  longer value (`2px solid {colors.x}`) are emitted with `var(--color-x)` and an `-hc` twin. Use the semantic aliases (`--bg`, `--text`,
+  ...) and component tokens (`--<component>-<prop>`): dark is the default (`:root`,
+  `[data-theme="dark"]`), `[data-theme="hc"]` maps them to the `-hc` values and
+  `[data-theme="light"]` to the `-light` values (falling back to dark where there is no light twin).
+- **Styling entry.** Every SvelteKit app imports `@arena/ui/base.css` once from
+  `src/routes/+layout.svelte` (marketing: `src/pages/index.astro`). It bundles
+  the Sora variable font (`@fontsource-variable/sora`) and imports `tokens.css`; nothing loads
+  remotely. TS constants and the `TokenName` union are in `@arena/ui/tokens`.
+- **Gates.** `pnpm check:tokens-fresh` regenerates and fails when `packages/ui/src/tokens` differs
+  from `HEAD`. `pnpm check:contrast` checks WCAG 2.x ratios for pairs derived from DESIGN.md in the
+  dark, hc and light themes (4.5 for text, 3.0 for large text and non-text); fill-only and
+  decorative tokens are listed with their reason in `EXCLUDED`. `pnpm check:tokens-used` fails on
+  `var(--name)` that neither `tokens.css` nor the same file declares. `pnpm check:hex` fails on raw
+  hex colours outside the generated tokens (exempt a line with `hex-ignore`). After a build,
+  `pnpm check:no-remote [app ...]` fails on remote URLs, fonts or CDN hosts in the Hub, Kiosk and
+  Kitchen output, and on a build without a bundled `sora-*.woff2` or a CSS file declaring
+  `--color-bg` (CI runs it in each of those build jobs; it is not part of `pnpm check`).
 
 `pnpm-workspace.yaml` also carries two pnpm install-policy settings:
 

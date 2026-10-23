@@ -1,0 +1,15 @@
+/* @arena/ui base stylesheet: the bundled Sora font, the generated tokens and the document
+   defaults. Every app imports it once from its root layout. Nothing here loads remotely. */
+@import "@fontsource-variable/sora";
+@import "./tokens/tokens.css";
+
+:root {
+  color-scheme: dark;
+  font-family: var(--type-hub-body-family), system-ui, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+}

@@ -167,6 +167,9 @@ catalogs:
     '@astrojs/svelte':
       specifier: 9.1.1
       version: 9.1.1
+    '@fontsource-variable/sora':
+      specifier: 5.3.0
+      version: 5.3.0
     '@sveltejs/adapter-cloudflare':
       specifier: 8.0.1
       version: 8.0.1
@@ -217,6 +220,9 @@ importers:
       svelte:
         specifier: 'catalog:'
         version: 5.57.2
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
 
   apps/admin:
     dependencies:
@@ -452,6 +458,10 @@ importers:
         version: 4.152.0(@cloudflare/workers-types@5.20261022.1)
 
   packages/ui:
+    dependencies:
+      '@fontsource-variable/sora':
+        specifier: 'catalog:'
+        version: 5.3.0
     devDependencies:
       svelte:
         specifier: 'catalog:'
@@ -924,6 +934,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource-variable/sora@5.3.0':
+    resolution: {integrity: sha512-h8kHta4Z8SkfUGeI82TUy1n3rbrKpBRGwuk4t4qCwto5oEHxlbOFD2yGP+Df5fbmTXwKGn+o667vYp0E4K8Whw==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -2677,6 +2690,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
+
+  '@fontsource-variable/sora@5.3.0': {}
 
   '@img/colour@1.1.0': {}
 

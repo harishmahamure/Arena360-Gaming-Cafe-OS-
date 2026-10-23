@@ -164,3 +164,16 @@ test("the real repo passes", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   assert.deepEqual(checkRepo(root), []);
 });
+
+test("pinned root devDependencies are read and must be exact", () => {
+  const pkg = readPackageJson(
+    JSON.stringify({ devDependencies: { yaml: "2.9.1", prettier: "3.9.10" } }),
+  );
+  assert.deepEqual(pkg, { yaml: "2.9.1" });
+  const ranged = { ...sources, "package.json": { yaml: "^2.9.1" } };
+  const table = [
+    { item: "rust", version: "1.95.0", source: "rust-toolchain.toml" },
+    { item: "yaml", version: "^2.9.1", source: "package.json" },
+  ];
+  assert.ok(comparePins(table, ranged).includes("non-exact pin: yaml (package.json ^2.9.1)"));
+});

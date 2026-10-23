@@ -27,21 +27,29 @@ export function parsePorcelain(text) {
   return entries;
 }
 
-/** Human-readable failure report, or `[]` when the folder is fresh. */
-export function formatReport(entries) {
+/**
+ * Human-readable failure report, or `[]` when the folder is fresh.
+ * @param {string} [what] what is out of date
+ * @param {string} [command] the command that regenerates it
+ */
+export function formatReport(
+  entries,
+  what = "generated protocol types",
+  command = "pnpm gen:types",
+) {
   if (entries.length === 0) return [];
   return [
-    `generated protocol types are out of date (run \`pnpm gen:types\` and commit):`,
+    `${what} are out of date (run \`${command}\` and commit):`,
     ...entries.map((e) => `  ${e.kind}: ${e.path}`),
   ];
 }
 
-export function gitStatus(root) {
-  return execFileSync(
-    "git",
-    ["status", "--porcelain", "--untracked-files=all", "--", GENERATED_DIR],
-    { cwd: root, encoding: "utf8" },
-  );
+/** `git status --porcelain` limited to `dir` (repo-relative; defaults to the protocol types). */
+export function gitStatus(root, dir = GENERATED_DIR) {
+  return execFileSync("git", ["status", "--porcelain", "--untracked-files=all", "--", dir], {
+    cwd: root,
+    encoding: "utf8",
+  });
 }
 
 async function main() {

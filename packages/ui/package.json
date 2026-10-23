@@ -19,11 +19,24 @@
     },
     "./messages": {
       "default": "./src/messages/index.js"
+    },
+    "./base.css": {
+      "default": "./src/base.css"
+    },
+    "./tokens.css": {
+      "default": "./src/tokens/tokens.css"
+    },
+    "./tokens": {
+      "types": "./src/tokens/tokens.ts",
+      "default": "./src/tokens/tokens.ts"
     }
   },
   "files": [
     "src"
   ],
+  "dependencies": {
+    "@fontsource-variable/sora": "catalog:"
+  },
   "peerDependencies": {
     "svelte": "catalog:"
   },

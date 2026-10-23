@@ -54,6 +54,10 @@ jobs:
       - run: pnpm run check:pins
       - run: pnpm run check:protocol
       - run: pnpm run check:strings
+      - run: pnpm run check:tokens-fresh
+      - run: pnpm run check:contrast
+      - run: pnpm run check:tokens-used
+      - run: pnpm run check:hex
       - run: pnpm run test:scripts
 
   build:
@@ -95,6 +99,9 @@ jobs:
           file=apps/kitchen/build/index.html
           if [[ "${{ matrix.app }}" == "marketing" ]]; then file=apps/marketing/dist/index.html; fi
           grep -q "Arena 360" "$file" || { echo "\"Arena 360\" not found in $file"; exit 1; }
+      - name: Built output loads nothing remotely
+        if: matrix.app == 'hub' || matrix.app == 'kiosk' || matrix.app == 'kitchen'
+        run: pnpm run check:no-remote ${{ matrix.app }}
       - if: matrix.os == 'windows-latest'
         run: pnpm --filter @arena/${{ matrix.app }} tauri build --no-bundle -- --locked
 

@@ -277,6 +277,11 @@ spacing:
   web-card-padding-phone: 24px
   web-header-height: 80px
   web-header-height-phone: 64px
+elevation:
+  game-tile: '0 10px 30px rgba(0,0,0,.35)'
+  menu: '0 16px 40px rgba(0,0,0,.35)'
+  toast: '0 20px 60px rgba(0,0,0,.5)'
+  none: none
 components:
   focus-ring:
     inner: '2px solid {colors.focus-ring-inner}'
@@ -951,6 +956,8 @@ Depth comes from **tone and media, not blur**.
   - HUD toast and `extend-options`: 0 20px 60px @50%, so they read over any game.
 - **Staff mood.** No shadows. Hierarchy is `hub-bg` → `hub-header` → `hub-tile` → `surface` (sheets). `undo-toast` separates by its `border-strong` edge, not a shadow.
 - **High-contrast.** No shadows; 2px white outlines instead.
+
+These shadows are the `elevation:` frontmatter key (`game-tile`, `menu`, `toast`, and `none` for staff and high-contrast surfaces).
 
 `backdrop-filter` is banned on every platform. This is a performance rule for low-end café PCs running WebView2, not a renderer limitation.
 

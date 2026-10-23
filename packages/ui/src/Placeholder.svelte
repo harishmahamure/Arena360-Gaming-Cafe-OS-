@@ -14,7 +14,7 @@
     display: grid;
     place-content: center;
     min-height: 100vh;
-    font-family: system-ui, sans-serif;
+    color: var(--text);
     text-align: center;
   }
 </style>

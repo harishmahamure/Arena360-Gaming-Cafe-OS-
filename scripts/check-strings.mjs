@@ -12,7 +12,11 @@ import { parse } from "svelte/compiler";
 export const CATALOGUE = "packages/ui/src/messages/en.json";
 export const EXTENSIONS = [".svelte", ".ts", ".js", ".astro"];
 /** Exact repo-relative folders that are not scanned. */
-export const SKIP_PATHS = new Set(["packages/ui/src/generated", "packages/ui/src/messages"]);
+export const SKIP_PATHS = new Set([
+  "packages/ui/src/generated",
+  "packages/ui/src/messages",
+  "packages/ui/src/tokens",
+]);
 /** Folder names skipped wherever they appear. */
 export const SKIP_DIRS = new Set(["node_modules", "build", "dist", ".svelte-kit"]);
 export const TEXT_ATTRIBUTES = new Set(["title", "alt", "placeholder", "aria-label", "label"]);

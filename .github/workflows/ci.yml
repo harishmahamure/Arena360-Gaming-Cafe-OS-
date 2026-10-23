@@ -23,6 +23,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential
       - run: cargo fmt --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
@@ -48,10 +53,52 @@ jobs:
       - run: pnpm run check:pins
       - run: pnpm run test:scripts
 
+  build:
+    name: build (${{ matrix.app }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { app: hub, os: windows-latest }
+          - { app: kiosk, os: windows-latest }
+          - { app: kitchen, os: ubuntu-latest }
+          - { app: owner, os: ubuntu-latest }
+          - { app: partner, os: ubuntu-latest }
+          - { app: admin, os: ubuntu-latest }
+          - { app: onboarding, os: ubuntu-latest }
+          - { app: marketing, os: ubuntu-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+        if: matrix.os == 'windows-latest'
+      - uses: Swatinem/rust-cache@v2
+        if: matrix.os == 'windows-latest'
+        with:
+          key: tauri-${{ matrix.app }}
+      - run: pnpm install --frozen-lockfile
+      - if: matrix.app != 'marketing'
+        run: pnpm --filter @arena/${{ matrix.app }} check
+      - run: pnpm --filter @arena/${{ matrix.app }} build
+      - name: Built output renders the Placeholder
+        if: matrix.app == 'kitchen' || matrix.app == 'marketing'
+        shell: bash
+        run: |
+          file=apps/kitchen/build/index.html
+          if [[ "${{ matrix.app }}" == "marketing" ]]; then file=apps/marketing/dist/index.html; fi
+          grep -q "Arena 360" "$file" || { echo "\"Arena 360\" not found in $file"; exit 1; }
+      - if: matrix.os == 'windows-latest'
+        run: pnpm --filter @arena/${{ matrix.app }} tauri build --no-bundle -- --locked
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [rust, checks]
+    needs: [rust, checks, build]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed

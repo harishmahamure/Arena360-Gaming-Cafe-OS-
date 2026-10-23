@@ -1,0 +1,26 @@
+{
+  "name": "@arena/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "svelte": "./src/index.js",
+  "exports": {
+    ".": {
+      "svelte": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./Placeholder.svelte": {
+      "svelte": "./src/Placeholder.svelte",
+      "default": "./src/Placeholder.svelte"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "svelte": "catalog:"
+  },
+  "devDependencies": {
+    "svelte": "catalog:"
+  }
+}

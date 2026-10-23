@@ -9,3 +9,6 @@ build/
 .wrangler/
 .env*
 !.env.example
+
+# Tauri-generated schemas
+apps/*/src-tauri/gen/

@@ -2,7 +2,7 @@
 // Pin table check: the README pin table must match the manifests exactly.
 // Reads local files only (no network).
 
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -153,6 +153,46 @@ export function comparePins(table, sources) {
   return errors;
 }
 
+const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies"];
+
+/**
+ * Checks that manifests reference catalog packages as `catalog:` and `@arena/*` packages as
+ * `workspace:*`.
+ * @param {Array<{file: string, pkg: Record<string, any>}>} manifests
+ * @param {Record<string, string>} catalog
+ * @returns {string[]} error messages
+ */
+export function checkManifestDeps(manifests, catalog) {
+  const errors = [];
+  for (const { file, pkg } of manifests) {
+    for (const field of DEP_FIELDS) {
+      for (const [name, spec] of Object.entries(pkg[field] ?? {})) {
+        if (name.startsWith("@arena/")) {
+          if (spec !== "workspace:*") {
+            errors.push(`non-workspace dependency: ${name} in ${file} (${spec})`);
+          }
+        } else if (name in catalog && spec !== "catalog:") {
+          errors.push(`non-catalog dependency: ${name} in ${file} (${spec})`);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+/** Root, `apps/*` and `packages/*` package.json files, relative to root. */
+export function readManifests(root) {
+  const files = ["package.json"];
+  for (const dir of ["apps", "packages"]) {
+    if (!existsSync(join(root, dir))) continue;
+    for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
+      const file = `${dir}/${entry.name}/package.json`;
+      if (entry.isDirectory() && existsSync(join(root, file))) files.push(file);
+    }
+  }
+  return files.map((file) => ({ file, pkg: JSON.parse(readFileSync(join(root, file), "utf8")) }));
+}
+
 export function readSources(root) {
   const sources = {};
   for (const [file, reader] of Object.entries(READERS)) {
@@ -168,7 +208,11 @@ export function checkRepo(root) {
   } catch (err) {
     return [err.code === "ENOENT" ? "pin table not found in README.md" : err.message];
   }
-  return comparePins(table, readSources(root));
+  const sources = readSources(root);
+  return [
+    ...comparePins(table, sources),
+    ...checkManifestDeps(readManifests(root), sources["pnpm-workspace.yaml"]),
+  ];
 }
 
 function main() {

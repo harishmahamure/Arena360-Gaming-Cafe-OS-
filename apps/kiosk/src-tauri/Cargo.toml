@@ -1,0 +1,14 @@
+[package]
+name = "arena-kiosk-ui"
+description = "Arena 360 Kiosk UI (Tauri shell)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+tauri.workspace = true

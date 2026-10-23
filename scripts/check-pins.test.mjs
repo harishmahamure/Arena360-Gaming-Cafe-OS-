@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  checkManifestDeps,
   checkRepo,
   comparePins,
   parsePinTable,
@@ -131,6 +132,32 @@ test("manifest readers", () => {
     ),
     { tauri: "=2.12.5", foo: "=1.0.0" },
   );
+});
+
+test("manifest deps must use catalog: and workspace:*", () => {
+  const catalog = { svelte: "5.57.2", vite: "8.3.5" };
+  const manifests = [
+    {
+      file: "apps/a/package.json",
+      pkg: {
+        dependencies: { "@arena/ui": "workspace:*" },
+        devDependencies: { svelte: "catalog:", prettier: "3.9.10" },
+      },
+    },
+    {
+      file: "apps/b/package.json",
+      pkg: {
+        dependencies: { "@arena/ui": "^0.0.0" },
+        devDependencies: { vite: "8.3.5" },
+        peerDependencies: { svelte: "^5.0.0" },
+      },
+    },
+  ];
+  assert.deepEqual(checkManifestDeps(manifests, catalog), [
+    "non-workspace dependency: @arena/ui in apps/b/package.json (^0.0.0)",
+    "non-catalog dependency: vite in apps/b/package.json (8.3.5)",
+    "non-catalog dependency: svelte in apps/b/package.json (^5.0.0)",
+  ]);
 });
 
 test("the real repo passes", () => {

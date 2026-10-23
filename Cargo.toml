@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "apps/*/src-tauri"]
 resolver = "3"
 
 [workspace.package]
@@ -22,4 +22,5 @@ arena-kiosk-core = { path = "crates/arena-kiosk-core" }
 
 # Pinned third-party versions (see README pin table)
 tauri = "=2.12.5"
+tauri-build = "=2.7.4"
 tauri-plugin-updater = "=2.14.0"

@@ -7,6 +7,7 @@ mod branch;
 mod dedupe;
 mod devices;
 mod migrations;
+mod staff;
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
@@ -16,10 +17,11 @@ use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 pub use branch::{
-    BranchSummary, ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, SettingRef, Table,
-    branch_exists, current_branch_id, delete_row, dump_table, find_branch_summary, find_setting,
-    has_branch_data, insert_branch, insert_change, insert_setting, next_change_seq, read_changes,
-    read_row, stamp_row, update_setting_value, upsert_row,
+    BranchSummary, ChangeOp, ChangeRecord, NewBranch, Row, RowKey, RowValue, SettingRef,
+    SettingRow, Table, branch_exists, current_branch_id, delete_row, dump_table,
+    find_branch_summary, find_setting, has_branch_data, insert_branch, insert_change,
+    insert_setting, list_settings, next_change_seq, read_changes, read_row, stamp_row,
+    update_setting_value, upsert_row,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
@@ -32,6 +34,11 @@ pub use devices::{
 pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
+pub use staff::{
+    RoleRow, StaffRow, StaffWrite, count_active_staff_with_role, find_role, find_role_by_name,
+    find_staff, find_staff_by_login, insert_role, insert_role_perm, insert_staff, list_role_perms,
+    list_roles, role_perm_effect, update_role_name, update_staff,
+};
 
 /// The transaction `apply()` and the replayer run in.
 pub type StoreTx<'a> = Transaction<'a>;
@@ -314,6 +321,46 @@ impl Store {
         let out = out?;
         ended?;
         Ok(out)
+    }
+
+    /// The staff member with `login` (case-insensitive) and their role, outside any write
+    /// transaction, in one read snapshot (`None` when there is no such member, or on a database
+    /// not yet migrated to the staff table).
+    pub fn staff_with_role(&self, login: &str) -> Result<Option<(StaffRow, RoleRow)>, AppError> {
+        if !self.table_exists("staff")? {
+            return Ok(None);
+        }
+        self.read_consistent(|s| {
+            let Some(staff) = find_staff_by_login(&s.conn, login)? else {
+                return Ok(None);
+            };
+            Ok(find_role(&s.conn, &staff.role_id)?.map(|role| (staff, role)))
+        })
+    }
+
+    /// The staff member `staff_id` and their role, outside any write transaction, in one read
+    /// snapshot (`None` when either is missing or before the staff table exists).
+    pub fn staff_by_id_with_role(
+        &self,
+        staff_id: &str,
+    ) -> Result<Option<(StaffRow, RoleRow)>, AppError> {
+        if !self.table_exists("staff")? {
+            return Ok(None);
+        }
+        self.read_consistent(|s| {
+            let Some(staff) = find_staff(&s.conn, staff_id)? else {
+                return Ok(None);
+            };
+            Ok(find_role(&s.conn, &staff.role_id)?.map(|role| (staff, role)))
+        })
+    }
+
+    /// Every branch setting, outside any write transaction (empty before bootstrap).
+    pub fn settings(&self) -> Result<Vec<SettingRow>, AppError> {
+        if !self.table_exists("settings")? {
+            return Ok(Vec::new());
+        }
+        list_settings(&self.conn)
     }
 
     /// Every device, outside any write transaction.
@@ -699,6 +746,9 @@ mod tests {
             "changes",
             "applied_intents",
             "devices",
+            "roles",
+            "role_perms",
+            "staff",
         ] {
             let exists: bool = store
                 .conn

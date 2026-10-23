@@ -9,4 +9,6 @@ export type IntentKind =
   | "device.register"
   | "device.revoke"
   | "device.version_reported"
-  | "console.plan_requested";
+  | "console.plan_requested"
+  | "staff.upsert"
+  | "role.upsert";

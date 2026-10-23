@@ -33,6 +33,9 @@ pub struct Frame {
 }
 
 /// A frame's body, tagged by `kind`.
+// Frames are short-lived and decoded one at a time; boxing the intent would only add an
+// allocation per submit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
 #[cfg_attr(feature = "export-ts", ts(export))]

@@ -116,3 +116,29 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Server-side lock:** `POST /ui/lock` rejects intents with a new `SESSION_LOCKED` code until unlock, so the lock can't be bypassed by calling the API directly.
 - **PIN switch:** unlock tries the current staff member first, then other active staff (at most 50). A match rebinds the session's actor to that person.
 - **1.10 review outcome:** 18 fixes and 5 rejections. Key fixes: the installer stops the running service before upgrade or uninstall; the shell refetches on hub-ready, on focus and with backoff while unreachable; a strict health probe and early sidecar-exit detection; a log at `logs/hub-ui.log`. Untested: the Windows installer hooks, the NSIS build and the benchmark (no Windows runner available).
+
+## Story 1.15: audit log viewer
+
+- **Spec approval:** self-approved. Spec: `spec-1-15-audit-log-viewer-on-the-hub.md`.
+- **Read elevation:** the 1.13 ticket flow also accepts a read permission (`audit.view`, `report.view`, `player.view`). It grants a 10-minute read ticket for that session, which a lock or sign-out drops.
+- **"Before" row:** the previous change to the same `(tbl, row_id)` in log order. Hash columns are always redacted as `[redacted]`.
+- **Module:** the `domain` part of `intent_kind`.
+- **Performance proxy:** a 100k-row debug test must return the first page in under 250 ms, standing in for the "<1 s on reference hardware" budget. Pagination is keyset, never OFFSET.
+- **1.11 implementation choices, accepted:** new `GET /ui/settings` endpoint so the client has `base_rev`. The Manager restriction applies to any non-Owner role with `user.manage`. Device register and revoke now need `device.manage`/`device.remote`; the dev tooling acts as the owner.
+
+## Story 1.16: kiosk privilege split
+
+- **Spec approval:** self-approved. Spec: `spec-1-16-kiosk-privilege-split-locked-service-and-unprivileged-ui.md`.
+- **Testability on Linux/macOS:** OS-specific parts sit behind traits (SecretStore, IpcServer, AppLauncher, ServiceHost). Non-Windows builds use a 0600 file and a Unix socket (dev/test only, with a warning). The Windows code is compiled by the CI Windows job but not run end to end here.
+- **DPAPI scope:** machine scope (`CRYPTPROTECT_LOCAL_MACHINE`), because the token belongs to the LocalSystem service, not to a user.
+- **Kiosk log intent:** new `kiosk.log` intent and `device_events` table, so kiosk events are queued as idempotent intents through `apply()` (AD-14).
+- **"Screen stays covered" during an app restart:** fully guaranteed only once 1.17's shell replacement removes Explorer. In 1.16 the watchdog only restarts the app quickly. This is documented in the README.
+- **Revoked token:** the service stops fast reconnects and reports `token_rejected` until it is re-provisioned.
+- **Hub "online":** derived from whether the device has a paired session in the Hub's session registry; shown as text on the floor.
+- **1.11 review outcome:** 22 fixes and 1 rejection (pre-0005 dev databases get no roles; only dev data exists). Security fixes:
+  - restricted actors can only grant permissions they hold and can't edit their own role;
+  - the last active Owner is protected;
+  - the lockout reserves attempts that are still in flight and can't be reset by spraying logins;
+  - sessions expire after 12 h, are capped at 5 per staff member, and are re-checked against the staff row on every request;
+  - logins are ASCII-only and role names are case-insensitive.
+- **Tooling note:** the session scratchpad directory went away mid-run, so review diffs now go to the gitignored `target/review/`.

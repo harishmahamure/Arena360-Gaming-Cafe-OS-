@@ -4,9 +4,17 @@ import type { HubSnapshot } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 
 // The Hub app shell: landmarks, rail and bottom bar, placeholder screens, the More sheet,
-// Ctrl+1–4 and the unreachable-Hub state. The snapshot is served with `page.route`.
+// Ctrl+1–4 and the unreachable-Hub state. The snapshot is served with `page.route`, and a
+// signed-in Manager session is stubbed the same way (sign-in itself is in auth.spec.ts).
 
 const SNAPSHOT_URL = "http://127.0.0.1:7409/ui/snapshot";
+const ME_URL = "http://127.0.0.1:7409/ui/me";
+const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
+const CORS = {
+  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-methods": "GET, POST",
+  "access-control-allow-headers": "authorization, content-type",
+};
 const SEEDED: HubSnapshot = {
   branch: { name: "Dev Branch", branch_code: "DEV01" },
   devices: [
@@ -44,6 +52,25 @@ type Serve = HubSnapshot | "down" | { status: number; body: string };
 /** Serves `state.snapshot` for every request; returns the mutable state and a request counter. */
 async function serve(page: Page, initial: Serve) {
   const state = { snapshot: initial, requests: 0, delayMs: 0 };
+  await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "shell-token"));
+  for (const [url, body] of [
+    [
+      ME_URL,
+      { staff_id: "01JMANAGER0000000000000000", display_name: "Manager", role_name: "Manager" },
+    ],
+    [SETTINGS_URL, [{ key: "receipt.footer", value: "", rev: 1 }]],
+  ] as const) {
+    await page.route(url, (route) =>
+      route.request().method() === "OPTIONS"
+        ? route.fulfill({ status: 204, headers: CORS })
+        : route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify(body),
+          }),
+    );
+  }
   await page.route(SNAPSHOT_URL, async (route) => {
     state.requests++;
     if (state.delayMs) await new Promise((r) => setTimeout(r, state.delayMs));

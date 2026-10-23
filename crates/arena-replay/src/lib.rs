@@ -150,25 +150,76 @@ mod tests {
             .await
             .unwrap();
         if with_device {
-            let payload = IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
-                class: arena_proto::ClientClass::Kds,
-                label: "Pass".into(),
-                token_hash: arena_core::devices::hash_token_secret("s").unwrap(),
-            });
+            let owner = Actor {
+                kind: ActorKind::Owner,
+                id: "dev-seed".into(),
+            };
+            let submit = |payload: IntentPayload, base_rev: Option<i64>| Intent {
+                intent_id: ulid::Ulid::generate().to_string(),
+                kind: payload.kind(),
+                idempotency_key: ulid::Ulid::generate().to_string(),
+                issued_at: T0,
+                base_rev,
+                actor: owner.clone(),
+                elevated_by: None,
+                payload,
+            };
             writer
-                .submit_intent(Intent {
-                    intent_id: ulid::Ulid::generate().to_string(),
-                    kind: payload.kind(),
-                    idempotency_key: ulid::Ulid::generate().to_string(),
-                    issued_at: T0,
-                    base_rev: None,
-                    actor: Actor {
-                        kind: ActorKind::System,
-                        id: "dev-seed".into(),
-                    },
-                    elevated_by: None,
-                    payload,
-                })
+                .submit_intent(submit(
+                    IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                        class: arena_proto::ClientClass::Kds,
+                        label: "Pass".into(),
+                        token_hash: arena_core::devices::hash_token_secret("s").unwrap(),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            // A custom role, then an edit that replaces its rows (delete + insert changes),
+            // and a staff member holding it: every change-log table has a row.
+            let perm = |p: &str, effect| arena_proto::RolePerm {
+                permission: p.into(),
+                effect,
+            };
+            let role = writer
+                .submit_intent(submit(
+                    IntentPayload::RoleUpsert(arena_proto::RoleUpsert {
+                        role_id: None,
+                        name: "Floor lead".into(),
+                        perms: vec![
+                            perm("pos.sell", arena_proto::PermEffect::Allow),
+                            perm("pos.void", arena_proto::PermEffect::Deny),
+                        ],
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            let role_id = role.changes[0].row_id.clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::RoleUpsert(arena_proto::RoleUpsert {
+                        role_id: Some(role_id.clone()),
+                        name: "Floor lead".into(),
+                        perms: vec![perm("pos.void", arena_proto::PermEffect::Allow)],
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                        staff_id: None,
+                        login: "lead".into(),
+                        display_name: "Lead".into(),
+                        role_id,
+                        password_hash: Some(arena_core::staff::hash_secret("pw").unwrap()),
+                        pin_hash: None,
+                        active: true,
+                    }),
+                    None,
+                ))
                 .await
                 .unwrap();
         }
@@ -209,12 +260,16 @@ mod tests {
     async fn update_and_delete_changes_apply_in_order() {
         let (_a, source) = seeded().await;
         let mut changes = source.changes().unwrap();
-        let last = changes.last().unwrap().clone();
+        let last = changes
+            .iter()
+            .rfind(|c| c.tbl == "settings")
+            .unwrap()
+            .clone();
         let mut row: Row = rmp_serde::from_slice(&last.row).unwrap();
         row.insert("value".into(), RowValue::Text("edited".into()));
         let edited = rmp_serde::to_vec_named(&row).unwrap();
         changes.push(ChangeRecord {
-            seq: last.seq + 1,
+            seq: changes.last().unwrap().seq + 1,
             op: ChangeOp::Update,
             row: edited.clone(),
             ..last.clone()
@@ -224,7 +279,7 @@ mod tests {
         assert!(dest.rows(Table::Settings).unwrap().contains(&row));
 
         changes.push(ChangeRecord {
-            seq: last.seq + 2,
+            seq: changes.last().unwrap().seq + 1,
             op: ChangeOp::Delete,
             row: edited,
             ..last
@@ -286,8 +341,13 @@ mod tests {
     async fn deleting_a_missing_row_is_refused() {
         let (_a, source) = seeded().await;
         let mut changes = source.changes().unwrap();
-        let last = changes.last().unwrap().clone();
-        for seq in [last.seq + 1, last.seq + 2] {
+        let last = changes
+            .iter()
+            .rfind(|c| c.tbl == "settings")
+            .unwrap()
+            .clone();
+        let end = changes.last().unwrap().seq;
+        for seq in [end + 1, end + 2] {
             changes.push(ChangeRecord {
                 seq,
                 op: ChangeOp::Delete,
@@ -308,7 +368,7 @@ mod tests {
             issued_at: T0,
             base_rev: Some(base_rev),
             actor: Actor {
-                kind: ActorKind::System,
+                kind: ActorKind::Owner,
                 id: "test".into(),
             },
             elevated_by: None,
@@ -344,6 +404,7 @@ mod tests {
         let mut boot = settings_set("x", "x", 0);
         boot.kind = IntentKind::BranchBootstrap;
         boot.base_rev = None;
+        boot.actor.kind = ActorKind::System;
         boot.payload = IntentPayload::BranchBootstrap(BranchBootstrap {
             name: "Dev Branch".into(),
             branch_code: "DEV01".into(),

@@ -3,7 +3,9 @@ import type { BranchBootstrap } from "./BranchBootstrap";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
+import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
+import type { StaffUpsert } from "./StaffUpsert";
 
 /**
  * The intent's payload, tagged by its kind.
@@ -13,4 +15,6 @@ export type IntentPayload =
   | ({ kind: "settings.set" } & SettingsSet)
   | ({ kind: "device.register" } & DeviceRegister)
   | ({ kind: "device.revoke" } & DeviceRevoke)
-  | ({ kind: "device.version_reported" } & DeviceVersionReported);
+  | ({ kind: "device.version_reported" } & DeviceVersionReported)
+  | ({ kind: "staff.upsert" } & StaffUpsert)
+  | ({ kind: "role.upsert" } & RoleUpsert);

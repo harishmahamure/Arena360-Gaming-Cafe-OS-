@@ -97,6 +97,44 @@ The three ports must differ. Tests pass free ports; production uses the defaults
   reads through `arena-core` on its own read-only connection. CORS allows only
   `tauri://localhost`, `http(s)://tauri.localhost` and the vite origin `http://localhost:5173`;
   another `Origin`, or a `Host` that is not `127.0.0.1`/`localhost`/`[::1]`, gets 403.
+- **Staff auth (same loopback server and origin guard):**
+
+  | Endpoint                                  | Answer                                                                                                                                                                 |
+  | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `POST /ui/auth/sign-in {login, password}` | `{token, staff: {staff_id, display_name, role_name}}`, or 401 `AUTH_FAILED` with one fixed message whatever was wrong (unknown login, wrong password, inactive staff)  |
+  | `POST /ui/auth/sign-out` (bearer)         | 204; the token stops working                                                                                                                                           |
+  | `GET /ui/me` (bearer)                     | the session's staff, or 401 `AUTH_FAILED`                                                                                                                              |
+  | `POST /ui/intent {intent}` (bearer)       | `{applied}`; the intent runs as the session's `actor{staff, staff_id}` whatever actor was sent, and any `elevated_by` is dropped. Errors are `{code, message, field?}` |
+  | `GET /ui/settings` (bearer)               | `[{key, value, rev}]`, so an edit can carry `base_rev`                                                                                                                 |
+
+  Five consecutive failed sign-ins for a login (compared without case) pause it for 60 s: every
+  attempt in that window gets 429 `AUTH_LOCKED` with `retry_after_s`, and a success resets the
+  count; attempts in flight count toward the limit, so parallel guesses cannot slip past it.
+  Tokens are 32 random bytes (base64url) held in memory only, so a Hub restart signs everyone
+  out. A session ends 12 h after sign-in, or as soon as its staff member is deactivated or
+  removed (every authenticated request re-reads the staff row and refreshes the name and
+  role). A staff member holds at most 5 sessions; a sixth sign-in ends the oldest. A missing or
+  unknown token is 401 `AUTH_FAILED`; signing out an unknown token is still 204.
+
+- **Permissions:** every intent kind has one requirement (`IntentKind::requirement()` in
+  `arena-proto`): a catalogue permission (`Permission`, dotted `domain.verb`), or the implicit
+  `System`, `Device` or `Phone`. `apply()` checks it first: a `staff` actor needs an active staff
+  row whose role allows the permission (and does not deny it); an `owner` actor holds every
+  permission; an `admin` actor holds none yet. Refusals are `PERMISSION_DENIED`.
+  `branch.bootstrap` seeds the built-in roles (Owner, Manager, Counter, Kitchen, Kiosk-device),
+  which cannot be changed; `role.upsert` makes custom roles from catalogue permissions only, and
+  `staff.upsert` takes argon2id password and PIN hashes computed outside the transaction.
+  - **Restricted actors.** A staff actor whose role is not the built-in Owner (a Manager, or a
+    custom role holding `user.manage`) may only assign the built-in Counter or Kitchen roles,
+    only edit staff who hold one of them, never edit the role it holds itself, and never write a
+    role that allows a permission its own role does not allow.
+  - **Last Owner.** A `staff.upsert` that would leave no active staff member holding the
+    built-in Owner role fails `VALIDATION_FAILED` (`role_id` or `active`).
+  - **Names.** Logins are 2–32 ASCII letters, digits, `.`, `_` or `-`, unique without case.
+    Custom role names are unique without case and never a built-in name. Kiosk-device is never
+    assigned to a person.
+  - **Deny rows.** Each staff member holds exactly one role, so a `deny` row means the same as
+    no row today; deny entries are kept for a later multi-role model.
 - **Logs:** JSON lines in `<data>/logs/hub-YYYY-MM-DD.jsonl` (UTC), with `.N` part files when the
   ring fills during a day. Files older than 14 days are deleted and the total is kept at or under
   50 MB (oldest deleted first). Logs never contain PII. Set the level with `RUST_LOG` (default
@@ -170,9 +208,20 @@ cargo run -p arena-hub --features dev-fixtures -- dev seed --data-dir /tmp/hub
 `dev` must be the first argument (`arena-hub --data-dir /tmp/hub dev seed` is rejected). It
 takes the lease once and submits `branch.bootstrap` as `actor{system, "dev-seed"}`: branch
 "Dev Branch", code `DEV01`, INR, `Asia/Kolkata`, business day from 06:00, financial year from
-April, plus the default settings. It then registers one `paired` device, "Dev Kiosk"
-(`device.register`, argon2id hash only), and prints its id and token once. On exit it releases
-the lease (it expires immediately), so a real Hub can start on the same data dir straight away.
+April, the default settings and the built-in roles. Then, as `actor{owner, "dev-seed"}`, it
+registers one `paired` device, "Dev Kiosk" (`device.register`), and the four staff members
+below (`staff.upsert`), and prints the device id and token and the staff credentials once. Only
+argon2id hashes are stored. On exit it releases the lease (it expires immediately), so a real Hub
+can start on the same data dir straight away.
+
+Dev staff (`dev-fixtures` builds only; never in a release build):
+
+| Login     | Role    | Password           | PIN  |
+| --------- | ------- | ------------------ | ---- |
+| `owner`   | Owner   | `dev-owner-pass`   | 1111 |
+| `manager` | Manager | `dev-manager-pass` | 2222 |
+| `counter` | Counter | `dev-counter-pass` | 3333 |
+| `kitchen` | Kitchen | `dev-kitchen-pass` | 4444 |
 
 With the same feature, `arena-hub dev revoke-device <device_id> [--health-port <port>]` asks
 the running Hub to revoke a device through the dev-only loopback endpoint
@@ -199,13 +248,17 @@ Inventory · Shift · Reports · Settings · System), a 72px header (branch name
 main area. Below 840px wide the rail becomes a 64px bottom bar (Floor · POS · Players · Shift ·
 More, where More opens a bottom sheet with the rest). Ctrl+1–4 open Floor, POS, Players and
 Shift, except while a text field has focus. `/` redirects to `/floor`; screens not built yet show
-a placeholder. The root layout reads `/ui/snapshot` before the first render; if the Hub service
-does not answer, it shows an error state with Retry.
+a placeholder. The root layout reads `/ui/snapshot` and `/ui/me` before the first render; if the
+Hub service does not answer, it shows an error state with Retry. With nobody signed in every
+screen redirects to `/sign-in` (login and password, one generic failure message, a live
+countdown while locked out); after sign-in it opens `/floor`, and the header shows the staff
+member's name and role with a Sign out button. Settings carries one demo control, "Receipt
+footer", which submits `settings.set` with `base_rev`; a refusal shows inline next to it.
 
 ```sh
 cargo run -p arena-hub --features dev-fixtures -- dev seed --data-dir /tmp/hub
 cargo run -p arena-hub -- --data-dir /tmp/hub      # serves 127.0.0.1:7409
-pnpm --filter @arena/hub dev                       # http://localhost:5173: "Dev Branch", "Dev Kiosk"
+pnpm --filter @arena/hub dev                       # http://localhost:5173: sign in as counter / dev-counter-pass
 pnpm --filter @arena/hub test:shell                # Playwright: builds, then runs on vite preview
 ```
 

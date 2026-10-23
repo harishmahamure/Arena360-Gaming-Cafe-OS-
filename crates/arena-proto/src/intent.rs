@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::actor::{Actor, ElevatedBy};
-use crate::permission::Permission;
+use crate::permission::{Permission, Requirement};
 use crate::scope::ClientClass;
 
 /// The domain an intent kind belongs to. Class scopes are checked against it: no browser class
@@ -44,17 +44,25 @@ pub enum IntentKind {
     /// A phone asks a console for a play plan. In the phone scope, but no handler yet.
     #[serde(rename = "console.plan_requested")]
     ConsolePlanRequested,
+    /// Creates or edits a staff member (hashes computed outside the transaction).
+    #[serde(rename = "staff.upsert")]
+    StaffUpsert,
+    /// Creates or edits a custom role and its permission rows (built-in roles are fixed).
+    #[serde(rename = "role.upsert")]
+    RoleUpsert,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 6] = [
+    pub const ALL: [IntentKind; 8] = [
         Self::BranchBootstrap,
         Self::SettingsSet,
         Self::DeviceRegister,
         Self::DeviceRevoke,
         Self::DeviceVersionReported,
         Self::ConsolePlanRequested,
+        Self::StaffUpsert,
+        Self::RoleUpsert,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -66,6 +74,8 @@ impl IntentKind {
             Self::DeviceRevoke => "device.revoke",
             Self::DeviceVersionReported => "device.version_reported",
             Self::ConsolePlanRequested => "console.plan_requested",
+            Self::StaffUpsert => "staff.upsert",
+            Self::RoleUpsert => "role.upsert",
         }
     }
 
@@ -83,16 +93,21 @@ impl IntentKind {
                 IntentCategory::Device
             }
             Self::ConsolePlanRequested => IntentCategory::Console,
+            Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
         }
     }
 
-    /// The catalogue permission this kind requires, where the catalogue has one yet (Story
-    /// 1.11 maps the rest).
-    pub fn permission(self) -> Option<Permission> {
+    /// What this kind requires of its actor (checked first in `apply()`). A total match: a new
+    /// kind does not compile until it is mapped.
+    pub fn requirement(self) -> Requirement {
         match self {
-            Self::DeviceRevoke => Some(Permission::DeviceRemote),
-            Self::DeviceRegister => Some(Permission::DevicePair),
-            _ => None,
+            Self::BranchBootstrap => Requirement::System,
+            Self::SettingsSet => Requirement::Perm(Permission::SettingsEdit),
+            Self::DeviceRegister => Requirement::Perm(Permission::DeviceManage),
+            Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
+            Self::DeviceVersionReported => Requirement::System,
+            Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
+            Self::ConsolePlanRequested => Requirement::Phone,
         }
     }
 
@@ -153,6 +168,68 @@ pub struct DeviceVersionReported {
     pub version: String,
 }
 
+/// The payload of `staff.upsert`. Without `staff_id` it creates a staff member (the writer
+/// mints the id); with one it edits that member. `password_hash` and `pin_hash` are argon2id PHC
+/// strings computed outside the transaction; `None` keeps the stored hash. A new PIN bumps the
+/// member's `pin_verifier_version`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StaffUpsert {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub staff_id: Option<String>,
+    pub login: String,
+    pub display_name: String,
+    pub role_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub password_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pin_hash: Option<String>,
+    pub active: bool,
+}
+
+/// Whether a role row grants or withholds a permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PermEffect {
+    Allow,
+    Deny,
+}
+
+impl PermEffect {
+    /// The stored form, `allow` or `deny`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+/// One permission row of a role. `permission` is a plain string so an unknown one fails
+/// validation on `perms[i]` instead of failing to decode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RolePerm {
+    pub permission: String,
+    pub effect: PermEffect,
+}
+
+/// The payload of `role.upsert`. Without `role_id` it creates a custom role (`builtin = 0`);
+/// with one it renames that custom role and replaces its permission rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RoleUpsert {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub role_id: Option<String>,
+    pub name: String,
+    pub perms: Vec<RolePerm>,
+}
+
 /// The intent's payload, tagged by its kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
@@ -168,6 +245,10 @@ pub enum IntentPayload {
     DeviceRevoke(DeviceRevoke),
     #[serde(rename = "device.version_reported")]
     DeviceVersionReported(DeviceVersionReported),
+    #[serde(rename = "staff.upsert")]
+    StaffUpsert(StaffUpsert),
+    #[serde(rename = "role.upsert")]
+    RoleUpsert(RoleUpsert),
 }
 
 impl IntentPayload {
@@ -179,6 +260,8 @@ impl IntentPayload {
             Self::DeviceRegister(_) => IntentKind::DeviceRegister,
             Self::DeviceRevoke(_) => IntentKind::DeviceRevoke,
             Self::DeviceVersionReported(_) => IntentKind::DeviceVersionReported,
+            Self::StaffUpsert(_) => IntentKind::StaffUpsert,
+            Self::RoleUpsert(_) => IntentKind::RoleUpsert,
         }
     }
 }
@@ -244,11 +327,111 @@ mod tests {
             assert_eq!(IntentKind::parse(kind.as_str()), Some(kind));
         }
         assert_eq!(IntentKind::parse("nope.verb"), None);
-        assert_eq!(
-            IntentKind::DeviceRevoke.permission(),
-            Some(Permission::DeviceRemote)
-        );
         assert!(!IntentKind::ConsolePlanRequested.is_handled());
+    }
+
+    /// Permissions no intent requires yet: views, ops and the modules later stories build.
+    const USED_BY_LATER_STORIES: &[Permission] = &[
+        Permission::PlayerManage,
+        Permission::PlayerView,
+        Permission::WalletTopup,
+        Permission::CreditManage,
+        Permission::CreditCollect,
+        Permission::SessionStart,
+        Permission::SessionPause,
+        Permission::SessionExtend,
+        Permission::SessionTransfer,
+        Permission::SessionEnd,
+        Permission::SessionForceEnd,
+        Permission::BookingManage,
+        Permission::PosSell,
+        Permission::PosVoid,
+        Permission::RefundIssue,
+        Permission::DiscountManual,
+        Permission::KitchenUse,
+        Permission::StockIn,
+        Permission::StockAdjust,
+        Permission::StockOverride,
+        Permission::CatalogEdit,
+        Permission::ShiftOpen,
+        Permission::ShiftClose,
+        Permission::CashManage,
+        Permission::DevicePair,
+        Permission::BackupExport,
+        Permission::OpsPromote,
+        Permission::OpsRestore,
+        Permission::ReportView,
+        Permission::AuditView,
+    ];
+
+    #[test]
+    fn every_kind_has_exactly_one_requirement() {
+        let mut seen = std::collections::HashSet::new();
+        for kind in IntentKind::ALL {
+            assert!(seen.insert(kind), "{} listed twice in ALL", kind.as_str());
+            // `requirement()` is a total match returning one value; pin the current mapping.
+            let want = match kind.as_str() {
+                "branch.bootstrap" | "device.version_reported" => Requirement::System,
+                "settings.set" => Requirement::Perm(Permission::SettingsEdit),
+                "device.register" => Requirement::Perm(Permission::DeviceManage),
+                "device.revoke" => Requirement::Perm(Permission::DeviceRemote),
+                "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
+                "console.plan_requested" => Requirement::Phone,
+                other => panic!("{other} has no pinned requirement"),
+            };
+            assert_eq!(kind.requirement(), want, "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn every_permission_is_required_or_reserved_for_a_later_story() {
+        let required: Vec<Permission> = IntentKind::ALL
+            .into_iter()
+            .filter_map(|k| match k.requirement() {
+                Requirement::Perm(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        for p in Permission::ALL {
+            let used = required.contains(&p);
+            let reserved = USED_BY_LATER_STORIES.contains(&p);
+            assert!(
+                used || reserved,
+                "{} is neither required nor reserved",
+                p.as_str()
+            );
+            assert!(
+                !(used && reserved),
+                "{} is required, so drop it from the allow-list",
+                p.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn staff_and_role_payloads_round_trip() {
+        let payload = IntentPayload::RoleUpsert(RoleUpsert {
+            role_id: None,
+            name: "Floor lead".into(),
+            perms: vec![RolePerm {
+                permission: "pos.sell".into(),
+                effect: PermEffect::Deny,
+            }],
+        });
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["kind"], "role.upsert");
+        assert_eq!(json["perms"][0]["effect"], "deny");
+        assert!(json.get("role_id").is_none());
+        assert_eq!(
+            serde_json::from_value::<IntentPayload>(json).unwrap(),
+            payload
+        );
+        let staff: IntentPayload = serde_json::from_value(serde_json::json!({
+            "kind": "staff.upsert", "login": "counter", "display_name": "Counter",
+            "role_id": "R", "active": true
+        }))
+        .unwrap();
+        assert_eq!(staff.kind(), IntentKind::StaffUpsert);
     }
 
     #[test]

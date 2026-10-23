@@ -1,7 +1,7 @@
 //! `arena-hub`: the branch Hub service.
 //!
 //! Start-up: parse args, init logs, open the store (exit 2 on `SCHEMA_TOO_NEW`), load or mint
-//! the instance id, load or generate the LAN TLS certificate, start the lease task, `/healthz` + `/ui/snapshot`
+//! the instance id, load or generate the LAN TLS certificate, start the lease task, `/healthz` + `/ui/snapshot` + the staff auth routes
 //! and the LAN listeners (`:7400`, `:7401`), then run until Ctrl+C or SIGTERM.
 //!
 //! Logs carry ids, codes and counts only — no PII (see `logs.rs`).
@@ -19,8 +19,8 @@ use std::net::{IpAddr, Ipv4Addr};
 use arena_api::lan::{LanHub, bind_lan, serve_lan, tls};
 use arena_api::{bind_health, serve_router};
 use arena_core::{
-    Clock, DeviceDirectory, HubStatus, Role, SnapshotReader, SystemClock, load_or_mint_instance_id,
-    record_tls_fingerprint, status_channel,
+    Clock, DeviceDirectory, HubStatus, Role, SnapshotReader, StaffDirectory, SystemClock,
+    load_or_mint_instance_id, record_tls_fingerprint, status_channel,
 };
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
@@ -117,6 +117,14 @@ async fn dev_seed(cfg: config::Config) -> ExitCode {
                 seeded.device_id
             );
             println!("dev seed: device token (shown once): {}", seeded.token);
+            // Dev-fixtures builds only: release builds have no dev module.
+            println!("dev seed: staff credentials (shown once, dev only):");
+            for s in &seeded.staff {
+                println!(
+                    "dev seed:   {:<8} role {:<8} password {:<20} pin {}  ({})",
+                    s.login, s.role, s.password, s.pin, s.staff_id
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -197,6 +205,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let server_tls = cert.server_config()?;
     let devices = Arc::new(DeviceDirectory::open(cfg.db_path())?);
     let snapshots = Arc::new(SnapshotReader::open(cfg.db_path())?);
+    let staff = Arc::new(StaffDirectory::open(cfg.db_path())?);
 
     let mut initial = HubStatus::opened(schema_version, instance_id.clone());
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
@@ -224,9 +233,16 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let mut lease_job = Some(tokio::spawn(lease.run()));
 
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let ui_auth = Arc::new(arena_api::UiAuth::new(
+        staff,
+        Arc::clone(&snapshots),
+        writer.clone(),
+        Arc::clone(&clock),
+    ));
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
     let mut router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
-        .merge(arena_api::ui_router(snapshots));
+        .merge(arena_api::ui_router(snapshots))
+        .merge(arena_api::ui_auth_router(ui_auth));
     #[cfg(feature = "dev-fixtures")]
     {
         router = router.merge(arena_api::health::dev_router(
@@ -239,7 +255,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     }));
     tracing::info!(
         port = cfg.health_port,
-        "healthz and ui snapshot listening on loopback"
+        "healthz, ui snapshot and ui auth listening on loopback"
     );
 
     let lan_hub = Arc::new(LanHub::new(

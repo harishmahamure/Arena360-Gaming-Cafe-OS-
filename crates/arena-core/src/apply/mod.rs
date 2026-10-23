@@ -1,8 +1,13 @@
 //! `apply()`: the single mutation path. Every write to a branch table is an [`Intent`] run
 //! through this fixed pipeline, by the Writer actor, in one `BEGIN IMMEDIATE` transaction:
 //!
-//! permission → epoch → ttl_dedupe → base_rev → validate → mutate → stamp → append_changes →
-//! commit → emit
+//! permission → epoch → ttl_dedupe → (load → authorize) → base_rev → validate → mutate → stamp
+//! → append_changes → commit → emit
+//!
+//! **permission** is the intent kind's [`Requirement`](arena_proto::Requirement), checked
+//! against the actor before anything else (`rbac::check`). **authorize** adds the rules that
+//! depend on the target row (built-in roles are fixed; a Manager assigns only Counter and
+//! Kitchen). Both fail `PERMISSION_DENIED`.
 //!
 //! [`apply`] runs the steps up to `append_changes` on the caller's transaction. The Writer then
 //! commits that transaction and, only once it has committed, calls [`emit`]. No I/O other than
@@ -19,6 +24,7 @@ mod frame;
 mod guards;
 mod mutate;
 mod settings_set;
+mod staff_roles;
 mod ttl_dedupe;
 mod validate;
 
@@ -90,6 +96,10 @@ pub(crate) enum Target {
     NewDevice(Option<String>),
     /// `device.revoke`, `device.version_reported`: the device row, if it exists.
     Device(Option<arena_store::DeviceRow>),
+    /// `staff.upsert`: the branch, the edited row, the roles involved and the login's holder.
+    Staff(Box<staff_roles::StaffTarget>),
+    /// `role.upsert`: the branch, the edited role and its rows, and the name's holder.
+    Role(Box<staff_roles::RoleTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
@@ -100,6 +110,8 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::DeviceRegister(_) => devices::load_register(tx)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,
+        P::StaffUpsert(s) => Target::Staff(Box::new(staff_roles::load_staff(tx, intent, s)?)),
+        P::RoleUpsert(r) => Target::Role(Box::new(staff_roles::load_role(tx, intent, r)?)),
     })
 }
 
@@ -140,6 +152,7 @@ pub(crate) fn run(
         return Ok(Outcome::Replayed(stored));
     }
     let target = load(tx, intent)?;
+    guards::authorize(intent, &target)?;
     guards::base_rev(intent, &target)?;
     validate::validate(intent, &target)?;
     let written = mutate::mutate(tx, intent, &target, now)?;

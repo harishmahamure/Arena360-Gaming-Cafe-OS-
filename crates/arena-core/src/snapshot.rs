@@ -4,7 +4,9 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use arena_proto::{AppError, ClientClass, ErrorCode, HubSnapshot, SnapshotBranch, SnapshotDevice};
+use arena_proto::{
+    AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SnapshotBranch, SnapshotDevice,
+};
 use arena_store::{BranchSummary, DeviceRow, Store};
 
 /// Builds the snapshot from the branch row and every device row. Revoked devices are left
@@ -71,6 +73,23 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         read_snapshot(&store)
+    }
+
+    /// Every branch setting with its `rev` (empty before bootstrap). Blocking (SQLite).
+    pub fn settings(&self) -> Result<Vec<SettingEntry>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store
+            .settings()?
+            .into_iter()
+            .map(|s| SettingEntry {
+                key: s.key,
+                value: s.value,
+                rev: s.rev,
+            })
+            .collect())
     }
 }
 

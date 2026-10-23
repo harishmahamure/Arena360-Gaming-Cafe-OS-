@@ -1,6 +1,6 @@
 //! **validate.** Payload checks; a failure is `VALIDATION_FAILED` naming the field.
 
-use super::{Target, devices, settings_set};
+use super::{Target, devices, settings_set, staff_roles};
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
 /// ISO 4217 alpha-3 codes this build accepts as a branch currency.
@@ -48,7 +48,22 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
         },
         IntentPayload::DeviceRevoke(d) => devices::validate_revoke(d, device_row(target)),
         IntentPayload::DeviceVersionReported(d) => devices::validate_version(d, device_row(target)),
+        IntentPayload::StaffUpsert(s) => match target {
+            Target::Staff(t) => staff_roles::validate_staff(intent, s, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::RoleUpsert(r) => match target {
+            Target::Role(t) => staff_roles::validate_role(intent, r, t),
+            _ => Err(internal_target()),
+        },
     }
+}
+
+fn internal_target() -> AppError {
+    AppError::new(
+        ErrorCode::Internal,
+        "the loaded target does not match the payload",
+    )
 }
 
 fn device_row(target: &Target) -> Option<&arena_store::DeviceRow> {

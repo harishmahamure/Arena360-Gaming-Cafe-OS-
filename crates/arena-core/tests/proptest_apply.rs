@@ -6,8 +6,10 @@
 //! After every step: `changes.seq` is 1..n with no gaps; a retried key gets its first outcome
 //! back and the change count does not grow; a reused key with another body fails
 //! `IDEMPOTENCY_CONFLICT` and writes nothing; a stale `base_rev` is rejected with the row
-//! unchanged; a successful edit bumps `rev` by exactly 1. After the sequence, replaying
-//! `changes` into an empty database reproduces the `branch` and `settings` rows.
+//! unchanged; a successful edit bumps `rev` by exactly 1; an edit by a staff member of each
+//! built-in role (or an admin) is applied only with `settings.edit`, and a permission denial
+//! writes nothing and is never recorded. After the sequence, replaying `changes` into an empty
+//! database reproduces every change-log table.
 //!
 //! 64 cases by default; set `PROPTEST_CASES` for more.
 
@@ -19,7 +21,14 @@ use arena_core::{
 };
 use arena_proto::{
     Actor, ActorKind, AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload, SettingsSet,
+    StaffUpsert,
 };
+
+/// One argon2id hash shared by every seeded staff member (hashing is slow).
+fn password_hash() -> &'static str {
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| arena_core::staff::hash_secret("pw").unwrap())
+}
 use arena_store::{LeaseRow, Row, RowValue, Store, Table, write_lease};
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -72,11 +81,20 @@ enum Op {
         key: &'static str,
         which: Index,
     },
+    /// A fresh `settings.set` by a staff member of a built-in role, or by an admin.
+    AsStaff {
+        key: &'static str,
+        value: String,
+        who: Index,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
     },
 }
+
+/// The seeded staff roles (index 4 is an admin actor).
+const STAFF_ROLES: [&str; 4] = ["Owner", "Manager", "Counter", "Kitchen"];
 
 const MALFORMED: &[&str] = &[
     "",
@@ -131,6 +149,8 @@ fn op() -> impl Strategy<Value = Op> {
         1 => valid_setting().prop_map(|(key, value)| Op::Expired { key, value }),
         1 => (valid_setting(), any::<Index>())
             .prop_map(|((key, _), which)| Op::MalformedKey { key, which }),
+        2 => (valid_setting(), any::<Index>())
+            .prop_map(|((key, value), who)| Op::AsStaff { key, value, who }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -183,6 +203,8 @@ struct Hub {
     /// Every submitted intent, except exact duplicates and perturbations.
     history: Vec<Submitted>,
     bootstrapped: bool,
+    /// The staff ids seeded right after bootstrap, in [`STAFF_ROLES`] order.
+    staff: Vec<String>,
 }
 
 impl Hub {
@@ -218,6 +240,7 @@ impl Hub {
             rt,
             history: Vec::new(),
             bootstrapped: false,
+            staff: Vec::new(),
         }
     }
 
@@ -249,8 +272,14 @@ impl Hub {
             idempotency_key: ulid::Ulid::generate().to_string(),
             issued_at: self.clock_now(),
             base_rev,
+            // Bootstrap needs the system actor; settings.set needs settings.edit, which the
+            // owner holds.
             actor: Actor {
-                kind: ActorKind::System,
+                kind: if matches!(payload, IntentPayload::BranchBootstrap(_)) {
+                    ActorKind::System
+                } else {
+                    ActorKind::Owner
+                },
                 id: "proptest".into(),
             },
             elevated_by: None,
@@ -321,7 +350,9 @@ fn assert_gap_free(hub: &Hub) -> Result<(), TestCaseError> {
 fn perturb(intent: &Intent, how: &Index) -> Intent {
     let mut out = intent.clone();
     match how.index(3) {
-        0 => out.actor.id = format!("{}-other", out.actor.id),
+        // A staff actor with another id would fail the permission step first.
+        0 if out.actor.kind != ActorKind::Staff => out.actor.id = format!("{}-other", out.actor.id),
+        0 => out.base_rev = Some(intent.base_rev.map_or(1_000, |r| r + 1_000)),
         1 => out.base_rev = Some(intent.base_rev.map_or(1_000, |r| r + 1_000)),
         _ => {
             out.payload = match &intent.payload {
@@ -329,6 +360,8 @@ fn perturb(intent: &Intent, how: &Index) -> Intent {
                 _ => set_payload("receipt.footer", "other"),
             };
             out.kind = out.payload.kind();
+            // Keep an actor that passes the permission step, so the conflict is what fails.
+            out.actor.kind = ActorKind::Owner;
         }
     }
     out
@@ -347,8 +380,45 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), changes_before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
-                prop_assert_eq!(hub.change_count(), 1 + DEFAULT_SETTINGS.len());
+                let roles: usize = arena_core::rbac::BUILTIN_ROLES
+                    .iter()
+                    .map(|r| 1 + arena_core::rbac::builtin_perms(r).len())
+                    .sum();
+                prop_assert_eq!(hub.change_count(), 1 + DEFAULT_SETTINGS.len() + roles);
                 hub.bootstrapped = true;
+                // One staff member per built-in role (outside the history: not retried).
+                let applied = out.unwrap();
+                let role_ids: Vec<String> = applied
+                    .changes
+                    .iter()
+                    .filter(|c| c.tbl == "roles")
+                    .map(|c| c.row_id.clone())
+                    .collect();
+                for (i, name) in STAFF_ROLES.iter().enumerate() {
+                    let at = arena_core::rbac::BUILTIN_ROLES
+                        .iter()
+                        .position(|r| r == name)
+                        .unwrap();
+                    let staff = hub.intent(
+                        IntentPayload::StaffUpsert(StaffUpsert {
+                            staff_id: None,
+                            login: format!("staff{i}"),
+                            display_name: (*name).into(),
+                            role_id: role_ids[at].clone(),
+                            password_hash: Some(password_hash().into()),
+                            pin_hash: None,
+                            active: true,
+                        }),
+                        None,
+                    );
+                    let applied = hub.submit(staff);
+                    prop_assert!(applied.is_ok(), "{:?}", applied);
+                    hub.staff.push(applied.unwrap().changes[0].row_id.clone());
+                }
+                prop_assert_eq!(
+                    hub.change_count(),
+                    1 + DEFAULT_SETTINGS.len() + roles + STAFF_ROLES.len()
+                );
             }
         }
         Op::SetFresh { key, value } => {
@@ -464,6 +534,39 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert_eq!(hub.change_count(), changes_before);
             prop_assert_eq!(hub.settings(), settings_before);
         }
+        Op::AsStaff { key, value, who } => {
+            let rev = hub.rev(key);
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            let mut intent = hub.intent(set_payload(key, value), Some(rev.unwrap_or(1)));
+            intent.actor = match hub.staff.get(pick) {
+                Some(id) if pick < STAFF_ROLES.len() => Actor {
+                    kind: ActorKind::Staff,
+                    id: id.clone(),
+                },
+                _ => Actor {
+                    kind: ActorKind::Admin,
+                    id: "admin".into(),
+                },
+            };
+            let allowed = intent.actor.kind == ActorKind::Staff && pick <= 1;
+            let records_before = hub.reader.applied_intent_count().unwrap();
+            let out = hub.submit_new(intent);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.settings(), settings_before);
+                prop_assert_eq!(hub.change_count(), changes_before);
+                prop_assert_eq!(
+                    hub.reader.applied_intent_count().unwrap(),
+                    records_before,
+                    "a permission denial is never recorded"
+                );
+            } else if let Some(rev) = rev {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.rev(key), Some(rev + 1));
+                let c = hub.reader.changes().unwrap().pop().unwrap();
+                prop_assert_eq!(c.actor_kind.as_str(), "staff");
+            }
+        }
         Op::Advance { ms } => hub.clock.advance(*ms),
     }
     assert_gap_free(hub)
@@ -478,7 +581,7 @@ fn assert_replay_reproduces(hub: &Hub) -> Result<(), TestCaseError> {
         .write_tx_mut(|tx| arena_replay::replay(changes.clone(), tx))
         .unwrap();
     prop_assert_eq!(n, changes.len());
-    for table in [Table::Branch, Table::Settings] {
+    for table in Table::ALL {
         prop_assert_eq!(
             dest.rows(table).unwrap(),
             hub.reader.rows(table).unwrap(),

@@ -62,11 +62,33 @@ mod with_feature {
         assert_eq!(b["day_start_min"], RowValue::Integer(360));
         assert_eq!(b["fy_start_month"], RowValue::Integer(4));
         let changes = store.changes().unwrap();
-        assert!(
-            changes
-                .iter()
-                .all(|c| c.actor_kind == "system" && c.actor_id == "dev-seed")
+        // Bootstrap as the system; the device and the staff as the owner.
+        assert!(changes.iter().all(|c| c.actor_id == "dev-seed"));
+        assert!(changes.iter().all(|c| match c.intent_kind.as_str() {
+            "branch.bootstrap" => c.actor_kind == "system",
+            _ => c.actor_kind == "owner",
+        }));
+        let staff = store.rows(Table::Staff).unwrap();
+        let logins: Vec<_> = staff.iter().map(|s| s["login"].clone()).collect();
+        for login in ["owner", "manager", "counter", "kitchen"] {
+            assert!(logins.contains(&RowValue::Text(login.into())), "{login}");
+        }
+        assert!(staff.iter().all(|s| s["active"] == RowValue::Integer(1)));
+        let stdout = String::from_utf8_lossy(&first.stdout);
+        assert!(stdout.contains("dev-counter-pass"), "{stdout}");
+        assert!(stdout.contains("3333"), "{stdout}");
+        // The credentials verify against the stored hashes.
+        drop(store);
+        let dir_ = arena_core::StaffDirectory::open(dir.path().join("branch.db")).unwrap();
+        let me = dir_.sign_in("counter", "dev-counter-pass").unwrap();
+        assert_eq!(
+            (me.display_name.as_str(), me.role_name.as_str()),
+            ("Counter", "Counter")
         );
+        assert!(dir_.sign_in("counter", "dev-owner-pass").is_err());
+        drop(dir_);
+        let store = Store::open(dir.path().join("branch.db"), 0).unwrap();
+        let changes = store.changes().unwrap();
         let before = changes.len();
 
         // The lease was released on exit: it has already expired.

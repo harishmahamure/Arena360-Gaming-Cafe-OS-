@@ -9,6 +9,7 @@
   import MoreSheet from "../lib/MoreSheet.svelte";
   import { BOTTOM_BAR, MORE, SCREENS, screenOf, shortcutTarget, type Screen } from "../lib/nav";
   import { SNAPSHOT_DEPENDENCY } from "../lib/snapshot";
+  import { SESSION_DEPENDENCY, safeRedirect, signOut } from "../lib/auth";
   import type { LayoutData } from "./$types";
 
   let { data, children }: { data: LayoutData; children: Snippet } = $props();
@@ -20,7 +21,17 @@
   /** Sent by the Tauri shell once it has started (or found) the Hub service. */
   const HUB_READY = "arena:hub-ready";
 
+  /** The sign-in screen: outside the gate, with no rail. */
+  const SIGN_IN = "/sign-in";
+
   const current = $derived(screenOf(page.url.pathname));
+  const onSignIn = $derived(page.url.pathname === SIGN_IN);
+  const staff = $derived(data.session.state === "signed_in" ? data.session.staff : null);
+  const signedOut = $derived(data.session.state === "signed_out");
+  /** The Hub answered the snapshot and said who is signed in (an unknown session retries). */
+  const reachable = $derived(data.hub.ok && data.session.state !== "unknown");
+  /** Not known to be signed in: only the sign-in screen (or the retry state) is shown. */
+  const gated = $derived(onSignIn || !staff);
   const inMore = $derived(MORE.some((s: Screen) => s.id === current?.id));
   const branchName = $derived(
     data.hub.ok ? (data.hub.snapshot.branch?.name ?? t("hub.header.no_branch")) : t("app.name"),
@@ -34,7 +45,7 @@
   let nextRetry: number | null = $state(null);
   let failures = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  let wasOk = untrack(() => data.hub.ok);
+  let wasOk = untrack(() => reachable);
 
   /** Focuses `el`, making it programmatically focusable when it is not. */
   function focusEl(el: HTMLElement | null | undefined) {
@@ -50,6 +61,7 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
+    if (gated) return;
     const target = shortcutTarget(event, document.activeElement);
     if (!target) return;
     event.preventDefault();
@@ -78,10 +90,34 @@
     retryTimer = setTimeout(() => void refresh(), seconds * 1000);
   }
 
+  // The gate: nobody signed in goes to sign-in; a signed-in member never stays on it.
+  $effect(() => {
+    if (!data.hub.ok) return;
+    if (signedOut && !onSignIn) {
+      // Remember where we were going, so sign-in returns there.
+      const back = page.url.pathname + page.url.search;
+      void goto(SIGN_IN + "?" + new URLSearchParams({ redirectTo: back }), { replaceState: true });
+    } else if (staff && onSignIn) {
+      void goto(safeRedirect(page.url.searchParams.get("redirectTo")), { replaceState: true });
+    }
+  });
+
+  // The More sheet belongs to the signed-in shell.
+  $effect(() => {
+    if (gated) untrack(() => (moreOpen = false));
+  });
+
+  async function onSignOut() {
+    await signOut();
+    await invalidate(SESSION_DEPENDENCY);
+  }
+
   // Every load result: back off while unreachable; on recovery stop retrying and move focus
   // to the screen's heading.
   $effect(() => {
-    const ok = data.hub.ok;
+    // Read `data` itself (not the `reachable` derived): every load result must re-run this,
+    // even when it is unreachable again.
+    const ok = data.hub.ok && data.session.state !== "unknown";
     untrack(() => {
       if (ok) {
         clearTimeout(retryTimer);
@@ -125,90 +161,118 @@
 <svelte:window {onkeydown} />
 
 <svelte:head>
-  {#if !data.hub.ok}
+  {#if !reachable}
     <title>{t("hub.page_title", { screen: t("hub.error.unreachable.title") })}</title>
   {/if}
 </svelte:head>
 
-<div class="shell" inert={moreOpen}>
-  <header class="hub-header">
-    <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
-    <Clock />
-  </header>
+{#snippet unreachable()}
+  <section class="unreachable" data-testid="hub-unreachable">
+    <h1 class="type-hub-numeric">{t("hub.error.unreachable.title")}</h1>
+    <p class="type-hub-body">{t("hub.error.unreachable.body")}</p>
+    <p class="retry-status type-hub-label" role="status" data-testid="hub-retry-status">
+      {#if refreshing}
+        {t("hub.error.retrying_status")}
+      {:else if nextRetry !== null}
+        {t("hub.error.next_retry", { seconds: nextRetry })}
+      {/if}
+    </p>
+    <Button
+      label="common.retry"
+      disabled={refreshing}
+      disabledReason="hub.error.retrying"
+      onclick={refresh}
+    />
+  </section>
+{/snippet}
 
-  <nav class="hub-rail" aria-label={t("hub.nav.label")}>
-    <ul>
-      {#each SCREENS as screen (screen.id)}
+{#if gated}
+  <div class="gate">
+    <header class="hub-header">
+      <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
+      <Clock />
+    </header>
+    <main class="hub-main" bind:this={mainEl}>
+      {#if !reachable}
+        {@render unreachable()}
+      {:else if onSignIn}
+        {@render children()}
+      {/if}
+    </main>
+  </div>
+{:else}
+  <div class="shell" inert={moreOpen}>
+    <header class="hub-header">
+      <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
+      <div class="header-end">
+        {#if staff}
+          <p class="staff type-hub-label" data-testid="hub-staff">
+            {t("hub.header.signed_in", { name: staff.display_name, role: staff.role_name })}
+          </p>
+          <Button label="hub.header.sign_out" variant="secondary" onclick={onSignOut} />
+        {/if}
+        <Clock />
+      </div>
+    </header>
+
+    <nav class="hub-rail" aria-label={t("hub.nav.label")}>
+      <ul>
+        {#each SCREENS as screen (screen.id)}
+          <li>
+            <a
+              class="rail-item ui-interactive"
+              href={screen.href}
+              aria-current={current?.id === screen.id ? "page" : undefined}
+            >
+              <Icon name={screen.id} />
+              <span class="type-hub-micro">{t(screen.label)}</span>
+            </a>
+          </li>
+        {/each}
+      </ul>
+    </nav>
+
+    <main class="hub-main" bind:this={mainEl}>
+      {#if data.hub.ok}
+        {@render children()}
+      {:else}
+        {@render unreachable()}
+      {/if}
+    </main>
+
+    <nav class="hub-bottom-bar" aria-label={t("hub.nav.label")}>
+      <ul>
+        {#each BOTTOM_BAR as screen (screen.id)}
+          <li>
+            <a
+              class="bar-item ui-interactive"
+              href={screen.href}
+              aria-current={current?.id === screen.id ? "page" : undefined}
+            >
+              <Icon name={screen.id} />
+              <span class="type-hub-micro">{t(screen.short ?? screen.label)}</span>
+            </a>
+          </li>
+        {/each}
         <li>
-          <a
-            class="rail-item ui-interactive"
-            href={screen.href}
-            aria-current={current?.id === screen.id ? "page" : undefined}
-          >
-            <Icon name={screen.id} />
-            <span class="type-hub-micro">{t(screen.label)}</span>
-          </a>
-        </li>
-      {/each}
-    </ul>
-  </nav>
-
-  <main class="hub-main" bind:this={mainEl}>
-    {#if data.hub.ok}
-      {@render children()}
-    {:else}
-      <section class="unreachable" data-testid="hub-unreachable">
-        <h1 class="type-hub-numeric">{t("hub.error.unreachable.title")}</h1>
-        <p class="type-hub-body">{t("hub.error.unreachable.body")}</p>
-        <p class="retry-status type-hub-label" role="status" data-testid="hub-retry-status">
-          {#if refreshing}
-            {t("hub.error.retrying_status")}
-          {:else if nextRetry !== null}
-            {t("hub.error.next_retry", { seconds: nextRetry })}
-          {/if}
-        </p>
-        <Button
-          label="common.retry"
-          disabled={refreshing}
-          disabledReason="hub.error.retrying"
-          onclick={refresh}
-        />
-      </section>
-    {/if}
-  </main>
-
-  <nav class="hub-bottom-bar" aria-label={t("hub.nav.label")}>
-    <ul>
-      {#each BOTTOM_BAR as screen (screen.id)}
-        <li>
-          <a
+          <button
             class="bar-item ui-interactive"
-            href={screen.href}
-            aria-current={current?.id === screen.id ? "page" : undefined}
+            type="button"
+            bind:this={moreButton}
+            aria-haspopup="dialog"
+            aria-expanded={moreOpen}
+            aria-controls={moreOpen ? "hub-more-sheet" : undefined}
+            data-active={inMore ? "true" : undefined}
+            onclick={() => (moreOpen = true)}
           >
-            <Icon name={screen.id} />
-            <span class="type-hub-micro">{t(screen.short ?? screen.label)}</span>
-          </a>
+            <Icon name="more" />
+            <span class="type-hub-micro">{t("hub.nav.more")}</span>
+          </button>
         </li>
-      {/each}
-      <li>
-        <button
-          class="bar-item ui-interactive"
-          type="button"
-          bind:this={moreButton}
-          aria-haspopup="dialog"
-          aria-expanded={moreOpen}
-          aria-controls={moreOpen ? "hub-more-sheet" : undefined}
-          data-active={inMore ? "true" : undefined}
-          onclick={() => (moreOpen = true)}
-        >
-          <Icon name="more" />
-          <span class="type-hub-micro">{t("hub.nav.more")}</span>
-        </button>
-      </li>
-    </ul>
-  </nav>
-</div>
+      </ul>
+    </nav>
+  </div>
+{/if}
 
 {#if moreOpen}
   <MoreSheet id="hub-more-sheet" current={current?.id} onclose={closeMore} />
@@ -249,6 +313,37 @@
     padding: 0 var(--space-hub-gutter);
     border-bottom: 1px solid var(--hub-line);
     background-color: var(--hub-header-background);
+  }
+
+  .header-end {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .staff {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Signed out: the header and the sign-in screen, no rail. */
+  .gate {
+    display: grid;
+    grid-template-rows: var(--space-hub-header-height) minmax(0, 1fr);
+    height: 100dvh;
+    background-color: var(--hub-bg);
+    color: var(--text);
+  }
+
+  .gate .hub-header {
+    grid-area: auto;
+  }
+
+  .gate .hub-main {
+    grid-area: auto;
   }
 
   .branch {

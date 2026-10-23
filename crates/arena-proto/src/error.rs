@@ -36,6 +36,12 @@ pub enum ErrorCode {
     AlreadyBootstrapped,
     /// The idempotency key was already used for a different intent body.
     IdempotencyConflict,
+    /// Sign-in failed, or the request carries no valid session. Never says which field failed.
+    AuthFailed,
+    /// Too many failed sign-ins for this login: paused for a while.
+    AuthLocked,
+    /// The actor does not hold the permission (or implicit principal) the intent requires.
+    PermissionDenied,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -67,6 +73,9 @@ impl ErrorCode {
             Self::ValidationFailed => "VALIDATION_FAILED",
             Self::AlreadyBootstrapped => "ALREADY_BOOTSTRAPPED",
             Self::IdempotencyConflict => "IDEMPOTENCY_CONFLICT",
+            Self::AuthFailed => "AUTH_FAILED",
+            Self::AuthLocked => "AUTH_LOCKED",
+            Self::PermissionDenied => "PERMISSION_DENIED",
         }
     }
 }
@@ -156,6 +165,9 @@ mod tests {
             (ErrorCode::ValidationFailed, "VALIDATION_FAILED"),
             (ErrorCode::AlreadyBootstrapped, "ALREADY_BOOTSTRAPPED"),
             (ErrorCode::IdempotencyConflict, "IDEMPOTENCY_CONFLICT"),
+            (ErrorCode::AuthFailed, "AUTH_FAILED"),
+            (ErrorCode::AuthLocked, "AUTH_LOCKED"),
+            (ErrorCode::PermissionDenied, "PERMISSION_DENIED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

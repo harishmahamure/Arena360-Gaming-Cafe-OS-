@@ -1,0 +1,123 @@
+//! Role-based access control: the built-in roles and the permission step of `apply()`.
+//!
+//! Every intent kind has one [`Requirement`]. `Perm(p)` needs a `staff` actor with an active
+//! staff row whose role allows `p` (and does not deny it), or an `owner` actor, who holds every
+//! permission. An `admin` actor holds none yet. `System` and `Device` need that actor kind;
+//! `Phone` is refused until phone actors exist. Every refusal is `PERMISSION_DENIED` with a
+//! message that never names anyone.
+
+use arena_proto::{ActorKind, AppError, ErrorCode, Intent, PermEffect, Permission, Requirement};
+use arena_store::{StoreTx, find_role, find_staff, role_perm_effect};
+
+/// The built-in role names. Built-in roles are seeded by `branch.bootstrap` and cannot be
+/// changed.
+pub const ROLE_OWNER: &str = "Owner";
+pub const ROLE_MANAGER: &str = "Manager";
+pub const ROLE_COUNTER: &str = "Counter";
+pub const ROLE_KITCHEN: &str = "Kitchen";
+pub const ROLE_KIOSK_DEVICE: &str = "Kiosk-device";
+
+/// Every built-in role, in the order bootstrap inserts them.
+pub const BUILTIN_ROLES: [&str; 5] = [
+    ROLE_OWNER,
+    ROLE_MANAGER,
+    ROLE_COUNTER,
+    ROLE_KITCHEN,
+    ROLE_KIOSK_DEVICE,
+];
+
+const COUNTER_PERMS: [Permission; 13] = [
+    Permission::SessionStart,
+    Permission::SessionPause,
+    Permission::SessionExtend,
+    Permission::SessionTransfer,
+    Permission::SessionEnd,
+    Permission::PosSell,
+    Permission::WalletTopup,
+    Permission::CreditCollect,
+    Permission::ShiftOpen,
+    Permission::ShiftClose,
+    Permission::StockIn,
+    Permission::PlayerManage,
+    Permission::PlayerView,
+];
+
+/// The permissions a built-in role allows (every row is an `allow`). Kiosk-device has none:
+/// a device's rights are implicit.
+pub fn builtin_perms(role: &str) -> Vec<Permission> {
+    match role {
+        ROLE_OWNER => Permission::ALL.to_vec(),
+        ROLE_MANAGER => Permission::ALL
+            .into_iter()
+            .filter(|p| *p != Permission::OpsRestore)
+            .collect(),
+        ROLE_COUNTER => COUNTER_PERMS.to_vec(),
+        ROLE_KITCHEN => vec![Permission::KitchenUse],
+        _ => Vec::new(),
+    }
+}
+
+/// The one refusal every permission failure returns. It never names anyone.
+pub fn denied() -> AppError {
+    AppError::new(
+        ErrorCode::PermissionDenied,
+        "you don't have permission to do this",
+    )
+}
+
+/// Whether the staff member `staff_id` is active and their role allows `p`.
+pub fn staff_allows(tx: &StoreTx<'_>, staff_id: &str, p: Permission) -> Result<bool, AppError> {
+    let Some(staff) = find_staff(tx, staff_id)? else {
+        return Ok(false);
+    };
+    if !staff.active {
+        return Ok(false);
+    }
+    let effect = role_perm_effect(tx, &staff.role_id, p.as_str())?;
+    Ok(effect.as_deref() == Some(PermEffect::Allow.as_str()))
+}
+
+/// The role of an active staff actor, if it is a built-in role: its name. An inactive or
+/// missing staff member has none.
+pub fn staff_builtin_role(tx: &StoreTx<'_>, staff_id: &str) -> Result<Option<String>, AppError> {
+    let Some(staff) = find_staff(tx, staff_id)?.filter(|s| s.active) else {
+        return Ok(None);
+    };
+    Ok(find_role(tx, &staff.role_id)?
+        .filter(|r| r.builtin)
+        .map(|r| r.name))
+}
+
+/// **permission.** Checks the intent's [`Requirement`] against its actor. The kind is taken
+/// from the payload, so a mislabelled envelope cannot borrow another kind's requirement.
+pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    let actor = &intent.actor;
+    let ok = match intent.payload.kind().requirement() {
+        Requirement::System => actor.kind == ActorKind::System,
+        Requirement::Device => actor.kind == ActorKind::Device,
+        Requirement::Phone => false,
+        Requirement::Perm(p) => match actor.kind {
+            ActorKind::Owner => true,
+            ActorKind::Staff => staff_allows(tx, &actor.id, p)?,
+            ActorKind::Admin | ActorKind::System | ActorKind::Device => false,
+        },
+    };
+    if ok { Ok(()) } else { Err(denied()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_role_permissions() {
+        assert_eq!(builtin_perms(ROLE_OWNER).len(), Permission::ALL.len());
+        let manager = builtin_perms(ROLE_MANAGER);
+        assert_eq!(manager.len(), Permission::ALL.len() - 1);
+        assert!(!manager.contains(&Permission::OpsRestore));
+        assert_eq!(builtin_perms(ROLE_COUNTER).len(), 13);
+        assert!(!builtin_perms(ROLE_COUNTER).contains(&Permission::SettingsEdit));
+        assert_eq!(builtin_perms(ROLE_KITCHEN), vec![Permission::KitchenUse]);
+        assert!(builtin_perms(ROLE_KIOSK_DEVICE).is_empty());
+    }
+}

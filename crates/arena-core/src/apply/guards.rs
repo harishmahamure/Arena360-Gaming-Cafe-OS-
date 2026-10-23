@@ -1,58 +1,52 @@
 //! The steps before any write: permission, epoch and base_rev (ttl_dedupe is in
 //! `ttl_dedupe.rs`).
 
-use arena_proto::{ActorKind, AppError, ErrorCode, Intent, IntentKind};
+use arena_proto::{ActorKind, AppError, ErrorCode, Intent};
 use arena_store::{StoreTx, find_device, read_lease};
 
-use super::{ApplyCtx, Target, devices, settings_set};
+use super::{ApplyCtx, Target, devices, settings_set, staff_roles};
+use crate::rbac;
 use crate::status::{Epoch, Role};
 
-/// **permission.** `branch.bootstrap` requires a `system` actor; `settings.set` a system, owner
-/// or staff actor; the device intents a `system` actor (the `device.remote` and `device.pair`
-/// permissions are "system actor allowed" stubs). Story 1.11
-/// replaces this with the permission catalogue. The kind is taken from the payload, so a
-/// mislabelled envelope cannot borrow another kind's permission.
+fn refused(message: &str) -> AppError {
+    AppError::new(ErrorCode::PermissionDenied, message)
+}
+
+/// **permission.** Runs first, before any write: the actor must have an id, a device actor's
+/// row must exist and not be revoked, an elevation claim is refused (Hub-side PIN verification
+/// arrives in Story 1.13), and then the kind's requirement must hold (`rbac::check`). Every
+/// failure is `PERMISSION_DENIED`.
 pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     if intent.actor.id.trim().is_empty() {
-        return Err(AppError::new(ErrorCode::Forbidden, "the actor has no id"));
+        return Err(refused("the actor has no id"));
     }
     // A device acts only while its row exists and is not revoked: this closes the window
     // between a revoke committing and the LAN fan-out closing the device's sessions.
     if intent.actor.kind == ActorKind::Device
         && find_device(tx, &intent.actor.id)?.is_none_or(|d| d.revoked_at.is_some())
     {
-        return Err(AppError::new(
-            ErrorCode::Forbidden,
-            "the device is revoked or unknown",
-        ));
+        return Err(refused("the device is revoked or unknown"));
     }
-    // Hub-side PIN verification arrives in Story 1.13; until then an elevation claim cannot be
-    // trusted, so it is refused rather than written into the audit log.
+    // An elevation claim cannot be trusted until the Hub verifies PINs, so it is refused rather
+    // than written into the audit log.
     if intent.elevated_by.is_some() {
-        return Err(AppError::new(
-            ErrorCode::Forbidden,
-            "elevation not verified",
-        ));
+        return Err(refused("elevation not verified"));
     }
-    let allowed = match intent.payload.kind() {
-        IntentKind::BranchBootstrap => intent.actor.kind == ActorKind::System,
-        IntentKind::SettingsSet => settings_set::permitted(intent.actor.kind),
-        IntentKind::DeviceRegister
-        | IntentKind::DeviceRevoke
-        | IntentKind::DeviceVersionReported => devices::permitted(intent.actor.kind),
-        // No payload carries this kind yet; kept for exhaustiveness.
-        IntentKind::ConsolePlanRequested => false,
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(AppError::new(
-            ErrorCode::Forbidden,
-            format!(
-                "{} is not permitted for this actor",
-                intent.payload.kind().as_str()
-            ),
-        ))
+    rbac::check(tx, intent)
+}
+
+/// **authorize.** The permission rules that depend on the loaded target.
+pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError> {
+    match (target, &intent.payload) {
+        (Target::Staff(t), _) => staff_roles::authorize_staff(t),
+        (Target::Role(t), arena_proto::IntentPayload::RoleUpsert(r)) => {
+            staff_roles::authorize_role(r, t)
+        }
+        (Target::Role(_), _) => Err(AppError::new(
+            ErrorCode::Internal,
+            "the loaded target does not match the payload",
+        )),
+        (Target::None | Target::Setting(_) | Target::NewDevice(_) | Target::Device(_), _) => Ok(()),
     }
 }
 
@@ -89,5 +83,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::Setting(row) => settings_set::base_rev(intent, row.as_ref()),
         Target::NewDevice(_) => Ok(()),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
+        Target::Staff(t) => staff_roles::base_rev_staff(intent, t),
+        Target::Role(t) => staff_roles::base_rev_role(intent, t),
     }
 }

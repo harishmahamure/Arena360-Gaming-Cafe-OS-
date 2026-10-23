@@ -1,15 +1,14 @@
 //! The device intents: `device.register`, `device.revoke` and `device.version_reported`.
 //!
-//! - **permission** (stub until Story 1.11): all three need a `system` actor. `device.revoke`
-//!   maps to `device.remote` and `device.register` to `device.pair`.
+//! - **permission**: `device.register` needs `device.manage`, `device.revoke` needs
+//!   `device.remote` and `device.version_reported` the system actor (see `rbac`).
 //! - **base_rev** is optional on revoke and version_reported: when present it must match the
 //!   device row's `rev`, else `STALE`. `device.register` creates a row and takes none.
 //! - `device.register` stores the argon2id hash computed by the caller outside the
 //!   transaction; the writer mints the `device_id`.
 
 use arena_proto::{
-    ActorKind, AppError, ClientClass, DeviceRegister, DeviceRevoke, DeviceVersionReported,
-    ErrorCode, Intent,
+    AppError, ClientClass, DeviceRegister, DeviceRevoke, DeviceVersionReported, ErrorCode, Intent,
 };
 use arena_store::{
     ChangeOp, DeviceRow, NewDevice, RowKey, StoreTx, current_branch_id, find_device, insert_device,
@@ -26,11 +25,6 @@ pub const MAX_VERSION_LEN: usize = 32;
 
 fn invalid(field: &str, message: impl Into<String>) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
-}
-
-/// **permission** (stub): the system actor only.
-pub(super) fn permitted(kind: ActorKind) -> bool {
-    kind == ActorKind::System
 }
 
 pub(super) fn load_register(tx: &StoreTx<'_>) -> Result<Target, AppError> {

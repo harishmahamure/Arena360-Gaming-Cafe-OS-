@@ -49,7 +49,13 @@ pub(crate) const RECORDABLE_FIELDS: &[&str] = &[
     "label",
     "token_hash",
     "version",
+    "display_name",
+    "password_hash",
+    "pin_hash",
 ];
+
+/// `VALIDATION_FAILED` field prefixes that depend only on the payload (`perms[i]`).
+pub(crate) const RECORDABLE_FIELD_PREFIXES: &[&str] = &["perms["];
 
 /// What the fingerprint covers: everything that decides an intent's outcome except its
 /// `intent_id`, `issued_at` and idempotency key.
@@ -222,10 +228,10 @@ pub(super) fn record_success(
 /// back. Permission denials are never recorded: a later grant must take effect.
 pub(crate) fn is_recordable(err: &AppError) -> bool {
     match err.code {
-        ErrorCode::ValidationFailed => err
-            .field
-            .as_deref()
-            .is_some_and(|f| RECORDABLE_FIELDS.contains(&f)),
+        ErrorCode::ValidationFailed => err.field.as_deref().is_some_and(|f| {
+            RECORDABLE_FIELDS.contains(&f)
+                || RECORDABLE_FIELD_PREFIXES.iter().any(|p| f.starts_with(p))
+        }),
         ErrorCode::Stale | ErrorCode::AlreadyBootstrapped => true,
         _ => false,
     }
@@ -339,6 +345,7 @@ mod tests {
         }
         for code in [
             ErrorCode::Forbidden,
+            ErrorCode::PermissionDenied,
             ErrorCode::NotPrimary,
             ErrorCode::Expired,
             ErrorCode::Internal,
@@ -352,7 +359,17 @@ mod tests {
         for field in RECORDABLE_FIELDS {
             assert!(is_recordable(&vf(field)), "{field}");
         }
-        for field in ["issued_at", "key", "kind"] {
+        assert!(is_recordable(&vf("perms[3]")));
+        // Fields whose answer depends on other rows are never recorded.
+        for field in [
+            "issued_at",
+            "key",
+            "kind",
+            "name_taken",
+            "login",
+            "role_id",
+            "active",
+        ] {
             assert!(!is_recordable(&vf(field)), "{field}");
         }
     }

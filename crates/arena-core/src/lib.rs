@@ -4,8 +4,10 @@
 mod apply;
 mod clock;
 pub mod devices;
+pub mod rbac;
 mod settings_defaults;
 mod snapshot;
+pub mod staff;
 mod status;
 mod writer;
 
@@ -21,6 +23,7 @@ pub use clock::{Clock, ManualClock, SystemClock};
 pub use devices::{DeviceDirectory, VerifiedDevice};
 pub use settings_defaults::{DEFAULT_SETTINGS, SETTING_RULES, SettingRule, setting_rule};
 pub use snapshot::{SnapshotReader, build_snapshot, read_snapshot};
+pub use staff::StaffDirectory;
 pub use status::{Epoch, HubStatus, LeaseInfo, Role, status_channel};
 pub use writer::{LeaseRenewal, Writer, WriterHandle};
 

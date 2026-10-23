@@ -1,5 +1,6 @@
 //! The loopback-only HTTP server on `127.0.0.1`: `GET /healthz`, and `GET /ui/snapshot` for the
-//! local Hub UI ([`ui_router`]).
+//! local Hub UI ([`ui_router`]). The staff auth routes live in [`crate::ui_auth`] behind the same
+//! origin guard.
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -98,7 +99,7 @@ fn host_is_loopback(host: &str) -> bool {
 /// CORS and origin guard for `/ui/*`: a request from another origin, without a `Host` header
 /// or addressed to a non-loopback host name, is refused with 403. An allowed origin is echoed back in
 /// `Access-Control-Allow-Origin`; a preflight is answered here with 204.
-async fn ui_guard(
+pub(crate) async fn ui_guard(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -126,7 +127,11 @@ async fn ui_guard(
         let h = r.headers_mut();
         h.insert(
             header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_static("GET"),
+            HeaderValue::from_static("GET, POST"),
+        );
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("authorization, content-type"),
         );
         h.insert(
             header::ACCESS_CONTROL_MAX_AGE,
@@ -196,7 +201,7 @@ pub async fn serve_router(
 
 /// Dev-only loopback endpoints (feature `dev-fixtures`, never in release builds):
 /// `POST /dev/revoke-device` with `{"device_id": "…"}` submits `device.revoke` as
-/// `actor{system, "dev-revoke"}` through the running Hub's writer. It answers 200 with
+/// `actor{owner, "dev-revoke"}` (`device.remote` is a permission, which the owner holds) through the running Hub's writer. It answers 200 with
 /// `{"applied": …}`, or an error status with `{"error": AppError}`.
 #[cfg(feature = "dev-fixtures")]
 pub fn dev_router(writer: Option<arena_core::WriterHandle>, clock: Arc<dyn Clock>) -> Router {
@@ -252,7 +257,7 @@ pub fn dev_router(writer: Option<arena_core::WriterHandle>, clock: Arc<dyn Clock
             issued_at: state.clock.now_ms(),
             base_rev: None,
             actor: Actor {
-                kind: ActorKind::System,
+                kind: ActorKind::Owner,
                 id: "dev-revoke".into(),
             },
             elevated_by: None,
@@ -514,7 +519,7 @@ mod tests {
                 headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
                 "http://tauri.localhost"
             );
-            assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_METHODS], "GET");
+            assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_METHODS], "GET, POST");
         }
 
         #[tokio::test]

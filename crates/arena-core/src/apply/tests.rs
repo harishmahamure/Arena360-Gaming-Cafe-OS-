@@ -99,6 +99,16 @@ fn bootstrap() -> Intent {
     intent_with(ActorKind::System, payload())
 }
 
+/// How many change rows `branch.bootstrap` writes: the branch, its settings, the built-in
+/// roles and their permission rows.
+fn bootstrap_changes() -> usize {
+    1 + DEFAULT_SETTINGS.len()
+        + crate::rbac::BUILTIN_ROLES
+            .iter()
+            .map(|r| 1 + crate::rbac::builtin_perms(r).len())
+            .sum::<usize>()
+}
+
 fn assert_nothing_written(store: &Store) {
     assert!(store.rows(Table::Branch).unwrap().is_empty());
     assert!(store.rows(Table::Settings).unwrap().is_empty());
@@ -145,7 +155,7 @@ async fn bootstrap_writes_branch_settings_and_gap_free_changes() {
     }
 
     let changes = store.changes().unwrap();
-    assert_eq!(changes.len(), 1 + DEFAULT_SETTINGS.len());
+    assert_eq!(changes.len(), bootstrap_changes());
     let epoch = format!("1:{HUB}");
     for (i, c) in changes.iter().enumerate() {
         assert_eq!(c.epoch, epoch);
@@ -222,11 +232,14 @@ async fn non_system_actor_is_forbidden() {
         ActorKind::Device,
     ] {
         let err = expect_err(&f, intent_with(kind, payload())).await;
-        assert_eq!(err.code, ErrorCode::Forbidden, "{kind:?}");
+        assert_eq!(err.code, ErrorCode::PermissionDenied, "{kind:?}");
     }
     let mut anonymous = bootstrap();
     anonymous.actor.id = " ".into();
-    assert_eq!(expect_err(&f, anonymous).await.code, ErrorCode::Forbidden);
+    assert_eq!(
+        expect_err(&f, anonymous).await.code,
+        ErrorCode::PermissionDenied
+    );
     assert_nothing_written(&reopen(&f));
     assert!(f.events.try_recv().is_err());
 }
@@ -268,7 +281,7 @@ async fn permission_is_checked_before_epoch() {
     let f = primary();
     f.status.send_modify(|s| s.role = Role::Follower);
     let err = expect_err(&f, intent_with(ActorKind::Staff, payload())).await;
-    assert_eq!(err.code, ErrorCode::Forbidden);
+    assert_eq!(err.code, ErrorCode::PermissionDenied);
 }
 
 #[tokio::test]
@@ -438,7 +451,7 @@ async fn unverified_elevation_is_forbidden() {
         verifier_version: 3,
     });
     let err = expect_err(&f, intent).await;
-    assert_eq!(err.code, ErrorCode::Forbidden);
+    assert_eq!(err.code, ErrorCode::PermissionDenied);
     assert_eq!(err.message, "elevation not verified");
     assert_nothing_written(&reopen(&f));
 }
@@ -613,8 +626,8 @@ fn set(key: &str, value: &str, base_rev: Option<i64>) -> Intent {
         issued_at: T0,
         base_rev,
         actor: Actor {
-            kind: ActorKind::Staff,
-            id: "counter-1".into(),
+            kind: ActorKind::Owner,
+            id: "owner-1".into(),
         },
         elevated_by: None,
         payload: IntentPayload::SettingsSet(SettingsSet {
@@ -665,7 +678,7 @@ async fn fresh_edit_bumps_rev_by_one_with_one_update_change() {
     assert_eq!(c.intent_kind, "settings.set");
     assert_eq!(
         (c.actor_kind.as_str(), c.actor_id.as_str()),
-        ("staff", "counter-1")
+        ("owner", "owner-1")
     );
     let logged: Row = rmp_serde::from_slice(&c.row).unwrap();
     assert_eq!(
@@ -752,7 +765,7 @@ async fn stale_base_rev_is_rejected_and_the_row_is_unchanged() {
     }
     let s = reopen(&f);
     assert_eq!(setting(&s, "receipt.footer"), before);
-    assert_eq!(s.changes().unwrap().len(), 1 + DEFAULT_SETTINGS.len() + 1);
+    assert_eq!(s.changes().unwrap().len(), bootstrap_changes() + 1);
 }
 
 #[tokio::test]
@@ -847,22 +860,27 @@ async fn settings_set_requires_base_rev_and_an_existing_key() {
 }
 
 #[tokio::test]
-async fn settings_set_permission_stub() {
+async fn settings_set_needs_settings_edit() {
     let f = bootstrapped().await;
-    for kind in [ActorKind::Device, ActorKind::Admin] {
+    // A staff actor with no staff row, the system and admin hold no permission.
+    for kind in [
+        ActorKind::Device,
+        ActorKind::Admin,
+        ActorKind::System,
+        ActorKind::Staff,
+    ] {
         let mut intent = set("hub.locale", "en-GB", Some(1));
         intent.actor.kind = kind;
         assert_eq!(
             expect_err(&f, intent).await.code,
-            ErrorCode::Forbidden,
+            ErrorCode::PermissionDenied,
             "{kind:?}"
         );
     }
-    for (rev, kind) in (1..).zip([ActorKind::System, ActorKind::Owner, ActorKind::Staff]) {
-        let mut intent = set("hub.locale", "en-GB", Some(rev));
-        intent.actor.kind = kind;
-        f.writer.submit_intent(intent).await.unwrap();
-    }
+    f.writer
+        .submit_intent(set("hub.locale", "en-GB", Some(1)))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -874,7 +892,7 @@ async fn permission_denials_and_not_primary_are_not_recorded() {
     let n = count(&f);
     assert_eq!(
         expect_err(&f, device.clone()).await.code,
-        ErrorCode::Forbidden
+        ErrorCode::PermissionDenied
     );
     assert_eq!(count(&f), n, "a permission denial is never recorded");
     // Once permitted (here: the same key from an allowed actor), the key runs for real.
@@ -893,7 +911,7 @@ async fn permission_denials_and_not_primary_are_not_recorded() {
     forbidden.actor.kind = ActorKind::Admin;
     assert_eq!(
         expect_err(&f, forbidden.clone()).await.code,
-        ErrorCode::Forbidden
+        ErrorCode::PermissionDenied
     );
     assert_eq!(count(&f), n);
 
@@ -1048,7 +1066,7 @@ async fn with_device(f: &mut Fixture) -> (String, String) {
     let hash = crate::devices::hash_token_secret(&secret).unwrap();
     let applied = f
         .writer
-        .submit_intent(device_intent(ActorKind::System, register(&hash)))
+        .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
         .await
         .unwrap();
     assert_eq!(applied.changes.len(), 1);
@@ -1086,27 +1104,27 @@ async fn device_register_checks_actor_hash_class_and_branch() {
     let f = primary();
     // Before bootstrap there is no branch to join.
     let hash = crate::devices::hash_token_secret("s").unwrap();
-    let err = expect_err(&f, device_intent(ActorKind::System, register(&hash))).await;
+    let err = expect_err(&f, device_intent(ActorKind::Owner, register(&hash))).await;
     assert_eq!(err.code, ErrorCode::ValidationFailed);
     f.writer.submit_intent(bootstrap()).await.unwrap();
-    for actor in [ActorKind::Device, ActorKind::Staff, ActorKind::Owner] {
+    for actor in [ActorKind::Device, ActorKind::Staff, ActorKind::System] {
         let err = expect_err(&f, device_intent(actor, register(&hash))).await;
-        assert_eq!(err.code, ErrorCode::Forbidden, "{actor:?}");
+        assert_eq!(err.code, ErrorCode::PermissionDenied, "{actor:?}");
     }
-    let err = expect_err(&f, device_intent(ActorKind::System, register("plain"))).await;
+    let err = expect_err(&f, device_intent(ActorKind::Owner, register("plain"))).await;
     assert_eq!(err.field.as_deref(), Some("token_hash"));
     let phone = IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
         class: arena_proto::ClientClass::Phone,
         label: "x".into(),
         token_hash: hash.clone(),
     });
-    let err = expect_err(&f, device_intent(ActorKind::System, phone)).await;
+    let err = expect_err(&f, device_intent(ActorKind::Owner, phone)).await;
     assert_eq!(err.field.as_deref(), Some("class"));
     assert!(reopen(&f).devices().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn device_revoke_sets_revoked_at_once_and_needs_system() {
+async fn device_revoke_sets_revoked_at_once_and_needs_device_remote() {
     let mut f = primary();
     let (id, _) = with_device(&mut f).await;
     let revoke = || {
@@ -1114,16 +1132,18 @@ async fn device_revoke_sets_revoked_at_once_and_needs_system() {
             device_id: id.clone(),
         })
     };
-    let err = expect_err(&f, device_intent(ActorKind::Device, revoke())).await;
-    assert_eq!(err.code, ErrorCode::Forbidden);
-    let mut stale = device_intent(ActorKind::System, revoke());
+    for actor in [ActorKind::Device, ActorKind::System] {
+        let err = expect_err(&f, device_intent(actor, revoke())).await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied, "{actor:?}");
+    }
+    let mut stale = device_intent(ActorKind::Owner, revoke());
     stale.base_rev = Some(7);
     assert_eq!(expect_err(&f, stale).await.code, ErrorCode::Stale);
 
     f.clock.advance(5);
     let applied = f
         .writer
-        .submit_intent(device_intent(ActorKind::System, revoke()))
+        .submit_intent(device_intent(ActorKind::Owner, revoke()))
         .await
         .unwrap();
     assert_eq!(applied.changes[0].op, ChangeOp::Update);
@@ -1132,7 +1152,7 @@ async fn device_revoke_sets_revoked_at_once_and_needs_system() {
     let row = reopen(&f).device(&id).unwrap().unwrap();
     assert_eq!((row.revoked_at, row.rev), (Some(T0 + 5), 2));
 
-    let err = expect_err(&f, device_intent(ActorKind::System, revoke())).await;
+    let err = expect_err(&f, device_intent(ActorKind::Owner, revoke())).await;
     assert_eq!(
         (err.code, err.field.as_deref()),
         (ErrorCode::ValidationFailed, Some("device_id"))
@@ -1140,7 +1160,7 @@ async fn device_revoke_sets_revoked_at_once_and_needs_system() {
     let missing = IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
         device_id: "01JNOPEAAAAAAAAAAAAAAAAAAA".into(),
     });
-    let err = expect_err(&f, device_intent(ActorKind::System, missing)).await;
+    let err = expect_err(&f, device_intent(ActorKind::Owner, missing)).await;
     assert_eq!(err.field.as_deref(), Some("device_id"));
 }
 
@@ -1157,7 +1177,7 @@ async fn device_version_reported_records_the_version() {
     let err = expect_err(&f, device_intent(ActorKind::System, report("1.2"))).await;
     assert_eq!(err.field.as_deref(), Some("version"));
     let err = expect_err(&f, device_intent(ActorKind::Device, report("0.1.0"))).await;
-    assert_eq!(err.code, ErrorCode::Forbidden);
+    assert_eq!(err.code, ErrorCode::PermissionDenied);
     f.writer
         .submit_intent(device_intent(ActorKind::System, report("0.1.0")))
         .await
@@ -1188,7 +1208,7 @@ async fn device_directory_verifies_and_sees_revocation() {
     assert!(!dir.is_revoked(&id).unwrap());
     f.writer
         .submit_intent(device_intent(
-            ActorKind::System,
+            ActorKind::Owner,
             IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
                 device_id: id.clone(),
             }),
@@ -1220,17 +1240,26 @@ async fn a_revoked_or_unknown_device_actor_is_forbidden_before_anything_else() {
         i.base_rev = Some(1);
         i
     };
-    // A live device reaches the kind's own check.
+    // A live device reaches the kind's own check (settings.edit, which no device holds).
     let err = expect_err(&f, as_device(&id)).await;
-    assert!(err.message.contains("settings.set"), "{}", err.message);
+    assert_eq!(
+        (err.code, err.message.as_str()),
+        (
+            ErrorCode::PermissionDenied,
+            "you don't have permission to do this"
+        )
+    );
     let err = expect_err(&f, as_device("01JNOPEAAAAAAAAAAAAAAAAAAA")).await;
     assert_eq!(
         (err.code, err.message.as_str()),
-        (ErrorCode::Forbidden, "the device is revoked or unknown")
+        (
+            ErrorCode::PermissionDenied,
+            "the device is revoked or unknown"
+        )
     );
     f.writer
         .submit_intent(device_intent(
-            ActorKind::System,
+            ActorKind::Owner,
             IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
                 device_id: id.clone(),
             }),
@@ -1239,4 +1268,756 @@ async fn a_revoked_or_unknown_device_actor_is_forbidden_before_anything_else() {
         .unwrap();
     let err = expect_err(&f, as_device(&id)).await;
     assert_eq!(err.message, "the device is revoked or unknown");
+}
+
+// ---- Story 1.11: roles, staff and the permission step ----
+
+mod rbac_matrix {
+    use super::*;
+    use crate::rbac::{
+        BUILTIN_ROLES, ROLE_COUNTER, ROLE_KIOSK_DEVICE, ROLE_KITCHEN, ROLE_MANAGER, ROLE_OWNER,
+        builtin_perms,
+    };
+    use crate::staff::{StaffDirectory, hash_secret};
+    use arena_proto::{PermEffect, Permission, RolePerm, RoleUpsert, StaffUpsert};
+
+    fn owner() -> Actor {
+        Actor {
+            kind: ActorKind::Owner,
+            id: "owner-1".into(),
+        }
+    }
+
+    fn staff_actor(id: &str) -> Actor {
+        Actor {
+            kind: ActorKind::Staff,
+            id: id.into(),
+        }
+    }
+
+    fn as_actor(actor: Actor, body: IntentPayload, base_rev: Option<i64>) -> Intent {
+        Intent {
+            kind: body.kind(),
+            payload: body,
+            actor,
+            base_rev,
+            ..bootstrap()
+        }
+    }
+
+    fn role_id(f: &Fixture, name: &str) -> String {
+        reopen(f)
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == RowValue::Text(name.into()))
+            .map(|r| match &r["role_id"] {
+                RowValue::Text(t) => t.clone(),
+                other => panic!("role_id is {other:?}"),
+            })
+            .unwrap()
+    }
+
+    fn staff_body(login: &str, role_id: &str, password: Option<&str>) -> StaffUpsert {
+        StaffUpsert {
+            staff_id: None,
+            login: login.into(),
+            display_name: login.into(),
+            role_id: role_id.into(),
+            password_hash: password.map(|p| hash_secret(p).unwrap()),
+            pin_hash: None,
+            active: true,
+        }
+    }
+
+    /// Registers a staff member as the owner; returns the staff id.
+    async fn add_staff(f: &Fixture, login: &str, role: &str) -> String {
+        let rid = role_id(f, role);
+        let applied = f
+            .writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(staff_body(login, &rid, Some("pw"))),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        assert_eq!(applied.changes[0].tbl, "staff");
+        applied.changes[0].row_id.clone()
+    }
+
+    fn custom_role(name: &str, perms: &[(&str, PermEffect)]) -> IntentPayload {
+        IntentPayload::RoleUpsert(RoleUpsert {
+            role_id: None,
+            name: name.into(),
+            perms: perms
+                .iter()
+                .map(|(p, e)| RolePerm {
+                    permission: (*p).into(),
+                    effect: *e,
+                })
+                .collect(),
+        })
+    }
+
+    fn footer_rev(f: &Fixture) -> i64 {
+        match setting(&reopen(f), "receipt.footer")["rev"] {
+            RowValue::Integer(n) => n,
+            ref other => panic!("rev is {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_the_builtin_roles_as_allow_rows() {
+        let f = bootstrapped().await;
+        let s = reopen(&f);
+        let roles = s.rows(Table::Roles).unwrap();
+        assert_eq!(roles.len(), BUILTIN_ROLES.len());
+        let perms = s.rows(Table::RolePerms).unwrap();
+        for name in BUILTIN_ROLES {
+            let role = roles
+                .iter()
+                .find(|r| r["name"] == RowValue::Text(name.into()))
+                .unwrap();
+            assert_eq!(role["builtin"], RowValue::Integer(1), "{name}");
+            assert_eq!(role["rev"], RowValue::Integer(1), "{name}");
+            let mine: Vec<&Row> = perms
+                .iter()
+                .filter(|p| p["role_id"] == role["role_id"])
+                .collect();
+            assert_eq!(mine.len(), builtin_perms(name).len(), "{name}");
+            assert!(
+                mine.iter()
+                    .all(|p| p["effect"] == RowValue::Text("allow".into()))
+            );
+        }
+        assert_eq!(builtin_perms(ROLE_KIOSK_DEVICE).len(), 0);
+        // Every role and permission row has its own change row.
+        let changes = s.changes().unwrap();
+        assert_eq!(
+            changes.iter().filter(|c| c.tbl == "roles").count(),
+            BUILTIN_ROLES.len()
+        );
+        assert_eq!(
+            changes.iter().filter(|c| c.tbl == "role_perms").count(),
+            perms.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn each_builtin_role_against_settings_set_and_role_upsert() {
+        let f = bootstrapped().await;
+        // Kiosk-device is never assigned to a person (its rights are the implicit Device).
+        let mut ids = Vec::new();
+        for (i, name) in BUILTIN_ROLES.iter().enumerate() {
+            if *name == ROLE_KIOSK_DEVICE {
+                continue;
+            }
+            ids.push((*name, add_staff(&f, &format!("staff{i}"), name).await));
+        }
+        for (i, (name, staff_id)) in ids.iter().enumerate() {
+            let allowed = matches!(*name, ROLE_OWNER | ROLE_MANAGER);
+            let before = snapshot(&f);
+            let set = as_actor(
+                staff_actor(staff_id),
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: "receipt.footer".into(),
+                    value: format!("by {name}"),
+                }),
+                Some(footer_rev(&f)),
+            );
+            let role = as_actor(
+                staff_actor(staff_id),
+                custom_role(&format!("Custom {i}"), &[("pos.sell", PermEffect::Allow)]),
+                None,
+            );
+            for intent in [set, role] {
+                let kind = intent.kind.as_str();
+                let result = f.writer.submit_intent(intent).await;
+                if allowed {
+                    let applied = result.unwrap_or_else(|e| panic!("{name} {kind}: {e}"));
+                    let changes = reopen(&f).changes().unwrap();
+                    let c = changes
+                        .iter()
+                        .find(|c| c.intent_id == applied.intent_id)
+                        .unwrap();
+                    assert_eq!(
+                        (c.actor_kind.as_str(), c.actor_id.as_str()),
+                        ("staff", staff_id.as_str())
+                    );
+                } else {
+                    let err = result.unwrap_err();
+                    assert_eq!(err.code, ErrorCode::PermissionDenied, "{name} {kind}");
+                    assert!(!err.message.contains(staff_id.as_str()));
+                    // No rows and no change rows (`changes` covers every table).
+                    assert_eq!(snapshot(&f), before, "{name} {kind}: nothing written");
+                }
+            }
+        }
+        // An owner actor holds every permission; an admin actor none yet.
+        let rev = footer_rev(&f);
+        let set = |actor: Actor, rev| {
+            as_actor(
+                actor,
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: "receipt.footer".into(),
+                    value: "x".into(),
+                }),
+                Some(rev),
+            )
+        };
+        let admin = Actor {
+            kind: ActorKind::Admin,
+            id: "admin-1".into(),
+        };
+        assert_eq!(
+            expect_err(&f, set(admin, rev)).await.code,
+            ErrorCode::PermissionDenied
+        );
+        f.writer.submit_intent(set(owner(), rev)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_counter_settings_set_is_denied_and_writes_nothing() {
+        let f = bootstrapped().await;
+        let counter = add_staff(&f, "counter", ROLE_COUNTER).await;
+        let before = snapshot(&f);
+        let roles_before = reopen(&f).rows(Table::Staff).unwrap();
+        let err = expect_err(
+            &f,
+            as_actor(
+                staff_actor(&counter),
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: "receipt.footer".into(),
+                    value: "nope".into(),
+                }),
+                Some(1),
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        assert_eq!(snapshot(&f), before);
+        assert_eq!(reopen(&f).rows(Table::Staff).unwrap(), roles_before);
+    }
+
+    #[tokio::test]
+    async fn custom_roles_allow_deny_and_inactive_staff() {
+        let f = bootstrapped().await;
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                custom_role(
+                    "Settings lead",
+                    &[
+                        ("settings.edit", PermEffect::Allow),
+                        ("pos.sell", PermEffect::Deny),
+                    ],
+                ),
+                None,
+            ))
+            .await
+            .unwrap();
+        let lead = add_staff(&f, "lead", "Settings lead").await;
+        let role = reopen(&f)
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == RowValue::Text("Settings lead".into()))
+            .unwrap();
+        assert_eq!(role["builtin"], RowValue::Integer(0));
+        let set = |rev| {
+            as_actor(
+                staff_actor(&lead),
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: "receipt.footer".into(),
+                    value: "lead".into(),
+                }),
+                Some(rev),
+            )
+        };
+        f.writer.submit_intent(set(footer_rev(&f))).await.unwrap();
+
+        // Flip the row to deny: the same staff member is now refused.
+        let rid = role_id(&f, "Settings lead");
+        let RowValue::Integer(role_rev) = role["rev"] else {
+            panic!()
+        };
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::RoleUpsert(RoleUpsert {
+                    role_id: Some(rid.clone()),
+                    name: "Settings lead".into(),
+                    perms: vec![RolePerm {
+                        permission: "settings.edit".into(),
+                        effect: PermEffect::Deny,
+                    }],
+                }),
+                Some(role_rev),
+            ))
+            .await
+            .unwrap();
+        let perms: Vec<Row> = reopen(&f)
+            .rows(Table::RolePerms)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p["role_id"] == RowValue::Text(rid.clone()))
+            .collect();
+        assert_eq!(perms.len(), 1, "the rows are replaced");
+        assert_eq!(
+            expect_err(&f, set(footer_rev(&f))).await.code,
+            ErrorCode::PermissionDenied
+        );
+
+        // An inactive Manager holds nothing.
+        let manager = add_staff(&f, "mgr", ROLE_MANAGER).await;
+        let mgr_role = role_id(&f, ROLE_MANAGER);
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(manager.clone()),
+                    active: false,
+                    ..staff_body("mgr", &mgr_role, None)
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let mut inactive = set(footer_rev(&f));
+        inactive.actor = staff_actor(&manager);
+        assert_eq!(
+            expect_err(&f, inactive).await.code,
+            ErrorCode::PermissionDenied
+        );
+    }
+
+    #[tokio::test]
+    async fn builtin_roles_cannot_be_changed() {
+        let f = bootstrapped().await;
+        let before = snapshot(&f);
+        let roles_before = reopen(&f).rows(Table::RolePerms).unwrap();
+        for name in BUILTIN_ROLES {
+            let err = expect_err(
+                &f,
+                as_actor(
+                    owner(),
+                    IntentPayload::RoleUpsert(RoleUpsert {
+                        role_id: Some(role_id(&f, name)),
+                        name: name.into(),
+                        perms: vec![],
+                    }),
+                    Some(1),
+                ),
+            )
+            .await;
+            assert_eq!(
+                (err.code, err.message.as_str()),
+                (
+                    ErrorCode::PermissionDenied,
+                    "built-in roles cannot be changed"
+                ),
+                "{name}"
+            );
+        }
+        assert_eq!(snapshot(&f), before);
+        assert_eq!(reopen(&f).rows(Table::RolePerms).unwrap(), roles_before);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_permission_fails_on_its_index() {
+        let f = bootstrapped().await;
+        let before = snapshot(&f);
+        let err = expect_err(
+            &f,
+            as_actor(
+                owner(),
+                custom_role(
+                    "Bad",
+                    &[
+                        ("pos.sell", PermEffect::Allow),
+                        ("nope.x", PermEffect::Allow),
+                    ],
+                ),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(
+            (err.code, err.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("perms[1]"))
+        );
+        let err = expect_err(
+            &f,
+            as_actor(
+                owner(),
+                custom_role(
+                    "Twice",
+                    &[
+                        ("pos.sell", PermEffect::Allow),
+                        ("pos.sell", PermEffect::Deny),
+                    ],
+                ),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(err.field.as_deref(), Some("perms[1]"));
+        let s = reopen(&f);
+        assert_eq!(
+            (s.rows(Table::Branch).unwrap(), s.changes().unwrap()),
+            (before.0, before.2)
+        );
+        assert_eq!(s.rows(Table::Roles).unwrap().len(), BUILTIN_ROLES.len());
+        assert_eq!(Permission::parse("nope.x"), None);
+    }
+
+    #[tokio::test]
+    async fn a_manager_assigns_only_counter_and_kitchen() {
+        let f = bootstrapped().await;
+        let manager = add_staff(&f, "mgr", ROLE_MANAGER).await;
+        let owner_staff = add_staff(&f, "boss", ROLE_OWNER).await;
+        for role in [ROLE_OWNER, ROLE_MANAGER] {
+            let before = reopen(&f).rows(Table::Staff).unwrap();
+            let err = expect_err(
+                &f,
+                as_actor(
+                    staff_actor(&manager),
+                    IntentPayload::StaffUpsert(staff_body("new", &role_id(&f, role), Some("pw"))),
+                    None,
+                ),
+            )
+            .await;
+            assert_eq!(err.code, ErrorCode::PermissionDenied, "{role}");
+            assert_eq!(reopen(&f).rows(Table::Staff).unwrap(), before);
+        }
+        for (i, role) in [ROLE_COUNTER, ROLE_KITCHEN].into_iter().enumerate() {
+            f.writer
+                .submit_intent(as_actor(
+                    staff_actor(&manager),
+                    IntentPayload::StaffUpsert(staff_body(
+                        &format!("crew{i}"),
+                        &role_id(&f, role),
+                        Some("pw"),
+                    )),
+                    None,
+                ))
+                .await
+                .unwrap();
+        }
+        // Nor may a Manager demote someone who holds another role.
+        let err = expect_err(
+            &f,
+            as_actor(
+                staff_actor(&manager),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(owner_staff.clone()),
+                    ..staff_body("boss", &role_id(&f, ROLE_COUNTER), None)
+                }),
+                Some(1),
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        // A staff member with the built-in Owner role may assign any role.
+        f.writer
+            .submit_intent(as_actor(
+                staff_actor(&owner_staff),
+                IntentPayload::StaffUpsert(staff_body(
+                    "mgr2",
+                    &role_id(&f, ROLE_MANAGER),
+                    Some("pw"),
+                )),
+                None,
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn staff_upsert_validates_and_rotates_the_pin_version() {
+        let f = bootstrapped().await;
+        let counter = role_id(&f, ROLE_COUNTER);
+        let id = add_staff(&f, "Counter", ROLE_COUNTER).await;
+        let fail =
+            |body: StaffUpsert, rev| as_actor(owner(), IntentPayload::StaffUpsert(body), rev);
+        for (body, rev, field) in [
+            (staff_body("counter", &counter, Some("pw")), None, "login"),
+            (staff_body("two words", &counter, Some("pw")), None, "login"),
+            (staff_body("xx", "nope", Some("pw")), None, "role_id"),
+            (staff_body("xx", &counter, None), None, "password_hash"),
+            (staff_body("x", &counter, Some("pw")), None, "login"),
+            (staff_body("ünï", &counter, Some("pw")), None, "login"),
+            (
+                staff_body("kiosk", &role_id(&f, ROLE_KIOSK_DEVICE), Some("pw")),
+                None,
+                "role_id",
+            ),
+            (
+                StaffUpsert {
+                    pin_hash: Some("1111".into()),
+                    ..staff_body("xx", &counter, Some("pw"))
+                },
+                None,
+                "pin_hash",
+            ),
+            (
+                StaffUpsert {
+                    display_name: " ".into(),
+                    ..staff_body("xx", &counter, Some("pw"))
+                },
+                None,
+                "display_name",
+            ),
+            (
+                StaffUpsert {
+                    staff_id: Some(id.clone()),
+                    ..staff_body("Counter", &counter, None)
+                },
+                None,
+                "base_rev",
+            ),
+        ] {
+            let err = expect_err(&f, fail(body, rev)).await;
+            assert_eq!(
+                (err.code, err.field.as_deref()),
+                (ErrorCode::ValidationFailed, Some(field))
+            );
+        }
+        let stale = expect_err(
+            &f,
+            fail(
+                StaffUpsert {
+                    staff_id: Some(id.clone()),
+                    ..staff_body("Counter", &counter, None)
+                },
+                Some(9),
+            ),
+        )
+        .await;
+        assert_eq!(stale.code, ErrorCode::Stale);
+        f.writer
+            .submit_intent(fail(
+                StaffUpsert {
+                    staff_id: Some(id.clone()),
+                    pin_hash: Some(hash_secret("3333").unwrap()),
+                    ..staff_body("Counter", &counter, None)
+                },
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let row = reopen(&f).rows(Table::Staff).unwrap().pop().unwrap();
+        assert_eq!(row["pin_verifier_version"], RowValue::Integer(2));
+        assert_eq!(row["rev"], RowValue::Integer(2));
+        assert!(matches!(&row["password_hash"], RowValue::Text(h) if h.starts_with("$argon2id$")));
+    }
+
+    #[tokio::test]
+    async fn sign_in_fails_the_same_way_for_every_cause() {
+        let f = bootstrapped().await;
+        let id = add_staff(&f, "counter", ROLE_COUNTER).await;
+        let dir = StaffDirectory::open(&f.path).unwrap();
+        let ok = dir.sign_in("COUNTER", "pw").unwrap();
+        assert_eq!(
+            (
+                ok.staff_id.as_str(),
+                ok.display_name.as_str(),
+                ok.role_name.as_str()
+            ),
+            (id.as_str(), "counter", ROLE_COUNTER)
+        );
+        let wrong = dir.sign_in("counter", "bad").unwrap_err();
+        let unknown = dir.sign_in("nobody", "x").unwrap_err();
+        assert_eq!(wrong, unknown);
+        assert_eq!(wrong.code, ErrorCode::AuthFailed);
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(id),
+                    active: false,
+                    ..staff_body("counter", &role_id(&f, ROLE_COUNTER), None)
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(dir.sign_in("counter", "pw").unwrap_err(), unknown);
+    }
+
+    #[tokio::test]
+    async fn a_manager_cannot_grant_what_it_lacks() {
+        let f = bootstrapped().await;
+        let manager = add_staff(&f, "mgr", ROLE_MANAGER).await;
+        let before = snapshot(&f);
+        let err = expect_err(
+            &f,
+            as_actor(
+                staff_actor(&manager),
+                custom_role("Restorer", &[("ops.restore", PermEffect::Allow)]),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        assert_eq!(snapshot(&f), before);
+        // Within its own permissions (and a deny of anything) it may.
+        f.writer
+            .submit_intent(as_actor(
+                staff_actor(&manager),
+                custom_role(
+                    "Till",
+                    &[
+                        ("pos.sell", PermEffect::Allow),
+                        ("ops.restore", PermEffect::Deny),
+                    ],
+                ),
+                None,
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_custom_user_manage_role_is_restricted_like_a_manager() {
+        let f = bootstrapped().await;
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                custom_role("Staffer", &[("user.manage", PermEffect::Allow)]),
+                None,
+            ))
+            .await
+            .unwrap();
+        let staffer = add_staff(&f, "staffer", "Staffer").await;
+        let own = role_id(&f, "Staffer");
+        // It cannot widen its own role, nor edit it at all.
+        for perms in [
+            vec![
+                ("user.manage", PermEffect::Allow),
+                ("settings.edit", PermEffect::Allow),
+            ],
+            vec![("user.manage", PermEffect::Allow)],
+        ] {
+            let err = expect_err(
+                &f,
+                as_actor(
+                    staff_actor(&staffer),
+                    IntentPayload::RoleUpsert(RoleUpsert {
+                        role_id: Some(own.clone()),
+                        name: "Staffer".into(),
+                        perms: perms
+                            .into_iter()
+                            .map(|(p, e)| RolePerm {
+                                permission: p.into(),
+                                effect: e,
+                            })
+                            .collect(),
+                    }),
+                    Some(1),
+                ),
+            )
+            .await;
+            assert_eq!(err.code, ErrorCode::PermissionDenied);
+        }
+        // Nor create a role granting more than it holds.
+        let err = expect_err(
+            &f,
+            as_actor(
+                staff_actor(&staffer),
+                custom_role("Wider", &[("settings.edit", PermEffect::Allow)]),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        // It assigns only Counter and Kitchen: not Owner, Manager or a custom role.
+        for (i, role) in [ROLE_OWNER, ROLE_MANAGER, "Staffer"]
+            .into_iter()
+            .enumerate()
+        {
+            let err = expect_err(
+                &f,
+                as_actor(
+                    staff_actor(&staffer),
+                    IntentPayload::StaffUpsert(staff_body(
+                        &format!("new{i}"),
+                        &role_id(&f, role),
+                        Some("pw"),
+                    )),
+                    None,
+                ),
+            )
+            .await;
+            assert_eq!(err.code, ErrorCode::PermissionDenied, "{role}");
+        }
+        f.writer
+            .submit_intent(as_actor(
+                staff_actor(&staffer),
+                IntentPayload::StaffUpsert(staff_body(
+                    "crew",
+                    &role_id(&f, ROLE_COUNTER),
+                    Some("pw"),
+                )),
+                None,
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_last_active_owner_stays_an_active_owner() {
+        let f = bootstrapped().await;
+        let boss = add_staff(&f, "boss", ROLE_OWNER).await;
+        let owner_role = role_id(&f, ROLE_OWNER);
+        let edit = |role: &str, active: bool, rev| {
+            as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(boss.clone()),
+                    active,
+                    ..staff_body("boss", role, None)
+                }),
+                Some(rev),
+            )
+        };
+        let count = |f: &Fixture| reopen(f).applied_intent_count().unwrap();
+        let n = count(&f);
+        let err = expect_err(&f, edit(&owner_role, false, 1)).await;
+        assert_eq!(
+            (err.code, err.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("active"))
+        );
+        let err = expect_err(&f, edit(&role_id(&f, ROLE_MANAGER), true, 1)).await;
+        assert_eq!(err.field.as_deref(), Some("role_id"));
+        assert_eq!(count(&f), n, "never recorded");
+        // With a second active Owner, the first may step down.
+        add_staff(&f, "boss2", ROLE_OWNER).await;
+        f.writer
+            .submit_intent(edit(&owner_role, false, 1))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn role_names_are_unique_without_case_and_never_built_in() {
+        let f = bootstrapped().await;
+        f.writer
+            .submit_intent(as_actor(owner(), custom_role("Floor lead", &[]), None))
+            .await
+            .unwrap();
+        let n = reopen(&f).applied_intent_count().unwrap();
+        let err = expect_err(&f, as_actor(owner(), custom_role("FLOOR LEAD", &[]), None)).await;
+        assert_eq!(
+            (err.code, err.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("name_taken"))
+        );
+        assert_eq!(reopen(&f).applied_intent_count().unwrap(), n);
+        for name in ["owner", "KITCHEN", "Kiosk-device"] {
+            let err = expect_err(&f, as_actor(owner(), custom_role(name, &[]), None)).await;
+            assert_eq!(err.field.as_deref(), Some("name"), "{name}");
+        }
+    }
 }

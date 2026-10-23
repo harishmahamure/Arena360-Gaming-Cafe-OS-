@@ -2,7 +2,7 @@
 //! `base_rev` (optimistic row version). The row is read once ([`load`]) and handed to the
 //! base_rev, validate and mutate steps.
 
-use arena_proto::{ActorKind, AppError, ErrorCode, Intent, SettingsSet};
+use arena_proto::{AppError, ErrorCode, Intent, SettingsSet};
 use arena_store::{ChangeOp, RowKey, SettingRef, StoreTx, find_setting, update_setting_value};
 
 use super::mutate::Written;
@@ -13,15 +13,6 @@ pub const MAX_SETTING_VALUE_CHARS: usize = 4096;
 
 fn invalid(field: &str, message: impl Into<String>) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
-}
-
-/// **permission** (stub until Story 1.11): system, owner and staff actors may set settings;
-/// device and admin actors may not.
-pub(super) fn permitted(kind: ActorKind) -> bool {
-    matches!(
-        kind,
-        ActorKind::System | ActorKind::Owner | ActorKind::Staff
-    )
 }
 
 /// Reads the target row (`None` if the branch has no such setting).

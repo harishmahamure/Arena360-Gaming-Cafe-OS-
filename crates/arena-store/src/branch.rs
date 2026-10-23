@@ -30,11 +30,21 @@ pub enum Table {
     Branch,
     Settings,
     Devices,
+    Roles,
+    RolePerms,
+    Staff,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 3] = [Table::Branch, Table::Settings, Table::Devices];
+    pub const ALL: [Table; 6] = [
+        Table::Branch,
+        Table::Settings,
+        Table::Devices,
+        Table::Roles,
+        Table::RolePerms,
+        Table::Staff,
+    ];
 
     /// The SQL table name.
     pub fn name(self) -> &'static str {
@@ -42,6 +52,9 @@ impl Table {
             Self::Branch => "branch",
             Self::Settings => "settings",
             Self::Devices => "devices",
+            Self::Roles => "roles",
+            Self::RolePerms => "role_perms",
+            Self::Staff => "staff",
         }
     }
 
@@ -51,15 +64,24 @@ impl Table {
             Self::Branch => &["branch_id"],
             Self::Settings => &["branch_id", "key"],
             Self::Devices => &["device_id"],
+            Self::Roles => &["role_id"],
+            Self::RolePerms => &["role_id", "permission"],
+            Self::Staff => &["staff_id"],
         }
     }
 
     /// Whether the table has a `created_at` column (stamped on insert).
     pub fn has_created_at(self) -> bool {
         match self {
-            Self::Branch | Self::Devices => true,
-            Self::Settings => false,
+            Self::Branch | Self::Devices | Self::Roles | Self::Staff => true,
+            Self::Settings | Self::RolePerms => false,
         }
+    }
+
+    /// Whether the table has `rev` and `updated_at` (stamped on every write). `role_perms`
+    /// rows are versioned through their role's `rev`.
+    pub fn is_versioned(self) -> bool {
+        !matches!(self, Self::RolePerms)
     }
 
     /// The table with this SQL name, if it is a change-log table.
@@ -74,6 +96,9 @@ pub enum RowKey {
     Branch { branch_id: String },
     Settings { branch_id: String, key: String },
     Devices { device_id: String },
+    Roles { role_id: String },
+    RolePerms { role_id: String, permission: String },
+    Staff { staff_id: String },
 }
 
 impl RowKey {
@@ -82,6 +107,9 @@ impl RowKey {
             Self::Branch { .. } => Table::Branch,
             Self::Settings { .. } => Table::Settings,
             Self::Devices { .. } => Table::Devices,
+            Self::Roles { .. } => Table::Roles,
+            Self::RolePerms { .. } => Table::RolePerms,
+            Self::Staff { .. } => Table::Staff,
         }
     }
 
@@ -91,6 +119,12 @@ impl RowKey {
             Self::Branch { branch_id } => branch_id.clone(),
             Self::Settings { branch_id, key } => format!("{branch_id}/{key}"),
             Self::Devices { device_id } => device_id.clone(),
+            Self::Roles { role_id } => role_id.clone(),
+            Self::RolePerms {
+                role_id,
+                permission,
+            } => format!("{role_id}/{permission}"),
+            Self::Staff { staff_id } => staff_id.clone(),
         }
     }
 
@@ -112,6 +146,16 @@ impl RowKey {
             Table::Devices => Self::Devices {
                 device_id: text("device_id")?,
             },
+            Table::Roles => Self::Roles {
+                role_id: text("role_id")?,
+            },
+            Table::RolePerms => Self::RolePerms {
+                role_id: text("role_id")?,
+                permission: text("permission")?,
+            },
+            Table::Staff => Self::Staff {
+                staff_id: text("staff_id")?,
+            },
         })
     }
 
@@ -120,6 +164,12 @@ impl RowKey {
             Self::Branch { branch_id } => vec![branch_id],
             Self::Settings { branch_id, key } => vec![branch_id, key],
             Self::Devices { device_id } => vec![device_id],
+            Self::Roles { role_id } => vec![role_id],
+            Self::RolePerms {
+                role_id,
+                permission,
+            } => vec![role_id, permission],
+            Self::Staff { staff_id } => vec![staff_id],
         }
     }
 }
@@ -226,7 +276,9 @@ pub fn branch_exists(conn: &Connection) -> Result<bool, AppError> {
 pub fn has_branch_data(conn: &Connection) -> Result<bool, AppError> {
     conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM branch) OR EXISTS (SELECT 1 FROM settings)
-             OR EXISTS (SELECT 1 FROM devices) OR EXISTS (SELECT 1 FROM changes)",
+             OR EXISTS (SELECT 1 FROM devices) OR EXISTS (SELECT 1 FROM roles)
+             OR EXISTS (SELECT 1 FROM role_perms) OR EXISTS (SELECT 1 FROM staff)
+             OR EXISTS (SELECT 1 FROM changes)",
         [],
         |r| r.get(0),
     )
@@ -296,6 +348,34 @@ pub fn find_setting(conn: &Connection, key: &str) -> Result<Option<SettingRef>, 
     .map_err(db_error)
 }
 
+/// One setting as the Hub UI reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingRow {
+    pub key: String,
+    pub value: String,
+    pub rev: i64,
+}
+
+/// Every setting of the branch, ordered by key (empty before bootstrap).
+pub fn list_settings(conn: &Connection) -> Result<Vec<SettingRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.key, s.value, s.rev FROM settings s
+             JOIN branch b ON b.branch_id = s.branch_id ORDER BY s.key",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(SettingRow {
+                key: r.get(0)?,
+                value: r.get(1)?,
+                rev: r.get(2)?,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 /// Sets one setting's `value` (the stamp step then bumps `rev` and `updated_at`). Fails
 /// `INTERNAL` if the row does not exist.
 pub fn update_setting_value(
@@ -330,7 +410,8 @@ fn key_where(table: Table) -> String {
 }
 
 /// Stamps a written row: `rev + 1` and `updated_at = now`, plus `created_at = now` on an insert
-/// into a table that has it. Fails `INTERNAL` if the row does not exist.
+/// into a table that has it. A table without `rev` ([`Table::is_versioned`]) is not stamped.
+/// Fails `INTERNAL` if the row does not exist.
 pub fn stamp_row(
     conn: &Connection,
     key: &RowKey,
@@ -338,6 +419,9 @@ pub fn stamp_row(
     inserted: bool,
 ) -> Result<(), AppError> {
     let table = key.table();
+    if !table.is_versioned() {
+        return Ok(());
+    }
     let now_param = table.primary_key().len() + 1;
     let created = if inserted && table.has_created_at() {
         format!(", created_at = ?{now_param}")

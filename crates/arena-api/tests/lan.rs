@@ -97,11 +97,19 @@ fn system() -> Actor {
     }
 }
 
+/// The owner: holds every permission (device.manage, device.remote, settings.edit).
+fn owner() -> Actor {
+    Actor {
+        kind: ActorKind::Owner,
+        id: "test-owner".into(),
+    }
+}
+
 async fn register(w: &WriterHandle, class: ClientClass, label: &str) -> (String, String) {
     let secret = new_token_secret().unwrap();
     let applied = w
         .submit_intent(intent(
-            system(),
+            owner(),
             IntentPayload::DeviceRegister(DeviceRegister {
                 class,
                 label: label.into(),
@@ -367,7 +375,7 @@ async fn paired_hello_records_the_version_and_pushes_applies() {
         .as_ref()
         .unwrap()
         .submit_intent(intent(
-            system(),
+            owner(),
             IntentPayload::SettingsSet(SettingsSet {
                 key: "receipt.footer".into(),
                 value: "thanks".into(),
@@ -555,7 +563,7 @@ async fn revoking_a_connected_device_closes_it_within_a_second_and_refuses_it_af
     hub.writer
         .as_ref()
         .unwrap()
-        .submit_intent(intent(system(), revoke_payload(&hub.paired_id), None))
+        .submit_intent(intent(owner(), revoke_payload(&hub.paired_id), None))
         .await
         .unwrap();
     let revoked_at = Instant::now();

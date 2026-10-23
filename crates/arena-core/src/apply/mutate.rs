@@ -2,11 +2,12 @@
 
 use arena_proto::{AppError, ErrorCode, Intent, IntentPayload};
 use arena_store::{
-    ChangeOp, NewBranch, Row, RowKey, StoreTx, branch_exists, insert_branch, insert_setting,
-    stamp_row,
+    ChangeOp, NewBranch, Row, RowKey, StoreTx, branch_exists, insert_branch, insert_role,
+    insert_role_perm, insert_setting, stamp_row,
 };
 
-use super::{Target, devices, settings_set};
+use super::{Target, devices, settings_set, staff_roles};
+use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::DEFAULT_SETTINGS;
 
 /// One row the intent wrote.
@@ -65,6 +66,29 @@ pub(super) fn mutate(
                     before: None,
                 });
             }
+            // The built-in roles, each permission row an allow.
+            for name in BUILTIN_ROLES {
+                let role_id = ulid::Ulid::generate().to_string();
+                insert_role(tx, &role_id, &branch_id, name, true)?;
+                written.push(Written {
+                    key: RowKey::Roles {
+                        role_id: role_id.clone(),
+                    },
+                    op: ChangeOp::Insert,
+                    before: None,
+                });
+                for p in builtin_perms(name) {
+                    insert_role_perm(tx, &role_id, p.as_str(), "allow")?;
+                    written.push(Written {
+                        key: RowKey::RolePerms {
+                            role_id: role_id.clone(),
+                            permission: p.as_str().to_owned(),
+                        },
+                        op: ChangeOp::Insert,
+                        before: None,
+                    });
+                }
+            }
             Ok(written)
         }
         IntentPayload::SettingsSet(s) => {
@@ -85,7 +109,22 @@ pub(super) fn mutate(
         IntentPayload::DeviceVersionReported(d) => {
             devices::mutate_version(tx, d, device_row(target))
         }
+        IntentPayload::StaffUpsert(s) => match target {
+            Target::Staff(t) => staff_roles::mutate_staff(tx, s, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::RoleUpsert(r) => match target {
+            Target::Role(t) => staff_roles::mutate_role(tx, r, t),
+            _ => Err(mismatch()),
+        },
     }
+}
+
+fn mismatch() -> AppError {
+    AppError::new(
+        ErrorCode::Internal,
+        "the loaded target does not match the payload",
+    )
 }
 
 fn device_row(target: &Target) -> Option<&arena_store::DeviceRow> {

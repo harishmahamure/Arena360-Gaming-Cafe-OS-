@@ -1,5 +1,6 @@
 import { SESSION_DEPENDENCY, loadSession } from "../lib/auth";
 import { SNAPSHOT_DEPENDENCY, loadSnapshot } from "../lib/snapshot";
+import { applyTheme } from "../lib/ui-settings.svelte";
 
 // The Hub UI is a client-only SPA inside Tauri (adapter-static with an index.html fallback).
 export const ssr = false;
@@ -14,5 +15,7 @@ export async function load({ fetch, depends }) {
   depends(SNAPSHOT_DEPENDENCY);
   depends(SESSION_DEPENDENCY);
   const [hub, session] = await Promise.all([loadSnapshot(fetch), loadSession(fetch)]);
+  // The theme is on <html> before the shell renders (no dark flash on an HC Hub).
+  if (hub.ok) applyTheme(hub.snapshot.ui.hc);
   return { hub, session };
 }

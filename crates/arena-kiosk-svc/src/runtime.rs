@@ -69,6 +69,9 @@ pub struct Ctx {
     /// The process allow-list and block-list in effect (cached in `queue.db`, updated by the
     /// Hub link).
     pub lists: watch::Sender<Arc<ProcessLists>>,
+    /// Whether this kiosk is high contrast (`display.hc.<device_id>`, cached in `queue.db`,
+    /// updated by the Hub link; the supervisor sends it to the app as IPC `theme`).
+    pub theme: watch::Sender<bool>,
     /// Toast catalogue keys for the app (the supervisor forwards them as IPC `toast`).
     pub toasts: broadcast::Sender<String>,
     /// Restarts the app; starts and stops the admin exit's desktop.
@@ -148,6 +151,11 @@ impl Runtime {
         let queue = QueueDb::open(&data.queue())?;
         let data_verifier = data.verifier();
         let (lists, _) = watch::channel(Arc::new(ProcessLists::load(&queue)));
+        let device_id = KioskConfig::load(&data.config())
+            .ok()
+            .flatten()
+            .map(|c| c.device_id);
+        let (theme, _) = watch::channel(crate::theme::load(&queue, device_id.as_deref()));
         let (toasts, _) = broadcast::channel(16);
         let (hub_state, _) = watch::channel(KioskHubState::Reconnecting);
         let ctx = Arc::new(Ctx {
@@ -160,6 +168,7 @@ impl Runtime {
             hub_state,
             app_state: Mutex::new(None),
             lists,
+            theme,
             toasts,
             admin: crate::admin_exit::AdminState::load(crate::secret::platform_store(
                 data_verifier,

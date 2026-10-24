@@ -26,8 +26,8 @@ use arena_core::ChangeOp;
 use arena_core::{Applied, DeviceDirectory};
 use arena_proto::{
     AdminExitMode, AdminUnlockAckEvent, AppError, AppliedSummary, ChangeOpKind, ChangeSummary,
-    ClientClass, ErrorCode, EventFrame, Frame, FrameBody, HubEvent, ManagerVerifier, SettingEntry,
-    SettingsValues, may_read_setting,
+    ClientClass, ErrorCode, EventFrame, Frame, FrameBody, HcTarget, HubEvent, ManagerVerifier,
+    PAIRED_SETTINGS_PREFIX, SettingEntry, SettingsValues, may_read_setting, parse_hc_key,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -394,24 +394,14 @@ impl Registry {
         }
     }
 
-    /// Pushes `settings.changed` with `values` to every `paired` session (each value is one a
-    /// paired session may read). A session whose queue is full or closed is dropped.
+    /// Pushes `settings.changed` to every `paired` session, each with the subset of `values`
+    /// it may read: every session gets the `kiosk.*` values, and a device's own
+    /// `display.hc.<device_id>` reaches only that device. A session with nothing to read gets
+    /// nothing. A session whose queue is full or closed is dropped.
     pub(crate) fn push_settings(&self, values: Vec<SettingEntry>) {
-        let values: Vec<SettingEntry> = values
-            .into_iter()
-            .filter(|v| may_read_setting(ClientClass::Paired, &v.key))
-            .collect();
         if values.is_empty() {
             return;
         }
-        let n = self.next_event.fetch_add(1, Ordering::Relaxed);
-        let frame = Frame::new(
-            format!("ev-{n}"),
-            FrameBody::Event(EventFrame {
-                event: HubEvent::SettingsChanged(SettingsValues { values }),
-            }),
-        );
-        let msg = Message::text(frame.to_text());
         let Ok(map) = self.sessions.lock() else {
             return;
         };
@@ -419,14 +409,30 @@ impl Registry {
             if entry.class != ClientClass::Paired {
                 continue;
             }
-            if entry.out.try_send(msg.clone()).is_err() {
+            let mine: Vec<SettingEntry> = values
+                .iter()
+                .filter(|v| may_read_setting(entry.class, &v.key, entry.device_id.as_deref()))
+                .cloned()
+                .collect();
+            if mine.is_empty() {
+                continue;
+            }
+            let n = self.next_event.fetch_add(1, Ordering::Relaxed);
+            let frame = Frame::new(
+                format!("ev-{n}"),
+                FrameBody::Event(EventFrame {
+                    event: HubEvent::SettingsChanged(SettingsValues { values: mine }),
+                }),
+            );
+            if entry.out.try_send(Message::text(frame.to_text())).is_err() {
                 tracing::warn!(session = id, "session queue full or closed; dropping it");
                 set_kill(&entry.kill, Kill::Drop);
             }
         }
     }
 
-    /// Reads the `kiosk.*` settings `applied` wrote and pushes them (nothing when it wrote none).
+    /// Reads the paired-readable settings `applied` wrote (`kiosk.*` and device
+    /// `display.hc.*`) and pushes them (nothing when it wrote none).
     async fn push_kiosk_settings(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
         let keys = paired_setting_keys(applied);
         if keys.is_empty() {
@@ -566,15 +572,19 @@ impl Registry {
     }
 }
 
-/// The setting keys `applied` wrote that a paired session may read (`settings` row ids are
-/// `branch_id/key`).
+/// The setting keys `applied` wrote that some paired session may read: `kiosk.*` and every
+/// device's `display.hc.<device_id>` (`settings` row ids are `branch_id/key`). Which session
+/// gets which is decided per session in [`Registry::push_settings`].
 pub(crate) fn paired_setting_keys(applied: &Applied) -> Vec<String> {
     let mut keys: Vec<String> = applied
         .changes
         .iter()
         .filter(|c| c.tbl == "settings")
         .filter_map(|c| c.row_id.split_once('/').map(|(_, k)| k.to_owned()))
-        .filter(|k| may_read_setting(ClientClass::Paired, k))
+        .filter(|k| {
+            k.starts_with(PAIRED_SETTINGS_PREFIX)
+                || matches!(parse_hc_key(k), Some(HcTarget::Device(_)))
+        })
         .collect();
     keys.sort();
     keys.dedup();
@@ -689,11 +699,17 @@ mod tests {
                 change("settings", "B/branch.currency"),
                 change("devices", "B/kiosk.process_allow"),
                 change("settings", "B/kiosk.process_allow"),
+                change("settings", "B/display.hc.hub"),
+                change("settings", "B/display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0"),
             ],
         };
         assert_eq!(
             paired_setting_keys(&applied),
-            ["kiosk.process_allow", "kiosk.process_block"]
+            [
+                "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
+                "kiosk.process_allow",
+                "kiosk.process_block"
+            ]
         );
     }
 
@@ -728,6 +744,57 @@ mod tests {
         // Nothing a paired session may read: nothing is sent.
         reg.push_settings(vec![entry("branch.currency")]);
         assert!(paired_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_device_hc_change_reaches_only_that_device() {
+        const A: &str = "01JABCDEFGHJKMNPQRSTVWXYZA";
+        const B: &str = "01JABCDEFGHJKMNPQRSTVWXYZB";
+        let reg = Arc::new(Registry::default());
+        let (a_tx, mut a_rx) = mpsc::channel(8);
+        let _a = reg.register(ClientClass::Paired, Some(A.into()), a_tx);
+        let (b_tx, mut b_rx) = mpsc::channel(8);
+        let _b = reg.register(ClientClass::Paired, Some(B.into()), b_tx);
+        let (kds_tx, mut kds_rx) = mpsc::channel(8);
+        let _kds = reg.register(ClientClass::Kds, Some(A.into()), kds_tx);
+        let entry = |key: String| SettingEntry {
+            key,
+            value: "true".into(),
+            rev: 1,
+        };
+        let values = |rx: &mut mpsc::Receiver<Message>| {
+            let Ok(Message::Text(t)) = rx.try_recv() else {
+                panic!("text")
+            };
+            let frame = arena_proto::parse_frame(t.as_str()).unwrap();
+            let FrameBody::Event(EventFrame {
+                event: HubEvent::SettingsChanged(v),
+            }) = frame.body
+            else {
+                panic!("{frame:?}")
+            };
+            v.values
+        };
+        reg.push_settings(vec![
+            entry(format!("display.hc.{A}")),
+            entry("display.hc.hub".into()),
+        ]);
+        assert_eq!(values(&mut a_rx), vec![entry(format!("display.hc.{A}"))]);
+        assert!(b_rx.try_recv().is_err(), "B gets nothing of A's");
+        assert!(kds_rx.try_recv().is_err());
+        // A list change still reaches both, each with its own HC value only.
+        reg.push_settings(vec![
+            entry("kiosk.process_mode".into()),
+            entry(format!("display.hc.{B}")),
+        ]);
+        assert_eq!(values(&mut a_rx), vec![entry("kiosk.process_mode".into())]);
+        assert_eq!(
+            values(&mut b_rx),
+            vec![
+                entry("kiosk.process_mode".into()),
+                entry(format!("display.hc.{B}"))
+            ]
+        );
     }
 
     #[tokio::test]

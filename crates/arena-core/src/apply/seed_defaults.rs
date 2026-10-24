@@ -1,16 +1,17 @@
 //! `branch.seed_defaults`: brings an upgraded branch up to the current defaults. It inserts every
 //! default setting the branch lacks (the `branch.*` locale keys take the branch row's bootstrap
-//! columns; `kiosk.process_mode` is backfilled as `report`, not the bootstrap `enforce`), every built-in role it lacks, and every permission row a built-in role lacks, as
+//! columns; `kiosk.process_mode` is backfilled as `report`, not the bootstrap `enforce`), the
+//! `display.hc.<device_id>` row (`false`) of every non-revoked paired device, every built-in role it lacks, and every permission row a built-in role lacks, as
 //! ordinary change rows. Nothing that exists is changed. It is idempotent: with nothing missing
 //! it fails `ALREADY_BOOTSTRAPPED` and writes nothing, and the Hub only submits it when
 //! [`missing`] finds something.
 
 use std::collections::BTreeSet;
 
-use arena_proto::{AppError, ErrorCode};
+use arena_proto::{AppError, ErrorCode, HC_DEFAULT, hc_key, parse_hc_key};
 use arena_store::{
     ChangeOp, RowKey, StoreTx, current_branch_id, find_branch_locale, insert_role,
-    insert_role_perm, insert_setting, list_role_perms, list_roles, list_settings,
+    insert_role_perm, insert_setting, list_devices, list_role_perms, list_roles, list_settings,
 };
 
 use super::mutate::Written;
@@ -56,6 +57,17 @@ pub fn missing(tx: &StoreTx<'_>) -> Result<Option<Missing>, AppError> {
         if !have.contains(key) {
             out.settings
                 .push((key.to_owned(), branch_default(&branch, key)));
+        }
+    }
+    // Story 1.21: every non-revoked paired device that predates its high-contrast row.
+    for device in list_devices(tx)? {
+        let key = hc_key(&device.device_id);
+        if device.class == "paired"
+            && device.revoked_at.is_none()
+            && parse_hc_key(&key).is_some()
+            && !have.contains(&key)
+        {
+            out.settings.push((key, HC_DEFAULT.to_owned()));
         }
     }
     let roles = list_roles(tx)?;

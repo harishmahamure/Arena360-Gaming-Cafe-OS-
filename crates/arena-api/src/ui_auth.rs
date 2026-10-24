@@ -2461,6 +2461,38 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn a_counter_turns_hub_high_contrast_on_with_a_manager_pin() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        assert!(!hub.auth.reader().snapshot(T0).unwrap().ui.hc);
+        let (status, denied) =
+            post_intent(&hub, &token, set_body(&hub, "display.hc.hub", "true", None)).await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let items = vec![item("settings.set", Some("display.hc.hub"))];
+        let (status, ok) = elevate_items(&hub, &token, items, "2222").await;
+        assert_eq!(status, StatusCode::OK, "{ok}");
+        let ticket = ok["ticket"].as_str().unwrap();
+        let (status, reply) = post_intent(
+            &hub,
+            &token,
+            set_body(&hub, "display.hc.hub", "true", Some(ticket)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let c = last_change(&hub);
+        assert_eq!(c.tbl, "settings");
+        assert!(c.row_id.ends_with("/display.hc.hub"));
+        assert_eq!(
+            (c.actor_id.as_str(), c.elevated_by_id.as_deref()),
+            (hub.counter_id.as_str(), Some(hub.manager_id.as_str()))
+        );
+        assert!(hub.auth.reader().snapshot(T0).unwrap().ui.hc);
+    }
+
+    #[tokio::test]
     async fn a_manager_pin_approves_the_counters_settings_set() {
         let hub = hub().await;
         let token = token_for(&hub, "counter", "c-pass").await;

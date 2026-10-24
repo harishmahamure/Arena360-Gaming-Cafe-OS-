@@ -1092,9 +1092,12 @@ async fn with_device(f: &mut Fixture) -> (String, String) {
         .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
         .await
         .unwrap();
-    assert_eq!(applied.changes.len(), 1);
+    // The device row, then its `display.hc.<id>` setting (Story 1.21), in one change.
+    assert_eq!(applied.changes.len(), 2);
     assert_eq!(applied.changes[0].tbl, "devices");
     assert_eq!(applied.changes[0].op, ChangeOp::Insert);
+    assert_eq!(applied.changes[1].tbl, "settings");
+    assert_eq!(applied.changes[1].op, ChangeOp::Insert);
     while f.events.try_recv().is_ok() {}
     (applied.changes[0].row_id.clone(), secret)
 }
@@ -1116,10 +1119,19 @@ async fn device_register_writes_a_row_and_an_insert_change() {
     let devices = store.rows(Table::Devices).unwrap();
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0]["created_at"], RowValue::Integer(T0));
-    let change = store.changes().unwrap().pop().unwrap();
+    let mut changes = store.changes().unwrap();
+    let hc = changes.pop().unwrap();
+    let change = changes.pop().unwrap();
     assert_eq!(change.intent_kind, "device.register");
     let logged: Row = rmp_serde::from_slice(&change.row).unwrap();
     assert_eq!(logged, devices[0]);
+    // Story 1.21: the device's high-contrast row starts off, in the same intent.
+    assert_eq!(hc.intent_kind, "device.register");
+    assert_eq!(hc.intent_id, change.intent_id);
+    assert_eq!(hc.tbl, "settings");
+    let hc_row = setting(&store, &arena_proto::hc_key(&id));
+    assert_eq!(hc_row["value"], RowValue::Text("false".into()));
+    assert_eq!(hc_row["rev"], RowValue::Integer(1));
 }
 
 #[tokio::test]
@@ -3507,5 +3519,109 @@ mod process_lists {
             detail.starts_with("game.exe (not_allowed, report only): …"),
             "{detail}"
         );
+    }
+}
+
+// ---- Story 1.21: high contrast per device ----
+
+mod high_contrast {
+    use super::*;
+
+    fn value(s: &Store, key: &str) -> Option<RowValue> {
+        s.rows(Table::Settings)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["key"] == RowValue::Text(key.into()))
+            .map(|r| r["value"].clone())
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_the_hub_row_off() {
+        let f = bootstrapped().await;
+        assert_eq!(
+            value(&reopen(&f), "display.hc.hub"),
+            Some(RowValue::Text("false".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_set_turns_a_device_and_the_hub_on_with_base_rev() {
+        let mut f = primary();
+        let (id, _) = with_device(&mut f).await;
+        let key = arena_proto::hc_key(&id);
+        let mut on = set(&key, "true", Some(1));
+        on.issued_at = f.clock.now_ms();
+        let applied = f.writer.submit_intent(on).await.unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        assert_eq!(applied.changes[0].row_id.split_once('/').unwrap().1, key);
+        let s = reopen(&f);
+        assert_eq!(value(&s, &key), Some(RowValue::Text("true".into())));
+        assert_eq!(
+            value(&s, "display.hc.hub"),
+            Some(RowValue::Text("false".into())),
+            "the Hub is unchanged"
+        );
+        // A stale base_rev, a non-boolean, or a device with no row are refused.
+        let mut stale = set(&key, "false", Some(1));
+        stale.issued_at = f.clock.now_ms();
+        assert_eq!(expect_err(&f, stale).await.code, ErrorCode::Stale);
+        let mut bad = set(&key, "yes", Some(2));
+        bad.issued_at = f.clock.now_ms();
+        assert_eq!(expect_err(&f, bad).await.field.as_deref(), Some("value"));
+        let mut unknown = set("display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0", "true", Some(1));
+        unknown.issued_at = f.clock.now_ms();
+        assert_eq!(expect_err(&f, unknown).await.field.as_deref(), Some("key"));
+        let mut hub = set("display.hc.hub", "true", Some(1));
+        hub.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(hub).await.unwrap();
+        assert_eq!(
+            value(&reopen(&f), "display.hc.hub"),
+            Some(RowValue::Text("true".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn seed_defaults_adds_rows_for_live_paired_devices_only() {
+        let mut f = primary();
+        let (live, _) = with_device(&mut f).await;
+        let secret = crate::devices::new_token_secret().unwrap();
+        let hash = crate::devices::hash_token_secret(&secret).unwrap();
+        let gone = f
+            .writer
+            .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let revoke = IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+            device_id: gone.clone(),
+        });
+        f.writer
+            .submit_intent(device_intent(ActorKind::Owner, revoke))
+            .await
+            .unwrap();
+        // A branch from before Story 1.21: no display.hc.* rows at all.
+        f.writer
+            .submit(|tx| {
+                tx.execute_batch("DELETE FROM settings WHERE key LIKE 'display.hc.%'")
+                    .map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+        while f.events.try_recv().is_ok() {}
+        let applied = f.writer.seed_defaults().await.unwrap().unwrap();
+        let mut keys: Vec<&str> = applied
+            .changes
+            .iter()
+            .map(|c| c.row_id.split_once('/').unwrap().1)
+            .collect();
+        keys.sort_unstable();
+        let live_key = arena_proto::hc_key(&live);
+        assert_eq!(keys, [live_key.as_str(), "display.hc.hub"]);
+        let s = reopen(&f);
+        assert_eq!(value(&s, &live_key), Some(RowValue::Text("false".into())));
+        assert_eq!(value(&s, &arena_proto::hc_key(&gone)), None);
+        assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
     }
 }

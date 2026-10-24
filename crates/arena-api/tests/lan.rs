@@ -1030,6 +1030,117 @@ async fn a_kiosk_list_change_is_pushed_to_paired_sessions_but_not_browsers() {
     assert!(next.is_err(), "kds got {next:?}");
 }
 
+// ---- Story 1.21: a kiosk reads and hears only its own high-contrast setting ----
+
+/// Waits up to `ms` for the next `settings.changed` on `events`.
+async fn next_settings(
+    events: &mut (impl futures_util::Stream<Item = HubEvent> + Unpin),
+    ms: u64,
+) -> Option<Vec<arena_proto::SettingEntry>> {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, events.next()).await {
+            Ok(Some(HubEvent::SettingsChanged(v))) => return Some(v.values),
+            Ok(Some(_)) => continue,
+            Ok(None) | Err(_) => return None,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kiosk_reads_and_hears_only_its_own_hc_key() {
+    let hub = start("0.1.0", true).await;
+    let writer = hub.writer.as_ref().unwrap();
+    let (other_id, other_token) = register(writer, ClientClass::Paired, "Kiosk 2").await;
+    let own_key = arena_proto::hc_key(&hub.paired_id);
+    let other_key = arena_proto::hc_key(&other_id);
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let frame = client
+        .request(
+            "settings.get",
+            settings_get_body(&["kiosk.process_mode", &own_key]),
+        )
+        .await
+        .unwrap();
+    let FrameBody::SettingsValues(v) = frame.body else {
+        panic!("{frame:?}")
+    };
+    let got: Vec<(&str, &str)> = v
+        .values
+        .iter()
+        .map(|e| (e.key.as_str(), e.value.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("kiosk.process_mode", "enforce"),
+            (own_key.as_str(), "false")
+        ]
+    );
+    for keys in [
+        &[other_key.as_str()][..],
+        &[own_key.as_str(), "display.hc.hub"][..],
+    ] {
+        let err = client
+            .request("settings.get", settings_get_body(keys))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::Forbidden), "{keys:?}");
+    }
+
+    let other = HubClient::connect(
+        &hub.url(),
+        &hub.fingerprint,
+        hub.hello(ClientClass::Paired, &other_token, "0.1.0"),
+    )
+    .await
+    .unwrap();
+    let mut mine = client.events().unwrap();
+    let mut theirs = other.events().unwrap();
+    writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: own_key.clone(),
+                value: "true".into(),
+            }),
+            Some(1),
+        ))
+        .await
+        .unwrap();
+    let values = next_settings(&mut mine, 5_000).await.expect("pushed");
+    assert_eq!(values.len(), 1);
+    assert_eq!(
+        (
+            values[0].key.as_str(),
+            values[0].value.as_str(),
+            values[0].rev
+        ),
+        (own_key.as_str(), "true", 2)
+    );
+    assert_eq!(
+        next_settings(&mut theirs, 300).await,
+        None,
+        "not to another kiosk"
+    );
+    // The Hub's own key reaches no kiosk.
+    writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "display.hc.hub".into(),
+                value: "true".into(),
+            }),
+            Some(1),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_settings(&mut mine, 300).await, None);
+}
+
 // ---- Story 1.20: kiosk admin exit ----
 
 /// Adds a staff member with `pin` in the built-in role `role`; returns the id.

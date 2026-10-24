@@ -2,8 +2,8 @@
 
 use arena_proto::{
     BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap, DEFAULT_PROCESS_ALLOW,
-    DEFAULT_PROCESS_BLOCK, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, ProcessList,
-    ProcessMode,
+    DEFAULT_PROCESS_BLOCK, HC_DEFAULT, KEY_HC_HUB, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK,
+    KEY_PROCESS_MODE, ProcessList, ProcessMode, parse_hc_key,
 };
 
 /// The branch locale keys. They are authoritative for the locale; the `branch` row's columns
@@ -58,6 +58,9 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_PROCESS_BLOCK, DEFAULT_PROCESS_BLOCK),
     // A new branch enforces; an upgraded one is backfilled in report mode ([`backfill_value`]).
     (KEY_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE),
+    // Story 1.21: high contrast for the Hub UI. Each paired device's `display.hc.<id>` row is
+    // created by `device.register` (and backfilled by `branch.seed_defaults`).
+    (KEY_HC_HUB, HC_DEFAULT),
 ];
 
 /// The value `branch.seed_defaults` inserts for a default setting an existing branch lacks:
@@ -90,6 +93,8 @@ pub enum SettingRule {
     /// A kiosk process list: a JSON array of at most 500 `{path_glob, signer?}` rules
     /// (`arena_proto::parse_process_rules`), up to `MAX_PROCESS_RULES_CHARS` long.
     ProcessRules(ProcessList),
+    /// `"true"` or `"false"`.
+    Bool,
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -126,12 +131,19 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     (KEY_PROCESS_MODE, SettingRule::OneOf(ProcessMode::VALUES)),
 ];
 
-/// The rule for `key`, if `key` is a known setting.
+/// The rule for every key that starts with `display.hc.` and names `hub` or a device id
+/// (`arena_proto::parse_hc_key`). `display.hc.hub` is also in [`DEFAULT_SETTINGS`]; the
+/// per-device rows are created with their device.
+pub const HC_RULE: SettingRule = SettingRule::Bool;
+
+/// The rule for `key`, if `key` is a known setting: an exact [`SETTING_RULES`] entry, else
+/// [`HC_RULE`] for a high-contrast key.
 pub fn setting_rule(key: &str) -> Option<SettingRule> {
     SETTING_RULES
         .iter()
         .find(|(k, _)| *k == key)
         .map(|(_, rule)| *rule)
+        .or_else(|| parse_hc_key(key).map(|_| HC_RULE))
 }
 
 fn is_locale(value: &str) -> bool {
@@ -158,6 +170,7 @@ impl SettingRule {
             Self::TimeZone => value.parse::<chrono_tz::Tz>().is_ok(),
             Self::OneOf(words) => words.contains(&value),
             Self::ProcessRules(list) => arena_proto::parse_process_rules(list, value).is_ok(),
+            Self::Bool => matches!(value, "true" | "false"),
         }
     }
 
@@ -176,10 +189,18 @@ mod tests {
 
     #[test]
     fn every_default_has_a_rule_and_satisfies_it() {
+        // Every exact rule is a default or a locale key, except `display.hc.hub`, a default
+        // covered by the `display.hc.` prefix rule.
         assert_eq!(
-            SETTING_RULES.len(),
+            SETTING_RULES.len() + 1,
             DEFAULT_SETTINGS.len() + LOCALE_KEYS.len()
         );
+        for (key, _) in SETTING_RULES {
+            assert!(
+                DEFAULT_SETTINGS.iter().any(|(k, _)| k == key) || LOCALE_KEYS.contains(key),
+                "{key} has a rule but no default"
+            );
+        }
         for (key, value) in DEFAULT_SETTINGS {
             let rule = setting_rule(key).unwrap_or_else(|| panic!("{key} has no rule"));
             assert!(rule.accepts(value), "{key}={value:?}");
@@ -304,6 +325,22 @@ mod tests {
     }
 
     #[test]
+    fn hc_keys_take_the_bool_rule() {
+        let device = "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0";
+        for key in ["display.hc.hub", device] {
+            let rule = setting_rule(key).unwrap_or_else(|| panic!("{key}"));
+            assert_eq!(rule, SettingRule::Bool);
+            assert!(rule.accepts("true") && rule.accepts("false"));
+            for bad in ["", "TRUE", "1", "yes", " true"] {
+                assert!(!rule.accepts(bad), "{bad:?}");
+            }
+        }
+        for not_a_setting in ["display.hc.", "display.hc.D1", "display.hc.hubx"] {
+            assert_eq!(setting_rule(not_a_setting), None, "{not_a_setting}");
+        }
+    }
+
+    #[test]
     fn keys_are_unique_and_required_ones_present() {
         let mut keys: Vec<_> = DEFAULT_SETTINGS.iter().map(|(k, _)| *k).collect();
         keys.sort_unstable();
@@ -316,6 +353,7 @@ mod tests {
             ("kiosk.process_allow", DEFAULT_PROCESS_ALLOW),
             ("kiosk.process_block", DEFAULT_PROCESS_BLOCK),
             ("kiosk.process_mode", "enforce"),
+            ("display.hc.hub", "false"),
         ] {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
         }

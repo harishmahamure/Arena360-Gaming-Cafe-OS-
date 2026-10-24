@@ -6,7 +6,7 @@
 //! ([`ipc`]); the service pings it and restarts it when it stops answering ([`app`],
 //! [`launcher`]). `lockdown apply|restore` ([`lockdown`]) locks the player account down for
 //! the installer. [`procs`] kills programs the branch's process lists do not allow in the
-//! player's session. Off Windows the same logic runs in console mode over a Unix socket, for dev
+//! player's session, and [`theme`] holds this kiosk's high-contrast setting. Off Windows the same logic runs in console mode over a Unix socket, for dev
 //! and CI.
 
 pub mod admin_exit;
@@ -30,6 +30,7 @@ pub mod runtime;
 pub mod secret;
 #[cfg(windows)]
 pub mod service;
+pub mod theme;
 #[cfg(windows)]
 pub mod winsec;
 

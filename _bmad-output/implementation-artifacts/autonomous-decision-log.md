@@ -257,3 +257,16 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - Hub `test:shell` was not re-run, because the user's own dev server holds port 5173. The implementer ran the Hub suite against that server: 209 passed.
   - `apps/hub/src-tauri` sidecar timing test: flaked once under load and passed on re-run. This story doesn't touch it.
   - The Windows paths are type-checked only.
+
+## Story 1.21: high-contrast theme per device
+
+- **Spec approval:** self-approved. Spec: `spec-1-21-high-contrast-theme-as-a-per-device-branch-setting.md`.
+- **Token gate:** about 1,700 tokens, over the 1,600 guide. **Kept the full spec** (recommended): it is one user goal (HC per device) whose layers can't ship apart.
+- **Key rule:** a new `SettingRule::Bool` plus a `display.hc.` prefix fallback in `setting_rule` (`hub` or a device id). Rows are created by defaults (hub), `device.register` and `seed_defaults` (existing devices); `settings.set` still only updates existing rows.
+- **Scope:** `may_read_setting` takes the session's device id; a `display.hc.<id>` change is pushed only to that device.
+- **Kiosk cold start:** pure decision function (IPC answer within 1 s, else the app's `theme.json`), set before the existing hidden-window show.
+- **1.21 implementation choices, accepted:** the device rows use a labelled checkbox switch rather than `TabControl`, which takes one fixed label; only paired devices get an HC row (Kitchen is out of scope); the kiosk window is built by the shell (`create: false`) with the theme init script, and the app saves `theme.json` on every change; `display.hc.<id>` is fetched in its own `settings.get` so an older Hub never costs the process lists.
+- **1.21 review outcome:** 8 fixes, 15 rejections and 2 deferrals.
+  - Fixes: the kiosk exits for a watchdog relaunch when the window can't be built; the theme is re-read just before the build (no eval before load); the real init script is in committed fixtures checked byte for byte; a config test for the `main` window; the kiosk layout no longer lets a stale `currentTheme()` reply overwrite a newer event; focus returns after cancelling the PIN or a refused save; a load sequence guard; a test renamed.
+  - Deferred: the rev guard after a Hub database restore; the `arena-hub-ui` sidecar timing test failing locally (predates this story).
+  - Not verified locally: Windows clippy (the cc builds for sqlite and ring need MSVC headers; CI covers it); gallery `test:a11y` (port 5181 held by a running gallery dev server; the diff doesn't touch the gallery).

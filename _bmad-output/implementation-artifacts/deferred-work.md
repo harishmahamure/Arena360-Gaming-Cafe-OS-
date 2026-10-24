@@ -34,3 +34,10 @@
 - source_spec: `spec-1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r.md`
   summary: Manager PIN strength floor or rotation guidance, because every paired kiosk holds argon2 hashes of all `device.remote` holders.
   evidence: The offline verifier is pushed to all paired kiosks; short numeric PINs are brute-forceable from a compromised kiosk.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-21-high-contrast-theme-as-a-per-device-branch-setting.md`
+  summary: The kiosk's per-key rev guard (process lists and high contrast) ignores a Hub value with a lower rev, for example after a Hub database restore.
+  evidence: maybe-false (medium if true). The guard seeds from the cached rev and rejects lower ones, even on the authoritative `settings.get` after hello. It would be settled by deciding whether hello-time reads may lower a rev.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-21-high-contrast-theme-as-a-per-device-branch-setting.md`
+  summary: `arena-hub-ui` test `sidecar::tests::a_sidecar_that_exits_stops_the_wait_early` fails locally (it took over 5 s) in code this story doesn't touch.
+  evidence: It fails 3 out of 3 runs on this Mac (the stub sidecar takes about 6 s to be seen exiting). It is environmental or a timing budget, and predates story 1.21.

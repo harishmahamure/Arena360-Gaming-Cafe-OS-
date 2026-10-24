@@ -27,6 +27,8 @@ pub struct SnapshotUi {
     /// Minutes without input before a signed-in Hub UI locks (1–30; the setting
     /// `idle_lock_minutes`).
     pub idle_lock_minutes: u8,
+    /// Whether this Hub's UI uses the high-contrast theme (the setting `display.hc.hub`).
+    pub hc: bool,
 }
 
 impl SnapshotUi {
@@ -35,13 +37,17 @@ impl SnapshotUi {
     /// The setting's allowed range.
     pub const IDLE_LOCK_RANGE: std::ops::RangeInclusive<u8> = 1..=30;
 
-    /// From the setting's TEXT value: anything missing or out of range is the default.
-    pub fn from_setting(value: Option<&str>) -> Self {
-        let idle_lock_minutes = value
+    /// From the settings' TEXT values (`idle_lock_minutes`, `display.hc.hub`): anything
+    /// missing or out of range is the default (5 minutes, high contrast off).
+    pub fn from_settings(idle_lock: Option<&str>, hc: Option<&str>) -> Self {
+        let idle_lock_minutes = idle_lock
             .and_then(|v| v.parse::<u8>().ok())
             .filter(|m| Self::IDLE_LOCK_RANGE.contains(m))
             .unwrap_or(Self::DEFAULT_IDLE_LOCK_MINUTES);
-        Self { idle_lock_minutes }
+        Self {
+            idle_lock_minutes,
+            hc: crate::display::parse_hc_value(hc),
+        }
     }
 }
 
@@ -49,6 +55,7 @@ impl Default for SnapshotUi {
     fn default() -> Self {
         Self {
             idle_lock_minutes: Self::DEFAULT_IDLE_LOCK_MINUTES,
+            hc: false,
         }
     }
 }
@@ -189,20 +196,27 @@ mod tests {
                 "branch": null,
                 "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true}],
                 "locale": null,
-                "ui": {"idle_lock_minutes": 5}
+                "ui": {"idle_lock_minutes": 5, "hc": false}
             })
         );
     }
 
     #[test]
     fn ui_block_reads_the_setting_or_falls_back() {
-        assert_eq!(SnapshotUi::from_setting(Some("10")).idle_lock_minutes, 10);
+        assert_eq!(
+            SnapshotUi::from_settings(Some("10"), None).idle_lock_minutes,
+            10
+        );
         for bad in [None, Some("0"), Some("31"), Some("five"), Some("")] {
             assert_eq!(
-                SnapshotUi::from_setting(bad).idle_lock_minutes,
+                SnapshotUi::from_settings(bad, None).idle_lock_minutes,
                 5,
                 "{bad:?}"
             );
+        }
+        assert!(SnapshotUi::from_settings(None, Some("true")).hc);
+        for off in [None, Some("false"), Some("yes")] {
+            assert!(!SnapshotUi::from_settings(None, off).hc, "{off:?}");
         }
     }
 }

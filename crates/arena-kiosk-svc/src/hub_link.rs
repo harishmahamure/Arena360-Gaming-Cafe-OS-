@@ -13,7 +13,8 @@
 //!   mode (waiting at most [`SETTINGS_TIMEOUT`]) and applies the answer; a pushed
 //!   `settings.changed` applies the same way, live. A failed or slow `settings.get` keeps the
 //!   cached values (they still apply offline). The applied revisions start from the cached
-//!   ones, so an older revision never replaces a newer one.
+//!   ones, so an older revision never replaces a newer one. This kiosk's own high contrast
+//!   (`display.hc.<device_id>`) is read and applied the same way ([`crate::theme`]).
 //! - **Admin exit:** the live client is shared with [`crate::admin_exit`] (online PIN checks);
 //!   a pushed `verifier` is stored when newer, and `admin_unlock` grants a remote exit and is
 //!   acknowledged.
@@ -168,10 +169,24 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
 /// While connected: replay the queue, then wait for new events, the close or shutdown.
 async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bool>) -> Ended {
     let mut events = client.events();
-    let mut revs = AppliedRevs::from_cache(&ctx.queue.lock().unwrap_or_else(|p| p.into_inner()));
+    let device_id = ctx.config().map(|c| c.device_id);
+    let mut revs = {
+        let q = ctx.queue.lock().unwrap_or_else(|p| p.into_inner());
+        let mut revs = AppliedRevs::from_cache(&q);
+        if let Some(id) = &device_id {
+            revs.seed(&q, &crate::theme::key_for(id));
+        }
+        revs
+    };
     tokio::select! {
         () = fetch_settings(ctx, client, &mut revs) => {}
         _ = stop.changed() => return Ended::Shutdown,
+    }
+    if let Some(id) = &device_id {
+        tokio::select! {
+            () = fetch_theme(ctx, client, id, &mut revs) => {}
+            _ = stop.changed() => return Ended::Shutdown,
+        }
     }
     // Set once when a replay stops; new events do not push it back.
     let mut retry_at: Option<tokio::time::Instant> = None;
@@ -209,6 +224,9 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                 match ev {
                     Some(HubEvent::SettingsChanged(values)) => {
                         apply_settings(ctx, &values.values, &mut revs);
+                        if let Some(id) = &device_id {
+                            crate::theme::apply(ctx, id, &values.values, &mut revs);
+                        }
                     }
                     Some(HubEvent::Verifier { verifier }) => {
                         crate::admin_exit::store_verifier(ctx, verifier);
@@ -240,6 +258,26 @@ async fn fetch_settings(ctx: &Ctx, client: &HubClient, revs: &mut AppliedRevs) {
         Err(_) => tracing::warn!(
             timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
             "settings.get timed out; keeping the cached process settings"
+        ),
+    }
+}
+
+/// Asks the Hub for this kiosk's high contrast (its own `display.hc.<device_id>`, on its own so
+/// a Hub that does not know the key yet never costs the process settings) and applies it. A
+/// failure, or no answer within [`SETTINGS_TIMEOUT`], keeps the cached value.
+async fn fetch_theme(ctx: &Ctx, client: &HubClient, device_id: &str, revs: &mut AppliedRevs) {
+    let body = serde_json::json!({ "keys": [crate::theme::key_for(device_id)] });
+    match tokio::time::timeout(SETTINGS_TIMEOUT, client.request("settings.get", body)).await {
+        Ok(Ok(frame)) => match frame.body {
+            FrameBody::SettingsValues(v) => crate::theme::apply(ctx, device_id, &v.values, revs),
+            other => tracing::warn!(kind = other.kind(), "unexpected reply to settings.get"),
+        },
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "settings.get failed; keeping the cached high contrast")
+        }
+        Err(_) => tracing::warn!(
+            timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
+            "settings.get timed out; keeping the cached high contrast"
         ),
     }
 }

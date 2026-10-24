@@ -18,7 +18,8 @@
         "resizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": false
+        "visible": false,
+        "create": false
       }
     ],
     "security": {

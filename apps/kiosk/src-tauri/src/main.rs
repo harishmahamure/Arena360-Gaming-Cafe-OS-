@@ -8,15 +8,16 @@
 
 mod bridge;
 mod shell;
+mod theme;
 
 use std::sync::Arc;
 
 use arena_proto::KioskHubStatus;
 use bridge::{
     ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, Answer, Bridge, Emit, HUB_STATUS_EVENT,
-    RESTORE_STATE_EVENT, TOAST_EVENT,
+    RESTORE_STATE_EVENT, THEME_EVENT, TOAST_EVENT,
 };
-use tauri::{Emitter, Manager, Runtime, WebviewWindow, WindowEvent};
+use tauri::{Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 fn crate_name() -> &'static str {
     "arena-kiosk-ui"
@@ -86,6 +87,57 @@ async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Opti
         .await)
 }
 
+/// Whether this kiosk is high contrast now (the service's last word, or the first-paint
+/// decision), so a reloaded page re-applies it.
+#[tauri::command]
+fn theme(bridge: tauri::State<'_, Arc<Bridge>>) -> bool {
+    bridge.theme().unwrap_or(false)
+}
+
+/// Where the last theme is saved (`<app local data>/theme.json`), if the directory is known.
+fn theme_file<R: Runtime>(handle: &tauri::AppHandle<R>) -> Option<std::path::PathBuf> {
+    handle
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|d| theme::file_in(&d))
+}
+
+/// Builds the hidden `main` window from its configuration with the theme set before the first
+/// script runs: the service's theme if it answers within [`theme::SERVICE_WAIT`], else the one
+/// saved last time ([`theme::initial`]).
+fn build_window<R: Runtime>(app: &tauri::App<R>, bridge: &Arc<Bridge>) -> Option<WebviewWindow<R>> {
+    let from_service = tauri::async_runtime::block_on(bridge.wait_theme(theme::SERVICE_WAIT));
+    let saved = theme_file(app.handle()).and_then(|p| theme::read(&p));
+    let hc = theme::initial(from_service, saved);
+    if from_service.is_none() {
+        tracing::info!(saved = ?saved, hc, "no theme from the kiosk service in time; using the saved one");
+    }
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+    else {
+        tracing::error!("no `main` window in tauri.conf.json");
+        return None;
+    };
+    // The service may have answered just after the wait: the latest word wins.
+    let hc = bridge.theme().unwrap_or(hc);
+    bridge.settle_theme(hc);
+    match WebviewWindowBuilder::from_config(app.handle(), &config)
+        .map(|b| b.initialization_script(theme::init_script(hc)).build())
+    {
+        Ok(Ok(w)) => Some(w),
+        Ok(Err(e)) | Err(e) => {
+            tracing::error!(error = %e, "the kiosk window could not be built");
+            None
+        }
+    }
+}
+
 /// Admin exit started (`Some`) or ended (`None`): the lockdown is suspended and the window
 /// becomes the corner badge, or the window covers every screen again and locks down.
 fn on_admin_exit<R: Runtime>(handle: &tauri::AppHandle<R>, running: bool) {
@@ -120,7 +172,8 @@ fn main() {
             take_restore_state,
             heartbeat,
             admin_exit,
-            admin_exit_status
+            admin_exit_status,
+            theme
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).
@@ -131,7 +184,37 @@ fn main() {
             }
         })
         .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
+            // The service link first: its theme decides the first paint.
+            let handle = app.handle().clone();
+            let bridge = Arc::clone(app.state::<Arc<Bridge>>().inner());
+            tauri::async_runtime::spawn(async move {
+                let emit = move |e: Emit| {
+                    let _ = match e {
+                        Emit::HubStatus(s) => handle.emit(HUB_STATUS_EVENT, s),
+                        Emit::RestoreState(v) => handle.emit(RESTORE_STATE_EVENT, v),
+                        Emit::Toast(key) => handle.emit(TOAST_EVENT, key),
+                        Emit::AdminExit(until) => {
+                            on_admin_exit(&handle, true);
+                            handle.emit(ADMIN_EXIT_EVENT, serde_json::json!({ "until": until }))
+                        }
+                        Emit::AdminExitEnded => {
+                            on_admin_exit(&handle, false);
+                            handle.emit(ADMIN_EXIT_ENDED_EVENT, ())
+                        }
+                        Emit::Theme(hc) => {
+                            if let Some(path) = theme_file(&handle)
+                                && let Err(e) = theme::write(&path, hc)
+                            {
+                                tracing::warn!(error = %e, "could not save the theme");
+                            }
+                            handle.emit(THEME_EVENT, serde_json::json!({ "hc": hc }))
+                        }
+                    };
+                };
+                bridge.run(&emit).await;
+            });
+            let bridge = Arc::clone(app.state::<Arc<Bridge>>().inner());
+            if let Some(window) = build_window(app, &bridge) {
                 if shell::dev_unlocked() {
                     let _ = window.set_always_on_top(false);
                     let _ = window.show();
@@ -163,38 +246,11 @@ fn main() {
                     }
                 }
             } else {
-                // No window is a serious misconfiguration, but the hook must still run so the
-                // Windows keys and task switchers are swallowed.
-                tracing::error!("no kiosk window; starting the input guard anyway");
-                #[cfg(windows)]
-                if !shell::dev_unlocked() {
-                    let bridge = Arc::clone(app.state::<Arc<Bridge>>().inner());
-                    shell::start_input_thread(
-                        || {},
-                        move |degraded| bridge.set_lockdown_degraded(degraded),
-                    );
-                }
+                // `create: false`: nothing else builds the window. Exit with a failure so the
+                // service's watchdog relaunches the app (the screen stays covered meanwhile).
+                tracing::error!("no kiosk window; exiting so the service relaunches the app");
+                std::process::exit(1);
             }
-            let handle = app.handle().clone();
-            let bridge = Arc::clone(app.state::<Arc<Bridge>>().inner());
-            tauri::async_runtime::spawn(async move {
-                let emit = move |e: Emit| {
-                    let _ = match e {
-                        Emit::HubStatus(s) => handle.emit(HUB_STATUS_EVENT, s),
-                        Emit::RestoreState(v) => handle.emit(RESTORE_STATE_EVENT, v),
-                        Emit::Toast(key) => handle.emit(TOAST_EVENT, key),
-                        Emit::AdminExit(until) => {
-                            on_admin_exit(&handle, true);
-                            handle.emit(ADMIN_EXIT_EVENT, serde_json::json!({ "until": until }))
-                        }
-                        Emit::AdminExitEnded => {
-                            on_admin_exit(&handle, false);
-                            handle.emit(ADMIN_EXIT_ENDED_EVENT, ())
-                        }
-                    };
-                };
-                bridge.run(&emit).await;
-            });
             Ok(())
         })
         .run(tauri::generate_context!())

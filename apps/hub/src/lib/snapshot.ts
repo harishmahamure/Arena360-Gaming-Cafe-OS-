@@ -30,7 +30,7 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
         devices: snapshot.devices.map((d) => ({ ...d, online: d.online === true })),
         locale: snapshot.locale ?? null,
         // A missing or malformed `ui` block falls back to the defaults.
-        ui: isSnapshotUi(snapshot.ui) ? snapshot.ui : { idle_lock_minutes: 5 },
+        ui: normalizeUi(snapshot.ui),
       },
     };
   } catch {
@@ -70,9 +70,23 @@ export function isSnapshotLocale(v: unknown): v is SnapshotLocale {
   );
 }
 
-/** Whether `v` has the `SnapshotUi` shape (`idle_lock_minutes` 1–30). */
+/**
+ * Whether `v` has the `SnapshotUi` shape (`idle_lock_minutes` 1–30; `hc` may be missing, from a
+ * Hub before per-device high contrast).
+ */
 export function isSnapshotUi(v: unknown): v is SnapshotUi {
-  return isObject(v) && isInt(v.idle_lock_minutes, 1, 30);
+  return (
+    isObject(v) &&
+    isInt(v.idle_lock_minutes, 1, 30) &&
+    (v.hc === undefined || typeof v.hc === "boolean")
+  );
+}
+
+/** The UI settings in `v`, or the defaults (5 minutes, not high contrast) when malformed. */
+export function normalizeUi(v: unknown): SnapshotUi {
+  return isSnapshotUi(v)
+    ? { idle_lock_minutes: v.idle_lock_minutes, hc: v.hc === true }
+    : { idle_lock_minutes: 5, hc: false };
 }
 
 /**

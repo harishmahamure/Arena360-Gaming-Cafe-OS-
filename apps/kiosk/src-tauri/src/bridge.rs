@@ -1,7 +1,7 @@
 //! The app end of the Kiosk service channel. The webview never sees the channel: this Rust
-//! shell answers the service's pings, forwards `hub_status`, `restore_state` and `toast` to the
-//! webview as the Tauri events `hub-status`, `restore-state` and `toast`, and sends the webview's state up as
-//! `app_state`. The webview has no Hub socket, no token and no admin rights.
+//! shell answers the service's pings, forwards `hub_status`, `restore_state`, `toast` and
+//! `theme` to the webview as the Tauri events `hub-status`, `restore-state`, `toast` and
+//! `theme`, and sends the webview's state up as `app_state`. The webview has no Hub socket, no token and no admin rights.
 //!
 //! - **Liveness is the webview's.** The shell answers the service's `ping` only while the
 //!   webview's `heartbeat` command (sent every second) was seen within [`HEARTBEAT_FRESH`], so a
@@ -15,6 +15,9 @@
 //!   logged) and the service's `reply` comes back as the command's result. `admin_exit_started`
 //!   and `admin_exit_ended` become the `admin-exit` / `admin-exit-ended` events; `main.rs`
 //!   suspends the lockdown and shrinks the window to the countdown badge in between.
+//! - **Theme (Story 1.21).** The service's `theme{hc}` (on every connection and every change)
+//!   is kept as the latest value: [`Bridge::wait_theme`] lets `main.rs` decide the first paint,
+//!   and a change becomes the `theme` event (`main.rs` also saves it to `theme.json`).
 //! - **Windows:** the pipe's server must run as SYSTEM, or the connection is refused.
 
 use std::collections::HashMap;
@@ -39,18 +42,21 @@ pub const TOAST_EVENT: &str = "toast";
 pub const ADMIN_EXIT_EVENT: &str = "admin-exit";
 /// The Tauri event of an admin exit that is over.
 pub const ADMIN_EXIT_ENDED_EVENT: &str = "admin-exit-ended";
+/// The Tauri event carrying the theme: `{hc}`.
+pub const THEME_EVENT: &str = "theme";
 /// How long the shell waits for the service's answer to a PIN.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 6] = [
+const COMMANDS: [&str; 7] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
     "heartbeat",
     "admin_exit",
     "admin_exit_status",
+    "theme",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -68,6 +74,8 @@ pub enum Emit {
     AdminExit(i64),
     /// The admin exit is over.
     AdminExitEnded,
+    /// The theme changed: high contrast on (`true`) or off.
+    Theme(bool),
 }
 
 /// What the service answered to a request: the body, or the error code (and the body that came
@@ -99,6 +107,8 @@ pub struct Bridge {
     /// Whether an admin exit runs, as last told: `admin_exit_ended` (sent on every connection)
     /// is passed on only when one ran, so a reconnect never re-covers the screen for nothing.
     exit_running: AtomicBool,
+    /// This kiosk's high contrast, once the service has said (or `main.rs` has decided).
+    theme: watch::Sender<Option<bool>>,
 }
 
 impl Default for Bridge {
@@ -114,6 +124,7 @@ impl Default for Bridge {
             pending: Mutex::default(),
             next_rid: AtomicU64::new(1),
             exit_running: AtomicBool::new(false),
+            theme: watch::channel(None).0,
         }
     }
 }
@@ -187,6 +198,32 @@ impl Bridge {
         *lock(&self.hub)
     }
 
+    /// The theme the service sent, if any.
+    pub fn theme(&self) -> Option<bool> {
+        *self.theme.borrow()
+    }
+
+    /// Records the first-paint theme when the service has not said yet (so the `theme` command
+    /// answers it, and a later different value from the service is a change).
+    pub fn settle_theme(&self, hc: bool) {
+        self.theme.send_if_modified(|t| {
+            if t.is_some() {
+                return false;
+            }
+            *t = Some(hc);
+            true
+        });
+    }
+
+    /// The service's theme, waiting at most `wait` for it (`None`: it did not say in time).
+    pub async fn wait_theme(&self, wait: Duration) -> Option<bool> {
+        let mut rx = self.theme.subscribe();
+        match tokio::time::timeout(wait, rx.wait_for(Option::is_some)).await {
+            Ok(Ok(v)) => *v,
+            _ => None,
+        }
+    }
+
     /// The state to restore, once (cleared on delivery).
     pub fn take_restore(&self) -> Option<Value> {
         lock(&self.restore).take()
@@ -223,6 +260,14 @@ impl Bridge {
                 (None, Some(Emit::RestoreState(json)))
             }
             IpcMsg::Toast { key } => (None, Some(Emit::Toast(key))),
+            IpcMsg::Theme { hc } => {
+                let changed = self.theme.send_if_modified(|t| {
+                    let new = *t != Some(hc);
+                    *t = Some(hc);
+                    new
+                });
+                (None, changed.then_some(Emit::Theme(hc)))
+            }
             IpcMsg::AdminExitStarted { until } => {
                 self.exit_running.store(true, Ordering::SeqCst);
                 (None, Some(Emit::AdminExit(until)))
@@ -445,6 +490,7 @@ mod tests {
         assert_eq!(names["events"]["hubStatus"], HUB_STATUS_EVENT);
         assert_eq!(names["events"]["restoreState"], RESTORE_STATE_EVENT);
         assert_eq!(names["events"]["toast"], TOAST_EVENT);
+        assert_eq!(names["events"]["theme"], THEME_EVENT);
         let mut listed: Vec<&str> = names["commands"]
             .as_object()
             .unwrap()
@@ -539,6 +585,35 @@ mod tests {
         drop(sw);
         drop(sr);
         let _ = tokio::time::timeout(Duration::from_secs(2), served).await;
+    }
+
+    #[tokio::test]
+    async fn the_theme_is_waited_for_at_most_the_timeout_and_changes_are_emitted_once() {
+        let b = Arc::new(Bridge::default());
+        let started = Instant::now();
+        assert_eq!(b.wait_theme(Duration::from_millis(50)).await, None);
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "a slow service never blocks"
+        );
+        let waiting = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move { b.wait_theme(Duration::from_secs(5)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            b.on_message(IpcMsg::Theme { hc: true }),
+            (None, Some(Emit::Theme(true)))
+        );
+        assert_eq!(waiting.await.unwrap(), Some(true));
+        assert_eq!(b.theme(), Some(true));
+        // The same value again (a reconnect) is nothing new; a change is.
+        assert_eq!(b.on_message(IpcMsg::Theme { hc: true }), (None, None));
+        assert_eq!(
+            b.on_message(IpcMsg::Theme { hc: false }),
+            (None, Some(Emit::Theme(false)))
+        );
+        assert_eq!(b.wait_theme(Duration::from_millis(1)).await, Some(false));
     }
 
     #[test]

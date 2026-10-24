@@ -11,6 +11,7 @@
     { href: "/settings/branch", label: "hub.settings.nav.branch" },
     { href: "/settings/receipt", label: "hub.settings.nav.receipt" },
     { href: "/settings/screen-lock", label: "hub.settings.nav.screen_lock" },
+    { href: "/settings/devices-display", label: "hub.settings.nav.devices_display" },
   ];
   const section = $derived(SECTIONS.find((s) => page.url.pathname.startsWith(s.href)));
 </script>

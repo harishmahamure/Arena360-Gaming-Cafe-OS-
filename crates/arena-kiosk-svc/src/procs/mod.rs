@@ -427,6 +427,23 @@ impl AppliedRevs {
     pub fn get(&self, key: &str) -> Option<i64> {
         self.0.get(key).copied()
     }
+
+    /// Also seeds `key` (another setting the kiosk caches, such as its high contrast) from the
+    /// cache.
+    pub fn seed(&mut self, queue: &QueueDb, key: &str) {
+        match queue.kv_get(key) {
+            Ok(Some((_, rev))) => {
+                self.0.insert(key.to_owned(), rev);
+            }
+            Ok(None) => {}
+            Err(e) => tracing::error!(key, error = %e, "the setting cache cannot be read"),
+        }
+    }
+
+    /// Records `rev` as applied for `key`.
+    pub fn record(&mut self, key: &str, rev: i64) {
+        self.0.insert(key.to_owned(), rev);
+    }
 }
 
 enum Parsed {

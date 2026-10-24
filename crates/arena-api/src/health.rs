@@ -525,7 +525,7 @@ mod tests {
                         "fy_start_month": 4,
                         "pending": null
                     },
-                    "ui": {"idle_lock_minutes": 5}
+                    "ui": {"idle_lock_minutes": 5, "hc": false}
                 })
             );
         }
@@ -537,7 +537,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body,
-                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5}})
+                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}})
             );
         }
 

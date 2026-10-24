@@ -400,7 +400,8 @@ dropped, and focus returns to Save; a lapsed approval asks again without a round
 returns focus, and a `PIN_REQUIRED` answer asks for the PIN again), **Receipt** (the
 "Receipt footer" control from Story 1.11) and **Screen lock** (`/settings/screen-lock`: the idle
 lock in minutes with "1–30 minutes" shown inline, checked before any round trip, saved with
-`settings.set` and the same manager approval for a Counter). **System → Audit**
+`settings.set` and the same manager approval for a Counter) and **Devices & display**
+(high contrast per device; see [High contrast per device](#high-contrast-per-device)). **System → Audit**
 (`/system` opens `/system/audit`): filters for who (staff names from `/ui/audit/facets`, plus
 System, Owner and Devices), module and a from/to date pair in the branch time zone (`to`
 inclusive, sent as the next day's start), with Clear filters resetting them all; a table of
@@ -882,6 +883,36 @@ screen again and `device.admin_relock{exit_id}` is queued. A service restart re-
 exit at once. Five wrong PINs at the kiosk pause the prompt for 60 s with a countdown; the count
 lives in the service, so restarting the app does not reset it. A failed attempt is logged with
 the device and count (never the PIN) and queued as `kiosk.log{warn, admin_exit_failed}`.
+
+## High contrast per device
+
+High contrast (pure black and white, accent `#FFE14D`, 2px white outlines on interactive
+surfaces, a 4px yellow focus ring, no shadows or translucency, instant motion: the generated
+`-hc` tokens plus the `[data-theme="hc"]` rules in `@arena/ui/base.css`) is a branch setting per
+device, set by a manager. There is no player-facing control, no light theme on Hub, Kiosk or
+Kitchen (`scripts/no-theme-toggle.test.mjs` fails on a `theme-toggle`, a `data-theme="light"` or
+a `ThemeToggle` import in their sources), and the OS high-contrast setting is not read. Art and
+video (none yet) must be hidden in HC by the epics that add them.
+
+- **Settings.** `display.hc.hub` is this Hub's UI; `display.hc.<device_id>` is one per paired
+  device. Values are `"true"` or `"false"` (`SettingRule::Bool`, matched by the `display.hc.`
+  prefix plus `hub` or a ULID). Bootstrap creates `display.hc.hub`, `device.register` creates the
+  device's row (`false`) in the same change, and `branch.seed_defaults` backfills any missing row
+  for the Hub and every non-revoked paired device. They are edited with `settings.set`
+  (`settings.edit`, `base_rev` required); a Counter's change needs a manager's PIN in place.
+- **Hub UI.** Settings → **Devices & display** (`/settings/devices-display`) lists "This Hub" and
+  every non-revoked paired device by label, each with a 44px switch that saves its own row. The
+  snapshot's `ui.hc` (from `display.hc.hub`) sets `data-theme` on `<html>` before the shell
+  renders, and `settings.changed` on `/ui/events` switches it live.
+- **Kiosk.** A paired session may read its own `display.hc.<device_id>` with `settings.get`
+  (another device's key or the Hub's is `FORBIDDEN`), and a change is pushed only to that device
+  in `settings.changed`. The service caches it in `queue.db` `kv` (same rev guard as the process
+  lists) and sends IPC `theme{hc}` to the app on every connection and every change (`theme` is
+  also a request kind). The Tauri window is configured hidden and not auto-created: at start the
+  shell waits up to 1 s for the service's `theme`, else uses `<app local data>/theme.json` (saved
+  on every change), builds the window with an initialization script that sets `data-theme` before
+  any page script runs, and only then shows it. Later changes arrive as the `theme` event and
+  apply without a restart.
 
 ## Pinned versions
 

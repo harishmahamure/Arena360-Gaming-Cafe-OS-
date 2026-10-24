@@ -7,6 +7,9 @@
   import { onMount, type Snippet } from "svelte";
   import {
     adminExit,
+    applyTheme,
+    currentTheme,
+    onTheme,
     adminExitStatus,
     isAdminExitCombo,
     onAdminExit,
@@ -93,6 +96,14 @@
     let gone = false;
     void (async () => {
       const add = (stop: () => void) => (gone ? stop() : stops.push(stop));
+      // A `theme` event is newer than the reply to the `theme` command asked below.
+      let themed = false;
+      add(
+        await onTheme((hc) => {
+          themed = true;
+          applyTheme(hc);
+        }),
+      );
       add(await onHubStatus((s) => (hub = s.state)));
       add(await onToast((key) => (toast = key)));
       add(
@@ -111,6 +122,8 @@
           void takeRestoreState();
         }),
       );
+      const hc = await currentTheme();
+      if (hc !== null && !themed) applyTheme(hc);
       const known = await currentHubStatus();
       if (known && hub === null) hub = known.state;
       const pending = await takeRestoreState();
@@ -251,6 +264,17 @@
 
   .dismiss:focus-visible {
     outline: 3px solid var(--hud-toast-title);
+    outline-offset: 2px;
+  }
+
+  /* HC: the shared 4px focus ring and 2px white outline, never the toast's own colours. */
+  :global([data-theme="hc"]) .dismiss {
+    outline: 2px solid var(--text);
+    outline-offset: 0;
+  }
+
+  :global([data-theme="hc"]) .dismiss:focus-visible {
+    outline: 4px solid var(--focus-ring);
     outline-offset: 2px;
   }
 

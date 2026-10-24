@@ -2,7 +2,7 @@
 // subscribes while someone is signed in; the Hub pushes, the UI never polls.
 
 import type { AdminUnlockAckEvent, SettingsChangedEvent, UnlockOk } from "@arena/ui/generated";
-import { isSnapshotLocale, isSnapshotUi } from "./snapshot";
+import { isSnapshotLocale, normalizeUi } from "./snapshot";
 
 export const EVENTS_URL = "http://127.0.0.1:7409/ui/events";
 /** Waits before reopening a stream the Hub closed or refused, in seconds (then 15 s each). */
@@ -39,7 +39,7 @@ export function isSettingsChanged(v: unknown): v is SettingsChangedEvent {
 
 /** The event's UI settings; a missing or malformed block means the defaults. */
 export function uiOf(event: SettingsChangedEvent): SettingsChangedEvent["ui"] {
-  return isSnapshotUi(event.ui) ? event.ui : { idle_lock_minutes: 5 };
+  return normalizeUi(event.ui);
 }
 
 /**

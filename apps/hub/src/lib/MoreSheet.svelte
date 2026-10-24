@@ -109,6 +109,11 @@
     background-color: color-mix(in srgb, var(--scrim-base) 72%, transparent);
   }
 
+  /* HC: no translucency; the screen behind is covered by the pure black ground. */
+  :global([data-theme="hc"]) .backdrop {
+    background-color: var(--bg);
+  }
+
   .sheet {
     --ring-gap: var(--surface);
     position: relative;

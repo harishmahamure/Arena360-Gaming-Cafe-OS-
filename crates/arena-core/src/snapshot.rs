@@ -68,17 +68,23 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
     Ok(build_snapshot(branch, devices, locale, ui))
 }
 
-/// The setting behind [`SnapshotUi::idle_lock_minutes`].
+/// The setting behind [`SnapshotUi::idle_lock_minutes`] (`display.hc.hub` is behind
+/// [`SnapshotUi::hc`]).
 pub const KEY_IDLE_LOCK_MINUTES: &str = "idle_lock_minutes";
 
 /// The Hub UI settings (the defaults before bootstrap).
 fn read_ui(store: &Store) -> Result<SnapshotUi, AppError> {
     let settings = store.settings()?;
-    let value = settings
-        .iter()
-        .find(|s| s.key == KEY_IDLE_LOCK_MINUTES)
-        .map(|s| s.value.as_str());
-    Ok(SnapshotUi::from_setting(value))
+    let value = |key: &str| {
+        settings
+            .iter()
+            .find(|s| s.key == key)
+            .map(|s| s.value.as_str())
+    };
+    Ok(SnapshotUi::from_settings(
+        value(KEY_IDLE_LOCK_MINUTES),
+        value(arena_proto::KEY_HC_HUB),
+    ))
 }
 
 /// The locale in effect at `now_ms` (`None` before bootstrap).

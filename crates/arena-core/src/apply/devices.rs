@@ -5,14 +5,16 @@
 //! - **base_rev** is optional on revoke and version_reported: when present it must match the
 //!   device row's `rev`, else `STALE`. `device.register` creates a row and takes none.
 //! - `device.register` stores the argon2id hash computed by the caller outside the
-//!   transaction; the writer mints the `device_id`.
+//!   transaction; the writer mints the `device_id`. A paired device also gets its
+//!   `display.hc.<device_id>` setting row (`false`) in the same change.
 
 use arena_proto::{
-    AppError, ClientClass, DeviceRegister, DeviceRevoke, DeviceVersionReported, ErrorCode, Intent,
+    AppError, ClientClass, DeviceRegister, DeviceRevoke, DeviceVersionReported, ErrorCode,
+    HC_DEFAULT, Intent, hc_key,
 };
 use arena_store::{
     ChangeOp, DeviceRow, NewDevice, RowKey, StoreTx, current_branch_id, find_device, insert_device,
-    set_device_reported_version, set_device_revoked,
+    insert_setting, set_device_reported_version, set_device_revoked,
 };
 
 use super::Target;
@@ -146,11 +148,27 @@ pub(super) fn mutate_register(
             token_hash: &d.token_hash,
         },
     )?;
-    Ok(vec![Written {
-        key: RowKey::Devices { device_id },
+    let mut written = vec![Written {
+        key: RowKey::Devices {
+            device_id: device_id.clone(),
+        },
         op: ChangeOp::Insert,
         before: None,
-    }])
+    }];
+    // Story 1.21: a paired device starts with high contrast off, in the same change.
+    if d.class == ClientClass::Paired {
+        let key = hc_key(&device_id);
+        insert_setting(tx, branch_id, &key, HC_DEFAULT)?;
+        written.push(Written {
+            key: RowKey::Settings {
+                branch_id: branch_id.clone(),
+                key,
+            },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+    }
+    Ok(written)
 }
 
 pub(super) fn mutate_revoke(

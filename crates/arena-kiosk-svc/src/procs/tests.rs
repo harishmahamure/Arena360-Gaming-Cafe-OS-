@@ -56,6 +56,7 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         hub_state,
         app_state: Mutex::new(None),
         lists,
+        theme: watch::channel(false).0,
         toasts,
         launcher: Arc::new(crate::launcher::NoopLauncher),
         admin: crate::admin_exit::AdminState::load(Box::new(NoSecret)),
@@ -666,4 +667,58 @@ fn closing_explorer_never_touches_other_sessions_or_report_mode_rules() {
         "report mode still closes it"
     );
     assert_eq!(t.sys.killed(), vec![61]);
+}
+
+// ---- Story 1.21: this kiosk's high contrast, cached with the same rev guard ----
+
+#[test]
+fn high_contrast_applies_once_per_newer_rev_and_ignores_other_devices() {
+    const ME: &str = "01JABCDEFGHJKMNPQRSTVWXYZ0";
+    let t = setup(enforcing());
+    let key = crate::theme::key_for(ME);
+    let entry = |key: &str, value: &str, rev: i64| SettingEntry {
+        key: key.into(),
+        value: value.into(),
+        rev,
+    };
+    let mut changes = t.ctx.theme.subscribe();
+    let mut revs = AppliedRevs::default();
+    let kv = || t.ctx.queue.lock().unwrap().kv_get(&key).unwrap();
+    crate::theme::apply(&t.ctx, ME, &[entry(&key, "true", 2)], &mut revs);
+    assert!(*t.ctx.theme.borrow());
+    assert!(changes.has_changed().unwrap());
+    changes.mark_unchanged();
+    assert_eq!(kv(), Some(("true".to_owned(), 2)));
+    // Older, invalid, or another device's key: nothing changes.
+    crate::theme::apply(
+        &t.ctx,
+        ME,
+        &[
+            entry(&key, "false", 1),
+            entry(&key, "nope", 3),
+            entry(
+                &crate::theme::key_for("01JABCDEFGHJKMNPQRSTVWXYZ1"),
+                "false",
+                9,
+            ),
+        ],
+        &mut revs,
+    );
+    assert!(*t.ctx.theme.borrow());
+    assert!(!changes.has_changed().unwrap());
+    assert_eq!(kv(), Some(("true".to_owned(), 2)));
+    // The next connection's revs start from the cache.
+    let mut next = AppliedRevs::default();
+    next.seed(&t.ctx.queue.lock().unwrap(), &key);
+    assert_eq!(next.get(&key), Some(2));
+    crate::theme::apply(&t.ctx, ME, &[entry(&key, "false", 1)], &mut next);
+    assert!(*t.ctx.theme.borrow());
+    // A newer value turns it off and is cached; the cache is what a cold start reads.
+    crate::theme::apply(&t.ctx, ME, &[entry(&key, "false", 3)], &mut next);
+    assert!(!*t.ctx.theme.borrow());
+    let q = t.ctx.queue.lock().unwrap();
+    assert!(!crate::theme::load(&q, Some(ME)));
+    q.kv_set(&key, "true", 4).unwrap();
+    assert!(crate::theme::load(&q, Some(ME)));
+    assert!(!crate::theme::load(&q, None), "unprovisioned");
 }

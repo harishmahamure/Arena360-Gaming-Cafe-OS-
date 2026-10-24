@@ -676,12 +676,13 @@ async fn the_watchdog_restarts_a_silent_app_and_restores_its_state() {
     let ctx = Arc::clone(kiosk.rt().ctx());
     assert_eq!(ctx.queue_len(), 1, "the restart is queued as a kiosk.log");
 
-    // The relaunched app gets the link state, then its last state back.
+    // The relaunched app gets the link state and its theme, then its last state back.
     let mut again = kiosk.app().await;
     assert!(matches!(
         again.recv().await.unwrap(),
         IpcMsg::HubStatus { .. }
     ));
+    assert_eq!(again.recv().await.unwrap(), IpcMsg::Theme { hc: false });
     assert_eq!(
         again.recv().await.unwrap(),
         IpcMsg::RestoreState { json: state }
@@ -703,7 +704,7 @@ async fn the_newest_app_connection_wins_and_requests_are_answered() {
     loop {
         match first.recv().await {
             Err(IpcError::Closed) => break,
-            Ok(IpcMsg::Ping { .. } | IpcMsg::AdminExitEnded) => {}
+            Ok(IpcMsg::Ping { .. } | IpcMsg::Theme { .. } | IpcMsg::AdminExitEnded) => {}
             other => panic!("{other:?}"),
         }
     }
@@ -1511,4 +1512,108 @@ async fn the_end_of_an_exit_closes_explorer_and_resumes_enforcement() {
     })
     .await;
     assert!(!sys.alive(300));
+}
+
+// ---- Story 1.21: this kiosk's high contrast ----
+
+impl Hub {
+    /// Sets the setting `key` to `value` as the owner, at its current rev.
+    async fn set_setting(&self, key: &str, value: &str) {
+        let rev = Store::open_reader(&self.path)
+            .unwrap()
+            .settings()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.key == key)
+            .unwrap_or_else(|| panic!("no {key}"))
+            .rev;
+        self.writer
+            .submit_intent(Intent {
+                base_rev: Some(rev),
+                ..intent(
+                    owner(),
+                    IntentPayload::SettingsSet(arena_proto::SettingsSet {
+                        key: key.into(),
+                        value: value.into(),
+                    }),
+                )
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_manager_turns_this_kiosks_high_contrast_on_live_and_the_hubs_key_is_not_ours() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    let mut app = kiosk.app().await;
+    app.until(|m| *m == IpcMsg::Theme { hc: false }).await;
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let key = arena_proto::hc_key(&hub.device_id);
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let cached = || ctx.queue.lock().unwrap().kv_get(&key).unwrap();
+    eventually("the theme read after hello", || cached().is_some()).await;
+    assert_eq!(cached().unwrap(), ("false".to_owned(), 1));
+
+    // The Hub's own key changes nothing here.
+    hub.set_setting("display.hc.hub", "true").await;
+    let started = Instant::now();
+    hub.set_setting(&key, "true").await;
+    app.until(|m| *m == IpcMsg::Theme { hc: true }).await;
+    assert!(started.elapsed() < Duration::from_secs(2), "within 2 s");
+    assert!(
+        !app.skipped.contains(&IpcMsg::Theme { hc: true }),
+        "exactly one theme change"
+    );
+    assert_eq!(cached().unwrap(), ("true".to_owned(), 2));
+    // A `theme` request answers the same value.
+    app.send(&IpcMsg::Request {
+        rid: "t1".into(),
+        kind: "theme".into(),
+        body: serde_json::Value::Null,
+    })
+    .await;
+    let reply = app.until(|m| matches!(m, IpcMsg::Reply { .. })).await;
+    assert_eq!(
+        reply,
+        IpcMsg::Reply {
+            rid: "t1".into(),
+            body: serde_json::json!({"hc": true}),
+            error: None,
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_start_offline_sends_the_cached_high_contrast_first() {
+    let hub = Hub::seeded().await;
+    let kiosk_cache = |kiosk: &Kiosk, value: &str, rev: i64| {
+        std::fs::create_dir_all(kiosk.data.root()).unwrap();
+        arena_kiosk_svc::queue::QueueDb::open(&kiosk.data.queue())
+            .unwrap()
+            .kv_set(&arena_proto::hc_key(&hub.device_id), value, rev)
+            .unwrap();
+    };
+    // The Hub is never up: only the cache can say.
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk_cache(&kiosk, "true", 3);
+    kiosk.start();
+    let mut app = kiosk.app().await;
+    assert!(matches!(
+        app.recv().await.unwrap(),
+        IpcMsg::HubStatus {
+            state: KioskHubState::Reconnecting
+        }
+    ));
+    assert_eq!(app.recv().await.unwrap(), IpcMsg::Theme { hc: true });
+    kiosk.runtime.take().unwrap().shutdown().await;
+    // A damaged cache is not high contrast.
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk_cache(&kiosk, "maybe", 3);
+    kiosk.start();
+    let mut app = kiosk.app().await;
+    app.until(|m| *m == IpcMsg::Theme { hc: false }).await;
 }

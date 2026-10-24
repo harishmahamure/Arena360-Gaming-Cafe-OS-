@@ -115,7 +115,7 @@ function snapshot(hub: Hub): HubSnapshot {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     devices: [],
     locale: locale(hub),
-    ui: { idle_lock_minutes: Number(hub.settings.get("idle_lock_minutes")?.value ?? 5) },
+    ui: { idle_lock_minutes: Number(hub.settings.get("idle_lock_minutes")?.value ?? 5), hc: false },
   };
 }
 
@@ -243,6 +243,7 @@ test("Settings opens on Branch, first in its sections, with the current values",
     en["hub.settings.nav.branch"],
     en["hub.settings.nav.receipt"],
     en["hub.settings.nav.screen_lock"],
+    en["hub.settings.nav.devices_display"],
   ]);
   await expect(sections.getByRole("link").first()).toHaveAttribute("aria-current", "page");
   await expect(page.getByLabel(en["hub.settings.branch.symbol_before"])).toBeChecked();

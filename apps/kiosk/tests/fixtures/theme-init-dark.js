@@ -1,0 +1,1 @@
+(function () {var t = "dark";function apply() {var e = document.documentElement;if (!e) return false;e.dataset.theme = t;return true;}if (!apply()) {var o = new MutationObserver(function () { if (apply()) o.disconnect(); });o.observe(document, { childList: true });}})();

@@ -88,6 +88,10 @@ pub enum IpcMsg {
     Pong { n: u64 },
     /// Service → app: the Hub link changed (also sent once on every new connection).
     HubStatus { state: KioskHubState },
+    /// Service → app: whether this kiosk uses the high-contrast theme (its
+    /// `display.hc.<device_id>` setting). Sent on every new connection, right after
+    /// `hub_status`, and whenever it changes.
+    Theme { hc: bool },
     /// App → service: the app's restorable state (a JSON value the UI owns), sent whenever it
     /// changes.
     AppState { json: Value },
@@ -245,6 +249,14 @@ mod tests {
             }
             .to_line(),
             "{\"type\":\"toast\",\"key\":\"player.app.blocked\"}\n"
+        );
+        assert_eq!(
+            IpcMsg::Theme { hc: true }.to_line(),
+            "{\"type\":\"theme\",\"hc\":true}\n"
+        );
+        assert_eq!(
+            IpcMsg::parse("{\"type\":\"theme\",\"hc\":false}").unwrap(),
+            IpcMsg::Theme { hc: false }
         );
     }
 

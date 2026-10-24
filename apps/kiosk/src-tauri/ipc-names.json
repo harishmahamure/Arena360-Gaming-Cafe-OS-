@@ -4,7 +4,8 @@
     "restoreState": "restore-state",
     "toast": "toast",
     "adminExit": "admin-exit",
-    "adminExitEnded": "admin-exit-ended"
+    "adminExitEnded": "admin-exit-ended",
+    "theme": "theme"
   },
   "commands": {
     "reportAppState": "report_app_state",
@@ -12,6 +13,7 @@
     "takeRestoreState": "take_restore_state",
     "heartbeat": "heartbeat",
     "adminExit": "admin_exit",
-    "adminExitStatus": "admin_exit_status"
+    "adminExitStatus": "admin_exit_status",
+    "theme": "theme"
   }
 }

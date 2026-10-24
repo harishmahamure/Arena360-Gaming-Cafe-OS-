@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::display::{HcTarget, parse_hc_key};
 use crate::intent::IntentKind;
 
 /// The kind of client on the other end of a LAN session.
@@ -73,10 +74,20 @@ pub fn in_scope(class: ClientClass, kind: IntentKind) -> bool {
 /// `settings.changed`). Browser classes read no settings at all.
 pub const PAIRED_SETTINGS_PREFIX: &str = "kiosk.";
 
-/// Whether a session of `class` may read the branch setting `key`: only paired apps, and only
-/// `kiosk.*` keys.
-pub fn may_read_setting(class: ClientClass, key: &str) -> bool {
-    class == ClientClass::Paired && key.starts_with(PAIRED_SETTINGS_PREFIX)
+/// Whether a session of `class`, signed in as `device_id`, may read the branch setting `key`:
+/// only paired apps, and only `kiosk.*` keys plus the device's own `display.hc.<device_id>`
+/// (never another device's, never the Hub's).
+pub fn may_read_setting(class: ClientClass, key: &str, device_id: Option<&str>) -> bool {
+    if class != ClientClass::Paired {
+        return false;
+    }
+    if key.starts_with(PAIRED_SETTINGS_PREFIX) {
+        return true;
+    }
+    match (parse_hc_key(key), device_id) {
+        (Some(HcTarget::Device(id)), Some(own)) => id == own,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -135,17 +146,40 @@ mod tests {
 
     #[test]
     fn only_paired_sessions_read_settings_and_only_kiosk_keys() {
-        assert!(may_read_setting(ClientClass::Paired, "kiosk.process_allow"));
-        assert!(may_read_setting(ClientClass::Paired, "kiosk.process_block"));
-        assert!(!may_read_setting(ClientClass::Paired, "branch.currency"));
-        assert!(!may_read_setting(ClientClass::Paired, "kiosk"));
+        let me = Some("01JABCDEFGHJKMNPQRSTVWXYZ0");
+        let paired = |k| may_read_setting(ClientClass::Paired, k, me);
+        assert!(paired("kiosk.process_allow"));
+        assert!(paired("kiosk.process_block"));
+        assert!(!paired("branch.currency"));
+        assert!(!paired("kiosk"));
+        assert!(!paired("Kiosk.process_allow"));
+        for class in [ClientClass::Kds, ClientClass::Phone] {
+            assert!(!may_read_setting(class, "kiosk.process_allow", me));
+            assert!(!may_read_setting(
+                class,
+                "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
+                me
+            ));
+        }
+    }
+
+    #[test]
+    fn a_paired_session_reads_only_its_own_hc_key() {
+        let me = "01JABCDEFGHJKMNPQRSTVWXYZ0";
+        let other = "01JABCDEFGHJKMNPQRSTVWXYZ1";
+        let own_key = format!("display.hc.{me}");
+        assert!(may_read_setting(ClientClass::Paired, &own_key, Some(me)));
         assert!(!may_read_setting(
             ClientClass::Paired,
-            "Kiosk.process_allow"
+            &format!("display.hc.{other}"),
+            Some(me)
         ));
-        for class in [ClientClass::Kds, ClientClass::Phone] {
-            assert!(!may_read_setting(class, "kiosk.process_allow"));
-        }
+        assert!(!may_read_setting(
+            ClientClass::Paired,
+            "display.hc.hub",
+            Some(me)
+        ));
+        assert!(!may_read_setting(ClientClass::Paired, &own_key, None));
     }
 
     #[test]

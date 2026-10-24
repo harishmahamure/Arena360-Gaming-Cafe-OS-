@@ -9,4 +9,8 @@ export type SnapshotUi = {
    * `idle_lock_minutes`).
    */
   idle_lock_minutes: number;
+  /**
+   * Whether this Hub's UI uses the high-contrast theme (the setting `display.hc.hub`).
+   */
+  hc: boolean;
 };

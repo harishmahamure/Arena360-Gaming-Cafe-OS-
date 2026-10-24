@@ -7,6 +7,7 @@ mod actor;
 mod admin;
 mod audit;
 pub mod currency;
+mod display;
 mod error;
 mod frame;
 mod intent;
@@ -28,6 +29,9 @@ pub use audit::{
     AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditAdminExit, AuditDetail,
     AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,
     AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
+};
+pub use display::{
+    HC_DEFAULT, HC_PREFIX, HcTarget, KEY_HC_HUB, hc_key, parse_hc_key, parse_hc_value,
 };
 pub use error::{AppError, ErrorCode};
 pub use frame::{

@@ -147,7 +147,7 @@ pub struct AdminUnlockAckEvent {
 }
 
 /// Whether `s` is a ULID (26 Crockford base32 characters).
-fn is_ulid_text(s: &str) -> bool {
+pub(crate) fn is_ulid_text(s: &str) -> bool {
     s.len() == 26
         && s.bytes().all(|b| {
             b.is_ascii_digit()

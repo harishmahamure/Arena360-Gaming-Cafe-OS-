@@ -45,7 +45,7 @@ const snapshot = (online: boolean): HubSnapshot => ({
     fy_start_month: 4,
     pending: null,
   },
-  ui: { idle_lock_minutes: 5 },
+  ui: { idle_lock_minutes: 5, hc: false },
 });
 
 const json = (route: Route, status: number, body: unknown) =>

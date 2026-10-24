@@ -2,8 +2,9 @@
 //! state, answers its requests, and runs the watchdog.
 //!
 //! - One app connection at a time: the newest wins and the older one is closed.
-//! - On every connection the app gets `hub_status`, then `restore_state` with the last
-//!   `app_state` it reported (when there is one).
+//! - On every connection the app gets `hub_status`, then `theme{hc}` (this kiosk's high
+//!   contrast, sent again on every change), then `restore_state` with the last `app_state` it
+//!   reported (when there is one).
 //! - Every 2 s the app is pinged; after 3 misses in a row it is killed and relaunched through
 //!   the [`AppLauncher`], and a `kiosk.log{warn, app_restarted}` is queued for the Hub.
 //!   Restarts back off (see the watchdog). While the app cannot run at all (no player in the
@@ -12,7 +13,7 @@
 //! - A toast the process enforcer raises (`player.app.blocked`) is forwarded to the current app
 //!   as IPC `toast`; with no app connected it is dropped (the kill is still reported).
 //! - Requests: `log{level, code, detail}` queues a `kiosk.log`; `hub_status` answers the link
-//!   state; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
+//!   state; `theme` answers `{hc}`; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
 //!   running exit). Anything else is `UNSUPPORTED`. The app gets nothing else: no Hub socket,
 //!   no token.
 //! - `admin_exit{pin}` (the hidden admin-exit panel) is checked by [`crate::admin_exit`] on its
@@ -119,6 +120,7 @@ pub(crate) async fn run<S: IpcServer>(
     let mut hub_state = ctx.hub_state.subscribe();
     let mut toasts = ctx.toasts.subscribe();
     let mut exits = ctx.admin.active.subscribe();
+    let mut theme = ctx.theme.subscribe();
     let mut current: Option<Current> = None;
     let mut held = false;
     loop {
@@ -133,6 +135,7 @@ pub(crate) async fn run<S: IpcServer>(
                             let _ = old.kill.send(());
                         }
                         let _ = out.try_send(IpcMsg::HubStatus { state: *hub_state.borrow_and_update() });
+                        let _ = out.try_send(IpcMsg::Theme { hc: *theme.borrow_and_update() });
                         let last = ctx.app_state.lock().unwrap_or_else(|p| p.into_inner()).clone();
                         if let Some(json) = last {
                             let _ = out.try_send(IpcMsg::RestoreState { json });
@@ -209,6 +212,13 @@ pub(crate) async fn run<S: IpcServer>(
                     let _ = c.out.try_send(IpcMsg::HubStatus { state });
                 }
             }
+            changed = theme.changed() => {
+                if changed.is_err() { break; }
+                let hc = *theme.borrow_and_update();
+                if let Some(c) = &current {
+                    let _ = c.out.try_send(IpcMsg::Theme { hc });
+                }
+            }
             changed = exits.changed() => {
                 if changed.is_err() { break; }
                 let msg = match exits.borrow_and_update().as_ref() {
@@ -262,6 +272,7 @@ fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError>
             Ok(Value::Object(Default::default()))
         }
         "hub_status" => Ok(serde_json::json!({ "state": *ctx.hub_state.borrow() })),
+        "theme" => Ok(serde_json::json!({ "hc": *ctx.theme.borrow() })),
         "admin_exit_status" => {
             let mut body = serde_json::Map::new();
             if let arena_kiosk_core::admin_exit::Gate::Paused { seconds } = ctx

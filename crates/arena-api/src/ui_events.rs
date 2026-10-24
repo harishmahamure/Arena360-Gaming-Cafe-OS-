@@ -817,7 +817,34 @@ mod tests {
         let (event, data) = next_event(&mut frames).await.unwrap();
         assert_eq!(event, "settings.changed");
         assert_eq!(data["keys"], serde_json::json!(["idle_lock_minutes"]));
-        assert_eq!(data["ui"], serde_json::json!({"idle_lock_minutes": 10}));
+        assert_eq!(
+            data["ui"],
+            serde_json::json!({"idle_lock_minutes": 10, "hc": false})
+        );
+    }
+
+    #[tokio::test]
+    async fn turning_hub_high_contrast_on_pushes_ui_hc() {
+        let hub = hub().await;
+        let manager_token = token_for(&hub, "manager", "m-pass").await;
+        let (status, mut frames) = open(&hub, Some(&manager_token)).await;
+        assert_eq!(status, StatusCode::OK);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let set = serde_json::json!({ "intent": intent_as(
+            manager(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "display.hc.hub".into(),
+                value: "true".into(),
+            }),
+            Some(1),
+        ) });
+        let (status, body) =
+            call(&hub, "POST", "/ui/intent", Some(&manager_token), Some(set)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "settings.changed");
+        assert_eq!(data["keys"], serde_json::json!(["display.hc.hub"]));
+        assert_eq!(data["ui"]["hc"], true);
     }
 
     #[tokio::test]

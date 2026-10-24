@@ -661,7 +661,8 @@ impl Ctx<'_> {
         Ok(bind_to_session(submit.intent, &self.authed.actor))
     }
 
-    /// The keys of a `settings.get` this session may read: paired only, 1–32 `kiosk.*` keys.
+    /// The keys of a `settings.get` this session may read: paired only, 1–32 `kiosk.*` keys or
+    /// the session's own `display.hc.<device_id>`.
     fn check_settings_get(&self, value: Value) -> Result<Vec<String>, AppError> {
         let class = self.authed.class;
         let frame = parse_frame_value(value).map_err(|e| e.error)?;
@@ -675,7 +676,11 @@ impl Ctx<'_> {
                 format!("keys must list 1–{MAX_SETTINGS_GET_KEYS} settings"),
             ));
         }
-        if let Some(key) = get.keys.iter().find(|k| !may_read_setting(class, k)) {
+        if let Some(key) = get
+            .keys
+            .iter()
+            .find(|k| !may_read_setting(class, k, self.authed.device_id()))
+        {
             tracing::warn!(
                 class = class.as_str(),
                 device_id = self.authed.device_id().unwrap_or("-"),

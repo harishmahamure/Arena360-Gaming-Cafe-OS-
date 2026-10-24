@@ -233,6 +233,7 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 
 - **What happened:** two implementation attempts were stopped by safety checks partway through, and my own follow-up dispatch was stopped as well. The only parts kept are the `arena-hub dev seed --kiosk-allow <glob>` and `--kiosk-process-mode enforce|report` flags (tested), committed separately.
 - **Status:** 1.19 is left `in-progress` in sprint-status, and its spec is not done. A person should decide how to build this conformance suite: write it by hand, use an off-the-shelf kiosk-testing tool, or scope it differently. The loop skips it and continues with 1.20.
+- **2026-10-24 interactive attempt:** the user chose to build the full spec in stages, keep the 2 s rule and verify by compiling only. A safety check stopped the detector code again, and the user parked the story (all partial files removed). The next step is for a person to write the detector and Windows runner by hand, or to replace the suite with a manual penetration checklist for each release.
 - **Known product gap the suite would flag:** the watchdog relaunches the app after about 6 s, longer than the 2 s "screen uncovered" rule.
 
 ## Story 1.20: kiosk admin exit (manager PIN, offline verifier, remote unlock)

@@ -175,6 +175,7 @@ dependencies = [
  "arena-proto",
  "arena-replay",
  "arena-store",
+ "argon2",
  "aws-sdk-s3",
  "aws-smithy-http-client",
  "axum",
@@ -184,7 +185,9 @@ dependencies = [
  "hmac 0.12.1",
  "hyper 0.14.32",
  "libsql",
+ "qrcode",
  "reqwest",
+ "ring",
  "rusqlite",
  "rustls 0.23.46",
  "serde",
@@ -4461,6 +4464,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

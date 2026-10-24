@@ -9,6 +9,7 @@ import {
   parsePinTable,
   readCargoWorkspaceDeps,
   readCiWorkflow,
+  readDataSource,
   readDeployReadme,
   readDeployWorkflow,
   readDevCompose,
@@ -239,5 +240,18 @@ test("dev compose: an image it cannot read as name:tag is an error", () => {
     "",
   ]) {
     assert.throws(() => readDevCompose(`services:\n  a:\n    image: ${bad}\n`), /not pinned/, bad);
+  }
+});
+
+test("bundled data: the npm package and exact version on its source line", () => {
+  assert.deepEqual(
+    readDataSource("# list\n# source: @zxcvbn-ts/language-common@3.0.4\n#   x\n\n123456\n"),
+    { "@zxcvbn-ts/language-common": "3.0.4" },
+  );
+  assert.deepEqual(readDataSource("# source: plain-pkg@1.2.3-beta.1\n"), {
+    "plain-pkg": "1.2.3-beta.1",
+  });
+  for (const bad of ["# nothing here\n", "# source: pkg@^1.0.0\n", "# source: pkg\n"]) {
+    assert.throws(() => readDataSource(bad), /source/, bad);
   }
 });

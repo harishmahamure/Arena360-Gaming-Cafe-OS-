@@ -4,17 +4,20 @@
 //! - `arena_refresh`: the same kind of token, 30 days, `Path=/v1/session/refresh`.
 //!
 //! Both are `HttpOnly; Secure; SameSite=Lax` and host-only (no `Domain`). `GET /v1/session`
-//! answers the signed-in owner or `AUTH_FAILED`. `POST /v1/session/refresh` rotates the
-//! refresh token (new access and refresh, the old one marked rotated, its access no longer
-//! valid). A rotated token presented again within 10 s (two tabs refreshing at once) is
-//! `AUTH_FAILED` without side effects; later it revokes the whole family.
+//! answers the signed-in owner (name, `mfa_state`, `has_password`, `backup_codes_acked`) or
+//! `AUTH_FAILED`; [`SignedIn`] is the same check as an extractor for other routes.
+//! `POST /v1/session/refresh` rotates the refresh token (new access and refresh, the old one
+//! marked rotated, its access no longer valid). A rotated token presented again within 10 s
+//! (two tabs refreshing at once) is `AUTH_FAILED` without side effects; later it revokes the
+//! whole family.
 
 use std::sync::Arc;
 
 use arena_proto::{SessionInfo, SessionOwner};
-use arena_store::control::{NewOwnerSession, RefreshOutcome};
+use arena_store::control::{NewOwnerSession, Owner, OwnerSession, RefreshOutcome};
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{FromRequestParts, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -103,27 +106,61 @@ pub(super) fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(|(_, v)| v.to_owned())
 }
 
-fn info(owner: &arena_store::control::Owner) -> SessionInfo {
-    SessionInfo {
+/// A request with a live session (the `arena_access` cookie): its session and owner, read
+/// fresh from `gz_control`. Rejects with `AUTH_FAILED`.
+#[derive(Debug, Clone)]
+pub struct SignedIn {
+    pub session: OwnerSession,
+    pub owner: Owner,
+}
+
+impl FromRequestParts<Arc<AuthState>> for SignedIn {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        st: &Arc<AuthState>,
+    ) -> Result<Self, Self::Rejection> {
+        let token = read_cookie(&parts.headers, ACCESS_COOKIE).ok_or_else(ApiError::auth_failed)?;
+        let live = st
+            .db
+            .owner_session_by_access(&token_hash(&token), st.now())
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(ApiError::auth_failed)?;
+        Ok(Self {
+            session: live.session,
+            owner: live.owner,
+        })
+    }
+}
+
+/// Whether the owner confirmed saving their backup codes.
+pub(super) async fn backup_codes_acked(st: &AuthState, owner_id: &str) -> Result<bool, ApiError> {
+    Ok(st
+        .db
+        .owner_mfa(owner_id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some_and(|m| m.confirmed_at.is_some() && m.backup_ack_at.is_some()))
+}
+
+async fn info(st: &AuthState, owner: &Owner) -> Result<SessionInfo, ApiError> {
+    Ok(SessionInfo {
         owner: SessionOwner {
             name: owner.name.clone(),
             mfa_state: owner.mfa_state,
+            has_password: owner.has_password(),
+            backup_codes_acked: backup_codes_acked(st, &owner.id).await?,
         },
-    }
+    })
 }
 
 async fn current(
     State(st): State<Arc<AuthState>>,
-    headers: HeaderMap,
+    signed: SignedIn,
 ) -> Result<axum::Json<SessionInfo>, ApiError> {
-    let token = read_cookie(&headers, ACCESS_COOKIE).ok_or_else(ApiError::auth_failed)?;
-    let live = st
-        .db
-        .owner_session_by_access(&token_hash(&token), st.now())
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(ApiError::auth_failed)?;
-    Ok(axum::Json(info(&live.owner)))
+    Ok(axum::Json(info(&st, &signed.owner).await?))
 }
 
 async fn refresh(State(st): State<Arc<AuthState>>, headers: HeaderMap) -> Response {
@@ -145,7 +182,16 @@ async fn refresh(State(st): State<Arc<AuthState>>, headers: HeaderMap) -> Respon
     };
     match outcome {
         RefreshOutcome::Rotated(owner) => {
-            with_session_cookies(axum::Json(info(&owner)).into_response(), &issued)
+            let acked = backup_codes_acked(&st, &owner.id).await.unwrap_or(false);
+            let body = SessionInfo {
+                owner: SessionOwner {
+                    name: owner.name.clone(),
+                    mfa_state: owner.mfa_state,
+                    has_password: owner.has_password(),
+                    backup_codes_acked: acked,
+                },
+            };
+            with_session_cookies(axum::Json(body).into_response(), &issued)
         }
         // A concurrent refresh (another tab) rotated it a moment ago and set the new cookies:
         // refuse without revoking, and without clearing the cookies it set.

@@ -27,8 +27,8 @@ export const ENVIRONMENTS = {
 export const DEPLOYMENT = "arena-cloud-control";
 export const SECRET = "arena-cloud-secrets";
 export const SECRET_KEYS = ["ARENA_CONTROL_DB_TOKEN", "ARENA_CONTROL_DB_URL"];
-/** The Deployment's secret env (Story 2.4 adds the OTP pepper and the Gupshup account), all
- * from `arena-cloud-secrets`. */
+/** The Deployment's secret env (Story 2.4 adds the OTP pepper and the Gupshup account, Story
+ * 2.5 the MFA key), all from `arena-cloud-secrets`. */
 export const DEPLOYMENT_SECRET_KEYS = [
   "ARENA_CONTROL_DB_TOKEN",
   "ARENA_CONTROL_DB_URL",
@@ -37,6 +37,7 @@ export const DEPLOYMENT_SECRET_KEYS = [
   "ARENA_GUPSHUP_PASSWORD",
   "ARENA_GUPSHUP_SENDER",
   "ARENA_GUPSHUP_USERID",
+  "ARENA_MFA_KEY",
   "ARENA_OTP_PEPPER",
 ];
 /** The Deployment's only plain env: the SMS provider and the per-environment web origins. */

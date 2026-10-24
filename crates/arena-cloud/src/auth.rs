@@ -1,5 +1,5 @@
-//! Owner sign-up building blocks: the shared state of the `/v1/signup` and `/v1/session`
-//! routes, form validation, one-time codes (HMAC-SHA256 with the pepper, compared in constant
+//! Owner sign-up building blocks: the shared state of the `/v1/signup`, `/v1/session` and
+//! `/v1/account` routes, form validation, one-time codes (HMAC-SHA256 with the pepper, compared in constant
 //! time), opaque session tokens (stored as SHA-256) and the `phone_tag` that stands in for a
 //! phone number in logs.
 
@@ -31,6 +31,8 @@ pub struct AuthState {
     pub web_origins: Vec<String>,
     /// SMS sends allowed per rolling minute across every phone.
     pub sms_global_per_min: u64,
+    /// Seals owners' TOTP secrets.
+    pub mfa_key: crate::crypto::MfaKey,
 }
 
 impl AuthState {
@@ -42,6 +44,7 @@ impl AuthState {
             pepper: cfg.pepper.clone(),
             web_origins: cfg.web_origins.clone(),
             sms_global_per_min: cfg.sms_global_per_min,
+            mfa_key: cfg.mfa_key.clone(),
         }
     }
 
@@ -260,6 +263,7 @@ mod tests {
             web_origins: vec![],
             sms: crate::config::SmsProviderConfig::Fake,
             sms_global_per_min: 60,
+            mfa_key: crate::crypto::MfaKey::from_bytes([0; 32]),
         };
         // A database these tests never touch.
         let rt = tokio::runtime::Builder::new_current_thread()

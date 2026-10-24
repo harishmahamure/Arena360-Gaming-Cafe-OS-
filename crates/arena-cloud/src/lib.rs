@@ -9,16 +9,21 @@
 //!
 //! The serving roles also run owner sign-up with a phone one-time code and the owner's cookie
 //! session ([`auth`], [`api::signup`], [`api::session`]), sending codes through the
-//! [`messaging`] adapter.
+//! [`messaging`] adapter, and account setup: a password ([`passwords`], [`api::account`]), an
+//! authenticator app ([`totp`], its secret sealed by [`crypto`]) and backup codes
+//! ([`api::mfa`]), with [`api::gate::RequireSetupComplete`] for routes that need all three.
 
 pub mod alert;
 pub mod api;
 pub mod auth;
 pub mod backup;
 pub mod config;
+pub mod crypto;
 pub mod health;
 pub mod messaging;
+pub mod passwords;
 pub mod store;
+pub mod totp;
 
 use std::future::Future;
 use std::sync::Arc;

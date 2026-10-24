@@ -84,6 +84,11 @@ spec:
                 secretKeyRef:
                   name: arena-cloud-secrets
                   key: ARENA_GUPSHUP_DLT_TEMPLATE_ID
+            - name: ARENA_MFA_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_MFA_KEY
             - name: ARENA_SMS_PROVIDER
               value: gupshup
             - name: ARENA_WEB_ORIGINS

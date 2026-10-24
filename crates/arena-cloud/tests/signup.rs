@@ -98,13 +98,20 @@ impl Harness {
             web_origins: vec![ORIGIN.to_owned()],
             sms: SmsProviderConfig::Fake,
             sms_global_per_min,
+            mfa_key: arena_cloud::crypto::MfaKey::from_bytes([9; 32]),
         };
         let st = auth_state(Arc::clone(&db), &cfg, clock).unwrap();
         let (_tx, rx) = watch::channel(Reachability {
             reachable: true,
             checked_at: None,
         });
-        let app = app_with_auth(Role::All, dev, rx, 2, Some(Arc::clone(&st)));
+        let app = app_with_auth(
+            Role::All,
+            dev,
+            rx,
+            arena_store::control::LATEST_CONTROL_VERSION,
+            Some(Arc::clone(&st)),
+        );
         Self {
             app,
             db,
@@ -333,7 +340,12 @@ async fn the_right_code_creates_a_pending_owner_and_signs_in() {
     assert_eq!(me.status, 200, "{}", me.body);
     assert_eq!(
         me.body,
-        json!({"owner": {"name": "Asha Rao", "mfa_state": "pending"}})
+        json!({"owner": {
+            "name": "Asha Rao",
+            "mfa_state": "pending",
+            "has_password": false,
+            "backup_codes_acked": false,
+        }})
     );
     let none = h.call("GET", "/v1/session", None, &[]).await;
     assert_eq!((none.status, none.code()), (401, "AUTH_FAILED"));
@@ -1186,6 +1198,7 @@ fn the_dev_binary_signs_a_new_owner_up_end_to_end() {
         .env_remove("ARENA_OTP_PEPPER")
         .env_remove("ARENA_WEB_ORIGINS")
         .env_remove("ARENA_SMS_PROVIDER")
+        .env_remove("ARENA_MFA_KEY")
         .args(["--role", "all", "--dev", "--data-dir"])
         .arg(dir.path())
         .args(["--listen", &format!("127.0.0.1:{port}")])
@@ -1198,7 +1211,11 @@ fn the_dev_binary_signs_a_new_owner_up_end_to_end() {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some((200, _, b)) = http(port, "GET", "/healthz", None, None) {
-            assert!(b.contains("\"migration_version\":2"), "{b}");
+            let want = format!(
+                "\"migration_version\":{}",
+                arena_store::control::LATEST_CONTROL_VERSION
+            );
+            assert!(b.contains(&want), "{b}");
             break;
         }
         assert!(

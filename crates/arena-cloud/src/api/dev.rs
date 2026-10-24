@@ -53,3 +53,16 @@ async fn sms(
 pub(super) fn sms_router(st: Arc<crate::auth::AuthState>) -> Router {
     Router::new().route("/dev/sms", get(sms)).with_state(st)
 }
+
+/// `GET /v1/dev/setup-gate`: `{"setup_complete": true}` for an owner who passes
+/// [`super::gate::RequireSetupComplete`]; otherwise its rejection.
+async fn setup_gate(_ok: super::gate::RequireSetupComplete) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "setup_complete": true }))
+}
+
+/// The setup-gate probe route, relative to `/v1`.
+pub(super) fn gate_router(st: Arc<crate::auth::AuthState>) -> Router {
+    Router::new()
+        .route("/dev/setup-gate", get(setup_gate))
+        .with_state(st)
+}

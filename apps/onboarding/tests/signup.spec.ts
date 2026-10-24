@@ -110,7 +110,9 @@ test.describe("code step", () => {
     await page.keyboard.insertText("123 456");
     await expect(page).toHaveURL(/\/account-setup$/);
     expect(cloud.verifies).toEqual([{ challenge_id: CHALLENGE.challenge_id, code: GOOD_CODE }]);
-    await expect(page.getByText(t("onboarding.account_setup.body"))).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: t("onboarding.password.title") }),
+    ).toBeVisible();
   });
 
   test("a wrong code clears the cells and says so", async ({ page }) => {
@@ -277,7 +279,9 @@ test.describe("account setup", () => {
     cloud.signedIn = true;
     cloud.nextSession.push({ status: 401, body: err("AUTH_FAILED") });
     await page.goto("/account-setup");
-    await expect(page.getByText(t("onboarding.account_setup.body"))).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: t("onboarding.password.title") }),
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/account-setup$/);
     expect(cloud.refreshes).toBe(1);
     expect(cloud.sessionChecks).toBe(2);
@@ -301,7 +305,9 @@ test.describe("account setup", () => {
     await expect(page.getByText(t("onboarding.error.offline"))).toBeVisible();
     await expect(page).toHaveURL(/\/account-setup$/);
     await page.getByRole("button", { name: t("onboarding.account_setup.retry") }).click();
-    await expect(page.getByText(t("onboarding.account_setup.body"))).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: t("onboarding.password.title") }),
+    ).toBeVisible();
     expect(cloud.refreshes).toBe(0);
   });
 

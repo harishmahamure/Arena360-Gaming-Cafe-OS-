@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { stubCloud, t, toCodeStep } from "./stub";
+import { GOOD_TOTP, stubCloud, t, toCodeStep, type Cloud } from "./stub";
 
 // Accessibility floor for every onboarding view in light and dark: landmarks, one h1, labelled
 // fields, targets of at least 44 × 44 px and no serious or critical axe violations.
@@ -8,7 +8,30 @@ import { stubCloud, t, toCodeStep } from "./stub";
 const THEMES = ["light", "dark"] as const;
 const INTERACTIVE = 'button, a, input, select, [role="tab"], [tabindex]:not([tabindex="-1"])';
 
-const VIEWS: { name: string; open: (page: Page) => Promise<void> }[] = [
+const h1 = (page: Page, key: Parameters<typeof t>[0]) =>
+  page.getByRole("heading", { level: 1, name: t(key) });
+
+async function toTotp(page: Page) {
+  await page.goto("/account-setup");
+  await page.getByLabel(t("onboarding.password.label"), { exact: true }).fill("Tandoori-42-x");
+  await page.getByRole("button", { name: t("onboarding.password.submit") }).click();
+  await expect(h1(page, "onboarding.totp.title")).toBeVisible();
+}
+
+async function toCodes(page: Page) {
+  await toTotp(page);
+  await page.getByLabel(t("onboarding.totp.code_label"), { exact: true }).focus();
+  await page.keyboard.insertText(GOOD_TOTP);
+  await expect(h1(page, "onboarding.codes.title")).toBeVisible();
+}
+
+const ENROLLED = { has_password: true, mfa_state: "enrolled" as const };
+
+const VIEWS: {
+  name: string;
+  cloud?: Parameters<typeof stubCloud>[1];
+  open: (page: Page, cloud: Cloud) => Promise<void>;
+}[] = [
   {
     name: "get started",
     open: async (page) => {
@@ -22,7 +45,64 @@ const VIEWS: { name: string; open: (page: Page) => Promise<void> }[] = [
     open: async (page) => {
       await toCodeStep(page);
       await page.keyboard.insertText("123456");
-      await expect(page.getByText(t("onboarding.account_setup.body"))).toBeVisible();
+      await expect(
+        page.getByRole("heading", { level: 1, name: t("onboarding.password.title") }),
+      ).toBeVisible();
+      // With the password shown and an error.
+      await page.getByRole("button", { name: t("ui.password.show") }).click();
+      await page.getByRole("button", { name: t("onboarding.password.submit") }).click();
+      await expect(
+        page.getByText(t("onboarding.password.too_short"), { exact: true }),
+      ).toBeVisible();
+    },
+  },
+  { name: "authenticator app", cloud: { signedIn: true }, open: toTotp },
+  {
+    name: "authenticator app, wrong code",
+    cloud: { signedIn: true },
+    open: async (page) => {
+      await toTotp(page);
+      await page.getByLabel(t("onboarding.totp.code_label"), { exact: true }).focus();
+      await page.keyboard.insertText("111111");
+      await expect(page.getByText(t("onboarding.totp.invalid"))).toBeVisible();
+    },
+  },
+  { name: "backup codes", cloud: { signedIn: true }, open: toCodes },
+  {
+    name: "codes not saved",
+    cloud: { signedIn: true, owner: ENROLLED },
+    open: async (page) => {
+      await page.goto("/account-setup");
+      await page.getByRole("button", { name: t("onboarding.regenerate.button") }).click();
+      await expect(page.getByLabel(t("onboarding.totp.code_label"), { exact: true })).toBeFocused();
+    },
+  },
+  {
+    name: "done",
+    cloud: { signedIn: true, owner: { ...ENROLLED, backup_codes_acked: true } },
+    open: async (page) => {
+      await page.goto("/account-setup");
+      await expect(h1(page, "onboarding.done.title")).toBeVisible();
+    },
+  },
+  {
+    name: "security",
+    cloud: { signedIn: true, owner: { ...ENROLLED, backup_codes_acked: true } },
+    open: async (page) => {
+      await page.goto("/account/security");
+      await expect(
+        page.getByRole("button", { name: t("onboarding.regenerate.button") }),
+      ).toBeVisible();
+    },
+  },
+  {
+    name: "security, new codes",
+    cloud: { signedIn: true, owner: { ...ENROLLED, backup_codes_acked: true } },
+    open: async (page) => {
+      await page.goto("/account/security");
+      await page.getByRole("button", { name: t("onboarding.regenerate.button") }).click();
+      await page.keyboard.insertText(GOOD_TOTP);
+      await expect(page.getByRole("dialog", { name: t("onboarding.codes.title") })).toBeVisible();
     },
   },
 ];
@@ -32,9 +112,9 @@ for (const theme of THEMES) {
     test(`${view.name} (${theme}): landmarks, one h1, labels, targets and axe`, async ({
       page,
     }) => {
-      await stubCloud(page);
+      const cloud = await stubCloud(page, view.cloud);
       await page.addInitScript((v) => localStorage.setItem("arena.theme", v), theme);
-      await view.open(page);
+      await view.open(page, cloud);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await page.evaluate(() => document.fonts.ready);
 

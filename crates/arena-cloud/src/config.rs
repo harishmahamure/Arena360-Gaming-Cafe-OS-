@@ -33,6 +33,8 @@ environment (not with --dev):
   ARENA_SMS_PROVIDER      gupshup (--dev: always the fake, read at GET /v1/dev/sms)
   ARENA_SMS_GLOBAL_PER_MIN  SMS sends per rolling minute across all phones (default 60;
                           --dev 10000)
+  ARENA_MFA_KEY           base64 of 32 random bytes: the AES-256-GCM key of owners' TOTP
+                          secrets (--dev: a fixed dev key)
   ARENA_GUPSHUP_ENDPOINT, ARENA_GUPSHUP_USERID, ARENA_GUPSHUP_PASSWORD, ARENA_GUPSHUP_SENDER,
   ARENA_GUPSHUP_DLT_TEMPLATE_ID  the Gupshup Enterprise SMS account (gupshup only)
 environment (--task control-backup, ops restore-control --from-key):
@@ -482,6 +484,10 @@ pub const GUPSHUP_USERID_ENV: &str = "ARENA_GUPSHUP_USERID";
 pub const GUPSHUP_PASSWORD_ENV: &str = "ARENA_GUPSHUP_PASSWORD";
 pub const GUPSHUP_SENDER_ENV: &str = "ARENA_GUPSHUP_SENDER";
 pub const GUPSHUP_DLT_TEMPLATE_ID_ENV: &str = "ARENA_GUPSHUP_DLT_TEMPLATE_ID";
+/// The AES-256-GCM key of owners' TOTP secrets: base64 of 32 bytes (a secret: never logged).
+pub const MFA_KEY_ENV: &str = "ARENA_MFA_KEY";
+/// The fixed key `--dev` uses (32 bytes).
+pub const DEV_MFA_KEY: &[u8; 32] = b"arena-dev-mfa-key-not-for-prod!!";
 /// The shortest accepted `ARENA_OTP_PEPPER`.
 pub const MIN_PEPPER_LEN: usize = 32;
 /// The fixed pepper `--dev` uses.
@@ -507,6 +513,8 @@ pub struct AuthConfig {
     pub sms: SmsProviderConfig,
     /// SMS sends allowed per rolling minute across every phone.
     pub sms_global_per_min: u64,
+    /// Seals owners' TOTP secrets.
+    pub mfa_key: crate::crypto::MfaKey,
 }
 
 impl std::fmt::Debug for AuthConfig {
@@ -516,18 +524,21 @@ impl std::fmt::Debug for AuthConfig {
             .field("web_origins", &self.web_origins)
             .field("sms", &self.sms)
             .field("sms_global_per_min", &self.sms_global_per_min)
+            .field("mfa_key", &self.mfa_key)
             .finish()
     }
 }
 
 impl AuthConfig {
-    /// The `--dev` settings: the fixed pepper, the fake SMS and [`DEV_WEB_ORIGIN`].
+    /// The `--dev` settings: the fixed pepper and MFA key, the fake SMS and
+    /// [`DEV_WEB_ORIGIN`].
     pub fn dev() -> Self {
         Self {
             pepper: DEV_OTP_PEPPER.as_bytes().to_vec(),
             web_origins: vec![DEV_WEB_ORIGIN.to_owned()],
             sms: SmsProviderConfig::Fake,
             sms_global_per_min: DEV_SMS_GLOBAL_PER_MIN,
+            mfa_key: crate::crypto::MfaKey::from_bytes(*DEV_MFA_KEY),
         }
     }
 }
@@ -562,8 +573,8 @@ pub fn parse_origins(v: &str) -> Result<Vec<String>, String> {
 /// The sign-up settings from the environment. `--dev` needs none of it: the pepper is fixed,
 /// the SMS provider is the fake, and the origins default to [`DEV_WEB_ORIGIN`] (or
 /// `ARENA_WEB_ORIGINS` when set). Otherwise `ARENA_OTP_PEPPER`, `ARENA_WEB_ORIGINS` and
-/// `ARENA_SMS_PROVIDER` (plus `ARENA_GUPSHUP_*` for `gupshup`) are required. Errors name the
-/// variable, never a secret's value.
+/// `ARENA_SMS_PROVIDER` (plus `ARENA_GUPSHUP_*` for `gupshup`) and `ARENA_MFA_KEY` are
+/// required. Errors name the variable, never a secret's value.
 pub fn auth_from_env(
     dev: bool,
     env: &impl Fn(&str) -> Option<OsString>,
@@ -628,11 +639,17 @@ pub fn auth_from_env(
         None | Some("") => return Err(format!("{SMS_PROVIDER_ENV} is not set (gupshup)")),
         Some(_) => return Err(format!("{SMS_PROVIDER_ENV} must be gupshup")),
     };
+    let mfa_key = get_env(env, MFA_KEY_ENV)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("{MFA_KEY_ENV} is not set (base64 of 32 random bytes)"))?;
+    let mfa_key =
+        crate::crypto::MfaKey::from_base64(&mfa_key).map_err(|e| format!("{MFA_KEY_ENV} {e}"))?;
     Ok(AuthConfig {
         pepper: pepper.into_bytes(),
         web_origins,
         sms,
         sms_global_per_min: global.unwrap_or(DEFAULT_SMS_GLOBAL_PER_MIN),
+        mfa_key,
     })
 }
 
@@ -650,6 +667,8 @@ mod auth_tests {
     }
 
     const PEPPER: &str = "pepper-SECRET-0123456789abcdef0123456789";
+    /// base64 of 32 bytes.
+    const MFA_KEY: &str = "c2VjcmV0LW1mYS1rZXktMDEyMzQ1Njc4OWFiY2RlZmc=";
 
     #[test]
     fn the_fake_provider_is_refused_outside_dev_and_the_global_cap_parses() {
@@ -751,6 +770,7 @@ mod auth_tests {
                 ("ARENA_GUPSHUP_PASSWORD", "gs-SECRET-pass"),
                 ("ARENA_GUPSHUP_SENDER", "ARENA"),
                 ("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1007000000000000000"),
+                ("ARENA_MFA_KEY", MFA_KEY),
             ]),
         )
         .unwrap();
@@ -759,5 +779,46 @@ mod auth_tests {
         assert_eq!(cfg.sms_global_per_min, DEFAULT_SMS_GLOBAL_PER_MIN);
         let d = format!("{cfg:?}");
         assert!(!d.contains(PEPPER) && !d.contains("gs-SECRET-pass"), "{d}");
+        assert!(!d.contains("secret-mfa-key") && !d.contains(MFA_KEY), "{d}");
+    }
+
+    #[test]
+    fn production_requires_a_32_byte_base64_mfa_key() {
+        let base: &[(&str, &str)] = &[
+            ("ARENA_OTP_PEPPER", PEPPER),
+            ("ARENA_WEB_ORIGINS", "https://start.arena360.cloud"),
+            ("ARENA_SMS_PROVIDER", "gupshup"),
+            (
+                "ARENA_GUPSHUP_ENDPOINT",
+                "https://enterprise.smsgupshup.com/GatewayAPI/rest",
+            ),
+            ("ARENA_GUPSHUP_USERID", "2000000000"),
+            ("ARENA_GUPSHUP_PASSWORD", "gs-pass"),
+            ("ARENA_GUPSHUP_SENDER", "ARENA"),
+            ("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1007000000000000000"),
+        ];
+        let with = |key: Option<&'static str>| {
+            let mut v = base.to_vec();
+            if let Some(k) = key {
+                v.push(("ARENA_MFA_KEY", k));
+            }
+            let pairs: &'static [(&'static str, &'static str)] = Box::leak(v.into());
+            auth_from_env(false, &env_of(pairs))
+        };
+        assert!(with(None).unwrap_err().contains("ARENA_MFA_KEY is not set"));
+        let short = with(Some("c2hvcnQ=")).unwrap_err();
+        assert!(
+            short.contains("ARENA_MFA_KEY") && short.contains("32 bytes"),
+            "{short}"
+        );
+        assert!(with(Some("%%%")).unwrap_err().contains("base64"));
+        assert!(with(Some(MFA_KEY)).is_ok());
+        // `--dev` uses the fixed key and ignores the variable.
+        assert_eq!(
+            auth_from_env(true, &env_of(&[("ARENA_MFA_KEY", "c2hvcnQ=")]))
+                .unwrap()
+                .mfa_key,
+            AuthConfig::dev().mfa_key
+        );
     }
 }

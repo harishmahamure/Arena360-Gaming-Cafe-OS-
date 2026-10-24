@@ -3,13 +3,16 @@
 // reported as `INTERNAL` with `offline` set.
 
 import { PUBLIC_API_BASE } from "$app/env/public";
+import { goto } from "$app/navigation";
 import type {
   AppError,
+  BackupCodes,
   ErrorCode,
   SessionInfo,
   SignupChallenge,
   SignupStart,
   SignupVerified,
+  TotpStarted,
 } from "@arena/ui/generated";
 
 /** The API origin (empty: same origin, through the dev/preview proxy). */
@@ -36,6 +39,12 @@ const CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "NOT_FOUND",
   "BAD_REQUEST",
   "INTERNAL",
+  "PASSWORD_TOO_SHORT",
+  "PASSWORD_COMMON",
+  "ALREADY_SET",
+  "PASSWORD_REQUIRED",
+  "TOTP_INVALID",
+  "SETUP_INCOMPLETE",
 ]);
 
 function isAppError(v: unknown): v is AppError {
@@ -83,10 +92,12 @@ async function call<T>(
     return internal(0, true);
   }
   let parsed: unknown = null;
-  try {
-    parsed = await res.json();
-  } catch {
-    parsed = null;
+  if (res.status !== 204) {
+    try {
+      parsed = await res.json();
+    } catch {
+      parsed = null;
+    }
   }
   if (res.ok) return { ok: true, status: res.status, data: parsed as T };
   if (!isAppError(parsed)) return internal(res.status, false);
@@ -120,3 +131,23 @@ export async function currentSession(): Promise<ApiResult<SessionInfo>> {
   if (!refreshed.ok) return refreshed;
   return getSession();
 }
+
+async function withRefresh<T>(request: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
+  const first = await request();
+  if (first.ok || first.error.code !== "AUTH_FAILED") return first;
+  const refreshed = await refreshSession();
+  if (refreshed.ok) return request();
+  if (!refreshed.offline) await goto("/", { replaceState: true });
+  return refreshed.offline ? refreshed : first;
+}
+
+export const setPassword = (password: string) =>
+  withRefresh(() => call<null>("POST", "/account/password", { password }));
+export const startTotp = () =>
+  withRefresh(() => call<TotpStarted>("POST", "/account/mfa/totp/start"));
+export const confirmTotp = (code: string) =>
+  withRefresh(() => call<BackupCodes>("POST", "/account/mfa/totp/confirm", { code }));
+export const ackBackupCodes = () =>
+  withRefresh(() => call<null>("POST", "/account/mfa/backup-codes/ack"));
+export const regenerateBackupCodes = (code: string) =>
+  withRefresh(() => call<BackupCodes>("POST", "/account/mfa/backup-codes/regenerate", { code }));

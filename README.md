@@ -1037,7 +1037,7 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
   `owner_sessions` and `rate_limits`. All their SQL lives in `arena_store::control`. libsql lives only in `arena-store`'s `control` feature, so
   `cargo tree -p arena-hub` never shows it, and it is built remote-only (no C SQLite core).
 - **`GET /healthz`** always answers 200
-  `{"role":"control","version":"0.1.0","gz_control":{"reachable":true,"checked_at":<ms>},"migration_version":2}`.
+  `{"role":"control","version":"0.1.0","gz_control":{"reachable":true,"checked_at":<ms>},"migration_version":3}`.
   Reachability comes from a background `SELECT 1` every 15 s (3 s timeout); requests never hit
   Turso, and a Turso blip shows `reachable: false` without restarting the pod.
 - **Tests.** The `gz_control` tests use `ARENA_TEST_SQLD_URL` when set (CI's libsql-server
@@ -1137,7 +1137,8 @@ minutes."`, answering 202 `{challenge_id, expires_in_s: 300, resend_after_s: 30}
     already `enrolled` gets `{next: "sign_in"}` and no session (the code alone never bypasses
     TOTP; sign-in is Story 2.6). A repeated verify of the used challenge from the browser that
     it signed in (its access cookie is that owner's) answers `account_setup` again.
-  - `GET /v1/session` answers `{owner: {name, mfa_state}}` or 401 `AUTH_FAILED`.
+  - `GET /v1/session` answers `{owner: {name, mfa_state, has_password, backup_codes_acked}}`
+    (the last two since Story 2.5) or 401 `AUTH_FAILED`.
     `POST /v1/session/refresh` rotates the refresh token (new pair, the old one marked
     `rotated_at`, its access cookie no longer valid). A rotated token presented again within
     10 s (two tabs refreshing at once) is 401 with nothing revoked; later it revokes the whole
@@ -1176,6 +1177,46 @@ minutes."`, answering 202 `{challenge_id, expires_in_s: 300, resend_after_s: 30}
   | `ARENA_GUPSHUP_SENDER`          | The DLT-registered sender id (`mask`)               |
   | `ARENA_GUPSHUP_DLT_TEMPLATE_ID` | The DLT template id of the sign-up message          |
 
+- **Account setup** (Story 2.5). After sign-up, `/account-setup` in the onboarding app makes the
+  owner set a password, enrol an authenticator app and save 10 backup codes, in that order; the
+  step comes from `GET /v1/session`, which now answers
+  `{owner: {name, mfa_state, has_password, backup_codes_acked}}`. Every route needs the session.
+  - `POST /v1/account/password {password}` → 204. 10–128 Unicode scalar values (shorter: 422
+    `PASSWORD_TOO_SHORT`, longer: 422 `VALIDATION_FAILED`), and its lowercase form not on the
+    bundled list of the 10,000 most common passwords (422 `PASSWORD_COMMON`), all with
+    `field: "password"`. Stored only as argon2id (m = 19 MiB, t = 2, p = 1, PHC string). It is
+    set once: again is 409 `ALREADY_SET` (changing it is a later story). The list is
+    `crates/arena-cloud/data/common-passwords.txt`, the first 10,000 entries of
+    `@zxcvbn-ts/language-common` (MIT; provenance, integrity and licence in its header, version
+    in the pin table).
+  - `POST /v1/account/mfa/totp/start` → `{secret, otpauth_uri, qr_svg}` (`no-store`). It needs
+    a password (403 `PASSWORD_REQUIRED`) and `mfa_state = pending` (409 `ALREADY_SET`). Each
+    call mints a new 20-byte secret (RFC 4648 base32, no padding) and replaces the unconfirmed
+    one, so leaving and coming back gets a new QR code. The URI is
+    `otpauth://totp/Arena%20360:%2B<phone digits>?secret=…&issuer=Arena%20360&algorithm=SHA1&digits=6&period=30`;
+    the QR code is an SVG drawn by the `qrcode` crate.
+  - `POST /v1/account/mfa/totp/confirm {code}`: RFC 6238 (HMAC-SHA1 on `ring`, 6 digits, 30 s,
+    one step either side). A valid code enrols the owner and answers
+    `{backup_codes: ["XXXXX-XXXXX", …10]}`, this once; anything else is 400 `TOTP_INVALID`
+    (`field: "code"`) and the owner stays `pending`.
+  - `POST /v1/account/mfa/backup-codes/ack` → 204 (enrolled only, else 403 `FORBIDDEN`).
+    `POST /v1/account/mfa/backup-codes/regenerate {code}` (enrolled only) deletes every backup
+    code and issues 10 new ones in one transaction. A code for a step at or before the last
+    accepted one is refused (`TOTP_INVALID`): no replay.
+  - Backup codes are 10 Crockford base32 characters, stored only as argon2id hashes; typed codes
+    are normalised (uppercase, hyphens and spaces dropped, I/L → 1, O → 0).
+  - The TOTP secret is stored only as AES-256-GCM ciphertext under `ARENA_MFA_KEY` (base64 of
+    32 bytes; `--dev` uses a fixed dev key), with the owner id as AAD and a random nonce per
+    start. A secret that doesn't open under the key is 500 `INTERNAL`, logged as
+    `mfa secret did not decrypt` ([`deploy/README.md`](deploy/README.md#6b-owner-mfa-key)).
+  - `api::gate::RequireSetupComplete` is the extractor every setup-wizard route takes: it passes
+    an owner with a password, `enrolled` and codes acked, else 403 `SETUP_INCOMPLETE`. Under
+    `--dev`, `GET /v1/dev/setup-gate` answers `{"setup_complete": true}` only behind it.
+  - Logs carry the owner id only: never a password, secret, otpauth URI or code
+    (`crates/arena-cloud/tests/mfa.rs` asserts it on captured logs).
+  - Account → Security (`/account/security`) lets an enrolled owner regenerate the backup codes
+    in a dialog that asks for a current authenticator code.
+
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
   fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the
@@ -1189,13 +1230,16 @@ No Turso, Cloudflare or token needed. MinIO stands in for R2:
 ```sh
 docker compose -f deploy/dev/compose.yaml up -d   # MinIO on 127.0.0.1:9000, bucket arena-dev
 cargo run -p arena-cloud -- --role all --dev
-curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":2}
+curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":3}
 ```
 
 Sign up locally: run the cloud as above and the onboarding app with
 `pnpm --filter @arena/onboarding dev` (<http://localhost:5179>; Vite proxies `/v1` to
 `127.0.0.1:8080`). Submit the form, read the code from `curl http://127.0.0.1:8080/v1/dev/sms`
-and enter it: you land on `/account-setup` signed in.
+and enter it: you land on `/account-setup` signed in. Set a password, scan the QR code with an
+authenticator app (or paste the setup key into it), enter its code and save the backup codes:
+`GET /v1/session` then reports `enrolled` with `backup_codes_acked: true`, and
+`GET /v1/dev/setup-gate` answers `{"setup_complete": true}`.
 
 - `--dev` keeps `gz_control` in `<--data-dir>/gz_control.db` (default `./.arena-cloud-dev`,
   created if missing) through rusqlite, with the same embedded migrations, the same
@@ -1206,10 +1250,11 @@ and enter it: you land on `/account-setup` signed in.
 - It mounts dev-only routes that exercise each envelope failure: `POST /v1/dev/echo`
   (`{"text":"…"}` → the same), `GET /v1/dev/fail` (`INTERNAL`) and `GET /v1/dev/panic` (a
   handler panic, answered with `INTERNAL`; the server keeps serving), plus `GET /v1/dev/sms`
-  (every message the fake SMS provider recorded, `[{to, text, at}]`). Without `--dev` they do
-  not exist (404 `NOT_FOUND`).
-- Sign-up needs no env either: `--dev` uses a fixed dev pepper, always the fake SMS provider,
-  and allows the origin `http://localhost:5179` (or `ARENA_WEB_ORIGINS` when set).
+  (every message the fake SMS provider recorded, `[{to, text, at}]`) and `GET /v1/dev/setup-gate`
+  (passes only a signed-in owner whose account setup is complete). Without `--dev` they do not
+  exist (404 `NOT_FOUND`).
+- Sign-up needs no env either: `--dev` uses a fixed dev pepper and MFA key, always the fake SMS
+  provider, and allows the origin `http://localhost:5179` (or `ARENA_WEB_ORIGINS` when set).
 - The backup task runs against the same local file and MinIO (a throwaway key from
   `age-keygen`):
 
@@ -1229,76 +1274,79 @@ This table is checked against the manifests by `pnpm check:pins`. Change the man
 table together. JS framework versions live in the pnpm `catalog:`; apps reference them as
 `"catalog:"`.
 
-| Item                                | Version                | Source                                 |
-| ----------------------------------- | ---------------------- | -------------------------------------- |
-| rust                                | 1.95.0                 | `rust-toolchain.toml`                  |
-| node                                | 22.23.4                | `.nvmrc`                               |
-| node engines                        | >=22.23.4 <23          | `package.json`                         |
-| pnpm                                | 12.15.0                | `package.json`                         |
-| svelte                              | 5.57.2                 | `pnpm-workspace.yaml`                  |
-| @sveltejs/kit                       | 3.1.0                  | `pnpm-workspace.yaml`                  |
-| @sveltejs/vite-plugin-svelte        | 7.3.1                  | `pnpm-workspace.yaml`                  |
-| vite                                | 8.3.5                  | `pnpm-workspace.yaml`                  |
-| typescript                          | 6.0.3                  | `pnpm-workspace.yaml`                  |
-| @sveltejs/adapter-static            | 4.0.0                  | `pnpm-workspace.yaml`                  |
-| @sveltejs/adapter-cloudflare        | 8.0.1                  | `pnpm-workspace.yaml`                  |
-| wrangler                            | 4.152.0                | `pnpm-workspace.yaml`                  |
-| svelte-check                        | 4.7.7                  | `pnpm-workspace.yaml`                  |
-| astro                               | 7.4.2                  | `pnpm-workspace.yaml`                  |
-| @astrojs/svelte                     | 9.1.1                  | `pnpm-workspace.yaml`                  |
-| @tauri-apps/cli                     | 2.12.4                 | `pnpm-workspace.yaml`                  |
-| @tauri-apps/api                     | 2.12.4                 | `pnpm-workspace.yaml`                  |
-| @tauri-apps/plugin-updater          | 2.14.0                 | `pnpm-workspace.yaml`                  |
-| @fontsource-variable/sora           | 5.3.0                  | `pnpm-workspace.yaml`                  |
-| @playwright/test                    | 1.64.1                 | `pnpm-workspace.yaml`                  |
-| @axe-core/playwright                | 4.14.0                 | `pnpm-workspace.yaml`                  |
-| yaml                                | 2.9.1                  | `package.json`                         |
-| tauri                               | =2.12.5                | `Cargo.toml`                           |
-| tauri-build                         | =2.7.4                 | `Cargo.toml`                           |
-| tauri-plugin-updater                | =2.14.0                | `Cargo.toml`                           |
-| serde                               | =1.0.229               | `Cargo.toml`                           |
-| serde_json                          | =1.0.154               | `Cargo.toml`                           |
-| ts-rs                               | =12.0.1                | `Cargo.toml`                           |
-| tokio                               | =1.54.1                | `Cargo.toml`                           |
-| axum                                | =0.8.9                 | `Cargo.toml`                           |
-| rusqlite                            | =0.40.2                | `Cargo.toml`                           |
-| tracing                             | =0.1.44                | `Cargo.toml`                           |
-| tracing-subscriber                  | =0.3.23                | `Cargo.toml`                           |
-| ulid                                | =3.0.0                 | `Cargo.toml`                           |
-| rmp-serde                           | =1.3.1                 | `Cargo.toml`                           |
-| chrono-tz                           | =0.10.4                | `Cargo.toml`                           |
-| chrono                              | =0.4.45                | `Cargo.toml`                           |
-| sha2                                | =0.10.9                | `Cargo.toml`                           |
-| tokio-tungstenite                   | =0.30.0                | `Cargo.toml`                           |
-| rustls                              | =0.23.46               | `Cargo.toml`                           |
-| tokio-rustls                        | =0.26.6                | `Cargo.toml`                           |
-| webpki-roots                        | =1.0.9                 | `Cargo.toml`                           |
-| rcgen                               | =0.14.10               | `Cargo.toml`                           |
-| argon2                              | =0.6.0                 | `Cargo.toml`                           |
-| futures-util                        | =0.3.34                | `Cargo.toml`                           |
-| windows                             | =0.62.2                | `Cargo.toml`                           |
-| windows-service                     | =0.8.1                 | `Cargo.toml`                           |
-| tempfile                            | =3.27.0                | `Cargo.toml`                           |
-| tower                               | =0.5.3                 | `Cargo.toml`                           |
-| proptest                            | =1.12.0                | `Cargo.toml`                           |
-| libsql                              | =0.10.0                | `Cargo.toml`                           |
-| hyper-rustls                        | =0.25.0                | `Cargo.toml`                           |
-| hyper                               | =0.14.32               | `Cargo.toml`                           |
-| serde_path_to_error                 | =0.1.20                | `Cargo.toml`                           |
-| aws-sdk-s3                          | =1.155.0               | `Cargo.toml`                           |
-| aws-smithy-http-client              | =1.5.1                 | `Cargo.toml`                           |
-| age                                 | =0.12.1                | `Cargo.toml`                           |
-| reqwest                             | =0.13.5                | `Cargo.toml`                           |
-| hmac                                | =0.12.1                | `Cargo.toml`                           |
-| getrandom                           | =0.3.4                 | `Cargo.toml`                           |
-| sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`   |
-| age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`   |
-| gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile` |
-| ghcr.io/tursodatabase/libsql-server | v0.24.31               | `.github/workflows/ci.yml`             |
-| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `.github/workflows/ci.yml`             |
-| k3s                                 | v1.33.4+k3s1           | `deploy/README.md`                     |
-| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `deploy/dev/compose.yaml`              |
-| bitnamilegacy/minio-client          | 2025.7.21-debian-12-r3 | `deploy/dev/compose.yaml`              |
+| Item                                | Version                | Source                                         |
+| ----------------------------------- | ---------------------- | ---------------------------------------------- |
+| rust                                | 1.95.0                 | `rust-toolchain.toml`                          |
+| node                                | 22.23.4                | `.nvmrc`                                       |
+| node engines                        | >=22.23.4 <23          | `package.json`                                 |
+| pnpm                                | 12.15.0                | `package.json`                                 |
+| svelte                              | 5.57.2                 | `pnpm-workspace.yaml`                          |
+| @sveltejs/kit                       | 3.1.0                  | `pnpm-workspace.yaml`                          |
+| @sveltejs/vite-plugin-svelte        | 7.3.1                  | `pnpm-workspace.yaml`                          |
+| vite                                | 8.3.5                  | `pnpm-workspace.yaml`                          |
+| typescript                          | 6.0.3                  | `pnpm-workspace.yaml`                          |
+| @sveltejs/adapter-static            | 4.0.0                  | `pnpm-workspace.yaml`                          |
+| @sveltejs/adapter-cloudflare        | 8.0.1                  | `pnpm-workspace.yaml`                          |
+| wrangler                            | 4.152.0                | `pnpm-workspace.yaml`                          |
+| svelte-check                        | 4.7.7                  | `pnpm-workspace.yaml`                          |
+| astro                               | 7.4.2                  | `pnpm-workspace.yaml`                          |
+| @astrojs/svelte                     | 9.1.1                  | `pnpm-workspace.yaml`                          |
+| @tauri-apps/cli                     | 2.12.4                 | `pnpm-workspace.yaml`                          |
+| @tauri-apps/api                     | 2.12.4                 | `pnpm-workspace.yaml`                          |
+| @tauri-apps/plugin-updater          | 2.14.0                 | `pnpm-workspace.yaml`                          |
+| @fontsource-variable/sora           | 5.3.0                  | `pnpm-workspace.yaml`                          |
+| @playwright/test                    | 1.64.1                 | `pnpm-workspace.yaml`                          |
+| @axe-core/playwright                | 4.14.0                 | `pnpm-workspace.yaml`                          |
+| yaml                                | 2.9.1                  | `package.json`                                 |
+| tauri                               | =2.12.5                | `Cargo.toml`                                   |
+| tauri-build                         | =2.7.4                 | `Cargo.toml`                                   |
+| tauri-plugin-updater                | =2.14.0                | `Cargo.toml`                                   |
+| serde                               | =1.0.229               | `Cargo.toml`                                   |
+| serde_json                          | =1.0.154               | `Cargo.toml`                                   |
+| ts-rs                               | =12.0.1                | `Cargo.toml`                                   |
+| tokio                               | =1.54.1                | `Cargo.toml`                                   |
+| axum                                | =0.8.9                 | `Cargo.toml`                                   |
+| rusqlite                            | =0.40.2                | `Cargo.toml`                                   |
+| tracing                             | =0.1.44                | `Cargo.toml`                                   |
+| tracing-subscriber                  | =0.3.23                | `Cargo.toml`                                   |
+| ulid                                | =3.0.0                 | `Cargo.toml`                                   |
+| rmp-serde                           | =1.3.1                 | `Cargo.toml`                                   |
+| chrono-tz                           | =0.10.4                | `Cargo.toml`                                   |
+| chrono                              | =0.4.45                | `Cargo.toml`                                   |
+| sha2                                | =0.10.9                | `Cargo.toml`                                   |
+| tokio-tungstenite                   | =0.30.0                | `Cargo.toml`                                   |
+| rustls                              | =0.23.46               | `Cargo.toml`                                   |
+| tokio-rustls                        | =0.26.6                | `Cargo.toml`                                   |
+| webpki-roots                        | =1.0.9                 | `Cargo.toml`                                   |
+| rcgen                               | =0.14.10               | `Cargo.toml`                                   |
+| argon2                              | =0.6.0                 | `Cargo.toml`                                   |
+| futures-util                        | =0.3.34                | `Cargo.toml`                                   |
+| windows                             | =0.62.2                | `Cargo.toml`                                   |
+| windows-service                     | =0.8.1                 | `Cargo.toml`                                   |
+| tempfile                            | =3.27.0                | `Cargo.toml`                                   |
+| tower                               | =0.5.3                 | `Cargo.toml`                                   |
+| proptest                            | =1.12.0                | `Cargo.toml`                                   |
+| libsql                              | =0.10.0                | `Cargo.toml`                                   |
+| hyper-rustls                        | =0.25.0                | `Cargo.toml`                                   |
+| hyper                               | =0.14.32               | `Cargo.toml`                                   |
+| serde_path_to_error                 | =0.1.20                | `Cargo.toml`                                   |
+| aws-sdk-s3                          | =1.155.0               | `Cargo.toml`                                   |
+| aws-smithy-http-client              | =1.5.1                 | `Cargo.toml`                                   |
+| age                                 | =0.12.1                | `Cargo.toml`                                   |
+| reqwest                             | =0.13.5                | `Cargo.toml`                                   |
+| hmac                                | =0.12.1                | `Cargo.toml`                                   |
+| getrandom                           | =0.3.4                 | `Cargo.toml`                                   |
+| ring                                | =0.17.14               | `Cargo.toml`                                   |
+| qrcode                              | =0.14.1                | `Cargo.toml`                                   |
+| sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`           |
+| age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`           |
+| gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile`         |
+| ghcr.io/tursodatabase/libsql-server | v0.24.31               | `.github/workflows/ci.yml`                     |
+| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `.github/workflows/ci.yml`                     |
+| k3s                                 | v1.33.4+k3s1           | `deploy/README.md`                             |
+| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `deploy/dev/compose.yaml`                      |
+| bitnamilegacy/minio-client          | 2025.7.21-debian-12-r3 | `deploy/dev/compose.yaml`                      |
+| @zxcvbn-ts/language-common          | 3.0.4                  | `crates/arena-cloud/data/common-passwords.txt` |
 
 ## Generated protocol types and the message catalogue
 

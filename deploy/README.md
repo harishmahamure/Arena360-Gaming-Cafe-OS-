@@ -243,6 +243,22 @@ it in the Deployment if launch traffic needs more.
   Repeat them for `api.staging.arena360.cloud`. A Cloudflare block answers before the origin,
   so the onboarding app shows its generic "try again" error for it.
 
+### 6b. Owner MFA key
+
+Owners' authenticator (TOTP) secrets are stored encrypted with AES-256-GCM under
+`ARENA_MFA_KEY` (a key of `arena-cloud-secrets`, step 7): standard base64 of 32 random bytes,
+`openssl rand -base64 32`, one per environment, never reused. A missing key, or one that does
+not decode to 32 bytes, makes the pod exit 64 at start. The key is never logged.
+
+- **Keep it with the database backups' recovery material.** A restored `gz_control` is useless
+  for TOTP without the key it was written under: every enrolled owner would get 500 `INTERNAL`
+  (logged as `mfa secret did not decrypt`) at regenerate and, from Story 2.6, at sign-in.
+- **No rotation yet.** Changing the key makes every stored secret unreadable. Until a
+  re-encryption job exists, rotate only together with resetting every owner's enrolment.
+- **Per-IP limits.** Add Cloudflare rate-limiting rules like those of step 6a for
+  `POST /v1/account/mfa/totp/confirm` and `POST /v1/account/mfa/backup-codes/regenerate`
+  (30 per 10 min each); both need a signed-in session.
+
 ### 7. Encrypt the secrets
 
 Each `deploy/secrets/<env>.enc.yaml` holds **all four** Secrets below; `ghcr-pull` is
@@ -267,6 +283,8 @@ stringData:
   ARENA_GUPSHUP_PASSWORD: <its password>
   ARENA_GUPSHUP_SENDER: <DLT sender id>
   ARENA_GUPSHUP_DLT_TEMPLATE_ID: <DLT template id of the sign-up message>
+  # Owner MFA (step 6b): `openssl rand -base64 32`, a different one per environment.
+  ARENA_MFA_KEY: <44 base64 characters>
 ---
 apiVersion: v1
 kind: Secret

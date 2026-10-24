@@ -300,4 +300,4 @@ impl ControlDb {
 }
 
 const OWNER_BY_PHONE: &str = "SELECT id, name, phone_e164, email, cafe_name, city, mfa_state, \
-                              created_at FROM owners WHERE phone_e164 = ?";
+                              created_at, password_set_at FROM owners WHERE phone_e164 = ?";

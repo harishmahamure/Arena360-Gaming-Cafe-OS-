@@ -64,6 +64,19 @@ pub enum ErrorCode {
     /// The one-time code challenge expired, ran out of attempts or was already used: request
     /// a new code.
     OtpExpired,
+    /// The new password is shorter than 10 characters; `field` is `password`.
+    PasswordTooShort,
+    /// The new password is on the common-password list; `field` is `password`.
+    PasswordCommon,
+    /// The thing being set (a password, an authenticator app) is already set and cannot be
+    /// set again here.
+    AlreadySet,
+    /// The request needs the owner's password to be set first.
+    PasswordRequired,
+    /// The authenticator code is wrong, too old or already used; `field` is `code`.
+    TotpInvalid,
+    /// Account setup (password, authenticator app, saved backup codes) is not finished.
+    SetupIncomplete,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -107,6 +120,12 @@ impl ErrorCode {
             Self::RateLimited => "RATE_LIMITED",
             Self::OtpInvalid => "OTP_INVALID",
             Self::OtpExpired => "OTP_EXPIRED",
+            Self::PasswordTooShort => "PASSWORD_TOO_SHORT",
+            Self::PasswordCommon => "PASSWORD_COMMON",
+            Self::AlreadySet => "ALREADY_SET",
+            Self::PasswordRequired => "PASSWORD_REQUIRED",
+            Self::TotpInvalid => "TOTP_INVALID",
+            Self::SetupIncomplete => "SETUP_INCOMPLETE",
         }
     }
 }
@@ -208,6 +227,12 @@ mod tests {
             (ErrorCode::RateLimited, "RATE_LIMITED"),
             (ErrorCode::OtpInvalid, "OTP_INVALID"),
             (ErrorCode::OtpExpired, "OTP_EXPIRED"),
+            (ErrorCode::PasswordTooShort, "PASSWORD_TOO_SHORT"),
+            (ErrorCode::PasswordCommon, "PASSWORD_COMMON"),
+            (ErrorCode::AlreadySet, "ALREADY_SET"),
+            (ErrorCode::PasswordRequired, "PASSWORD_REQUIRED"),
+            (ErrorCode::TotpInvalid, "TOTP_INVALID"),
+            (ErrorCode::SetupIncomplete, "SETUP_INCOMPLETE"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

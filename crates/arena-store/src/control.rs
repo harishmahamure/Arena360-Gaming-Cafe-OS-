@@ -12,16 +12,19 @@
 //! [`ControlDb::dump`] and [`ControlDb::restore`] (in `control/dump.rs`) back the database up as
 //! a self-contained SQL text and put it back into an empty database, verifying row counts.
 //!
-//! Owner sign-up (Story 2.4) has typed queries in `control/{owner,otp,session,rate_limit}.rs`;
-//! every SQL statement `arena-cloud` runs lives here.
+//! Owner sign-up (Story 2.4) has typed queries in `control/{owner,otp,session,rate_limit}.rs`,
+//! and the owner's password, TOTP and backup codes (Story 2.5) in `control/mfa.rs`; every SQL
+//! statement `arena-cloud` runs lives here.
 
 mod dump;
+mod mfa;
 mod otp;
 mod owner;
 mod rate_limit;
 mod session;
 
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
+pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
 pub use otp::{
     NewOtpChallenge, OTP_PURPOSE_SIGNUP, OTP_RETENTION_MS, OtpChallenge, SignupCompletion,
     SignupOutcome,
@@ -57,6 +60,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 2,
         sql: include_str!("../control-migrations/0002_owner_signup.sql"),
+    },
+    ControlMigration {
+        version: 3,
+        sql: include_str!("../control-migrations/0003_owner_mfa.sql"),
     },
 ];
 
@@ -395,6 +402,28 @@ fn col_int(row: &[SqlValue], i: usize) -> Result<i64, ControlError> {
         Some(SqlValue::Integer(n)) => Ok(*n),
         other => Err(ControlError::Db(format!(
             "column {i}: expected integer, got {other:?}"
+        ))),
+    }
+}
+
+/// A blob column.
+fn col_blob(row: &[SqlValue], i: usize) -> Result<Vec<u8>, ControlError> {
+    match row.get(i) {
+        Some(SqlValue::Blob(b)) => Ok(b.clone()),
+        other => Err(ControlError::Db(format!(
+            "column {i}: expected blob, got {:?}",
+            other.map(|_| "another type")
+        ))),
+    }
+}
+
+/// A nullable text column.
+fn col_opt_text(row: &[SqlValue], i: usize) -> Result<Option<String>, ControlError> {
+    match row.get(i) {
+        Some(SqlValue::Null) => Ok(None),
+        Some(SqlValue::Text(t)) => Ok(Some(t.clone())),
+        _ => Err(ControlError::Db(format!(
+            "column {i}: expected text or null"
         ))),
     }
 }

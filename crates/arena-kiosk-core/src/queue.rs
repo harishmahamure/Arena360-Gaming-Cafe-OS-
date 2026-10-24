@@ -45,7 +45,13 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::NotFound
         | ErrorCode::BadRequest
         | ErrorCode::OtpInvalid
-        | ErrorCode::OtpExpired => true,
+        | ErrorCode::OtpExpired
+        | ErrorCode::PasswordTooShort
+        | ErrorCode::PasswordCommon
+        | ErrorCode::AlreadySet
+        | ErrorCode::PasswordRequired
+        | ErrorCode::TotpInvalid
+        | ErrorCode::SetupIncomplete => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary

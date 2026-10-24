@@ -17,7 +17,7 @@ fn cloud() -> Command {
         .env_remove("ARENA_CONTROL_DB_TOKEN")
         .env_remove("ARENA_CONTROL_DB_RETRY_SECS")
         .env("RUST_LOG", "info")
-        // The sign-up settings every serving role needs (Story 2.4).
+        // The sign-up and MFA settings every serving role needs (Stories 2.4, 2.5).
         .env("ARENA_OTP_PEPPER", "test-pepper-0123456789abcdef0123456789")
         .env("ARENA_WEB_ORIGINS", "https://start.arena360.cloud")
         .env("ARENA_SMS_PROVIDER", "gupshup")
@@ -28,7 +28,11 @@ fn cloud() -> Command {
         .env("ARENA_GUPSHUP_USERID", "u")
         .env("ARENA_GUPSHUP_PASSWORD", "p")
         .env("ARENA_GUPSHUP_SENDER", "ARENA")
-        .env("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1");
+        .env("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1")
+        .env(
+            "ARENA_MFA_KEY",
+            "dGVzdC1tZmEta2V5LTAxMjM0NTY3ODlhYmNkZWZnaGk=",
+        );
     c
 }
 

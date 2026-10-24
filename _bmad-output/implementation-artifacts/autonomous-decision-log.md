@@ -444,3 +444,28 @@ Each entry gives the story, the decision point, the choice taken (the recommende
     - Playwright's Chromium was reinstalled; the 2.5 worktree had replaced the shared browser cache.
     - The known `arena-hub-ui` sidecar tests still fail.
     - The store test's sub-1 s bound flaked under load, so it's relaxed to 1.6 s (still below the 1.8 s retry path).
+
+## Story 2.5: owner sets a password and enrols TOTP with backup codes
+
+- **Spec approval:** self-approved (about 2,400 tokens, full spec kept: one account-security goal).
+- **Primitives:** ring for TOTP, AES-GCM, randomness and the constant-time compare; `qrcode` for the SVG; the common-password list from `@zxcvbn-ts/language-common@3.0.4` (npm, MIT).
+- **Implemented on the overlap path:** built in a worktree while 2.4 was reviewed, then rebased onto the final 2.4. The 2.5 implementer resolved 18 conflict hunks and fixed two 2.4 column lists that lacked `password_set_at`.
+- **Implementation choices, accepted:**
+  - over 128 characters is 422 `VALIDATION_FAILED`;
+  - start/confirm on an enrolled owner is 409 `ALREADY_SET`;
+  - a malformed TOTP is `TOTP_INVALID`;
+  - `+` is encoded `%2B` in the otpauth URI.
+- **Review outcome (3 reviewers on Sonnet):** 11 fixes and 10 rejections. No deferrals.
+  - **Fixes:**
+    - a per-owner TOTP failure limit (high);
+    - regenerate resets the ack, and ack needs unused codes;
+    - an argon2 semaphore;
+    - a constant-time compare;
+    - trimmed password length;
+    - strict base64;
+    - the refresh fallback;
+    - client refresh-and-retry on 401;
+    - a retry for a failed start;
+    - the dialog can't close over unsaved codes.
+- **Flaky store test:** the migration test's wall-clock bound failed even at 1.6 s under parallel builds. The bound is removed; the `ControlError::Migration` match already proves the no-retry path.
+- **Verification (worktree):** everything passes except the known `arena-hub-ui` sidecar tests: 188 script tests, the onboarding check, build and 127 Playwright tests, the linkage check and clippy.

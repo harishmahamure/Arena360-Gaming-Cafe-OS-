@@ -4,4 +4,15 @@ import type { MfaState } from "./MfaState";
 /**
  * The signed-in owner, as `GET /v1/session` shows them.
  */
-export type SessionOwner = { name: string; mfa_state: MfaState };
+export type SessionOwner = {
+  name: string;
+  mfa_state: MfaState;
+  /**
+   * Whether the owner has set a password.
+   */
+  has_password: boolean;
+  /**
+   * Whether the owner confirmed saving their backup codes.
+   */
+  backup_codes_acked: boolean;
+};

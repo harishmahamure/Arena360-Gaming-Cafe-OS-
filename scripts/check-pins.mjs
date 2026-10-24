@@ -166,6 +166,19 @@ export function readDevCompose(text) {
   return out;
 }
 
+/**
+ * A bundled data file -> { <npm package>: <version> } from its `# source: <name>@<version>`
+ * header line (the provenance of the common-password list). A file without one throws, so
+ * the list never loses its pin silently.
+ */
+export function readDataSource(text) {
+  const m = text.match(
+    /^#\s*source:\s*((?:@[\w.-]+\/)?[\w.-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s*$/m,
+  );
+  if (!m) throw new Error("bundled data file: no `# source: <package>@<exact version>` line");
+  return { [m[1]]: m[2] };
+}
+
 export const READERS = {
   "rust-toolchain.toml": readRustToolchain,
   ".nvmrc": readNvmrc,
@@ -177,6 +190,7 @@ export const READERS = {
   ".github/workflows/ci.yml": readCiWorkflow,
   "deploy/README.md": readDeployReadme,
   "deploy/dev/compose.yaml": readDevCompose,
+  "crates/arena-cloud/data/common-passwords.txt": readDataSource,
 };
 
 /** Manifests whose values must be exact versions (no ranges). */

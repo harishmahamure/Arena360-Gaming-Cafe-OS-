@@ -2,7 +2,9 @@
 
 use arena_proto::MfaState;
 
-use super::{ControlDb, ControlError, SqlValue, col_int, col_text, text};
+use super::{
+    ControlDb, ControlError, SqlValue, col_int, col_opt_int, col_opt_text, col_text, text,
+};
 
 /// An owner row.
 #[derive(Clone, PartialEq, Eq)]
@@ -15,6 +17,16 @@ pub struct Owner {
     pub city: String,
     pub mfa_state: MfaState,
     pub created_at: i64,
+    /// When the owner set their password (`None`: no password yet). The hash itself is read
+    /// only through [`ControlDb::owner_password_hash`].
+    pub password_set_at: Option<i64>,
+}
+
+impl Owner {
+    /// Whether the owner has set a password.
+    pub fn has_password(&self) -> bool {
+        self.password_set_at.is_some()
+    }
 }
 
 impl std::fmt::Debug for Owner {
@@ -24,6 +36,7 @@ impl std::fmt::Debug for Owner {
             .field("id", &self.id)
             .field("mfa_state", &self.mfa_state)
             .field("created_at", &self.created_at)
+            .field("password_set_at", &self.password_set_at)
             .finish_non_exhaustive()
     }
 }
@@ -45,7 +58,7 @@ impl std::fmt::Debug for NewOwner {
 }
 
 pub(super) const OWNER_COLUMNS: &str =
-    "id, name, phone_e164, email, cafe_name, city, mfa_state, created_at";
+    "id, name, phone_e164, email, cafe_name, city, mfa_state, created_at, password_set_at";
 
 /// An owner from a row of [`OWNER_COLUMNS`] starting at column `at`.
 pub(super) fn owner_from(row: &[SqlValue], at: usize) -> Result<Owner, ControlError> {
@@ -60,31 +73,22 @@ pub(super) fn owner_from(row: &[SqlValue], at: usize) -> Result<Owner, ControlEr
         mfa_state: MfaState::parse(&state)
             .ok_or_else(|| ControlError::Db(format!("unknown mfa_state {state:?}")))?,
         created_at: col_int(row, at + 7)?,
+        password_set_at: col_opt_int(row, at + 8)?,
     })
 }
 
 impl ControlDb {
     /// The owner with this E.164 phone.
     pub async fn owner_by_phone(&self, phone_e164: &str) -> Result<Option<Owner>, ControlError> {
-        let rows = self
-            .query(
-                "SELECT id, name, phone_e164, email, cafe_name, city, mfa_state, created_at \
-                 FROM owners WHERE phone_e164 = ?",
-                vec![text(phone_e164)],
-            )
-            .await?;
+        let sql = format!("SELECT {OWNER_COLUMNS} FROM owners WHERE phone_e164 = ?");
+        let rows = self.query(&sql, vec![text(phone_e164)]).await?;
         rows.first().map(|r| owner_from(r, 0)).transpose()
     }
 
     /// The owner with this id.
     pub async fn owner_by_id(&self, id: &str) -> Result<Option<Owner>, ControlError> {
-        let rows = self
-            .query(
-                "SELECT id, name, phone_e164, email, cafe_name, city, mfa_state, created_at \
-                 FROM owners WHERE id = ?",
-                vec![text(id)],
-            )
-            .await?;
+        let sql = format!("SELECT {OWNER_COLUMNS} FROM owners WHERE id = ?");
+        let rows = self.query(&sql, vec![text(id)]).await?;
         rows.first().map(|r| owner_from(r, 0)).transpose()
     }
 
@@ -112,5 +116,38 @@ impl ControlDb {
             )
             .await?;
         Ok(n == 1)
+    }
+
+    /// Sets the owner's password (an argon2id PHC string) once: `false`, with nothing changed,
+    /// when there is no such owner or a password is already set.
+    pub async fn set_owner_password(
+        &self,
+        id: &str,
+        password_hash: &str,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        let n = self
+            .execute(
+                "UPDATE owners SET password_hash = ?, password_set_at = ? \
+                 WHERE id = ? AND password_hash IS NULL",
+                vec![text(password_hash), SqlValue::Integer(now), text(id)],
+            )
+            .await?;
+        Ok(n == 1)
+    }
+
+    /// The owner's password hash (an argon2id PHC string), when one is set.
+    pub async fn owner_password_hash(&self, id: &str) -> Result<Option<String>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT password_hash FROM owners WHERE id = ?",
+                vec![text(id)],
+            )
+            .await?;
+        Ok(rows
+            .first()
+            .map(|r| col_opt_text(r, 0))
+            .transpose()?
+            .flatten())
     }
 }

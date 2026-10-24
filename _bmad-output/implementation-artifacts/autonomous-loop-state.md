@@ -18,6 +18,8 @@ Read this file after a context flush (`/clear`). It's the single entry point for
   - **Risk-based review:** auth, security, crypto, payments and data-integrity stories get all three reviewers. UI-only or config-only stories get the Verification Gap reviewer plus one Blind Hunter.
   - **Reviewers run on Sonnet** (`model: sonnet`). Implementers stay on the session model.
 
+- **(2026-10-25) No code comments:** the user's global rule (`~/.claude/CLAUDE.md`). Every implementer dispatch and fix message adds: "Do not add code comments in anything you write or change (no line, block or doc comments; leave existing comments alone unless the code they describe changes)."
+
 ## Where things stand
 
 - **Story order and status:** `_bmad-output/implementation-artifacts/sprint-status.yaml`. A story at `review` is committed; `in-progress` is mid-pipeline.

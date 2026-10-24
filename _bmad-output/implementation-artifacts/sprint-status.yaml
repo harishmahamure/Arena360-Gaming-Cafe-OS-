@@ -65,8 +65,8 @@ development_status:
   2-2-cloud-error-envelope-local-dev-mode-and-single-sqlite-linkag: review
   2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl: review
   2-4-owner-signs-up-with-phone-otp: review
-  2-5-owner-sets-a-password-and-enrols-totp-with-backup-codes: backlog
-  2-6-owner-signs-in-on-a-new-device-with-totp-backup-code-or-sms: backlog
+  2-5-owner-sets-a-password-and-enrols-totp-with-backup-codes: review
+  2-6-owner-signs-in-on-a-new-device-with-totp-backup-code-or-sms: in-progress
   2-7-resumable-setup-wizard-and-step-1-café-and-first-branch: backlog
   2-8-step-2-free-tier-issues-a-signed-licence: backlog
   2-9-step-3-single-use-8-character-hub-pairing-code: backlog

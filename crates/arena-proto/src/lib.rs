@@ -3,6 +3,7 @@
 //! TypeScript bindings are generated from these types with ts-rs (`pnpm gen:types`) into
 //! `packages/ui/src/generated`.
 
+mod account;
 mod actor;
 mod admin;
 mod audit;
@@ -20,6 +21,10 @@ mod signup;
 mod snapshot;
 mod ui_auth;
 
+pub use account::{
+    BACKUP_CODE_CHARS, BACKUP_CODE_COUNT, BackupCodes, PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS,
+    SetPassword, TOTP_DIGITS, TOTP_PERIOD_S, TotpCode, TotpStarted,
+};
 pub use actor::{Actor, ActorKind, ElevatedBy, ElevationKind, ElevationMode};
 pub use admin::{
     ADMIN_EXIT_FAILED_CODE, ADMIN_EXIT_MS, AdminExitMode, AdminPinOk, AdminUnlockAck,

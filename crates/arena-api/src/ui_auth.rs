@@ -678,7 +678,12 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::AuthFailed => StatusCode::UNAUTHORIZED,
         ErrorCode::AuthLocked | ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-        ErrorCode::OtpInvalid | ErrorCode::OtpExpired => StatusCode::BAD_REQUEST,
+        ErrorCode::OtpInvalid | ErrorCode::OtpExpired | ErrorCode::TotpInvalid => {
+            StatusCode::BAD_REQUEST
+        }
+        ErrorCode::PasswordTooShort | ErrorCode::PasswordCommon => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::AlreadySet => StatusCode::CONFLICT,
+        ErrorCode::PasswordRequired | ErrorCode::SetupIncomplete => StatusCode::FORBIDDEN,
         ErrorCode::PermissionDenied
         | ErrorCode::Forbidden
         | ErrorCode::PinRequired

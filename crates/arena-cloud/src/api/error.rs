@@ -18,22 +18,29 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::Unsupported | ErrorCode::BadRequest | ErrorCode::BadFrame => {
             StatusCode::BAD_REQUEST
         }
-        ErrorCode::ValidationFailed | ErrorCode::ReasonRequired | ErrorCode::Expired => {
-            StatusCode::UNPROCESSABLE_ENTITY
-        }
+        ErrorCode::ValidationFailed
+        | ErrorCode::ReasonRequired
+        | ErrorCode::Expired
+        | ErrorCode::PasswordTooShort
+        | ErrorCode::PasswordCommon => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::AuthFailed | ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => {
             StatusCode::UNAUTHORIZED
         }
         ErrorCode::AuthLocked | ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-        ErrorCode::OtpInvalid | ErrorCode::OtpExpired => StatusCode::BAD_REQUEST,
+        ErrorCode::OtpInvalid | ErrorCode::OtpExpired | ErrorCode::TotpInvalid => {
+            StatusCode::BAD_REQUEST
+        }
         ErrorCode::Forbidden
+        | ErrorCode::PasswordRequired
+        | ErrorCode::SetupIncomplete
         | ErrorCode::PermissionDenied
         | ErrorCode::PinRequired
         | ErrorCode::PinRejected => StatusCode::FORBIDDEN,
         ErrorCode::SessionLocked => StatusCode::LOCKED,
-        ErrorCode::Stale | ErrorCode::AlreadyBootstrapped | ErrorCode::IdempotencyConflict => {
-            StatusCode::CONFLICT
-        }
+        ErrorCode::Stale
+        | ErrorCode::AlreadyBootstrapped
+        | ErrorCode::IdempotencyConflict
+        | ErrorCode::AlreadySet => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -232,6 +239,12 @@ mod tests {
             (ErrorCode::OtpExpired, 400),
             (ErrorCode::AuthFailed, 401),
             (ErrorCode::Forbidden, 403),
+            (ErrorCode::PasswordTooShort, 422),
+            (ErrorCode::PasswordCommon, 422),
+            (ErrorCode::AlreadySet, 409),
+            (ErrorCode::PasswordRequired, 403),
+            (ErrorCode::TotpInvalid, 400),
+            (ErrorCode::SetupIncomplete, 403),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

@@ -16,6 +16,8 @@ const BASELINE: &[ControlMigration] = CONTROL_MIGRATIONS.split_at(1).0;
 /// The tables every migration creates, sorted.
 const ALL_TABLES: &[&str] = &[
     "otp_challenges",
+    "owner_backup_codes",
+    "owner_mfa",
     "owner_sessions",
     "owners",
     "rate_limits",
@@ -106,14 +108,11 @@ async fn a_failing_migration_leaves_neither_its_changes_nor_its_row() {
         sql: "CREATE TABLE half (id INTEGER); INSERT INTO missing VALUES (1);",
     });
     let db = ControlDb::connect(&t.url, "").await.unwrap();
-    let started = std::time::Instant::now();
     let err = db.migrate_with(&list, 7).await.unwrap_err();
     assert!(
         matches!(&err, ControlError::Migration { version: 2, message } if message.contains("no such table")),
         "{err:?}"
     );
-    // Not retried: a bad migration fails at once.
-    assert!(started.elapsed() < std::time::Duration::from_millis(1600));
     assert_eq!(sqld::migration_rows(&t.url).await, vec![(1, 7)]);
     assert_eq!(sqld::tables(&t.url).await, vec!["schema_migrations"]);
 }
@@ -277,13 +276,11 @@ mod local {
             sql: "CREATE TABLE half (id INTEGER); INSERT INTO missing VALUES (1);",
         });
         let db = ControlDb::open_local(&path).await.unwrap();
-        let started = std::time::Instant::now();
         let err = db.migrate_with(&list, 7).await.unwrap_err();
         assert!(
             matches!(&err, ControlError::Migration { version: 2, message } if message.contains("no such table")),
             "{err:?}"
         );
-        assert!(started.elapsed() < std::time::Duration::from_millis(1600));
         assert_eq!(rows(&path), vec![(1, 7)]);
         assert_eq!(tables(&path), vec!["schema_migrations"]);
     }

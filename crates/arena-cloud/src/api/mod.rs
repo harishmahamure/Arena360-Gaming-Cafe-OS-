@@ -6,14 +6,19 @@
 //! and any internal failure or panic (`INTERNAL`, 500, a fixed message; the detail is only
 //! logged).
 //!
-//! With an [`AuthState`] the owner routes are mounted too: `/v1/signup/*` ([`signup`]) and
-//! `/v1/session*` ([`session`]), behind the CORS layer ([`cors`]); with `--dev` also
-//! `GET /v1/dev/sms`, the fake SMS outbox.
+//! With an [`AuthState`] the owner routes are mounted too: `/v1/signup/*` ([`signup`]),
+//! `/v1/session*` ([`session`]), `/v1/account/password` ([`account`]) and
+//! `/v1/account/mfa/*` ([`mfa`]), behind the CORS layer ([`cors`]); with `--dev` also
+//! `GET /v1/dev/sms`, the fake SMS outbox, and `GET /v1/dev/setup-gate`, which passes only
+//! [`gate::RequireSetupComplete`].
 
+pub mod account;
 mod cors;
 mod dev;
 mod error;
+pub mod gate;
 mod json;
+pub mod mfa;
 mod panic;
 pub mod session;
 pub mod signup;
@@ -38,12 +43,16 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
     if let Some(st) = auth {
         v1 = v1
             .merge(signup::router(Arc::clone(st)))
-            .merge(session::router(Arc::clone(st)));
+            .merge(session::router(Arc::clone(st)))
+            .merge(account::router(Arc::clone(st)))
+            .merge(mfa::router(Arc::clone(st)));
     }
     if dev {
         v1 = v1.merge(dev::router());
         if let Some(st) = auth {
-            v1 = v1.merge(dev::sms_router(Arc::clone(st)));
+            v1 = v1
+                .merge(dev::sms_router(Arc::clone(st)))
+                .merge(dev::gate_router(Arc::clone(st)));
         }
     }
     v1

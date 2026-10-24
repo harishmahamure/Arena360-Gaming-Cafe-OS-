@@ -54,7 +54,7 @@ pub(super) const PRUNE_SESSIONS: &str =
 
 /// The owner of session `?`, in [`OWNER_COLUMNS`] order.
 const OWNER_OF_SESSION: &str = "SELECT o.id, o.name, o.phone_e164, o.email, o.cafe_name, o.city, \
-     o.mfa_state, o.created_at FROM owners o JOIN owner_sessions s ON s.owner_id = o.id \
+     o.mfa_state, o.created_at, o.password_set_at FROM owners o JOIN owner_sessions s ON s.owner_id = o.id \
      WHERE s.id = ?";
 
 /// A refresh token presented again within this long of its rotation is a concurrent refresh

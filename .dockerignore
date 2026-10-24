@@ -13,3 +13,4 @@ docs
 .env
 *.env
 deploy/secrets
+.arena-cloud-dev

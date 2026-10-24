@@ -327,3 +327,42 @@ Each entry gives the story, the decision point, the choice taken (the recommende
     - **Failing:** only the known `arena-hub-ui` sidecar timing test, already deferred in 1.21.
     - **Not run:** the app builds, Hub `test:shell` and gallery a11y. The diff touches no app.
     - **Not verifiable here:** the deploy workflow itself (never run).
+
+## Story 2.2: cloud error envelope, local dev mode and single SQLite linkage
+
+- **Spec approval:** self-approved. Spec: `spec-2-2-cloud-error-envelope-local-dev-mode-and-single-sqlite-linkag.md`.
+- **Token gate:** about 2,000 tokens. **Kept the full spec** (recommended): the integration suite runs against dev mode, so the envelope and dev mode can't be verified apart.
+- **Linkage spike outcome (recommended):** libsql stays remote-only. Dev mode's local `gz_control` uses rusqlite (already bundled in arena-store), so the binary has exactly one SQLite C library. A symbol-level CI script proves it. Rejected the alternative: libsql `core` plus a system SQLite for rusqlite, which means two SQLite forks or fragile linking.
+- **Envelope wire:** a flat `AppError` body (the story says "the body is the envelope"), with new codes `NOT_FOUND` and `BAD_REQUEST`. A wrong method reuses `UNSUPPORTED` (405). `INTERNAL` has a fixed message and the detail is logged.
+- **Failure routes:** `/v1/dev/{echo,fail,panic}`, mounted only under `--dev`, so the CI suite can trigger each failure against the real binary.
+- **R2/MinIO:** a compose file plus docs only. There's no R2 client until a story needs one; recorded in place of dead config.
+- **`--dev` safety:** loopback listen only, no token, data in `./.arena-cloud-dev`.
+
+## User decision (2026-10-24): Sentry and telemetry export move to the end
+
+- The user said: "we can opt out from logging and sentry", then "We will do at last".
+- **Applied as:** Story 2.3 is built **without** Sentry and the OpenTelemetry/Grafana Cloud export. That work is deferred, not dropped: it runs as the last item of Epic 2, after 2.31 (tracked in `deferred-work.md`).
+- In the meantime, logs stay tracing JSON on stdout with the existing no-PII rule, and 2.3 includes a scrub test over the logged output.
+- 2.3 still covers the nightly encrypted backups, the restore drill and the backup-failure alert.
+- **2.2 implementation choices, accepted:**
+  - MinIO images: `bitnamilegacy/minio` and `bitnamilegacy/minio-client` (the official images are gone from Docker Hub). There is no console, so port 9001 was dropped.
+  - New pin `serde_path_to_error =0.1.20`, so a bad body names its field.
+  - `--data-dir` without `--dev` exits 64.
+  - `runs_control()` was deleted because it was dead code.
+  - The 413 test sends exactly 64 KiB + 1 bytes: axum waits for the body, so an oversize `Content-Length` alone hangs.
+- **2.2 review outcome:** 14 fixes, 2 deferrals and 8 rejections.
+  - **Fixes:**
+    - the linkage script's pipefail/SIGPIPE false pass (high);
+    - `cargo tree` failure is fatal;
+    - `CARGO_TARGET_DIR`;
+    - a stripped binary and dynamic libsqlite3 are detected;
+    - `UNSUPPORTED` maps to 400, and only the method fallback sends 405;
+    - a layer wraps any non-JSON error in the envelope;
+    - nested and top-level missing fields name the field;
+    - dev mode ignores the retry env;
+    - the 413 test is robust;
+    - the healthz test polls until reachable;
+    - `readDevCompose` errors on unparsable images;
+    - the 9001 port mapping is removed.
+  - **Deferred:** tests for a dev data-dir open failure and for local busy-retry.
+  - **Verification:** everything passes except the known `arena-hub-ui` sidecar test; the linkage check passes on macOS. The Linux linkage run happens first in CI.

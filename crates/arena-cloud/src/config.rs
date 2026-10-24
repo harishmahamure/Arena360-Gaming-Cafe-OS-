@@ -2,12 +2,19 @@
 
 use std::ffi::OsString;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub const USAGE: &str =
-    "usage: arena-cloud --role control [--listen <addr:port>] [--help] [--version]
+    "usage: arena-cloud --role control|all [--listen <addr:port>] [--help] [--version]
+       arena-cloud --role control|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
 
-environment:
+  --role all   every role this build has (control)
+  --dev        local dev mode: gz_control is <data-dir>/gz_control.db (SQLite), no env or
+               token needed, loopback only (default 127.0.0.1:8080), dev routes under /v1/dev
+  --data-dir   dev data directory, created if missing (default ./.arena-cloud-dev)
+
+environment (not with --dev):
   ARENA_CONTROL_DB_URL    gz_control URL (libsql:// or https://)
   ARENA_CONTROL_DB_TOKEN  gz_control auth token";
 
@@ -20,6 +27,12 @@ pub const DB_RETRY_SECS_ENV: &str = "ARENA_CONTROL_DB_RETRY_SECS";
 
 /// The default listen address.
 pub const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
+/// The default listen address with `--dev`.
+pub const DEFAULT_DEV_LISTEN: &str = "127.0.0.1:8080";
+/// The default `--data-dir`.
+pub const DEFAULT_DATA_DIR: &str = "./.arena-cloud-dev";
+/// The local `gz_control` file inside the dev data directory.
+pub const DEV_DB_FILE: &str = "gz_control.db";
 /// How long start-up keeps retrying an unreachable `gz_control`.
 pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(60);
 
@@ -27,35 +40,66 @@ pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Control,
+    /// Every role this build has (only `control` today).
+    All,
 }
 
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Control => "control",
+            Self::All => "all",
+        }
+    }
+}
+
+/// Where `gz_control` lives.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Database {
+    /// Turso (or a loopback sqld) over libsql remote.
+    Remote { url: String, token: String },
+    /// `--dev`: a local SQLite file in `data_dir` ([`DEV_DB_FILE`]).
+    Local { data_dir: PathBuf },
+}
+
+impl Database {
+    /// The local file path, for [`Database::Local`].
+    pub fn local_path(&self) -> Option<PathBuf> {
+        match self {
+            Self::Local { data_dir } => Some(data_dir.join(DEV_DB_FILE)),
+            Self::Remote { .. } => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for Database {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Remote { url, .. } => f
+                .debug_struct("Remote")
+                .field("url", url)
+                .field("token", &"[redacted]")
+                .finish(),
+            Self::Local { data_dir } => {
+                f.debug_struct("Local").field("data_dir", data_dir).finish()
+            }
         }
     }
 }
 
 /// Resolved start-up configuration.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub role: Role,
     pub listen: SocketAddr,
-    pub db_url: String,
-    pub db_token: String,
+    pub database: Database,
     pub retry_window: Duration,
 }
 
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config")
-            .field("role", &self.role)
-            .field("listen", &self.listen)
-            .field("db_url", &self.db_url)
-            .field("db_token", &"[redacted]")
-            .field("retry_window", &self.retry_window)
-            .finish()
+impl Config {
+    /// Local dev mode (`--dev`): the local database and the dev routes.
+    pub fn dev(&self) -> bool {
+        matches!(self.database, Database::Local { .. })
     }
 }
 
@@ -86,9 +130,9 @@ pub fn parse(
     env: impl Fn(&str) -> Option<OsString>,
 ) -> Result<Command, String> {
     let mut role: Option<String> = None;
-    let mut listen: SocketAddr = DEFAULT_LISTEN
-        .parse()
-        .expect("valid default listen address");
+    let mut listen: Option<SocketAddr> = None;
+    let mut dev = false;
+    let mut data_dir: Option<PathBuf> = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let arg = arg
@@ -114,14 +158,17 @@ pub fn parse(
             "--role" => role = Some(value()?),
             "--listen" => {
                 let v = value()?;
-                listen = v.parse().map_err(|_| format!("invalid --listen {v:?}"))?;
+                listen = Some(v.parse().map_err(|_| format!("invalid --listen {v:?}"))?);
             }
+            "--dev" if inline.is_none() => dev = true,
+            "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
             other => return Err(format!("unknown argument {other}")),
         }
     }
     let role = match role.as_deref() {
-        None => return Err("--role is required (control)".to_owned()),
+        None => return Err("--role is required (control or all)".to_owned()),
         Some("control") => Role::Control,
+        Some("all") => Role::All,
         Some(other) => return Err(format!("role not available yet: {other}")),
     };
 
@@ -131,17 +178,37 @@ pub fn parse(
             .and_then(|v| v.into_string().ok())
             .map(|v| v.trim().to_owned())
     };
-    let db_url = get(DB_URL_ENV)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| format!("{DB_URL_ENV} is not set"))?;
-    let loopback = is_loopback_http(&db_url);
-    if !(db_url.starts_with("libsql://") || db_url.starts_with("https://") || loopback) {
-        return Err(format!("{DB_URL_ENV} must be a libsql:// or https:// URL"));
+    if dev {
+        let listen = match listen {
+            None => DEFAULT_DEV_LISTEN
+                .parse()
+                .expect("valid default dev listen address"),
+            Some(l) if l.ip().is_loopback() => l,
+            Some(l) => {
+                return Err(format!(
+                    "--dev listens on loopback only; refusing --listen {l}"
+                ));
+            }
+        };
+        return Ok(Command::Run(Config {
+            role,
+            listen,
+            database: Database::Local {
+                data_dir: data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR)),
+            },
+            // Unused: a local file is opened once, never retried.
+            retry_window: DEFAULT_RETRY_WINDOW,
+        }));
     }
-    let db_token = get(DB_TOKEN_ENV).unwrap_or_default();
-    if db_token.is_empty() && !loopback {
-        return Err(format!("{DB_TOKEN_ENV} is not set"));
+    if data_dir.is_some() {
+        return Err("--data-dir needs --dev".to_owned());
     }
+    let listen = listen.unwrap_or_else(|| {
+        DEFAULT_LISTEN
+            .parse()
+            .expect("valid default listen address")
+    });
+
     let retry_window = match get(DB_RETRY_SECS_ENV).filter(|v| !v.is_empty()) {
         None => DEFAULT_RETRY_WINDOW,
         Some(v) => {
@@ -153,11 +220,25 @@ pub fn parse(
             Duration::from_secs(secs)
         }
     };
+
+    let db_url = get(DB_URL_ENV)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("{DB_URL_ENV} is not set"))?;
+    let loopback = is_loopback_http(&db_url);
+    if !(db_url.starts_with("libsql://") || db_url.starts_with("https://") || loopback) {
+        return Err(format!("{DB_URL_ENV} must be a libsql:// or https:// URL"));
+    }
+    let db_token = get(DB_TOKEN_ENV).unwrap_or_default();
+    if db_token.is_empty() && !loopback {
+        return Err(format!("{DB_TOKEN_ENV} is not set"));
+    }
     Ok(Command::Run(Config {
         role,
         listen,
-        db_url,
-        db_token,
+        database: Database::Remote {
+            url: db_url,
+            token: db_token,
+        },
         retry_window,
     }))
 }
@@ -186,8 +267,10 @@ mod tests {
         let cfg = Config {
             role: Role::Control,
             listen: DEFAULT_LISTEN.parse().unwrap(),
-            db_url: "libsql://x".into(),
-            db_token: "tok-SECRET".into(),
+            database: Database::Remote {
+                url: "libsql://x".into(),
+                token: "tok-SECRET".into(),
+            },
             retry_window: DEFAULT_RETRY_WINDOW,
         };
         assert!(!format!("{cfg:?}").contains("tok-SECRET"));

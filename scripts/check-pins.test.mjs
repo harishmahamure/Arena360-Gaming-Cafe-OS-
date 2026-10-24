@@ -11,6 +11,7 @@ import {
   readCiWorkflow,
   readDeployReadme,
   readDeployWorkflow,
+  readDevCompose,
   readDockerfile,
   readNvmrc,
   readPackageJson,
@@ -201,4 +202,32 @@ test("deploy sources: workflow tool versions, runtime image, CI service image, k
     k3s: "v1.33.4+k3s1",
   });
   assert.deepEqual(readDeployReadme("nothing"), {});
+});
+
+test("dev compose: every image with its tag", () => {
+  assert.deepEqual(
+    readDevCompose(
+      "services:\n  a:\n    image: bitnamilegacy/minio:2025.7.23-debian-12-r5\n  b:\n    image: 'x/mc:1.2'\n    entrypoint: [sh]\n",
+    ),
+    { "bitnamilegacy/minio": "2025.7.23-debian-12-r5", "x/mc": "1.2" },
+  );
+  assert.deepEqual(readDevCompose("services: {}\n"), {});
+  assert.deepEqual(readDevCompose("    image: localhost:5000/x/minio:1.0\n"), {
+    "localhost:5000/x/minio": "1.0",
+  });
+});
+
+test("dev compose: an image it cannot read as name:tag is an error", () => {
+  for (const bad of [
+    "bitnamilegacy/minio",
+    "bitnamilegacy/minio:",
+    "bitnamilegacy/minio@sha256:abc",
+    "minio:1@sha256:abc",
+    "${MINIO_IMAGE}",
+    "minio:${TAG}",
+    "localhost:5000/minio",
+    "",
+  ]) {
+    assert.throws(() => readDevCompose(`services:\n  a:\n    image: ${bad}\n`), /not pinned/, bad);
+  }
 });

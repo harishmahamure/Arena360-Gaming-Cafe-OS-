@@ -4,7 +4,16 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::time::Duration;
 
-use arena_cloud::config::{Command, DEFAULT_RETRY_WINDOW, Role, parse};
+use std::path::PathBuf;
+
+use arena_cloud::config::{Command, DEFAULT_RETRY_WINDOW, Database, Role, parse};
+
+fn remote(db: &Database) -> (&str, &str) {
+    match db {
+        Database::Remote { url, token } => (url, token),
+        Database::Local { .. } => panic!("expected a remote database"),
+    }
+}
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     let map: HashMap<String, OsString> = pairs
@@ -34,10 +43,10 @@ fn control_with_defaults() {
     assert_eq!(c.role, Role::Control);
     assert_eq!(c.listen.to_string(), "0.0.0.0:8080");
     assert_eq!(
-        c.db_url,
-        "libsql://gz-control-arena.aws-ap-south-1.turso.io"
+        remote(&c.database),
+        ("libsql://gz-control-arena.aws-ap-south-1.turso.io", "tok")
     );
-    assert_eq!(c.db_token, "tok");
+    assert!(!c.dev());
     assert_eq!(c.retry_window, DEFAULT_RETRY_WINDOW);
 }
 
@@ -70,7 +79,7 @@ fn help_and_version() {
 
 #[test]
 fn other_roles_are_not_available_yet() {
-    for role in ["builder", "command", "jobs", "all"] {
+    for role in ["builder", "command", "jobs"] {
         let e = parse(args(&["--role", role]), env_of(TURSO)).unwrap_err();
         assert!(e.contains("role not available yet"), "{e}");
         assert!(e.contains(role), "{e}");
@@ -139,7 +148,7 @@ fn the_token_may_be_empty_only_for_loopback_http() {
         else {
             panic!("{url}");
         };
-        assert_eq!(c.db_token, "");
+        assert_eq!(remote(&c.database).1, "");
     }
 }
 
@@ -182,8 +191,7 @@ fn url_and_token_are_trimmed() {
     ) else {
         panic!("expected run");
     };
-    assert_eq!(c.db_url, "libsql://a.turso.io");
-    assert_eq!(c.db_token, "tok");
+    assert_eq!(remote(&c.database), ("libsql://a.turso.io", "tok"));
     // Whitespace alone is no token.
     let e = parse(
         args(&["--role", "control"]),
@@ -194,4 +202,102 @@ fn url_and_token_are_trimmed() {
     )
     .unwrap_err();
     assert!(e.contains("ARENA_CONTROL_DB_TOKEN"), "{e}");
+}
+
+#[test]
+fn role_all_is_every_role_this_build_has() {
+    let Ok(Command::Run(c)) = parse(args(&["--role", "all"]), env_of(TURSO)) else {
+        panic!("expected run");
+    };
+    assert_eq!(c.role, Role::All);
+    assert_eq!(c.role.as_str(), "all");
+}
+
+#[test]
+fn dev_needs_no_env_and_defaults_to_loopback_and_the_dev_data_dir() {
+    let Ok(Command::Run(c)) = parse(args(&["--role", "all", "--dev"]), env_of(&[])) else {
+        panic!("expected run");
+    };
+    assert!(c.dev());
+    assert_eq!(c.listen.to_string(), "127.0.0.1:8080");
+    assert_eq!(
+        c.database,
+        Database::Local {
+            data_dir: PathBuf::from("./.arena-cloud-dev")
+        }
+    );
+    assert_eq!(
+        c.database.local_path(),
+        Some(PathBuf::from("./.arena-cloud-dev").join("gz_control.db"))
+    );
+    // The remote env is ignored in dev mode.
+    let Ok(Command::Run(c)) = parse(
+        args(&["--role", "control", "--dev", "--data-dir", "/tmp/d"]),
+        env_of(TURSO),
+    ) else {
+        panic!("expected run");
+    };
+    assert_eq!(
+        c.database,
+        Database::Local {
+            data_dir: PathBuf::from("/tmp/d")
+        }
+    );
+}
+
+#[test]
+fn dev_refuses_a_non_loopback_listen() {
+    for l in ["0.0.0.0:8080", "192.168.1.5:8080", "[::]:8080"] {
+        let e = parse(
+            args(&["--role", "all", "--dev", "--listen", l]),
+            env_of(&[]),
+        )
+        .unwrap_err();
+        assert!(e.contains("loopback"), "{l}: {e}");
+    }
+    for l in ["127.0.0.1:9999", "[::1]:9999"] {
+        let Ok(Command::Run(c)) = parse(
+            args(&["--role", "all", "--dev", "--listen", l]),
+            env_of(&[]),
+        ) else {
+            panic!("{l}");
+        };
+        assert_eq!(c.listen.to_string(), l);
+    }
+}
+
+#[test]
+fn data_dir_needs_dev() {
+    let e = parse(
+        args(&["--role", "control", "--data-dir", "/tmp/d"]),
+        env_of(TURSO),
+    )
+    .unwrap_err();
+    assert!(e.contains("--dev"), "{e}");
+    assert!(parse(args(&["--role", "all", "--dev=yes"]), env_of(&[])).is_err());
+}
+
+#[test]
+fn debug_never_prints_the_token() {
+    let Ok(Command::Run(c)) = parse(
+        args(&["--role", "control"]),
+        env_of(&[
+            ("ARENA_CONTROL_DB_URL", "libsql://a.turso.io"),
+            ("ARENA_CONTROL_DB_TOKEN", "tok-SECRET-xyz"),
+        ]),
+    ) else {
+        panic!("expected run");
+    };
+    assert!(!format!("{c:?}").contains("tok-SECRET-xyz"));
+}
+
+#[test]
+fn dev_ignores_a_bad_retry_env() {
+    let Ok(Command::Run(c)) = parse(
+        args(&["--role", "all", "--dev"]),
+        env_of(&[("ARENA_CONTROL_DB_RETRY_SECS", "nope")]),
+    ) else {
+        panic!("--dev must ignore ARENA_CONTROL_DB_RETRY_SECS");
+    };
+    assert!(c.dev());
 }

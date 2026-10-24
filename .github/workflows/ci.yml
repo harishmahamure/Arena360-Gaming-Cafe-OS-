@@ -66,6 +66,12 @@ jobs:
           if cargo tree --locked -p arena-cloud -e normal | grep -E -q 'libsql-(ffi|sys)'; then
             echo "arena-cloud links a libsql C core"; exit 1
           fi
+      # Story 2.2: rusqlite's bundled SQLite is the only SQLite C library in arena-cloud.
+      - name: One SQLite in arena-cloud
+        if: runner.os == 'Linux'
+        run: |
+          scripts/check-sqlite-linkage.sh --self-test
+          scripts/check-sqlite-linkage.sh
       - run: cargo clippy --locked -p arena-hub --features dev-fixtures --all-targets -- -D warnings
       - run: cargo test --locked -p arena-hub --features dev-fixtures
       - run: cargo test --locked -p arena-api --features dev-fixtures

@@ -9,7 +9,7 @@ mod sqld;
 
 use std::time::{Duration, Instant};
 
-use arena_cloud::config::{Config, DEFAULT_RETRY_WINDOW, Role};
+use arena_cloud::config::{Config, DEFAULT_RETRY_WINDOW, Database, Role};
 use arena_cloud::{connect_and_migrate, serve_control};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -91,8 +91,10 @@ async fn healthz_follows_the_background_check() {
     let cfg = Config {
         role: Role::Control,
         listen: "127.0.0.1:0".parse().unwrap(),
-        db_url: format!("http://127.0.0.1:{}", proxy.port),
-        db_token: String::new(),
+        database: Database::Remote {
+            url: format!("http://127.0.0.1:{}", proxy.port),
+            token: String::new(),
+        },
         retry_window: DEFAULT_RETRY_WINDOW,
     };
     let (db, version) = connect_and_migrate(&cfg).await.unwrap();

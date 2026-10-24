@@ -24,4 +24,6 @@ export type ErrorCode =
   | "PIN_REQUIRED"
   | "PIN_REJECTED"
   | "REASON_REQUIRED"
-  | "SESSION_LOCKED";
+  | "SESSION_LOCKED"
+  | "NOT_FOUND"
+  | "BAD_REQUEST";

@@ -140,6 +140,28 @@ export function readDeployReadme(text) {
   return m ? { k3s: m[1] } : {};
 }
 
+/**
+ * deploy/dev/compose.yaml -> { <image>: <tag> } for every `image:` line. An `image:` it cannot
+ * read as `name:tag` (no tag, a digest, a `${VAR}`, a registry port with no tag) throws, so an
+ * unpinned dev image never passes silently.
+ */
+export function readDevCompose(text) {
+  const out = {};
+  for (const m of text.matchAll(/^\s*-?\s*image:\s*(.*?)\s*$/gm)) {
+    const ref = unquote(m[1]);
+    const last = ref.slice(ref.lastIndexOf("/") + 1);
+    const colon = last.lastIndexOf(":");
+    if (!ref || /[$@\s]/.test(ref) || colon <= 0 || colon === last.length - 1) {
+      throw new Error(
+        `deploy/dev/compose.yaml: image not pinned by name:tag: ${m[1] || "(empty)"}`,
+      );
+    }
+    const cut = ref.length - last.length + colon;
+    out[ref.slice(0, cut)] = ref.slice(cut + 1);
+  }
+  return out;
+}
+
 export const READERS = {
   "rust-toolchain.toml": readRustToolchain,
   ".nvmrc": readNvmrc,
@@ -150,6 +172,7 @@ export const READERS = {
   "deploy/docker/arena-cloud.Dockerfile": readDockerfile,
   ".github/workflows/ci.yml": readCiWorkflow,
   "deploy/README.md": readDeployReadme,
+  "deploy/dev/compose.yaml": readDevCompose,
 };
 
 /** Manifests whose values must be exact versions (no ranges). */
@@ -256,7 +279,12 @@ export function checkRepo(root) {
   } catch (err) {
     return [err.code === "ENOENT" ? "pin table not found in README.md" : err.message];
   }
-  const sources = readSources(root);
+  let sources;
+  try {
+    sources = readSources(root);
+  } catch (err) {
+    return [err.message];
+  }
   return [
     ...comparePins(table, sources),
     ...checkManifestDeps(readManifests(root), sources["pnpm-workspace.yaml"]),

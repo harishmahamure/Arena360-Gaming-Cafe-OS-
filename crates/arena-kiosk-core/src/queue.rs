@@ -41,7 +41,9 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PermissionDenied
         | ErrorCode::PinRequired
         | ErrorCode::PinRejected
-        | ErrorCode::ReasonRequired => true,
+        | ErrorCode::ReasonRequired
+        | ErrorCode::NotFound
+        | ErrorCode::BadRequest => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary

@@ -8,6 +8,8 @@ Read this file after a context flush (`/clear`). It's the single entry point for
 - Take the recommended option at every decision and log it in `autonomous-decision-log.md`. Don't stop for spec approval.
 - Never push or deploy, and never run anything against GitHub.
 - Flush context after each story. Everything the next story needs lives in files.
+- (2026-10-24) The user asked to continue from 2.2 and complete all of Epic 2 in one run.
+- (2026-10-24) Sentry and the OpenTelemetry/Grafana export (Story 2.3's observability ACs) are moved to the **end of Epic 2**: build them after 2.31, before closing the epic. Until then, logs stay JSON on stdout with no PII.
 
 ## Where things stand
 

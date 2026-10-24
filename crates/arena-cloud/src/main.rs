@@ -2,12 +2,14 @@
 //!
 //! Start-up: parse args and env (exit 64 on a usage error), JSON logs to stdout, connect to
 //! `gz_control` and migrate it (exit 2 on `SCHEMA_TOO_NEW`, exit 1 after 60 s unreachable), then
-//! serve `/healthz` until Ctrl+C or SIGTERM. The database token never appears in a log line.
+//! serve `/healthz` and `/v1` until Ctrl+C or SIGTERM. The database token never appears in a log
+//! line. `--dev` uses a local SQLite file instead (no env, loopback only) and says so in one
+//! warning line.
 
 use std::process::ExitCode;
 
 use arena_cloud::config::{self, Command};
-use arena_cloud::{CHECK_INTERVAL, StartError, connect_and_migrate, serve_control};
+use arena_cloud::{CHECK_INTERVAL, ServeOptions, StartError, connect_and_migrate, serve};
 use tracing_subscriber::EnvFilter;
 
 const EXIT_FAILURE: u8 = 1;
@@ -41,6 +43,21 @@ async fn main() -> ExitCode {
         )
         .with_writer(std::io::stdout)
         .init();
+    // A handler panic is answered with `INTERNAL` by the API layer; the panic itself is logged
+    // here as one JSON line instead of the default stderr text.
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        tracing::error!(location = %location, detail = %msg, "panic");
+    }));
 
     tracing::info!(
         role = cfg.role.as_str(),
@@ -48,6 +65,12 @@ async fn main() -> ExitCode {
         listen = %cfg.listen,
         "starting"
     );
+    if let Some(path) = cfg.database.local_path() {
+        tracing::warn!(
+            db_path = %path.display(),
+            "dev mode is on: local gz_control, dev routes mounted, not for production"
+        );
+    }
 
     let (db, migration_version) = match connect_and_migrate(&cfg).await {
         Ok(ok) => ok,
@@ -77,6 +100,10 @@ async fn main() -> ExitCode {
             );
             return ExitCode::from(EXIT_FAILURE);
         }
+        Err(StartError::Local { path, message }) => {
+            tracing::error!(db_path = %path, detail = %message, "cannot open the local gz_control");
+            return ExitCode::from(EXIT_FAILURE);
+        }
     };
     tracing::info!(migration_version, "gz_control ready");
 
@@ -87,7 +114,13 @@ async fn main() -> ExitCode {
             return ExitCode::from(EXIT_FAILURE);
         }
     };
-    match serve_control(listener, db, migration_version, CHECK_INTERVAL, shutdown()).await {
+    let opts = ServeOptions {
+        role: cfg.role,
+        dev: cfg.dev(),
+        migration_version,
+        check_interval: CHECK_INTERVAL,
+    };
+    match serve(listener, db, opts, shutdown()).await {
         Ok(()) => {
             tracing::info!("stopped");
             ExitCode::SUCCESS

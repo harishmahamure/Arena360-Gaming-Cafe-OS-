@@ -1,5 +1,9 @@
 //! `gz_control`: the cloud control database on Turso, reached over libsql remote (Hrana over
-//! HTTPS). Feature `control` only; the Hub never links it.
+//! HTTPS), or a local SQLite file through rusqlite for `arena-cloud --dev`. Feature `control`
+//! only; the Hub never links it.
+//!
+//! libsql is built remote-only (no C SQLite core), so rusqlite's bundled SQLite stays the only
+//! SQLite C library in the binary (`scripts/check-sqlite-linkage.sh`).
 //!
 //! Migrations are embedded, numbered and forward-only, like the Hub's, but kept in their own
 //! list (`control-migrations/`). [`ControlDb::migrate`] refuses a database written by a newer
@@ -7,6 +11,8 @@
 
 use std::fmt;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// One control migration: its number and its SQL.
@@ -111,51 +117,68 @@ fn is_lock_error(msg: &str) -> bool {
     m.contains("busy") || m.contains("locked")
 }
 
-/// A `gz_control` connection.
-pub struct ControlDb {
+/// Why one migration transaction failed.
+struct StepFailure {
+    error: ControlError,
+    /// An SQL error that retrying cannot fix (not a lock, busy or transport error).
+    deterministic: bool,
+}
+
+/// A remote (libsql, Hrana over HTTPS) connection.
+struct Remote {
     _db: libsql::Database,
     conn: libsql::Connection,
     token: String,
 }
 
+/// The two places `gz_control` can live.
+enum Backend {
+    /// Turso (or a test sqld) over libsql remote.
+    Remote(Remote),
+    /// A local SQLite file through rusqlite (`arena-cloud --dev`). Every call runs on the
+    /// blocking pool.
+    Local(Arc<Mutex<rusqlite::Connection>>),
+}
+
+/// A `gz_control` connection: remote ([`ControlDb::connect`]) or a local file
+/// ([`ControlDb::open_local`]), behind one API.
+pub struct ControlDb {
+    backend: Backend,
+}
+
 impl fmt::Debug for ControlDb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ControlDb").finish_non_exhaustive()
+        let kind = match self.backend {
+            Backend::Remote(_) => "remote",
+            Backend::Local(_) => "local",
+        };
+        f.debug_struct("ControlDb")
+            .field("backend", &kind)
+            .finish_non_exhaustive()
     }
 }
 
-impl ControlDb {
-    /// Builds a remote client for `url` (`libsql://`, `https://` or, for tests, `http://`)
-    /// with `token`. This does not touch the network; the first query does.
-    pub async fn connect(url: &str, token: &str) -> Result<Self, ControlError> {
-        let redact = |e: libsql::Error| Self::redact_with(token, e);
-        let db = libsql::Builder::new_remote(url.to_owned(), token.to_owned())
-            .connector(connector())
-            .build()
-            .await
-            .map_err(redact)?;
-        let conn = db.connect().map_err(redact)?;
-        Ok(Self {
-            _db: db,
-            conn,
-            token: token.to_owned(),
-        })
-    }
+/// How long a local call waits on a lock held by another connection.
+const LOCAL_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-    fn redact_with(token: &str, e: libsql::Error) -> ControlError {
-        let mut msg = e.to_string();
-        if !token.is_empty() {
-            msg = msg.replace(token, "[redacted]");
-        }
-        ControlError::Db(msg)
-    }
+fn local_err(e: rusqlite::Error) -> ControlError {
+    ControlError::Db(e.to_string())
+}
 
+/// Is `e` a SQLite busy/locked error (another connection holds the lock)?
+fn is_local_lock_error(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+impl Remote {
     fn err(&self, e: libsql::Error) -> ControlError {
-        Self::redact_with(&self.token, e)
+        redact_with(&self.token, e)
     }
 
-    /// `SELECT 1`: succeeds when the database answers.
-    pub async fn ping(&self) -> Result<(), ControlError> {
+    async fn ping(&self) -> Result<(), ControlError> {
         let mut rows = self
             .conn
             .query("SELECT 1", ())
@@ -168,10 +191,7 @@ impl ControlDb {
     async fn has_migrations_table(&self) -> Result<bool, ControlError> {
         let mut rows = self
             .conn
-            .query(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
-                (),
-            )
+            .query(HAS_MIGRATIONS_TABLE, ())
             .await
             .map_err(|e| self.err(e))?;
         let row = rows.next().await.map_err(|e| self.err(e))?;
@@ -182,21 +202,194 @@ impl ControlDb {
         Ok(n > 0)
     }
 
+    async fn max_version(&self) -> Result<Option<i64>, ControlError> {
+        let mut rows = self
+            .conn
+            .query(MAX_VERSION, ())
+            .await
+            .map_err(|e| self.err(e))?;
+        let row = rows.next().await.map_err(|e| self.err(e))?;
+        match row {
+            Some(r) => r.get(0).map_err(|e| self.err(e)),
+            None => Ok(None),
+        }
+    }
+
+    async fn create_migrations_table(&self) -> Result<(), ControlError> {
+        self.conn
+            .execute(CREATE_MIGRATIONS_TABLE, ())
+            .await
+            .map_err(|e| self.err(e))?;
+        Ok(())
+    }
+
+    async fn apply_batch(&self, batch: &str) -> Result<(), StepFailure> {
+        match self.conn.execute_transactional_batch(batch).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let error = self.err(e);
+                let deterministic = matches!(&error, ControlError::Db(msg)
+                    if is_sql_error(msg) && !is_lock_error(msg));
+                Err(StepFailure {
+                    error,
+                    deterministic,
+                })
+            }
+        }
+    }
+}
+
+fn redact_with(token: &str, e: libsql::Error) -> ControlError {
+    let mut msg = e.to_string();
+    if !token.is_empty() {
+        msg = msg.replace(token, "[redacted]");
+    }
+    ControlError::Db(msg)
+}
+
+const HAS_MIGRATIONS_TABLE: &str =
+    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'";
+const MAX_VERSION: &str = "SELECT MAX(version) FROM schema_migrations";
+const CREATE_MIGRATIONS_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)";
+
+impl ControlDb {
+    /// Builds a remote client for `url` (`libsql://`, `https://` or, for tests, `http://`)
+    /// with `token`. This does not touch the network; the first query does.
+    pub async fn connect(url: &str, token: &str) -> Result<Self, ControlError> {
+        let redact = |e: libsql::Error| redact_with(token, e);
+        let db = libsql::Builder::new_remote(url.to_owned(), token.to_owned())
+            .connector(connector())
+            .build()
+            .await
+            .map_err(redact)?;
+        let conn = db.connect().map_err(redact)?;
+        Ok(Self {
+            backend: Backend::Remote(Remote {
+                _db: db,
+                conn,
+                token: token.to_owned(),
+            }),
+        })
+    }
+
+    /// Opens (creating it when missing) the local SQLite file at `path` through rusqlite: the
+    /// `arena-cloud --dev` backend. The parent directory must exist.
+    pub async fn open_local(path: &Path) -> Result<Self, ControlError> {
+        let path: PathBuf = path.to_owned();
+        let conn = tokio::task::spawn_blocking(move || {
+            let conn = rusqlite::Connection::open(&path).map_err(local_err)?;
+            conn.busy_timeout(LOCAL_BUSY_TIMEOUT).map_err(local_err)?;
+            conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0))
+                .map_err(local_err)?;
+            Ok::<_, ControlError>(conn)
+        })
+        .await
+        .map_err(|e| ControlError::Db(format!("local open task failed: {e}")))??;
+        Ok(Self {
+            backend: Backend::Local(Arc::new(Mutex::new(conn))),
+        })
+    }
+
+    /// Runs `f` on the local connection on the blocking pool.
+    async fn local<T: Send + 'static>(
+        conn: &Arc<Mutex<rusqlite::Connection>>,
+        f: impl FnOnce(&mut rusqlite::Connection) -> T + Send + 'static,
+    ) -> Result<T, ControlError> {
+        let conn = Arc::clone(conn);
+        tokio::task::spawn_blocking(move || {
+            let mut guard = conn
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            f(&mut guard)
+        })
+        .await
+        .map_err(|e| ControlError::Db(format!("local task failed: {e}")))
+    }
+
+    /// `SELECT 1`: succeeds when the database answers.
+    pub async fn ping(&self) -> Result<(), ControlError> {
+        match &self.backend {
+            Backend::Remote(r) => r.ping().await,
+            Backend::Local(c) => {
+                Self::local(c, |c| {
+                    c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+                        .map(|_| ())
+                        .map_err(local_err)
+                })
+                .await?
+            }
+        }
+    }
+
+    async fn has_migrations_table(&self) -> Result<bool, ControlError> {
+        match &self.backend {
+            Backend::Remote(r) => r.has_migrations_table().await,
+            Backend::Local(c) => {
+                Self::local(c, |c| {
+                    c.query_row(HAS_MIGRATIONS_TABLE, [], |r| r.get::<_, i64>(0))
+                        .map(|n| n > 0)
+                        .map_err(local_err)
+                })
+                .await?
+            }
+        }
+    }
+
+    async fn create_migrations_table(&self) -> Result<(), ControlError> {
+        match &self.backend {
+            Backend::Remote(r) => r.create_migrations_table().await,
+            Backend::Local(c) => {
+                Self::local(c, |c| {
+                    c.execute(CREATE_MIGRATIONS_TABLE, [])
+                        .map(|_| ())
+                        .map_err(local_err)
+                })
+                .await?
+            }
+        }
+    }
+
+    /// Runs `batch` as one transaction.
+    async fn apply_batch(&self, batch: String) -> Result<(), StepFailure> {
+        match &self.backend {
+            Backend::Remote(r) => r.apply_batch(&batch).await,
+            Backend::Local(c) => Self::local(c, move |c| {
+                let run = |c: &mut rusqlite::Connection| {
+                    let tx =
+                        c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    tx.execute_batch(&batch)?;
+                    tx.commit()
+                };
+                run(c).map_err(|e| StepFailure {
+                    deterministic: !is_local_lock_error(&e),
+                    error: local_err(e),
+                })
+            })
+            .await
+            .unwrap_or_else(|error| {
+                Err(StepFailure {
+                    error,
+                    deterministic: false,
+                })
+            }),
+        }
+    }
+
     /// The database's `MAX(version)`, or 0 when `schema_migrations` is missing or empty.
     /// Read-only.
     pub async fn schema_version(&self) -> Result<u32, ControlError> {
         if !self.has_migrations_table().await? {
             return Ok(0);
         }
-        let mut rows = self
-            .conn
-            .query("SELECT MAX(version) FROM schema_migrations", ())
-            .await
-            .map_err(|e| self.err(e))?;
-        let row = rows.next().await.map_err(|e| self.err(e))?;
-        let v: Option<i64> = match row {
-            Some(r) => r.get(0).map_err(|e| self.err(e))?,
-            None => None,
+        let v = match &self.backend {
+            Backend::Remote(r) => r.max_version().await?,
+            Backend::Local(c) => {
+                Self::local(c, |c| {
+                    c.query_row(MAX_VERSION, [], |r| r.get::<_, Option<i64>>(0))
+                        .map_err(local_err)
+                })
+                .await??
+            }
         };
         let v = v.unwrap_or(0);
         u32::try_from(v).map_err(|_| ControlError::Db(format!("invalid schema version {v}")))
@@ -211,7 +404,7 @@ impl ControlDb {
     /// Creates `schema_migrations` when it is missing, refuses a database newer than the last
     /// of `migrations` ([`ControlError::SchemaTooNew`], nothing written), then applies each
     /// pending migration together with its `schema_migrations` row (`applied_at = now_ms`) in
-    /// one transaction, in order.
+    /// one transaction, in order. The same runner drives both backends.
     ///
     /// A concurrent runner (a rolling update) is tolerated: the version row is inserted first
     /// in each transaction, so the runner that loses the primary-key race rolls back, re-reads
@@ -226,13 +419,7 @@ impl ControlDb {
         let found = self.schema_version().await?;
         plan(found, latest).map_err(ControlError::SchemaTooNew)?;
         if !self.has_migrations_table().await? {
-            self.conn
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)",
-                    (),
-                )
-                .await
-                .map_err(|e| self.err(e))?;
+            self.create_migrations_table().await?;
         }
         let mut current = found;
         loop {
@@ -260,27 +447,30 @@ impl ControlDb {
             if attempt > 0 {
                 tokio::time::sleep(STEP_RETRY_DELAY).await;
             }
-            match self.conn.execute_transactional_batch(&batch).await {
-                Ok(_) => return Ok(m.version),
-                Err(e) => {
+            match self.apply_batch(batch.clone()).await {
+                Ok(()) => return Ok(m.version),
+                Err(StepFailure {
+                    error,
+                    deterministic,
+                }) => {
                     // Lost the race (or a lock): if another runner applied it, carry on.
-                    let err = self.err(e);
                     let now = self.schema_version().await?;
                     if now >= m.version {
                         return Ok(now);
                     }
                     // A deterministic SQL error (bad migration) fails at once; retrying it
                     // cannot help. Lock/busy errors and transport failures are retried.
-                    if let ControlError::Db(msg) = &err
-                        && is_sql_error(msg)
-                        && !is_lock_error(msg)
-                    {
+                    if deterministic {
+                        let message = match error {
+                            ControlError::Db(msg) => msg,
+                            other => other.to_string(),
+                        };
                         return Err(ControlError::Migration {
                             version: m.version,
-                            message: msg.clone(),
+                            message,
                         });
                     }
-                    last_err = Some(err);
+                    last_err = Some(error);
                 }
             }
         }

@@ -51,6 +51,11 @@ pub enum ErrorCode {
     ReasonRequired,
     /// The Hub UI session is locked (idle lock): unlock it with a PIN first.
     SessionLocked,
+    /// The cloud has no such resource or route.
+    NotFound,
+    /// The body is not valid JSON or doesn't match the request; `field` names the offending
+    /// field when known.
+    BadRequest,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -89,6 +94,8 @@ impl ErrorCode {
             Self::PinRejected => "PIN_REJECTED",
             Self::ReasonRequired => "REASON_REQUIRED",
             Self::SessionLocked => "SESSION_LOCKED",
+            Self::NotFound => "NOT_FOUND",
+            Self::BadRequest => "BAD_REQUEST",
         }
     }
 }
@@ -185,6 +192,8 @@ mod tests {
             (ErrorCode::PinRejected, "PIN_REJECTED"),
             (ErrorCode::ReasonRequired, "REASON_REQUIRED"),
             (ErrorCode::SessionLocked, "SESSION_LOCKED"),
+            (ErrorCode::NotFound, "NOT_FOUND"),
+            (ErrorCode::BadRequest, "BAD_REQUEST"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

@@ -52,3 +52,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-arena-360-cloud-runs-in-india-behind-cloudflare.md`
   summary: Operator setup before the first cloud deploy. Pin the sops 3.13.3 and age 1.3.2 sha256 values (`PIN-ME` in `deploy-cloud.yml`); generate the age keys and replace the placeholder recipients in `.sops.yaml`; encrypt `deploy/secrets/<env>.enc.yaml` (the Turso token, the origin certificate, `ghcr-pull`); install k3s and record its version; create the Turso DB in `aws-ap-south-1`; apply the Cloudflare zone settings and the Hostinger firewall; create the GitHub environments and their secrets.
   evidence: The loop can't fetch from GitHub or hold real credentials. The deploy job fails clearly until these are done. Steps are in `deploy/README.md`.
+
+- source_spec: none (user decision, 2026-10-24)
+  summary: Story 2.3's observability ACs — OpenTelemetry traces (role, route, status, tenant/branch ids) exported to Grafana Cloud, unhandled errors to Sentry, and the scrub test over exported telemetry — to be built as the last item of Epic 2, after 2.31.
+  evidence: The user said "we can opt out from logging and sentry" and then "We will do at last".
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-cloud-error-envelope-local-dev-mode-and-single-sqlite-linkag.md`
+  summary: Add tests for `--dev` failing to open its data dir (exit 1, log line) and for a local-backend migration under a held write lock (busy then retry).
+  evidence: Verification-gap review found neither path exercised; both dev-only.

@@ -684,7 +684,10 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PinRejected => StatusCode::FORBIDDEN,
         ErrorCode::ReasonRequired => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::SessionLocked => StatusCode::LOCKED,
-        ErrorCode::BadFrame | ErrorCode::Unsupported => StatusCode::BAD_REQUEST,
+        ErrorCode::BadFrame | ErrorCode::Unsupported | ErrorCode::BadRequest => {
+            StatusCode::BAD_REQUEST
+        }
+        ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::ValidationFailed | ErrorCode::Expired => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Stale | ErrorCode::AlreadyBootstrapped | ErrorCode::IdempotencyConflict => {
             StatusCode::CONFLICT

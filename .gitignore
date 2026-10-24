@@ -22,3 +22,6 @@ apps/hub/src-tauri/binaries/
 
 # Kiosk service sidecar copied in by the installer job (never committed)
 apps/kiosk/src-tauri/binaries/
+
+# arena-cloud --dev local data (gz_control.db)
+.arena-cloud-dev/

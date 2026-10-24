@@ -23,6 +23,7 @@
 //! `applied_intents` right after append_changes, in the same transaction.
 
 mod admin_exit;
+mod ads_consent;
 mod changes;
 mod devices;
 mod frame;
@@ -99,7 +100,7 @@ pub struct Applied {
 pub(crate) enum Target {
     /// The intent edits no existing row (`branch.bootstrap`).
     None,
-    /// `settings.set`: the setting row, if it exists.
+    /// `settings.set`, `ads.consent`: the setting row, if it exists.
     Setting(Option<arena_store::SettingRef>),
     /// `device.register`: the branch the device joins, if it has been bootstrapped.
     NewDevice(Option<String>),
@@ -125,6 +126,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
     Ok(match &intent.payload {
         P::BranchBootstrap(_) | P::BranchSeedDefaults(_) => Target::None,
         P::SettingsSet(s) => Target::Setting(settings_set::load(tx, s)?),
+        P::AdsConsent(_) => Target::Setting(ads_consent::load(tx)?),
         P::DeviceRegister(_) => devices::load_register(tx)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,

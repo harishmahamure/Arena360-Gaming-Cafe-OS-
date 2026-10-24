@@ -3233,7 +3233,15 @@ mod seed_defaults {
             .iter()
             .map(|r| 1 + crate::rbac::builtin_perms(r).len())
             .sum();
-        assert_eq!(applied.changes.len(), crate::LOCALE_KEYS.len() + roles);
+        let branch_defaults = crate::DEFAULT_SETTINGS
+            .iter()
+            .filter(|(k, _)| k.starts_with("branch."))
+            .count();
+        assert_eq!(branch_defaults, 4);
+        assert_eq!(
+            applied.changes.len(),
+            crate::LOCALE_KEYS.len() + branch_defaults + roles
+        );
         let s = reopen(&f);
         let changes = s.changes().unwrap();
         assert_eq!(changes.len(), before + applied.changes.len());
@@ -3362,10 +3370,11 @@ mod process_lists {
         let applied = f.writer.seed_defaults().await.unwrap().unwrap();
         let mut ids: Vec<&str> = applied.changes.iter().map(|c| c.row_id.as_str()).collect();
         ids.sort_unstable();
-        assert_eq!(ids.len(), 3);
+        assert_eq!(ids.len(), 4);
         assert!(ids[0].ends_with("/kiosk.process_allow"), "{ids:?}");
         assert!(ids[1].ends_with("/kiosk.process_block"), "{ids:?}");
         assert!(ids[2].ends_with("/kiosk.process_mode"), "{ids:?}");
+        assert!(ids[3].ends_with("/kiosk.volume_default"), "{ids:?}");
         assert_eq!(
             setting(&reopen(&f), "kiosk.process_block")["value"],
             RowValue::Text(DEFAULT_PROCESS_BLOCK.into())
@@ -3623,5 +3632,467 @@ mod high_contrast {
         assert_eq!(value(&s, &live_key), Some(RowValue::Text("false".into())));
         assert_eq!(value(&s, &arena_proto::hc_key(&gone)), None);
         assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
+    }
+}
+
+mod operating {
+    use super::*;
+    use crate::rbac::{ROLE_COUNTER, ROLE_MANAGER};
+    use crate::snapshot::SnapshotReader;
+    use arena_proto::{AdConsentState, AdsConsent, AdsConsentSet, SetupStatus, StaffUpsert};
+
+    const HOURS: &str = "branch.opening_hours";
+    const CLOSED: &str = r#"{"closed":true}"#;
+
+    fn week(days: [&str; 7]) -> String {
+        format!("[{}]", days.join(","))
+    }
+
+    fn text(s: &Store, key: &str) -> String {
+        match &setting(s, key)["value"] {
+            RowValue::Text(t) => t.clone(),
+            other => panic!("{key} is {other:?}"),
+        }
+    }
+
+    fn rev(f: &Fixture, key: &str) -> i64 {
+        match setting(&reopen(f), key)["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        }
+    }
+
+    fn as_actor(actor: Actor, payload: IntentPayload, base_rev: Option<i64>, now: i64) -> Intent {
+        Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: payload.kind(),
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: now,
+            base_rev,
+            actor,
+            elevated_by: None,
+            reason: None,
+            payload,
+        }
+    }
+
+    async fn save(f: &Fixture, key: &str, value: &str) -> Result<Applied, AppError> {
+        let mut intent = set(key, value, Some(rev(f, key)));
+        intent.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(intent).await
+    }
+
+    async fn staff(f: &Fixture, login: &str, role: &str) -> Actor {
+        let role_id = reopen(f)
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == RowValue::Text(role.into()))
+            .map(|r| match &r["role_id"] {
+                RowValue::Text(t) => t.clone(),
+                other => panic!("{other:?}"),
+            })
+            .unwrap();
+        let owner = Actor {
+            kind: ActorKind::Owner,
+            id: "owner-1".into(),
+        };
+        let applied = f
+            .writer
+            .submit_intent(as_actor(
+                owner,
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: None,
+                    login: login.into(),
+                    display_name: login.into(),
+                    role_id,
+                    password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
+                    pin_hash: None,
+                    active: true,
+                }),
+                None,
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap();
+        Actor {
+            kind: ActorKind::Staff,
+            id: applied.changes[0].row_id.clone(),
+        }
+    }
+
+    fn setup(f: &Fixture) -> SetupStatus {
+        SnapshotReader::open(&f.path)
+            .unwrap()
+            .snapshot(f.clock.now_ms())
+            .unwrap()
+            .setup
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_every_operating_default() {
+        let f = bootstrapped().await;
+        let s = reopen(&f);
+        assert_eq!(text(&s, HOURS), arena_proto::DEFAULT_OPENING_HOURS);
+        assert_eq!(text(&s, "branch.opening_hours_set"), "false");
+        assert_eq!(text(&s, "branch.fulfilment"), "counter");
+        assert_eq!(text(&s, "kiosk.volume_default"), "50");
+        assert_eq!(text(&s, "system.backup_dir"), "");
+        assert_eq!(
+            AdsConsent::parse(&text(&s, "branch.ads_consent")),
+            Some(AdsConsent {
+                given: false,
+                at: None,
+                staff_id: None,
+                policy_version: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_existing_branch_gets_the_operating_rows_from_seed_defaults() {
+        let mut f = bootstrapped().await;
+        f.writer
+            .submit(|tx| {
+                tx.execute_batch(
+                    "DELETE FROM settings WHERE key IN ('branch.opening_hours',
+                     'branch.opening_hours_set', 'branch.fulfilment', 'kiosk.volume_default',
+                     'system.backup_dir', 'branch.ads_consent')",
+                )
+                .map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+        while f.events.try_recv().is_ok() {}
+        let applied = f.writer.seed_defaults().await.unwrap().unwrap();
+        assert_eq!(applied.changes.len(), 6);
+        let s = reopen(&f);
+        assert_eq!(text(&s, "branch.fulfilment"), "counter");
+        assert_eq!(text(&s, "kiosk.volume_default"), "50");
+        assert_eq!(text(&s, HOURS), arena_proto::DEFAULT_OPENING_HOURS);
+    }
+
+    #[tokio::test]
+    async fn valid_hours_are_stored_and_the_first_save_marks_them_set() {
+        let f = bootstrapped().await;
+        let mon = week([
+            r#"{"open_min":600,"close_min":1380}"#,
+            CLOSED,
+            CLOSED,
+            CLOSED,
+            r#"{ "open_min": 1080, "close_min": 120 }"#,
+            CLOSED,
+            CLOSED,
+        ]);
+        let applied = save(&f, HOURS, &mon).await.unwrap();
+        let keys: Vec<&str> = applied
+            .changes
+            .iter()
+            .map(|c| c.row_id.split_once('/').unwrap().1)
+            .collect();
+        assert_eq!(keys, [HOURS, "branch.opening_hours_set"]);
+        let s = reopen(&f);
+        assert_eq!(
+            text(&s, HOURS),
+            week([
+                r#"{"open_min":600,"close_min":1380}"#,
+                CLOSED,
+                CLOSED,
+                CLOSED,
+                r#"{"open_min":1080,"close_min":120}"#,
+                CLOSED,
+                CLOSED,
+            ])
+        );
+        assert_eq!(text(&s, "branch.opening_hours_set"), "true");
+        let mut sunday = [CLOSED; 7];
+        sunday[6] = r#"{"open_min":0,"close_min":60}"#;
+        let again = save(&f, HOURS, &week(sunday)).await.unwrap();
+        assert_eq!(again.changes.len(), 1, "the flag is already set");
+        assert_eq!(text(&reopen(&f), "branch.opening_hours_set"), "true");
+    }
+
+    #[tokio::test]
+    async fn bad_hours_name_the_day_or_the_week() {
+        let f = bootstrapped().await;
+        let before = snapshot(&f);
+        let mut equal = [CLOSED; 7];
+        equal[0] = r#"{"open_min":600,"close_min":600}"#;
+        let mut out_of_range = [CLOSED; 7];
+        out_of_range[3] = r#"{"open_min":600,"close_min":1440}"#;
+        for (value, field) in [
+            (week(equal), "branch.opening_hours[0]"),
+            (week(out_of_range), "branch.opening_hours[3]"),
+            (
+                format!("[{}]", [CLOSED; 6].join(",")),
+                "branch.opening_hours",
+            ),
+            ("nope".into(), "branch.opening_hours"),
+            (week([CLOSED; 7]), "branch.opening_hours"),
+        ] {
+            let e = save(&f, HOURS, &value).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{value}");
+            assert_eq!(e.field.as_deref(), Some(field), "{value}");
+        }
+        assert_eq!(snapshot(&f), before);
+    }
+
+    #[tokio::test]
+    async fn fulfilment_and_volume_bounds() {
+        let f = bootstrapped().await;
+        save(&f, "branch.fulfilment", "seat").await.unwrap();
+        save(&f, "kiosk.volume_default", "0").await.unwrap();
+        save(&f, "kiosk.volume_default", "100").await.unwrap();
+        for (key, bad) in [
+            ("kiosk.volume_default", "101"),
+            ("kiosk.volume_default", "-1"),
+            ("branch.fulfilment", "table"),
+        ] {
+            let e = save(&f, key, bad).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{key}={bad}");
+            assert_eq!(e.field.as_deref(), Some(key));
+        }
+        let s = reopen(&f);
+        assert_eq!(text(&s, "branch.fulfilment"), "seat");
+        assert_eq!(text(&s, "kiosk.volume_default"), "100");
+    }
+
+    #[tokio::test]
+    async fn consent_and_the_hours_flag_are_never_raw_settings() {
+        let f = bootstrapped().await;
+        for (key, value) in [
+            (
+                "branch.ads_consent",
+                r#"{"given":true,"at":1,"staff_id":"x"}"#,
+            ),
+            ("branch.opening_hours_set", "true"),
+        ] {
+            let e = save(&f, key, value).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed);
+            assert_eq!(e.field.as_deref(), Some("key"), "{key}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ads_consent_records_the_staff_actor_and_the_time() {
+        let f = bootstrapped().await;
+        let manager = staff(&f, "manager", ROLE_MANAGER).await;
+        f.clock.set(T0 + 5_000);
+        let r = rev(&f, "branch.ads_consent");
+        let applied = f
+            .writer
+            .submit_intent(as_actor(
+                manager.clone(),
+                IntentPayload::AdsConsent(AdsConsentSet {
+                    given: true,
+                    policy_version: arena_proto::ADS_POLICY_VERSION,
+                }),
+                Some(r),
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        let s = reopen(&f);
+        assert_eq!(
+            AdsConsent::parse(&text(&s, "branch.ads_consent")),
+            Some(AdsConsent {
+                given: true,
+                at: Some(T0 + 5_000),
+                staff_id: Some(manager.id.clone()),
+                policy_version: Some(arena_proto::ADS_POLICY_VERSION),
+            })
+        );
+        let c = s.changes().unwrap().pop().unwrap();
+        assert_eq!(c.intent_kind, "ads.consent");
+        assert_eq!(
+            (c.actor_kind.as_str(), c.actor_id.as_str()),
+            ("staff", manager.id.as_str())
+        );
+        let owner = Actor {
+            kind: ActorKind::Owner,
+            id: "owner-1".into(),
+        };
+        let e = f
+            .writer
+            .submit_intent(as_actor(
+                owner,
+                IntentPayload::AdsConsent(AdsConsentSet {
+                    given: true,
+                    policy_version: arena_proto::ADS_POLICY_VERSION,
+                }),
+                Some(r + 1),
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("actor"));
+        let old_policy = f
+            .writer
+            .submit_intent(as_actor(
+                manager.clone(),
+                IntentPayload::AdsConsent(AdsConsentSet {
+                    given: true,
+                    policy_version: arena_proto::ADS_POLICY_VERSION + 1,
+                }),
+                Some(r + 1),
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(old_policy.field.as_deref(), Some("policy_version"));
+        let stale = f
+            .writer
+            .submit_intent(as_actor(
+                manager,
+                IntentPayload::AdsConsent(AdsConsentSet {
+                    given: false,
+                    policy_version: arena_proto::ADS_POLICY_VERSION,
+                }),
+                Some(r),
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(stale.code, ErrorCode::Stale);
+    }
+
+    #[tokio::test]
+    async fn a_counter_cannot_change_operating_settings_or_consent() {
+        let f = bootstrapped().await;
+        let counter = staff(&f, "counter", ROLE_COUNTER).await;
+        let before = snapshot(&f);
+        for payload in [
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "branch.fulfilment".into(),
+                value: "seat".into(),
+            }),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "kiosk.volume_default".into(),
+                value: "10".into(),
+            }),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: HOURS.into(),
+                value: week([CLOSED; 7]),
+            }),
+            IntentPayload::AdsConsent(AdsConsentSet {
+                given: true,
+                policy_version: arena_proto::ADS_POLICY_VERSION,
+            }),
+        ] {
+            let e = f
+                .writer
+                .submit_intent(as_actor(
+                    counter.clone(),
+                    payload,
+                    Some(1),
+                    f.clock.now_ms(),
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::PermissionDenied);
+        }
+        assert_eq!(snapshot(&f), before);
+    }
+
+    #[tokio::test]
+    async fn setup_status_goes_from_defaults_to_done() {
+        let f = bootstrapped().await;
+        assert_eq!(
+            setup(&f),
+            SetupStatus {
+                opening_hours_set: false,
+                backup_location_set: false,
+                ad_consent: AdConsentState::Missing,
+            }
+        );
+        let manager = staff(&f, "manager", ROLE_MANAGER).await;
+        save(
+            &f,
+            HOURS,
+            &week([r#"{"open_min":600,"close_min":1380}"#; 7]),
+        )
+        .await
+        .unwrap();
+        save(&f, "system.backup_dir", "/mnt/backup").await.unwrap();
+        assert_eq!(
+            setup(&f),
+            SetupStatus {
+                opening_hours_set: true,
+                backup_location_set: true,
+                ad_consent: AdConsentState::Missing,
+            }
+        );
+        f.writer
+            .submit_intent(as_actor(
+                manager,
+                IntentPayload::AdsConsent(AdsConsentSet {
+                    given: true,
+                    policy_version: arena_proto::ADS_POLICY_VERSION,
+                }),
+                Some(rev(&f, "branch.ads_consent")),
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            setup(&f),
+            SetupStatus {
+                opening_hours_set: true,
+                backup_location_set: true,
+                ad_consent: AdConsentState::Given,
+            }
+        );
+        save(&f, "system.backup_dir", "").await.unwrap();
+        assert!(!setup(&f).backup_location_set);
+        let relative = save(&f, "system.backup_dir", "backups").await.unwrap_err();
+        assert_eq!(relative.code, ErrorCode::ValidationFailed);
+        assert_eq!(relative.field.as_deref(), Some("system.backup_dir"));
+        assert_eq!(relative.message, "not_found");
+    }
+
+    #[tokio::test]
+    async fn the_published_setup_status_follows_settings_changes() {
+        let f = bootstrapped().await;
+        let reader = std::sync::Arc::new(SnapshotReader::open(&f.path).unwrap());
+        let job = tokio::spawn(crate::setup::publish_setup(
+            reader,
+            Some(f.writer.subscribe()),
+            f.status.clone(),
+        ));
+        let mut rx = f.status.subscribe();
+        let wait = |rx: &mut watch::Receiver<HubStatus>, want: SetupStatus| {
+            let mut rx = rx.clone();
+            async move {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    rx.wait_for(|s| s.setup == Some(want)),
+                )
+                .await
+                .expect("published")
+                .unwrap();
+            }
+        };
+        wait(
+            &mut rx,
+            SetupStatus {
+                opening_hours_set: false,
+                backup_location_set: false,
+                ad_consent: AdConsentState::Missing,
+            },
+        )
+        .await;
+        save(&f, "system.backup_dir", "/mnt/backup").await.unwrap();
+        wait(
+            &mut rx,
+            SetupStatus {
+                opening_hours_set: false,
+                backup_location_set: true,
+                ad_consent: AdConsentState::Missing,
+            },
+        )
+        .await;
+        job.abort();
     }
 }

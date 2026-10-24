@@ -18,4 +18,5 @@ export type IntentKind =
   | "kiosk.process_blocked"
   | "device.admin_exit"
   | "device.admin_relock"
-  | "device.admin_unlock";
+  | "device.admin_unlock"
+  | "ads.consent";

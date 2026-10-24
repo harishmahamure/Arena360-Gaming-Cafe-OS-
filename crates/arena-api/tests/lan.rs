@@ -1141,6 +1141,98 @@ async fn a_kiosk_reads_and_hears_only_its_own_hc_key() {
     assert_eq!(next_settings(&mut mine, 300).await, None);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fulfilment_and_kiosk_volume_reach_every_connected_kiosk() {
+    let hub = start("0.1.0", true).await;
+    let writer = hub.writer.as_ref().unwrap();
+    let (_, other_token) = register(writer, ClientClass::Paired, "Kiosk 2").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let frame = client
+        .request(
+            "settings.get",
+            settings_get_body(&["branch.fulfilment", "kiosk.volume_default"]),
+        )
+        .await
+        .unwrap();
+    let FrameBody::SettingsValues(v) = frame.body else {
+        panic!("{frame:?}")
+    };
+    let got: Vec<(&str, &str)> = v
+        .values
+        .iter()
+        .map(|e| (e.key.as_str(), e.value.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("branch.fulfilment", "counter"),
+            ("kiosk.volume_default", "50")
+        ]
+    );
+    for key in [
+        "branch.opening_hours",
+        "system.backup_dir",
+        "branch.ads_consent",
+    ] {
+        let err = client
+            .request("settings.get", settings_get_body(&[key]))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::Forbidden), "{key}");
+    }
+    let other = HubClient::connect(
+        &hub.url(),
+        &hub.fingerprint,
+        hub.hello(ClientClass::Paired, &other_token, "0.1.0"),
+    )
+    .await
+    .unwrap();
+    let mut mine = client.events().unwrap();
+    let mut theirs = other.events().unwrap();
+    for (key, value) in [
+        ("branch.fulfilment", "seat"),
+        ("kiosk.volume_default", "30"),
+    ] {
+        writer
+            .submit_intent(intent(
+                owner(),
+                IntentPayload::SettingsSet(SettingsSet {
+                    key: key.into(),
+                    value: value.into(),
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        for events in [&mut mine, &mut theirs] {
+            let values = next_settings(events, 5_000).await.expect("pushed");
+            assert_eq!(values.len(), 1);
+            assert_eq!(
+                (
+                    values[0].key.as_str(),
+                    values[0].value.as_str(),
+                    values[0].rev
+                ),
+                (key, value, 2)
+            );
+        }
+    }
+    writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "system.backup_dir".into(),
+                value: "/mnt/backup".into(),
+            }),
+            Some(1),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_settings(&mut mine, 300).await, None);
+}
+
 // ---- Story 1.20: kiosk admin exit ----
 
 /// Adds a staff member with `pin` in the built-in role `role`; returns the id.

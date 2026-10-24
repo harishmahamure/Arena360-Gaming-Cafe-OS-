@@ -1,9 +1,12 @@
 //! The settings every branch starts with, written by `branch.bootstrap`. Every value is TEXT.
 
 use arena_proto::{
-    BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap, DEFAULT_PROCESS_ALLOW,
-    DEFAULT_PROCESS_BLOCK, HC_DEFAULT, KEY_HC_HUB, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK,
-    KEY_PROCESS_MODE, ProcessList, ProcessMode, parse_hc_key,
+    BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap, DEFAULT_ADS_CONSENT,
+    DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT, DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS,
+    DEFAULT_OPENING_HOURS_SET, DEFAULT_PROCESS_ALLOW, DEFAULT_PROCESS_BLOCK, FULFILMENT_MODES,
+    HC_DEFAULT, KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_HC_HUB,
+    KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW,
+    KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
 };
 
 /// The branch locale keys. They are authoritative for the locale; the `branch` row's columns
@@ -61,6 +64,23 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     // Story 1.21: high contrast for the Hub UI. Each paired device's `display.hc.<id>` row is
     // created by `device.register` (and backfilled by `branch.seed_defaults`).
     (KEY_HC_HUB, HC_DEFAULT),
+    (KEY_OPENING_HOURS, DEFAULT_OPENING_HOURS),
+    (KEY_OPENING_HOURS_SET, DEFAULT_OPENING_HOURS_SET),
+    (KEY_FULFILMENT, DEFAULT_FULFILMENT),
+    (KEY_KIOSK_VOLUME_DEFAULT, DEFAULT_KIOSK_VOLUME),
+    (KEY_BACKUP_DIR, DEFAULT_BACKUP_DIR),
+    (KEY_ADS_CONSENT, DEFAULT_ADS_CONSENT),
+];
+
+pub const SYSTEM_MANAGED_KEYS: [&str; 2] = [KEY_OPENING_HOURS_SET, KEY_ADS_CONSENT];
+
+pub const KEYED_FIELD_KEYS: [&str; 6] = [
+    KEY_OPENING_HOURS,
+    KEY_OPENING_HOURS_SET,
+    KEY_FULFILMENT,
+    KEY_KIOSK_VOLUME_DEFAULT,
+    KEY_BACKUP_DIR,
+    KEY_ADS_CONSENT,
 ];
 
 /// The value `branch.seed_defaults` inserts for a default setting an existing branch lacks:
@@ -79,7 +99,10 @@ pub fn backfill_value<'a>(key: &str, bootstrap_default: &'a str) -> &'a str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingRule {
     /// A base-10 integer (ASCII digits only) within the inclusive range.
-    Integer { min: i64, max: i64 },
+    Integer {
+        min: i64,
+        max: i64,
+    },
     /// A locale tag: `[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*`.
     Locale,
     /// Any text (bounded only by the global length limit).
@@ -95,6 +118,9 @@ pub enum SettingRule {
     ProcessRules(ProcessList),
     /// `"true"` or `"false"`.
     Bool,
+    OpeningHours,
+    Path,
+    AdsConsent,
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -129,6 +155,18 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         SettingRule::ProcessRules(ProcessList::Block),
     ),
     (KEY_PROCESS_MODE, SettingRule::OneOf(ProcessMode::VALUES)),
+    (KEY_OPENING_HOURS, SettingRule::OpeningHours),
+    (KEY_OPENING_HOURS_SET, SettingRule::Bool),
+    (KEY_FULFILMENT, SettingRule::OneOf(FULFILMENT_MODES)),
+    (
+        KEY_KIOSK_VOLUME_DEFAULT,
+        SettingRule::Integer {
+            min: 0,
+            max: KIOSK_VOLUME_MAX,
+        },
+    ),
+    (KEY_BACKUP_DIR, SettingRule::Path),
+    (KEY_ADS_CONSENT, SettingRule::AdsConsent),
 ];
 
 /// The rule for every key that starts with `display.hc.` and names `hub` or a device id
@@ -171,6 +209,14 @@ impl SettingRule {
             Self::OneOf(words) => words.contains(&value),
             Self::ProcessRules(list) => arena_proto::parse_process_rules(list, value).is_ok(),
             Self::Bool => matches!(value, "true" | "false"),
+            Self::OpeningHours => arena_proto::parse_opening_hours(value).is_ok(),
+            Self::Path => {
+                value.is_empty()
+                    || (arena_proto::is_absolute_path(value)
+                        && value.trim() == value
+                        && !value.chars().any(char::is_control))
+            }
+            Self::AdsConsent => arena_proto::AdsConsent::parse(value).is_some(),
         }
     }
 
@@ -325,6 +371,34 @@ mod tests {
     }
 
     #[test]
+    fn operating_rules() {
+        let rule = |k| setting_rule(k).unwrap();
+        assert!(rule("branch.fulfilment").accepts("seat"));
+        assert!(rule("branch.fulfilment").accepts("counter"));
+        for bad in ["", "Seat", "table", " seat"] {
+            assert!(!rule("branch.fulfilment").accepts(bad), "{bad:?}");
+        }
+        let volume = rule("kiosk.volume_default");
+        for ok in ["0", "50", "100"] {
+            assert!(volume.accepts(ok), "{ok}");
+        }
+        for bad in ["101", "-1", "", "5.5", "loud"] {
+            assert!(!volume.accepts(bad), "{bad:?}");
+        }
+        let hours = rule("branch.opening_hours");
+        assert!(hours.accepts(DEFAULT_OPENING_HOURS));
+        assert!(!hours.accepts("[]"));
+        let dir = rule("system.backup_dir");
+        assert!(dir.accepts("") && dir.accepts("/mnt/backup") && dir.accepts(r"D:\Backups"));
+        assert!(!dir.accepts("/mnt/x\n") && !dir.accepts(" /mnt") && !dir.accepts("/mnt\u{7}"));
+        assert!(!dir.accepts("backups") && !dir.accepts("./b"));
+        let consent = rule("branch.ads_consent");
+        assert!(consent.accepts(DEFAULT_ADS_CONSENT));
+        assert!(!consent.accepts("yes"));
+        assert!(rule("branch.opening_hours_set").accepts("true"));
+    }
+
+    #[test]
     fn hc_keys_take_the_bool_rule() {
         let device = "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0";
         for key in ["display.hc.hub", device] {
@@ -354,6 +428,10 @@ mod tests {
             ("kiosk.process_block", DEFAULT_PROCESS_BLOCK),
             ("kiosk.process_mode", "enforce"),
             ("display.hc.hub", "false"),
+            ("branch.opening_hours_set", "false"),
+            ("branch.fulfilment", "counter"),
+            ("kiosk.volume_default", "50"),
+            ("system.backup_dir", ""),
         ] {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
         }

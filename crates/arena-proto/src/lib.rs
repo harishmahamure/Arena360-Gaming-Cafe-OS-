@@ -14,6 +14,7 @@ mod error;
 mod frame;
 mod intent;
 mod kiosk;
+mod operating;
 mod permission;
 mod process;
 mod scope;
@@ -58,6 +59,15 @@ pub use intent::{
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
     MAX_KIOSK_LOG_DETAIL_CHARS,
+};
+pub use operating::{
+    ADS_POLICY_VERSION, AdConsentState, AdsConsent, AdsConsentSet, BACKUP_PROBE_PREFIX,
+    BackupDirProblem, DAYS_PER_WEEK, DEFAULT_ADS_CONSENT, DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT,
+    DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET, FULFILMENT_MODES,
+    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS,
+    KEY_OPENING_HOURS_SET, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, LAST_MINUTE, OpeningDay,
+    OpeningHoursError, SetupStatus, has_open_day, is_absolute_path, opening_hours_json,
+    parse_opening_hours,
 };
 pub use permission::{Permission, Requirement};
 pub use process::{

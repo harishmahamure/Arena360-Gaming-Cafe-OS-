@@ -23,6 +23,7 @@ pub mod ipc;
 pub mod launcher;
 pub mod lockdown;
 pub mod logs;
+pub mod operating;
 pub mod paths;
 pub mod procs;
 pub mod queue;

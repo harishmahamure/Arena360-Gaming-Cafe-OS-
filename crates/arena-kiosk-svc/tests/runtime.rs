@@ -1588,6 +1588,45 @@ async fn a_manager_turns_this_kiosks_high_contrast_on_live_and_the_hubs_key_is_n
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_kiosk_stores_the_pushed_fulfilment_and_default_volume() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let cached = |key: &str| ctx.queue.lock().unwrap().kv_get(key).unwrap();
+    eventually("the operating settings read after hello", || {
+        cached("kiosk.volume_default").is_some() && cached("branch.fulfilment").is_some()
+    })
+    .await;
+    assert_eq!(
+        cached("kiosk.volume_default").unwrap(),
+        ("50".to_owned(), 1)
+    );
+    assert_eq!(
+        cached("branch.fulfilment").unwrap(),
+        ("counter".to_owned(), 1)
+    );
+
+    hub.set_setting("kiosk.volume_default", "35").await;
+    hub.set_setting("branch.fulfilment", "seat").await;
+    eventually("the pushed values", || {
+        cached("kiosk.volume_default") == Some(("35".to_owned(), 2))
+            && cached("branch.fulfilment") == Some(("seat".to_owned(), 2))
+    })
+    .await;
+    let stored = arena_kiosk_svc::operating::load(&ctx.queue.lock().unwrap());
+    assert_eq!(
+        stored,
+        arena_kiosk_svc::operating::KioskOperating {
+            volume_default: Some(35),
+            fulfilment: Some(arena_kiosk_svc::operating::Fulfilment::Seat),
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cold_start_offline_sends_the_cached_high_contrast_first() {
     let hub = Hub::seeded().await;
     let kiosk_cache = |kiosk: &Kiosk, value: &str, rev: i64| {

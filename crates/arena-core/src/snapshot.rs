@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use arena_proto::{
-    AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SnapshotBranch, SnapshotDevice,
-    SnapshotLocale, SnapshotUi,
+    AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SetupStatus, SnapshotBranch,
+    SnapshotDevice, SnapshotLocale, SnapshotUi,
 };
 use arena_store::{BranchSummary, DeviceRow, Store};
 
@@ -27,6 +27,7 @@ pub fn build_snapshot(
         // The probe's state is the Hub status's, not the database's: the snapshot handler
         // fills it in.
         connectivity: arena_proto::Connectivity::default(),
+        setup: None,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -60,15 +61,34 @@ pub fn build_snapshot(
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, locale, ui) = store.read_consistent(|s| {
+    let (branch, devices, locale, ui, setup) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
             s.devices()?,
             read_locale(s, now_ms)?,
             read_ui(s)?,
+            read_setup(s)?,
         ))
     })?;
-    Ok(build_snapshot(branch, devices, locale, ui))
+    let mut snapshot = build_snapshot(branch, devices, locale, ui);
+    snapshot.setup = setup;
+    Ok(snapshot)
+}
+
+fn read_setup(store: &Store) -> Result<Option<SetupStatus>, AppError> {
+    if store.branch_summary()?.is_none() {
+        return Ok(None);
+    }
+    let settings = store.settings()?;
+    Ok(Some(crate::setup::setup_status(
+        |key| {
+            settings
+                .iter()
+                .find(|s| s.key == key)
+                .map(|s| s.value.as_str())
+        },
+        crate::setup::hub_tier(),
+    )))
 }
 
 /// The setting behind [`SnapshotUi::idle_lock_minutes`] (`display.hc.hub` is behind
@@ -176,6 +196,36 @@ impl SnapshotReader {
         store.read_consistent(|s| read_locale(s, now_ms))
     }
 
+    pub fn setup(&self) -> Result<Option<SetupStatus>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(read_setup)
+    }
+
+    pub fn setting_rev_and_replay(
+        &self,
+        key: &str,
+        idempotency_key: &str,
+    ) -> Result<(Option<i64>, bool), AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let rev = s
+                .settings()?
+                .into_iter()
+                .find(|r| r.key == key)
+                .map(|r| r.rev);
+            Ok((
+                rev,
+                s.has_applied_intent(&idempotency_key.to_ascii_uppercase())?,
+            ))
+        })
+    }
+
     /// Every branch setting with its `rev` (empty before bootstrap). Blocking (SQLite).
     pub fn settings(&self) -> Result<Vec<SettingEntry>, AppError> {
         let store = self
@@ -268,6 +318,11 @@ mod tests {
                 }),
                 ui: SnapshotUi::default(),
                 connectivity: arena_proto::Connectivity::default(),
+                setup: Some(SetupStatus {
+                    opening_hours_set: false,
+                    backup_location_set: false,
+                    ad_consent: arena_proto::AdConsentState::Missing,
+                }),
             }
         );
     }
@@ -286,6 +341,7 @@ mod tests {
                 locale: None,
                 ui: SnapshotUi::default(),
                 connectivity: arena_proto::Connectivity::default(),
+                setup: None,
             }
         );
     }

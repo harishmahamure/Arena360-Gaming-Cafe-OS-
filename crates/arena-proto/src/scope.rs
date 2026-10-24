@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use crate::display::{HcTarget, parse_hc_key};
 use crate::intent::IntentKind;
+use crate::operating::KEY_FULFILMENT;
 
 /// The kind of client on the other end of a LAN session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -75,13 +76,13 @@ pub fn in_scope(class: ClientClass, kind: IntentKind) -> bool {
 pub const PAIRED_SETTINGS_PREFIX: &str = "kiosk.";
 
 /// Whether a session of `class`, signed in as `device_id`, may read the branch setting `key`:
-/// only paired apps, and only `kiosk.*` keys plus the device's own `display.hc.<device_id>`
-/// (never another device's, never the Hub's).
+/// only paired apps, and only `kiosk.*` keys, `branch.fulfilment` and the device's own
+/// `display.hc.<device_id>` (never another device's, never the Hub's).
 pub fn may_read_setting(class: ClientClass, key: &str, device_id: Option<&str>) -> bool {
     if class != ClientClass::Paired {
         return false;
     }
-    if key.starts_with(PAIRED_SETTINGS_PREFIX) {
+    if key.starts_with(PAIRED_SETTINGS_PREFIX) || key == KEY_FULFILMENT {
         return true;
     }
     match (parse_hc_key(key), device_id) {
@@ -151,6 +152,11 @@ mod tests {
         assert!(paired("kiosk.process_allow"));
         assert!(paired("kiosk.process_block"));
         assert!(!paired("branch.currency"));
+        assert!(paired("kiosk.volume_default"));
+        assert!(paired("branch.fulfilment"));
+        assert!(!paired("branch.opening_hours"));
+        assert!(!paired("system.backup_dir"));
+        assert!(!paired("branch.ads_consent"));
         assert!(!paired("kiosk"));
         assert!(!paired("Kiosk.process_allow"));
         for class in [ClientClass::Kds, ClientClass::Phone] {

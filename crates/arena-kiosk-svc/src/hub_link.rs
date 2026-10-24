@@ -186,6 +186,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
         if let Some(id) = &device_id {
             revs.seed(&q, &crate::theme::key_for(id));
         }
+        crate::operating::seed(&q, &mut revs);
         revs
     };
     tokio::select! {
@@ -197,6 +198,10 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
             () = fetch_theme(ctx, client, id, &mut revs) => {}
             _ = stop.changed() => return Ended::Shutdown,
         }
+    }
+    tokio::select! {
+        () = fetch_operating(ctx, client, &mut revs) => {}
+        _ = stop.changed() => return Ended::Shutdown,
     }
     // Set once when a replay stops; new events do not push it back.
     let mut retry_at: Option<tokio::time::Instant> = None;
@@ -239,6 +244,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                 match ev {
                     Some(HubEvent::SettingsChanged(values)) => {
                         apply_settings(ctx, &values.values, &mut revs);
+                        crate::operating::apply(ctx, &values.values, &mut revs);
                         if let Some(id) = &device_id {
                             crate::theme::apply(ctx, id, &values.values, &mut revs);
                         }
@@ -293,6 +299,23 @@ async fn fetch_theme(ctx: &Ctx, client: &HubClient, device_id: &str, revs: &mut 
         Err(_) => tracing::warn!(
             timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
             "settings.get timed out; keeping the cached high contrast"
+        ),
+    }
+}
+
+async fn fetch_operating(ctx: &Ctx, client: &HubClient, revs: &mut AppliedRevs) {
+    let body = serde_json::json!({ "keys": crate::operating::KEYS });
+    match tokio::time::timeout(SETTINGS_TIMEOUT, client.request("settings.get", body)).await {
+        Ok(Ok(frame)) => match frame.body {
+            FrameBody::SettingsValues(v) => crate::operating::apply(ctx, &v.values, revs),
+            other => tracing::warn!(kind = other.kind(), "unexpected reply to settings.get"),
+        },
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "settings.get failed; keeping the cached operating settings")
+        }
+        Err(_) => tracing::warn!(
+            timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
+            "settings.get timed out; keeping the cached operating settings"
         ),
     }
 }

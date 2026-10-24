@@ -246,6 +246,7 @@ test("Settings opens on Branch, first in its sections, with the current values",
     en["hub.settings.nav.receipt"],
     en["hub.settings.nav.screen_lock"],
     en["hub.settings.nav.devices_display"],
+    en["hub.settings.nav.system"],
   ]);
   await expect(sections.getByRole("link").first()).toHaveAttribute("aria-current", "page");
   await expect(page.getByLabel(en["hub.settings.branch.symbol_before"])).toBeChecked();

@@ -266,7 +266,12 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         .with_presence(lan_hub.presence()),
     );
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
-    let mut router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
+    let setup_job = tokio::spawn(arena_core::setup::publish_setup(
+        Arc::clone(&snapshots),
+        writer.as_ref().map(|w| w.subscribe()),
+        status_tx.clone(),
+    ));
+    let router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
         .merge(arena_api::ui_router(
             snapshots,
             Arc::clone(&clock),
@@ -275,12 +280,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         ))
         .merge(arena_api::ui_auth_router(ui_auth));
     #[cfg(feature = "dev-fixtures")]
-    {
-        router = router.merge(arena_api::health::dev_router(
-            writer.clone(),
-            Arc::clone(&clock),
-        ));
-    }
+    let router = router.merge(arena_api::health::dev_router(
+        writer.clone(),
+        Arc::clone(&clock),
+    ));
     let mut server = tokio::spawn(serve_router(listener, router, async {
         let _ = stop_rx.await;
     }));
@@ -348,6 +351,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     }
     probe_job.abort();
     let _ = probe_job.await;
+    setup_job.abort();
+    let _ = setup_job.await;
     // Close every LAN session before the writer goes away.
     let _ = lan_stop_tx.send(());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), lan).await;

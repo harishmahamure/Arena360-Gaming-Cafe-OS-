@@ -8,6 +8,7 @@ pub mod devices;
 pub mod locale;
 pub mod rbac;
 mod settings_defaults;
+pub mod setup;
 mod snapshot;
 pub mod staff;
 mod status;

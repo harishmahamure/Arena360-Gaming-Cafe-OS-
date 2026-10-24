@@ -403,7 +403,14 @@ pub struct UiAuth {
     audit: std::sync::OnceLock<Arc<arena_core::AuditReader>>,
     /// Device presence on the LAN: `/ui/events` pushes `devices.changed` when it changes.
     presence: crate::lan::Presence,
+    backup_probe: BackupProbe,
+    backup_probe_timeout: std::time::Duration,
 }
+
+pub type BackupProbe =
+    Arc<dyn Fn(&std::path::Path) -> Result<(), arena_proto::BackupDirProblem> + Send + Sync>;
+
+pub const BACKUP_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl std::fmt::Debug for UiAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -439,6 +446,8 @@ impl UiAuth {
             events: std::sync::OnceLock::new(),
             audit: std::sync::OnceLock::new(),
             presence: crate::lan::Presence::none(),
+            backup_probe: Arc::new(arena_core::setup::probe_backup_dir),
+            backup_probe_timeout: BACKUP_PROBE_TIMEOUT,
         }
     }
 
@@ -447,6 +456,54 @@ impl UiAuth {
     pub fn with_presence(mut self, presence: crate::lan::Presence) -> Self {
         self.presence = presence;
         self
+    }
+
+    pub fn with_backup_probe(mut self, probe: BackupProbe, timeout: std::time::Duration) -> Self {
+        self.backup_probe = probe;
+        self.backup_probe_timeout = timeout;
+        self
+    }
+
+    async fn probe_backup_dir(
+        &self,
+        intent: &arena_proto::Intent,
+        authorized: bool,
+    ) -> Result<(), UiError> {
+        let arena_proto::IntentPayload::SettingsSet(set) = &intent.payload else {
+            return Ok(());
+        };
+        if set.key != arena_proto::KEY_BACKUP_DIR
+            || !authorized
+            || intent.kind != intent.payload.kind()
+            || !arena_proto::is_absolute_path(&set.value)
+        {
+            return Ok(());
+        }
+        let reader = Arc::clone(&self.reader);
+        let key = intent.idempotency_key.clone();
+        let (rev, replay) = tokio::task::spawn_blocking(move || {
+            reader.setting_rev_and_replay(arena_proto::KEY_BACKUP_DIR, &key)
+        })
+        .await
+        .map_err(|_| internal())?
+        .map_err(ui_error)?;
+        if replay || rev.is_none() || rev != intent.base_rev {
+            return Ok(());
+        }
+        let probe = Arc::clone(&self.backup_probe);
+        let path = std::path::PathBuf::from(&set.value);
+        let job = tokio::task::spawn_blocking(move || probe(&path));
+        match tokio::time::timeout(self.backup_probe_timeout, job).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(problem))) => Err(ui_error(arena_core::setup::backup_dir_error(problem))),
+            Ok(Err(_)) => Err(internal()),
+            Err(_) => {
+                tracing::warn!("the backup location probe timed out");
+                Err(ui_error(arena_core::setup::backup_dir_error(
+                    arena_proto::BackupDirProblem::NotWritable,
+                )))
+            }
+        }
     }
 
     pub(crate) fn presence(&self) -> &crate::lan::Presence {
@@ -1555,7 +1612,7 @@ async fn intent(
     // The session decides who acts, never the client, and only a redeemed ticket elevates.
     intent.actor = arena_proto::Actor {
         kind: ActorKind::Staff,
-        id: me.staff_id,
+        id: me.staff_id.clone(),
     };
     intent.elevated_by = None;
     // A follower spends no ticket use.
@@ -1576,6 +1633,7 @@ async fn intent(
             "the device is offline",
         )));
     }
+    let can_edit = me.permissions.contains(&Permission::SettingsEdit);
     let mut redeemed = None;
     if let Some(ticket) = elevation_ticket {
         if intent.kind != intent.payload.kind() {
@@ -1588,6 +1646,15 @@ async fn intent(
             }
             Err(e) => return fail(e),
         }
+    }
+    if let Err(e) = auth
+        .probe_backup_dir(&intent, can_edit || redeemed.is_some())
+        .await
+    {
+        if let Some((ticket, index)) = redeemed {
+            auth.refund(&ticket, index);
+        }
+        return fail(e);
     }
     match writer.submit_intent(intent).await {
         Ok(applied) => Json(IntentResult {
@@ -3670,5 +3737,350 @@ pub(crate) mod tests {
                 "{login}"
             );
         }
+    }
+
+    fn probes(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(arena_proto::BACKUP_PROBE_PREFIX)
+            })
+            .count()
+    }
+
+    fn setting_value(hub: &Hub, key: &str) -> String {
+        Store::open_reader(&hub.path)
+            .unwrap()
+            .settings()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.key == key)
+            .unwrap()
+            .value
+    }
+
+    #[tokio::test]
+    async fn a_writable_backup_location_is_saved_after_the_probe() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let (status, body) = post_intent(
+            &hub,
+            &token,
+            set_body(&hub, "system.backup_dir", &path, None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(setting_value(&hub, "system.backup_dir"), path);
+        assert_eq!(probes(dir.path()), 0, "the probe file is removed");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        let (status, _) =
+            post_intent(&hub, &token, set_body(&hub, "system.backup_dir", "", None)).await;
+        assert_eq!(status, StatusCode::OK, "clearing needs no probe");
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_or_read_only_backup_location_is_refused_with_its_reason() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let before = change_count(&hub);
+        for (path, reason) in [
+            (dir.path().join("missing"), "not_found"),
+            (file.clone(), "not_dir"),
+        ] {
+            let (status, body) = post_intent(
+                &hub,
+                &token,
+                set_body(&hub, "system.backup_dir", &path.to_string_lossy(), None),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert_eq!(body["code"], "VALIDATION_FAILED");
+            assert_eq!(body["field"], "system.backup_dir");
+            assert_eq!(body["message"], reason);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let ro = dir.path().join("ro");
+            std::fs::create_dir(&ro).unwrap();
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let root = std::fs::write(ro.join("root-check"), b"x").is_ok();
+            let (status, body) = post_intent(
+                &hub,
+                &token,
+                set_body(&hub, "system.backup_dir", &ro.to_string_lossy(), None),
+            )
+            .await;
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let (status, body) = if root {
+                let sealed = if cfg!(target_os = "linux") {
+                    "/proc/self"
+                } else {
+                    "/"
+                };
+                post_intent(
+                    &hub,
+                    &token,
+                    set_body(&hub, "system.backup_dir", sealed, None),
+                )
+                .await
+            } else {
+                assert_eq!(probes(&ro), 0);
+                (status, body)
+            };
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert_eq!(body["message"], "not_writable");
+        }
+        assert_eq!(change_count(&hub), before);
+        assert_eq!(setting_value(&hub, "system.backup_dir"), "");
+    }
+
+    #[tokio::test]
+    async fn a_counter_is_denied_operating_settings_and_no_probe_is_written() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let dir = tempfile::tempdir().unwrap();
+        let before = change_count(&hub);
+        for body in [
+            set_body(
+                &hub,
+                "system.backup_dir",
+                &dir.path().to_string_lossy(),
+                None,
+            ),
+            set_body(&hub, "branch.fulfilment", "seat", None),
+            set_body(&hub, "kiosk.volume_default", "20", None),
+        ] {
+            let (status, reply) = post_intent(&hub, &token, body).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+            assert_eq!(reply["code"], "PERMISSION_DENIED");
+        }
+        let consent = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "whoever".into() },
+            IntentPayload::AdsConsent(arena_proto::AdsConsentSet {
+                given: true,
+                policy_version: arena_proto::ADS_POLICY_VERSION,
+            }),
+            Some(setting_rev(&hub, "branch.ads_consent")),
+        ) });
+        let (status, reply) = post_intent(&hub, &token, consent).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        assert_eq!(change_count(&hub), before);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn ads_consent_records_the_session_staff_and_healthz_reports_setup() {
+        let hub = hub().await;
+        let health = crate::health::router(hub._status.subscribe(), hub.clock.clone());
+        let (_, unpublished) = call_app(&health, "GET", "/healthz", None, None).await;
+        assert_eq!(unpublished["setup"], Value::Null);
+        let job = tokio::spawn(arena_core::setup::publish_setup(
+            Arc::new(SnapshotReader::open(&hub.path).unwrap()),
+            Some(hub.writer.subscribe()),
+            hub._status.clone(),
+        ));
+        let setup_is = |want: Value| {
+            let health = health.clone();
+            async move {
+                for _ in 0..100 {
+                    let (_, body) = call_app(&health, "GET", "/healthz", None, None).await;
+                    if body["setup"] == want {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                panic!("healthz never reported {want}");
+            }
+        };
+        setup_is(json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing"})).await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let consent = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Owner, id: "spoof".into() },
+            IntentPayload::AdsConsent(arena_proto::AdsConsentSet {
+                given: true,
+                policy_version: arena_proto::ADS_POLICY_VERSION,
+            }),
+            Some(setting_rev(&hub, "branch.ads_consent")),
+        ) });
+        let (status, body) = post_intent(&hub, &token, consent).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let stored =
+            arena_proto::AdsConsent::parse(&setting_value(&hub, "branch.ads_consent")).unwrap();
+        assert!(stored.given);
+        assert_eq!(stored.at, Some(T0));
+        assert_eq!(stored.staff_id.as_deref(), Some(hub.manager_id.as_str()));
+        let c = last_change(&hub);
+        assert_eq!(c.intent_kind, "ads.consent");
+        assert_eq!(
+            (c.actor_kind.as_str(), c.actor_id.as_str()),
+            ("staff", hub.manager_id.as_str())
+        );
+        let hours = format!(
+            "[{}]",
+            [r#"{"open_min":600,"close_min":1380}"#; 7].join(",")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        for (key, value) in [
+            ("branch.opening_hours", hours.as_str()),
+            ("system.backup_dir", &dir.path().to_string_lossy()),
+        ] {
+            let (status, body) = post_intent(&hub, &token, set_body(&hub, key, value, None)).await;
+            assert_eq!(status, StatusCode::OK, "{key}: {body}");
+        }
+        let done =
+            json!({"opening_hours_set": true, "backup_location_set": true, "ad_consent": "given"});
+        setup_is(done.clone()).await;
+        let snapshot = SnapshotReader::open(&hub.path)
+            .unwrap()
+            .snapshot(T0)
+            .unwrap();
+        assert_eq!(serde_json::to_value(snapshot.setup).unwrap(), done);
+        assert_eq!(
+            arena_proto::AdsConsent::parse(&setting_value(&hub, "branch.ads_consent"))
+                .unwrap()
+                .policy_version,
+            Some(arena_proto::ADS_POLICY_VERSION)
+        );
+        job.abort();
+    }
+
+    fn counting_probe(
+        delay: std::time::Duration,
+    ) -> (BackupProbe, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::clone(&calls);
+        let probe: BackupProbe = Arc::new(move |_| {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(delay);
+            Ok(())
+        });
+        (probe, calls)
+    }
+
+    fn with_probe(hub: &mut Hub, probe: BackupProbe, timeout: std::time::Duration) {
+        let auth = Arc::new(
+            UiAuth::new(
+                Arc::new(StaffDirectory::open(&hub.path).unwrap()),
+                Arc::new(SnapshotReader::open(&hub.path).unwrap()),
+                Some(hub.writer.clone()),
+                hub.clock.clone(),
+            )
+            .with_backup_probe(probe, timeout),
+        );
+        hub.app = ui_auth_router(Arc::clone(&auth));
+        hub.auth = auth;
+    }
+
+    #[tokio::test]
+    async fn the_probe_runs_only_for_an_authorized_fresh_save_at_the_current_rev() {
+        let mut hub = hub().await;
+        let (probe, calls) = counting_probe(std::time::Duration::ZERO);
+        with_probe(&mut hub, probe, BACKUP_PROBE_TIMEOUT);
+        let calls_now = || calls.load(std::sync::atomic::Ordering::SeqCst);
+        let path = "/mnt/backup";
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, body) = post_intent(
+            &hub,
+            &counter,
+            set_body(&hub, "system.backup_dir", path, Some("bogus-ticket")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "PIN_REQUIRED");
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let (status, _) = post_intent(
+            &hub,
+            &manager,
+            set_body(&hub, "system.backup_dir", path, Some("bogus-ticket")),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        let mut stale = set_body(&hub, "system.backup_dir", path, None);
+        stale["intent"]["base_rev"] = json!(99);
+        let (status, body) = post_intent(&hub, &manager, stale).await;
+        assert_eq!(body["code"], "STALE", "{status} {body}");
+        let (status, body) = post_intent(
+            &hub,
+            &manager,
+            set_body(&hub, "system.backup_dir", "relative/dir", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["message"], "not_found");
+        assert_eq!(
+            calls_now(),
+            0,
+            "no probe before authorization and the rev check"
+        );
+        let fresh = set_body(&hub, "system.backup_dir", path, None);
+        let (status, first) = post_intent(&hub, &manager, fresh.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(calls_now(), 1);
+        let (status, replay) = post_intent(&hub, &manager, fresh).await;
+        assert_eq!(status, StatusCode::OK, "{replay}");
+        assert_eq!(replay, first, "the replay returns the original result");
+        assert_eq!(calls_now(), 1, "a replay never probes");
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_hangs_times_out_as_not_writable() {
+        let mut hub = hub().await;
+        let (probe, calls) = counting_probe(std::time::Duration::from_secs(2));
+        with_probe(&mut hub, probe, std::time::Duration::from_millis(100));
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let before = change_count(&hub);
+        let started = std::time::Instant::now();
+        let (status, body) = post_intent(
+            &hub,
+            &token,
+            set_body(&hub, "system.backup_dir", "/net/dead/share", None),
+        )
+        .await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["field"], "system.backup_dir");
+        assert_eq!(body["message"], "not_writable");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(change_count(&hub), before);
+    }
+
+    #[tokio::test]
+    async fn consent_and_the_hours_flag_are_refused_as_raw_settings() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let before = change_count(&hub);
+        for (key, value) in [
+            (
+                "branch.ads_consent",
+                r#"{"given":true,"at":1,"staff_id":"x","policy_version":1}"#,
+            ),
+            ("branch.opening_hours_set", "true"),
+        ] {
+            let (status, body) = post_intent(&hub, &token, set_body(&hub, key, value, None)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{key}: {body}");
+            assert_eq!(body["code"], "VALIDATION_FAILED");
+            assert_eq!(body["field"], "key");
+        }
+        let closed = format!("[{}]", [r#"{"closed":true}"#; 7].join(","));
+        let (status, body) = post_intent(
+            &hub,
+            &token,
+            set_body(&hub, "branch.opening_hours", &closed, None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["field"], "branch.opening_hours");
+        assert_eq!(change_count(&hub), before);
+        assert_eq!(setting_value(&hub, "branch.opening_hours_set"), "false");
     }
 }

@@ -80,6 +80,7 @@ pub struct HubStatus {
     /// The WAN connectivity probe's last answer (`online`, `checked_at: null` until the first
     /// probe finishes, so a Hub never shows the offline chip before it knows).
     pub connectivity: Connectivity,
+    pub setup: Option<arena_proto::SetupStatus>,
 }
 
 impl HubStatus {
@@ -93,6 +94,7 @@ impl HubStatus {
             schema_version,
             tls_fingerprint: None,
             connectivity: Connectivity::default(),
+            setup: None,
         }
     }
 }

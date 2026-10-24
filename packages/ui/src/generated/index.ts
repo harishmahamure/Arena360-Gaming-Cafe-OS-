@@ -2,10 +2,13 @@
 
 export type { Actor } from "./Actor";
 export type { ActorKind } from "./ActorKind";
+export type { AdConsentState } from "./AdConsentState";
 export type { AdminExitMode } from "./AdminExitMode";
 export type { AdminPinOk } from "./AdminPinOk";
 export type { AdminUnlockAck } from "./AdminUnlockAck";
 export type { AdminUnlockAckEvent } from "./AdminUnlockAckEvent";
+export type { AdsConsent } from "./AdsConsent";
+export type { AdsConsentSet } from "./AdsConsentSet";
 export type { AppError } from "./AppError";
 export type { AppliedEvent } from "./AppliedEvent";
 export type { AppliedSummary } from "./AppliedSummary";
@@ -89,6 +92,7 @@ export type { SettingsChangedEvent } from "./SettingsChangedEvent";
 export type { SettingsGet } from "./SettingsGet";
 export type { SettingsSet } from "./SettingsSet";
 export type { SettingsValues } from "./SettingsValues";
+export type { SetupStatus } from "./SetupStatus";
 export type { SignInOk } from "./SignInOk";
 export type { SignInRequest } from "./SignInRequest";
 export type { Signin } from "./Signin";

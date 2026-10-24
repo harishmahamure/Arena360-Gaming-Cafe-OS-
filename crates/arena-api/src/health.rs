@@ -35,11 +35,12 @@ struct HealthBody {
     self_instance_id: String,
     tls_fingerprint: Option<String>,
     connectivity: arena_proto::Connectivity,
+    setup: Option<arena_proto::SetupStatus>,
     now: i64,
 }
 
 impl HealthBody {
-    fn new(s: &HubStatus, now: i64) -> Self {
+    fn new(s: &HubStatus, now: i64, setup: Option<arena_proto::SetupStatus>) -> Self {
         Self {
             db_open: s.db_open,
             role: s.role.as_str(),
@@ -54,6 +55,7 @@ impl HealthBody {
             self_instance_id: s.self_instance_id.clone(),
             tls_fingerprint: s.tls_fingerprint.clone(),
             connectivity: s.connectivity,
+            setup,
             now,
         }
     }
@@ -67,7 +69,8 @@ struct HealthState {
 
 async fn healthz(State(state): State<HealthState>) -> Json<HealthBody> {
     let now = state.clock.now_ms();
-    let body = HealthBody::new(&state.status.borrow(), now);
+    let status = state.status.borrow();
+    let body = HealthBody::new(&status, now, status.setup);
     Json(body)
 }
 
@@ -173,7 +176,11 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                 d.online = state.presence.online(&d.device_id);
             }
             if let Some(status) = &state.status {
-                snapshot.connectivity = status.borrow().connectivity;
+                let status = status.borrow();
+                snapshot.connectivity = status.connectivity;
+                if status.setup.is_some() {
+                    snapshot.setup = status.setup;
+                }
             }
             Json(snapshot).into_response()
         }
@@ -386,6 +393,7 @@ mod tests {
                 "self_instance_id": "01JSELF",
                 "tls_fingerprint": "ab".repeat(32),
                 "connectivity": {"state": "internet_offline", "checked_at": 900},
+                "setup": null,
                 "now": 1000
             })
         );
@@ -396,7 +404,7 @@ mod tests {
         let (_tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
         assert_eq!(
             get_json(rx).await,
-            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "now": 1000})
+            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "setup": null, "now": 1000})
         );
     }
 
@@ -547,7 +555,8 @@ mod tests {
                         "pending": null
                     },
                     "ui": {"idle_lock_minutes": 5, "hc": false},
-                    "connectivity": {"state": "cloud_unreachable", "checked_at": 7}
+                    "connectivity": {"state": "cloud_unreachable", "checked_at": 7},
+                    "setup": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing"}
                 })
             );
         }
@@ -559,7 +568,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body,
-                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}})
+                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null})
             );
         }
 

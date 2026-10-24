@@ -304,10 +304,10 @@ test("landmarks, one h1 and no serious axe violations on every screen", async ({
     await page.goto(`/${id}`);
     await expect(page.locator("header")).toHaveCount(1);
     await expect(page.locator("main")).toHaveCount(1);
-    // One visible Hub navigation (Settings adds its own section list beside it).
+    // One visible Hub navigation (Settings adds its own section lists beside it).
     const hubNav = visibleNav(page).and(page.locator(`[aria-label="${en["hub.nav.label"]}"]`));
     await expect(hubNav).toHaveCount(1);
-    await expect(visibleNav(page)).toHaveCount(id === "settings" || id === "system" ? 2 : 1);
+    await expect(visibleNav(page)).toHaveCount(id === "settings" ? 3 : id === "system" ? 2 : 1);
     await expect(page.locator("h1")).toHaveCount(1);
     await expectNoSeriousAxe(page);
   }

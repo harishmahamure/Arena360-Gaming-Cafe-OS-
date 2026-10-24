@@ -91,3 +91,11 @@
 - source_spec: none (observed 2026-10-25 under load average ~19)
   summary: Hub Playwright phone tests `devices-display.spec.ts` "a Counter's toggle asks for a manager's PIN…" and `shell.spec.ts` "More sheet: … traps focus …" flake under heavy CPU load (2/6 failures on master).
   evidence: They pass when the machine is less loaded. The failures are timing-sensitive assertions (`toContainText`, `toBeFocused`) in Epic 1 code.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-27-printer-detection-and-test-print-at-the-hub.md`
+  summary: A Windows CI or manual test that drives `local_printers` and `print_raw` against a real spooler queue (for example the built-in "Microsoft Print to PDF" with RAW, or a generic text driver).
+  evidence: No automated test calls the spooler functions, and USB printing is the main production path.
+
+- source_spec: none (observed 2026-10-25 at load average ~32)
+  summary: Hub Playwright `auth.spec.ts` "a locked sign-in counts down, then lets you try again" flakes under extreme CPU load (1/6).
+  evidence: The real-time countdown misses its 30 s test timeout when the machine is saturated.

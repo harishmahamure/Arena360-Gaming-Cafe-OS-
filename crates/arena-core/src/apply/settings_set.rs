@@ -8,13 +8,17 @@
 //! `prior_value` and replaces the new value (setting it back to `prior_value` cancels the
 //! wait). Every other key applies at once.
 
-use arena_proto::{AppError, ErrorCode, Intent, SettingsSet};
+use arena_proto::{
+    AppError, ErrorCode, Intent, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, SettingsSet,
+};
 use arena_store::{ChangeOp, RowKey, SettingRef, StoreTx, find_setting, update_setting};
 use chrono::NaiveDate;
 
 use super::mutate::Written;
 use crate::locale;
-use crate::settings_defaults::{DEFERRED_KEYS, SettingRule, setting_rule};
+use crate::settings_defaults::{
+    DEFERRED_KEYS, KEYED_FIELD_KEYS, SYSTEM_MANAGED_KEYS, SettingRule, setting_rule,
+};
 
 /// Longest value, in characters.
 pub const MAX_SETTING_VALUE_CHARS: usize = 4096;
@@ -52,21 +56,43 @@ pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), 
         (Some(_), Some(rule)) => rule,
         _ => return Err(invalid("key", "no such setting")),
     };
+    if SYSTEM_MANAGED_KEYS.contains(&s.key.as_str()) {
+        return Err(invalid("key", "this setting is not set by settings.set"));
+    }
+    let field = if KEYED_FIELD_KEYS.contains(&s.key.as_str()) {
+        s.key.as_str()
+    } else {
+        "value"
+    };
     let max = rule.max_chars();
     if s.value.chars().count() > max {
         return Err(invalid(
-            "value",
+            field,
             format!("value must be at most {max} characters"),
         ));
     }
-    if let SettingRule::ProcessRules(list) = rule {
-        return arena_proto::parse_process_rules(list, &s.value).map(|_| ());
+    match rule {
+        SettingRule::ProcessRules(list) => {
+            return arena_proto::parse_process_rules(list, &s.value).map(|_| ());
+        }
+        SettingRule::OpeningHours => {
+            let week = arena_proto::parse_opening_hours(&s.value)
+                .map_err(|e| invalid(&e.field(), e.message()))?;
+            if !arena_proto::has_open_day(&week) {
+                return Err(invalid(KEY_OPENING_HOURS, "at least one day must be open"));
+            }
+            return Ok(());
+        }
+        SettingRule::Path if !rule.accepts(&s.value) => {
+            return Err(invalid(
+                field,
+                arena_proto::BackupDirProblem::NotFound.as_str(),
+            ));
+        }
+        _ => {}
     }
     if !rule.accepts(&s.value) {
-        return Err(invalid(
-            "value",
-            format!("value is not valid for {}", s.key),
-        ));
+        return Err(invalid(field, format!("value is not valid for {}", s.key)));
     }
     Ok(())
 }
@@ -85,22 +111,43 @@ pub(super) fn mutate(
     } else {
         (None, None)
     };
+    let opening_hours = (row.key == KEY_OPENING_HOURS)
+        .then(|| arena_proto::parse_opening_hours(&s.value).ok())
+        .flatten();
+    let value = opening_hours
+        .as_ref()
+        .map_or_else(|| s.value.clone(), arena_proto::opening_hours_json);
     update_setting(
         tx,
         &row.branch_id,
         &row.key,
-        &s.value,
+        &value,
         prior.as_deref(),
         from.map(|d| d.to_string()).as_deref(),
     )?;
-    Ok(vec![Written {
+    let mut written = vec![Written {
         key: RowKey::Settings {
             branch_id: row.branch_id.clone(),
             key: row.key.clone(),
         },
         op: ChangeOp::Update,
         before: None,
-    }])
+    }];
+    if opening_hours.is_some()
+        && let Some(flag) = find_setting(tx, KEY_OPENING_HOURS_SET)?
+        && flag.value != "true"
+    {
+        update_setting(tx, &flag.branch_id, &flag.key, "true", None, None)?;
+        written.push(Written {
+            key: RowKey::Settings {
+                branch_id: flag.branch_id,
+                key: flag.key,
+            },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    Ok(written)
 }
 
 /// The `(prior_value, effective_from)` a tz or day-start change gets, worked out under the rules

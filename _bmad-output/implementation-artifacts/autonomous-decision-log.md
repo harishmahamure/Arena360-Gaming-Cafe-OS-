@@ -576,3 +576,24 @@ Each entry gives the story, the decision point, the choice taken (the recommende
     - a11y fixes.
   - **Deferred:** guard currency, country and tz edits once downstream data exists.
   - **Verification:** fully green (workspace, store control, linkage, 188 scripts, onboarding check, build and Playwright).
+- **2.26 implementation choices, accepted:**
+  - no migration (settings mechanism only);
+  - the new keys put the key in `field`;
+  - `opening_hours_set`/`ads_consent` can't be set raw;
+  - 24 h text inputs;
+  - the Tauri dialog plugin isn't added, so Browse is hidden in the shell.
+- **2.26 review outcome (BH + VG on Sonnet):** 9 fixes, 10 rejections and 1 deferral.
+  - **Fixes:**
+    - the probe runs only after authorization, rev and idempotency checks, with a 5 s timeout;
+    - the core rule requires an absolute path;
+    - cached `SetupStatus` (no per-request DB read);
+    - ads consent policy version;
+    - no all-closed week;
+    - API refusal tests;
+    - Playwright STALE/403/live-refresh/withdraw tests;
+    - a clippy unused-mut fix (mine).
+  - **Deferred:** the probe on non-HTTP paths (with the mailbox, 2.15).
+- **Port-collision discovery:** the Hub Playwright "regression" first reported for 2.26 was a cross-worktree port collision; fixed by chore `4a6da95`.
+- **Verification (after rebase onto `4a6da95`, `ARENA_PW_PORT=5426`):**
+  - Passing: clippy, workspace and dev-fixtures tests, 188 scripts, and Hub Playwright 277/278.
+  - Failing: only `auth.spec.ts:216` (lock countdown), a load flake at load average ~32 (1/6 on rerun), recorded.

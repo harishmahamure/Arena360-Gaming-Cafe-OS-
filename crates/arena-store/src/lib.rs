@@ -495,6 +495,10 @@ impl Store {
         count_applied_intents(&self.conn)
     }
 
+    pub fn has_applied_intent(&self, idempotency_key: &str) -> Result<bool, AppError> {
+        Ok(dedupe::find_applied_intent(&self.conn, idempotency_key)?.is_some())
+    }
+
     /// Takes the process-level writer lock (`<db>.lock`), so two processes on one data dir can
     /// never both write. Returns `false` when another process holds it. The OS releases it when
     /// this process exits, however it exits. [`Store::open`] already tries once; this retries.

@@ -3,7 +3,7 @@
 //! Every committed intent from the writer broadcast is pushed to every `paired` session as
 //! `event{kind:"applied"}`. Browser classes (`kds`, `phone`) only get the changes to tables on
 //! their allow-list ([`browser_tables`], empty for now), and nothing when none remain. When the
-//! intent wrote `kiosk.*` settings, their values now follow as `event{kind:"settings.changed"}`,
+//! intent wrote `kiosk.*` or `branch.fulfilment` settings, their values now follow as `event{kind:"settings.changed"}`,
 //! to `paired` sessions only (browser classes never see settings). Each
 //! session has its own bounded queue; a session whose queue is full is dropped, so a slow or
 //! failing client never blocks the others. After an intent that touched a `devices` row,
@@ -572,9 +572,10 @@ impl Registry {
     }
 }
 
-/// The setting keys `applied` wrote that some paired session may read: `kiosk.*` and every
-/// device's `display.hc.<device_id>` (`settings` row ids are `branch_id/key`). Which session
-/// gets which is decided per session in [`Registry::push_settings`].
+/// The setting keys `applied` wrote that some paired session may read: `kiosk.*`,
+/// `branch.fulfilment` and every device's `display.hc.<device_id>` (`settings` row ids are
+/// `branch_id/key`). Which session gets which is decided per session in
+/// [`Registry::push_settings`].
 pub(crate) fn paired_setting_keys(applied: &Applied) -> Vec<String> {
     let mut keys: Vec<String> = applied
         .changes
@@ -583,6 +584,7 @@ pub(crate) fn paired_setting_keys(applied: &Applied) -> Vec<String> {
         .filter_map(|c| c.row_id.split_once('/').map(|(_, k)| k.to_owned()))
         .filter(|k| {
             k.starts_with(PAIRED_SETTINGS_PREFIX)
+                || k == arena_proto::KEY_FULFILMENT
                 || matches!(parse_hc_key(k), Some(HcTarget::Device(_)))
         })
         .collect();
@@ -701,14 +703,20 @@ mod tests {
                 change("settings", "B/kiosk.process_allow"),
                 change("settings", "B/display.hc.hub"),
                 change("settings", "B/display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0"),
+                change("settings", "B/branch.fulfilment"),
+                change("settings", "B/kiosk.volume_default"),
+                change("settings", "B/branch.opening_hours"),
+                change("settings", "B/system.backup_dir"),
             ],
         };
         assert_eq!(
             paired_setting_keys(&applied),
             [
+                "branch.fulfilment",
                 "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
                 "kiosk.process_allow",
-                "kiosk.process_block"
+                "kiosk.process_block",
+                "kiosk.volume_default"
             ]
         );
     }

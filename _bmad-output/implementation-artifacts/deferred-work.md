@@ -60,3 +60,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-cloud-error-envelope-local-dev-mode-and-single-sqlite-linkag.md`
   summary: Add tests for `--dev` failing to open its data dir (exit 1, log line) and for a local-backend migration under a held write lock (busy then retry).
   evidence: Verification-gap review found neither path exercised; both dev-only.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl.md`
+  summary: Test the HTTPS paths of the alert webhook and S3 clients against a server whose certificate chains to a webpki root (or an injectable root store).
+  evidence: Every test uses plain HTTP loopback; a broken root store would only show up when the first real alert or upload fails.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl.md`
+  summary: Make the remote gz_control dump a point-in-time snapshot (Turso PITR/branch, or batched reads within the interactive-transaction timeout).
+  evidence: The remote dump reads tables one after another without a transaction, so writes during the dump can leave cross-table drift (for example a child row without its parent).

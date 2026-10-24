@@ -8,6 +8,7 @@ import {
   KUBECTL_MISSING,
   checkCiWorkflow,
   checkCluster,
+  checkCronJob,
   checkDockerfile,
   checkRbac,
   checkOverlay,
@@ -134,12 +135,88 @@ test("environments may differ only in namespace, host, replicas/resources and ta
   const prod = copy("production");
   container(prod).args = ["--role", "control", "--listen", "0.0.0.0:9"];
   assert.deepEqual(checkParity(copy("staging"), prod), [
-    "staging and production differ beyond namespace, host, replicas/resources and image tag",
+    "staging and production differ beyond namespace, host, replicas/resources, image tag and backup bucket",
   ]);
   const replicas = copy("production");
   doc(replicas, "Deployment").spec.replicas = 9;
   container(replicas).image = "ghcr.io/arena360/arena-cloud:abc123";
   assert.deepEqual(checkParity(copy("staging"), replicas), []);
+});
+
+const cronjob = (docs) => docs.find((d) => d.kind === "CronJob");
+const cjPod = (docs) => cronjob(docs).spec.jobTemplate.spec.template.spec;
+const cjContainer = (docs) => cjPod(docs).containers[0];
+const checkCj = (docs, env = "staging") => checkCronJob(env, docs, ENVIRONMENTS[env]);
+
+test("both overlays carry the backup CronJob, each with its own bucket", () => {
+  assert.deepEqual(checkCj(copy("staging")), []);
+  assert.deepEqual(checkCj(copy("production"), "production"), []);
+  const bucket = (docs) =>
+    cjContainer(docs).env.find((e) => e.name === "ARENA_BACKUP_S3_BUCKET").value;
+  assert.notEqual(bucket(copy("staging")), bucket(copy("production")));
+  // The same bucket in both environments fails.
+  const shared = copy("production");
+  cjContainer(shared).env.find((e) => e.name === "ARENA_BACKUP_S3_BUCKET").value =
+    ENVIRONMENTS.staging.bucket;
+  assert.match(checkCj(shared, "production").join("\n"), /ARENA_BACKUP_S3_BUCKET is/);
+  assert.match(
+    checkCj(copy("staging").filter((d) => d.kind !== "CronJob")).join("\n"),
+    /no CronJob arena-cloud-control-backup/,
+  );
+});
+
+test("the CronJob's schedule, time zone, concurrency, deadlines and history are enforced", () => {
+  const cases = [
+    [(d) => (cronjob(d).spec.schedule = "0 3 * * *"), /schedule is "0 3 \* \* \*"/],
+    [(d) => delete cronjob(d).spec.timeZone, /timeZone is undefined/],
+    [(d) => (cronjob(d).spec.concurrencyPolicy = "Allow"), /concurrencyPolicy/],
+    [(d) => (cronjob(d).spec.startingDeadlineSeconds = 60), /startingDeadlineSeconds/],
+    [(d) => (cronjob(d).spec.failedJobsHistoryLimit = 1), /failedJobsHistoryLimit/],
+    [(d) => (cronjob(d).spec.successfulJobsHistoryLimit = 9), /successfulJobsHistoryLimit/],
+    [(d) => (cronjob(d).spec.jobTemplate.spec.backoffLimit = 6), /backoffLimit/],
+    [
+      (d) =>
+        (cjContainer(d).env.find(
+          (e) => e.name === "ARENA_BACKUP_S3_ENDPOINT",
+        ).valueFrom.secretKeyRef.optional = true),
+      /env ARENA_BACKUP_S3_ENDPOINT is optional/,
+    ],
+    [(d) => delete cronjob(d).spec.jobTemplate.spec.activeDeadlineSeconds, /activeDeadlineSeconds/],
+    [(d) => (cjContainer(d).args = ["--role", "jobs"]), /args is/],
+  ];
+  for (const [mutate, re] of cases) {
+    const docs = copy("staging");
+    mutate(docs);
+    assert.match(checkCj(docs).join("\n"), re, String(re));
+  }
+});
+
+test("the CronJob runs the Deployment's image and security context with secret env only", () => {
+  const image = copy("staging");
+  cjContainer(image).image = "ghcr.io/arena360/arena-cloud:other";
+  assert.match(checkCj(image).join("\n"), /is not the Deployment's/);
+  const sc = copy("staging");
+  cjContainer(sc).securityContext.readOnlyRootFilesystem = false;
+  cjPod(sc).securityContext.runAsNonRoot = false;
+  const out = checkCj(sc).join("\n");
+  assert.match(out, /container securityContext differs/);
+  assert.match(out, /pod securityContext differs/);
+  const plain = copy("staging");
+  const i = cjContainer(plain).env.findIndex((e) => e.name === "ARENA_BACKUP_S3_SECRET_ACCESS_KEY");
+  cjContainer(plain).env[i] = { name: "ARENA_BACKUP_S3_SECRET_ACCESS_KEY", value: "x" };
+  assert.match(checkCj(plain).join("\n"), /SECRET_ACCESS_KEY is not a secretKeyRef/);
+  const missing = copy("staging");
+  cjContainer(missing).env = cjContainer(missing).env.filter(
+    (e) => e.name !== "ARENA_ALERT_WEBHOOK_URL",
+  );
+  assert.match(checkCj(missing).join("\n"), /keys from arena-cloud-backup are/);
+  const envName = copy("staging");
+  cjContainer(envName).env.find((e) => e.name === "ARENA_ENV").valueFrom.fieldRef.fieldPath =
+    "metadata.name";
+  assert.match(checkCj(envName).join("\n"), /ARENA_ENV is not the pod's namespace/);
+  const from = copy("staging");
+  cjContainer(from).envFrom = [{ secretRef: { name: "arena-cloud-backup" } }];
+  assert.match(checkCj(from).join("\n"), /uses envFrom/);
 });
 
 test("the cluster config must keep the source IP", () => {
@@ -214,6 +291,17 @@ test("the workflow: triggers, tool versions, secrets and smoke steps", () => {
     [ok.replace(".gz_control.reachable == true", ".gz_control"), /edge \/healthz smoke/],
     [ok.replace('"301" || "$code" == "308"', '"200"'), /http -> https smoke/],
     [ok.replace('"403"', '"200"'), /direct-origin smoke/],
+    [
+      ok.replace('select(.kind == "CronJob" and', 'select(.kind == "Job" and'),
+      /backup CronJob's image/,
+    ],
+    [
+      ok.replace(
+        "      - name: Apply and wait",
+        "      - run: arena-cloud ops restore-control\n      - name: Apply and wait",
+      ),
+      /never run ops restore-control/,
+    ],
   ];
   for (const [text, re] of cases) {
     assert.match(checkWorkflow(text).errors.join("\n"), re, String(re));
@@ -245,6 +333,14 @@ test("the deployer RBAC: namespaced, scoped to what a deploy applies", () => {
   assert.match(
     checkRbac(ok.replace('resources: ["middlewares"]', 'resources: ["other"]')).join("\n"),
     /cannot apply traefik\.io\/middlewares/,
+  );
+  assert.match(
+    checkRbac(ok.replace('resources: ["cronjobs"]', 'resources: ["jobs"]')).join("\n"),
+    /cannot apply batch\/cronjobs/,
+  );
+  assert.match(
+    checkRbac(ok.replaceAll('"arena-cloud-backup", ', "")).join("\n"),
+    /cannot update Secret arena-cloud-backup/,
   );
   assert.match(
     checkRbac(

@@ -198,6 +198,16 @@ test("deploy sources: workflow tool versions, runtime image, CI service image, k
     readCiWorkflow("image: ${{ x && 'ghcr.io/tursodatabase/libsql-server:v0.24.31' || '' }}"),
     { "ghcr.io/tursodatabase/libsql-server": "v0.24.31" },
   );
+  assert.deepEqual(
+    readCiWorkflow(
+      "image: ${{ x && 'ghcr.io/tursodatabase/libsql-server:v0.24.31' || '' }}\n" +
+        "image: ${{ x && 'bitnamilegacy/minio:2025.7.23-debian-12-r5' || '' }}",
+    ),
+    {
+      "ghcr.io/tursodatabase/libsql-server": "v0.24.31",
+      "bitnamilegacy/minio": "2025.7.23-debian-12-r5",
+    },
+  );
   assert.deepEqual(readDeployReadme("curl … | INSTALL_K3S_VERSION=v1.33.4+k3s1 sh -"), {
     k3s: "v1.33.4+k3s1",
   });

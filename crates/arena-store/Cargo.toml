@@ -14,11 +14,12 @@ libsql = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
 hyper-rustls = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [features]
 # `gz_control` (the cloud control database) over libsql remote. Only `arena-cloud` enables it,
 # so the Hub's dependency tree never includes libsql.
-control = ["dep:libsql", "dep:tokio", "dep:hyper", "dep:hyper-rustls"]
+control = ["dep:libsql", "dep:tokio", "dep:hyper", "dep:hyper-rustls", "dep:serde_json"]
 
 [dev-dependencies]
 tempfile.workspace = true

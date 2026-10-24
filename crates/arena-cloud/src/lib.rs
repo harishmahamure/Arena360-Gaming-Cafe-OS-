@@ -4,11 +4,15 @@
 //! The control role connects to `gz_control` (Turso, Mumbai) through `arena-store`'s `control`
 //! module, applies its embedded migrations and serves `GET /healthz` and `/v1` (every failure
 //! as the flat `AppError` envelope, see [`api`]). `--dev` runs `gz_control` from a local SQLite
-//! file instead and mounts the dev-only routes.
+//! file instead and mounts the dev-only routes. `--role jobs --task control-backup` runs the
+//! nightly backup once and exits, and `ops restore-control` restores one ([`backup`]).
 
+pub mod alert;
 pub mod api;
+pub mod backup;
 pub mod config;
 pub mod health;
+pub mod store;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -74,6 +78,7 @@ pub async fn connect_and_migrate(cfg: &Config) -> Result<(ControlDb, u32), Start
                 return Err(StartError::Migration { version, message });
             }
             Ok(Err(ControlError::Db(m))) => m,
+            Ok(Err(other)) => other.to_string(),
             Err(_) => "timed out".to_owned(),
         };
         let left = deadline.saturating_duration_since(Instant::now());
@@ -112,6 +117,7 @@ async fn open_local_and_migrate(
             Err(StartError::Migration { version, message })
         }
         Err(ControlError::Db(m)) => Err(local(&path, m)),
+        Err(other) => Err(local(&path, other.to_string())),
     }
 }
 

@@ -8,12 +8,21 @@
 //! Migrations are embedded, numbered and forward-only, like the Hub's, but kept in their own
 //! list (`control-migrations/`). [`ControlDb::migrate`] refuses a database written by a newer
 //! binary ([`SchemaTooNew`]) without writing to it.
+//!
+//! [`ControlDb::dump`] and [`ControlDb::restore`] (in `control/dump.rs`) back the database up as
+//! a self-contained SQL text and put it back into an empty database, verifying row counts.
+
+mod dump;
+
+pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 
 use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
 use std::time::Duration;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 /// One control migration: its number and its SQL.
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +82,38 @@ pub enum ControlError {
     /// Migration `version` failed with an SQL error that retrying cannot fix (not a lock or
     /// busy error); it was rolled back and the database version did not advance.
     Migration { version: u32, message: String },
+    /// The database holds something [`ControlDb::dump`] cannot represent (a virtual table).
+    Dump(String),
+    /// The text given to [`ControlDb::restore`] is not a complete v1 dump; nothing was written.
+    DumpInvalid(String),
+    /// [`ControlDb::restore`] refused a target that already has these objects; nothing was
+    /// written.
+    TargetNotEmpty { objects: Vec<String> },
+    /// After a restore, `table` holds `found` rows where the manifest says `expected` (`None`:
+    /// the table is missing on that side).
+    CountMismatch {
+        table: String,
+        expected: Option<u64>,
+        found: Option<u64>,
+    },
+    /// After a restore, a row of `table` references a missing row of `parent`.
+    ForeignKeyViolation { table: String, parent: String },
+}
+
+impl ControlError {
+    /// A stable code for logs, alerts and exit messages.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::SchemaTooNew(_) => "SCHEMA_TOO_NEW",
+            Self::Db(_) => "CONTROL_DB_FAILED",
+            Self::Migration { .. } => "MIGRATION_FAILED",
+            Self::Dump(_) => "DUMP_FAILED",
+            Self::DumpInvalid(_) => "DUMP_INVALID",
+            Self::TargetNotEmpty { .. } => "RESTORE_TARGET_NOT_EMPTY",
+            Self::CountMismatch { .. } => "RESTORE_COUNT_MISMATCH",
+            Self::ForeignKeyViolation { .. } => "RESTORE_FOREIGN_KEY_VIOLATION",
+        }
+    }
 }
 
 impl fmt::Display for ControlError {
@@ -83,6 +124,32 @@ impl fmt::Display for ControlError {
             Self::Migration { version, message } => {
                 write!(f, "gz_control migration {version} failed: {message}")
             }
+            Self::Dump(m) => write!(f, "DUMP_FAILED: {m}"),
+            Self::DumpInvalid(m) => write!(f, "DUMP_INVALID: {m}"),
+            Self::TargetNotEmpty { objects } => write!(
+                f,
+                "RESTORE_TARGET_NOT_EMPTY: the target database already has {}",
+                objects.join(", ")
+            ),
+            Self::CountMismatch {
+                table,
+                expected,
+                found,
+            } => {
+                let n = |v: &Option<u64>| {
+                    v.map_or_else(|| "no table".to_owned(), |n| format!("{n} rows"))
+                };
+                write!(
+                    f,
+                    "RESTORE_COUNT_MISMATCH: table {table}: the dump says {}, the restored database has {}",
+                    n(expected),
+                    n(found)
+                )
+            }
+            Self::ForeignKeyViolation { table, parent } => write!(
+                f,
+                "RESTORE_FOREIGN_KEY_VIOLATION: table {table} has rows whose {parent} row is missing"
+            ),
         }
     }
 }
@@ -124,11 +191,127 @@ struct StepFailure {
     deterministic: bool,
 }
 
+/// One SQLite value, as read or bound by [`ControlDb::query`].
+#[derive(Debug, Clone, PartialEq)]
+enum SqlValue {
+    Null,
+    Integer(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+impl From<libsql::Value> for SqlValue {
+    fn from(v: libsql::Value) -> Self {
+        match v {
+            libsql::Value::Null => Self::Null,
+            libsql::Value::Integer(i) => Self::Integer(i),
+            libsql::Value::Real(r) => Self::Real(r),
+            libsql::Value::Text(t) => Self::Text(t),
+            libsql::Value::Blob(b) => Self::Blob(b),
+        }
+    }
+}
+
+impl From<SqlValue> for libsql::Value {
+    fn from(v: SqlValue) -> Self {
+        match v {
+            SqlValue::Null => Self::Null,
+            SqlValue::Integer(i) => Self::Integer(i),
+            SqlValue::Real(r) => Self::Real(r),
+            SqlValue::Text(t) => Self::Text(t),
+            SqlValue::Blob(b) => Self::Blob(b),
+        }
+    }
+}
+
+impl From<rusqlite::types::Value> for SqlValue {
+    fn from(v: rusqlite::types::Value) -> Self {
+        use rusqlite::types::Value as V;
+        match v {
+            V::Null => Self::Null,
+            V::Integer(i) => Self::Integer(i),
+            V::Real(r) => Self::Real(r),
+            V::Text(t) => Self::Text(t),
+            V::Blob(b) => Self::Blob(b),
+        }
+    }
+}
+
+impl From<SqlValue> for rusqlite::types::Value {
+    fn from(v: SqlValue) -> Self {
+        match v {
+            SqlValue::Null => Self::Null,
+            SqlValue::Integer(i) => Self::Integer(i),
+            SqlValue::Real(r) => Self::Real(r),
+            SqlValue::Text(t) => Self::Text(t),
+            SqlValue::Blob(b) => Self::Blob(b),
+        }
+    }
+}
+
 /// A remote (libsql, Hrana over HTTPS) connection.
 struct Remote {
     _db: libsql::Database,
     conn: libsql::Connection,
     token: String,
+}
+
+/// Runs `sql` on a rusqlite connection and returns every row.
+fn local_query(
+    c: &rusqlite::Connection,
+    sql: &str,
+    params: Vec<SqlValue>,
+) -> Result<Vec<Vec<SqlValue>>, ControlError> {
+    let run = || {
+        let mut st = c.prepare(sql)?;
+        let n = st.column_count();
+        let params: Vec<rusqlite::types::Value> = params.into_iter().map(Into::into).collect();
+        let mut rows = st.query(rusqlite::params_from_iter(params))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let mut values = Vec::with_capacity(n);
+            for i in 0..n {
+                values.push(row.get::<_, rusqlite::types::Value>(i)?.into());
+            }
+            out.push(values);
+        }
+        Ok::<_, rusqlite::Error>(out)
+    };
+    run().map_err(local_err)
+}
+
+/// See [`ControlDb::reader`].
+enum Reader<'a> {
+    Remote(&'a Remote),
+    /// `None` only while a query runs on the blocking pool.
+    Local(Option<OwnedMutexGuard<rusqlite::Connection>>),
+}
+
+impl Reader<'_> {
+    async fn query(
+        &mut self,
+        sql: &str,
+        params: Vec<SqlValue>,
+    ) -> Result<Vec<Vec<SqlValue>>, ControlError> {
+        match self {
+            Self::Remote(r) => r.query(sql, params).await,
+            Self::Local(slot) => {
+                let guard = slot
+                    .take()
+                    .ok_or_else(|| ControlError::Db("local reader lost its connection".into()))?;
+                let sql = sql.to_owned();
+                let (guard, res) = tokio::task::spawn_blocking(move || {
+                    let res = local_query(&guard, &sql, params);
+                    (guard, res)
+                })
+                .await
+                .map_err(|e| ControlError::Db(format!("local task failed: {e}")))?;
+                *slot = Some(guard);
+                res
+            }
+        }
+    }
 }
 
 /// The two places `gz_control` can live.
@@ -186,6 +369,29 @@ impl Remote {
             .map_err(|e| self.err(e))?;
         rows.next().await.map_err(|e| self.err(e))?;
         Ok(())
+    }
+
+    async fn query(
+        &self,
+        sql: &str,
+        params: Vec<SqlValue>,
+    ) -> Result<Vec<Vec<SqlValue>>, ControlError> {
+        let params: Vec<libsql::Value> = params.into_iter().map(Into::into).collect();
+        let mut rows = self
+            .conn
+            .query(sql, libsql::params_from_iter(params))
+            .await
+            .map_err(|e| self.err(e))?;
+        let n = rows.column_count();
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| self.err(e))? {
+            let mut values = Vec::with_capacity(usize::try_from(n).unwrap_or(0));
+            for i in 0..n {
+                values.push(row.get_value(i).map_err(|e| self.err(e))?.into());
+            }
+            out.push(values);
+        }
+        Ok(out)
     }
 
     async fn has_migrations_table(&self) -> Result<bool, ControlError> {
@@ -295,15 +501,10 @@ impl ControlDb {
         conn: &Arc<Mutex<rusqlite::Connection>>,
         f: impl FnOnce(&mut rusqlite::Connection) -> T + Send + 'static,
     ) -> Result<T, ControlError> {
-        let conn = Arc::clone(conn);
-        tokio::task::spawn_blocking(move || {
-            let mut guard = conn
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            f(&mut guard)
-        })
-        .await
-        .map_err(|e| ControlError::Db(format!("local task failed: {e}")))
+        let mut guard = Arc::clone(conn).lock_owned().await;
+        tokio::task::spawn_blocking(move || f(&mut guard))
+            .await
+            .map_err(|e| ControlError::Db(format!("local task failed: {e}")))
     }
 
     /// `SELECT 1`: succeeds when the database answers.
@@ -318,6 +519,30 @@ impl ControlDb {
                 })
                 .await?
             }
+        }
+    }
+
+    /// Runs `sql` with positional `params` and returns every row.
+    async fn query(
+        &self,
+        sql: &str,
+        params: Vec<SqlValue>,
+    ) -> Result<Vec<Vec<SqlValue>>, ControlError> {
+        match &self.backend {
+            Backend::Remote(r) => r.query(sql, params).await,
+            Backend::Local(c) => {
+                let sql = sql.to_owned();
+                Self::local(c, move |c| local_query(c, &sql, params)).await?
+            }
+        }
+    }
+
+    /// A reader that keeps one connection for a sequence of queries: on the local backend it
+    /// holds the connection's lock throughout, so a transaction it opens is not shared.
+    async fn reader(&self) -> Reader<'_> {
+        match &self.backend {
+            Backend::Remote(r) => Reader::Remote(r),
+            Backend::Local(c) => Reader::Local(Some(Arc::clone(c).lock_owned().await)),
         }
     }
 

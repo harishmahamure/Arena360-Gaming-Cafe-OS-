@@ -38,3 +38,10 @@ patches:
           limits:
             cpu: 500m
             memory: 256Mi
+  - target:
+      kind: CronJob
+      name: arena-cloud-control-backup
+    patch: |-
+      - op: replace
+        path: /spec/jobTemplate/spec/template/spec/containers/0/env/1/value
+        value: arena360-gz-control-backup-staging

@@ -1015,6 +1015,7 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
 | Flag / variable          | Meaning                                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------------------ |
 | `--role control\|all`    | Required. Any other role exits 64 with "role not available yet"                            |
+| `--role jobs --task <t>` | Run one task and exit (see **Nightly backup**); `--task` without `--role jobs` exits 64    |
 | `--dev`                  | Local dev mode (see **Local dev mode** below): no env, loopback only                       |
 | `--data-dir <dir>`       | With `--dev` only: where `gz_control.db` lives (default `./.arena-cloud-dev`)              |
 | `--listen <addr:port>`   | Listen address (default `0.0.0.0:8080`)                                                    |
@@ -1036,7 +1037,11 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
   Turso, and a Turso blip shows `reachable: false` without restarting the pod.
 - **Tests.** The `gz_control` tests use `ARENA_TEST_SQLD_URL` when set (CI's libsql-server
   service), else spawn `sqld` from `PATH`, else skip with a reason; `ARENA_REQUIRE_SQLD=1` turns
-  the skip into a failure.
+  the skip into a failure. The S3 tests (the MinIO round trip in `crates/arena-cloud/tests/backup.rs`)
+  use `ARENA_TEST_S3_URL` (e.g. `http://127.0.0.1:9000` from the dev compose file, credentials
+  `ARENA_TEST_S3_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY`, default the dev ones) and make their own
+  bucket; unset, they skip with a reason unless `ARENA_REQUIRE_S3=1`. CI's Linux `rust` job runs
+  a MinIO service with both set.
 - **Error envelope.** Every failure on `/v1` (and any path other than `/healthz`) is the flat
   `AppError` JSON body `{"code","message","field"?}` with `content-type: application/json`:
   an unknown path is 404 `NOT_FOUND`, a wrong method 405 `UNSUPPORTED`, a body that is not
@@ -1051,6 +1056,61 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
   job on Linux) builds the binary and fails unless it defines exactly one `sqlite3_open_v2`, no
   `libsql_`-prefixed C symbols, and `cargo tree -p arena-cloud` has no `libsql-ffi`/`libsql-sys`.
   `--self-test` proves the rules fire on crafted `nm` listings.
+- **Nightly backup** (Story 2.3). `arena-cloud --role jobs --task control-backup` runs once and
+  exits: it dumps `gz_control` (`ControlDb::dump`: a SQL text with a `-- arena-control-dump v1`
+  header and a JSON manifest of the schema version and each table's row count; tables, then
+  one INSERT per row read 1,000 at a time (keyset paging by `rowid`, or by primary key for
+  `WITHOUT ROWID`), the `sqlite_sequence` high-water marks, then indexes, views and triggers;
+  one read transaction on the local backend, page-by-page reads on Turso;
+  `sqlite_%`, `libsql_%` and `_litestream%` objects skipped; `schema_migrations` included),
+  age-encrypts it to the X25519 public keys in `ARENA_BACKUP_AGE_RECIPIENTS` (comma-separated;
+  the job never holds a private key; the file decrypts with the age 1.3.2 CLI too) and puts
+  `gz_control/nightly/<UTC yyyy-mm-ddTHHMMSSZ>.sql.age` in the backup bucket. Then it deletes all
+  but the newest 30 nightly keys, never the one it just wrote (other keys are never touched).
+  Exit 0 on success, 1 on any failure (including a bad environment, or 25 minutes without
+  finishing). A failure is logged with a stable code (`BACKUP_CONFIG_INVALID`,
+  `BACKUP_DUMP_FAILED`, `BACKUP_ENCRYPT_FAILED`, `BACKUP_UPLOAD_FAILED`,
+  `BACKUP_RETENTION_FAILED`, `BACKUP_TIMEOUT`) and, when `ARENA_ALERT_WEBHOOK_URL` is set, POSTed
+  as Slack-compatible `{"text": …}` (10 s timeout) naming `ARENA_ENV`, the task and the code,
+  never a secret or the error detail; a failed POST is logged and the exit stays 1. After a
+  success it GETs `ARENA_BACKUP_HEARTBEAT_URL` when set (10 s timeout; a failed ping is logged and
+  the exit stays 0), so a dead-man's-switch monitor catches failures that never reach the binary
+  (OOM kill, deadline kill, image pull, a missing Secret). Setup and the run share the 25-minute
+  limit, and the dump is written straight into the encryptor.
+  It runs as the `arena-cloud-control-backup` CronJob (02:30 Asia/Kolkata, see
+  [`deploy/README.md`](deploy/README.md#restore-gz_control)).
+
+  | Variable                            | Meaning                                                              |
+  | ----------------------------------- | -------------------------------------------------------------------- |
+  | `ARENA_BACKUP_S3_ENDPOINT`          | `https://<account>.r2.cloudflarestorage.com` (`http://` on loopback) |
+  | `ARENA_BACKUP_S3_BUCKET`            | The environment's own backup bucket                                  |
+  | `ARENA_BACKUP_S3_ACCESS_KEY_ID`     | Bucket-scoped R2 API token. Never logged                             |
+  | `ARENA_BACKUP_S3_SECRET_ACCESS_KEY` | Its secret. Never logged                                             |
+  | `ARENA_BACKUP_AGE_RECIPIENTS`       | `age1…` public keys, comma-separated                                 |
+  | `ARENA_ALERT_WEBHOOK_URL`           | Optional webhook (Discord: append `/slack`). Never logged            |
+  | `ARENA_BACKUP_HEARTBEAT_URL`        | Optional heartbeat, GET after each success. Never logged             |
+  | `ARENA_ENV`                         | Optional environment name in the alert (default `unknown`)           |
+
+  S3 goes through `aws-sdk-s3` (region `auto`, path-style, `request_checksum_calculation =
+WhenRequired`, the smithy client on rustls + ring, so no aws-lc-rs) and static credentials (no
+  `aws-config`); the alert through `reqwest` on the workspace rustls + ring with webpki-roots.
+
+- **Restore.** `arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
+(--identity <age identity file> | --plaintext) [--dev [--data-dir <dir>]]` restores a dump into
+  the database in `ARENA_CONTROL_DB_URL`/`ARENA_CONTROL_DB_TOKEN` (or the `--dev` file). It
+  refuses a target that already has user objects (`RESTORE_TARGET_NOT_EMPTY`) and a dump newer
+  than the binary (`SCHEMA_TOO_NEW`) before writing anything; a wrong identity fails before the
+  target is opened. With foreign keys off on the target, it applies the schema, the rows (in
+  transactions of 500 statements), the `sqlite_sequence` marks, checks every reference with
+  `PRAGMA foreign_key_check` (`RESTORE_FOREIGN_KEY_VIOLATION` names the table), creates the
+  indexes, views and triggers, and recounts every table against the manifest
+  (`RESTORE_COUNT_MISMATCH` names the table). It prints the verified counts and exits 0, or exits
+  1 with `CODE: reason`; a missing `ARENA_CONTROL_DB_URL` (or, for `--from-key`, an
+  `ARENA_BACKUP_S3_*` variable) is `RESTORE_CONFIG_INVALID`, exit 1. Bad flags exit 64. A failure part-way leaves a partly restored database: use a fresh one.
+  `--from-key` reads the backup bucket (`ARENA_BACKUP_S3_*`); `--from-file -` reads stdin, e.g.
+  `age -d -i key.txt x.sql.age | arena-cloud ops restore-control --from-file - --plaintext`. The
+  restored database is already at the dump's migration version. No deploy ever runs it
+  (`pnpm check:deploy` checks the workflow).
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
   fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the
@@ -1059,8 +1119,7 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
 
 ### Local dev mode
 
-No Turso, Cloudflare or token needed. MinIO stands in for R2 (nothing reads it yet; the first
-R2 story does):
+No Turso, Cloudflare or token needed. MinIO stands in for R2:
 
 ```sh
 docker compose -f deploy/dev/compose.yaml up -d   # MinIO on 127.0.0.1:9000, bucket arena-dev
@@ -1078,6 +1137,16 @@ curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration
   (`{"text":"…"}` → the same), `GET /v1/dev/fail` (`INTERNAL`) and `GET /v1/dev/panic` (a
   handler panic, answered with `INTERNAL`; the server keeps serving). Without `--dev` they do not
   exist (404 `NOT_FOUND`).
+- The backup task runs against the same local file and MinIO (a throwaway key from
+  `age-keygen`):
+
+  ```sh
+  ARENA_BACKUP_S3_ENDPOINT=http://127.0.0.1:9000 ARENA_BACKUP_S3_BUCKET=arena-dev \
+  ARENA_BACKUP_S3_ACCESS_KEY_ID=arena-dev ARENA_BACKUP_S3_SECRET_ACCESS_KEY=arena-dev-password \
+  ARENA_BACKUP_AGE_RECIPIENTS=age1… \
+  cargo run -p arena-cloud -- --role jobs --task control-backup --dev
+  ```
+
 - MinIO's dev-only credentials are `arena-dev` / `arena-dev-password` (in the compose file).
   `docker compose -f deploy/dev/compose.yaml down -v` removes it and its data.
 
@@ -1143,10 +1212,15 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | hyper-rustls                        | =0.25.0                | `Cargo.toml`                           |
 | hyper                               | =0.14.32               | `Cargo.toml`                           |
 | serde_path_to_error                 | =0.1.20                | `Cargo.toml`                           |
+| aws-sdk-s3                          | =1.155.0               | `Cargo.toml`                           |
+| aws-smithy-http-client              | =1.5.1                 | `Cargo.toml`                           |
+| age                                 | =0.12.1                | `Cargo.toml`                           |
+| reqwest                             | =0.13.5                | `Cargo.toml`                           |
 | sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`   |
 | age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`   |
 | gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile` |
 | ghcr.io/tursodatabase/libsql-server | v0.24.31               | `.github/workflows/ci.yml`             |
+| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `.github/workflows/ci.yml`             |
 | k3s                                 | v1.33.4+k3s1           | `deploy/README.md`                     |
 | bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `deploy/dev/compose.yaml`              |
 | bitnamilegacy/minio-client          | 2025.7.21-debian-12-r3 | `deploy/dev/compose.yaml`              |

@@ -21,16 +21,27 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # gz_control tests (arena-store `control`, arena-cloud) run against a libsql server. Service
-    # containers only exist on Linux; an empty image skips it on Windows, where those tests skip.
+    # gz_control tests (arena-store `control`, arena-cloud) run against a libsql server, and the
+    # backup tests (arena-cloud) against MinIO for R2. Service containers only exist on Linux; an
+    # empty image skips them on Windows, where those tests skip.
     services:
       sqld:
         image: ${{ matrix.os == 'ubuntu-latest' && 'ghcr.io/tursodatabase/libsql-server:v0.24.31' || '' }}
         ports:
           - 8080:8080
+      minio:
+        image: ${{ matrix.os == 'ubuntu-latest' && 'bitnamilegacy/minio:2025.7.23-debian-12-r5' || '' }}
+        # CI-only credentials (the dev compose ones); each test creates its own bucket.
+        env:
+          MINIO_ROOT_USER: arena-dev
+          MINIO_ROOT_PASSWORD: arena-dev-password
+        ports:
+          - 9000:9000
     env:
       ARENA_TEST_SQLD_URL: ${{ matrix.os == 'ubuntu-latest' && 'http://127.0.0.1:8080' || '' }}
       ARENA_REQUIRE_SQLD: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+      ARENA_TEST_S3_URL: ${{ matrix.os == 'ubuntu-latest' && 'http://127.0.0.1:9000' || '' }}
+      ARENA_REQUIRE_S3: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.95.0
@@ -45,6 +56,14 @@ jobs:
             sleep 1
           done
           echo "libsql server did not become healthy"; exit 1
+      - name: Wait for MinIO
+        if: runner.os == 'Linux'
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          echo "MinIO did not become healthy"; exit 1
       - name: Install Tauri Linux system packages
         if: runner.os == 'Linux'
         run: |

@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use std::path::PathBuf;
 
-use arena_cloud::config::{Command, DEFAULT_RETRY_WINDOW, Database, Role, parse};
+use arena_cloud::config::{
+    Command, DEFAULT_RETRY_WINDOW, Database, Decryption, JobConfig, RestoreConfig, RestoreSource,
+    Role, Task, parse,
+};
 
 fn remote(db: &Database) -> (&str, &str) {
     match db {
@@ -79,7 +82,7 @@ fn help_and_version() {
 
 #[test]
 fn other_roles_are_not_available_yet() {
-    for role in ["builder", "command", "jobs"] {
+    for role in ["builder", "command"] {
         let e = parse(args(&["--role", role]), env_of(TURSO)).unwrap_err();
         assert!(e.contains("role not available yet"), "{e}");
         assert!(e.contains(role), "{e}");
@@ -300,4 +303,144 @@ fn dev_ignores_a_bad_retry_env() {
         panic!("--dev must ignore ARENA_CONTROL_DB_RETRY_SECS");
     };
     assert!(c.dev());
+}
+
+#[test]
+fn jobs_run_one_task_and_read_no_env_at_parse_time() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "control-backup"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::ControlBackup,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(
+        parse(
+            args(&[
+                "--role=jobs",
+                "--task=control-backup",
+                "--dev",
+                "--data-dir",
+                "/tmp/d"
+            ]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::ControlBackup,
+            dev_data_dir: Some(PathBuf::from("/tmp/d")),
+        }))
+    );
+}
+
+#[test]
+fn a_bad_task_combination_is_a_usage_error() {
+    let e = parse(args(&["--role", "jobs", "--task", "vacuum"]), env_of(TURSO)).unwrap_err();
+    assert!(e.contains("unknown --task vacuum"), "{e}");
+    let e = parse(args(&["--role", "jobs"]), env_of(TURSO)).unwrap_err();
+    assert!(e.contains("--task"), "{e}");
+    for role in ["control", "all"] {
+        let e = parse(
+            args(&["--role", role, "--task", "control-backup"]),
+            env_of(TURSO),
+        )
+        .unwrap_err();
+        assert!(e.contains("--task needs --role jobs"), "{e}");
+    }
+    assert!(
+        parse(
+            args(&[
+                "--role",
+                "jobs",
+                "--task",
+                "control-backup",
+                "--listen",
+                "127.0.0.1:1"
+            ]),
+            env_of(TURSO)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn restore_control_takes_one_source_and_one_decryption() {
+    // The environment is read when the restore runs, not here.
+    assert_eq!(
+        parse(
+            args(&[
+                "ops",
+                "restore-control",
+                "--from-key",
+                "gz_control/nightly/x.sql.age",
+                "--identity",
+                "/k"
+            ]),
+            env_of(&[])
+        ),
+        Ok(Command::RestoreControl(RestoreConfig {
+            source: RestoreSource::Key("gz_control/nightly/x.sql.age".into()),
+            decryption: Decryption::Identity(PathBuf::from("/k")),
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(
+        parse(
+            args(&[
+                "ops",
+                "restore-control",
+                "--from-file",
+                "-",
+                "--plaintext",
+                "--dev",
+                "--data-dir",
+                "/d"
+            ]),
+            env_of(&[])
+        ),
+        Ok(Command::RestoreControl(RestoreConfig {
+            source: RestoreSource::File(PathBuf::from("-")),
+            decryption: Decryption::Plaintext,
+            dev_data_dir: Some(PathBuf::from("/d")),
+        }))
+    );
+    for bad in [
+        &["ops", "restore-control", "--plaintext", "--dev"][..],
+        &[
+            "ops",
+            "restore-control",
+            "--from-file",
+            "f",
+            "--from-key",
+            "k",
+            "--plaintext",
+            "--dev",
+        ],
+        &["ops", "restore-control", "--from-file", "f", "--dev"],
+        &[
+            "ops",
+            "restore-control",
+            "--from-file",
+            "f",
+            "--plaintext",
+            "--identity",
+            "i",
+            "--dev",
+        ],
+        &[
+            "ops",
+            "restore-control",
+            "--from-file",
+            "f",
+            "--plaintext",
+            "--data-dir",
+            "/d",
+        ],
+        &["ops", "restore-everything"],
+        &["ops"],
+    ] {
+        assert!(parse(args(bad), env_of(TURSO)).is_err(), "{bad:?}");
+    }
 }

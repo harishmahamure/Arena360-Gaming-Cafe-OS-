@@ -30,7 +30,7 @@ metadata:
   name: deployer
   namespace: staging
 rules:
-  # The overlay: Deployment, Service, Ingress, the Traefik Middleware.
+  # The overlay: Deployment, Service, Ingress, the Traefik Middleware, the backup CronJob.
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
@@ -43,10 +43,15 @@ rules:
   - apiGroups: ["traefik.io"]
     resources: ["middlewares"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # The decrypted SOPS Secrets (arena-cloud-secrets, origin-tls, ghcr-pull) only.
+  # The nightly gz_control backup.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # The decrypted SOPS Secrets (arena-cloud-secrets, arena-cloud-backup, origin-tls, ghcr-pull)
+  # only.
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["arena-cloud-secrets", "origin-tls", "ghcr-pull"]
+    resourceNames: ["arena-cloud-secrets", "arena-cloud-backup", "origin-tls", "ghcr-pull"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]
     resources: ["secrets"]
@@ -65,7 +70,7 @@ metadata:
   name: deployer
   namespace: production
 rules:
-  # The overlay: Deployment, Service, Ingress, the Traefik Middleware.
+  # The overlay: Deployment, Service, Ingress, the Traefik Middleware, the backup CronJob.
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
@@ -78,10 +83,15 @@ rules:
   - apiGroups: ["traefik.io"]
     resources: ["middlewares"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # The decrypted SOPS Secrets (arena-cloud-secrets, origin-tls, ghcr-pull) only.
+  # The nightly gz_control backup.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # The decrypted SOPS Secrets (arena-cloud-secrets, arena-cloud-backup, origin-tls, ghcr-pull)
+  # only.
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["arena-cloud-secrets", "origin-tls", "ghcr-pull"]
+    resourceNames: ["arena-cloud-secrets", "arena-cloud-backup", "origin-tls", "ghcr-pull"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]
     resources: ["secrets"]

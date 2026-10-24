@@ -5,9 +5,15 @@
 //! serve `/healthz` and `/v1` until Ctrl+C or SIGTERM. The database token never appears in a log
 //! line. `--dev` uses a local SQLite file instead (no env, loopback only) and says so in one
 //! warning line.
+//!
+//! `--role jobs --task control-backup` runs the nightly backup once: exit 0 on success, 1 on
+//! any failure (logged, and alerted when a webhook is set). `ops restore-control` restores a
+//! backup into an empty `gz_control` and prints the verified row counts (exit 0) or the reason
+//! (exit 1).
 
 use std::process::ExitCode;
 
+use arena_cloud::backup;
 use arena_cloud::config::{self, Command};
 use arena_cloud::{CHECK_INTERVAL, ServeOptions, StartError, connect_and_migrate, serve};
 use tracing_subscriber::EnvFilter;
@@ -20,6 +26,39 @@ const EXIT_USAGE: u8 = 64;
 async fn main() -> ExitCode {
     let cfg = match config::parse(std::env::args_os().skip(1), |k| std::env::var_os(k)) {
         Ok(Command::Run(cfg)) => cfg,
+        Ok(Command::Job(job)) => {
+            init_logging();
+            tracing::info!(
+                role = "jobs",
+                task = job.task.as_str(),
+                version = env!("CARGO_PKG_VERSION"),
+                "starting"
+            );
+            if job.dev_data_dir.is_some() {
+                tracing::warn!("dev mode is on: local gz_control, not for production");
+            }
+            let ok = backup::run_job(&job, |k| std::env::var_os(k)).await;
+            return ExitCode::from(if ok { 0 } else { EXIT_FAILURE });
+        }
+        Ok(Command::RestoreControl(restore)) => {
+            return match backup::restore_control(&restore, |k| std::env::var_os(k)).await {
+                Ok(report) => {
+                    println!(
+                        "restored gz_control at schema version {}; row counts verified:",
+                        report.schema_version
+                    );
+                    let width = report.tables.keys().map(String::len).max().unwrap_or(0);
+                    for (table, rows) in &report.tables {
+                        println!("  {table:<width$}  {rows}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("arena-cloud: restore-control failed: {e}");
+                    ExitCode::from(EXIT_FAILURE)
+                }
+            };
+        }
         Ok(Command::Help) => {
             println!("{}", config::USAGE);
             return ExitCode::SUCCESS;
@@ -35,14 +74,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    tracing_subscriber::fmt()
-        .json()
-        .with_ansi(false)
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stdout)
-        .init();
+    init_logging();
     // A handler panic is answered with `INTERNAL` by the API layer; the panic itself is logged
     // here as one JSON line instead of the default stderr text.
     std::panic::set_hook(Box::new(|info| {
@@ -130,6 +162,18 @@ async fn main() -> ExitCode {
             ExitCode::from(EXIT_FAILURE)
         }
     }
+}
+
+/// JSON log lines on stdout (`RUST_LOG`, default `info`).
+fn init_logging() {
+    tracing_subscriber::fmt()
+        .json()
+        .with_ansi(false)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stdout)
+        .init();
 }
 
 /// Resolves on Ctrl+C or (Unix) SIGTERM, which Kubernetes sends before killing the pod.

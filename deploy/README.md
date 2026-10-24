@@ -1,6 +1,6 @@
 # Deploying arena-cloud
 
-`arena-cloud --role control` runs on a single k3s node (Hostinger VPS, Mumbai) behind
+`arena-cloud --role control` (and, nightly, the `--role jobs` backup CronJob) runs on a single k3s node (Hostinger VPS, Mumbai) behind
 Cloudflare. `gz_control`, the only cloud database, is a Turso database in `aws-ap-south-1`
 (Mumbai), so control-plane data stays in India.
 
@@ -16,20 +16,21 @@ none. Both environments deploy by digest (`@sha256:`).
 
 ## What is in the repository
 
-| Path                                    | What                                                                                     |
-| --------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `docker/arena-cloud.Dockerfile`         | Multi-stage image: `rust:<rust-toolchain.toml>` build, `distroless/cc` non-root runtime  |
-| `k8s/base/`                             | Deployment `arena-cloud-control`, Service, Traefik Ingress, `cloudflare-only` Middleware |
-| `k8s/overlays/{staging,production}/`    | Namespace, host, replicas, resources, image tag                                          |
-| `k8s/cluster/deployer-rbac.yaml`        | One-time: Namespaces, and per namespace a `deployer` ServiceAccount, Role, RoleBinding   |
-| `k8s/cluster/traefik-config.yaml`       | One-time: k3s Traefik `HelmChartConfig`, `externalTrafficPolicy: Local` (real source IP) |
-| `cloudflare/ips-v4.txt`, `ips-v6.txt`   | Cloudflare's published ranges; the Middleware allow list must equal them                 |
-| `secrets/<env>.enc.yaml`                | SOPS + age encrypted `arena-cloud-secrets`, `origin-tls` and `ghcr-pull` Secrets         |
-| `../.sops.yaml`                         | SOPS creation rules (age recipients per environment)                                     |
-| `../.github/workflows/deploy-cloud.yml` | CI, build or promote, decrypt and apply over SSH, rollout, smoke                         |
+| Path                                    | What                                                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `docker/arena-cloud.Dockerfile`         | Multi-stage image: `rust:<rust-toolchain.toml>` build, `distroless/cc` non-root runtime                                        |
+| `k8s/base/`                             | Deployment `arena-cloud-control`, Service, Traefik Ingress, `cloudflare-only` Middleware, CronJob `arena-cloud-control-backup` |
+| `k8s/overlays/{staging,production}/`    | Namespace, host, replicas, resources, image tag, backup bucket                                                                 |
+| `k8s/cluster/deployer-rbac.yaml`        | One-time: Namespaces, and per namespace a `deployer` ServiceAccount, Role, RoleBinding                                         |
+| `k8s/cluster/traefik-config.yaml`       | One-time: k3s Traefik `HelmChartConfig`, `externalTrafficPolicy: Local` (real source IP)                                       |
+| `cloudflare/ips-v4.txt`, `ips-v6.txt`   | Cloudflare's published ranges; the Middleware allow list must equal them                                                       |
+| `secrets/<env>.enc.yaml`                | SOPS + age encrypted `arena-cloud-secrets`, `arena-cloud-backup`, `origin-tls` and `ghcr-pull` Secrets                         |
+| `../.sops.yaml`                         | SOPS creation rules (age recipients per environment)                                                                           |
+| `../.github/workflows/deploy-cloud.yml` | CI, build or promote, decrypt and apply over SSH, rollout, smoke                                                               |
 
-`pnpm check:deploy` renders both overlays and checks them, the RBAC, the image and the
-workflow; `pnpm check:secrets` fails on any plaintext secret. Neither contacts anything.
+`pnpm check:deploy` renders both overlays and checks them (including the backup CronJob's
+schedule, time zone, `Forbid`, deadlines, history limits, image, security context, secret refs
+and per-environment bucket), the RBAC, the image and the workflow; `pnpm check:secrets` fails on any plaintext secret. Neither contacts anything.
 
 The origin lock has two layers:
 
@@ -121,7 +122,7 @@ sudo chmod 0600 "/home/$user/.kube/config"
 ```
 
 The `deployer` Role may only get/create/update/patch the Deployment, Service, Ingress,
-Middleware and its three Secrets in its own namespace, and watch the rollout.
+Middleware, the backup CronJob and its four Secrets in its own namespace, and watch the rollout.
 
 ### 3. Provider firewall: only Cloudflare reaches 80/443
 
@@ -163,9 +164,51 @@ Store each private key file's contents as the `SOPS_AGE_KEY` secret of the match
 environment, and keep an offline copy with the operators. Never commit a `.agekey` file
 (`pnpm check:secrets` fails on age private keys).
 
-### 6. Encrypt the secrets
+### 6. Backup: R2 bucket, age key pair and alert webhook
 
-Each `deploy/secrets/<env>.enc.yaml` holds **all three** Secrets below; `ghcr-pull` is
+The nightly CronJob `arena-cloud-control-backup` (02:30 Asia/Kolkata) writes an age-encrypted
+dump of `gz_control` to Cloudflare R2, off both Hostinger (the cluster) and Turso (the
+database), and keeps the newest 30. Per environment:
+
+- **R2 bucket.** In the Cloudflare dashboard (R2 → Create bucket) create
+  `arena360-gz-control-backup-staging` (and `…-production`; the overlays name them, and
+  `pnpm check:deploy` fails if both environments share one). Location hint: Asia-Pacific. This
+  bucket is **only** for control-plane backups, separate from any branch data bucket. Then R2 →
+  Manage API tokens → Create API token with **Object Read & Write** scoped to **that bucket
+  only**; it gives `ARENA_BACKUP_S3_ACCESS_KEY_ID` and `ARENA_BACKUP_S3_SECRET_ACCESS_KEY`, and
+  the S3 endpoint `https://<account id>.r2.cloudflarestorage.com` is
+  `ARENA_BACKUP_S3_ENDPOINT`. The token cannot create or delete buckets.
+- **Bucket lock.** That token can still overwrite or delete objects, so a compromised cluster
+  could erase the history. In the bucket's settings add a **bucket lock rule**: prefix
+  `gz_control/nightly/`, retain objects for **30 days**. Retention is unchanged (the job keeps the
+  newest 30): with one backup per night, the 31st-newest object is already at least 30 days old,
+  so the job's deletes still succeed. If a delete is refused anyway (a lock longer than 30 days,
+  or extra runs on one day), the run fails with `BACKUP_RETENTION_FAILED` and alerts, after the
+  new backup was written; fix the rule rather than the job.
+- **Backup age key pair** (not the SOPS key from step 5). Two operators, together, on an offline
+  machine: `age-keygen -o gz-control-backup-<env>.agekey`. The printed public key (`age1…`) is
+  `ARENA_BACKUP_AGE_RECIPIENTS` (comma-separate several to add a second recipient, e.g. one key
+  per operator). The private key file is copied to two offline media held by the two operators
+  and then deleted from the machine. It never goes into the cluster, the repository, CI or a
+  password manager shared with CI; restoring is the only time it is used.
+- **Alert webhook.** A Slack incoming-webhook URL for the on-call channel (or a Discord webhook
+  URL with `/slack` appended) is `ARENA_ALERT_WEBHOOK_URL`. A failed run posts
+  `arena-cloud <env>: task control-backup failed with <CODE>` there; the detail is in the job's
+  logs (`kubectl -n <env> logs job/<name>`). The key is optional in the Secret (a missing key
+  does not block the pod), but set it in every deployed environment.
+- **Heartbeat (dead-man's switch).** Some failures never reach the binary, so it cannot alert on
+  them: an OOM kill, the 1800 s deadline kill, an image pull failure, a missing Secret key, the
+  CronJob not being scheduled at all. Create a check in a healthchecks-style service
+  (healthchecks.io, Better Stack heartbeats, or a self-hosted Healthchecks) with period **24 h**
+  and grace **2 h**, so it alerts the on-call channel when no ping arrives for 26 h. Its ping URL
+  is `ARENA_BACKUP_HEARTBEAT_URL` (optional in the Secret): the job GETs it after every
+  successful backup. A failed ping is logged and does not fail the backup.
+- **One attempt per night.** The Job has `backoffLimit: 0`: a failed run alerts once and the next
+  night runs as usual. To retry by hand: `kubectl -n <env> create job --from=cronjob/arena-cloud-control-backup backup-manual-$(date +%s)`.
+
+### 7. Encrypt the secrets
+
+Each `deploy/secrets/<env>.enc.yaml` holds **all four** Secrets below; `ghcr-pull` is
 mandatory, because the Deployment always references it (without it the first rollout hangs in
 `ImagePullBackOff`). Write the plaintext only in a temporary file outside the repository,
 encrypt it, then delete the plaintext:
@@ -180,6 +223,19 @@ type: Opaque
 stringData:
   ARENA_CONTROL_DB_URL: libsql://gz-control-staging-<org>.aws-ap-south-1.turso.io
   ARENA_CONTROL_DB_TOKEN: <token from step 1>
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: arena-cloud-backup
+type: Opaque
+stringData:
+  ARENA_BACKUP_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
+  ARENA_BACKUP_S3_ACCESS_KEY_ID: <bucket-scoped token, step 6>
+  ARENA_BACKUP_S3_SECRET_ACCESS_KEY: <its secret>
+  ARENA_BACKUP_AGE_RECIPIENTS: age1… # public key(s) only, step 6
+  ARENA_ALERT_WEBHOOK_URL: https://hooks.slack.com/services/…
+  ARENA_BACKUP_HEARTBEAT_URL: https://hc-ping.com/<uuid>
 ---
 apiVersion: v1
 kind: Secret
@@ -213,20 +269,20 @@ document and `ENC[...]` for every `data`/`stringData` value. The deploy job fail
 message when `deploy/secrets/<env>.enc.yaml` is missing. To rotate the Turso token:
 `sops deploy/secrets/<env>.enc.yaml`, edit, save, commit, deploy.
 
-### 7. GitHub environments
+### 8. GitHub environments
 
 Create environments `staging` and `production` (restrict `production` to `v*` tags and add
 required reviewers). Secrets per environment:
 
 | Secret                   | Value                                                         |
 | ------------------------ | ------------------------------------------------------------- |
-| `SOPS_AGE_KEY`           | The environment's age private key (step 5)                    |
+| `SOPS_AGE_KEY`           | The environment's SOPS age private key (step 5)               |
 | `DEPLOY_HOST`            | The VPS's public IPv4 (also used by the direct-origin smoke)  |
 | `DEPLOY_USER`            | `arena-deploy-staging` or `arena-deploy-production` (step 2)  |
 | `DEPLOY_SSH_KEY`         | That user's private SSH key (a different key per environment) |
 | `DEPLOY_SSH_KNOWN_HOSTS` | `ssh-keyscan -t ed25519 <host>` output, verified out of band  |
 
-### 8. Pin the tool checksums
+### 9. Pin the tool checksums
 
 `deploy-cloud.yml` installs sops `3.13.3` and age `1.3.2` from pinned release URLs and verifies
 each download's sha256. Before the first deploy, replace both `PIN-ME` values (`SOPS_SHA256`,
@@ -242,7 +298,8 @@ warns).
 2. Installs sops and age (pinned URL + sha256) and opens SSH, with the pinned `known_hosts`, as
    the environment's own deploy user.
 3. Decrypts `deploy/secrets/<env>.enc.yaml` straight into `kubectl apply` on the node.
-4. Renders the overlay with the image digest, applies it and waits on `kubectl rollout status`.
+4. Renders the overlay with the image digest (the control Deployment and the backup CronJob),
+   applies it and waits on `kubectl rollout status`. A deploy never runs a restore.
 5. Smoke: `https://<host>/healthz` through the edge reports `migration_version` and
    `reachable: true`; `http://<host>/healthz` answers 301/308 to `https://`; a direct request to
    the origin IP from the runner (outside Cloudflare) gets 403 or no usable connection.
@@ -253,3 +310,63 @@ Once a new migration has committed to `gz_control`, the previous image refuses t
 (`SCHEMA_TOO_NEW`, exit 2): migrations are forward-only. So never `kubectl rollout undo` past a
 migration; fix forward with a new commit (staging) and a new tag (production). A rollback is
 only safe to an image with the same `migration_version`, as `/healthz` reports.
+
+## Restore gz_control
+
+The recovery time objective is **4 hours** from "gz_control is lost" to the control role
+serving from a restored database. `arena-cloud ops restore-control` restores only into an
+**empty** database, verifies every table's row count against the dump's manifest and prints
+them. It runs from an operator machine, never from a deploy.
+
+**Drill before GA (an operator step, once, then after any change to this runbook):** run the
+steps below against **staging** with the latest production-shaped backup and record the timings
+at the end of this section.
+
+1. **Pick the backup.** List the bucket (`aws s3 ls` or `rclone` with the bucket-scoped token,
+   endpoint `https://<account id>.r2.cloudflarestorage.com`, region `auto`) and take the newest
+   `gz_control/nightly/<UTC timestamp>.sql.age`.
+2. **Bring the private key.** The two operators bring the offline copy of
+   `gz-control-backup-<env>.agekey` (step 6) to the operator machine. Never copy it to the
+   node or into the cluster.
+3. **A fresh database in Mumbai:**
+
+   ```sh
+   turso db create gz-control-staging-restore --location aws-ap-south-1
+   turso db show gz-control-staging-restore --url        # -> ARENA_CONTROL_DB_URL
+   turso db tokens create gz-control-staging-restore     # -> ARENA_CONTROL_DB_TOKEN
+   ```
+
+4. **Restore** (the bucket variables are the same as the CronJob's; a released `arena-cloud`
+   binary or `cargo run --release -p arena-cloud --`):
+
+   ```sh
+   ARENA_CONTROL_DB_URL=libsql://gz-control-staging-restore-<org>.aws-ap-south-1.turso.io \
+   ARENA_CONTROL_DB_TOKEN=<token> \
+   ARENA_BACKUP_S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com \
+   ARENA_BACKUP_S3_BUCKET=arena360-gz-control-backup-staging \
+   ARENA_BACKUP_S3_ACCESS_KEY_ID=<id> ARENA_BACKUP_S3_SECRET_ACCESS_KEY=<secret> \
+   arena-cloud ops restore-control --from-key gz_control/nightly/<timestamp>.sql.age \
+     --identity /media/offline/gz-control-backup-staging.agekey
+   ```
+
+   It prints `restored gz_control at schema version N` and each table's verified row count, or
+   exits 1 with the reason (`RESTORE_TARGET_NOT_EMPTY`, `SCHEMA_TOO_NEW`,
+   `RESTORE_COUNT_MISMATCH` or `RESTORE_FOREIGN_KEY_VIOLATION` naming the table,
+   `RESTORE_CONFIG_INVALID`, a decrypt error). After a failure part-way, destroy the
+   database and start again from step 3. The age 1.3.2 CLI can also decrypt the file
+   (`age -d -i <key> x.sql.age | arena-cloud ops restore-control --from-file - --plaintext`).
+
+5. **Point the environment at it.** Edit `deploy/secrets/<env>.enc.yaml` with `sops`, set
+   `ARENA_CONTROL_DB_URL` and `ARENA_CONTROL_DB_TOKEN` in `arena-cloud-secrets` to the new
+   database, commit and deploy (or, under incident pressure, `sops --decrypt … | ssh node kubectl
+apply -f -` followed by `kubectl -n <env> rollout restart deployment/arena-cloud-control`).
+6. **Verify.** `https://<host>/healthz` reports `reachable: true` and `migration_version` equal
+   to the restored schema version printed in step 4 (the control role applies nothing on start).
+7. **Clean up.** Delete the private key from the operator machine; for a drill, destroy the
+   restore database and point staging back.
+
+Record each drill:
+
+| Date | Operators | Backup key | Steps 1–4 | Steps 5–6 | Total (≤ 4 h) |
+| ---- | --------- | ---------- | --------- | --------- | ------------- |
+|      |           |            |           |           |               |

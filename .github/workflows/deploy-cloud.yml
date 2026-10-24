@@ -97,7 +97,7 @@ jobs:
         run: |
           f="deploy/secrets/${DEPLOY_ENV}.enc.yaml"
           if [[ ! -f "$f" ]]; then
-            echo "::error file=$f::$f is missing. Encrypt the ${DEPLOY_ENV} arena-cloud-secrets and origin-tls Secrets with sops first (deploy/README.md, \"Encrypt the secrets\")."
+            echo "::error file=$f::$f is missing. Encrypt the ${DEPLOY_ENV} arena-cloud-secrets, arena-cloud-backup, origin-tls and ghcr-pull Secrets with sops first (deploy/README.md, \"Encrypt the secrets\")."
             exit 1
           fi
 
@@ -156,7 +156,9 @@ jobs:
         run: |
           kubectl kustomize "deploy/k8s/overlays/${DEPLOY_ENV}" > "$RUNNER_TEMP/rendered.yaml"
           yq -i '(select(.kind == "Deployment" and .metadata.name == "arena-cloud-control") | .spec.template.spec.containers[] | select(.name == "control") | .image) = strenv(IMAGE)' "$RUNNER_TEMP/rendered.yaml"
-          grep -F "image: ${IMAGE}" "$RUNNER_TEMP/rendered.yaml"
+          yq -i '(select(.kind == "CronJob" and .metadata.name == "arena-cloud-control-backup") | .spec.jobTemplate.spec.template.spec.containers[] | select(.name == "control-backup") | .image) = strenv(IMAGE)' "$RUNNER_TEMP/rendered.yaml"
+          # The control Deployment and the backup CronJob both run this image.
+          [[ "$(grep -cF "image: ${IMAGE}" "$RUNNER_TEMP/rendered.yaml")" == "2" ]]
 
       - name: Apply and wait for the rollout
         run: |

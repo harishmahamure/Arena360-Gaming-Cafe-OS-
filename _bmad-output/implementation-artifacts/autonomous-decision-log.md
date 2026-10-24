@@ -366,3 +366,27 @@ Each entry gives the story, the decision point, the choice taken (the recommende
     - the 9001 port mapping is removed.
   - **Deferred:** tests for a dev data-dir open failure and for local busy-retry.
   - **Verification:** everything passes except the known `arena-hub-ui` sidecar test; the linkage check passes on macOS. The Linux linkage run happens first in CI.
+
+## Story 2.3: control data backed up nightly (observability moved to the end of the epic)
+
+- **Spec approval:** self-approved. Spec: `spec-2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl.md`. The OTel/Grafana/Sentry ACs and the scrub test are out, by the user's decision (`deferred-work.md`). The scrub test needs 2.4's sign-up endpoint anyway.
+- **Token gate:** about 1,900 tokens. **Kept the full spec**: backup, retention, alert and restore are one DR goal.
+- **Dump format:** a SQL text with a JSON manifest (schema version, per-table row counts), paged by rowid and run through both `ControlDb` backends, so a restore can verify counts.
+- **Encryption:** the `age` crate to X25519 recipients only. The cluster never holds the private key, and an operator can decrypt with the age 1.3.2 CLI.
+- **Off-provider:** a dedicated R2 backup bucket (Cloudflare, not Hostinger or Turso) via `aws-sdk-s3`, configured per the architecture's R2 spike settings.
+- **On-call channel:** a Slack-compatible webhook (`{"text"}`, which also works for Discord with `/slack`). The architecture defers paging policy until the first paid tenants.
+- **CronJob:** 02:30 Asia/Kolkata, `Forbid`, a 3600 s starting deadline (a missed slot still runs), a 1800 s active deadline (a hung run can't block the next one), backoff 2.
+- **Restore:** an `ops restore-control` CLI that refuses a non-empty target and verifies the counts. The drill before GA is an operator step.
+- **2.3 implementation choices, accepted:**
+  - New crates on ring, with no aws-lc-rs and no aws-config: `aws-sdk-s3 =1.155.0`, `aws-smithy-http-client =1.5.1`, `age =0.12.1`, `reqwest =0.13.5`.
+  - Indexes and triggers are restored after the rows.
+  - A bad backup env is an alerted task failure (exit 1).
+  - The job gives itself a 25-minute limit.
+  - The bucket name is per overlay.
+  - `--from-file -` reads stdin.
+  - `sqlite_sequence` is restored in its own section (overrides the spec's skip of `sqlite_%`).
+  - Remote foreign keys are turned off per batch inside the request, because sqld opens a new stream per request.
+- **2.3 review outcome:** 17 fixes, 5 rejections and 2 deferrals.
+  - **Fixes:** a test of the R2 checksum headers; restore runs with foreign keys off and then checks them; AUTOINCREMENT sequences; keyset paging and the `i64::MIN` bound; a local snapshot transaction; streaming into the encryptor with a 512Mi limit; a success heartbeat with optional webhook and heartbeat keys; `backoffLimit: 0`; a broken manifest fails; setup runs inside the timeout; restore env errors exit 1; the code appears once in messages; retention-failure and second-recipient tests; a 30-day R2 bucket lock in the runbook.
+  - **Deferred:** HTTPS-path tests, and a point-in-time snapshot of the remote dump.
+  - **Verification:** everything passes with sqld and MinIO required, except the known `arena-hub-ui` sidecar test. This machine has `docker-compose` (v1 CLI), not the `docker compose` plugin.

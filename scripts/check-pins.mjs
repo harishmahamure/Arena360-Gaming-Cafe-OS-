@@ -128,10 +128,14 @@ export function readDockerfile(text) {
   return last ? { [last[1]]: last[2] } : {};
 }
 
-/** ci.yml -> { ghcr.io/tursodatabase/libsql-server: <tag> } (the rust job's service) */
+/** ci.yml -> { <image>: <tag> } for the rust job's service containers (libsql-server, MinIO) */
 export function readCiWorkflow(text) {
-  const m = text.match(/ghcr\.io\/tursodatabase\/libsql-server:([\w.+-]+)/);
-  return m ? { "ghcr.io/tursodatabase/libsql-server": m[1] } : {};
+  const out = {};
+  for (const image of ["ghcr.io/tursodatabase/libsql-server", "bitnamilegacy/minio"]) {
+    const m = text.match(new RegExp(`${image.replace(/[./]/g, "\\$&")}:([\\w.+-]+)`));
+    if (m) out[image] = m[1];
+  }
+  return out;
 }
 
 /** deploy/README.md -> { k3s: INSTALL_K3S_VERSION } */

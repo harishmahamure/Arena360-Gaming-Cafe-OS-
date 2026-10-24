@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Deploy check: renders both arena-cloud overlays with `kubectl kustomize` (local files only)
-// and asserts the deployment invariants, then checks the cluster config, the image and the
+// and asserts the deployment and backup CronJob invariants, then checks the cluster config, the image and the
 // deploy workflow statically. Nothing is applied or contacted.
 
 import { execFileSync } from "node:child_process";
@@ -11,13 +11,43 @@ import { isDeepStrictEqual } from "node:util";
 import { parse as parseYaml, parseAllDocuments } from "yaml";
 
 export const ENVIRONMENTS = {
-  staging: { namespace: "staging", host: "api.staging.arena360.cloud" },
-  production: { namespace: "production", host: "api.arena360.cloud" },
+  staging: {
+    namespace: "staging",
+    host: "api.staging.arena360.cloud",
+    bucket: "arena360-gz-control-backup-staging",
+  },
+  production: {
+    namespace: "production",
+    host: "api.arena360.cloud",
+    bucket: "arena360-gz-control-backup-production",
+  },
 };
 export const DEPLOYMENT = "arena-cloud-control";
 export const SECRET = "arena-cloud-secrets";
 export const SECRET_KEYS = ["ARENA_CONTROL_DB_TOKEN", "ARENA_CONTROL_DB_URL"];
 export const MIDDLEWARE = "cloudflare-only";
+/** The nightly gz_control backup (Story 2.3). */
+export const CRONJOB = "arena-cloud-control-backup";
+export const BACKUP_SECRET = "arena-cloud-backup";
+/** The CronJob's secret env: secret name -> keys (each env var reads the key of its name). */
+export const CRONJOB_SECRET_KEYS = {
+  [SECRET]: SECRET_KEYS,
+  [BACKUP_SECRET]: [
+    "ARENA_ALERT_WEBHOOK_URL",
+    "ARENA_BACKUP_AGE_RECIPIENTS",
+    "ARENA_BACKUP_HEARTBEAT_URL",
+    "ARENA_BACKUP_S3_ACCESS_KEY_ID",
+    "ARENA_BACKUP_S3_ENDPOINT",
+    "ARENA_BACKUP_S3_SECRET_ACCESS_KEY",
+  ],
+};
+/** The only CronJob secret keys that may be `optional: true` (both are optional in the binary). */
+export const CRONJOB_OPTIONAL_KEYS = ["ARENA_ALERT_WEBHOOK_URL", "ARENA_BACKUP_HEARTBEAT_URL"];
+export const CRONJOB_ARGS = ["--role", "jobs", "--task", "control-backup"];
+export const CRONJOB_SCHEDULE = "30 2 * * *";
+export const CRONJOB_TIME_ZONE = "Asia/Kolkata";
+/** Every Secret a deploy applies (the deployer Role may update only these). */
+export const DEPLOYED_SECRETS = [SECRET, BACKUP_SECRET, "origin-tls", "ghcr-pull"];
 export const SOPS_VERSION = "3.13.3";
 export const AGE_VERSION = "1.3.2";
 const MW_ANNOTATION = "traefik.ingress.kubernetes.io/router.middlewares";
@@ -33,6 +63,7 @@ export const DEPLOYER_RESOURCES = [
   "/services",
   "networking.k8s.io/ingresses",
   "traefik.io/middlewares",
+  "batch/cronjobs",
   "/secrets",
 ];
 export const KUBECTL_MISSING = "check:deploy needs kubectl on PATH";
@@ -177,6 +208,102 @@ export function checkOverlay(env, docs, want, ranges) {
   return errors;
 }
 
+/**
+ * The nightly backup CronJob in one rendered overlay: schedule, time zone, Forbid, deadlines,
+ * history, the Deployment's image and security context, and its env (secret refs only, plus
+ * the namespace as ARENA_ENV and this environment's own bucket).
+ * @returns {string[]} error messages
+ */
+export function checkCronJob(env, docs, want) {
+  const errors = [];
+  const err = (m) => errors.push(`${env}: CronJob ${CRONJOB}: ${m}`);
+  const cj = find(docs, "CronJob", CRONJOB);
+  if (!cj) return [`${env}: no CronJob ${CRONJOB}`];
+  const spec = cj.spec ?? {};
+  const expect = (path, got, wantValue) => {
+    if (!isDeepStrictEqual(got, wantValue)) {
+      err(`${path} is ${JSON.stringify(got)}, not ${JSON.stringify(wantValue)}`);
+    }
+  };
+  expect("schedule", spec.schedule, CRONJOB_SCHEDULE);
+  expect("timeZone", spec.timeZone, CRONJOB_TIME_ZONE);
+  expect("concurrencyPolicy", spec.concurrencyPolicy, "Forbid");
+  expect("startingDeadlineSeconds", spec.startingDeadlineSeconds, 3600);
+  expect("successfulJobsHistoryLimit", spec.successfulJobsHistoryLimit, 3);
+  expect("failedJobsHistoryLimit", spec.failedJobsHistoryLimit, 5);
+  const job = spec.jobTemplate?.spec ?? {};
+  expect("backoffLimit", job.backoffLimit, 0);
+  expect("activeDeadlineSeconds", job.activeDeadlineSeconds, 1800);
+  const pod = job.template?.spec ?? {};
+  expect("restartPolicy", pod.restartPolicy, "Never");
+  if (pod.automountServiceAccountToken !== false) err("automountServiceAccountToken is not false");
+  const containers = pod.containers ?? [];
+  if (containers.length !== 1) err("must have one container");
+
+  const dep = find(docs, "Deployment", DEPLOYMENT);
+  const depPod = dep?.spec?.template?.spec ?? {};
+  const depContainer = depPod.containers?.[0] ?? {};
+  if (!isDeepStrictEqual(pod.securityContext, depPod.securityContext)) {
+    err("pod securityContext differs from the Deployment's");
+  }
+  if (!isDeepStrictEqual(pod.imagePullSecrets, depPod.imagePullSecrets)) {
+    err("imagePullSecrets differ from the Deployment's");
+  }
+  for (const c of containers) {
+    expect("args", c.args, CRONJOB_ARGS);
+    if (c.image !== depContainer.image) {
+      err(`image ${c.image} is not the Deployment's ${depContainer.image}`);
+    }
+    if (!isDeepStrictEqual(c.securityContext, depContainer.securityContext)) {
+      err("container securityContext differs from the Deployment's");
+    }
+    if (c.envFrom) err("uses envFrom");
+    const r = c.resources ?? {};
+    for (const k of ["requests", "limits"]) {
+      if (!r[k]?.cpu || !r[k]?.memory) err(`resources.${k} cpu and memory must be set`);
+    }
+    const got = {};
+    const plain = {};
+    for (const e of c.env ?? []) {
+      const ref = e.valueFrom?.secretKeyRef;
+      if (e.name === "ARENA_ENV") {
+        if (e.valueFrom?.fieldRef?.fieldPath !== "metadata.namespace" || "value" in e) {
+          err("ARENA_ENV is not the pod's namespace (fieldRef metadata.namespace)");
+        }
+        plain[e.name] = true;
+        continue;
+      }
+      if (e.name === "ARENA_BACKUP_S3_BUCKET") {
+        if (e.value !== want.bucket) {
+          err(`ARENA_BACKUP_S3_BUCKET is ${JSON.stringify(e.value)}, not ${want.bucket}`);
+        }
+        plain[e.name] = true;
+        continue;
+      }
+      if (!ref || "value" in e) {
+        err(`env ${e.name} is not a secretKeyRef`);
+        continue;
+      }
+      if (!(ref.name in CRONJOB_SECRET_KEYS)) err(`env ${e.name} reads secret ${ref.name}`);
+      if (ref.key !== e.name) err(`env ${e.name} reads key ${ref.key}`);
+      if (ref.optional && !CRONJOB_OPTIONAL_KEYS.includes(ref.key)) {
+        err(`env ${e.name} is optional`);
+      }
+      (got[ref.name] ??= []).push(ref.key);
+    }
+    for (const name of ["ARENA_ENV", "ARENA_BACKUP_S3_BUCKET"]) {
+      if (!plain[name]) err(`no ${name}`);
+    }
+    for (const [secret, keys] of Object.entries(CRONJOB_SECRET_KEYS)) {
+      const have = [...(got[secret] ?? [])].sort();
+      if (!isDeepStrictEqual(have, keys)) {
+        err(`keys from ${secret} are ${JSON.stringify(have)}, want ${JSON.stringify(keys)}`);
+      }
+    }
+  }
+  return errors;
+}
+
 /** Blanks the fields the environments may differ in: namespace, host, replicas, resources,
  * image tag. */
 export function normalise(docs, want) {
@@ -197,16 +324,27 @@ export function normalise(docs, want) {
         if (typeof c.image === "string") c.image = c.image.replace(/:[^:/@]+$/, ":<tag>");
       }
     }
+    if (d.kind === "CronJob") {
+      for (const c of d.spec?.jobTemplate?.spec?.template?.spec?.containers ?? []) {
+        if (typeof c.image === "string") c.image = c.image.replace(/:[^:/@]+$/, ":<tag>");
+        for (const e of c.env ?? []) {
+          if (e.name === "ARENA_BACKUP_S3_BUCKET" && e.value === want.bucket) e.value = "<bucket>";
+        }
+      }
+    }
   }
   return out;
 }
 
-/** Staging and production may differ only in namespace, host, replicas/resources and tag. */
+/** Staging and production may differ only in namespace, host, replicas/resources, tag and
+ * backup bucket. */
 export function checkParity(stagingDocs, productionDocs) {
   const a = normalise(stagingDocs, ENVIRONMENTS.staging);
   const b = normalise(productionDocs, ENVIRONMENTS.production);
   if (isDeepStrictEqual(a, b)) return [];
-  return ["staging and production differ beyond namespace, host, replicas/resources and image tag"];
+  return [
+    "staging and production differ beyond namespace, host, replicas/resources, image tag and backup bucket",
+  ];
 }
 
 /** deploy/k8s/cluster/traefik-config.yaml: Traefik keeps the real source IP. */
@@ -249,6 +387,14 @@ export function checkRbac(text) {
           )
         ) {
           errors.push(`rbac: Role deployer in ${ns} grants ${r.verbs.join(",")}`);
+        }
+      }
+      const secretNames = rules
+        .filter((r) => (r.resources ?? []).includes("secrets") && r.resourceNames)
+        .flatMap((r) => r.resourceNames);
+      for (const name of DEPLOYED_SECRETS) {
+        if (!secretNames.includes(name)) {
+          errors.push(`rbac: Role deployer in ${ns} cannot update Secret ${name}`);
         }
       }
       for (const want of DEPLOYER_RESOURCES) {
@@ -408,6 +554,13 @@ export function checkWorkflow(text) {
   if (!has(/kubectl kustomize "deploy\/k8s\/overlays\/\$\{DEPLOY_ENV\}"/)) {
     errors.push("workflow: the overlay is not rendered");
   }
+  if (
+    !has(
+      /select\(\.kind == "CronJob" and \.metadata\.name == "arena-cloud-control-backup"\)[^\n]*strenv\(IMAGE\)/,
+    )
+  ) {
+    errors.push("workflow: the backup CronJob's image is not set to the deployed image");
+  }
   if (!has(/rollout status deployment\/arena-cloud-control/))
     errors.push("workflow: no rollout status wait");
   if (!has(/\/healthz[\s\S]*migration_version[\s\S]*reachable == true/)) {
@@ -417,6 +570,9 @@ export function checkWorkflow(text) {
     errors.push("workflow: no http -> https smoke");
   if (!has(/--resolve[\s\S]*403/)) errors.push("workflow: no direct-origin smoke");
   const code = text.replace(/^\s*#.*$/gm, "");
+  if (/restore-control/.test(code)) {
+    errors.push("workflow: a deploy must never run ops restore-control");
+  }
   if (/kube-?apiserver|:6443/.test(code)) {
     errors.push("workflow: talks to a kube-apiserver directly");
   }
@@ -457,6 +613,7 @@ export function checkRepo(root, renderOverlay = (env) => render(root, env)) {
   for (const [env, want] of Object.entries(ENVIRONMENTS)) {
     rendered[env] = parseDocs(renderOverlay(env));
     errors.push(...checkOverlay(env, rendered[env], want, ranges));
+    errors.push(...checkCronJob(env, rendered[env], want));
   }
   errors.push(...checkParity(rendered.staging, rendered.production));
   errors.push(...checkCluster(read("deploy/k8s/cluster/traefik-config.yaml")));

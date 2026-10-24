@@ -4,8 +4,8 @@
 #
 # S3 API on http://127.0.0.1:9000, bucket `arena-dev`.
 # DEV-ONLY credentials (never used anywhere else): user `arena-dev`, password
-# `arena-dev-password`. Loopback only. No arena-cloud code reads R2 yet; the first R2 story
-# consumes this.
+# `arena-dev-password`. Loopback only. The nightly backup task (`--role jobs --task
+# control-backup --dev`) and the S3 tests (ARENA_TEST_S3_URL=http://127.0.0.1:9000) use it.
 #
 # The upstream minio/minio and minio/mc images are no longer published on Docker Hub, so this
 # uses Bitnami's frozen legacy builds, pinned by tag (README pin table).

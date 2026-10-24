@@ -1,5 +1,6 @@
-# arena-cloud base: the control role, its Service, the Traefik Ingress and the Cloudflare-only
-# origin lock. Overlays set the namespace, host, replicas, resources and image tag.
+# arena-cloud base: the control role, its Service, the Traefik Ingress, the Cloudflare-only
+# origin lock and the nightly gz_control backup CronJob. Overlays set the namespace, host,
+# replicas, resources, image tag and backup bucket.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 labels:
@@ -11,3 +12,4 @@ resources:
   - service.yaml
   - ingress.yaml
   - middleware-cloudflare-only.yaml
+  - cronjob-control-backup.yaml

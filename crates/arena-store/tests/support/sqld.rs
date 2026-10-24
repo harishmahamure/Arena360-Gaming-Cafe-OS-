@@ -65,8 +65,8 @@ fn wait_for(addr: SocketAddr, child: &mut Child) -> bool {
     false
 }
 
-/// Removes every user table from the shared server's database.
-async fn wipe(url: &str) {
+/// Removes every user view and table (with their indexes and triggers) from the database.
+pub async fn wipe(url: &str) {
     let db = libsql::Builder::new_remote(url.to_owned(), String::new())
         .connector(hyper::client::HttpConnector::new())
         .build()
@@ -75,17 +75,18 @@ async fn wipe(url: &str) {
     let conn = db.connect().unwrap();
     let mut rows = conn
         .query(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_litestream%' AND name NOT LIKE 'libsql_%'",
+            "SELECT type, name FROM sqlite_master WHERE type IN ('view', 'table') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_litestream%' AND name NOT LIKE 'libsql_%' ORDER BY type DESC",
             (),
         )
         .await
         .unwrap();
     let mut names = Vec::new();
     while let Some(r) = rows.next().await.unwrap() {
-        names.push(r.get::<String>(0).unwrap());
+        names.push((r.get::<String>(0).unwrap(), r.get::<String>(1).unwrap()));
     }
-    for n in names {
-        conn.execute(&format!("DROP TABLE IF EXISTS \"{n}\""), ())
+    for (kind, n) in names {
+        let kind = if kind == "view" { "VIEW" } else { "TABLE" };
+        conn.execute(&format!("DROP {kind} IF EXISTS \"{n}\""), ())
             .await
             .unwrap();
     }

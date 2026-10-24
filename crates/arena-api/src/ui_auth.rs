@@ -405,6 +405,9 @@ pub struct UiAuth {
     presence: crate::lan::Presence,
     backup_probe: BackupProbe,
     backup_probe_timeout: std::time::Duration,
+    printer: Option<Arc<dyn arena_core::printer::Printer>>,
+    printer_find: tokio::sync::Mutex<()>,
+    printer_job: tokio::sync::Mutex<()>,
 }
 
 pub type BackupProbe =
@@ -448,7 +451,27 @@ impl UiAuth {
             presence: crate::lan::Presence::none(),
             backup_probe: Arc::new(arena_core::setup::probe_backup_dir),
             backup_probe_timeout: BACKUP_PROBE_TIMEOUT,
+            printer: None,
+            printer_find: tokio::sync::Mutex::new(()),
+            printer_job: tokio::sync::Mutex::new(()),
         }
+    }
+
+    pub fn with_printer(mut self, printer: Arc<dyn arena_core::printer::Printer>) -> Self {
+        self.printer = Some(printer);
+        self
+    }
+
+    pub(crate) fn printer(&self) -> Option<&Arc<dyn arena_core::printer::Printer>> {
+        self.printer.as_ref()
+    }
+
+    pub(crate) fn printer_find_lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.printer_find
+    }
+
+    pub(crate) fn printer_job_lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.printer_job
     }
 
     /// Pushes `devices.changed` to `/ui/events` streams whenever a device comes online or
@@ -1621,6 +1644,12 @@ async fn intent(
         id: me.staff_id.clone(),
     };
     intent.elevated_by = None;
+    if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "the printer status is recorded by a test print or by skipping the printer",
+        )));
+    }
     // A follower spends no ticket use.
     let Some(writer) = &auth.writer else {
         return fail(ui_error(AppError::new(
@@ -1705,6 +1734,9 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/elevate/drop", post(elevate_drop))
         .route("/ui/intent", post(intent))
         .route("/ui/settings", get(settings))
+        .route("/ui/printer/find", post(crate::ui_printer::find))
+        .route("/ui/printer/test", post(crate::ui_printer::test))
+        .route("/ui/printer/skip", post(crate::ui_printer::skip))
         .route("/ui/audit", get(crate::ui_audit::list))
         .route("/ui/audit/item", get(crate::ui_audit::item))
         .route("/ui/audit/facets", get(crate::ui_audit::facets))
@@ -3908,7 +3940,7 @@ pub(crate) mod tests {
                 panic!("healthz never reported {want}");
             }
         };
-        setup_is(json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing"})).await;
+        setup_is(json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset"})).await;
         let token = token_for(&hub, "manager", "m-pass").await;
         let consent = json!({ "intent": intent_as(
             Actor { kind: ActorKind::Owner, id: "spoof".into() },
@@ -3943,8 +3975,7 @@ pub(crate) mod tests {
             let (status, body) = post_intent(&hub, &token, set_body(&hub, key, value, None)).await;
             assert_eq!(status, StatusCode::OK, "{key}: {body}");
         }
-        let done =
-            json!({"opening_hours_set": true, "backup_location_set": true, "ad_consent": "given"});
+        let done = json!({"opening_hours_set": true, "backup_location_set": true, "ad_consent": "given", "printer": "unset"});
         setup_is(done.clone()).await;
         let snapshot = SnapshotReader::open(&hub.path)
             .unwrap()

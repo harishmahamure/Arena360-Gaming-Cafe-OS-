@@ -85,6 +85,7 @@ function snapshot(hub: Hub): HubSnapshot {
       opening_hours_set: hub.settings.get("branch.opening_hours_set")!.value === "true",
       backup_location_set: hub.settings.get("system.backup_dir")!.value !== "",
       ad_consent: hub.adConsent,
+      printer: "unset",
     },
     lan: null,
   };

@@ -99,3 +99,17 @@
 - source_spec: none (observed 2026-10-25 at load average ~32)
   summary: Hub Playwright `auth.spec.ts` "a locked sign-in counts down, then lets you try again" flakes under extreme CPU load (1/6).
   evidence: The real-time countdown misses its 30 s test timeout when the machine is saturated.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-8-step-2-free-tier-issues-a-signed-licence.md`
+  summary: Playwright cases for TierStep's 409 recovery (`ONE_FREE_BRANCH`/`ALREADY_SET` returned after a successful load).
+  evidence: The stub can return them but no spec reaches the paths.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-8-step-2-free-tier-issues-a-signed-licence.md`
+  summary: Review `jsonwebtoken`'s rust-crypto backend pulling in `rsa` (RUSTSEC Marvin timing advisory), even though only EdDSA is used. Consider a feature set or alternative that drops RSA.
+  evidence: The implementer reported that `rsa`, `p256` and `p384` are now in the dependency tree.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi.md`
+  summary: Idempotent kiosk pairing. When the Hub registered the device but the answer was lost, retries create orphan device rows (duplicate floor entries). Needs a request key or dedupe-by-name design, plus revoking the orphan.
+  evidence: The kiosk retries with a new code; the first device row keeps a valid token.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi.md`
+  summary: Pin the kiosk Tauri `generate_handler!` registration against `ipc-names.json` (for example by parsing `main.rs` in the existing COMMANDS test).
+  evidence: Removing `pair`/`pair_info` from the handler list passes every test.

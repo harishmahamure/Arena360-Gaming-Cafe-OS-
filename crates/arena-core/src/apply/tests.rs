@@ -4005,6 +4005,7 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                printer: arena_proto::PrinterState::Unset,
             }
         );
         let manager = staff(&f, "manager", ROLE_MANAGER).await;
@@ -4022,6 +4023,7 @@ mod operating {
                 opening_hours_set: true,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
+                printer: arena_proto::PrinterState::Unset,
             }
         );
         f.writer
@@ -4042,6 +4044,7 @@ mod operating {
                 opening_hours_set: true,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Given,
+                printer: arena_proto::PrinterState::Unset,
             }
         );
         save(&f, "system.backup_dir", "").await.unwrap();
@@ -4080,6 +4083,7 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                printer: arena_proto::PrinterState::Unset,
             },
         )
         .await;
@@ -4090,9 +4094,438 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
+                printer: arena_proto::PrinterState::Unset,
+            },
+        )
+        .await;
+        let manager = staff(&f, "manager", ROLE_MANAGER).await;
+        f.writer
+            .submit_intent(as_actor(
+                manager,
+                IntentPayload::PrinterStatus(arena_proto::PrinterStatusSet {
+                    state: arena_proto::PrinterState::Skipped,
+                    error_kind: None,
+                    error: None,
+                }),
+                None,
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap();
+        wait(
+            &mut rx,
+            SetupStatus {
+                opening_hours_set: false,
+                backup_location_set: true,
+                ad_consent: AdConsentState::Missing,
+                printer: arena_proto::PrinterState::Skipped,
+            },
+        )
+        .await;
+        save(&f, "printer.paper_mm", "58").await.unwrap();
+        wait(
+            &mut rx,
+            SetupStatus {
+                opening_hours_set: false,
+                backup_location_set: true,
+                ad_consent: AdConsentState::Missing,
+                printer: arena_proto::PrinterState::Unset,
             },
         )
         .await;
         job.abort();
+    }
+}
+
+mod printer {
+    use super::*;
+    use crate::rbac::{ROLE_COUNTER, ROLE_MANAGER};
+    use crate::snapshot::SnapshotReader;
+    use arena_proto::{
+        PrinterErrorKind, PrinterState, PrinterStatus, PrinterStatusSet, StaffUpsert,
+    };
+
+    fn text(s: &Store, key: &str) -> String {
+        match &setting(s, key)["value"] {
+            RowValue::Text(t) => t.clone(),
+            other => panic!("{key} is {other:?}"),
+        }
+    }
+
+    fn rev(f: &Fixture, key: &str) -> i64 {
+        match setting(&reopen(f), key)["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        }
+    }
+
+    fn as_actor(actor: Actor, payload: IntentPayload, base_rev: Option<i64>, now: i64) -> Intent {
+        Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: payload.kind(),
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: now,
+            base_rev,
+            actor,
+            elevated_by: None,
+            reason: None,
+            payload,
+        }
+    }
+
+    async fn staff(f: &Fixture, login: &str, role: &str) -> Actor {
+        let role_id = reopen(f)
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == RowValue::Text(role.into()))
+            .map(|r| match &r["role_id"] {
+                RowValue::Text(t) => t.clone(),
+                other => panic!("{other:?}"),
+            })
+            .unwrap();
+        let owner = Actor {
+            kind: ActorKind::Owner,
+            id: "owner-1".into(),
+        };
+        let applied = f
+            .writer
+            .submit_intent(as_actor(
+                owner,
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: None,
+                    login: login.into(),
+                    display_name: login.into(),
+                    role_id,
+                    password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
+                    pin_hash: None,
+                    active: true,
+                }),
+                None,
+                f.clock.now_ms(),
+            ))
+            .await
+            .unwrap();
+        Actor {
+            kind: ActorKind::Staff,
+            id: applied.changes[0].row_id.clone(),
+        }
+    }
+
+    fn record_as(
+        actor: &Actor,
+        state: PrinterState,
+        error_kind: Option<PrinterErrorKind>,
+        error: Option<&str>,
+        now: i64,
+    ) -> Intent {
+        as_actor(
+            actor.clone(),
+            IntentPayload::PrinterStatus(PrinterStatusSet {
+                state,
+                error_kind,
+                error: error.map(str::to_owned),
+            }),
+            None,
+            now,
+        )
+    }
+
+    fn record(actor: &Actor, state: PrinterState, now: i64) -> Intent {
+        record_as(actor, state, None, None, now)
+    }
+
+    fn stored(f: &Fixture) -> PrinterStatus {
+        PrinterStatus::parse(&text(&reopen(f), "printer.status")).unwrap()
+    }
+
+    fn setup_printer(f: &Fixture) -> PrinterState {
+        SnapshotReader::open(&f.path)
+            .unwrap()
+            .snapshot(f.clock.now_ms())
+            .unwrap()
+            .setup
+            .unwrap()
+            .printer
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_the_printer_defaults() {
+        let f = bootstrapped().await;
+        let s = reopen(&f);
+        assert_eq!(text(&s, "printer.selected"), "");
+        assert_eq!(text(&s, "printer.paper_mm"), "80");
+        assert_eq!(
+            text(&s, "printer.status"),
+            arena_proto::DEFAULT_PRINTER_STATUS
+        );
+        assert_eq!(setup_printer(&f), PrinterState::Unset);
+    }
+
+    #[tokio::test]
+    async fn an_existing_branch_gets_the_printer_rows_from_seed_defaults() {
+        let mut f = bootstrapped().await;
+        f.writer
+            .submit(|tx| {
+                tx.execute_batch(
+                    "DELETE FROM settings WHERE key IN ('printer.selected', 'printer.paper_mm',
+                     'printer.status')",
+                )
+                .map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+        while f.events.try_recv().is_ok() {}
+        let applied = f.writer.seed_defaults().await.unwrap().unwrap();
+        assert_eq!(applied.changes.len(), 3);
+        let s = reopen(&f);
+        assert_eq!(text(&s, "printer.selected"), "");
+        assert_eq!(text(&s, "printer.paper_mm"), "80");
+        assert_eq!(
+            text(&s, "printer.status"),
+            arena_proto::DEFAULT_PRINTER_STATUS
+        );
+    }
+
+    #[tokio::test]
+    async fn the_selection_normalises_a_lan_address_and_names_a_bad_ip() {
+        let f = bootstrapped().await;
+        let r = rev(&f, "printer.selected");
+        f.writer
+            .submit_intent(set(
+                "printer.selected",
+                r#"{"kind":"lan","id_or_addr":"192.168.1.50","name":"192.168.1.50"}"#,
+                Some(r),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            text(&reopen(&f), "printer.selected"),
+            r#"{"kind":"lan","id_or_addr":"192.168.1.50:9100","name":"192.168.1.50"}"#
+        );
+        let before = snapshot(&f);
+        let e = f
+            .writer
+            .submit_intent(set(
+                "printer.selected",
+                r#"{"kind":"lan","id_or_addr":"abc","name":"abc"}"#,
+                Some(rev(&f, "printer.selected")),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+        assert_eq!(e.field.as_deref(), Some("ip"));
+        let e = f
+            .writer
+            .submit_intent(set(
+                "printer.paper_mm",
+                "57",
+                Some(rev(&f, "printer.paper_mm")),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("printer.paper_mm"));
+        assert_eq!(snapshot(&f), before);
+        f.writer
+            .submit_intent(set(
+                "printer.paper_mm",
+                "58",
+                Some(rev(&f, "printer.paper_mm")),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(text(&reopen(&f), "printer.paper_mm"), "58");
+    }
+
+    #[tokio::test]
+    async fn the_status_is_never_a_raw_setting() {
+        let f = bootstrapped().await;
+        let e = f
+            .writer
+            .submit_intent(set(
+                "printer.status",
+                r#"{"state":"ok","error":null,"at":1}"#,
+                Some(rev(&f, "printer.status")),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+        assert_eq!(e.field.as_deref(), Some("key"));
+    }
+
+    #[tokio::test]
+    async fn test_and_skip_move_the_status_with_the_time_and_the_staff() {
+        let f = bootstrapped().await;
+        let manager = staff(&f, "manager", ROLE_MANAGER).await;
+        let now = f.clock.now_ms();
+        f.writer
+            .submit_intent(record_as(
+                &manager,
+                PrinterState::Failed,
+                Some(PrinterErrorKind::Refused),
+                Some("connection refused"),
+                now,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            stored(&f),
+            PrinterStatus {
+                state: PrinterState::Failed,
+                error_kind: Some(PrinterErrorKind::Refused),
+                error: Some("connection refused".into()),
+                at: Some(now),
+            }
+        );
+        assert_eq!(setup_printer(&f), PrinterState::Failed);
+        f.writer
+            .submit_intent(record(&manager, PrinterState::Ok, now))
+            .await
+            .unwrap();
+        assert_eq!(stored(&f).state, PrinterState::Ok);
+        assert_eq!(stored(&f).error, None);
+        f.writer
+            .submit_intent(record(&manager, PrinterState::Skipped, now))
+            .await
+            .unwrap();
+        assert_eq!(setup_printer(&f), PrinterState::Skipped);
+        let c = reopen(&f).changes().unwrap().pop().unwrap();
+        assert_eq!(c.intent_kind, "printer.status");
+        assert_eq!(
+            (c.actor_kind.as_str(), c.actor_id.as_str()),
+            ("staff", manager.id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn changing_the_printer_or_the_width_resets_the_status_and_resaving_does_not() {
+        let f = bootstrapped().await;
+        let manager = staff(&f, "manager", ROLE_MANAGER).await;
+        let now = f.clock.now_ms();
+        let lan = r#"{"kind":"lan","id_or_addr":"192.168.1.50","name":"P"}"#;
+        f.writer
+            .submit_intent(set(
+                "printer.selected",
+                lan,
+                Some(rev(&f, "printer.selected")),
+            ))
+            .await
+            .unwrap();
+        for (key, same, other) in [
+            (
+                "printer.selected",
+                r#"{"kind":"lan","id_or_addr":"192.168.1.50:9100","name":"P"}"#,
+                r#"{"kind":"lan","id_or_addr":"192.168.1.51","name":"P"}"#,
+            ),
+            ("printer.paper_mm", "80", "58"),
+        ] {
+            f.writer
+                .submit_intent(record(&manager, PrinterState::Ok, now))
+                .await
+                .unwrap();
+            let applied = f
+                .writer
+                .submit_intent(set(key, same, Some(rev(&f, key))))
+                .await
+                .unwrap();
+            assert_eq!(applied.changes.len(), 1, "{key}");
+            assert_eq!(stored(&f).state, PrinterState::Ok, "{key} unchanged");
+            let applied = f
+                .writer
+                .submit_intent(set(key, other, Some(rev(&f, key))))
+                .await
+                .unwrap();
+            assert_eq!(applied.changes.len(), 2, "{key}");
+            assert_eq!(stored(&f), PrinterStatus::unset(), "{key} changed");
+            assert_eq!(setup_printer(&f), PrinterState::Unset);
+            let applied = f
+                .writer
+                .submit_intent(set(key, same, Some(rev(&f, key))))
+                .await
+                .unwrap();
+            assert_eq!(applied.changes.len(), 1, "{key}: already unset");
+        }
+        f.writer
+            .submit_intent(record(&manager, PrinterState::Skipped, now))
+            .await
+            .unwrap();
+        f.writer
+            .submit_intent(set(
+                "printer.selected",
+                "",
+                Some(rev(&f, "printer.selected")),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stored(&f).state, PrinterState::Unset);
+    }
+
+    #[tokio::test]
+    async fn a_status_must_fit_its_state() {
+        let f = bootstrapped().await;
+        let manager = staff(&f, "manager", ROLE_MANAGER).await;
+        let now = f.clock.now_ms();
+        let long = "e".repeat(201);
+        let k = Some(PrinterErrorKind::Other);
+        for (state, kind, error, field) in [
+            (PrinterState::Unset, None, None, "state"),
+            (PrinterState::Failed, None, None, "error_kind"),
+            (PrinterState::Failed, None, Some("x"), "error_kind"),
+            (PrinterState::Failed, k, Some(" "), "error"),
+            (PrinterState::Failed, k, Some(long.as_str()), "error"),
+            (PrinterState::Ok, None, Some("x"), "error"),
+            (PrinterState::Ok, k, None, "error_kind"),
+            (PrinterState::Skipped, None, Some("x"), "error"),
+        ] {
+            let e = f
+                .writer
+                .submit_intent(record_as(&manager, state, kind, error, now))
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{state:?}");
+            assert_eq!(e.field.as_deref(), Some(field), "{state:?}");
+        }
+        let owner = Actor {
+            kind: ActorKind::Owner,
+            id: "owner-1".into(),
+        };
+        let e = f
+            .writer
+            .submit_intent(record(&owner, PrinterState::Skipped, now))
+            .await
+            .unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("actor"));
+        assert_eq!(setup_printer(&f), PrinterState::Unset);
+    }
+
+    #[tokio::test]
+    async fn a_counter_cannot_record_or_select() {
+        let f = bootstrapped().await;
+        let counter = staff(&f, "counter", ROLE_COUNTER).await;
+        let before = snapshot(&f);
+        let now = f.clock.now_ms();
+        for payload in [
+            IntentPayload::PrinterStatus(PrinterStatusSet {
+                state: PrinterState::Skipped,
+                error_kind: None,
+                error: None,
+            }),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "printer.paper_mm".into(),
+                value: "58".into(),
+            }),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "printer.selected".into(),
+                value: r#"{"kind":"lan","id_or_addr":"10.0.0.9","name":"P"}"#.into(),
+            }),
+        ] {
+            let e = f
+                .writer
+                .submit_intent(as_actor(counter.clone(), payload, Some(1), now))
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::PermissionDenied);
+        }
+        assert_eq!(snapshot(&f), before);
     }
 }

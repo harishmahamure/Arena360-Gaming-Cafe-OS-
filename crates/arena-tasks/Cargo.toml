@@ -18,6 +18,9 @@ webpki-roots.workspace = true
 mdns-sd.workspace = true
 if-addrs.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
 [dev-dependencies]
 arena-core = { workspace = true, features = ["test-jobs"] }
 tempfile.workspace = true

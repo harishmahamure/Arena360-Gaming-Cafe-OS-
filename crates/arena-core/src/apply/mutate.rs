@@ -108,6 +108,10 @@ pub(super) fn mutate(
             Target::Setting(row) => super::ads_consent::mutate(tx, intent, p, row.as_ref(), now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::PrinterStatus(p) => match target {
+            Target::Setting(row) => super::printer_status::mutate(tx, intent, p, row.as_ref()),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceRegister(d) => {
             let branch = match target {
                 Target::NewDevice(b) => b.as_ref(),

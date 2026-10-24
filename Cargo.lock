@@ -150,6 +150,7 @@ dependencies = [
  "arena-kiosk-core",
  "arena-proto",
  "arena-store",
+ "arena-tasks",
  "axum",
  "futures-util",
  "rcgen",
@@ -391,6 +392,7 @@ dependencies = [
  "tokio-rustls 0.26.6",
  "tracing",
  "webpki-roots 1.0.9",
+ "windows",
 ]
 
 [[package]]

@@ -88,6 +88,7 @@ curl 127.0.0.1:7409/healthz
 | `--web-port <port>`                  | Sniffed TLS / plain HTTP port (default `7401`)                                                                                         |
 | `--cloud-host <host:port>`           | Cloud host the connectivity probe checks (default `api.arena360.cloud:443`, the production `arena-cloud` `/healthz` behind Cloudflare) |
 | `--probe-internet <ip:port,ip:port>` | Internet endpoints the probe connects to (default `1.1.1.1:443,8.8.8.8:443`)                                                           |
+| `--printer <system\|fake>`           | Receipt printer adapter (default `system`: the Windows spooler for USB plus LAN `:9100`); `fake` records jobs and needs `dev-fixtures` |
 | `--help`, `-h`                       | Print usage and exit 0                                                                                                                 |
 | `--version`                          | Print the version and exit 0                                                                                                           |
 
@@ -283,6 +284,60 @@ fy_start_month, pending: {tz?, day_start_min?, effective_from} | null}`.
   50 MB (oldest deleted first). Logs never contain PII. Set the level with `RUST_LOG` (default
   `info`, e.g. `RUST_LOG=arena_tasks=debug`).
 - **Stopping:** Ctrl+C, or SIGTERM on Unix.
+
+### Receipt printer
+
+Settings → Printer & payments finds the receipt printer, takes its paper width and prints a test
+page; the result feeds the go-live checklist. Printing is never a dependency of any other Hub
+flow, and no payment-provider keys are asked for (UPI and card are recorded by reference when a
+bill is settled).
+
+- **Adapter** (`arena-core::printer::Printer`, implemented in `arena-tasks::printer`):
+  `discover()` lists `{id, kind: usb|lan, name, addr?}` and `send(target, bytes)` prints raw
+  ESC/POS bytes. `SystemPrinter` is the production adapter; `FakePrinter` records every job and
+  has scripted discovery and failure (`--printer fake`, and the tests).
+  - **USB (Windows):** printers come from the spooler (`EnumPrintersW`, local and connected
+    queues) and a job goes out RAW through `OpenPrinterW` / `StartDocPrinterW` (datatype `RAW`)
+    / `WritePrinter`. Other systems list no USB printer and refuse a USB job.
+  - **LAN:** the Hub scans only its own IPv4 /24 subnets (from `if-addrs`, its own address left
+    out) for TCP `:9100`, 300 ms per connect, at most 64 at once, all within 8 s. A typed address
+    is `ip[:port]` (port 9100 by default) in a private LAN range (10/8, 172.16/12, 192.168/16);
+    loopback, link-local and public addresses are refused (`VALIDATION_FAILED` on `ip`), and
+    loopback and link-local interfaces are never scanned. A job connects and writes with a 5 s
+    limit each; a USB job that the spooler hasn't finished after 10 s fails (its blocked thread
+    is abandoned and logged).
+- **Test page:** ESC/POS text in Font A on PC437: `ESC @`, `ESC t 0`, `ESC M 0`, the branch
+  name centred at double width and height (non-ASCII becomes `?`, cut to half the line), the date
+  in the branch time zone, `Printer test OK`, a `1234567890…` ruler of 32 (58 mm) or 48 (80 mm)
+  columns, a 4-line feed and a partial cut (`GS V 66 0`). No graphics.
+- **Settings:** `printer.selected` (`{kind, id_or_addr, name}` or empty; a LAN address is stored
+  as `ip:port`, a bad one is `VALIDATION_FAILED` on `ip`) and `printer.paper_mm` (`58` or `80`,
+  default `80`), both through `settings.set`; changing either resets `printer.status` to
+  `unset`. `printer.status` (`{state: unset|ok|failed|skipped, error_kind?, error?, at}`, where
+  `error_kind` is `refused|timeout|unreachable|spooler|other` and `error` an optional detail of at
+  most 200 characters) is written only by the `printer.status` intent behind the endpoints
+  below, never by `settings.set` or a raw `/ui/intent`. All need `settings.edit` (Manager or
+  Owner).
+- **Endpoints** (loopback, bearer token): `POST /ui/printer/find` → `{printers}`;
+  `POST /ui/printer/test` prints with the selected printer and width and records `ok` or
+  `failed` with the error kind; `POST /ui/printer/skip` records `skipped`. Test and skip answer
+  `{outcome: recorded, status}` with the status they wrote, or `{outcome: printed_not_recorded}`
+  when the page printed but its result could not be saved. Finds run one at a time, and so do
+  test prints and skips (a second caller waits). A Counter gets `PERMISSION_DENIED`, a follower
+  `NOT_PRIMARY` before anything prints, and a test print with no printer chosen is
+  `VALIDATION_FAILED` on `printer.selected`. The UI shows catalogue text for each error kind.
+- **Setup status:** `setup.printer` (`unset|ok|failed|skipped`) on `GET /ui/snapshot` and
+  `GET /healthz`.
+- **Dev:** `cargo run -p arena-hub --features dev-fixtures -- --printer fake` offers one fake USB
+  and one fake LAN printer; `GET /dev/printer/jobs` lists what it printed (`{jobs: [{target,
+bytes_hex}]}`).
+- **Windows printing notes:** install the printer's own Windows driver (or a "Generic / Text Only"
+  queue on its USB port) so it shows in the spooler; the Hub sends RAW bytes, so the driver never
+  renders the page. Share-free local queues work; for a LAN printer, prefer its IP address over a
+  Windows TCP/IP queue. A live print on real hardware is a manual check. The spooler lists the
+  queues of the account the Hub runs as: a Hub running as a Windows service, or as another user,
+  sees the machine's local printers but not printers connected per user in someone else's
+  profile, so add the receipt printer as a local printer (or by its IP address).
 
 ### LAN protocol
 

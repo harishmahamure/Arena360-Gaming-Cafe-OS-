@@ -19,4 +19,5 @@ export type IntentKind =
   | "device.admin_exit"
   | "device.admin_relock"
   | "device.admin_unlock"
-  | "ads.consent";
+  | "ads.consent"
+  | "printer.status";

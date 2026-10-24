@@ -9,9 +9,9 @@ use arena_api::lan::{DEFAULT_LAN_PORT, DEFAULT_WEB_PORT};
 use arena_tasks::{CloudHost, DEFAULT_CLOUD_HOST, default_internet_endpoints};
 
 #[cfg(not(feature = "dev-fixtures"))]
-pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--help] [--version]";
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--printer system] [--help] [--version]";
 #[cfg(feature = "dev-fixtures")]
-pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--help] [--version]
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--printer <system|fake>] [--help] [--version]
        arena-hub dev seed [--data-dir <path>] [--kiosk-allow <path_glob>]... [--kiosk-process-mode <enforce|report>]
        arena-hub dev revoke-device <device_id> [--health-port <port>]";
 pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
@@ -31,6 +31,26 @@ pub struct Config {
     /// The internet endpoints the probe connects to (`--probe-internet`, default `1.1.1.1:443`
     /// and `8.8.8.8:443`).
     pub probe_internet: Vec<SocketAddr>,
+    pub printer: PrinterChoice,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PrinterChoice {
+    #[default]
+    System,
+    #[cfg(feature = "dev-fixtures")]
+    Fake,
+}
+
+fn printer_choice(v: &OsString) -> Result<PrinterChoice, String> {
+    match v.to_str() {
+        Some("system") => Ok(PrinterChoice::System),
+        #[cfg(feature = "dev-fixtures")]
+        Some("fake") => Ok(PrinterChoice::Fake),
+        #[cfg(not(feature = "dev-fixtures"))]
+        Some("fake") => Err("--printer fake needs a dev-fixtures build".to_owned()),
+        _ => Err(format!("invalid --printer {v:?} (system or fake)")),
+    }
 }
 
 impl Config {
@@ -201,6 +221,7 @@ fn parse_flags(
     let mut web_port = DEFAULT_WEB_PORT;
     let mut cloud_host = CloudHost::parse(DEFAULT_CLOUD_HOST).expect("valid default cloud host");
     let mut probe_internet = default_internet_endpoints();
+    let mut printer = PrinterChoice::default();
     let mut args = args;
     while let Some(arg) = args.next() {
         let arg = arg
@@ -234,6 +255,7 @@ fn parse_flags(
                 probe_internet =
                     arena_tasks::parse_internet_endpoints(&value()?.to_string_lossy())?;
             }
+            "--printer" if ports => printer = printer_choice(&value()?)?,
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -258,6 +280,7 @@ fn parse_flags(
         web_port,
         cloud_host,
         probe_internet,
+        printer,
     }))
 }
 
@@ -411,6 +434,7 @@ mod tests {
                     web_port: DEFAULT_WEB_PORT,
                     cloud_host: CloudHost::parse(DEFAULT_CLOUD_HOST).unwrap(),
                     probe_internet: default_internet_endpoints(),
+                    printer: PrinterChoice::System,
                 },
                 SeedOptions::default()
             )
@@ -492,6 +516,31 @@ mod tests {
         assert!(parse(args(&["dev", "wipe"]), &env, false).is_err());
         assert!(parse(args(&["dev", "seed", "--health-port", "1"]), &env, false).is_err());
         assert!(parse(args(&["--data-dir", "/d", "dev", "seed"]), &env, false).is_err());
+    }
+
+    #[test]
+    fn printer_flag_defaults_to_the_system_adapter() {
+        let env = env_of(&[("HOME", "/h")]);
+        assert_eq!(
+            run(&[], &env, false).unwrap().printer,
+            PrinterChoice::System
+        );
+        assert_eq!(
+            run(&["--printer", "system"], &env, false).unwrap().printer,
+            PrinterChoice::System
+        );
+        assert!(run(&["--printer", "laser"], &env, false).is_err());
+        assert!(run(&["--printer"], &env, false).is_err());
+        #[cfg(feature = "dev-fixtures")]
+        {
+            assert_eq!(
+                run(&["--printer=fake"], &env, false).unwrap().printer,
+                PrinterChoice::Fake
+            );
+            assert!(parse(args(&["dev", "seed", "--printer", "fake"]), &env, false).is_err());
+        }
+        #[cfg(not(feature = "dev-fixtures"))]
+        assert!(run(&["--printer", "fake"], &env, false).is_err());
     }
 
     #[test]

@@ -334,6 +334,7 @@ mod tests {
                     opening_hours_set: false,
                     backup_location_set: false,
                     ad_consent: arena_proto::AdConsentState::Missing,
+                    printer: arena_proto::PrinterState::Unset,
                 }),
                 lan: None,
             }

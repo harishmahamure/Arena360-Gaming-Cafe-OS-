@@ -30,6 +30,7 @@ mod frame;
 mod guards;
 mod kiosk_log;
 mod mutate;
+mod printer_status;
 mod read_grants;
 pub(crate) mod seed_defaults;
 mod settings_set;
@@ -127,6 +128,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::BranchBootstrap(_) | P::BranchSeedDefaults(_) => Target::None,
         P::SettingsSet(s) => Target::Setting(settings_set::load(tx, s)?),
         P::AdsConsent(_) => Target::Setting(ads_consent::load(tx)?),
+        P::PrinterStatus(_) => Target::Setting(printer_status::load(tx)?),
         P::DeviceRegister(_) => devices::load_register(tx)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,

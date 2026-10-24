@@ -128,6 +128,11 @@ pub(crate) fn epoch(tx: &StoreTx<'_>, ctx: &ApplyCtx<'_>) -> Result<Epoch, AppEr
 pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError> {
     match target {
         Target::None => Ok(()),
+        Target::Setting(_)
+            if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) =>
+        {
+            Ok(())
+        }
         Target::Setting(row) => settings_set::base_rev(intent, row.as_ref()),
         Target::NewDevice(_)
         | Target::Branch(_)

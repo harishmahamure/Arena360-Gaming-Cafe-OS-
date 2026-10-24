@@ -4,6 +4,7 @@ pub mod connectivity;
 pub mod housekeeping;
 pub mod lease;
 pub mod mdns;
+pub mod printer;
 
 pub use connectivity::{
     CloudHost, ConnectivityTask, DEFAULT_CLOUD_HOST, DEFAULT_INTERNET_ENDPOINTS, NetProber,

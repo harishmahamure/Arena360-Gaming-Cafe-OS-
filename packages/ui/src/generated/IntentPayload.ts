@@ -11,6 +11,7 @@ import type { DeviceRevoke } from "./DeviceRevoke";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
+import type { PrinterStatusSet } from "./PrinterStatusSet";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffUpsert } from "./StaffUpsert";
@@ -33,4 +34,5 @@ export type IntentPayload =
   | ({ kind: "device.admin_exit" } & DeviceAdminExit)
   | ({ kind: "device.admin_relock" } & DeviceAdminRelock)
   | ({ kind: "device.admin_unlock" } & DeviceAdminUnlock)
-  | ({ kind: "ads.consent" } & AdsConsentSet);
+  | ({ kind: "ads.consent" } & AdsConsentSet)
+  | ({ kind: "printer.status" } & PrinterStatusSet);

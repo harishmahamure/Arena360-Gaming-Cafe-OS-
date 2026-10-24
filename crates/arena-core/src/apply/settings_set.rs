@@ -9,7 +9,8 @@
 //! wait). Every other key applies at once.
 
 use arena_proto::{
-    AppError, ErrorCode, Intent, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, SettingsSet,
+    AppError, ErrorCode, Intent, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_PRINTER_PAPER_MM,
+    KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PrinterSelected, PrinterStatus, SettingsSet,
 };
 use arena_store::{ChangeOp, RowKey, SettingRef, StoreTx, find_setting, update_setting};
 use chrono::NaiveDate;
@@ -89,6 +90,11 @@ pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), 
                 arena_proto::BackupDirProblem::NotFound.as_str(),
             ));
         }
+        SettingRule::PrinterSelected => {
+            return PrinterSelected::parse(&s.value)
+                .map(|_| ())
+                .map_err(|e| invalid(e.field(), e.message()));
+        }
         _ => {}
     }
     if !rule.accepts(&s.value) {
@@ -114,9 +120,14 @@ pub(super) fn mutate(
     let opening_hours = (row.key == KEY_OPENING_HOURS)
         .then(|| arena_proto::parse_opening_hours(&s.value).ok())
         .flatten();
-    let value = opening_hours
-        .as_ref()
-        .map_or_else(|| s.value.clone(), arena_proto::opening_hours_json);
+    let printer = (row.key == KEY_PRINTER_SELECTED)
+        .then(|| PrinterSelected::parse(&s.value).ok().flatten())
+        .flatten();
+    let value = match (&opening_hours, &printer) {
+        (Some(week), _) => arena_proto::opening_hours_json(week),
+        (None, Some(p)) => p.to_json(),
+        (None, None) => s.value.clone(),
+    };
     update_setting(
         tx,
         &row.branch_id,
@@ -133,6 +144,23 @@ pub(super) fn mutate(
         op: ChangeOp::Update,
         before: None,
     }];
+    if (row.key == KEY_PRINTER_SELECTED || row.key == KEY_PRINTER_PAPER_MM)
+        && value != row.value
+        && let Some(status) = find_setting(tx, KEY_PRINTER_STATUS)?
+    {
+        let unset = PrinterStatus::unset().to_json();
+        if status.value != unset {
+            update_setting(tx, &status.branch_id, &status.key, &unset, None, None)?;
+            written.push(Written {
+                key: RowKey::Settings {
+                    branch_id: status.branch_id,
+                    key: status.key,
+                },
+                op: ChangeOp::Update,
+                before: None,
+            });
+        }
+    }
     if opening_hours.is_some()
         && let Some(flag) = find_setting(tx, KEY_OPENING_HOURS_SET)?
         && flag.value != "true"

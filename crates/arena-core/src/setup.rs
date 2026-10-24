@@ -7,7 +7,8 @@ use crate::{Applied, HubStatus, SnapshotReader};
 
 use arena_proto::{
     AdConsentState, AdsConsent, AppError, BACKUP_PROBE_PREFIX, BackupDirProblem, ErrorCode,
-    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET, SetupStatus,
+    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET, KEY_PRINTER_STATUS, PrinterState,
+    PrinterStatus, SetupStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +33,9 @@ pub fn setup_status<'a>(value: impl Fn(&str) -> Option<&'a str>, tier: HubTier) 
         opening_hours_set: value(KEY_OPENING_HOURS_SET) == Some("true"),
         backup_location_set: value(KEY_BACKUP_DIR).is_some_and(|v| !v.trim().is_empty()),
         ad_consent,
+        printer: value(KEY_PRINTER_STATUS)
+            .and_then(PrinterStatus::parse)
+            .map_or(PrinterState::Unset, |s| s.state),
     }
 }
 
@@ -138,6 +142,7 @@ mod tests {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                printer: PrinterState::Unset,
             }
         );
         let given = r#"{"given":true,"at":1,"staff_id":"S"}"#;
@@ -145,6 +150,10 @@ mod tests {
             (KEY_OPENING_HOURS_SET, "true"),
             (KEY_BACKUP_DIR, "/mnt/backup"),
             (KEY_ADS_CONSENT, given),
+            (
+                KEY_PRINTER_STATUS,
+                r#"{"state":"skipped","error":null,"at":3}"#,
+            ),
         ];
         assert_eq!(
             status(&done, HubTier::Free),
@@ -152,6 +161,7 @@ mod tests {
                 opening_hours_set: true,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Given,
+                printer: PrinterState::Skipped,
             }
         );
         assert_eq!(
@@ -177,8 +187,24 @@ mod tests {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                printer: PrinterState::Unset,
             }
         );
+        for (value, state) in [
+            (r#"{"state":"ok","error":null,"at":1}"#, PrinterState::Ok),
+            (
+                r#"{"state":"failed","error_kind":"refused","error":null,"at":1}"#,
+                PrinterState::Failed,
+            ),
+            (arena_proto::DEFAULT_PRINTER_STATUS, PrinterState::Unset),
+            ("junk", PrinterState::Unset),
+        ] {
+            assert_eq!(
+                status(&[(KEY_PRINTER_STATUS, value)], HubTier::Free).printer,
+                state,
+                "{value}"
+            );
+        }
         assert!(!status(&[(KEY_BACKUP_DIR, "  ")], HubTier::Free).backup_location_set);
         assert_eq!(hub_tier(), HubTier::Free);
     }

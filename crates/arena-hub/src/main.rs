@@ -283,6 +283,18 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         }),
     );
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    #[cfg(feature = "dev-fixtures")]
+    let fake_printer = (cfg.printer == config::PrinterChoice::Fake)
+        .then(|| Arc::new(arena_tasks::printer::FakePrinter::dev()));
+    let printer: Arc<dyn arena_core::printer::Printer> = match cfg.printer {
+        config::PrinterChoice::System => Arc::new(arena_tasks::printer::SystemPrinter::new()),
+        #[cfg(feature = "dev-fixtures")]
+        config::PrinterChoice::Fake => match &fake_printer {
+            Some(fake) => Arc::clone(fake) as Arc<dyn arena_core::printer::Printer>,
+            None => return Err(internal("the fake printer was not created".to_owned())),
+        },
+    };
+    tracing::info!(adapter = ?cfg.printer, "printer adapter ready");
     let ui_auth = Arc::new(
         arena_api::UiAuth::new(
             Arc::clone(&staff),
@@ -291,7 +303,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             Arc::clone(&clock),
         )
         .with_status(status_rx.clone())
-        .with_presence(lan_hub.presence()),
+        .with_presence(lan_hub.presence())
+        .with_printer(printer),
     );
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
     let setup_job = tokio::spawn(arena_core::setup::publish_setup(
@@ -312,6 +325,25 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         writer.clone(),
         Arc::clone(&clock),
     ));
+    #[cfg(feature = "dev-fixtures")]
+    let router = match fake_printer {
+        Some(fake) => {
+            let jobs: arena_api::health::PrintedJobs = Arc::new(move || {
+                fake.sent()
+                    .into_iter()
+                    .map(|job| {
+                        let target = match job.target {
+                            arena_core::printer::PrinterTarget::Usb(name) => format!("usb:{name}"),
+                            arena_core::printer::PrinterTarget::Lan(addr) => format!("lan:{addr}"),
+                        };
+                        (target, job.bytes)
+                    })
+                    .collect()
+            });
+            router.merge(arena_api::health::dev_printer_router(jobs))
+        }
+        None => router,
+    };
     let mut server = tokio::spawn(serve_router(listener, router, async {
         let _ = stop_rx.await;
     }));

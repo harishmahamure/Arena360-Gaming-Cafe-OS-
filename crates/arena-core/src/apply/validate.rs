@@ -50,6 +50,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Setting(row) => super::ads_consent::validate(intent, p, row.as_ref()),
             _ => Err(internal_target()),
         },
+        IntentPayload::PrinterStatus(p) => match target {
+            Target::Setting(row) => super::printer_status::validate(intent, p, row.as_ref()),
+            _ => Err(internal_target()),
+        },
         IntentPayload::DeviceRegister(d) => match target {
             Target::NewDevice(branch) => devices::validate_register(intent, d, branch.as_ref()),
             _ => devices::validate_register(intent, d, None),

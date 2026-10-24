@@ -79,10 +79,11 @@ base64 = "=0.22.1"
 # Windows-only (arena-kiosk-svc, arena-kiosk-ui): DPAPI, ACLs, pipe peers, WTS session launch,
 # job objects, the service host; the lockdown (local accounts, profiles, hives), the keyboard
 # hook and the monitor layout; process enforcement (WMI process-start events, Authenticode
-# with catalogs, process snapshots).
+# with catalogs, process snapshots). arena-tasks: the Hub's receipt printer through the spooler.
 windows = { version = "=0.62.2", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
+  "Win32_Graphics_Printing",
   "Win32_NetworkManagement_NetManagement",
   "Win32_Security",
   "Win32_Security_Authorization",

@@ -6,6 +6,7 @@ pub mod audit;
 mod clock;
 pub mod devices;
 pub mod locale;
+pub mod printer;
 pub mod rbac;
 mod settings_defaults;
 pub mod setup;

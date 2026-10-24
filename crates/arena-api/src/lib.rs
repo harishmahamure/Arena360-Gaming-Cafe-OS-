@@ -7,6 +7,7 @@ pub mod lan;
 pub mod ui_audit;
 pub mod ui_auth;
 pub mod ui_events;
+mod ui_printer;
 
 pub use health::{
     DEFAULT_HEALTH_PORT, UI_ALLOWED_ORIGINS, bind_health, router, serve_health, serve_router,

@@ -18,6 +18,7 @@ mod kiosk;
 pub mod licence;
 mod operating;
 mod permission;
+mod printer;
 mod process;
 mod scope;
 mod signin;
@@ -80,6 +81,15 @@ pub use operating::{
     parse_opening_hours,
 };
 pub use permission::{Permission, Requirement};
+pub use printer::{
+    DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_PORT, DEFAULT_PRINTER_SELECTED,
+    DEFAULT_PRINTER_STATUS, FoundPrinter, KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED,
+    KEY_PRINTER_STATUS, MAX_PRINTER_ERROR_CHARS, MAX_PRINTER_NAME_CHARS, PRINTER_IP_FIELD,
+    PRINTER_PAPER_WIDTHS_MM, PrinterErrorKind, PrinterFindResult, PrinterKind, PrinterOutcome,
+    PrinterSelected, PrinterSelectedError, PrinterState, PrinterStatus, PrinterStatusReply,
+    PrinterStatusSet, parse_printer_addr, printer_error_text, valid_printer_error,
+    valid_printer_outcome,
+};
 pub use process::{
     ARENA_SIGNER_CN, BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, DEFAULT_PROCESS_ALLOW,
     DEFAULT_PROCESS_BLOCK, INSTALL_DIR_TOKEN, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK,

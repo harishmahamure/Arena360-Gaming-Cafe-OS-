@@ -657,3 +657,29 @@ Each entry gives the story, the decision point, the choice taken (the recommende
     - small UI and CLI fixes.
   - **Deferred:** TierStep 409 recovery tests; review of the `rsa` crate pulled in by jsonwebtoken.
   - **Verification:** fully green except the known `arena-kiosk-svc` PIN-pause flake. Post-rebase onto 2.17 (error-code union, lockfile regenerated), clippy, the touched crates' tests and the checks pass.
+- **2.27 implementation choices, accepted:**
+  - the printer trait and test page live in arena-core (layer rules), with adapters in arena-tasks;
+  - `Win32_Graphics_Printing` feature;
+  - `printer.status` writes skip `base_rev`;
+  - selection saves immediately.
+- **2.27 review outcome (BH + VG on Sonnet):** 15 fixes, 5 rejections and 1 deferral.
+  - **Fixes:**
+    - status resets on printer or width change;
+    - manual IP limited to private ranges;
+    - USB 10 s timeout;
+    - single-flight find and test;
+    - link-local interfaces skipped;
+    - printed-not-recorded outcome;
+    - error kinds via the catalogue;
+    - `ESC t 0`;
+    - a shared error check;
+    - focus kept after save;
+    - audit label;
+    - aligned spooler buffer;
+    - deterministic LAN tests;
+    - follower test;
+    - README service note.
+  - **Deferred:** a Windows spooler behavioural test.
+- **Verification:**
+  - Before landing: full run green except one Hub Playwright load flake (`operating.spec:311`, 8/8 on rerun).
+  - Post-rebase onto 2.8 (conflicts in Cargo/README/health/tasks): clippy, the arena-tasks/core/api/hub tests, checks, and the printer/operating/devices specs all pass. Added `lan: null` to `printer.spec`'s stub for the 2.17 snapshot field.

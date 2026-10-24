@@ -346,6 +346,27 @@ pub fn dev_router(writer: Option<arena_core::WriterHandle>, clock: Arc<dyn Clock
         .with_state(DevState { writer, clock })
 }
 
+#[cfg(feature = "dev-fixtures")]
+pub type PrintedJobs = Arc<dyn Fn() -> Vec<(String, Vec<u8>)> + Send + Sync>;
+
+#[cfg(feature = "dev-fixtures")]
+pub fn dev_printer_router(jobs: PrintedJobs) -> Router {
+    async fn list(State(jobs): State<PrintedJobs>) -> Json<serde_json::Value> {
+        let jobs: Vec<serde_json::Value> = jobs()
+            .into_iter()
+            .map(|(target, bytes)| {
+                let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+                serde_json::json!({ "target": target, "bytes_hex": hex })
+            })
+            .collect();
+        Json(serde_json::json!({ "jobs": jobs }))
+    }
+
+    Router::new()
+        .route("/dev/printer/jobs", get(list))
+        .with_state(jobs)
+}
+
 /// Serves `/healthz` on `listener` until `shutdown` resolves.
 pub async fn serve_health(
     listener: TcpListener,
@@ -571,7 +592,7 @@ mod tests {
                     },
                     "ui": {"idle_lock_minutes": 5, "hc": false},
                     "connectivity": {"state": "cloud_unreachable", "checked_at": 7},
-                    "setup": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing"},
+                    "setup": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset"},
                     "lan": {
                         "addresses": ["192.168.1.20"],
                         "lan_port": 7400,

@@ -28,6 +28,7 @@ dev-fixtures = []
 
 [dev-dependencies]
 arena-kiosk-core.workspace = true
+arena-tasks.workspace = true
 arena-store.workspace = true
 tempfile.workspace = true
 tracing-subscriber.workspace = true

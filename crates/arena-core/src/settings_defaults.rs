@@ -8,6 +8,10 @@ use arena_proto::{
     KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW,
     KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
 };
+use arena_proto::{
+    DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
+    KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
+};
 
 /// The branch locale keys. They are authoritative for the locale; the `branch` row's columns
 /// only hold the bootstrap values.
@@ -70,17 +74,24 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_KIOSK_VOLUME_DEFAULT, DEFAULT_KIOSK_VOLUME),
     (KEY_BACKUP_DIR, DEFAULT_BACKUP_DIR),
     (KEY_ADS_CONSENT, DEFAULT_ADS_CONSENT),
+    (KEY_PRINTER_SELECTED, DEFAULT_PRINTER_SELECTED),
+    (KEY_PRINTER_PAPER_MM, DEFAULT_PRINTER_PAPER_MM),
+    (KEY_PRINTER_STATUS, DEFAULT_PRINTER_STATUS),
 ];
 
-pub const SYSTEM_MANAGED_KEYS: [&str; 2] = [KEY_OPENING_HOURS_SET, KEY_ADS_CONSENT];
+pub const SYSTEM_MANAGED_KEYS: [&str; 3] =
+    [KEY_OPENING_HOURS_SET, KEY_ADS_CONSENT, KEY_PRINTER_STATUS];
 
-pub const KEYED_FIELD_KEYS: [&str; 6] = [
+pub const KEYED_FIELD_KEYS: [&str; 9] = [
     KEY_OPENING_HOURS,
     KEY_OPENING_HOURS_SET,
     KEY_FULFILMENT,
     KEY_KIOSK_VOLUME_DEFAULT,
     KEY_BACKUP_DIR,
     KEY_ADS_CONSENT,
+    KEY_PRINTER_SELECTED,
+    KEY_PRINTER_PAPER_MM,
+    KEY_PRINTER_STATUS,
 ];
 
 /// The value `branch.seed_defaults` inserts for a default setting an existing branch lacks:
@@ -121,6 +132,8 @@ pub enum SettingRule {
     OpeningHours,
     Path,
     AdsConsent,
+    PrinterSelected,
+    PrinterStatus,
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -167,6 +180,12 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     ),
     (KEY_BACKUP_DIR, SettingRule::Path),
     (KEY_ADS_CONSENT, SettingRule::AdsConsent),
+    (KEY_PRINTER_SELECTED, SettingRule::PrinterSelected),
+    (
+        KEY_PRINTER_PAPER_MM,
+        SettingRule::OneOf(PRINTER_PAPER_WIDTHS_MM),
+    ),
+    (KEY_PRINTER_STATUS, SettingRule::PrinterStatus),
 ];
 
 /// The rule for every key that starts with `display.hc.` and names `hub` or a device id
@@ -217,6 +236,8 @@ impl SettingRule {
                         && !value.chars().any(char::is_control))
             }
             Self::AdsConsent => arena_proto::AdsConsent::parse(value).is_some(),
+            Self::PrinterSelected => arena_proto::PrinterSelected::parse(value).is_ok(),
+            Self::PrinterStatus => arena_proto::PrinterStatus::parse(value).is_some(),
         }
     }
 
@@ -399,6 +420,26 @@ mod tests {
     }
 
     #[test]
+    fn printer_rules() {
+        let rule = |k| setting_rule(k).unwrap();
+        let paper = rule("printer.paper_mm");
+        assert!(paper.accepts("58") && paper.accepts("80"));
+        for bad in ["", "57", "80mm", "112"] {
+            assert!(!paper.accepts(bad), "{bad:?}");
+        }
+        let selected = rule("printer.selected");
+        assert!(selected.accepts(""));
+        assert!(selected.accepts(r#"{"kind":"lan","id_or_addr":"192.168.1.50","name":"P"}"#));
+        assert!(selected.accepts(r#"{"kind":"usb","id_or_addr":"EPSON","name":"EPSON"}"#));
+        assert!(!selected.accepts(r#"{"kind":"lan","id_or_addr":"abc","name":"P"}"#));
+        assert!(!selected.accepts("printer"));
+        let status = rule("printer.status");
+        assert!(status.accepts(DEFAULT_PRINTER_STATUS));
+        assert!(!status.accepts(r#"{"state":"ok"}"#));
+        assert!(SYSTEM_MANAGED_KEYS.contains(&"printer.status"));
+    }
+
+    #[test]
     fn hc_keys_take_the_bool_rule() {
         let device = "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0";
         for key in ["display.hc.hub", device] {
@@ -432,6 +473,9 @@ mod tests {
             ("branch.fulfilment", "counter"),
             ("kiosk.volume_default", "50"),
             ("system.backup_dir", ""),
+            ("printer.selected", ""),
+            ("printer.paper_mm", "80"),
+            ("printer.status", DEFAULT_PRINTER_STATUS),
         ] {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
         }

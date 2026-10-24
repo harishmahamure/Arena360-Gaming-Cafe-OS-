@@ -8,6 +8,7 @@ use crate::admin::{DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock};
 use crate::kiosk::KioskLog;
 use crate::operating::AdsConsentSet;
 use crate::permission::{Permission, Requirement};
+use crate::printer::PrinterStatusSet;
 use crate::process::KioskProcessBlocked;
 use crate::scope::ClientClass;
 
@@ -83,11 +84,13 @@ pub enum IntentKind {
     DeviceAdminUnlock,
     #[serde(rename = "ads.consent")]
     AdsConsent,
+    #[serde(rename = "printer.status")]
+    PrinterStatus,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 16] = [
+    pub const ALL: [IntentKind; 17] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -104,6 +107,7 @@ impl IntentKind {
         Self::DeviceAdminRelock,
         Self::DeviceAdminUnlock,
         Self::AdsConsent,
+        Self::PrinterStatus,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -125,6 +129,7 @@ impl IntentKind {
             Self::DeviceAdminRelock => "device.admin_relock",
             Self::DeviceAdminUnlock => "device.admin_unlock",
             Self::AdsConsent => "ads.consent",
+            Self::PrinterStatus => "printer.status",
         }
     }
 
@@ -137,7 +142,7 @@ impl IntentKind {
     pub fn category(self) -> IntentCategory {
         match self {
             Self::BranchBootstrap | Self::BranchSeedDefaults => IntentCategory::Branch,
-            Self::SettingsSet | Self::AdsConsent => IntentCategory::Settings,
+            Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => IntentCategory::Settings,
             Self::DeviceRegister
             | Self::DeviceRevoke
             | Self::DeviceVersionReported
@@ -156,7 +161,9 @@ impl IntentKind {
     pub fn requirement(self) -> Requirement {
         match self {
             Self::BranchBootstrap | Self::BranchSeedDefaults => Requirement::System,
-            Self::SettingsSet | Self::AdsConsent => Requirement::Perm(Permission::SettingsEdit),
+            Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => {
+                Requirement::Perm(Permission::SettingsEdit)
+            }
             Self::DeviceRegister => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
             Self::DeviceVersionReported => Requirement::System,
@@ -206,7 +213,8 @@ impl IntentKind {
             | Self::DeviceAdminExit
             | Self::DeviceAdminRelock
             | Self::DeviceAdminUnlock
-            | Self::AdsConsent => None,
+            | Self::AdsConsent
+            | Self::PrinterStatus => None,
         }
     }
 
@@ -426,6 +434,8 @@ pub enum IntentPayload {
     DeviceAdminUnlock(DeviceAdminUnlock),
     #[serde(rename = "ads.consent")]
     AdsConsent(AdsConsentSet),
+    #[serde(rename = "printer.status")]
+    PrinterStatus(PrinterStatusSet),
 }
 
 impl IntentPayload {
@@ -447,6 +457,7 @@ impl IntentPayload {
             Self::DeviceAdminRelock(_) => IntentKind::DeviceAdminRelock,
             Self::DeviceAdminUnlock(_) => IntentKind::DeviceAdminUnlock,
             Self::AdsConsent(_) => IntentKind::AdsConsent,
+            Self::PrinterStatus(_) => IntentKind::PrinterStatus,
         }
     }
 }
@@ -565,7 +576,9 @@ mod tests {
                 | "branch.seed_defaults"
                 | "device.version_reported"
                 | "audit.read_granted" => Requirement::System,
-                "settings.set" | "ads.consent" => Requirement::Perm(Permission::SettingsEdit),
+                "settings.set" | "ads.consent" | "printer.status" => {
+                    Requirement::Perm(Permission::SettingsEdit)
+                }
                 "device.register" => Requirement::Perm(Permission::DeviceManage),
                 "device.revoke" | "device.admin_unlock" => {
                     Requirement::Perm(Permission::DeviceRemote)

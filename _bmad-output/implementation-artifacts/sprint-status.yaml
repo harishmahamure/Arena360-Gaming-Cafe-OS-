@@ -68,7 +68,7 @@ development_status:
   2-5-owner-sets-a-password-and-enrols-totp-with-backup-codes: review
   2-6-owner-signs-in-on-a-new-device-with-totp-backup-code-or-sms: review
   2-7-resumable-setup-wizard-and-step-1-café-and-first-branch: review
-  2-8-step-2-free-tier-issues-a-signed-licence: in-progress
+  2-8-step-2-free-tier-issues-a-signed-licence: review
   2-9-step-3-single-use-8-character-hub-pairing-code: in-progress
   2-10-hub-installer-pairs-with-the-code-and-retries-in-place: backlog
   2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself: backlog

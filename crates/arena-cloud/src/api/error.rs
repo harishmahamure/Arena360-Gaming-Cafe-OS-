@@ -41,7 +41,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::IdempotencyConflict
         | ErrorCode::AlreadySet
-        | ErrorCode::BranchCodeTaken => StatusCode::CONFLICT,
+        | ErrorCode::BranchCodeTaken
+        | ErrorCode::BillingDisabled
+        | ErrorCode::OneFreeBranch => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }
@@ -260,6 +262,8 @@ mod tests {
             (ErrorCode::TotpInvalid, 400),
             (ErrorCode::SetupIncomplete, 403),
             (ErrorCode::BranchCodeTaken, 409),
+            (ErrorCode::BillingDisabled, 409),
+            (ErrorCode::OneFreeBranch, 409),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

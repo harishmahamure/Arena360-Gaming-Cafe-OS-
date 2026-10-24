@@ -17,6 +17,7 @@
 //! statement `arena-cloud` runs lives here.
 
 mod dump;
+mod entitlement;
 mod mfa;
 mod otp;
 mod owner;
@@ -26,6 +27,7 @@ mod signin;
 mod tenant;
 
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
+pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
 pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
 pub use otp::{
     NewOtpChallenge, OTP_PURPOSE_SIGNUP, OTP_RETENTION_MS, OtpChallenge, SignupCompletion,
@@ -79,6 +81,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 5,
         sql: include_str!("../control-migrations/0005_tenants_branches.sql"),
+    },
+    ControlMigration {
+        version: 6,
+        sql: include_str!("../control-migrations/0006_entitlements.sql"),
     },
 ];
 

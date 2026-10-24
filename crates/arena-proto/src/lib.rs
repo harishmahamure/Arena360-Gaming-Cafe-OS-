@@ -15,6 +15,7 @@ mod error;
 mod frame;
 mod intent;
 mod kiosk;
+pub mod licence;
 mod operating;
 mod permission;
 mod process;
@@ -22,6 +23,7 @@ mod scope;
 mod signin;
 mod signup;
 mod snapshot;
+pub mod tier;
 mod ui_auth;
 mod wizard;
 
@@ -67,6 +69,7 @@ pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
     MAX_KIOSK_LOG_DETAIL_CHARS,
 };
+pub use licence::{LicenceClaims, LicenceError, VerifyKey};
 pub use operating::{
     ADS_POLICY_VERSION, AdConsentState, AdsConsent, AdsConsentSet, BACKUP_PROBE_PREFIX,
     BackupDirProblem, DAYS_PER_WEEK, DEFAULT_ADS_CONSENT, DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT,
@@ -103,14 +106,16 @@ pub use snapshot::{
     SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLan, SnapshotLocale, SnapshotUi,
     SymbolPosition,
 };
+pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use ui_auth::{
     ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_TICKET_USES, SessionStaff,
     SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk, UnlockRequest,
 };
 pub use wizard::{
-    BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, COUNTRIES, CafeDetails, Country, CountryRow,
-    SetBranchCode, StepState, WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant,
-    country, current_step, valid_branch_code,
+    BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, COUNTRIES, CafeDetails, ChooseTier, Country,
+    CountryRow, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable, WizardBranch,
+    WizardState, WizardStep, WizardStepInfo, WizardTenant, country, current_step,
+    valid_branch_code,
 };
 
 /// Returns this crate's name.

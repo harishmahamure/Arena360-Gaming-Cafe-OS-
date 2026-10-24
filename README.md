@@ -1310,7 +1310,7 @@ Secure; SameSite=Lax`). The device label is `device_label` (up to 60 characters)
   `go_live` (the three before the test session can be skipped in a later story). A later
   step that isn't done redirects to the current one; any done step opens for edit and saving it
   returns to the current step. The wizard state is fetched again on every visit to `/setup` and
-  when the tab regains focus, and cleared on sign-in, sign-out and any 401. Steps 2–10 say "This step is coming soon" until their stories land.
+  when the tab regains focus, and cleared on sign-in, sign-out and any 401. Steps 3–10 say "This step is coming soon" until their stories land.
   - Every wizard and branch route needs a finished account setup (else 403
     `SETUP_INCOMPLETE`). The tenant always comes from the session owner, never the request.
   - `GET /v1/wizard` → `{current, steps: [{key, state, can_skip}], tenant?: {id, name},
@@ -1345,6 +1345,44 @@ gstin?}` answers the same body. The first call creates the tenant (one per owner
 state, completed_at)`, which keeps completion times for the sign-up-to-go-live metric and
     no personal data.
 
+- **Plan and licence** (Story 2.8). Wizard step 2 (`/setup/tier`) shows three equal cards
+  rendered only from the pricing table `packages/ui/src/pricing.ts` (exported from `@arena/ui`):
+  Free ₹0 (1 branch, ads on the Android Hub), Basic ₹200 per branch per month or ₹2,000 a year
+  and Premium ₹1,999 a month or ₹19,990 a year, both + 18% GST, with a Monthly · Yearly
+  switch. No payment is ever asked for: paid plans stay disabled ("Paid plans are coming soon")
+  until billing ships in Epic 10.
+  - `GET /v1/wizard/tier[?branch_id=]` → `{tiers: [{key, available, reason?, limits}],
+billing_enabled, current?}`. Free is available unless another branch of the tenant already
+    has a Free entitlement (`reason: "one_free_branch"`); Basic and Premium answer
+    `reason: "billing_disabled"` while `ARENA_BILLING_ENABLED` is not `true` (off by default,
+    and never on in Epic 2). `limits` and `current` come from the tier table and the branch's
+    entitlement.
+  - `PUT /v1/wizard/tier {tier, branch_id?}` → the `GET /v1/wizard` body. Free writes the
+    entitlement (tier and source `free`) and marks `tier` done in one transaction; picking it
+    again is a 200 no-op. Basic or Premium is 409 `BILLING_DISABLED` and writes nothing; a
+    second Free branch is 409 `ONE_FREE_BRANCH`; Free on a branch that already has a comp or
+    paid plan is 409 `ALREADY_SET`. With no branch yet (before step 1), or a `branch_id` the
+    session's tenant doesn't own, it is 403 `FORBIDDEN` and nothing is written.
+  - **Tier table** `arena_proto::TIERS` (shared by the cloud and the Hub): Free has no flags,
+    no uploads (intervals 0), retention 0 and limits 20 devices, 3 users, 1 branch; Basic adds
+    `uploads` and `owner_reports`, 300 s uploads, 900 s summaries, 365 days and 60/10/1;
+    Premium adds `kiosk_orders`, `kitchen_display` and `standby`, 1095 days and 200/50/1. The
+    paid values other than the device limits are provisional until Epic 10.
+  - **Licence.** `arena-cloud`'s `licence` module signs an EdDSA JWT (kid header) with claims
+    `{tenant_id, branch_id, tier, flags, features, upload_interval_s, summary_interval_s,
+rollup_schema, retention_days, limits, iat, exp}` from the tier table and the entitlement
+    (`exp = iat + 7 days`; a comp entitlement past its `until` signs as Free).
+    `arena_proto::licence::verify(token, keys, now_ms)` checks the kid, the signature, `iat`
+    (at most 5 minutes ahead) and `exp` against a set of `VerifyKey {kid, public_key}`.
+    `LICENCE_VERIFY_KEYS` (current plus next) ships empty, which refuses every token with "no
+    licence verify keys"; the dev public key is compiled in only for tests and the `dev-keys`
+    feature. Nothing signs at the HTTP layer yet: the heartbeat (Story 2.11) delivers
+    licences. Keys, rotation and the operator commands `ops licence-keygen` and
+    `ops grant-comp` are in [`deploy/README.md`](deploy/README.md#6c-licence-signing-key).
+  - Tables (migration 0006): `entitlements(branch_id, tier, source, addons_json, issued_at,
+until, updated_at)` and `ops_audit(id, at, operator, action, target, reason,
+details_json)`.
+
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
   fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the
@@ -1358,7 +1396,7 @@ No Turso, Cloudflare or token needed. MinIO stands in for R2:
 ```sh
 docker compose -f deploy/dev/compose.yaml up -d   # MinIO on 127.0.0.1:9000, bucket arena-dev
 cargo run -p arena-cloud -- --role all --dev
-curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":5}
+curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":6}
 ```
 
 Sign up locally: run the cloud as above and the onboarding app with
@@ -1474,6 +1512,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | qrcode                              | =0.14.1                | `Cargo.toml`                                   |
 | mdns-sd                             | =0.21.6                | `Cargo.toml`                                   |
 | if-addrs                            | =0.15.0                | `Cargo.toml`                                   |
+| jsonwebtoken                        | =11.1.0                | `Cargo.toml`                                   |
+| base64                              | =0.22.1                | `Cargo.toml`                                   |
 | sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`           |
 | age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`           |
 | gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile`         |

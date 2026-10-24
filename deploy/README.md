@@ -268,6 +268,48 @@ not decode to 32 bytes, makes the pod exit 64 at start. The key is never logged.
   `POST /v1/account/mfa/totp/confirm` and `POST /v1/account/mfa/backup-codes/regenerate`
   (30 per 10 min each); both need a signed-in session.
 
+### 6c. Licence signing key
+
+Each branch licence is an EdDSA (Ed25519) JWT that lives 7 days, signed by the cloud with
+`ARENA_LICENCE_SIGNING_KEY` (a PKCS#8 PEM private key) under the kid `ARENA_LICENCE_KID`, both
+keys of `arena-cloud-secrets` (step 7). Hubs trust only the public keys compiled into
+`arena_proto::licence::LICENCE_VERIFY_KEYS` (two slots: the current key and the next one). The
+set ships empty, and an empty set refuses every licence ("no licence verify keys"), so this
+step must be done before a release that verifies licences.
+
+1. Generate a key, one per environment, on an operator machine:
+
+   ```sh
+   cargo run -p arena-cloud -- ops licence-keygen --kid prod-2026-10 > /tmp/licence.pem
+   ```
+
+   The private PEM goes to stdout only. stderr prints `ARENA_LICENCE_KID=<kid>` and the line
+   to paste into `LICENCE_VERIFY_KEYS`:
+   `VerifyKey { kid: "<kid>", public_key: "<base64url>" },`. Without `--kid` the kid is
+   `lk-` plus 12 hex characters of the public key's SHA-256.
+
+2. Put the PEM (as a YAML block scalar) and the kid into `arena-cloud-secrets` (step 7), then
+   `shred -u /tmp/licence.pem`.
+3. Paste the `VerifyKey` line into `LICENCE_VERIFY_KEYS` in
+   `crates/arena-proto/src/licence.rs` and release the Hub with it **before** the cloud signs
+   with the key.
+
+- **Rotation.** Generate the next key, ship it as the second slot of `LICENCE_VERIFY_KEYS`,
+  wait until Hubs run that release, then switch `ARENA_LICENCE_SIGNING_KEY`/`ARENA_LICENCE_KID`
+  and, in a later release, drop the retired slot. Licences live 7 days, so a retired key stops
+  mattering a week after the switch.
+- **Never the dev key.** `--dev` signs with the committed
+  `crates/arena-cloud/dev/fixtures/licence-dev-signing-key.pem` (kid `arena-dev-licence-1`),
+  whose public key is compiled in only for tests and the `dev-keys` feature of `arena-proto`.
+  The control role exits 64 when `ARENA_LICENCE_SIGNING_KEY` is missing, is not an Ed25519
+  PKCS#8 PEM, or is that dev key. The key is never logged.
+- **Comp entitlements.** Internal and beta cafés get Basic or Premium limits from
+  `arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
+--operator <name> --reason <text>`, run against the environment's `ARENA_CONTROL_DB_*`. It
+  writes an `ops_audit` row and marks the branch's plan step done; `--until` ends at midnight
+  Asia/Kolkata. Exit 64 is a usage error (including a missing `ARENA_CONTROL_DB_*`); exit 1 an unknown
+  branch, a past date, a branch on a paid plan (never replaced) or a database failure.
+
 ### 7. Encrypt the secrets
 
 Each `deploy/secrets/<env>.enc.yaml` holds **all four** Secrets below; `ghcr-pull` is
@@ -294,6 +336,10 @@ stringData:
   ARENA_GUPSHUP_DLT_TEMPLATE_ID: <DLT template id of the sign-up message>
   # Owner MFA (step 6b): `openssl rand -base64 32`, a different one per environment.
   ARENA_MFA_KEY: <44 base64 characters>
+  # Licence signing (step 6c): from `ops licence-keygen`, a different one per environment.
+  ARENA_LICENCE_KID: <kid>
+  ARENA_LICENCE_SIGNING_KEY: |
+    <the PEM printed on stdout>
 ---
 apiVersion: v1
 kind: Secret

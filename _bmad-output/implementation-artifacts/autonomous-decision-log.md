@@ -636,3 +636,24 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Verification (`ARENA_PW_PORT` 5417/5517, 2 workers):**
   - Passing: clippy, workspace and dev-fixtures tests, 188 scripts, `check:generated`, kiosk Playwright, and Hub Playwright 283/286.
   - Failing: only the three known load flakes (lock countdown, Counter PIN, More sheet), recorded in `deferred-work.md`.
+- **2.8 implementation choices, accepted:**
+  - optional `branch_id` on the tier endpoints;
+  - limits shown from the server;
+  - Free on a live comp branch is `ALREADY_SET`;
+  - no `ed25519-dalek` (ring for keygen);
+  - dev key under `dev/fixtures/` (the `check:secrets` allowlist);
+  - `addons_json` stored but unused;
+  - pins `jsonwebtoken =11.1.0`, `base64 =0.22.1`.
+- **2.8 review outcome (Sonnet ×3):** 16 fixes, 7 rejections and 2 deferrals.
+  - **Fixes:**
+    - lapsed comp treated as Free everywhere (high);
+    - comp licence clamped to `until`;
+    - grant-comp never replaces a paid plan, with the audit row in the same txn;
+    - `tenant_id` plus a one-Free partial unique index and CHECKs;
+    - billing flag refused in this build;
+    - overflow-safe verify, two-slot assert and skew boundary tests;
+    - signer self-test and trust warning;
+    - `branch_id` sent by the UI;
+    - small UI and CLI fixes.
+  - **Deferred:** TierStep 409 recovery tests; review of the `rsa` crate pulled in by jsonwebtoken.
+  - **Verification:** fully green except the known `arena-kiosk-svc` PIN-pause flake. Post-rebase onto 2.17 (error-code union, lockfile regenerated), clippy, the touched crates' tests and the checks pass.

@@ -89,6 +89,16 @@ spec:
                 secretKeyRef:
                   name: arena-cloud-secrets
                   key: ARENA_MFA_KEY
+            - name: ARENA_LICENCE_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_LICENCE_SIGNING_KEY
+            - name: ARENA_LICENCE_KID
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_LICENCE_KID
             - name: ARENA_SMS_PROVIDER
               value: gupshup
             - name: ARENA_WEB_ORIGINS

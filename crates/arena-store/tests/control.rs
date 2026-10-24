@@ -16,7 +16,9 @@ const BASELINE: &[ControlMigration] = CONTROL_MIGRATIONS.split_at(1).0;
 /// The tables every migration creates, sorted.
 const ALL_TABLES: &[&str] = &[
     "branches",
+    "entitlements",
     "onboarding_progress",
+    "ops_audit",
     "otp_challenges",
     "owner_backup_codes",
     "owner_devices",

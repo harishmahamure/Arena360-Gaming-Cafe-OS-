@@ -83,6 +83,13 @@ test.describe("routes", () => {
     await page.goto("/setup");
     await expect(page).toHaveURL(/\/setup\/tier$/);
     await expect(h1(page, "ui.wizard.step.tier")).toBeVisible();
+    await expect(page.getByTestId("plan-free")).toBeVisible();
+  });
+
+  test("a step without its story yet says it is coming soon", async ({ page }) => {
+    await stubCloud(page, { ...ready, wizard: { branch: {}, done: ["cafe", "tier"] } });
+    await page.goto("/setup");
+    await expect(page).toHaveURL(/\/setup\/install_hub$/);
     await expect(page.getByText(t("onboarding.setup.coming_soon"))).toBeVisible();
   });
 

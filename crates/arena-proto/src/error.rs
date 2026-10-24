@@ -80,6 +80,8 @@ pub enum ErrorCode {
     BranchCodeTaken,
     NoHub,
     HubIncompatible,
+    BillingDisabled,
+    OneFreeBranch,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -132,6 +134,8 @@ impl ErrorCode {
             Self::BranchCodeTaken => "BRANCH_CODE_TAKEN",
             Self::NoHub => "NO_HUB",
             Self::HubIncompatible => "HUB_INCOMPATIBLE",
+            Self::BillingDisabled => "BILLING_DISABLED",
+            Self::OneFreeBranch => "ONE_FREE_BRANCH",
         }
     }
 }
@@ -242,6 +246,8 @@ mod tests {
             (ErrorCode::BranchCodeTaken, "BRANCH_CODE_TAKEN"),
             (ErrorCode::NoHub, "NO_HUB"),
             (ErrorCode::HubIncompatible, "HUB_INCOMPATIBLE"),
+            (ErrorCode::BillingDisabled, "BILLING_DISABLED"),
+            (ErrorCode::OneFreeBranch, "ONE_FREE_BRANCH"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

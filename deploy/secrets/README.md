@@ -11,7 +11,9 @@ environment:
 `arena-cloud-secrets` holds the `gz_control` URL and token, the sign-up OTP pepper
 (`ARENA_OTP_PEPPER`), the Gupshup SMS account (`ARENA_GUPSHUP_*`, see
 [`../README.md`](../README.md#6a-owner-sign-up-sms-pepper-web-origins-and-per-ip-limits)) and
-the owner MFA key (`ARENA_MFA_KEY`, see [`../README.md`](../README.md#6b-owner-mfa-key)).
+the owner MFA key (`ARENA_MFA_KEY`, see [`../README.md`](../README.md#6b-owner-mfa-key)) and
+the licence signing key and its kid (`ARENA_LICENCE_SIGNING_KEY`, `ARENA_LICENCE_KID`, see
+[`../README.md`](../README.md#6c-licence-signing-key)).
 
 `arena-cloud-backup` holds the nightly backup's bucket-scoped R2 token and endpoint, the
 backup age **public** key(s) and the alert webhook URL. The backup's age **private** key is

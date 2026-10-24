@@ -209,10 +209,36 @@ const VIEWS: {
   },
   {
     name: "setup, a coming-soon step",
-    cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {} } },
+    cloud: {
+      signedIn: true,
+      owner: READY_OWNER,
+      wizard: { branch: {}, done: ["cafe", "tier"] },
+    },
     open: async (page) => {
       await page.goto("/setup");
+      await expect(h1(page, "ui.wizard.step.install_hub")).toBeVisible();
+    },
+  },
+  {
+    name: "setup, plan step, yearly",
+    cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {} } },
+    open: async (page) => {
+      await page.goto("/setup/tier");
       await expect(h1(page, "ui.wizard.step.tier")).toBeVisible();
+      await page.getByRole("tab", { name: t("onboarding.tier.yearly") }).click();
+      await expect(page.getByTestId("plan-free")).toBeVisible();
+    },
+  },
+  {
+    name: "setup, plan step, no Free left",
+    cloud: {
+      signedIn: true,
+      owner: READY_OWNER,
+      wizard: { branch: {}, otherFree: true },
+    },
+    open: async (page) => {
+      await page.goto("/setup/tier");
+      await expect(page.getByText(t("onboarding.tier.choose_first"))).toBeVisible();
     },
   },
 ];

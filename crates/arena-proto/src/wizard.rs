@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::tier::{Tier, TierLimits};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -274,6 +276,44 @@ pub struct SetBranchCode {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct BranchCodeSet {
     pub branch_code: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum TierUnavailable {
+    OneFreeBranch,
+    BillingDisabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct TierOption {
+    pub key: Tier,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<TierUnavailable>,
+    pub limits: TierLimits,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct TierChoices {
+    pub tiers: Vec<TierOption>,
+    pub billing_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub current: Option<Tier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ChooseTier {
+    pub tier: Tier,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_id: Option<String>,
 }
 
 pub const BRANCH_CODE_MIN: usize = 3;

@@ -5,6 +5,8 @@ import type {
   Country,
   SessionOwner,
   SignupChallenge,
+  Tier,
+  TierChoices,
   TotpStarted,
   TrustedDevice,
   WizardBranch,
@@ -127,7 +129,18 @@ export const READY_OWNER: Partial<SessionOwner> = {
   backup_codes_acked: true,
 };
 
-export type WizardStart = { done?: WizardStep[]; branch?: Partial<WizardBranch> };
+export type WizardStart = {
+  done?: WizardStep[];
+  branch?: Partial<WizardBranch>;
+  tier?: Tier;
+  otherFree?: boolean;
+};
+
+export const TIER_LIMITS: Record<Tier, { devices: number; users: number; branches: number }> = {
+  free: { devices: 20, users: 3, branches: 1 },
+  basic: { devices: 60, users: 10, branches: 1 },
+  premium: { devices: 200, users: 50, branches: 1 },
+};
 
 export const err = (code: AppError["code"], extra: Partial<AppError> = {}): AppError => ({
   code,
@@ -184,6 +197,10 @@ export type Cloud = {
   takenCodes: string[];
   wizardLoads: number;
   nextWizard: Reply[];
+  tier: Tier | null;
+  otherFree: boolean;
+  tierPicks: Tier[];
+  tierBodies: unknown[];
 };
 
 async function fulfil(route: Route, r: Reply) {
@@ -252,6 +269,10 @@ export async function stubCloud(
     takenCodes: ["SEC"],
     wizardLoads: 0,
     nextWizard: [],
+    tier: start.wizard?.tier ?? (start.wizard?.done?.includes("tier") ? "free" : null),
+    otherFree: start.wizard?.otherFree ?? false,
+    tierPicks: [],
+    tierBodies: [],
   };
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -374,6 +395,24 @@ export function wizardBody(cloud: Cloud): WizardState {
   };
 }
 
+export function tierChoices(cloud: Cloud): TierChoices {
+  const keys: Tier[] = ["free", "basic", "premium"];
+  return {
+    tiers: keys.map((key) => {
+      const reason =
+        key === "free" ? (cloud.otherFree ? "one_free_branch" : undefined) : "billing_disabled";
+      return {
+        key,
+        available: reason === undefined,
+        ...(reason ? { reason } : {}),
+        limits: TIER_LIMITS[key],
+      } as TierChoices["tiers"][number];
+    }),
+    billing_enabled: false,
+    ...(cloud.tier ? { current: cloud.tier } : {}),
+  };
+}
+
 function initials(name: string): string {
   const words = name
     .toUpperCase()
@@ -428,6 +467,24 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
     }
     cloud.done.add("cafe");
     return { status: 200, body: wizardBody(cloud) };
+  }
+  if (path === "/v1/wizard/tier") {
+    if (!cloud.branch) return { status: 403, body: err("FORBIDDEN") };
+    if (method === "GET") return { status: 200, body: tierChoices(cloud) };
+    if (method === "PUT") {
+      cloud.tierBodies.push(body);
+      const tier = (body as { tier?: Tier } | null)?.tier;
+      if (tier !== "free" && tier !== "basic" && tier !== "premium") {
+        return { status: 400, body: err("BAD_REQUEST") };
+      }
+      cloud.tierPicks.push(tier);
+      if (tier !== "free") return { status: 409, body: err("BILLING_DISABLED", { field: "tier" }) };
+      if (cloud.tier && cloud.tier !== "free") return { status: 409, body: err("ALREADY_SET") };
+      if (cloud.otherFree) return { status: 409, body: err("ONE_FREE_BRANCH", { field: "tier" }) };
+      cloud.tier = "free";
+      cloud.done.add("tier");
+      return { status: 200, body: wizardBody(cloud) };
+    }
   }
   const m = /^\/v1\/branches\/([^/]+)\/code$/.exec(path);
   if (m && method === "PUT") {

@@ -20,6 +20,10 @@
     "./messages": {
       "default": "./src/messages/index.js"
     },
+    "./pricing": {
+      "types": "./src/pricing.ts",
+      "default": "./src/pricing.ts"
+    },
     "./format": {
       "default": "./src/format.js"
     },

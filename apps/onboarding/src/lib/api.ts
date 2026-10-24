@@ -19,6 +19,8 @@ import type {
   SigninReply,
   SigninSmsSent,
   SigninVerified,
+  Tier,
+  TierChoices,
   TotpStarted,
   TrustedDevice,
   WizardState,
@@ -57,6 +59,8 @@ const CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "SETUP_INCOMPLETE",
   "AUTH_LOCKED",
   "BRANCH_CODE_TAKEN",
+  "BILLING_DISABLED",
+  "ONE_FREE_BRANCH",
 ]);
 
 function isAppError(v: unknown): v is AppError {
@@ -205,3 +209,8 @@ export const setBranchCode = (branchId: string, code: string) =>
   );
 export const listCountries = () => call<Country[]>("GET", "/meta/countries");
 export const listTimezones = () => call<string[]>("GET", "/meta/timezones");
+export const getTierChoices = () => withRefresh(() => call<TierChoices>("GET", "/wizard/tier"));
+export const chooseTier = (tier: Tier, branchId?: string) =>
+  withRefresh(() =>
+    call<WizardState>("PUT", "/wizard/tier", branchId ? { tier, branch_id: branchId } : { tier }),
+  );

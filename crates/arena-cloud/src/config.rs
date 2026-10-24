@@ -11,6 +11,9 @@ pub const USAGE: &str =
        arena-cloud --role jobs --task control-backup [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
+       arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
+                                  --operator <name> --reason <text> [--dev [--data-dir <dir>]]
+       arena-cloud ops licence-keygen [--kid <kid>]
 
   --role all   every serving role this build has (control)
   --role jobs  run one --task and exit (0 on success, 1 on failure)
@@ -23,6 +26,11 @@ pub const USAGE: &str =
   ops restore-control  restore a dump into an EMPTY gz_control and verify every table's row
                count; --from-key reads the backup bucket, --from-file a file (- for stdin);
                --identity decrypts with an age identity file, --plaintext reads a decrypted dump
+  ops grant-comp  give a branch a comp Basic or Premium entitlement until the end of that date
+               (Asia/Kolkata), write an ops_audit row and mark the wizard's plan step done;
+               exit 1 for an unknown branch, a past date or a database failure
+  ops licence-keygen  print a new Ed25519 PKCS#8 private key PEM on stdout (for SOPS) and, on
+               stderr, its kid and the VerifyKey line for arena_proto::licence::LICENCE_VERIFY_KEYS
 
 environment (not with --dev):
   ARENA_CONTROL_DB_URL    gz_control URL (libsql:// or https://)
@@ -35,6 +43,10 @@ environment (not with --dev):
                           --dev 10000)
   ARENA_MFA_KEY           base64 of 32 random bytes: the AES-256-GCM key of owners' TOTP
                           secrets (--dev: a fixed dev key)
+  ARENA_LICENCE_SIGNING_KEY  the Ed25519 PKCS#8 PEM that signs branch licences (from
+                          ops licence-keygen; --dev: the committed dev key)
+  ARENA_LICENCE_KID       the kid of that key, as listed in LICENCE_VERIFY_KEYS
+  ARENA_BILLING_ENABLED   unset or false: billing is not available in this build (true exits 64)
   ARENA_GUPSHUP_ENDPOINT, ARENA_GUPSHUP_USERID, ARENA_GUPSHUP_PASSWORD, ARENA_GUPSHUP_SENDER,
   ARENA_GUPSHUP_DLT_TEMPLATE_ID  the Gupshup Enterprise SMS account (gupshup only)
 environment (--task control-backup, ops restore-control --from-key):
@@ -184,14 +196,132 @@ pub struct RestoreConfig {
     pub dev_data_dir: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantCompConfig {
+    pub branch_id: String,
+    pub tier: arena_proto::Tier,
+    pub until_date: String,
+    pub until_ms: i64,
+    pub operator: String,
+    pub reason: String,
+    pub dev_data_dir: Option<PathBuf>,
+}
+
 /// What the command line asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Run(Config),
     Job(JobConfig),
     RestoreControl(RestoreConfig),
+    GrantComp(GrantCompConfig),
+    LicenceKeygen { kid: Option<String> },
     Help,
     Version,
+}
+
+pub const IST_OFFSET_MS: i64 = (5 * 60 + 30) * 60 * 1000;
+const OPS_TEXT_MAX: usize = 200;
+
+pub fn end_of_ist_day(date: &str) -> Option<i64> {
+    let b = date.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| -> Option<u32> {
+        let s = date.get(r)?;
+        if !s.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        s.parse().ok()
+    };
+    let day = chrono::NaiveDate::from_ymd_opt(num(0..4)? as i32, num(5..7)?, num(8..10)?)?;
+    let next = day.succ_opt()?.and_hms_opt(0, 0, 0)?;
+    Some(next.and_utc().timestamp_millis() - IST_OFFSET_MS - 1)
+}
+
+fn ops_text(flag: &str, v: Option<String>) -> Result<String, String> {
+    let v = v.ok_or_else(|| format!("grant-comp needs {flag}"))?;
+    let v = v.trim().to_owned();
+    if v.is_empty() || v.chars().count() > OPS_TEXT_MAX || v.chars().any(char::is_control) {
+        return Err(format!(
+            "{flag} must be 1 to {OPS_TEXT_MAX} characters of plain text"
+        ));
+    }
+    Ok(v)
+}
+
+fn parse_grant_comp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut branch: Option<String> = None;
+    let mut tier: Option<String> = None;
+    let mut until: Option<String> = None;
+    let mut operator: Option<String> = None;
+    let mut reason: Option<String> = None;
+    let mut dev = false;
+    let mut data_dir: Option<PathBuf> = None;
+    let early = walk_flags(args, |flag, inline, value| {
+        match flag {
+            "--help" | "-h" => return Ok(Some(Command::Help)),
+            "--branch" => branch = Some(value()?),
+            "--tier" => tier = Some(value()?),
+            "--until" => until = Some(value()?),
+            "--operator" => operator = Some(value()?),
+            "--reason" => reason = Some(value()?),
+            "--dev" if !inline => dev = true,
+            "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
+            other => return Err(format!("unknown argument {other}")),
+        }
+        Ok(None)
+    })?;
+    if let Some(cmd) = early {
+        return Ok(cmd);
+    }
+    let branch_id = ops_text("--branch", branch)?;
+    let tier = match tier.as_deref().map(str::trim) {
+        Some("basic") => arena_proto::Tier::Basic,
+        Some("premium") => arena_proto::Tier::Premium,
+        None => return Err("grant-comp needs --tier (basic or premium)".to_owned()),
+        Some(other) => return Err(format!("--tier must be basic or premium, not {other:?}")),
+    };
+    let until_date = until
+        .map(|u| u.trim().to_owned())
+        .ok_or("grant-comp needs --until <YYYY-MM-DD>")?;
+    let until_ms = end_of_ist_day(&until_date)
+        .ok_or_else(|| format!("--until must be a date as YYYY-MM-DD, not {until_date:?}"))?;
+    let operator = ops_text("--operator", operator)?;
+    let reason = ops_text("--reason", reason)?;
+    if data_dir.is_some() && !dev {
+        return Err("--data-dir needs --dev".to_owned());
+    }
+    Ok(Command::GrantComp(GrantCompConfig {
+        branch_id,
+        tier,
+        until_date,
+        until_ms,
+        operator,
+        reason,
+        dev_data_dir: dev.then(|| data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))),
+    }))
+}
+
+fn parse_keygen(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut kid: Option<String> = None;
+    let early = walk_flags(args, |flag, _, value| {
+        match flag {
+            "--help" | "-h" => return Ok(Some(Command::Help)),
+            "--kid" => kid = Some(value()?),
+            other => return Err(format!("unknown argument {other}")),
+        }
+        Ok(None)
+    })?;
+    if let Some(cmd) = early {
+        return Ok(cmd);
+    }
+    if let Some(k) = &kid
+        && !crate::licence::valid_kid(k)
+    {
+        return Err("--kid must be 1 to 64 letters, digits, '-', '_' or '.'".to_owned());
+    }
+    Ok(Command::LicenceKeygen { kid })
 }
 
 /// Is `url` a plain-HTTP loopback URL (`http://127.0.0.1…` or `http://localhost…`)?
@@ -385,9 +515,15 @@ pub fn parse(
 fn parse_ops(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     match args.next().and_then(|a| a.into_string().ok()).as_deref() {
         Some("restore-control") => {}
+        Some("grant-comp") => return parse_grant_comp(args),
+        Some("licence-keygen") => return parse_keygen(args),
         Some("--help" | "-h") => return Ok(Command::Help),
         Some(other) => return Err(format!("unknown ops command {other}")),
-        None => return Err("ops needs a command (restore-control)".to_owned()),
+        None => {
+            return Err(
+                "ops needs a command (restore-control, grant-comp or licence-keygen)".to_owned(),
+            );
+        }
     }
     let mut from_key: Option<String> = None;
     let mut from_file: Option<PathBuf> = None;
@@ -486,6 +622,9 @@ pub const GUPSHUP_SENDER_ENV: &str = "ARENA_GUPSHUP_SENDER";
 pub const GUPSHUP_DLT_TEMPLATE_ID_ENV: &str = "ARENA_GUPSHUP_DLT_TEMPLATE_ID";
 /// The AES-256-GCM key of owners' TOTP secrets: base64 of 32 bytes (a secret: never logged).
 pub const MFA_KEY_ENV: &str = "ARENA_MFA_KEY";
+pub const LICENCE_SIGNING_KEY_ENV: &str = "ARENA_LICENCE_SIGNING_KEY";
+pub const LICENCE_KID_ENV: &str = "ARENA_LICENCE_KID";
+pub const BILLING_ENABLED_ENV: &str = "ARENA_BILLING_ENABLED";
 /// The fixed key `--dev` uses (32 bytes).
 pub const DEV_MFA_KEY: &[u8; 32] = b"arena-dev-mfa-key-not-for-prod!!";
 /// The shortest accepted `ARENA_OTP_PEPPER`.
@@ -515,6 +654,8 @@ pub struct AuthConfig {
     pub sms_global_per_min: u64,
     /// Seals owners' TOTP secrets.
     pub mfa_key: crate::crypto::MfaKey,
+    pub licence: crate::licence::LicenceSigner,
+    pub billing_enabled: bool,
 }
 
 impl std::fmt::Debug for AuthConfig {
@@ -525,6 +666,8 @@ impl std::fmt::Debug for AuthConfig {
             .field("sms", &self.sms)
             .field("sms_global_per_min", &self.sms_global_per_min)
             .field("mfa_key", &self.mfa_key)
+            .field("licence", &self.licence)
+            .field("billing_enabled", &self.billing_enabled)
             .finish()
     }
 }
@@ -539,8 +682,46 @@ impl AuthConfig {
             sms: SmsProviderConfig::Fake,
             sms_global_per_min: DEV_SMS_GLOBAL_PER_MIN,
             mfa_key: crate::crypto::MfaKey::from_bytes(*DEV_MFA_KEY),
+            licence: crate::licence::LicenceSigner::dev(),
+            billing_enabled: false,
         }
     }
+}
+
+fn billing_enabled(env: &impl Fn(&str) -> Option<OsString>) -> Result<bool, String> {
+    match get_env(env, BILLING_ENABLED_ENV).as_deref() {
+        None | Some("") | Some("false") => Ok(false),
+        Some("true") => Err(format!(
+            "{BILLING_ENABLED_ENV}=true: billing is not available in this build"
+        )),
+        Some(_) => Err(format!("{BILLING_ENABLED_ENV} must be true or false")),
+    }
+}
+
+pub fn licence_from_env(
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<crate::licence::LicenceSigner, String> {
+    let pem = get_env(env, LICENCE_SIGNING_KEY_ENV)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            format!("{LICENCE_SIGNING_KEY_ENV} is not set (a PEM from ops licence-keygen)")
+        })?;
+    let kid = get_env(env, LICENCE_KID_ENV)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("{LICENCE_KID_ENV} is not set"))?;
+    let signer = crate::licence::LicenceSigner::from_pem(&kid, &pem).map_err(|e| {
+        if e.starts_with("kid") {
+            format!("{LICENCE_KID_ENV}: {e}")
+        } else {
+            format!("{LICENCE_SIGNING_KEY_ENV} {e}")
+        }
+    })?;
+    if signer.is_dev_key() {
+        return Err(format!(
+            "{LICENCE_SIGNING_KEY_ENV} is the committed dev key; generate one with ops licence-keygen"
+        ));
+    }
+    Ok(signer)
 }
 
 /// Parses one origin: `http(s)://host[:port]`, no path, query or trailing slash.
@@ -589,8 +770,10 @@ pub fn auth_from_env(
                 .ok_or_else(|| format!("{SMS_GLOBAL_PER_MIN_ENV} must be a positive number"))?,
         ),
     };
+    let billing = billing_enabled(env)?;
     if dev {
         let mut cfg = AuthConfig::dev();
+        cfg.billing_enabled = billing;
         if let Some(v) = origins {
             cfg.web_origins = parse_origins(&v)?;
         }
@@ -644,12 +827,15 @@ pub fn auth_from_env(
         .ok_or_else(|| format!("{MFA_KEY_ENV} is not set (base64 of 32 random bytes)"))?;
     let mfa_key =
         crate::crypto::MfaKey::from_base64(&mfa_key).map_err(|e| format!("{MFA_KEY_ENV} {e}"))?;
+    let licence = licence_from_env(env)?;
     Ok(AuthConfig {
         pepper: pepper.into_bytes(),
         web_origins,
         sms,
         sms_global_per_min: global.unwrap_or(DEFAULT_SMS_GLOBAL_PER_MIN),
         mfa_key,
+        licence,
+        billing_enabled: billing,
     })
 }
 
@@ -751,11 +937,28 @@ mod auth_tests {
         }
     }
 
+    fn licence_pairs() -> Vec<(&'static str, &'static str)> {
+        let g = crate::licence::generate(Some("test-1")).unwrap();
+        let pem: &'static str = Box::leak(g.pem.into_boxed_str());
+        vec![
+            ("ARENA_LICENCE_SIGNING_KEY", pem),
+            ("ARENA_LICENCE_KID", "test-1"),
+        ]
+    }
+
+    fn with_licence(
+        pairs: &[(&'static str, &'static str)],
+    ) -> &'static [(&'static str, &'static str)] {
+        let mut v = pairs.to_vec();
+        v.extend(licence_pairs());
+        Box::leak(v.into())
+    }
+
     #[test]
     fn a_full_gupshup_config_parses_and_debug_hides_secrets() {
         let cfg = auth_from_env(
             false,
-            &env_of(&[
+            &env_of(with_licence(&[
                 ("ARENA_OTP_PEPPER", PEPPER),
                 (
                     "ARENA_WEB_ORIGINS",
@@ -771,13 +974,16 @@ mod auth_tests {
                 ("ARENA_GUPSHUP_SENDER", "ARENA"),
                 ("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1007000000000000000"),
                 ("ARENA_MFA_KEY", MFA_KEY),
-            ]),
+            ])),
         )
         .unwrap();
+        assert_eq!(cfg.licence.kid(), "test-1");
+        assert!(!cfg.billing_enabled);
         assert_eq!(cfg.web_origins.len(), 2);
         assert!(matches!(cfg.sms, SmsProviderConfig::Gupshup(_)));
         assert_eq!(cfg.sms_global_per_min, DEFAULT_SMS_GLOBAL_PER_MIN);
         let d = format!("{cfg:?}");
+        assert!(!d.contains("PRIVATE"), "{d}");
         assert!(!d.contains(PEPPER) && !d.contains("gs-SECRET-pass"), "{d}");
         assert!(!d.contains("secret-mfa-key") && !d.contains(MFA_KEY), "{d}");
     }
@@ -798,7 +1004,7 @@ mod auth_tests {
             ("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1007000000000000000"),
         ];
         let with = |key: Option<&'static str>| {
-            let mut v = base.to_vec();
+            let mut v = with_licence(base).to_vec();
             if let Some(k) = key {
                 v.push(("ARENA_MFA_KEY", k));
             }
@@ -820,5 +1026,195 @@ mod auth_tests {
                 .mfa_key,
             AuthConfig::dev().mfa_key
         );
+    }
+
+    #[test]
+    fn production_requires_a_licence_key_that_is_not_the_dev_key() {
+        let base: Vec<(&'static str, &'static str)> = vec![
+            ("ARENA_OTP_PEPPER", PEPPER),
+            ("ARENA_WEB_ORIGINS", "https://start.arena360.cloud"),
+            ("ARENA_SMS_PROVIDER", "gupshup"),
+            (
+                "ARENA_GUPSHUP_ENDPOINT",
+                "https://enterprise.smsgupshup.com/GatewayAPI/rest",
+            ),
+            ("ARENA_GUPSHUP_USERID", "2000000000"),
+            ("ARENA_GUPSHUP_PASSWORD", "gs-pass"),
+            ("ARENA_GUPSHUP_SENDER", "ARENA"),
+            ("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1007000000000000000"),
+            ("ARENA_MFA_KEY", MFA_KEY),
+        ];
+        let with = |extra: Vec<(&'static str, &'static str)>| {
+            let mut v = base.clone();
+            v.extend(extra);
+            let pairs: &'static [(&'static str, &'static str)] = Box::leak(v.into());
+            auth_from_env(false, &env_of(pairs))
+        };
+        let e = with(vec![]).unwrap_err();
+        assert!(e.contains("ARENA_LICENCE_SIGNING_KEY is not set"), "{e}");
+        let pem = licence_pairs()[0].1;
+        let e = with(vec![("ARENA_LICENCE_SIGNING_KEY", pem)]).unwrap_err();
+        assert!(e.contains("ARENA_LICENCE_KID is not set"), "{e}");
+        let e = with(vec![
+            ("ARENA_LICENCE_SIGNING_KEY", "garbage"),
+            ("ARENA_LICENCE_KID", "k1"),
+        ])
+        .unwrap_err();
+        assert!(e.starts_with("ARENA_LICENCE_SIGNING_KEY"), "{e}");
+        let e = with(vec![
+            ("ARENA_LICENCE_SIGNING_KEY", pem),
+            ("ARENA_LICENCE_KID", "k 1"),
+        ])
+        .unwrap_err();
+        assert!(e.starts_with("ARENA_LICENCE_KID"), "{e}");
+        let e = with(vec![
+            (
+                "ARENA_LICENCE_SIGNING_KEY",
+                crate::licence::DEV_SIGNING_KEY_PEM,
+            ),
+            ("ARENA_LICENCE_KID", "k1"),
+        ])
+        .unwrap_err();
+        assert!(e.contains("dev key"), "{e}");
+        assert!(!e.contains("MC4C"), "{e}");
+        let mut on = licence_pairs();
+        on.push(("ARENA_BILLING_ENABLED", "true"));
+        let e = with(on).unwrap_err();
+        assert!(e.contains("billing is not available in this build"), "{e}");
+        let e = auth_from_env(true, &env_of(&[("ARENA_BILLING_ENABLED", "true")])).unwrap_err();
+        assert!(e.contains("billing is not available in this build"), "{e}");
+        let mut off = licence_pairs();
+        off.push(("ARENA_BILLING_ENABLED", "false"));
+        assert!(!with(off).unwrap().billing_enabled);
+        let mut bad = licence_pairs();
+        bad.push(("ARENA_BILLING_ENABLED", "yes"));
+        assert!(with(bad).unwrap_err().contains("ARENA_BILLING_ENABLED"));
+        let dev = auth_from_env(true, &env_of(&[])).unwrap();
+        assert!(dev.licence.is_dev_key() && !dev.billing_enabled);
+    }
+}
+
+#[cfg(test)]
+mod ops_tests {
+    use super::*;
+
+    fn ops(args: &[&str]) -> Result<Command, String> {
+        parse(
+            std::iter::once("ops")
+                .chain(args.iter().copied())
+                .map(OsString::from),
+            |_| None,
+        )
+    }
+
+    const GOOD: &[&str] = &[
+        "grant-comp",
+        "--branch",
+        "01JB",
+        "--tier",
+        "premium",
+        "--until",
+        "2026-12-31",
+        "--operator",
+        "harish",
+        "--reason",
+        "beta café",
+    ];
+
+    #[test]
+    fn the_end_of_an_ist_day_is_one_ms_before_the_next_ist_midnight() {
+        let end = end_of_ist_day("2026-12-31").unwrap();
+        let next_utc = chrono::NaiveDate::from_ymd_opt(2027, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(end, next_utc - IST_OFFSET_MS - 1);
+        for bad in [
+            "2026-02-30",
+            "2026-1-01",
+            "26-01-01",
+            "2026-01-01x",
+            "2026/01/01",
+            "+026-01-01",
+        ] {
+            assert_eq!(end_of_ist_day(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn grant_comp_parses_and_refuses_usage_errors() {
+        let Command::GrantComp(g) = ops(GOOD).unwrap() else {
+            panic!("not grant-comp")
+        };
+        assert_eq!(g.branch_id, "01JB");
+        assert_eq!(g.tier, arena_proto::Tier::Premium);
+        assert_eq!(g.until_ms, end_of_ist_day("2026-12-31").unwrap());
+        assert_eq!(
+            (g.operator.as_str(), g.reason.as_str()),
+            ("harish", "beta café")
+        );
+        assert_eq!(g.dev_data_dir, None);
+        let mut dev = GOOD.to_vec();
+        dev.extend(["--dev", "--data-dir", "/tmp/x"]);
+        let Command::GrantComp(g) = ops(&dev).unwrap() else {
+            panic!("not grant-comp")
+        };
+        assert_eq!(g.dev_data_dir, Some(PathBuf::from("/tmp/x")));
+        let replace = |flag: &str, value: &'static str| {
+            let mut v = GOOD.to_vec();
+            let i = v.iter().position(|a| *a == flag).unwrap();
+            v[i + 1] = value;
+            ops(&v)
+        };
+        assert!(
+            replace("--tier", "free")
+                .unwrap_err()
+                .contains("basic or premium")
+        );
+        assert!(
+            replace("--until", "31-12-2026")
+                .unwrap_err()
+                .contains("YYYY-MM-DD")
+        );
+        assert!(replace("--operator", " ").is_err());
+        let without = |flag: &str| {
+            let mut all = vec!["grant-comp"];
+            all.extend(
+                GOOD[1..]
+                    .chunks(2)
+                    .filter(|c| c[0] != flag)
+                    .flatten()
+                    .copied(),
+            );
+            ops(&all)
+        };
+        for flag in ["--branch", "--tier", "--until", "--operator", "--reason"] {
+            assert!(without(flag).unwrap_err().contains(flag), "{flag}");
+        }
+        let mut stray = GOOD.to_vec();
+        stray.push("--force");
+        assert!(ops(&stray).unwrap_err().contains("unknown argument"));
+        let mut dir = GOOD.to_vec();
+        dir.extend(["--data-dir", "/tmp/x"]);
+        assert!(ops(&dir).unwrap_err().contains("--data-dir needs --dev"));
+    }
+
+    #[test]
+    fn licence_keygen_parses_an_optional_kid() {
+        assert_eq!(
+            ops(&["licence-keygen"]).unwrap(),
+            Command::LicenceKeygen { kid: None }
+        );
+        assert_eq!(
+            ops(&["licence-keygen", "--kid", "prod-2026"]).unwrap(),
+            Command::LicenceKeygen {
+                kid: Some("prod-2026".into())
+            }
+        );
+        assert!(ops(&["licence-keygen", "--kid", "a b"]).is_err());
+        assert!(ops(&["licence-keygen", "--out", "x"]).is_err());
+        assert!(ops(&["nope"]).unwrap_err().contains("unknown ops command"));
     }
 }

@@ -59,6 +59,47 @@ async fn main() -> ExitCode {
                 }
             };
         }
+        Ok(Command::GrantComp(grant)) => {
+            return match arena_cloud::ops::grant_comp(
+                &grant,
+                |k| std::env::var_os(k),
+                arena_cloud::now_ms(),
+            )
+            .await
+            {
+                Ok(summary) => {
+                    for line in summary.lines() {
+                        println!("{line}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e @ arena_cloud::ops::OpsError::Config(_)) => {
+                    eprintln!("arena-cloud: grant-comp: {e}");
+                    ExitCode::from(EXIT_USAGE)
+                }
+                Err(e) => {
+                    eprintln!("arena-cloud: grant-comp failed: {e}");
+                    ExitCode::from(EXIT_FAILURE)
+                }
+            };
+        }
+        Ok(Command::LicenceKeygen { kid }) => {
+            return match arena_cloud::licence::generate(kid.as_deref()) {
+                Ok(key) => {
+                    print!("{}", key.pem);
+                    eprintln!("ARENA_LICENCE_KID={}", key.kid);
+                    eprintln!(
+                        "VerifyKey {{ kid: \"{}\", public_key: \"{}\" }},",
+                        key.kid, key.public_key
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("arena-cloud: licence-keygen failed: {e}");
+                    ExitCode::from(EXIT_FAILURE)
+                }
+            };
+        }
         Ok(Command::Help) => {
             println!("{}", config::USAGE);
             return ExitCode::SUCCESS;
@@ -111,6 +152,16 @@ async fn main() -> ExitCode {
         web_origins = ?auth.web_origins,
         "starting"
     );
+    if !cfg.dev()
+        && !auth
+            .licence
+            .trusted_by(arena_proto::licence::LICENCE_VERIFY_KEYS)
+    {
+        tracing::error!(
+            licence_kid = auth.licence.kid(),
+            "the licence signing key is not in LICENCE_VERIFY_KEYS: Hubs won't trust the licences it signs"
+        );
+    }
     if let Some(path) = cfg.database.local_path() {
         tracing::warn!(
             db_path = %path.display(),

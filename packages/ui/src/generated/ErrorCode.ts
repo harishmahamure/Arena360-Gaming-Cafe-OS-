@@ -38,4 +38,6 @@ export type ErrorCode =
   | "SETUP_INCOMPLETE"
   | "BRANCH_CODE_TAKEN"
   | "NO_HUB"
-  | "HUB_INCOMPATIBLE";
+  | "HUB_INCOMPATIBLE"
+  | "BILLING_DISABLED"
+  | "ONE_FREE_BRANCH";

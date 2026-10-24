@@ -34,6 +34,8 @@ pub struct AuthState {
     /// Seals owners' TOTP secrets.
     pub mfa_key: crate::crypto::MfaKey,
     pub dummy_verifies: std::sync::atomic::AtomicU64,
+    pub licence: crate::licence::LicenceSigner,
+    pub billing_enabled: bool,
 }
 
 impl AuthState {
@@ -47,6 +49,8 @@ impl AuthState {
             sms_global_per_min: cfg.sms_global_per_min,
             mfa_key: cfg.mfa_key.clone(),
             dummy_verifies: std::sync::atomic::AtomicU64::new(0),
+            licence: cfg.licence.clone(),
+            billing_enabled: cfg.billing_enabled,
         }
     }
 
@@ -274,6 +278,8 @@ mod tests {
             sms: crate::config::SmsProviderConfig::Fake,
             sms_global_per_min: 60,
             mfa_key: crate::crypto::MfaKey::from_bytes([0; 32]),
+            licence: crate::licence::LicenceSigner::dev(),
+            billing_enabled: false,
         };
         // A database these tests never touch.
         let rt = tokio::runtime::Builder::new_current_thread()

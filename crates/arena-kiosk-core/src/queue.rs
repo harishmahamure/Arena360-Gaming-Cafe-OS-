@@ -53,7 +53,9 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::TotpInvalid
         | ErrorCode::SetupIncomplete
         | ErrorCode::BranchCodeTaken
-        | ErrorCode::HubIncompatible => true,
+        | ErrorCode::HubIncompatible
+        | ErrorCode::BillingDisabled
+        | ErrorCode::OneFreeBranch => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary

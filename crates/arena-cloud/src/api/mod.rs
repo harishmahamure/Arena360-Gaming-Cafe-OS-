@@ -28,6 +28,7 @@ pub mod session;
 pub mod signin;
 pub mod signup;
 pub mod wizard;
+pub mod wizard_tier;
 
 use std::sync::Arc;
 
@@ -55,6 +56,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
             .merge(signin::router(Arc::clone(st)))
             .merge(security::router(Arc::clone(st)))
             .merge(wizard::router(Arc::clone(st)))
+            .merge(wizard_tier::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
             .merge(meta::router());
     }

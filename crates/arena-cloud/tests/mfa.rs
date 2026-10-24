@@ -132,6 +132,8 @@ impl Harness {
             sms: SmsProviderConfig::Fake,
             sms_global_per_min: 10_000,
             mfa_key,
+            licence: arena_cloud::licence::LicenceSigner::dev(),
+            billing_enabled: false,
         };
         let st = auth_state(Arc::clone(&db), &cfg, clock).unwrap();
         let (_tx, rx) = watch::channel(Reachability {

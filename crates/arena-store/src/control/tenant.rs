@@ -147,6 +147,12 @@ impl ControlDb {
         rows.iter().map(|r| branch_from(r)).collect()
     }
 
+    pub async fn branch(&self, branch_id: &str) -> Result<Option<Branch>, ControlError> {
+        let sql = format!("SELECT {BRANCH_COLUMNS} FROM branches b WHERE b.id = ?");
+        let rows = self.query(&sql, vec![text(branch_id)]).await?;
+        rows.first().map(|r| branch_from(r)).transpose()
+    }
+
     pub async fn owned_branch(
         &self,
         owner_id: &str,

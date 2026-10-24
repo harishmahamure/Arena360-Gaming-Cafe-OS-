@@ -32,8 +32,15 @@ fn cloud() -> Command {
         .env(
             "ARENA_MFA_KEY",
             "dGVzdC1tZmEta2V5LTAxMjM0NTY3ODlhYmNkZWZnaGk=",
-        );
+        )
+        .env("ARENA_LICENCE_SIGNING_KEY", licence_pem())
+        .env("ARENA_LICENCE_KID", "test-1");
     c
+}
+
+fn licence_pem() -> &'static str {
+    static PEM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PEM.get_or_init(|| arena_cloud::licence::generate(Some("test-1")).unwrap().pem)
 }
 
 fn run(c: &mut Command) -> Output {
@@ -66,6 +73,31 @@ fn bad_role_exits_64() {
         .env("ARENA_CONTROL_DB_TOKEN", "t"));
     assert_eq!(o.status.code(), Some(64));
     assert!(text(&o).contains("role not available yet"), "{}", text(&o));
+}
+
+#[test]
+fn a_missing_or_dev_licence_key_exits_64_naming_the_variable() {
+    let o = run(cloud()
+        .args(["--role", "control"])
+        .env("ARENA_CONTROL_DB_URL", "libsql://x.turso.io")
+        .env("ARENA_CONTROL_DB_TOKEN", TOKEN)
+        .env_remove("ARENA_LICENCE_SIGNING_KEY"));
+    assert_eq!(o.status.code(), Some(64));
+    assert!(
+        text(&o).contains("ARENA_LICENCE_SIGNING_KEY is not set"),
+        "{}",
+        text(&o)
+    );
+    let o = run(cloud()
+        .args(["--role", "control"])
+        .env("ARENA_CONTROL_DB_URL", "libsql://x.turso.io")
+        .env("ARENA_CONTROL_DB_TOKEN", TOKEN)
+        .env(
+            "ARENA_LICENCE_SIGNING_KEY",
+            arena_cloud::licence::DEV_SIGNING_KEY_PEM,
+        ));
+    assert_eq!(o.status.code(), Some(64));
+    assert!(text(&o).contains("dev key"), "{}", text(&o));
 }
 
 #[test]

@@ -469,3 +469,60 @@ Each entry gives the story, the decision point, the choice taken (the recommende
     - the dialog can't close over unsaved codes.
 - **Flaky store test:** the migration test's wall-clock bound failed even at 1.6 s under parallel builds. The bound is removed; the `ControlError::Migration` match already proves the no-retry path.
 - **Verification (worktree):** everything passes except the known `arena-hub-ui` sidecar tests: 188 script tests, the onboarding check, build and 127 Playwright tests, the linkage check and clippy.
+
+## User decision (2026-10-25): module tracks
+
+- The rest of Epic 2 runs as two parallel tracks: control plane (2.6–2.16, 2.19, 2.22) and Hub (2.17, 2.18, 2.20, 2.21, 2.23–2.27). The joint stories 2.28–2.31 come after both.
+- Procedure is in `autonomous-loop-state.md`.
+
+## Story 2.17: kiosk finds the Hub on the LAN or by typed IP (Hub track)
+
+- **Spec approval:** self-approved (about 2,300 tokens, full spec kept: discovery has no value without both ends).
+- **mDNS:** `_arena360-hub._tcp.local.` with TXT branch/hub/proto/fp, pinned to `mdns-sd` 0.21 per the architecture. The Hub name is the hostname; there's no setting yet.
+- **Typed IP:** `GET :7401/hub-info` (unauthenticated, no-store), cross-checked against the TLS certificate fingerprint captured on `:7401`, so a spoofed `HubInfo` is refused.
+- **Kiosk:** a new `unpaired` hub state, with IPC `discover`, `probe_ip` and `select_hub`. The selection goes in `selected_hub.json` for 2.18 and creates no token.
+- **New codes:** `NO_HUB` and `HUB_INCOMPATIBLE` (reserved for the Hub track).
+
+## User decision (2026-10-25): all modules in parallel
+
+- Three tracks, with the device stories fanning out after 2.18, at most 4 implementers. Hub migration numbers are reserved per story in `autonomous-loop-state.md`.
+
+## Story 2.26: branch operating settings (Hub track C)
+
+- **Spec approval:** self-approved. The settings go through the existing `settings.set`/`SettingRule` mechanism; ads consent is its own intent with the typed actor.
+- **Free tier:** until the licence stories land, a `hub_tier()` helper returns `free`; 2.12 replaces it.
+- **`SetupStatus`:** exposed on `/ui/snapshot` and `/healthz` for the later heartbeat `setup` block.
+
+## Story 2.7: resumable setup wizard and step 1 (control track A)
+
+- **Spec approval:** self-approved. Control migration 0005.
+- **Scope:** one tenant per owner.
+- **Countries:** a small `COUNTRIES` table (IN plus 8 nearby markets); any IANA zone is allowed.
+- **GSTIN:** format plus the GSTN mod-36 checksum.
+- **`branch_code`:** initials-based, with a clash suffix 2..9 then A..Z; editable until locked at pairing.
+- **Ownership:** `OwnedBranch` answers `FORBIDDEN` for both foreign and unknown ids.
+
+## Story 2.6: owner signs in on a new device (control track A)
+
+- **Spec approval:** self-approved. Migration 0004, plus `owner_sessions.device_id` (needed to mark the current device and to end a removed device's sessions).
+- **Implementation choices, accepted:**
+  - a non-phone/non-email login or empty password is 422;
+  - failures during a pause aren't counted;
+  - an SMS send extends the challenge;
+  - sign-in shares 2.5's per-owner TOTP failure budget, answering `AUTH_LOCKED` when exhausted.
+- **Review outcome (Sonnet ×3):** 16 fixes, 11 rejections and 1 deferral.
+  - **Fixes:**
+    - removing a device ends its sessions (high);
+    - sign-out-everywhere consumes open challenges;
+    - nothing fails after commit;
+    - a race loser isn't counted as a failure;
+    - one live challenge per owner;
+    - ambiguous email login refused;
+    - the trusted device is refreshed, not duplicated;
+    - input length caps;
+    - leading-0 numbers;
+    - SMS failure, expiry and counting tests;
+    - UI dead-challenge, wait-notice and remove fixes.
+  - **Deferred:** a lockout-DoS mitigation (needs an intent decision).
+  - **Accepted explanation:** an expired SMS code within a live challenge can't occur, because a send extends the challenge.
+- **Verification (worktree):** everything passes, including 188 script tests and the onboarding suite. One flaky failure: `arena-kiosk-svc` `wrong_and_counter_pins_are_refused_and_five_pause_across_an_app_restart` failed once under load and passed 3/3 on rerun. It predates this story and is deferred.

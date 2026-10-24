@@ -289,10 +289,10 @@ test.describe("Account → Security", () => {
     await expect(h1(page, "onboarding.password.title")).toBeVisible();
   });
 
-  test("without a session it goes back to the start", async ({ page }) => {
+  test("without a session it goes to sign-in", async ({ page }) => {
     await stubCloud(page);
     await page.goto("/account/security");
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/sign-in$/);
   });
 });
 

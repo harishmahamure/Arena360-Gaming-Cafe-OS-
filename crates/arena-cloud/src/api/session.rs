@@ -29,6 +29,8 @@ pub const ACCESS_COOKIE: &str = "arena_access";
 pub const REFRESH_COOKIE: &str = "arena_refresh";
 pub const ACCESS_TTL_S: i64 = 15 * 60;
 pub const REFRESH_TTL_S: i64 = 30 * 24 * 60 * 60;
+pub const TRUSTED_COOKIE: &str = "arena_trusted";
+pub const TRUSTED_PATH: &str = "/v1/signin";
 const ACCESS_PATH: &str = "/v1";
 const REFRESH_PATH: &str = "/v1/session/refresh";
 
@@ -53,13 +55,14 @@ pub(super) fn issue_session(now: i64) -> Result<IssuedSession, String> {
             refresh_hash: token_hash(&refresh),
             refresh_expires_at: now + REFRESH_TTL_S * 1000,
             created_at: now,
+            device_id: None,
         },
         access,
         refresh,
     })
 }
 
-fn cookie(name: &str, value: &str, path: &str, max_age_s: i64) -> HeaderValue {
+pub(super) fn cookie(name: &str, value: &str, path: &str, max_age_s: i64) -> HeaderValue {
     HeaderValue::from_str(&format!(
         "{name}={value}; Path={path}; Max-Age={max_age_s}; HttpOnly; Secure; SameSite=Lax"
     ))
@@ -81,7 +84,7 @@ pub(super) fn with_session_cookies(mut res: Response, s: &IssuedSession) -> Resp
 }
 
 /// Expires both session cookies.
-fn clear_cookies(mut res: Response) -> Response {
+pub(super) fn clear_cookies(mut res: Response) -> Response {
     let h = res.headers_mut();
     h.append(
         header::SET_COOKIE,
@@ -152,6 +155,7 @@ async fn info(st: &AuthState, owner: &Owner) -> Result<SessionInfo, ApiError> {
             mfa_state: owner.mfa_state,
             has_password: owner.has_password(),
             backup_codes_acked: backup_codes_acked(st, &owner.id).await?,
+            sms_fallback: owner.sms_fallback,
         },
     })
 }
@@ -189,6 +193,7 @@ async fn refresh(State(st): State<Arc<AuthState>>, headers: HeaderMap) -> Respon
                     mfa_state: owner.mfa_state,
                     has_password: owner.has_password(),
                     backup_codes_acked: acked,
+                    sms_fallback: owner.sms_fallback,
                 },
             };
             with_session_cookies(axum::Json(body).into_response(), &issued)

@@ -20,6 +20,9 @@ pub struct Owner {
     /// When the owner set their password (`None`: no password yet). The hash itself is read
     /// only through [`ControlDb::owner_password_hash`].
     pub password_set_at: Option<i64>,
+    pub sms_fallback: bool,
+    pub failed_signins: u32,
+    pub locked_until: Option<i64>,
 }
 
 impl Owner {
@@ -37,6 +40,9 @@ impl std::fmt::Debug for Owner {
             .field("mfa_state", &self.mfa_state)
             .field("created_at", &self.created_at)
             .field("password_set_at", &self.password_set_at)
+            .field("sms_fallback", &self.sms_fallback)
+            .field("failed_signins", &self.failed_signins)
+            .field("locked_until", &self.locked_until)
             .finish_non_exhaustive()
     }
 }
@@ -57,8 +63,8 @@ impl std::fmt::Debug for NewOwner {
     }
 }
 
-pub(super) const OWNER_COLUMNS: &str =
-    "id, name, phone_e164, email, cafe_name, city, mfa_state, created_at, password_set_at";
+pub(super) const OWNER_COLUMNS: &str = "id, name, phone_e164, email, cafe_name, city, \
+     mfa_state, created_at, password_set_at, sms_fallback, failed_signins, locked_until";
 
 /// An owner from a row of [`OWNER_COLUMNS`] starting at column `at`.
 pub(super) fn owner_from(row: &[SqlValue], at: usize) -> Result<Owner, ControlError> {
@@ -74,6 +80,9 @@ pub(super) fn owner_from(row: &[SqlValue], at: usize) -> Result<Owner, ControlEr
             .ok_or_else(|| ControlError::Db(format!("unknown mfa_state {state:?}")))?,
         created_at: col_int(row, at + 7)?,
         password_set_at: col_opt_int(row, at + 8)?,
+        sms_fallback: col_int(row, at + 9)? != 0,
+        failed_signins: u32::try_from(col_int(row, at + 10)?).unwrap_or(u32::MAX),
+        locked_until: col_opt_int(row, at + 11)?,
     })
 }
 

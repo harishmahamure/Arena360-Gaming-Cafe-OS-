@@ -3,7 +3,9 @@
 //! its whole family.
 
 use super::owner::{OWNER_COLUMNS, Owner, owner_from};
-use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_text, text};
+use super::{
+    ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_opt_text, col_text, text,
+};
 
 /// A session to create.
 #[derive(Clone)]
@@ -16,6 +18,7 @@ pub struct NewOwnerSession {
     pub refresh_hash: String,
     pub refresh_expires_at: i64,
     pub created_at: i64,
+    pub device_id: Option<String>,
 }
 
 impl std::fmt::Debug for NewOwnerSession {
@@ -38,6 +41,7 @@ pub struct OwnerSession {
     pub rotated_at: Option<i64>,
     pub revoked_at: Option<i64>,
     pub created_at: i64,
+    pub device_id: Option<String>,
 }
 
 /// A live session and its owner.
@@ -54,8 +58,8 @@ pub(super) const PRUNE_SESSIONS: &str =
 
 /// The owner of session `?`, in [`OWNER_COLUMNS`] order.
 const OWNER_OF_SESSION: &str = "SELECT o.id, o.name, o.phone_e164, o.email, o.cafe_name, o.city, \
-     o.mfa_state, o.created_at, o.password_set_at FROM owners o JOIN owner_sessions s ON s.owner_id = o.id \
-     WHERE s.id = ?";
+     o.mfa_state, o.created_at, o.password_set_at, o.sms_fallback, o.failed_signins, \
+     o.locked_until FROM owners o JOIN owner_sessions s ON s.owner_id = o.id WHERE s.id = ?";
 
 /// A refresh token presented again within this long of its rotation is a concurrent refresh
 /// (two tabs), not theft: refused without revoking the family.
@@ -77,7 +81,8 @@ pub enum RefreshOutcome {
 }
 
 const SESSION_COLUMNS: &str = "s.id, s.owner_id, s.family_id, s.access_expires_at, \
-                               s.refresh_expires_at, s.rotated_at, s.revoked_at, s.created_at";
+                               s.refresh_expires_at, s.rotated_at, s.revoked_at, s.created_at, \
+                               s.device_id";
 
 fn session_from(row: &[SqlValue]) -> Result<OwnerSession, ControlError> {
     Ok(OwnerSession {
@@ -89,14 +94,15 @@ fn session_from(row: &[SqlValue]) -> Result<OwnerSession, ControlError> {
         rotated_at: col_opt_int(row, 5)?,
         revoked_at: col_opt_int(row, 6)?,
         created_at: col_int(row, 7)?,
+        device_id: col_opt_text(row, 8)?,
     })
 }
 
-fn insert_stmt(s: &NewOwnerSession) -> Stmt {
+pub(super) fn insert_stmt(s: &NewOwnerSession) -> Stmt {
     Stmt::new(
         "INSERT INTO owner_sessions (id, owner_id, family_id, access_hash, access_expires_at, \
-         refresh_hash, refresh_expires_at, rotated_at, revoked_at, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+         refresh_hash, refresh_expires_at, rotated_at, revoked_at, created_at, device_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
         vec![
             text(&s.id),
             text(&s.owner_id),
@@ -106,6 +112,7 @@ fn insert_stmt(s: &NewOwnerSession) -> Stmt {
             text(&s.refresh_hash),
             SqlValue::Integer(s.refresh_expires_at),
             SqlValue::Integer(s.created_at),
+            s.device_id.as_deref().map_or(SqlValue::Null, text),
         ],
     )
 }
@@ -166,7 +173,7 @@ impl ControlDb {
             .map(|r| {
                 Ok(SessionWithOwner {
                     session: session_from(r)?,
-                    owner: owner_from(r, 8)?,
+                    owner: owner_from(r, 9)?,
                 })
             })
             .transpose()
@@ -199,8 +206,8 @@ impl ControlDb {
                 Stmt::new(
                     "INSERT INTO owner_sessions (id, owner_id, family_id, access_hash, \
                      access_expires_at, refresh_hash, refresh_expires_at, rotated_at, revoked_at, \
-                     created_at) SELECT ?, owner_id, family_id, ?, ?, ?, ?, NULL, NULL, ? \
-                     FROM owner_sessions WHERE refresh_hash = ?",
+                     created_at, device_id) SELECT ?, owner_id, family_id, ?, ?, ?, ?, NULL, NULL, ?, \
+                     device_id FROM owner_sessions WHERE refresh_hash = ?",
                     vec![
                         text(&next.id),
                         text(&next.access_hash),

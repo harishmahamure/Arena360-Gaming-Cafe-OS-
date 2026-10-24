@@ -48,6 +48,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
         ("members", 2),
         ("otp_challenges", 0),
         ("owner_backup_codes", 0),
+        ("owner_devices", 0),
         ("owner_mfa", 0),
         ("owner_sessions", 0),
         ("owners", 0),
@@ -56,6 +57,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
             "schema_migrations",
             u64::from(arena_store::control::LATEST_CONTROL_VERSION),
         ),
+        ("signin_challenges", 0),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v))
@@ -717,11 +719,13 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "members",
             "otp_challenges",
             "owner_backup_codes",
+            "owner_devices",
             "owner_mfa",
             "owner_sessions",
             "owners",
             "rate_limits",
-            "schema_migrations"
+            "schema_migrations",
+            "signin_challenges"
         ]
     );
 }

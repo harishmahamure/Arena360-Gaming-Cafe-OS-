@@ -134,6 +134,16 @@ impl ApiError {
         e
     }
 
+    pub fn locked(retry_after_s: u64) -> Self {
+        let mut e: Self = AppError::new(
+            ErrorCode::AuthLocked,
+            "Sign-in is paused. Try again after the time in Retry-After.",
+        )
+        .into();
+        e.retry_after_s = Some(retry_after_s.max(1));
+        e
+    }
+
     /// `AUTH_FAILED`, 401: no valid session.
     pub fn auth_failed() -> Self {
         AppError::new(ErrorCode::AuthFailed, "Sign in to continue.").into()

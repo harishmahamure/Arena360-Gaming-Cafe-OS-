@@ -1,10 +1,18 @@
 <script lang="ts">
-  import { Button, CodeField, t } from "@arena/ui";
+  import { Button, CodeField, formatDateTime, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
-  import type { SessionOwner } from "@arena/ui/generated";
+  import type { SessionOwner, TrustedDevice } from "@arena/ui/generated";
   import { goto } from "$app/navigation";
   import { onMount, tick } from "svelte";
-  import { ackBackupCodes, currentSession, regenerateBackupCodes } from "../../../lib/api";
+  import {
+    ackBackupCodes,
+    currentSession,
+    listDevices,
+    regenerateBackupCodes,
+    removeDevice,
+    setSmsFallback,
+    signOutEverywhere,
+  } from "../../../lib/api";
   import BackupCodesPanel from "../../../lib/BackupCodesPanel.svelte";
 
   // Account → Security, gated by `GET /v1/session`. Enrolled owners can regenerate their backup
@@ -23,20 +31,110 @@
   let failed = $state(false);
   let offline = $state(false);
 
+  let devices: TrustedDevice[] | null = $state(null);
+  let devicesError: MessageKey | null = $state(null);
+  let devicesStatus: MessageKey | null = $state(null);
+  let smsBusy = $state(false);
+  let smsStatus: MessageKey | null = $state(null);
+  let signoutDialog: HTMLDialogElement | undefined = $state();
+  let signoutOpener: HTMLElement | null = null;
+  let signingOut = $state(false);
+  let signoutError: MessageKey | null = $state(null);
+
   async function load() {
     failed = false;
     const res = await currentSession();
     if (res.ok) {
       owner = res.data.owner;
+      if (owner.mfa_state === "enrolled") await loadDevices();
     } else if (res.offline || res.status >= 500) {
       offline = res.offline;
       failed = true;
     } else {
-      await goto("/", { replaceState: true });
+      await goto("/sign-in", { replaceState: true });
     }
   }
 
   onMount(load);
+
+  async function loadDevices() {
+    const res = await listDevices();
+    if (res.ok) {
+      devices = res.data;
+      devicesError = null;
+    } else {
+      devicesError = res.offline ? "onboarding.error.offline" : "onboarding.error.generic";
+    }
+  }
+
+  async function toggleSms() {
+    if (!owner || smsBusy) return;
+    const next = !owner.sms_fallback;
+    smsBusy = true;
+    smsStatus = null;
+    const res = await setSmsFallback(next);
+    smsBusy = false;
+    if (res.ok) {
+      owner = { ...owner, sms_fallback: next };
+      smsStatus = next ? "onboarding.security.sms_on" : "onboarding.security.sms_off";
+    } else {
+      smsStatus = res.offline ? "onboarding.error.offline" : "onboarding.error.generic";
+    }
+  }
+
+  let removing: string | null = $state(null);
+
+  async function remove(id: string) {
+    if (removing) return;
+    removing = id;
+    devicesStatus = null;
+    const current = (devices ?? []).some((d) => d.id === id && d.current);
+    const res = await removeDevice(id);
+    if (!res.ok && res.status !== 404) {
+      removing = null;
+      devicesStatus = res.offline ? "onboarding.error.offline" : "onboarding.error.generic";
+      return;
+    }
+    if (current) {
+      await goto("/sign-in", { replaceState: true });
+      return;
+    }
+    const session = await currentSession();
+    if (!session.ok) {
+      await goto("/sign-in", { replaceState: true });
+      return;
+    }
+    owner = session.data.owner;
+    await loadDevices();
+    removing = null;
+    devicesStatus = "onboarding.security.removed";
+    await tick();
+    document.getElementById("devices-heading")?.focus();
+  }
+
+  function openSignout(event: MouseEvent) {
+    signoutOpener = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    signoutError = null;
+    signoutDialog?.showModal();
+  }
+
+  function closeSignout() {
+    signoutDialog?.close();
+  }
+
+  async function confirmSignout() {
+    if (signingOut) return;
+    signingOut = true;
+    signoutError = null;
+    const res = await signOutEverywhere();
+    signingOut = false;
+    if (res.ok || res.status === 401) {
+      signoutDialog?.close();
+      await goto("/sign-in", { replaceState: true });
+      return;
+    }
+    signoutError = res.offline ? "onboarding.error.offline" : "onboarding.error.generic";
+  }
 
   async function open(event: MouseEvent) {
     opener = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
@@ -124,7 +222,100 @@
       {#if done}{t("onboarding.security.done")}{/if}
     </p>
   </section>
+
+  <section class="section" aria-labelledby="sms-heading">
+    <h2 id="sms-heading">{t("onboarding.security.sms_title")}</h2>
+    <p class="intro" id="sms-body">{t("onboarding.security.sms_body")}</p>
+    <div class="switch-row">
+      <button
+        type="button"
+        class="ui-interactive switch"
+        role="switch"
+        aria-checked={owner.sms_fallback}
+        aria-labelledby="sms-label"
+        aria-describedby="sms-body"
+        aria-busy={smsBusy}
+        onclick={toggleSms}
+      >
+        <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+      </button>
+      <span class="switch-label" id="sms-label">{t("onboarding.security.sms_label")}</span>
+    </div>
+    <p class="status" role="status">
+      {#if smsStatus}{t(smsStatus)}{/if}
+    </p>
+  </section>
+
+  <section class="section" aria-labelledby="devices-heading">
+    <h2 id="devices-heading" tabindex="-1">{t("onboarding.security.devices_title")}</h2>
+    <p class="intro">{t("onboarding.security.devices_body")}</p>
+    {#if devicesError}
+      <p role="alert">{t(devicesError)}</p>
+    {:else if devices === null}
+      <p role="status">{t("onboarding.account_setup.checking")}</p>
+    {:else if devices.length === 0}
+      <p>{t("onboarding.security.devices_empty")}</p>
+    {:else}
+      <ul class="devices">
+        {#each devices as d (d.id)}
+          <li class="device">
+            <div class="device-text">
+              <span class="device-label">{d.label}</span>
+              {#if d.current}
+                <span class="tag">{t("onboarding.security.this_device")}</span>
+              {/if}
+              <span class="muted">
+                {t("onboarding.security.last_seen", { time: formatDateTime(d.last_seen_at, null) })}
+              </span>
+            </div>
+            <Button
+              label="onboarding.security.remove"
+              variant="secondary"
+              onclick={() => remove(d.id)}
+              disabled={removing !== null}
+              disabledReason="onboarding.security.removing"
+            />
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    <p class="status" role="status">
+      {#if devicesStatus}{t(devicesStatus)}{/if}
+    </p>
+  </section>
+
+  <section class="section" aria-labelledby="signout-heading">
+    <h2 id="signout-heading">{t("onboarding.security.signout_title")}</h2>
+    <p class="intro">{t("onboarding.security.signout_body")}</p>
+    <div class="actions">
+      <Button label="onboarding.security.signout_button" variant="warning" onclick={openSignout} />
+    </div>
+  </section>
 {/if}
+
+<dialog
+  bind:this={signoutDialog}
+  class="dialog"
+  aria-labelledby="signout-dialog-heading"
+  aria-describedby="signout-dialog-body"
+  onclose={() => signoutOpener?.focus()}
+>
+  <h2 id="signout-dialog-heading">{t("onboarding.security.signout_confirm_title")}</h2>
+  <p class="intro" id="signout-dialog-body">{t("onboarding.security.signout_confirm_body")}</p>
+  <p class="error" role="alert">
+    {#if signoutError}{t(signoutError)}{/if}
+  </p>
+  <div class="actions">
+    <Button label="onboarding.security.cancel" variant="secondary" onclick={closeSignout} />
+    <Button
+      label="onboarding.security.signout_button"
+      variant="warning"
+      onclick={confirmSignout}
+      disabled={signingOut}
+      disabledReason="onboarding.signin.signing_in"
+    />
+  </div>
+</dialog>
 
 <dialog
   bind:this={dialog}
@@ -193,6 +384,115 @@
   .status {
     margin: 0;
     min-height: 1lh;
+  }
+
+  .switch-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .switch {
+    --ui-bg: transparent;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--space-touch-min);
+    min-height: var(--space-touch-min);
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .track {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    width: 2.75rem;
+    height: 1.5rem;
+    padding: 2px;
+    border: 2px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--text-field-background);
+  }
+
+  .thumb {
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: transform 120ms ease;
+  }
+
+  .switch[aria-checked="true"] .track {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .switch[aria-checked="true"] .thumb {
+    background: var(--surface);
+    transform: translateX(1.25rem);
+  }
+
+  .switch-label {
+    font-weight: var(--type-hub-title-weight);
+  }
+
+  .devices {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .device {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .device-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .device-label {
+    font-weight: var(--type-hub-title-weight);
+    overflow-wrap: anywhere;
+  }
+
+  .tag {
+    align-self: flex-start;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-size: var(--type-hub-label-size);
+  }
+
+  .muted {
+    color: var(--text-muted);
+    font-size: var(--type-hub-label-size);
+  }
+
+  .error {
+    margin: 0;
+    min-height: 1lh;
+    color: var(--text-field-error-text);
+    font-weight: var(--type-hub-title-weight);
+  }
+
+  h2:focus {
+    outline: none;
   }
 
   .link {

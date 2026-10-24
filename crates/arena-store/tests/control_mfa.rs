@@ -42,6 +42,7 @@ async fn pending_owner(db: &ControlDb) -> String {
         refresh_hash: "r1".into(),
         refresh_expires_at: 9_000_000,
         created_at: 2_000,
+        device_id: None,
     };
     let out = db
         .complete_signup(&SignupCompletion {

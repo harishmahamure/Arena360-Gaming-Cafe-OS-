@@ -33,6 +33,7 @@ pub struct AuthState {
     pub sms_global_per_min: u64,
     /// Seals owners' TOTP secrets.
     pub mfa_key: crate::crypto::MfaKey,
+    pub dummy_verifies: std::sync::atomic::AtomicU64,
 }
 
 impl AuthState {
@@ -45,6 +46,7 @@ impl AuthState {
             web_origins: cfg.web_origins.clone(),
             sms_global_per_min: cfg.sms_global_per_min,
             mfa_key: cfg.mfa_key.clone(),
+            dummy_verifies: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -92,6 +94,14 @@ impl AuthState {
         let digits: Vec<char> = phone_e164.chars().filter(char::is_ascii_digit).collect();
         let last2: String = digits[digits.len().saturating_sub(2)..].iter().collect();
         format!("{last2}:{}", &digest[..8])
+    }
+
+    pub fn email_tag(&self, email: &str) -> String {
+        let mut mac = self.mac(TAG_LABEL);
+        mac.update(b"email\0");
+        mac.update(email.to_lowercase().as_bytes());
+        let digest = hex(&mac.finalize().into_bytes());
+        format!("email:{}", &digest[..8])
     }
 }
 

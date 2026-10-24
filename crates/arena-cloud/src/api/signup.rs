@@ -65,12 +65,16 @@ pub fn send_key(phone: &str) -> String {
     format!("{PHONE_PREFIX}{phone}")
 }
 
-fn ceil_s(ms: i64) -> u64 {
+pub(super) fn ceil_s(ms: i64) -> u64 {
     u64::try_from((ms + 999) / 1000).unwrap_or(1).max(1)
 }
 
 /// Reserves one send to `phone` under both limits, or `RATE_LIMITED` with the wait.
-async fn reserve_send(st: &AuthState, phone: &str, now: i64) -> Result<RateReservation, ApiError> {
+pub(super) async fn reserve_send(
+    st: &AuthState,
+    phone: &str,
+    now: i64,
+) -> Result<RateReservation, ApiError> {
     let key = send_key(phone);
     let rules = [
         RateRule {
@@ -108,7 +112,7 @@ async fn reserve_send(st: &AuthState, phone: &str, now: i64) -> Result<RateReser
 }
 
 /// Gives a reservation back; a failure is only logged (the slot then stays counted).
-async fn release(st: &AuthState, r: &RateReservation) {
+pub(super) async fn release(st: &AuthState, r: &RateReservation) {
     if let Err(e) = st.db.rate_release(r).await {
         tracing::warn!(detail = %e, "could not release an SMS send reservation");
     }
@@ -116,7 +120,7 @@ async fn release(st: &AuthState, r: &RateReservation) {
 
 /// Sends `code` to `phone`: 503 `INTERNAL` when the provider fails, after giving the
 /// reservation back unless delivery is uncertain.
-async fn send_code(
+pub(super) async fn send_code(
     st: &AuthState,
     phone: &str,
     code: &str,

@@ -20,7 +20,9 @@ pub mod gate;
 mod json;
 pub mod mfa;
 mod panic;
+pub mod security;
 pub mod session;
+pub mod signin;
 pub mod signup;
 
 use std::sync::Arc;
@@ -45,7 +47,9 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
             .merge(signup::router(Arc::clone(st)))
             .merge(session::router(Arc::clone(st)))
             .merge(account::router(Arc::clone(st)))
-            .merge(mfa::router(Arc::clone(st)));
+            .merge(mfa::router(Arc::clone(st)))
+            .merge(signin::router(Arc::clone(st)))
+            .merge(security::router(Arc::clone(st)));
     }
     if dev {
         v1 = v1.merge(dev::router());

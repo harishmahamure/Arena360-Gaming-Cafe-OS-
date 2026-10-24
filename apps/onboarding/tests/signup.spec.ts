@@ -198,7 +198,7 @@ test.describe("code step", () => {
     await expect(page.getByText(t("onboarding.sign_in.message"))).toBeVisible();
     await expect(page.getByRole("link", { name: t("onboarding.sign_in.link") })).toHaveAttribute(
       "href",
-      "/",
+      "/sign-in",
     );
     await expect(page).toHaveURL(/\/$/);
   });

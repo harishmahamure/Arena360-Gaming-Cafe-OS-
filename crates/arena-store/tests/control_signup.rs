@@ -45,6 +45,7 @@ fn session(id: &str, now: i64) -> NewOwnerSession {
         refresh_hash: format!("ref-{id}"),
         refresh_expires_at: now + 30 * 86_400_000,
         created_at: now,
+        device_id: None,
     }
 }
 

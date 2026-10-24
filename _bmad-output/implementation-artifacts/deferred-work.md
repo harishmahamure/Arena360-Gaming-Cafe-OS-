@@ -67,3 +67,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl.md`
   summary: Make the remote gz_control dump a point-in-time snapshot (Turso PITR/branch, or batched reads within the interactive-transaction timeout).
   evidence: The remote dump reads tables one after another without a transaction, so writes during the dump can leave cross-table drift (for example a child row without its parent).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6-owner-signs-in-on-a-new-device-with-totp-backup-code-or-sms.md`
+  summary: Mitigate lock-out by strangers. Anyone who knows an owner's phone or email can trigger the 5-failure, 15-minute pause repeatedly. Options include exempting requests that carry a valid trusted-device cookie, or counting failures per client.
+  evidence: Story 2.6 locks per account as specified; the reviewers found the denial-of-service path. Changing it alters the frozen intent, so it needs a decision.
+
+- source_spec: none (observed during 2.6 verification)
+  summary: `arena-kiosk-svc` test `wrong_and_counter_pins_are_refused_and_five_pause_across_an_app_restart` (`tests/runtime.rs:261`, "no entry found for key") flakes under heavy parallel load.
+  evidence: Failed once in the full workspace run while three other builds ran, then passed 3/3 alone. It is Story 1.20 code that this work didn't touch.

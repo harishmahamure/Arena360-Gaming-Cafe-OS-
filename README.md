@@ -1034,10 +1034,12 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
   forward-only, separate from the Hub's. Each is applied with its `schema_migrations` row in one
   transaction; a concurrent runner (rolling update) that loses the race re-reads and carries on.
   `0001_baseline` creates no tables; `0002_owner_signup` adds `owners`, `otp_challenges`,
-  `owner_sessions` and `rate_limits`. All their SQL lives in `arena_store::control`. libsql lives only in `arena-store`'s `control` feature, so
+  `owner_sessions` and `rate_limits`; `0003_owner_mfa` adds `owner_mfa` and
+  `owner_backup_codes`; `0004_owner_signin` adds `signin_challenges`, `owner_devices` and the
+  owner's `sms_fallback`, `failed_signins` and `locked_until`. All their SQL lives in `arena_store::control`. libsql lives only in `arena-store`'s `control` feature, so
   `cargo tree -p arena-hub` never shows it, and it is built remote-only (no C SQLite core).
 - **`GET /healthz`** always answers 200
-  `{"role":"control","version":"0.1.0","gz_control":{"reachable":true,"checked_at":<ms>},"migration_version":3}`.
+  `{"role":"control","version":"0.1.0","gz_control":{"reachable":true,"checked_at":<ms>},"migration_version":4}`.
   Reachability comes from a background `SELECT 1` every 15 s (3 s timeout); requests never hit
   Turso, and a Turso blip shows `reachable: false` without restarting the pod.
 - **Tests.** The `gz_control` tests use `ARENA_TEST_SQLD_URL` when set (CI's libsql-server
@@ -1217,6 +1219,49 @@ minutes."`, answering 202 `{challenge_id, expires_in_s: 300, resend_after_s: 30}
   - Account → Security (`/account/security`) lets an enrolled owner regenerate the backup codes
     in a dialog that asks for a current authenticator code.
 
+- **Sign-in** (Story 2.6). `/sign-in` in the onboarding app takes "Phone or email" and the
+  password, then asks for a second factor on a browser that isn't trusted. Errors never say
+  which part was wrong.
+  - `POST /v1/signin {login, password}`. `login` is an E.164 phone (spaces, dashes, dots and
+    brackets dropped; a bare 10-digit number is read as `+91`; `00` as `+`) or an email
+    (case-insensitive). A malformed login or an empty password is 422 `VALIDATION_FAILED`. An
+    unknown login, a wrong password or an owner without a password is 401 `AUTH_FAILED` with
+    one fixed message; an unknown login still runs one argon2 verify against a fixed dummy hash.
+    A correct password while the account is paused is 429 `AUTH_LOCKED` with `Retry-After`. A
+    `pending` owner gets a session and `{next: "account_setup"}`. An `enrolled` owner with a
+    valid `arena_trusted` cookie gets a session and `{next: "done"}`; otherwise the answer is
+    `{challenge_id, methods}` (`totp`, `backup_code`, plus `sms` when the owner turned it on)
+    and no session. A challenge lasts 5 minutes and takes 5 wrong codes.
+  - `POST /v1/signin/sms {challenge_id}` (403 `FORBIDDEN` unless SMS fallback is on) texts a
+    6-digit code, HMAC-hashed like a sign-up code, valid 5 minutes, under the sign-up per-phone
+    send limit and a 30 s resend floor: 202 `{resend_after_s: 30}`.
+  - `POST /v1/signin/verify {challenge_id, method, code, trust_device, device_label?}` checks a
+    TOTP code (one step either side, never a step already used), an unused backup code (then
+    marked used; the answer carries `backup_codes_remaining`) or the SMS code. A wrong code is
+    401 `AUTH_FAILED`, the same message as a wrong password. Success consumes the challenge and
+    sets the session cookies; with `trust_device` it also stores a trusted device (a 32-byte
+    token, kept as SHA-256) and sets `arena_trusted` (`Path=/v1/signin`, 30 days, `HttpOnly;
+Secure; SameSite=Lax`). The device label is `device_label` (up to 60 characters) or a coarse
+    one from the User-Agent, such as "Chrome on Android".
+  - **Lockout.** 5 consecutive failures, password or second factor in any mix, set
+    `locked_until` to 15 minutes ahead and reset the counter; a successful sign-in resets it.
+    A TOTP code at sign-in also goes through the per-owner `totp:{owner_id}` failure limit
+    shared with confirm and regenerate; once it is reached, `/v1/signin/verify` with `totp`
+    answers 429 `AUTH_LOCKED` with `Retry-After` until the window clears.
+  - **Account → Security** (enrolled owners; else 403 `SETUP_INCOMPLETE`):
+    `PUT /v1/account/security/sms-fallback {enabled}` → 204; `GET /v1/account/devices` →
+    `[{id, label, last_seen_at, created_at, current}]`; `DELETE /v1/account/devices/{id}` → 204
+    (404 `NOT_FOUND` when it isn't a live device of this owner);
+    `POST /v1/account/sign-out-everywhere` → 204, revoking every session and trusted device of
+    the owner and clearing this browser's cookies. `GET /v1/session` adds `sms_fallback`.
+  - A session remembers the trusted device it was signed in from (`owner_sessions.device_id`),
+    which is how the device list marks the `current` one; refresh rotation carries it over.
+  - Logs name a login only by `phone_tag` or an email tag (`email:` and 8 hex characters of an
+    HMAC with the pepper), never a password, code or token
+    (`crates/arena-cloud/tests/signin.rs` asserts it on captured logs).
+  - Per-IP limits for `/v1/signin*` are Cloudflare rules
+    ([`deploy/README.md`](deploy/README.md#6a-owner-sign-up-sms-pepper-web-origins-and-per-ip-limits)).
+
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
   fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the
@@ -1230,7 +1275,7 @@ No Turso, Cloudflare or token needed. MinIO stands in for R2:
 ```sh
 docker compose -f deploy/dev/compose.yaml up -d   # MinIO on 127.0.0.1:9000, bucket arena-dev
 cargo run -p arena-cloud -- --role all --dev
-curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":3}
+curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":4}
 ```
 
 Sign up locally: run the cloud as above and the onboarding app with
@@ -1239,7 +1284,10 @@ Sign up locally: run the cloud as above and the onboarding app with
 and enter it: you land on `/account-setup` signed in. Set a password, scan the QR code with an
 authenticator app (or paste the setup key into it), enter its code and save the backup codes:
 `GET /v1/session` then reports `enrolled` with `backup_codes_acked: true`, and
-`GET /v1/dev/setup-gate` answers `{"setup_complete": true}`.
+`GET /v1/dev/setup-gate` answers `{"setup_complete": true}`. To sign in again, open
+<http://localhost:5179/sign-in> in a fresh browser profile: the password, then the current
+authenticator code. Tick "Trust this device for 30 days" and the next sign-in in that profile
+skips the code; Account → Security → "Sign out everywhere" makes it ask again.
 
 - `--dev` keeps `gz_control` in `<--data-dir>/gz_control.db` (default `./.arena-cloud-dev`,
   created if missing) through rusqlite, with the same embedded migrations, the same

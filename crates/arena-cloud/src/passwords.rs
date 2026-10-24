@@ -82,6 +82,13 @@ pub fn verify_secret(secret: &str, hash: &str) -> bool {
         && argon2().verify_password(secret.as_bytes(), &parsed).is_ok()
 }
 
+pub fn dummy_hash() -> &'static str {
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| {
+        hash_secret("arena-360-no-such-account").expect("argon2 hashes a fixed input")
+    })
+}
+
 /// Crockford base32 (no I, L, O or U).
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 

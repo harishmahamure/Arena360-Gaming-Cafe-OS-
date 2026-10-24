@@ -1,5 +1,11 @@
 import type { Page, Route } from "@playwright/test";
-import type { AppError, SessionOwner, SignupChallenge, TotpStarted } from "@arena/ui/generated";
+import type {
+  AppError,
+  SessionOwner,
+  SignupChallenge,
+  TotpStarted,
+  TrustedDevice,
+} from "@arena/ui/generated";
 import { t } from "../../../packages/ui/src/messages/index.js";
 
 export { t };
@@ -26,7 +32,31 @@ export const NEW_OWNER: SessionOwner = {
   mfa_state: "pending",
   has_password: false,
   backup_codes_acked: false,
+  sms_fallback: false,
 };
+export const ENROLLED_OWNER: Partial<SessionOwner> = {
+  has_password: true,
+  mfa_state: "enrolled",
+  backup_codes_acked: true,
+};
+export const PASSWORD = "Tandoori-Nights-42";
+export const SIGNIN_CHALLENGE = "01JSIGNIN0000000000000000000";
+export const DEVICES: TrustedDevice[] = [
+  {
+    id: "dev-1",
+    label: "Chrome on Android",
+    last_seen_at: Date.UTC(2026, 9, 20, 9, 30),
+    created_at: Date.UTC(2026, 9, 1, 9, 30),
+    current: true,
+  },
+  {
+    id: "dev-2",
+    label: "Safari on iOS",
+    last_seen_at: Date.UTC(2026, 9, 18, 18, 5),
+    created_at: Date.UTC(2026, 9, 2, 9, 30),
+    current: false,
+  },
+];
 export const GOOD_CODE = "123456";
 /** The authenticator code the stub accepts (for confirm and regenerate). */
 export const GOOD_TOTP = "246810";
@@ -73,6 +103,24 @@ export type Cloud = {
   regenerates: string[];
   acks: number;
   nextAccount: Reply[];
+  signins: { login: string; password: string }[];
+  nextSignin: Reply[];
+  smsSends: unknown[];
+  nextSms: Reply[];
+  signinVerifies: {
+    challenge_id: string;
+    method: string;
+    code: string;
+    trust_device: boolean;
+  }[];
+  nextSigninVerify: Reply[];
+  trusted: boolean;
+  usedBackupCodes: string[];
+  backupRemaining: number;
+  devices: TrustedDevice[];
+  smsFallbackSets: boolean[];
+  removedDevices: string[];
+  signOuts: number;
 };
 
 async function fulfil(route: Route, r: Reply) {
@@ -118,6 +166,19 @@ export async function stubCloud(
     regenerates: [],
     acks: 0,
     nextAccount: [],
+    signins: [],
+    nextSignin: [],
+    smsSends: [],
+    nextSms: [],
+    signinVerifies: [],
+    nextSigninVerify: [],
+    trusted: false,
+    usedBackupCodes: [],
+    backupRemaining: 9,
+    devices: DEVICES.map((d) => ({ ...d })),
+    smsFallbackSets: [],
+    removedDevices: [],
+    signOuts: 0,
   };
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -155,11 +216,61 @@ export async function stubCloud(
           ? fulfil(route, { status: 200, body: { owner: cloud.owner } })
           : fulfil(route, { status: 401, body: err("AUTH_FAILED") });
       }
+      case "/v1/signin": {
+        cloud.signins.push(body);
+        const next = cloud.nextSignin.shift();
+        if (next) return fulfil(route, next);
+        if (body.password !== PASSWORD) {
+          return fulfil(route, { status: 401, body: err("AUTH_FAILED") });
+        }
+        if (cloud.owner.mfa_state !== "enrolled") {
+          cloud.signedIn = true;
+          return fulfil(route, { status: 200, body: { next: "account_setup" } });
+        }
+        if (cloud.trusted) {
+          cloud.signedIn = true;
+          return fulfil(route, { status: 200, body: { next: "done" } });
+        }
+        const methods = ["totp", "backup_code", ...(cloud.owner.sms_fallback ? ["sms"] : [])];
+        return fulfil(route, {
+          status: 200,
+          body: { challenge_id: SIGNIN_CHALLENGE, methods },
+        });
+      }
+      case "/v1/signin/sms": {
+        cloud.smsSends.push(body);
+        const next = cloud.nextSms.shift();
+        if (next) return fulfil(route, next);
+        if (!cloud.owner.sms_fallback)
+          return fulfil(route, { status: 403, body: err("FORBIDDEN") });
+        return fulfil(route, { status: 202, body: { resend_after_s: 30 } });
+      }
+      case "/v1/signin/verify": {
+        cloud.signinVerifies.push(body);
+        const next = cloud.nextSigninVerify.shift();
+        if (next) return fulfil(route, next);
+        const normalized = CODES.map((c) => c.replace("-", ""));
+        let ok = false;
+        if (body.method === "totp") ok = body.code === GOOD_TOTP;
+        if (body.method === "sms") ok = body.code === GOOD_CODE;
+        if (body.method === "backup_code") {
+          ok = normalized.includes(body.code) && !cloud.usedBackupCodes.includes(body.code);
+          if (ok) cloud.usedBackupCodes.push(body.code);
+        }
+        if (!ok) return fulfil(route, { status: 401, body: err("AUTH_FAILED") });
+        cloud.signedIn = true;
+        if (body.trust_device) cloud.trusted = true;
+        const reply =
+          body.method === "backup_code"
+            ? { next: "done", backup_codes_remaining: cloud.backupRemaining }
+            : { next: "done" };
+        return fulfil(route, { status: 200, body: reply });
+      }
       default: {
         const next = cloud.nextAccount.shift();
         if (next) return fulfil(route, next);
         if (!cloud.signedIn) return fulfil(route, { status: 401, body: err("AUTH_FAILED") });
-        return fulfil(route, account(cloud, url.pathname, body));
+        return fulfil(route, account(cloud, url.pathname, body, route.request().method()));
       }
     }
   });
@@ -167,10 +278,40 @@ export async function stubCloud(
 }
 
 /** The cloud's account-setup rules, on `cloud.owner`. */
-function account(cloud: Cloud, path: string, body: Record<string, string> | null): Reply {
+function account(
+  cloud: Cloud,
+  path: string,
+  body: Record<string, string> | null,
+  method: string,
+): Reply {
   const o = cloud.owner;
   const enrolled = o.mfa_state === "enrolled";
+  if (path.startsWith("/v1/account/devices/") && method === "DELETE") {
+    if (!enrolled) return { status: 403, body: err("SETUP_INCOMPLETE") };
+    const id = decodeURIComponent(path.slice("/v1/account/devices/".length));
+    cloud.removedDevices.push(id);
+    const before = cloud.devices.length;
+    cloud.devices = cloud.devices.filter((d) => d.id !== id);
+    return cloud.devices.length < before ? NO_CONTENT : { status: 404, body: err("NOT_FOUND") };
+  }
   switch (path) {
+    case "/v1/account/security/sms-fallback": {
+      if (!enrolled) return { status: 403, body: err("SETUP_INCOMPLETE") };
+      const enabled = (body as unknown as { enabled: boolean } | null)?.enabled === true;
+      cloud.smsFallbackSets.push(enabled);
+      o.sms_fallback = enabled;
+      return NO_CONTENT;
+    }
+    case "/v1/account/devices":
+      if (!enrolled) return { status: 403, body: err("SETUP_INCOMPLETE") };
+      return { status: 200, body: cloud.devices };
+    case "/v1/account/sign-out-everywhere":
+      if (!enrolled) return { status: 403, body: err("SETUP_INCOMPLETE") };
+      cloud.signOuts += 1;
+      cloud.signedIn = false;
+      cloud.trusted = false;
+      cloud.devices = [];
+      return NO_CONTENT;
     case "/v1/account/password": {
       const pw = body?.password ?? "";
       cloud.passwords.push(pw);

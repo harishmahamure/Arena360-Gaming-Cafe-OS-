@@ -22,6 +22,7 @@ mod otp;
 mod owner;
 mod rate_limit;
 mod session;
+mod signin;
 
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
@@ -33,6 +34,10 @@ pub use owner::{NewOwner, Owner};
 pub use rate_limit::{RateReservation, RateRule, RateWindow};
 pub use session::{
     NewOwnerSession, OwnerSession, REFRESH_RACE_MS, RefreshOutcome, SessionWithOwner,
+};
+pub use signin::{
+    NewOwnerDevice, NewSigninChallenge, OwnerDevice, SigninChallenge, SigninCompletion,
+    SigninFactor, SigninFailure,
 };
 
 use std::fmt;
@@ -64,6 +69,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 3,
         sql: include_str!("../control-migrations/0003_owner_mfa.sql"),
+    },
+    ControlMigration {
+        version: 4,
+        sql: include_str!("../control-migrations/0004_owner_signin.sql"),
     },
 ];
 

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { GOOD_TOTP, stubCloud, t, toCodeStep, type Cloud } from "./stub";
+import { GOOD_TOTP, PASSWORD, stubCloud, t, toCodeStep, type Cloud } from "./stub";
 
 // Accessibility floor for every onboarding view in light and dark: landmarks, one h1, labelled
 // fields, targets of at least 44 × 44 px and no serious or critical axe violations.
@@ -26,6 +26,14 @@ async function toCodes(page: Page) {
 }
 
 const ENROLLED = { has_password: true, mfa_state: "enrolled" as const };
+
+async function toSigninChallenge(page: Page) {
+  await page.goto("/sign-in");
+  await page.getByLabel(t("onboarding.signin.login"), { exact: true }).fill("+919876543210");
+  await page.getByLabel(t("onboarding.password.label"), { exact: true }).fill(PASSWORD);
+  await page.getByRole("button", { name: t("onboarding.signin.submit"), exact: true }).click();
+  await expect(h1(page, "onboarding.signin.challenge_title")).toBeVisible();
+}
 
 const VIEWS: {
   name: string;
@@ -92,6 +100,78 @@ const VIEWS: {
       await page.goto("/account/security");
       await expect(
         page.getByRole("button", { name: t("onboarding.regenerate.button") }),
+      ).toBeVisible();
+      await expect(page.getByRole("listitem")).toHaveCount(2);
+    },
+  },
+  {
+    name: "sign in",
+    open: async (page) => {
+      await page.goto("/sign-in");
+      await page.getByRole("button", { name: t("onboarding.signin.submit"), exact: true }).click();
+      await expect(page.getByText(t("onboarding.signin.login_required"))).toBeVisible();
+    },
+  },
+  {
+    name: "sign in, failed",
+    open: async (page) => {
+      await page.goto("/sign-in");
+      await page.getByLabel(t("onboarding.signin.login"), { exact: true }).fill("a@b.in");
+      await page.getByLabel(t("onboarding.password.label"), { exact: true }).fill("wrong-one-1");
+      await page.getByRole("button", { name: t("onboarding.signin.submit"), exact: true }).click();
+      await expect(page.getByText(t("onboarding.signin.failed"))).toBeVisible();
+    },
+  },
+  {
+    name: "sign-in code",
+    cloud: { owner: { ...ENROLLED, backup_codes_acked: true, sms_fallback: true } },
+    open: toSigninChallenge,
+  },
+  {
+    name: "sign-in backup code",
+    cloud: { owner: { ...ENROLLED, backup_codes_acked: true } },
+    open: async (page) => {
+      await toSigninChallenge(page);
+      await page.getByRole("button", { name: t("onboarding.signin.use_backup") }).click();
+      await page.getByRole("button", { name: t("onboarding.signin.submit"), exact: true }).click();
+      await expect(page.getByText(t("onboarding.signin.backup_required"))).toBeVisible();
+    },
+  },
+  {
+    name: "sign-in text message",
+    cloud: { owner: { ...ENROLLED, backup_codes_acked: true, sms_fallback: true } },
+    open: async (page) => {
+      await toSigninChallenge(page);
+      await page.getByRole("button", { name: t("onboarding.signin.text_me") }).click();
+      await expect(
+        page.getByLabel(t("onboarding.signin.sms_label"), { exact: true }),
+      ).toBeFocused();
+    },
+  },
+  {
+    name: "backup codes low",
+    cloud: { owner: { ...ENROLLED, backup_codes_acked: true } },
+    open: async (page, cloud) => {
+      cloud.backupRemaining = 3;
+      await toSigninChallenge(page);
+      await page.getByRole("button", { name: t("onboarding.signin.use_backup") }).click();
+      await page
+        .getByLabel(t("onboarding.signin.backup_label"), { exact: true })
+        .fill("ABCDE-FG000");
+      await page.getByRole("button", { name: t("onboarding.signin.submit"), exact: true }).click();
+      await expect(
+        page.getByRole("heading", { level: 1, name: t("onboarding.signin.low_title", { n: 3 }) }),
+      ).toBeVisible();
+    },
+  },
+  {
+    name: "security, sign out everywhere",
+    cloud: { signedIn: true, owner: { ...ENROLLED, backup_codes_acked: true } },
+    open: async (page) => {
+      await page.goto("/account/security");
+      await page.getByRole("button", { name: t("onboarding.security.signout_button") }).click();
+      await expect(
+        page.getByRole("dialog", { name: t("onboarding.security.signout_confirm_title") }),
       ).toBeVisible();
     },
   },

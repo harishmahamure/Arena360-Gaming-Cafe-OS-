@@ -128,6 +128,7 @@ pub struct SessionOwner {
     pub has_password: bool,
     /// Whether the owner confirmed saving their backup codes.
     pub backup_codes_acked: bool,
+    pub sms_fallback: bool,
 }
 
 /// `200` from `GET /v1/session` and `POST /v1/session/refresh`.

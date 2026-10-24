@@ -15,4 +15,5 @@ export type SessionOwner = {
    * Whether the owner confirmed saving their backup codes.
    */
   backup_codes_acked: boolean;
+  sms_fallback: boolean;
 };

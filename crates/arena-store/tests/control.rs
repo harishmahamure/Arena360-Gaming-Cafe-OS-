@@ -17,11 +17,13 @@ const BASELINE: &[ControlMigration] = CONTROL_MIGRATIONS.split_at(1).0;
 const ALL_TABLES: &[&str] = &[
     "otp_challenges",
     "owner_backup_codes",
+    "owner_devices",
     "owner_mfa",
     "owner_sessions",
     "owners",
     "rate_limits",
     "schema_migrations",
+    "signin_challenges",
 ];
 
 /// `schema_migrations` after `migrate(at)` on a fresh database.

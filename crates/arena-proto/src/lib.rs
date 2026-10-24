@@ -17,6 +17,7 @@ mod kiosk;
 mod permission;
 mod process;
 mod scope;
+mod signin;
 mod signup;
 mod snapshot;
 mod ui_auth;
@@ -68,6 +69,12 @@ pub use process::{
     is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
+pub use signin::{
+    BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,
+    SIGNIN_MAX_ATTEMPTS, SIGNIN_MAX_FAILURES, Signin, SigninMethod, SigninNext, SigninReply,
+    SigninSms, SigninSmsSent, SigninVerified, SigninVerify, SmsFallback, TRUSTED_DEVICE_TTL_S,
+    TrustedDevice,
+};
 pub use signup::{
     MfaState, OTP_DIGITS, OTP_MAX_ATTEMPTS, OTP_RESEND_AFTER_S, OTP_SENDS_PER_HOUR, OTP_TTL_S,
     SessionInfo, SessionOwner, SignupChallenge, SignupNext, SignupResend, SignupStart,

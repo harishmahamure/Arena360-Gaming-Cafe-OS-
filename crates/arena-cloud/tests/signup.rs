@@ -345,6 +345,7 @@ async fn the_right_code_creates_a_pending_owner_and_signs_in() {
             "mfa_state": "pending",
             "has_password": false,
             "backup_codes_acked": false,
+            "sms_fallback": false,
         }})
     );
     let none = h.call("GET", "/v1/session", None, &[]).await;

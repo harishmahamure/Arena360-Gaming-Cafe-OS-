@@ -24,6 +24,7 @@ pub mod messaging;
 pub mod passwords;
 pub mod store;
 pub mod totp;
+pub mod useragent;
 
 use std::future::Future;
 use std::sync::Arc;

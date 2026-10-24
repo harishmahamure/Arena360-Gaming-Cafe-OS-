@@ -12,7 +12,12 @@ import type {
   SignupChallenge,
   SignupStart,
   SignupVerified,
+  SigninMethod,
+  SigninReply,
+  SigninSmsSent,
+  SigninVerified,
   TotpStarted,
+  TrustedDevice,
 } from "@arena/ui/generated";
 
 /** The API origin (empty: same origin, through the dev/preview proxy). */
@@ -45,6 +50,7 @@ const CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "PASSWORD_REQUIRED",
   "TOTP_INVALID",
   "SETUP_INCOMPLETE",
+  "AUTH_LOCKED",
 ]);
 
 function isAppError(v: unknown): v is AppError {
@@ -73,7 +79,7 @@ export function retryAfterSeconds(header: string | null, now = Date.now()): numb
 }
 
 async function call<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
@@ -151,3 +157,22 @@ export const ackBackupCodes = () =>
   withRefresh(() => call<null>("POST", "/account/mfa/backup-codes/ack"));
 export const regenerateBackupCodes = (code: string) =>
   withRefresh(() => call<BackupCodes>("POST", "/account/mfa/backup-codes/regenerate", { code }));
+
+export const signIn = (login: string, password: string) =>
+  call<SigninReply>("POST", "/signin", { login, password });
+export const sendSigninSms = (challenge_id: string) =>
+  call<SigninSmsSent>("POST", "/signin/sms", { challenge_id });
+export const verifySignin = (
+  challenge_id: string,
+  method: SigninMethod,
+  code: string,
+  trust_device: boolean,
+) => call<SigninVerified>("POST", "/signin/verify", { challenge_id, method, code, trust_device });
+export const setSmsFallback = (enabled: boolean) =>
+  withRefresh(() => call<null>("PUT", "/account/security/sms-fallback", { enabled }));
+export const listDevices = () =>
+  withRefresh(() => call<TrustedDevice[]>("GET", "/account/devices"));
+export const removeDevice = (id: string) =>
+  withRefresh(() => call<null>("DELETE", `/account/devices/${encodeURIComponent(id)}`));
+export const signOutEverywhere = () =>
+  withRefresh(() => call<null>("POST", "/account/sign-out-everywhere"));

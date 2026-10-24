@@ -20,6 +20,22 @@ Read this file after a context flush (`/clear`). It's the single entry point for
 
 - **(2026-10-25) No code comments:** the user's global rule (`~/.claude/CLAUDE.md`). Every implementer dispatch and fix message adds: "Do not add code comments in anything you write or change (no line, block or doc comments; leave existing comments alone unless the code they describe changes)."
 
+- **(2026-10-25) Two module tracks, requested by the user ("module by module … control plane, hub"):**
+  - **Control-plane track:** 2.6 → 2.16, then 2.19 and 2.22 (worktrees `.claude/worktrees/<key>`, with the overlap rules above).
+  - **Hub track:** 2.17 → 2.18 → 2.20 → 2.21 → 2.23 → 2.24 → 2.25 → 2.26 → 2.27, in sequence on worktree `.claude/worktrees/hub-<key>`, branched from current master. Hub migrations go in `crates/arena-store/migrations/` (the branch DB), control migrations in `control-migrations/`; they never collide.
+  - **Joint stories:** 2.28–2.31 run after both tracks.
+  - **Landing:** each finished story is rebased onto master and fast-forwarded, one `feat:` commit per story, with bookkeeping (sprint-status, decision log) amended in on master.
+  - **Limits:** at most 3 implementers at once. Ports: the hub app's Playwright uses 5173 (the user's own dev server may hold it; then reuse or run against it, as in 1.20), onboarding uses 5179.
+
+- **(2026-10-25) All modules in parallel, requested by the user ("ALL MODULES IN EPIC"):**
+  - **Track A, control plane:** 2.6 → 2.16.
+  - **Track B, Hub devices:** 2.17 → 2.18, then fan out 2.20 (→ 2.25), 2.21, 2.23 and 2.24 in parallel.
+  - **Track C, Hub settings:** 2.26 and 2.27.
+  - **Joint:** 2.19, 2.22 and 2.28–2.31 after A and B.
+  - **Limits:** at most 4 implementers at once.
+  - **Hub migration numbers reserved:** 2.26 = 0011, 2.18 = 0012, then 2.20 = 0013, 2.21 = 0014, 2.23 = 0015, 2.24 = 0016, 2.25 = 0017, 2.27 = 0018 (if needed).
+  - **Control migrations:** 2.6 = 0004, 2.7 = 0005, then sequential.
+
 ## Where things stand
 
 - **Story order and status:** `_bmad-output/implementation-artifacts/sprint-status.yaml`. A story at `review` is committed; `in-progress` is mid-pipeline.

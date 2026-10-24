@@ -239,6 +239,15 @@ it in the Deployment if launch traffic needs more.
   | signup start  | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signup/start"`  | 10 per 10 min |
   | signup verify | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signup/verify"` | 30 per 10 min |
   | signup resend | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signup/resend"` | 10 per 10 min |
+  | signin        | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signin"`        | 20 per 10 min |
+  | signin verify | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signin/verify"` | 30 per 10 min |
+  | signin sms    | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signin/sms"`    | 10 per 10 min |
+
+  The sign-in rules (Story 2.6) sit next to the sign-up ones. Inside the cloud, 5 consecutive
+  failed sign-ins (wrong password or second factor, in any mix) pause that account for 15
+  minutes, and an SMS sign-in code counts against the same 5-per-phone-per-hour send limit as a
+  sign-up code. The per-IP rules stop one address from pausing many accounts or guessing
+  across them.
 
   Repeat them for `api.staging.arena360.cloud`. A Cloudflare block answers before the origin,
   so the onboarding app shows its generic "try again" error for it.

@@ -51,14 +51,20 @@ const TOTP_PREFIX: &str = "totp:";
 pub const TOTP_FAILURES_PER_WINDOW: u64 = 5;
 pub const TOTP_WINDOW_MS: i64 = 15 * 60_000;
 
-async fn check_code(
+pub(super) enum TotpCheck {
+    Accepted(i64),
+    Wrong,
+    Limited(u64),
+}
+
+pub(super) async fn check_totp(
     st: &AuthState,
     owner_id: &str,
     secret: &[u8],
     code: &str,
     now: i64,
     last_step: Option<i64>,
-) -> Result<i64, ApiError> {
+) -> Result<TotpCheck, ApiError> {
     let key = format!("{TOTP_PREFIX}{owner_id}");
     let rule = RateRule {
         key: &key,
@@ -77,18 +83,33 @@ async fn check_code(
         Err(wait_ms) => {
             tracing::warn!(owner_id = %owner_id, "totp failure limit reached");
             let retry = u64::try_from((wait_ms + 999) / 1000).unwrap_or(1);
-            return Err(ApiError::rate_limited(retry));
+            return Ok(TotpCheck::Limited(retry));
         }
     };
     let Some(step) = totp::matching_step(secret, code, now, last_step) else {
         tracing::info!(owner_id = %owner_id, "totp code wrong or reused");
-        return Err(totp_invalid());
+        return Ok(TotpCheck::Wrong);
     };
     st.db
         .rate_release(&reservation)
         .await
         .map_err(ApiError::internal)?;
-    Ok(step)
+    Ok(TotpCheck::Accepted(step))
+}
+
+async fn check_code(
+    st: &AuthState,
+    owner_id: &str,
+    secret: &[u8],
+    code: &str,
+    now: i64,
+    last_step: Option<i64>,
+) -> Result<i64, ApiError> {
+    match check_totp(st, owner_id, secret, code, now, last_step).await? {
+        TotpCheck::Accepted(step) => Ok(step),
+        TotpCheck::Wrong => Err(totp_invalid()),
+        TotpCheck::Limited(retry) => Err(ApiError::rate_limited(retry)),
+    }
 }
 
 fn not_enrolled() -> ApiError {
@@ -104,7 +125,7 @@ fn no_store(body: impl serde::Serialize) -> Response {
 }
 
 /// The owner's secret, opened with the MFA key: 500 `INTERNAL` (logged) when it doesn't open.
-fn open_secret(st: &AuthState, m: &OwnerMfa) -> Result<Vec<u8>, ApiError> {
+pub(super) fn open_secret(st: &AuthState, m: &OwnerMfa) -> Result<Vec<u8>, ApiError> {
     st.mfa_key
         .open(&m.owner_id, &m.secret_ct, &m.secret_nonce)
         .map_err(|e| {

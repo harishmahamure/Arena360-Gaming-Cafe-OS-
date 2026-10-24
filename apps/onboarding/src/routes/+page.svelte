@@ -245,11 +245,6 @@
     codeStatus = null;
     step = "form";
   }
-
-  function backToStart(event: MouseEvent) {
-    event.preventDefault();
-    changeDetails();
-  }
 </script>
 
 <svelte:head>
@@ -391,7 +386,7 @@
 {:else}
   <h1>{t("onboarding.start.title")}</h1>
   <p class="intro" role="status">{t("onboarding.sign_in.message")}</p>
-  <p><a class="link" href="/" onclick={backToStart}>{t("onboarding.sign_in.link")}</a></p>
+  <p><a class="link" href="/sign-in">{t("onboarding.sign_in.link")}</a></p>
 {/if}
 
 <style>

@@ -20,10 +20,12 @@
     "check:tokens-used": "node scripts/check-tokens-used.mjs",
     "check:hex": "node scripts/check-hex.mjs",
     "check:no-remote": "node scripts/check-no-remote.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "check:deploy": "node scripts/check-deploy.mjs",
     "test:scripts": "node --test scripts/*.test.mjs",
     "format:check": "prettier --check .",
     "check:rust": "cargo fmt --check && cargo clippy --locked --workspace --all-targets -- -D warnings",
-    "check": "pnpm run check:rust && pnpm run check:generated && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run check:protocol && pnpm run check:strings && pnpm run check:tokens-fresh && pnpm run check:contrast && pnpm run check:tokens-used && pnpm run check:hex && pnpm run test:scripts"
+    "check": "pnpm run check:rust && pnpm run check:generated && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run check:protocol && pnpm run check:strings && pnpm run check:tokens-fresh && pnpm run check:contrast && pnpm run check:tokens-used && pnpm run check:hex && pnpm run check:secrets && pnpm run check:deploy && pnpm run test:scripts"
   },
   "devDependencies": {
     "prettier": "3.9.10",

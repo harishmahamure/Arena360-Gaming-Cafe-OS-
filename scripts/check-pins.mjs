@@ -108,12 +108,48 @@ export function readCargoWorkspaceDeps(text) {
   return out;
 }
 
+/** deploy-cloud.yml -> { sops, age } from the workflow `env` */
+export function readDeployWorkflow(text) {
+  const out = {};
+  for (const [item, key] of [
+    ["sops", "SOPS_VERSION"],
+    ["age", "AGE_VERSION"],
+  ]) {
+    const m = text.match(new RegExp(`^\\s*${key}:\\s*(.+?)\\s*$`, "m"));
+    if (m) out[item] = unquote(m[1]);
+  }
+  return out;
+}
+
+/** arena-cloud.Dockerfile -> { <runtime image>: <tag> } (the final FROM) */
+export function readDockerfile(text) {
+  const froms = [...text.matchAll(/^FROM\s+([^\s:@]+):([^\s@]+)/gm)];
+  const last = froms.at(-1);
+  return last ? { [last[1]]: last[2] } : {};
+}
+
+/** ci.yml -> { ghcr.io/tursodatabase/libsql-server: <tag> } (the rust job's service) */
+export function readCiWorkflow(text) {
+  const m = text.match(/ghcr\.io\/tursodatabase\/libsql-server:([\w.+-]+)/);
+  return m ? { "ghcr.io/tursodatabase/libsql-server": m[1] } : {};
+}
+
+/** deploy/README.md -> { k3s: INSTALL_K3S_VERSION } */
+export function readDeployReadme(text) {
+  const m = text.match(/INSTALL_K3S_VERSION=([^\s"'`]+)/);
+  return m ? { k3s: m[1] } : {};
+}
+
 export const READERS = {
   "rust-toolchain.toml": readRustToolchain,
   ".nvmrc": readNvmrc,
   "package.json": readPackageJson,
   "pnpm-workspace.yaml": readPnpmCatalog,
   "Cargo.toml": readCargoWorkspaceDeps,
+  ".github/workflows/deploy-cloud.yml": readDeployWorkflow,
+  "deploy/docker/arena-cloud.Dockerfile": readDockerfile,
+  ".github/workflows/ci.yml": readCiWorkflow,
+  "deploy/README.md": readDeployReadme,
 };
 
 /** Manifests whose values must be exact versions (no ranges). */

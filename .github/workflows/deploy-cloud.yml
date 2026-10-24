@@ -1,0 +1,203 @@
+# Deploys arena-cloud to the k3s node in Mumbai (Hostinger VPS) behind Cloudflare.
+#   push to master -> staging    (api.staging.arena360.cloud)
+#   push tag v*    -> production (api.arena360.cloud)
+#
+# Every run first passes the full CI suite (ci.yml, called). On master it builds the image
+# and pushes it to GHCR tagged with the commit SHA; a v* tag never rebuilds, it promotes the
+# image staging already ran (and fails if that commit never went through staging). Both
+# environments deploy by digest. Over SSH to the node (no public kube-apiserver), as the
+# environment's own namespace-scoped deployer, it applies the decrypted SOPS secrets and the
+# overlay, waits for the rollout and smoke-tests the edge. Namespaces, RBAC and the Traefik
+# config are one-time operator steps (deploy/README.md), never applied here.
+# `pnpm check:deploy` checks this file statically.
+
+name: deploy-cloud
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+
+concurrency:
+  group: deploy-cloud-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SOPS_VERSION: "3.13.3"
+  AGE_VERSION: "1.3.2"
+  SOPS_URL: https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+  AGE_URL: https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+  # sha256 of the two downloads above. Operator step (deploy/README.md, "Pin the tool
+  # checksums"): replace each PIN-ME with the published sha256 before the first deploy; the
+  # install step refuses anything that is not 64 hex characters.
+  SOPS_SHA256: PIN-ME
+  AGE_SHA256: PIN-ME
+
+jobs:
+  ci:
+    name: ci
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: ${{ startsWith(github.ref, 'refs/tags/v') && 'promote staged image' || 'build and push image' }}
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.digest.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image name
+        id: image
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "repo=ghcr.io/${owner}/arena-cloud" >> "$GITHUB_OUTPUT"
+          echo "tagged=ghcr.io/${owner}/arena-cloud:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+      - name: Build
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: docker build -f deploy/docker/arena-cloud.Dockerfile -t '${{ steps.image.outputs.tagged }}' .
+      - name: Push
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: docker push '${{ steps.image.outputs.tagged }}'
+      - name: The staged image exists (tags never rebuild)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          if ! docker manifest inspect '${{ steps.image.outputs.tagged }}' >/dev/null; then
+            echo "::error::${{ steps.image.outputs.tagged }} does not exist. A release tag only promotes an image staging built: push ${{ github.sha }} to master first and let it deploy to staging."
+            exit 1
+          fi
+          docker pull '${{ steps.image.outputs.tagged }}'
+      - name: Resolve the digest
+        id: digest
+        run: |
+          ref="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' '${{ steps.image.outputs.tagged }}' | grep -F '${{ steps.image.outputs.repo }}@sha256:' | head -n1)"
+          [[ "$ref" == *@sha256:* ]] || { echo "::error::no digest for ${{ steps.image.outputs.tagged }}"; exit 1; }
+          echo "image=$ref" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: deploy (${{ startsWith(github.ref, 'refs/tags/v') && 'production' || 'staging' }})
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'production' || 'staging' }}
+    env:
+      DEPLOY_ENV: ${{ startsWith(github.ref, 'refs/tags/v') && 'production' || 'staging' }}
+      EDGE_HOST: ${{ startsWith(github.ref, 'refs/tags/v') && 'api.arena360.cloud' || 'api.staging.arena360.cloud' }}
+      IMAGE: ${{ needs.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Encrypted secrets exist
+        run: |
+          f="deploy/secrets/${DEPLOY_ENV}.enc.yaml"
+          if [[ ! -f "$f" ]]; then
+            echo "::error file=$f::$f is missing. Encrypt the ${DEPLOY_ENV} arena-cloud-secrets and origin-tls Secrets with sops first (deploy/README.md, \"Encrypt the secrets\")."
+            exit 1
+          fi
+
+      - name: Install sops and age (pinned URL + sha256)
+        run: |
+          for v in SOPS_SHA256 AGE_SHA256; do
+            if [[ ! "${!v}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::$v is not a sha256. Pin it in deploy-cloud.yml (deploy/README.md, \"Pin the tool checksums\")."
+              exit 1
+            fi
+          done
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL -o "$RUNNER_TEMP/sops" "$SOPS_URL"
+          echo "${SOPS_SHA256}  $RUNNER_TEMP/sops" | sha256sum -c -
+          install -m 0755 "$RUNNER_TEMP/sops" "$RUNNER_TEMP/bin/sops"
+          curl -fsSL -o "$RUNNER_TEMP/age.tar.gz" "$AGE_URL"
+          echo "${AGE_SHA256}  $RUNNER_TEMP/age.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/age.tar.gz" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/age/age" "$RUNNER_TEMP/bin/age"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Tool versions
+        run: |
+          sops --version | grep -F "$SOPS_VERSION"
+          age --version | grep -F "$AGE_VERSION"
+
+      - name: SSH to the node (pinned known_hosts)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 0600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0644 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CFG
+          Host node
+            HostName ${{ secrets.DEPLOY_HOST }}
+            User ${{ secrets.DEPLOY_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+          CFG
+          ssh node true
+
+      - name: Apply the decrypted secrets
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          set -o pipefail
+          # The plaintext only ever exists in this pipe.
+          sops --decrypt "deploy/secrets/${DEPLOY_ENV}.enc.yaml" | ssh node kubectl apply -n "$DEPLOY_ENV" -f -
+
+      - name: Render the overlay with this image
+        run: |
+          kubectl kustomize "deploy/k8s/overlays/${DEPLOY_ENV}" > "$RUNNER_TEMP/rendered.yaml"
+          yq -i '(select(.kind == "Deployment" and .metadata.name == "arena-cloud-control") | .spec.template.spec.containers[] | select(.name == "control") | .image) = strenv(IMAGE)' "$RUNNER_TEMP/rendered.yaml"
+          grep -F "image: ${IMAGE}" "$RUNNER_TEMP/rendered.yaml"
+
+      - name: Apply and wait for the rollout
+        run: |
+          set -o pipefail
+          ssh node kubectl apply -f - < "$RUNNER_TEMP/rendered.yaml"
+          ssh node kubectl -n "$DEPLOY_ENV" rollout status deployment/arena-cloud-control --timeout=180s
+
+      - name: "Smoke: /healthz through the edge"
+        run: |
+          for i in $(seq 1 30); do
+            if body="$(curl -fsS --max-time 10 "https://${EDGE_HOST}/healthz")" \
+              && echo "$body" | jq -e '.role == "control" and (.migration_version | type == "number" and . >= 1) and .gz_control.reachable == true' >/dev/null; then
+              echo "$body"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::https://${EDGE_HOST}/healthz did not report migration_version and reachable: true"
+          exit 1
+
+      - name: "Smoke: http redirects to https"
+        run: |
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${EDGE_HOST}/healthz")"
+          location="$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 10 "http://${EDGE_HOST}/healthz")"
+          echo "http -> $code $location"
+          [[ "$code" == "301" || "$code" == "308" ]] && [[ "$location" == https://* ]]
+
+      - name: "Smoke: the origin refuses non-Cloudflare clients"
+        env:
+          ORIGIN_IP: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          # This runner is outside Cloudflare: Traefik answers 403, or the provider firewall drops it.
+          set +e
+          code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \
+            --resolve "${EDGE_HOST}:443:${ORIGIN_IP}" "https://${EDGE_HOST}/healthz")"
+          rc=$?
+          set -e
+          echo "direct origin -> curl exit $rc, http $code"
+          # 7 refused, 28 timed out (dropped), 35 TLS failure, 52 empty reply, 56 reset.
+          if [[ "$code" == "403" || " 7 28 35 52 56 " == *" $rc "* ]]; then
+            exit 0
+          fi
+          echo "::error::the origin answered a non-Cloudflare client (http $code, curl exit $rc)"
+          exit 1

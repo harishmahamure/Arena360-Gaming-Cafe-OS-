@@ -26,7 +26,7 @@ pub struct Config {
     /// The sniffed TLS / plain HTTP port (default 7401).
     pub web_port: u16,
     /// The cloud host the connectivity probe checks (`--cloud-host`, default
-    /// `api.arena360.in:443`, a placeholder until the cloud epic).
+    /// `api.arena360.cloud:443`, the production `arena-cloud` behind Cloudflare).
     pub cloud_host: CloudHost,
     /// The internet endpoints the probe connects to (`--probe-internet`, default `1.1.1.1:443`
     /// and `8.8.8.8:443`).
@@ -498,7 +498,7 @@ mod tests {
     fn probe_flags_default_and_override() {
         let env = env_of(&[("HOME", "/h")]);
         let c = run(&[], &env, false).unwrap();
-        assert_eq!(c.cloud_host.host, "api.arena360.in");
+        assert_eq!(c.cloud_host.host, "api.arena360.cloud");
         assert_eq!(c.cloud_host.port, 443);
         assert_eq!(
             c.probe_internet,

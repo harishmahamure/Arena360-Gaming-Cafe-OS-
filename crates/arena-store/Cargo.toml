@@ -10,6 +10,16 @@ publish.workspace = true
 arena-proto.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
+libsql = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+hyper-rustls = { workspace = true, optional = true }
+
+[features]
+# `gz_control` (the cloud control database) over libsql remote. Only `arena-cloud` enables it,
+# so the Hub's dependency tree never includes libsql.
+control = ["dep:libsql", "dep:tokio", "dep:hyper", "dep:hyper-rustls"]
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio.workspace = true

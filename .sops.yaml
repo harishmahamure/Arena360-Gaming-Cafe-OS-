@@ -1,0 +1,13 @@
+# SOPS creation rules: every deploy/secrets/*.enc.yaml is encrypted to the age recipients below
+# (whole Kubernetes Secret manifests; only `data` and `stringData` values are encrypted).
+#
+# Replace each recipient with the public key printed by `age-keygen` (see deploy/README.md);
+# the private keys live only in the GitHub environment secret SOPS_AGE_KEY and with the
+# operators, never in the repository.
+creation_rules:
+  - path_regex: ^deploy/secrets/staging\.enc\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1stagingrecipientreplacemewiththeoutputofagekeygen000000000000000000
+  - path_regex: ^deploy/secrets/production\.enc\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1productionrecipientreplacemewiththeoutputofagekeygen000000000000000

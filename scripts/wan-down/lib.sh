@@ -15,7 +15,7 @@ HEALTH_PORT=7409
 LAN_PORT=7400
 # The probe's endpoints, passed explicitly so the trace allow-list cannot drift from them.
 PROBE_INTERNET="1.1.1.1:443,8.8.8.8:443"
-CLOUD_HOST="api.arena360.in:443"
+CLOUD_HOST="api.arena360.cloud:443"
 # The veth pair and subnet that reconnect the namespace (soak restore only).
 VETH_HOST="arena-wan-h"
 VETH_NS="arena-wan-n"

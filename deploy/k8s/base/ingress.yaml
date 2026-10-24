@@ -1,0 +1,28 @@
+# Traefik (bundled with k3s) on websecure only, TLS with the Cloudflare Origin CA certificate
+# (secret `origin-tls`, from SOPS) for SSL Full (strict), and every router behind the
+# Cloudflare-only allow list. Overlays replace the host and the middleware's namespace prefix.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: arena-cloud
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: NAMESPACE-cloudflare-only@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - HOST
+      secretName: origin-tls
+  rules:
+    - host: HOST
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: arena-cloud-control
+                port:
+                  name: http

@@ -26,9 +26,14 @@ Rust tests.
 | `scripts/`  | Repo checks (`check-*.mjs`), `gen-types.mjs`, branch rule |
 
 Rust crates: `arena-proto`, `arena-store`, `arena-core`, `arena-api`, `arena-tasks`,
-`arena-replay`, `arena-cloud`, `arena-kiosk-core` (libraries) and `arena-hub`, `arena-kiosk-svc`,
+`arena-replay`, `arena-kiosk-core` (libraries), `arena-cloud` (library and the `arena-cloud`
+binary, see [Running arena-cloud](#running-arena-cloud)) and `arena-hub`, `arena-kiosk-svc`,
 `arena-pi` (binaries), plus the test-only `arena-e2e` driver (see
 [The branch with the WAN down](#the-branch-with-the-wan-down)).
+
+| Path      | Contents                                                                              |
+| --------- | ------------------------------------------------------------------------------------- |
+| `deploy/` | `arena-cloud` image, k3s manifests, Cloudflare ranges, SOPS secrets, operator runbook |
 
 ### Apps
 
@@ -75,16 +80,16 @@ cargo run -p arena-hub -- --data-dir /tmp/hub
 curl 127.0.0.1:7409/healthz
 ```
 
-| Flag                                 | Meaning                                                                                                      |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `--data-dir <path>`                  | Data directory (overrides `ARENA_HUB_DATA_DIR`)                                                              |
-| `--health-port <port>`               | Loopback port for `GET /healthz` (default `7409`, not `0`)                                                   |
-| `--lan-port <port>`                  | TLS WebSocket port for paired apps (default `7400`)                                                          |
-| `--web-port <port>`                  | Sniffed TLS / plain HTTP port (default `7401`)                                                               |
-| `--cloud-host <host:port>`           | Cloud host the connectivity probe checks (default `api.arena360.in:443`, a placeholder until the cloud epic) |
-| `--probe-internet <ip:port,ip:port>` | Internet endpoints the probe connects to (default `1.1.1.1:443,8.8.8.8:443`)                                 |
-| `--help`, `-h`                       | Print usage and exit 0                                                                                       |
-| `--version`                          | Print the version and exit 0                                                                                 |
+| Flag                                 | Meaning                                                                                                                                |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `--data-dir <path>`                  | Data directory (overrides `ARENA_HUB_DATA_DIR`)                                                                                        |
+| `--health-port <port>`               | Loopback port for `GET /healthz` (default `7409`, not `0`)                                                                             |
+| `--lan-port <port>`                  | TLS WebSocket port for paired apps (default `7400`)                                                                                    |
+| `--web-port <port>`                  | Sniffed TLS / plain HTTP port (default `7401`)                                                                                         |
+| `--cloud-host <host:port>`           | Cloud host the connectivity probe checks (default `api.arena360.cloud:443`, the production `arena-cloud` `/healthz` behind Cloudflare) |
+| `--probe-internet <ip:port,ip:port>` | Internet endpoints the probe connects to (default `1.1.1.1:443,8.8.8.8:443`)                                                           |
+| `--help`, `-h`                       | Print usage and exit 0                                                                                                                 |
+| `--version`                          | Print the version and exit 0                                                                                                           |
 
 The three ports must differ. Tests pass free ports; production uses the defaults.
 
@@ -988,64 +993,119 @@ Story 1.22. The branch works with no internet; the connectivity probe (see
   (3 minutes) at the end of `run.sh`; `release-bench.yml`'s manual `soak` input runs 8 hours on
   a self-hosted Linux runner.
 
+## Running arena-cloud
+
+`arena-cloud` is the cloud control plane: one binary, run once per role. Story 2.1 ships
+`--role control`, which connects to `gz_control` (Turso, Mumbai, `aws-ap-south-1`) over libsql,
+applies the embedded migrations and serves `GET /healthz`. It is deployed to k3s behind
+Cloudflare at `api.staging.arena360.cloud` (staging) and `api.arena360.cloud` (production); see
+[`deploy/README.md`](deploy/README.md).
+
+```sh
+ARENA_CONTROL_DB_URL=libsql://gz-control-<org>.aws-ap-south-1.turso.io \
+ARENA_CONTROL_DB_TOKEN=<token> \
+cargo run -p arena-cloud -- --role control --listen 127.0.0.1:8080
+
+# Locally against sqld (no token needed on loopback http):
+sqld --http-listen-addr 127.0.0.1:8081 --db-path /tmp/gz_control.sqld &
+ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role control
+```
+
+| Flag / variable          | Meaning                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| `--role control`         | Required. Any other role exits 64 with "role not available yet"                            |
+| `--listen <addr:port>`   | Listen address (default `0.0.0.0:8080`)                                                    |
+| `--help`, `--version`    | Print usage or the version and exit 0                                                      |
+| `ARENA_CONTROL_DB_URL`   | `libsql://` or `https://` (plain `http://` only for `127.0.0.1`/`localhost`); else exit 64 |
+| `ARENA_CONTROL_DB_TOKEN` | Turso auth token; may be empty only for loopback `http://`. Never logged                   |
+
+- **Start-up.** Logs are JSON lines on stdout. A `gz_control` newer than the binary
+  (`SCHEMA_TOO_NEW`) logs both versions and exits 2 without writing. An unreachable database is
+  retried with backoff for up to 60 s, then the process exits 1.
+- **Migrations.** `crates/arena-store/control-migrations/NNNN_*.sql`, embedded, numbered from 1,
+  forward-only, separate from the Hub's. Each is applied with its `schema_migrations` row in one
+  transaction; a concurrent runner (rolling update) that loses the race re-reads and carries on.
+  `0001_baseline` creates no tables. libsql lives only in `arena-store`'s `control` feature, so
+  `cargo tree -p arena-hub` never shows it, and it is built remote-only (no C SQLite core).
+- **`GET /healthz`** always answers 200
+  `{"role":"control","version":"0.1.0","gz_control":{"reachable":true,"checked_at":<ms>},"migration_version":1}`.
+  Reachability comes from a background `SELECT 1` every 15 s (3 s timeout); requests never hit
+  Turso, and a Turso blip shows `reachable: false` without restarting the pod.
+- **Tests.** The `gz_control` tests use `ARENA_TEST_SQLD_URL` when set (CI's libsql-server
+  service), else spawn `sqld` from `PATH`, else skip with a reason; `ARENA_REQUIRE_SQLD=1` turns
+  the skip into a failure.
+- **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
+  env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
+  fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the
+  namespace, host, args, secret refs, probes, non-root, the Cloudflare allow list and the deploy
+  workflow.
+
 ## Pinned versions
 
 This table is checked against the manifests by `pnpm check:pins`. Change the manifest and this
 table together. JS framework versions live in the pnpm `catalog:`; apps reference them as
 `"catalog:"`.
 
-| Item                         | Version       | Source                |
-| ---------------------------- | ------------- | --------------------- |
-| rust                         | 1.95.0        | `rust-toolchain.toml` |
-| node                         | 22.23.4       | `.nvmrc`              |
-| node engines                 | >=22.23.4 <23 | `package.json`        |
-| pnpm                         | 12.15.0       | `package.json`        |
-| svelte                       | 5.57.2        | `pnpm-workspace.yaml` |
-| @sveltejs/kit                | 3.1.0         | `pnpm-workspace.yaml` |
-| @sveltejs/vite-plugin-svelte | 7.3.1         | `pnpm-workspace.yaml` |
-| vite                         | 8.3.5         | `pnpm-workspace.yaml` |
-| typescript                   | 6.0.3         | `pnpm-workspace.yaml` |
-| @sveltejs/adapter-static     | 4.0.0         | `pnpm-workspace.yaml` |
-| @sveltejs/adapter-cloudflare | 8.0.1         | `pnpm-workspace.yaml` |
-| wrangler                     | 4.152.0       | `pnpm-workspace.yaml` |
-| svelte-check                 | 4.7.7         | `pnpm-workspace.yaml` |
-| astro                        | 7.4.2         | `pnpm-workspace.yaml` |
-| @astrojs/svelte              | 9.1.1         | `pnpm-workspace.yaml` |
-| @tauri-apps/cli              | 2.12.4        | `pnpm-workspace.yaml` |
-| @tauri-apps/api              | 2.12.4        | `pnpm-workspace.yaml` |
-| @tauri-apps/plugin-updater   | 2.14.0        | `pnpm-workspace.yaml` |
-| @fontsource-variable/sora    | 5.3.0         | `pnpm-workspace.yaml` |
-| @playwright/test             | 1.64.1        | `pnpm-workspace.yaml` |
-| @axe-core/playwright         | 4.14.0        | `pnpm-workspace.yaml` |
-| yaml                         | 2.9.1         | `package.json`        |
-| tauri                        | =2.12.5       | `Cargo.toml`          |
-| tauri-build                  | =2.7.4        | `Cargo.toml`          |
-| tauri-plugin-updater         | =2.14.0       | `Cargo.toml`          |
-| serde                        | =1.0.229      | `Cargo.toml`          |
-| serde_json                   | =1.0.154      | `Cargo.toml`          |
-| ts-rs                        | =12.0.1       | `Cargo.toml`          |
-| tokio                        | =1.54.1       | `Cargo.toml`          |
-| axum                         | =0.8.9        | `Cargo.toml`          |
-| rusqlite                     | =0.40.2       | `Cargo.toml`          |
-| tracing                      | =0.1.44       | `Cargo.toml`          |
-| tracing-subscriber           | =0.3.23       | `Cargo.toml`          |
-| ulid                         | =3.0.0        | `Cargo.toml`          |
-| rmp-serde                    | =1.3.1        | `Cargo.toml`          |
-| chrono-tz                    | =0.10.4       | `Cargo.toml`          |
-| chrono                       | =0.4.45       | `Cargo.toml`          |
-| sha2                         | =0.10.9       | `Cargo.toml`          |
-| tokio-tungstenite            | =0.30.0       | `Cargo.toml`          |
-| rustls                       | =0.23.46      | `Cargo.toml`          |
-| tokio-rustls                 | =0.26.6       | `Cargo.toml`          |
-| webpki-roots                 | =1.0.9        | `Cargo.toml`          |
-| rcgen                        | =0.14.10      | `Cargo.toml`          |
-| argon2                       | =0.6.0        | `Cargo.toml`          |
-| futures-util                 | =0.3.34       | `Cargo.toml`          |
-| windows                      | =0.62.2       | `Cargo.toml`          |
-| windows-service              | =0.8.1        | `Cargo.toml`          |
-| tempfile                     | =3.27.0       | `Cargo.toml`          |
-| tower                        | =0.5.3        | `Cargo.toml`          |
-| proptest                     | =1.12.0       | `Cargo.toml`          |
+| Item                                | Version       | Source                                 |
+| ----------------------------------- | ------------- | -------------------------------------- |
+| rust                                | 1.95.0        | `rust-toolchain.toml`                  |
+| node                                | 22.23.4       | `.nvmrc`                               |
+| node engines                        | >=22.23.4 <23 | `package.json`                         |
+| pnpm                                | 12.15.0       | `package.json`                         |
+| svelte                              | 5.57.2        | `pnpm-workspace.yaml`                  |
+| @sveltejs/kit                       | 3.1.0         | `pnpm-workspace.yaml`                  |
+| @sveltejs/vite-plugin-svelte        | 7.3.1         | `pnpm-workspace.yaml`                  |
+| vite                                | 8.3.5         | `pnpm-workspace.yaml`                  |
+| typescript                          | 6.0.3         | `pnpm-workspace.yaml`                  |
+| @sveltejs/adapter-static            | 4.0.0         | `pnpm-workspace.yaml`                  |
+| @sveltejs/adapter-cloudflare        | 8.0.1         | `pnpm-workspace.yaml`                  |
+| wrangler                            | 4.152.0       | `pnpm-workspace.yaml`                  |
+| svelte-check                        | 4.7.7         | `pnpm-workspace.yaml`                  |
+| astro                               | 7.4.2         | `pnpm-workspace.yaml`                  |
+| @astrojs/svelte                     | 9.1.1         | `pnpm-workspace.yaml`                  |
+| @tauri-apps/cli                     | 2.12.4        | `pnpm-workspace.yaml`                  |
+| @tauri-apps/api                     | 2.12.4        | `pnpm-workspace.yaml`                  |
+| @tauri-apps/plugin-updater          | 2.14.0        | `pnpm-workspace.yaml`                  |
+| @fontsource-variable/sora           | 5.3.0         | `pnpm-workspace.yaml`                  |
+| @playwright/test                    | 1.64.1        | `pnpm-workspace.yaml`                  |
+| @axe-core/playwright                | 4.14.0        | `pnpm-workspace.yaml`                  |
+| yaml                                | 2.9.1         | `package.json`                         |
+| tauri                               | =2.12.5       | `Cargo.toml`                           |
+| tauri-build                         | =2.7.4        | `Cargo.toml`                           |
+| tauri-plugin-updater                | =2.14.0       | `Cargo.toml`                           |
+| serde                               | =1.0.229      | `Cargo.toml`                           |
+| serde_json                          | =1.0.154      | `Cargo.toml`                           |
+| ts-rs                               | =12.0.1       | `Cargo.toml`                           |
+| tokio                               | =1.54.1       | `Cargo.toml`                           |
+| axum                                | =0.8.9        | `Cargo.toml`                           |
+| rusqlite                            | =0.40.2       | `Cargo.toml`                           |
+| tracing                             | =0.1.44       | `Cargo.toml`                           |
+| tracing-subscriber                  | =0.3.23       | `Cargo.toml`                           |
+| ulid                                | =3.0.0        | `Cargo.toml`                           |
+| rmp-serde                           | =1.3.1        | `Cargo.toml`                           |
+| chrono-tz                           | =0.10.4       | `Cargo.toml`                           |
+| chrono                              | =0.4.45       | `Cargo.toml`                           |
+| sha2                                | =0.10.9       | `Cargo.toml`                           |
+| tokio-tungstenite                   | =0.30.0       | `Cargo.toml`                           |
+| rustls                              | =0.23.46      | `Cargo.toml`                           |
+| tokio-rustls                        | =0.26.6       | `Cargo.toml`                           |
+| webpki-roots                        | =1.0.9        | `Cargo.toml`                           |
+| rcgen                               | =0.14.10      | `Cargo.toml`                           |
+| argon2                              | =0.6.0        | `Cargo.toml`                           |
+| futures-util                        | =0.3.34       | `Cargo.toml`                           |
+| windows                             | =0.62.2       | `Cargo.toml`                           |
+| windows-service                     | =0.8.1        | `Cargo.toml`                           |
+| tempfile                            | =3.27.0       | `Cargo.toml`                           |
+| tower                               | =0.5.3        | `Cargo.toml`                           |
+| proptest                            | =1.12.0       | `Cargo.toml`                           |
+| libsql                              | =0.10.0       | `Cargo.toml`                           |
+| hyper-rustls                        | =0.25.0       | `Cargo.toml`                           |
+| hyper                               | =0.14.32      | `Cargo.toml`                           |
+| sops                                | 3.13.3        | `.github/workflows/deploy-cloud.yml`   |
+| age                                 | 1.3.2         | `.github/workflows/deploy-cloud.yml`   |
+| gcr.io/distroless/cc-debian12       | nonroot       | `deploy/docker/arena-cloud.Dockerfile` |
+| ghcr.io/tursodatabase/libsql-server | v0.24.31      | `.github/workflows/ci.yml`             |
+| k3s                                 | v1.33.4+k3s1  | `deploy/README.md`                     |
 
 ## Generated protocol types and the message catalogue
 

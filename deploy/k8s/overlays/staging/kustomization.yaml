@@ -1,0 +1,40 @@
+# arena-cloud in `staging` at api.staging.arena360.cloud. The deploy workflow replaces the image tag with the
+# commit SHA it built.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: staging
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/arena360/arena-cloud
+    newTag: staging
+patches:
+  - target:
+      kind: Ingress
+      name: arena-cloud
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/traefik.ingress.kubernetes.io~1router.middlewares
+        value: staging-cloudflare-only@kubernetescrd
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: api.staging.arena360.cloud
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.staging.arena360.cloud
+  - target:
+      kind: Deployment
+      name: arena-cloud-control
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi

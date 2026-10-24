@@ -48,3 +48,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of.md`
   summary: Hub Playwright phone tests are flaky under full-suite load. These failed once and passed 6 out of 6 alone: `devices-display.spec.ts:292` (Counter PIN toggle, from 1.21) and `shell.spec.ts:382` (More sheet); earlier, `auth.spec.ts:214` (locked sign-in).
   evidence: Each failed only during a full `test:shell` run on a loaded machine and passed on every isolated rerun. This points to timing-sensitive waits, worth hardening before CI sees them.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-arena-360-cloud-runs-in-india-behind-cloudflare.md`
+  summary: Operator setup before the first cloud deploy. Pin the sops 3.13.3 and age 1.3.2 sha256 values (`PIN-ME` in `deploy-cloud.yml`); generate the age keys and replace the placeholder recipients in `.sops.yaml`; encrypt `deploy/secrets/<env>.enc.yaml` (the Turso token, the origin certificate, `ghcr-pull`); install k3s and record its version; create the Turso DB in `aws-ap-south-1`; apply the Cloudflare zone settings and the Hostinger firewall; create the GitHub environments and their secrets.
+  evidence: The loop can't fetch from GitHub or hold real credentials. The deploy job fails clearly until these are done. Steps are in `deploy/README.md`.

@@ -4,9 +4,13 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # deploy-cloud.yml runs the whole suite before it builds or promotes an image.
+  workflow_call:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # github.workflow is the caller's name when called, so deploy-cloud's CI run never cancels
+  # (or is cancelled by) the push-triggered one on the same ref.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -17,12 +21,30 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # gz_control tests (arena-store `control`, arena-cloud) run against a libsql server. Service
+    # containers only exist on Linux; an empty image skips it on Windows, where those tests skip.
+    services:
+      sqld:
+        image: ${{ matrix.os == 'ubuntu-latest' && 'ghcr.io/tursodatabase/libsql-server:v0.24.31' || '' }}
+        ports:
+          - 8080:8080
+    env:
+      ARENA_TEST_SQLD_URL: ${{ matrix.os == 'ubuntu-latest' && 'http://127.0.0.1:8080' || '' }}
+      ARENA_REQUIRE_SQLD: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Wait for the libsql server
+        if: runner.os == 'Linux'
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8080/health && exit 0
+            sleep 1
+          done
+          echo "libsql server did not become healthy"; exit 1
       - name: Install Tauri Linux system packages
         if: runner.os == 'Linux'
         run: |
@@ -31,6 +53,19 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - run: cargo clippy --locked -p arena-store --features control --all-targets -- -D warnings
+      - run: cargo test --locked -p arena-store --features control
+      # arena-cloud must never pull libsql into the Hub, nor a C SQLite core into libsql.
+      - name: libsql stays out of the Hub
+        shell: bash
+        run: |
+          # `libsql` crates only; rusqlite's `libsqlite3-sys` is expected.
+          if cargo tree --locked -p arena-hub -e normal | grep -Eq ' libsql(-[a-z0-9]+)? v'; then
+            echo "arena-hub depends on libsql"; exit 1
+          fi
+          if cargo tree --locked -p arena-cloud -e normal | grep -E -q 'libsql-(ffi|sys)'; then
+            echo "arena-cloud links a libsql C core"; exit 1
+          fi
       - run: cargo clippy --locked -p arena-hub --features dev-fixtures --all-targets -- -D warnings
       - run: cargo test --locked -p arena-hub --features dev-fixtures
       - run: cargo test --locked -p arena-api --features dev-fixtures
@@ -63,6 +98,8 @@ jobs:
       - run: pnpm run check:contrast
       - run: pnpm run check:tokens-used
       - run: pnpm run check:hex
+      - run: pnpm run check:secrets
+      - run: pnpm run check:deploy
       - run: pnpm run test:scripts
 
   build:

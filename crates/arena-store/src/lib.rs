@@ -6,6 +6,8 @@
 mod admin;
 mod audit;
 mod branch;
+#[cfg(feature = "control")]
+pub mod control;
 mod dedupe;
 mod devices;
 mod migrations;

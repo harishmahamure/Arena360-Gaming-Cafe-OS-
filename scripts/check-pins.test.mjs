@@ -8,6 +8,10 @@ import {
   comparePins,
   parsePinTable,
   readCargoWorkspaceDeps,
+  readCiWorkflow,
+  readDeployReadme,
+  readDeployWorkflow,
+  readDockerfile,
   readNvmrc,
   readPackageJson,
   readPnpmCatalog,
@@ -176,4 +180,25 @@ test("pinned root devDependencies are read and must be exact", () => {
     { item: "yaml", version: "^2.9.1", source: "package.json" },
   ];
   assert.ok(comparePins(table, ranged).includes("non-exact pin: yaml (package.json ^2.9.1)"));
+});
+
+test("deploy sources: workflow tool versions, runtime image, CI service image, k3s", () => {
+  assert.deepEqual(readDeployWorkflow('env:\n  SOPS_VERSION: "3.13.3"\n  AGE_VERSION: 1.3.2\n'), {
+    sops: "3.13.3",
+    age: "1.3.2",
+  });
+  assert.deepEqual(
+    readDockerfile(
+      "FROM rust:1.95.0-bookworm AS build\nRUN x\nFROM gcr.io/distroless/cc-debian12:nonroot\n",
+    ),
+    { "gcr.io/distroless/cc-debian12": "nonroot" },
+  );
+  assert.deepEqual(
+    readCiWorkflow("image: ${{ x && 'ghcr.io/tursodatabase/libsql-server:v0.24.31' || '' }}"),
+    { "ghcr.io/tursodatabase/libsql-server": "v0.24.31" },
+  );
+  assert.deepEqual(readDeployReadme("curl … | INSTALL_K3S_VERSION=v1.33.4+k3s1 sh -"), {
+    k3s: "v1.33.4+k3s1",
+  });
+  assert.deepEqual(readDeployReadme("nothing"), {});
 });

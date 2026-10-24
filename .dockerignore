@@ -1,0 +1,15 @@
+# Build context for deploy/docker/*.Dockerfile: sources and manifests only.
+.git
+target
+**/node_modules
+**/.svelte-kit
+**/build
+**/dist
+_bmad
+_bmad-output
+docs
+.claude
+**/*.log
+.env
+*.env
+deploy/secrets

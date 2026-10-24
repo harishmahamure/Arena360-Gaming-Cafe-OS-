@@ -283,3 +283,47 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - Fixes: a doubled-insert check and a ledger without underflow; each new SSE stream gets the current connectivity, and the newer `checked_at` wins; the chip shows only while signed in; the probe allow-list applies to the Hub trace only; the UI smoke runs under strace; fallback tests; e2e IPC robustness and arg checks; node and pnpm checked up front; README wording.
   - Deferred: the placeholder cloud host shows "Cloud unreachable" until Epic 2 (needs a user decision); Hub phone Playwright tests are flaky under load.
   - Verified: `run.sh --soak-hours 0.05` passes in a privileged Debian arm64 container, not on GitHub's ubuntu x64; the 8-hour soak was not run; Windows clippy is not verified locally.
+
+## Story 2.1: Arena 360 cloud runs in India behind Cloudflare
+
+- **Epic 2 context:** compiled to `epic-2-context.md` (longer than the 1,500-token target because the epic has 31 stories). The Epic 1 retrospective (optional) was skipped.
+- **Spec approval:** self-approved. Spec: `spec-2-1-arena-360-cloud-runs-in-india-behind-cloudflare.md`.
+- **Token gate:** about 2,700 tokens. **Kept the full spec** (recommended): the binary, image, manifests, secrets and deploy workflow are one deliverable, the story's own ACs need all of them, and a split would leave none of the halves verifiable.
+- **libsql placement:** in `arena-store` behind a `control` feature (the spine puts all SQL in arena-store). Pinned `=0.10.0` with remote-only features, so 2.1 has **no C SQLite core**; the rusqlite + libsql shared-linkage spike stays in 2.2.
+- **Migrations:** a `schema_migrations` table, plus a `0001_baseline` that creates no business tables. Each migration commits in one transaction with its row, and a concurrent runner re-reads when it loses the race.
+- **healthz:** reachability is cached by a 15 s background `SELECT 1`, and healthz always answers 200, so a Turso blip never restarts pods.
+- **K8s distribution:** k3s on the single Hostinger node, with its bundled Traefik. The exact k3s version is recorded at install by the operator (no network lookups against GitHub from the loop).
+- **Origin lock:** a Traefik `ipAllowList` holding the committed Cloudflare ranges, `externalTrafficPolicy: Local`, a ufw rule in the runbook, and a Cloudflare Origin CA certificate for Full (strict). HTTP→HTTPS is a Cloudflare zone setting, proven only by the post-deploy smoke.
+- **Deploy transport:** SSH to the VPS with a pinned `known_hosts` rather than a public kube-apiserver.
+- **Secrets:** `.sops.yaml` plus a runbook. **Human follow-up needed:** generate the age key, encrypt the real Turso token and the origin certificate into `deploy/secrets/<env>.enc.yaml`, and set the GitHub environment secrets. The deploy job fails clearly until then.
+- **Hub probe default:** changed `api.arena360.in:443` → `api.arena360.cloud:443` (partly closes the 1.22 deferral; the host only answers once deployed).
+- **Tests against Turso:** a local `sqld` (0.24.31 installed), with a pinned `libsql-server` service container in CI. `ARENA_REQUIRE_SQLD=1` makes a missing server fail instead of skip.
+- **2.1 implementation choices, accepted:**
+  - libsql's own TLS loader panicked on macOS, so it gets a `hyper-rustls` connector with webpki roots (two new pins, the same majors libsql uses).
+  - The control tests use an in-process TCP proxy to simulate the DB going away, so they also work against CI's shared sqld.
+  - The Cloudflare IP lists come from known published ranges (not fetched); `check:deploy` guards drift against the committed file.
+- **2.1 review outcome:** 18 fixes, 10 rejections and 1 operator deferral.
+  - **Fixes:**
+    - `/healthz` is seeded unreachable, and a test proves the ping loop's wiring;
+    - the deploy triggers on `master` (the repo's real default; the story text says "main");
+    - the deploy waits on CI (`workflow_call`);
+    - tags promote the staging image by digest and never rebuild;
+    - per-environment namespace-scoped deployer RBAC, with no cluster-wide applies from CI;
+    - the Hostinger provider firewall replaces ufw (which ServiceLB's DNAT bypasses);
+    - DNS uses A records only;
+    - a rollback note (roll forward after a migration);
+    - `ghcr-pull` is mandatory;
+    - a `preStop` sleep;
+    - `check:deploy` gives a clear error without kubectl;
+    - `check:secrets` handles multi-document files and plaintext leaves;
+    - a migration SQL error fails at once and isn't retried as "unreachable";
+    - a no-BEGIN/COMMIT test;
+    - the URL and token are trimmed;
+    - more curl codes are accepted in the origin smoke.
+  - **Deferred:** the operator setup before the first deploy (`deferred-work.md`).
+  - **Verification:**
+    - Passing: the workspace tests (`--no-fail-fast`, sqld required); the `control`, hub and api dev-fixtures runs; clippy, including control and dev-fixtures; fmt; every `check:*`; `test:scripts` (180); `docker build`.
+    - Hub probe default: `api.arena360.cloud:443`.
+    - **Failing:** only the known `arena-hub-ui` sidecar timing test, already deferred in 1.21.
+    - **Not run:** the app builds, Hub `test:shell` and gallery a11y. The diff touches no app.
+    - **Not verifiable here:** the deploy workflow itself (never run).

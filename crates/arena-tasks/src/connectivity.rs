@@ -36,9 +36,9 @@ pub const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// The internet endpoints tried by default (`--probe-internet` overrides them).
 pub const DEFAULT_INTERNET_ENDPOINTS: [&str; 2] = ["1.1.1.1:443", "8.8.8.8:443"];
-/// The cloud host probed by default (`--cloud-host` overrides it). A placeholder until the
-/// cloud epic sets the real one.
-pub const DEFAULT_CLOUD_HOST: &str = "api.arena360.in:443";
+/// The cloud host probed by default (`--cloud-host` overrides it): the production
+/// `arena-cloud` control role behind Cloudflare, which answers `GET /healthz`.
+pub const DEFAULT_CLOUD_HOST: &str = "api.arena360.cloud:443";
 /// The longest status line + headers read from the cloud's answer.
 const MAX_RESPONSE_HEAD: usize = 8 * 1024;
 
@@ -479,14 +479,14 @@ mod tests {
         #[test]
         fn cloud_hosts_and_endpoints_parse() {
             assert_eq!(
-                CloudHost::parse("api.arena360.in:443").unwrap(),
+                CloudHost::parse("api.arena360.cloud:443").unwrap(),
                 CloudHost {
-                    host: "api.arena360.in".into(),
+                    host: "api.arena360.cloud".into(),
                     port: 443
                 }
             );
             assert_eq!(CloudHost::parse("[::1]:8443").unwrap().host, "::1");
-            for bad in ["api.arena360.in", "h:0", ":443", "h:x", "a b:1", "h/x:1"] {
+            for bad in ["api.arena360.cloud", "h:0", ":443", "h:x", "a b:1", "h/x:1"] {
                 assert!(CloudHost::parse(bad).is_err(), "{bad}");
             }
             assert_eq!(

@@ -1,0 +1,3 @@
+-- 0001: the gz_control baseline. It creates no tables of its own: applying it only records
+-- version 1 in `schema_migrations` (which the runner creates). Each later story adds the tables
+-- it needs as its own numbered file.

@@ -1,0 +1,13 @@
+# Cluster-wide, a one-time operator step (the deploy workflow never applies it): k3s's
+# bundled Traefik keeps the client's source IP (externalTrafficPolicy: Local), so the `cloudflare-only` ipAllowList sees
+# the Cloudflare edge address instead of the node's. Without it every request would look local.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      spec:
+        externalTrafficPolicy: Local

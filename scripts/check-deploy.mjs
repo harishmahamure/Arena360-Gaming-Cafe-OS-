@@ -15,16 +15,32 @@ export const ENVIRONMENTS = {
     namespace: "staging",
     host: "api.staging.arena360.cloud",
     bucket: "arena360-gz-control-backup-staging",
+    webOrigins: "https://start.staging.arena360.cloud",
   },
   production: {
     namespace: "production",
     host: "api.arena360.cloud",
     bucket: "arena360-gz-control-backup-production",
+    webOrigins: "https://start.arena360.cloud",
   },
 };
 export const DEPLOYMENT = "arena-cloud-control";
 export const SECRET = "arena-cloud-secrets";
 export const SECRET_KEYS = ["ARENA_CONTROL_DB_TOKEN", "ARENA_CONTROL_DB_URL"];
+/** The Deployment's secret env (Story 2.4 adds the OTP pepper and the Gupshup account), all
+ * from `arena-cloud-secrets`. */
+export const DEPLOYMENT_SECRET_KEYS = [
+  "ARENA_CONTROL_DB_TOKEN",
+  "ARENA_CONTROL_DB_URL",
+  "ARENA_GUPSHUP_DLT_TEMPLATE_ID",
+  "ARENA_GUPSHUP_ENDPOINT",
+  "ARENA_GUPSHUP_PASSWORD",
+  "ARENA_GUPSHUP_SENDER",
+  "ARENA_GUPSHUP_USERID",
+  "ARENA_OTP_PEPPER",
+];
+/** The Deployment's only plain env: the SMS provider and the per-environment web origins. */
+export const SMS_PROVIDER = "gupshup";
 export const MIDDLEWARE = "cloudflare-only";
 /** The nightly gz_control backup (Story 2.3). */
 export const CRONJOB = "arena-cloud-control-backup";
@@ -125,7 +141,18 @@ export function checkOverlay(env, docs, want, ranges) {
       }
       if (c.envFrom) err(`container ${c.name} uses envFrom`);
       const keys = [];
+      const plain = { ARENA_SMS_PROVIDER: SMS_PROVIDER, ARENA_WEB_ORIGINS: want.webOrigins };
+      const seenPlain = new Set();
       for (const e of c.env ?? []) {
+        if (e.name in plain) {
+          if (e.value !== plain[e.name]) {
+            err(
+              `env ${e.name} is ${JSON.stringify(e.value)}, not ${JSON.stringify(plain[e.name])}`,
+            );
+          }
+          seenPlain.add(e.name);
+          continue;
+        }
         const ref = e.valueFrom?.secretKeyRef;
         if (!ref || "value" in e) {
           err(`env ${e.name} is not a secretKeyRef`);
@@ -133,10 +160,14 @@ export function checkOverlay(env, docs, want, ranges) {
         }
         if (ref.name !== SECRET) err(`env ${e.name} reads secret ${ref.name}, not ${SECRET}`);
         if (ref.key !== e.name) err(`env ${e.name} reads key ${ref.key}`);
+        if (ref.optional) err(`env ${e.name} is optional`);
         keys.push(ref.key);
       }
-      if (!isDeepStrictEqual([...keys].sort(), SECRET_KEYS)) {
-        err(`env keys are ${JSON.stringify(keys)}, want ${JSON.stringify(SECRET_KEYS)}`);
+      for (const name of Object.keys(plain)) {
+        if (!seenPlain.has(name)) err(`env ${name} is missing`);
+      }
+      if (!isDeepStrictEqual([...keys].sort(), DEPLOYMENT_SECRET_KEYS)) {
+        err(`env keys are ${JSON.stringify(keys)}, want ${JSON.stringify(DEPLOYMENT_SECRET_KEYS)}`);
       }
       for (const p of ["livenessProbe", "readinessProbe"]) {
         if (c[p]?.httpGet?.path !== "/healthz") err(`${p} is not GET /healthz`);
@@ -321,6 +352,9 @@ export function normalise(docs, want) {
       if (d.spec) d.spec.replicas = "<replicas>";
       for (const c of d.spec?.template?.spec?.containers ?? []) {
         c.resources = "<resources>";
+        for (const e of c.env ?? []) {
+          if (e.name === "ARENA_WEB_ORIGINS" && e.value === want.webOrigins) e.value = "<origins>";
+        }
         if (typeof c.image === "string") c.image = c.image.replace(/:[^:/@]+$/, ":<tag>");
       }
     }
@@ -336,14 +370,14 @@ export function normalise(docs, want) {
   return out;
 }
 
-/** Staging and production may differ only in namespace, host, replicas/resources, tag and
- * backup bucket. */
+/** Staging and production may differ only in namespace, host, replicas/resources, tag,
+ * backup bucket and web origins. */
 export function checkParity(stagingDocs, productionDocs) {
   const a = normalise(stagingDocs, ENVIRONMENTS.staging);
   const b = normalise(productionDocs, ENVIRONMENTS.production);
   if (isDeepStrictEqual(a, b)) return [];
   return [
-    "staging and production differ beyond namespace, host, replicas/resources, image tag and backup bucket",
+    "staging and production differ beyond namespace, host, replicas/resources, image tag, backup bucket and web origins",
   ];
 }
 

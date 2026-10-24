@@ -390,3 +390,57 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - **Fixes:** a test of the R2 checksum headers; restore runs with foreign keys off and then checks them; AUTOINCREMENT sequences; keyset paging and the `i64::MIN` bound; a local snapshot transaction; streaming into the encryptor with a 512Mi limit; a success heartbeat with optional webhook and heartbeat keys; `backoffLimit: 0`; a broken manifest fails; setup runs inside the timeout; restore env errors exit 1; the code appears once in messages; retention-failure and second-recipient tests; a 30-day R2 bucket lock in the runbook.
   - **Deferred:** HTTPS-path tests, and a point-in-time snapshot of the remote dump.
   - **Verification:** everything passes with sqld and MinIO required, except the known `arena-hub-ui` sidecar test. This machine has `docker-compose` (v1 CLI), not the `docker compose` plugin.
+
+## Story 2.4: owner signs up with phone OTP
+
+- **Spec approval:** self-approved. Spec: `spec-2-4-owner-signs-up-with-phone-otp.md`.
+- **Token gate:** about 2,900 tokens. **Kept the full spec**: the UI, API, adapter and session are one sign-up goal and can't be verified apart.
+- **Existing enrolled owner:** a correct sign-up OTP returns `next: "sign_in"` and **no session**, so an OTP never bypasses TOTP. A pending owner gets a session (still mid-setup) and their details are not overwritten.
+- **OTP hash:** HMAC-SHA256 with a server pepper over challenge id ‖ code (fast, and the pepper defeats brute force on a 6-digit space), with constant-time compare.
+- **Rate limit:** a rolling hour over minute buckets in `rate_limits`. The 6th send returns 429 `RATE_LIMITED` with a `Retry-After` header, so the `AppError` body stays flat. Resend has a 30 s server floor.
+- **New codes:** `RATE_LIMITED`, `OTP_INVALID`, `OTP_EXPIRED`.
+- **Session:** opaque access (15 min, `Path=/v1`) and refresh (30 d, refresh path) cookies, hashed in `owner_sessions`, with rotation and family revocation on reuse. Built here because 2.4's AC requires a rotating refresh; 2.6 adds sign-in.
+- **Hosting:** onboarding at `start.arena360.cloud` (staging `start.staging...`). The host wasn't specified anywhere, so I picked it. Cookies are host-only on the API, with a CORS exact-origin allowlist and state-changing requests from unlisted origins refused. In dev, the Vite proxy makes `/v1` same-origin.
+- **Messaging:** a fake adapter (with `/v1/dev/sms` under `--dev`) and a Gupshup Enterprise SMS client tested against a local stub only. A live Gupshup check and the DLT template registration are operator steps.
+- **Shared UI:** a new `CodeField` (visible digits, `one-time-code`, paste, auto-submit) and `ThemeToggle` (System · Light · Dark, set before first paint).
+- **Tests:** Playwright with a stubbed API (the hub pattern), plus Rust in-process API tests that also scrub logs for PII.
+
+## User decision (2026-10-24): speed-ups
+
+- Chosen: overlap stories (worktree for N+1 while N is reviewed), risk-based review depth, reviewers on Sonnet.
+- Not chosen: merging related stories.
+- Procedure recorded in `autonomous-loop-state.md`.
+- **2.4 implementation choices, accepted:**
+  - A resend sends before replacing the code, so a failed send leaves the old code working.
+  - A code that isn't 6 digits is 422 and isn't counted as an attempt.
+  - A failed refresh clears both cookies.
+  - A "Change details" button on the code step.
+  - Gupshup settings are keys of `arena-cloud-secrets`.
+- **2.4 review fixes, accepted:**
+  - Unreleased migration 0002 was edited in place (it only ever existed in a local WIP commit).
+  - A challenge voided by 5 wrong codes can't be resent; the user starts again.
+  - `phone_tag` is now an HMAC.
+- **2.4 review outcome:** 21 fixes and 7 rejections.
+  - **Fixes:**
+    - an atomic per-phone send reservation (high);
+    - a global SMS cap;
+    - `fake` SMS refused outside dev;
+    - PII cleared and challenges and sessions pruned;
+    - an idempotent retried verify;
+    - a 10 s no-revoke grace for two-tab refresh;
+    - rotated access tokens refused;
+    - outcomes returned from inside transactions;
+    - keyed rate prune and an exact `Retry-After`;
+    - Vary: Origin;
+    - pepper domain separation;
+    - SMS text derived from the TTL;
+    - Gupshup body capped with an exact match;
+    - shared client/server validation vectors;
+    - the kustomize env patch by name;
+    - client refresh on 401 and offline retry;
+    - UI dead-end and stale-response fixes.
+  - **Verification:**
+    - Passing: everything, including 59 onboarding Playwright tests.
+    - Playwright's Chromium was reinstalled; the 2.5 worktree had replaced the shared browser cache.
+    - The known `arena-hub-ui` sidecar tests still fail.
+    - The store test's sub-1 s bound flaked under load, so it's relaxed to 1.6 s (still below the 1.8 s retry path).

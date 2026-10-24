@@ -26,4 +26,7 @@ export type ErrorCode =
   | "REASON_REQUIRED"
   | "SESSION_LOCKED"
   | "NOT_FOUND"
-  | "BAD_REQUEST";
+  | "BAD_REQUEST"
+  | "RATE_LIMITED"
+  | "OTP_INVALID"
+  | "OTP_EXPIRED";

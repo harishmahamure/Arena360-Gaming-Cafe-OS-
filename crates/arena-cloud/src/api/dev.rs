@@ -1,8 +1,11 @@
 //! Dev-only routes (`--dev`): one per envelope failure, for the integration suite. Production
 //! routing never mounts them.
 
+use std::sync::Arc;
+
 use axum::Json;
 use axum::Router;
+use axum::extract::State;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 
@@ -37,4 +40,16 @@ pub(super) fn router() -> Router {
         .route("/dev/echo", post(echo))
         .route("/dev/fail", get(fail))
         .route("/dev/panic", get(panic))
+}
+
+/// `GET /v1/dev/sms`: every message the fake SMS provider recorded, oldest first.
+async fn sms(
+    State(st): State<Arc<crate::auth::AuthState>>,
+) -> Json<Vec<crate::messaging::SentSms>> {
+    Json(st.sms.fake().map(|f| f.sent()).unwrap_or_default())
+}
+
+/// The fake SMS outbox route, relative to `/v1`.
+pub(super) fn sms_router(st: Arc<crate::auth::AuthState>) -> Router {
+    Router::new().route("/dev/sms", get(sms)).with_state(st)
 }

@@ -25,7 +25,11 @@ futures-util.workspace = true
 aws-sdk-s3.workspace = true
 aws-smithy-http-client.workspace = true
 age.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["form"] }
+hmac.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+ulid.workspace = true
 rustls.workspace = true
 webpki-roots.workspace = true
 chrono.workspace = true

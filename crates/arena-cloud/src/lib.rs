@@ -6,12 +6,18 @@
 //! as the flat `AppError` envelope, see [`api`]). `--dev` runs `gz_control` from a local SQLite
 //! file instead and mounts the dev-only routes. `--role jobs --task control-backup` runs the
 //! nightly backup once and exits, and `ops restore-control` restores one ([`backup`]).
+//!
+//! The serving roles also run owner sign-up with a phone one-time code and the owner's cookie
+//! session ([`auth`], [`api::signup`], [`api::session`]), sending codes through the
+//! [`messaging`] adapter.
 
 pub mod alert;
 pub mod api;
+pub mod auth;
 pub mod backup;
 pub mod config;
 pub mod health;
+pub mod messaging;
 pub mod store;
 
 use std::future::Future;
@@ -22,9 +28,19 @@ use arena_store::control::{ControlDb, ControlError, SchemaTooNew};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use crate::config::{Config, Database, Role};
+use crate::auth::AuthState;
+use crate::config::{AuthConfig, Config, Database, Role, SmsProviderConfig};
 pub use crate::health::CHECK_INTERVAL;
 use crate::health::{CHECK_TIMEOUT, Reachability};
+use crate::messaging::{FakeSms, GupshupSms, Messenger};
+
+/// A source of Unix milliseconds (tests move it by hand).
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+/// The wall clock as a [`Clock`].
+pub fn system_clock() -> Clock {
+    Arc::new(now_ms)
+}
 
 /// Unix time in milliseconds.
 pub fn now_ms() -> i64 {
@@ -132,8 +148,35 @@ pub fn app(
     api::with_envelope(health::router(role, reach, migration_version), dev)
 }
 
+/// [`app`] plus the owner sign-up and session routes (and their CORS layer) when `auth` is
+/// set.
+pub fn app_with_auth(
+    role: Role,
+    dev: bool,
+    reach: watch::Receiver<Reachability>,
+    migration_version: u32,
+    auth: Option<Arc<AuthState>>,
+) -> axum::Router {
+    api::with_envelope_and_auth(health::router(role, reach, migration_version), dev, auth)
+}
+
+/// The sign-up state for `cfg`: the configured SMS provider over `db`, timed by `clock`.
+pub fn auth_state(
+    db: Arc<ControlDb>,
+    cfg: &AuthConfig,
+    clock: Clock,
+) -> Result<Arc<AuthState>, String> {
+    let sms = match &cfg.sms {
+        SmsProviderConfig::Fake => Messenger::Fake(FakeSms::new(Arc::clone(&clock))),
+        SmsProviderConfig::Gupshup(g) => {
+            Messenger::Gupshup(GupshupSms::new(g.clone()).map_err(|e| e.to_string())?)
+        }
+    };
+    Ok(Arc::new(AuthState::new(db, sms, clock, cfg)))
+}
+
 /// How [`serve`] runs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ServeOptions {
     pub role: Role,
     /// Mount the dev-only routes (`--dev`).
@@ -141,6 +184,8 @@ pub struct ServeOptions {
     pub migration_version: u32,
     /// The reachability check interval (production: [`CHECK_INTERVAL`]).
     pub check_interval: Duration,
+    /// Owner sign-up and sessions; `None` serves only `/healthz` and the envelope.
+    pub auth: Option<AuthConfig>,
 }
 
 /// Serves the control role on `listener` until `shutdown` resolves: `/healthz`, with the
@@ -159,6 +204,7 @@ pub async fn serve_control(
         dev: false,
         migration_version,
         check_interval,
+        auth: None,
     };
     serve(listener, db, opts, shutdown).await
 }
@@ -176,6 +222,7 @@ pub async fn serve(
         dev,
         migration_version,
         check_interval,
+        auth,
     } = opts;
     // Not checked yet; the loop's first tick runs immediately.
     let (tx, rx) = watch::channel(Reachability {
@@ -183,17 +230,25 @@ pub async fn serve(
         checked_at: None,
     });
     let db = Arc::new(db);
+    let auth = match auth {
+        Some(cfg) => Some(
+            auth_state(Arc::clone(&db), &cfg, system_clock())
+                .map_err(|e| std::io::Error::other(format!("sms provider: {e}")))?,
+        ),
+        None => None,
+    };
+    let check_db = Arc::clone(&db);
     let check = tokio::spawn(health::reachability_loop(
         tx,
         check_interval,
         CHECK_TIMEOUT,
         now_ms,
         move || {
-            let db = Arc::clone(&db);
+            let db = Arc::clone(&check_db);
             async move { db.ping().await.map_err(|e| e.to_string()) }
         },
     ));
-    let app = app(role, dev, rx, migration_version);
+    let app = app_with_auth(role, dev, rx, migration_version, auth);
     let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await;

@@ -16,7 +16,19 @@ fn cloud() -> Command {
     c.env_remove("ARENA_CONTROL_DB_URL")
         .env_remove("ARENA_CONTROL_DB_TOKEN")
         .env_remove("ARENA_CONTROL_DB_RETRY_SECS")
-        .env("RUST_LOG", "info");
+        .env("RUST_LOG", "info")
+        // The sign-up settings every serving role needs (Story 2.4).
+        .env("ARENA_OTP_PEPPER", "test-pepper-0123456789abcdef0123456789")
+        .env("ARENA_WEB_ORIGINS", "https://start.arena360.cloud")
+        .env("ARENA_SMS_PROVIDER", "gupshup")
+        .env(
+            "ARENA_GUPSHUP_ENDPOINT",
+            "http://127.0.0.1:9/GatewayAPI/rest",
+        )
+        .env("ARENA_GUPSHUP_USERID", "u")
+        .env("ARENA_GUPSHUP_PASSWORD", "p")
+        .env("ARENA_GUPSHUP_SENDER", "ARENA")
+        .env("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1");
     c
 }
 
@@ -107,7 +119,13 @@ async fn too_new_exits_2_naming_both_versions_and_writes_nothing() {
     assert_eq!(o.status.code(), Some(2), "{out}");
     assert!(out.contains("SCHEMA_TOO_NEW"), "{out}");
     assert!(out.contains("\"db_schema_version\":99"), "{out}");
-    assert!(out.contains("\"binary_schema_version\":1"), "{out}");
+    assert!(
+        out.contains(&format!(
+            "\"binary_schema_version\":{}",
+            arena_store::control::LATEST_CONTROL_VERSION
+        )),
+        "{out}"
+    );
     assert_eq!(sqld::migration_rows(&t.url).await, vec![(99, 5)]);
     assert_eq!(sqld::tables(&t.url).await, vec!["schema_migrations"]);
 }
@@ -137,7 +155,7 @@ fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_fresh_database_serves_healthz_at_migration_1() {
+async fn a_fresh_database_serves_healthz_at_the_latest_migration() {
     let Some(t) = sqld::fresh().await else { return };
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -177,13 +195,14 @@ async fn a_fresh_database_serves_healthz_at_migration_1() {
     assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(v["gz_control"]["reachable"], true);
     assert!(v["gz_control"]["checked_at"].as_i64().unwrap() > 0);
-    assert_eq!(v["migration_version"], 1);
+    let latest = arena_store::control::LATEST_CONTROL_VERSION;
+    assert_eq!(v["migration_version"], latest);
     assert_eq!(
         sqld::migration_rows(&t.url)
             .await
             .iter()
             .map(|r| r.0)
             .collect::<Vec<_>>(),
-        vec![1]
+        (1..=i64::from(latest)).collect::<Vec<_>>()
     );
 }

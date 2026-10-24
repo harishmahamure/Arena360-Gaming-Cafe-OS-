@@ -21,3 +21,6 @@ export {
   nextDay,
   zonedDayStart,
 } from "./format.js";
+export { default as CodeField } from "./components/CodeField.svelte";
+export { default as ThemeToggle } from "./components/ThemeToggle.svelte";
+export { THEME_KEY, readThemeChoice, resolveTheme, storeThemeChoice } from "./theme.js";

@@ -135,12 +135,45 @@ test("environments may differ only in namespace, host, replicas/resources and ta
   const prod = copy("production");
   container(prod).args = ["--role", "control", "--listen", "0.0.0.0:9"];
   assert.deepEqual(checkParity(copy("staging"), prod), [
-    "staging and production differ beyond namespace, host, replicas/resources, image tag and backup bucket",
+    "staging and production differ beyond namespace, host, replicas/resources, image tag, backup bucket and web origins",
   ]);
   const replicas = copy("production");
   doc(replicas, "Deployment").spec.replicas = 9;
   container(replicas).image = "ghcr.io/arena360/arena-cloud:abc123";
   assert.deepEqual(checkParity(copy("staging"), replicas), []);
+});
+
+test("sign-up env: secrets by ref, the provider and this environment's web origins", () => {
+  const envOf = (docs, name) => container(docs).env.find((e) => e.name === name);
+  assert.equal(
+    envOf(copy("staging"), "ARENA_WEB_ORIGINS").value,
+    "https://start.staging.arena360.cloud",
+  );
+  assert.equal(
+    envOf(copy("production"), "ARENA_WEB_ORIGINS").value,
+    "https://start.arena360.cloud",
+  );
+  const origin = copy("staging");
+  envOf(origin, "ARENA_WEB_ORIGINS").value = "https://start.arena360.cloud";
+  assert.match(
+    check(origin).join("\n"),
+    /env ARENA_WEB_ORIGINS is "https:\/\/start\.arena360\.cloud"/,
+  );
+  const provider = copy("staging");
+  envOf(provider, "ARENA_SMS_PROVIDER").value = "fake";
+  assert.match(check(provider).join("\n"), /env ARENA_SMS_PROVIDER is "fake"/);
+  const missing = copy("staging");
+  container(missing).env = container(missing).env.filter((e) => e.name !== "ARENA_SMS_PROVIDER");
+  assert.match(check(missing).join("\n"), /env ARENA_SMS_PROVIDER is missing/);
+  const pepper = copy("staging");
+  envOf(pepper, "ARENA_OTP_PEPPER").valueFrom = undefined;
+  envOf(pepper, "ARENA_OTP_PEPPER").value = "x";
+  assert.match(check(pepper).join("\n"), /env ARENA_OTP_PEPPER is not a secretKeyRef/);
+  const dropped = copy("staging");
+  container(dropped).env = container(dropped).env.filter(
+    (e) => e.name !== "ARENA_GUPSHUP_PASSWORD",
+  );
+  assert.match(check(dropped).join("\n"), /env keys are/);
 });
 
 const cronjob = (docs) => docs.find((d) => d.kind === "CronJob");

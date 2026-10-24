@@ -27,24 +27,37 @@ const S3_SECRET: &str = "s3-SECRET-do-not-log-0123456789";
 const HOOK_SECRET: &str = "T000/B000/hook-SECRET-path";
 /// 2026-10-24T02:30:00Z
 const NOW: i64 = 1_792_809_000_000;
+const LATEST: u32 = arena_store::control::LATEST_CONTROL_VERSION;
 
 // ---- fixtures -------------------------------------------------------------------------------
 
 const FIXTURE: &str = "
-    CREATE TABLE owners (id INTEGER PRIMARY KEY, phone TEXT NOT NULL, note TEXT, pic BLOB);
+    CREATE TABLE members (id INTEGER PRIMARY KEY, phone TEXT NOT NULL, note TEXT, pic BLOB);
     CREATE TABLE licences (id INTEGER PRIMARY KEY, owner_id INTEGER, tier TEXT, exp REAL);
     CREATE INDEX licences_owner ON licences (owner_id);
-    INSERT INTO owners VALUES (1, '+919800000001', 'it''s' || char(10) || 'two lines ✓', X'0102');
-    INSERT INTO owners VALUES (2, '+919800000002', NULL, NULL);
+    INSERT INTO members VALUES (1, '+919800000001', 'it''s' || char(10) || 'two lines ✓', X'0102');
+    INSERT INTO members VALUES (2, '+919800000002', NULL, NULL);
     WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 1500)
         INSERT INTO licences SELECT x, 1 + x % 2, 'free', x * 1.5 FROM c;
 ";
 
 fn expected_counts() -> BTreeMap<String, u64> {
-    [("licences", 1500), ("owners", 2), ("schema_migrations", 1)]
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v))
-        .collect()
+    // The fixture's tables, plus every migration's (empty) tables.
+    [
+        ("licences", 1500),
+        ("members", 2),
+        ("otp_challenges", 0),
+        ("owner_sessions", 0),
+        ("owners", 0),
+        ("rate_limits", 0),
+        (
+            "schema_migrations",
+            u64::from(arena_store::control::LATEST_CONTROL_VERSION),
+        ),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v))
+    .collect()
 }
 
 /// A local gz_control at `<dir>/gz_control.db` (the `--dev --data-dir` file), migrated and
@@ -185,7 +198,10 @@ async fn a_nightly_run_writes_an_encrypted_object_that_restores_to_the_same_coun
         .await
         .unwrap();
     assert_eq!(report.tables, expected_counts());
-    assert_eq!(report.schema_version, 1);
+    assert_eq!(
+        report.schema_version,
+        arena_store::control::LATEST_CONTROL_VERSION
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -590,7 +606,13 @@ async fn restore_control_from_a_file_verifies_counts_and_refuses_bad_input() {
     let o = run(&mut restore_cmd(&good, &identity, &target));
     let out = text(&o);
     assert_eq!(o.status.code(), Some(0), "{out}");
-    assert!(out.contains("schema version 1"), "{out}");
+    assert!(
+        out.contains(&format!(
+            "schema version {}",
+            arena_store::control::LATEST_CONTROL_VERSION
+        )),
+        "{out}"
+    );
     for (table, n) in expected_counts() {
         assert!(
             out.lines()
@@ -623,7 +645,7 @@ async fn restore_control_from_a_file_verifies_counts_and_refuses_bad_input() {
     let tampered = sealed_file(
         dir.path(),
         "tampered.sql.age",
-        &dump.replacen("\"owners\":2", "\"owners\":3", 1),
+        &dump.replacen("\"members\":2", "\"members\":3", 1),
         &r,
     );
     let o = run(&mut restore_cmd(
@@ -633,7 +655,7 @@ async fn restore_control_from_a_file_verifies_counts_and_refuses_bad_input() {
     ));
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        text(&o).contains("RESTORE_COUNT_MISMATCH") && text(&o).contains("owners"),
+        text(&o).contains("RESTORE_COUNT_MISMATCH") && text(&o).contains("members"),
         "{}",
         text(&o)
     );
@@ -642,7 +664,11 @@ async fn restore_control_from_a_file_verifies_counts_and_refuses_bad_input() {
     let newer = sealed_file(
         dir.path(),
         "newer.sql.age",
-        &dump.replacen("\"schema_version\":1", "\"schema_version\":2", 1),
+        &dump.replacen(
+            &format!("\"schema_version\":{LATEST}"),
+            &format!("\"schema_version\":{}", LATEST + 1),
+            1,
+        ),
         &r,
     );
     let t3 = dir.path().join("t3");
@@ -684,7 +710,15 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     assert_eq!(
         local_tables(&target),
-        vec!["licences", "owners", "schema_migrations"]
+        vec![
+            "licences",
+            "members",
+            "otp_challenges",
+            "owner_sessions",
+            "owners",
+            "rate_limits",
+            "schema_migrations"
+        ]
     );
 }
 

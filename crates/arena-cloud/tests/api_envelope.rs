@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use arena_cloud::config::Role;
 use arena_cloud::health::Reachability;
+use arena_store::control::LATEST_CONTROL_VERSION as LATEST;
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use serde_json::Value;
@@ -279,16 +280,19 @@ fn dev_starts_on_an_empty_dir_and_a_restart_applies_nothing() {
     let (running, port) = start_dev(&data);
     let h = healthz_reachable(port);
     assert_eq!(h["role"], "all");
-    assert_eq!(h["migration_version"], 1);
+    assert_eq!(h["migration_version"], LATEST);
     drop(running);
     assert!(db.is_file(), "{} created", db.display());
     let first = migration_rows(&db);
-    assert_eq!(first.iter().map(|r| r.0).collect::<Vec<_>>(), vec![1]);
+    assert_eq!(
+        first.iter().map(|r| r.0).collect::<Vec<_>>(),
+        (1..=i64::from(LATEST)).collect::<Vec<_>>()
+    );
 
     let (_running, port) = start_dev(&data);
     let h = request(port, "GET", "/healthz", None).unwrap().json();
     assert_eq!(h["role"], "all");
-    assert_eq!(h["migration_version"], 1);
+    assert_eq!(h["migration_version"], LATEST);
     assert_eq!(migration_rows(&db), first, "nothing applied on restart");
 }
 
@@ -303,8 +307,8 @@ fn dev_on_a_too_new_file_exits_2_and_leaves_it_untouched() {
     rusqlite::Connection::open(&db)
         .unwrap()
         .execute_batch(
-            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
-             INSERT INTO schema_migrations VALUES (2, 5);",
+            &format!("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             INSERT INTO schema_migrations VALUES ({}, 5);", LATEST + 1),
         )
         .unwrap();
     let o = run(cloud()
@@ -314,7 +318,7 @@ fn dev_on_a_too_new_file_exits_2_and_leaves_it_untouched() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert_eq!(o.status.code(), Some(2), "{out}");
     assert!(out.contains("SCHEMA_TOO_NEW"), "{out}");
-    assert_eq!(migration_rows(&db), vec![(2, 5)]);
+    assert_eq!(migration_rows(&db), vec![(i64::from(LATEST) + 1, 5)]);
 }
 
 #[test]

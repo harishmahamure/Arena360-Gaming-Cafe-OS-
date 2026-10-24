@@ -677,7 +677,8 @@ pub(crate) fn ui_error(e: AppError) -> UiError {
 pub fn status_of(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::AuthFailed => StatusCode::UNAUTHORIZED,
-        ErrorCode::AuthLocked => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::AuthLocked | ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::OtpInvalid | ErrorCode::OtpExpired => StatusCode::BAD_REQUEST,
         ErrorCode::PermissionDenied
         | ErrorCode::Forbidden
         | ErrorCode::PinRequired

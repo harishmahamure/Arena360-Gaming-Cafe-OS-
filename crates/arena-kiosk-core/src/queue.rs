@@ -43,7 +43,9 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PinRejected
         | ErrorCode::ReasonRequired
         | ErrorCode::NotFound
-        | ErrorCode::BadRequest => true,
+        | ErrorCode::BadRequest
+        | ErrorCode::OtpInvalid
+        | ErrorCode::OtpExpired => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary
@@ -54,7 +56,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::Internal
         | ErrorCode::AuthFailed
         | ErrorCode::AuthLocked
-        | ErrorCode::SessionLocked => false,
+        | ErrorCode::SessionLocked
+        | ErrorCode::RateLimited => false,
     }
 }
 

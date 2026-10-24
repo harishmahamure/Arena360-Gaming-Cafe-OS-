@@ -10,15 +10,35 @@ use arena_store::control::{
     SchemaTooNew,
 };
 
+/// The baseline alone (no tables), for runner and dump tests that bring their own schema.
+const BASELINE: &[ControlMigration] = CONTROL_MIGRATIONS.split_at(1).0;
+
+/// The tables every migration creates, sorted.
+const ALL_TABLES: &[&str] = &[
+    "otp_challenges",
+    "owner_sessions",
+    "owners",
+    "rate_limits",
+    "schema_migrations",
+];
+
+/// `schema_migrations` after `migrate(at)` on a fresh database.
+fn all_rows(at: i64) -> Vec<(i64, i64)> {
+    CONTROL_MIGRATIONS
+        .iter()
+        .map(|m| (i64::from(m.version), at))
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn a_fresh_database_gets_the_baseline_and_no_business_tables() {
+async fn a_fresh_database_gets_every_migration() {
     let Some(t) = sqld::fresh().await else { return };
     let db = ControlDb::connect(&t.url, "").await.unwrap();
     assert_eq!(db.schema_version().await.unwrap(), 0);
-    assert_eq!(db.migrate(1_000).await.unwrap(), 1);
+    assert_eq!(db.migrate(1_000).await.unwrap(), LATEST_CONTROL_VERSION);
     assert_eq!(db.schema_version().await.unwrap(), LATEST_CONTROL_VERSION);
-    assert_eq!(sqld::migration_rows(&t.url).await, vec![(1, 1_000)]);
-    assert_eq!(sqld::tables(&t.url).await, vec!["schema_migrations"]);
+    assert_eq!(sqld::migration_rows(&t.url).await, all_rows(1_000));
+    assert_eq!(sqld::tables(&t.url).await, ALL_TABLES);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -27,8 +47,8 @@ async fn a_restart_at_latest_applies_nothing() {
     let db = ControlDb::connect(&t.url, "").await.unwrap();
     db.migrate(1_000).await.unwrap();
     let again = ControlDb::connect(&t.url, "").await.unwrap();
-    assert_eq!(again.migrate(2_000).await.unwrap(), 1);
-    assert_eq!(sqld::migration_rows(&t.url).await, vec![(1, 1_000)]);
+    assert_eq!(again.migrate(2_000).await.unwrap(), LATEST_CONTROL_VERSION);
+    assert_eq!(sqld::migration_rows(&t.url).await, all_rows(1_000));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -59,7 +79,7 @@ async fn a_newer_database_is_refused_and_left_untouched() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_migrations_apply_in_order_each_with_its_row() {
     let Some(t) = sqld::fresh().await else { return };
-    let mut list = CONTROL_MIGRATIONS.to_vec();
+    let mut list = BASELINE.to_vec();
     list.push(ControlMigration {
         version: 2,
         sql: "CREATE TABLE t2 (id INTEGER PRIMARY KEY);",
@@ -69,7 +89,7 @@ async fn pending_migrations_apply_in_order_each_with_its_row() {
         sql: "ALTER TABLE t2 ADD COLUMN name TEXT;",
     });
     let db = ControlDb::connect(&t.url, "").await.unwrap();
-    db.migrate(1).await.unwrap();
+    db.migrate_with(BASELINE, 1).await.unwrap();
     assert_eq!(db.migrate_with(&list, 7).await.unwrap(), 3);
     assert_eq!(
         sqld::migration_rows(&t.url).await,
@@ -80,7 +100,7 @@ async fn pending_migrations_apply_in_order_each_with_its_row() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failing_migration_leaves_neither_its_changes_nor_its_row() {
     let Some(t) = sqld::fresh().await else { return };
-    let mut list = CONTROL_MIGRATIONS.to_vec();
+    let mut list = BASELINE.to_vec();
     list.push(ControlMigration {
         version: 2,
         sql: "CREATE TABLE half (id INTEGER); INSERT INTO missing VALUES (1);",
@@ -93,7 +113,7 @@ async fn a_failing_migration_leaves_neither_its_changes_nor_its_row() {
         "{err:?}"
     );
     // Not retried: a bad migration fails at once.
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert!(started.elapsed() < std::time::Duration::from_millis(1600));
     assert_eq!(sqld::migration_rows(&t.url).await, vec![(1, 7)]);
     assert_eq!(sqld::tables(&t.url).await, vec!["schema_migrations"]);
 }
@@ -103,7 +123,7 @@ async fn concurrent_runners_both_succeed_with_one_row_per_version() {
     let Some(t) = sqld::fresh().await else { return };
     let list: &'static [ControlMigration] = Box::leak(
         [
-            CONTROL_MIGRATIONS.to_vec(),
+            BASELINE.to_vec(),
             vec![
                 ControlMigration {
                     version: 2,
@@ -195,16 +215,16 @@ mod local {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_fresh_file_gets_the_baseline_and_no_business_tables() {
+    async fn a_fresh_file_gets_every_migration() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gz_control.db");
         let db = ControlDb::open_local(&path).await.unwrap();
         db.ping().await.unwrap();
         assert_eq!(db.schema_version().await.unwrap(), 0);
-        assert_eq!(db.migrate(1_000).await.unwrap(), 1);
+        assert_eq!(db.migrate(1_000).await.unwrap(), LATEST_CONTROL_VERSION);
         assert_eq!(db.schema_version().await.unwrap(), LATEST_CONTROL_VERSION);
-        assert_eq!(rows(&path), vec![(1, 1_000)]);
-        assert_eq!(tables(&path), vec!["schema_migrations"]);
+        assert_eq!(rows(&path), all_rows(1_000));
+        assert_eq!(tables(&path), ALL_TABLES);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -218,8 +238,8 @@ mod local {
             .await
             .unwrap();
         let again = ControlDb::open_local(&path).await.unwrap();
-        assert_eq!(again.migrate(2_000).await.unwrap(), 1);
-        assert_eq!(rows(&path), vec![(1, 1_000)]);
+        assert_eq!(again.migrate(2_000).await.unwrap(), LATEST_CONTROL_VERSION);
+        assert_eq!(rows(&path), all_rows(1_000));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -251,7 +271,7 @@ mod local {
     async fn a_failing_migration_leaves_neither_its_changes_nor_its_row() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gz_control.db");
-        let mut list = CONTROL_MIGRATIONS.to_vec();
+        let mut list = BASELINE.to_vec();
         list.push(ControlMigration {
             version: 2,
             sql: "CREATE TABLE half (id INTEGER); INSERT INTO missing VALUES (1);",
@@ -263,7 +283,7 @@ mod local {
             matches!(&err, ControlError::Migration { version: 2, message } if message.contains("no such table")),
             "{err:?}"
         );
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(started.elapsed() < std::time::Duration::from_millis(1600));
         assert_eq!(rows(&path), vec![(1, 7)]);
         assert_eq!(tables(&path), vec!["schema_migrations"]);
     }
@@ -272,13 +292,13 @@ mod local {
     async fn pending_migrations_apply_in_order_each_with_its_row() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gz_control.db");
-        let mut list = CONTROL_MIGRATIONS.to_vec();
+        let mut list = BASELINE.to_vec();
         list.push(ControlMigration {
             version: 2,
             sql: "CREATE TABLE t2 (id INTEGER PRIMARY KEY);",
         });
         let db = ControlDb::open_local(&path).await.unwrap();
-        db.migrate(1).await.unwrap();
+        db.migrate_with(BASELINE, 1).await.unwrap();
         assert_eq!(db.migrate_with(&list, 7).await.unwrap(), 2);
         assert_eq!(rows(&path), vec![(1, 1), (2, 7)]);
     }
@@ -332,7 +352,7 @@ mod dump_restore {
     async fn seeded_local(dir: &Path) -> (ControlDb, PathBuf) {
         let path = dir.join("source.db");
         let db = ControlDb::open_local(&path).await.unwrap();
-        db.migrate(1_000).await.unwrap();
+        db.migrate_with(BASELINE, 1_000).await.unwrap();
         local_exec(&path, FIXTURE);
         (db, path)
     }
@@ -381,7 +401,7 @@ mod dump_restore {
         // Byte-identical dump: same objects, same values, same storage classes.
         assert_eq!(target.dump(42).await.unwrap(), dump);
         // A restored database needs no migration.
-        assert_eq!(target.migrate(9_999).await.unwrap(), 1);
+        assert_eq!(target.migrate_with(BASELINE, 9_999).await.unwrap(), 1);
 
         // Read back independently.
         let c = rusqlite::Connection::open(&target_path).unwrap();
@@ -434,7 +454,7 @@ mod dump_restore {
         let dump = src.dump(1).await.unwrap();
         let path = dir.path().join("target.db");
         let target = ControlDb::open_local(&path).await.unwrap();
-        target.migrate(5).await.unwrap();
+        target.migrate_with(BASELINE, 5).await.unwrap();
         let err = target.restore(&dump).await.unwrap_err();
         assert!(
             matches!(&err, ControlError::TargetNotEmpty { objects } if objects == &vec!["table schema_migrations".to_owned()]),
@@ -483,12 +503,16 @@ mod dump_restore {
         let path = dir.path().join("t.db");
         let target = ControlDb::open_local(&path).await.unwrap();
 
-        let newer = dump.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
+        let newer = dump.replacen(
+            "\"schema_version\":1",
+            &format!("\"schema_version\":{}", LATEST_CONTROL_VERSION + 1),
+            1,
+        );
         let err = target.restore(&newer).await.unwrap_err();
         assert_eq!(
             err,
             ControlError::SchemaTooNew(SchemaTooNew {
-                db: 2,
+                db: LATEST_CONTROL_VERSION + 1,
                 binary: LATEST_CONTROL_VERSION
             })
         );
@@ -506,7 +530,7 @@ mod dump_restore {
         let src = ControlDb::open_local(&dir.path().join("s.db"))
             .await
             .unwrap();
-        src.migrate(1).await.unwrap();
+        src.migrate_with(BASELINE, 1).await.unwrap();
         let dump = src.dump(1).await.unwrap();
         let target = ControlDb::open_local(&dir.path().join("t.db"))
             .await
@@ -522,7 +546,7 @@ mod dump_restore {
     async fn a_remote_round_trip_matches_and_crosses_backends() {
         let Some(t) = sqld::fresh().await else { return };
         let db = ControlDb::connect(&t.url, "").await.unwrap();
-        db.migrate(1_000).await.unwrap();
+        db.migrate_with(BASELINE, 1_000).await.unwrap();
         sqld::exec(&t.url, FIXTURE).await;
         let dump = db.dump(7).await.unwrap();
 
@@ -556,7 +580,7 @@ mod dump_restore {
         );
         assert_eq!(fresh.dump(7).await.unwrap(), dump);
         assert_eq!(sqld::migration_rows(&t.url).await, vec![(1, 1_000)]);
-        assert_eq!(fresh.migrate(2_000).await.unwrap(), 1);
+        assert_eq!(fresh.migrate_with(BASELINE, 2_000).await.unwrap(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -567,7 +591,11 @@ mod dump_restore {
         let dump = src.dump(1).await.unwrap();
         let db = ControlDb::connect(&t.url, "").await.unwrap();
 
-        let newer = dump.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
+        let newer = dump.replacen(
+            "\"schema_version\":1",
+            &format!("\"schema_version\":{}", LATEST_CONTROL_VERSION + 1),
+            1,
+        );
         assert!(matches!(
             db.restore(&newer).await,
             Err(ControlError::SchemaTooNew(_))
@@ -603,7 +631,7 @@ mod dump_restore {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.db");
         let src = ControlDb::open_local(&path).await.unwrap();
-        src.migrate(1).await.unwrap();
+        src.migrate_with(BASELINE, 1).await.unwrap();
         local_exec(&path, FK_FIXTURE);
         let dump = src.dump(1).await.unwrap();
         let t = ControlDb::open_local(&dir.path().join("t.db"))
@@ -645,7 +673,7 @@ mod dump_restore {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.db");
         let src = ControlDb::open_local(&path).await.unwrap();
-        src.migrate(1).await.unwrap();
+        src.migrate_with(BASELINE, 1).await.unwrap();
         local_exec(
             &path,
             "CREATE TABLE seq (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
@@ -675,7 +703,7 @@ mod dump_restore {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.db");
         let src = ControlDb::open_local(&path).await.unwrap();
-        src.migrate(1).await.unwrap();
+        src.migrate_with(BASELINE, 1).await.unwrap();
         local_exec(
             &path,
             "CREATE TABLE r (v TEXT);

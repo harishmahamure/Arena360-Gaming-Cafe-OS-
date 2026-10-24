@@ -206,6 +206,43 @@ database), and keeps the newest 30. Per environment:
 - **One attempt per night.** The Job has `backoffLimit: 0`: a failed run alerts once and the next
   night runs as usual. To retry by hand: `kubectl -n <env> create job --from=cronjob/arena-cloud-control-backup backup-manual-$(date +%s)`.
 
+### 6a. Owner sign-up: SMS, pepper, web origins and per-IP limits
+
+The control Deployment sends sign-up codes through Gupshup and reads these from
+`arena-cloud-secrets` (step 7): `ARENA_OTP_PEPPER` and `ARENA_GUPSHUP_*`. Two plain values sit in
+the manifests and are checked by `pnpm check:deploy`: `ARENA_SMS_PROVIDER=gupshup`, and
+`ARENA_WEB_ORIGINS`, the onboarding app's origin in that environment
+(`https://start.staging.arena360.cloud` in staging, `https://start.arena360.cloud` in
+production; each overlay merges it into the env list by name). A missing or short pepper, a
+missing Gupshup variable, no origin or `ARENA_SMS_PROVIDER=fake` makes the pod exit 64 at
+start. `ARENA_SMS_GLOBAL_PER_MIN` (default 60) caps SMS sends per minute across all phones; set
+it in the Deployment if launch traffic needs more.
+
+- **Pepper.** `openssl rand -hex 32`, one per environment, never reused. Rotating it voids the
+  codes in flight (users request a new one) and changes every `phone_tag` in the logs.
+- **Gupshup.** An Enterprise SMS account with the DLT registration India requires: the sender
+  id (header) and a template for `{#var#} is your Arena 360 code. It expires in 5 minutes.`.
+  Its id is `ARENA_GUPSHUP_DLT_TEMPLATE_ID`. Tests and CI never call Gupshup; after the first
+  deploy of an environment, sign up once with an operator's phone at the onboarding app and
+  confirm the SMS arrives (a live check is an operator step). A provider failure answers 503
+  and shows in the logs as `signup code send failed` with a `phone_tag`.
+- **Onboarding hosting.** The onboarding app (`apps/onboarding`, Cloudflare Workers) is served
+  at `start.arena360.cloud` (staging `start.staging.arena360.cloud`). Its `PUBLIC_API_BASE` is
+  the API origin of the same environment (`https://api.arena360.cloud`,
+  `https://api.staging.arena360.cloud`); session cookies are host-only on the API host.
+- **Per-IP limits (Cloudflare).** The cloud limits sends per phone (5 per hour); per-IP limits
+  are Cloudflare rate-limiting rules on the `arena360.cloud` zone (Security → WAF → Rate
+  limiting rules), one per host, counting by IP, action **Block** with a 429 for the period:
+
+  | Rule          | Expression (`http.host eq "api.arena360.cloud"` and…)                            | Rate          |
+  | ------------- | -------------------------------------------------------------------------------- | ------------- |
+  | signup start  | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signup/start"`  | 10 per 10 min |
+  | signup verify | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signup/verify"` | 30 per 10 min |
+  | signup resend | `http.request.method eq "POST" and http.request.uri.path eq "/v1/signup/resend"` | 10 per 10 min |
+
+  Repeat them for `api.staging.arena360.cloud`. A Cloudflare block answers before the origin,
+  so the onboarding app shows its generic "try again" error for it.
+
 ### 7. Encrypt the secrets
 
 Each `deploy/secrets/<env>.enc.yaml` holds **all four** Secrets below; `ghcr-pull` is
@@ -223,6 +260,13 @@ type: Opaque
 stringData:
   ARENA_CONTROL_DB_URL: libsql://gz-control-staging-<org>.aws-ap-south-1.turso.io
   ARENA_CONTROL_DB_TOKEN: <token from step 1>
+  # Owner sign-up (step 6a): `openssl rand -hex 32`, a different one per environment.
+  ARENA_OTP_PEPPER: <64 hex characters>
+  ARENA_GUPSHUP_ENDPOINT: https://enterprise.smsgupshup.com/GatewayAPI/rest
+  ARENA_GUPSHUP_USERID: <Enterprise user id>
+  ARENA_GUPSHUP_PASSWORD: <its password>
+  ARENA_GUPSHUP_SENDER: <DLT sender id>
+  ARENA_GUPSHUP_DLT_TEMPLATE_ID: <DLT template id of the sign-up message>
 ---
 apiVersion: v1
 kind: Secret

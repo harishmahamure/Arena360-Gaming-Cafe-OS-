@@ -98,7 +98,7 @@ async fn healthz_follows_the_background_check() {
         retry_window: DEFAULT_RETRY_WINDOW,
     };
     let (db, version) = connect_and_migrate(&cfg).await.unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, arena_store::control::LATEST_CONTROL_VERSION);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -117,7 +117,7 @@ async fn healthz_follows_the_background_check() {
     let first = up["gz_control"]["checked_at"]
         .as_i64()
         .expect("checked_at set");
-    assert_eq!(up["migration_version"], 1);
+    assert_eq!(up["migration_version"], version);
 
     proxy.stop();
     let down = until(port, |v| v["gz_control"]["reachable"] == false).await;

@@ -38,6 +38,20 @@ patches:
           limits:
             cpu: 1000m
             memory: 512Mi
+  # This environment's onboarding origin, merged into the env list by name.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: arena-cloud-control
+      spec:
+        template:
+          spec:
+            containers:
+              - name: control
+                env:
+                  - name: ARENA_WEB_ORIGINS
+                    value: https://start.arena360.cloud
   - target:
       kind: CronJob
       name: arena-cloud-control-backup

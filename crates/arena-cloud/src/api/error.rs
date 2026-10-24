@@ -24,7 +24,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::AuthFailed | ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => {
             StatusCode::UNAUTHORIZED
         }
-        ErrorCode::AuthLocked => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::AuthLocked | ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::OtpInvalid | ErrorCode::OtpExpired => StatusCode::BAD_REQUEST,
         ErrorCode::Forbidden
         | ErrorCode::PermissionDenied
         | ErrorCode::PinRequired
@@ -43,6 +44,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
 pub struct ApiError {
     status: StatusCode,
     error: AppError,
+    /// Sent as `Retry-After` (seconds).
+    retry_after_s: Option<u64>,
 }
 
 impl ApiError {
@@ -69,6 +72,7 @@ impl ApiError {
                 ErrorCode::Unsupported,
                 "This address doesn't accept that method.",
             ),
+            retry_after_s: None,
         }
     }
 
@@ -86,6 +90,7 @@ impl ApiError {
             s => Self {
                 status: s,
                 error: AppError::new(ErrorCode::BadRequest, "The request could not be read."),
+                retry_after_s: None,
             },
         }
     }
@@ -102,7 +107,50 @@ impl ApiError {
         Self {
             status: StatusCode::PAYLOAD_TOO_LARGE,
             error: AppError::new(ErrorCode::BadRequest, "The request body is too large."),
+            retry_after_s: None,
         }
+    }
+
+    /// `VALIDATION_FAILED`, 422, naming `field`.
+    pub fn validation(field: &str, message: impl Into<String>) -> Self {
+        AppError::with_field(ErrorCode::ValidationFailed, field, message).into()
+    }
+
+    /// `RATE_LIMITED`, 429, with `Retry-After: retry_after_s` (at least 1).
+    pub fn rate_limited(retry_after_s: u64) -> Self {
+        let mut e: Self = AppError::new(
+            ErrorCode::RateLimited,
+            "Too many requests. Try again after the time in Retry-After.",
+        )
+        .into();
+        e.retry_after_s = Some(retry_after_s.max(1));
+        e
+    }
+
+    /// `AUTH_FAILED`, 401: no valid session.
+    pub fn auth_failed() -> Self {
+        AppError::new(ErrorCode::AuthFailed, "Sign in to continue.").into()
+    }
+
+    /// `FORBIDDEN`, 403.
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        AppError::new(ErrorCode::Forbidden, message).into()
+    }
+
+    /// `INTERNAL` with 503: a dependency (such as the SMS provider) is down. `detail` goes to
+    /// the log only.
+    pub fn unavailable(detail: impl Display) -> Self {
+        tracing::error!(code = "INTERNAL", detail = %detail, "dependency unavailable");
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            error: AppError::new(ErrorCode::Internal, INTERNAL_MESSAGE),
+            retry_after_s: None,
+        }
+    }
+
+    /// The `Retry-After` seconds this error carries.
+    pub fn retry_after_s(&self) -> Option<u64> {
+        self.retry_after_s
     }
 
     /// `INTERNAL`, 500 with the fixed message. `detail` goes to the log only.
@@ -115,6 +163,7 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             error: AppError::new(ErrorCode::Internal, INTERNAL_MESSAGE),
+            retry_after_s: None,
         }
     }
 }
@@ -129,13 +178,19 @@ impl From<AppError> for ApiError {
         Self {
             status: status_of(error.code),
             error,
+            retry_after_s: None,
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(self.error)).into_response()
+        let mut res = (self.status, Json(self.error)).into_response();
+        if let Some(s) = self.retry_after_s {
+            res.headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, s.into());
+        }
+        res
     }
 }
 
@@ -172,6 +227,11 @@ mod tests {
             (ErrorCode::BadRequest, 400),
             (ErrorCode::ValidationFailed, 422),
             (ErrorCode::Internal, 500),
+            (ErrorCode::RateLimited, 429),
+            (ErrorCode::OtpInvalid, 400),
+            (ErrorCode::OtpExpired, 400),
+            (ErrorCode::AuthFailed, 401),
+            (ErrorCode::Forbidden, 403),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

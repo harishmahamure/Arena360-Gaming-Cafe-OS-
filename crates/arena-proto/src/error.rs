@@ -56,6 +56,14 @@ pub enum ErrorCode {
     /// The body is not valid JSON or doesn't match the request; `field` names the offending
     /// field when known.
     BadRequest,
+    /// Too many requests (an OTP send limit, or a resend sooner than allowed): wait for the
+    /// `Retry-After` seconds and try again.
+    RateLimited,
+    /// The one-time code is wrong; attempts are left on the same challenge.
+    OtpInvalid,
+    /// The one-time code challenge expired, ran out of attempts or was already used: request
+    /// a new code.
+    OtpExpired,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -96,6 +104,9 @@ impl ErrorCode {
             Self::SessionLocked => "SESSION_LOCKED",
             Self::NotFound => "NOT_FOUND",
             Self::BadRequest => "BAD_REQUEST",
+            Self::RateLimited => "RATE_LIMITED",
+            Self::OtpInvalid => "OTP_INVALID",
+            Self::OtpExpired => "OTP_EXPIRED",
         }
     }
 }
@@ -194,6 +205,9 @@ mod tests {
             (ErrorCode::SessionLocked, "SESSION_LOCKED"),
             (ErrorCode::NotFound, "NOT_FOUND"),
             (ErrorCode::BadRequest, "BAD_REQUEST"),
+            (ErrorCode::RateLimited, "RATE_LIMITED"),
+            (ErrorCode::OtpInvalid, "OTP_INVALID"),
+            (ErrorCode::OtpExpired, "OTP_EXPIRED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

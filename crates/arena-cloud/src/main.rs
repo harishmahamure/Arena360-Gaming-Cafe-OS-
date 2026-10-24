@@ -74,6 +74,15 @@ async fn main() -> ExitCode {
         }
     };
 
+    let auth = match config::auth_from_env(cfg.dev(), &|k| std::env::var_os(k)) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("arena-cloud: {e}");
+            eprintln!("{}", config::USAGE);
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+
     init_logging();
     // A handler panic is answered with `INTERNAL` by the API layer; the panic itself is logged
     // here as one JSON line instead of the default stderr text.
@@ -95,6 +104,11 @@ async fn main() -> ExitCode {
         role = cfg.role.as_str(),
         version = env!("CARGO_PKG_VERSION"),
         listen = %cfg.listen,
+        sms_provider = match auth.sms {
+            config::SmsProviderConfig::Fake => "fake",
+            config::SmsProviderConfig::Gupshup(_) => "gupshup",
+        },
+        web_origins = ?auth.web_origins,
         "starting"
     );
     if let Some(path) = cfg.database.local_path() {
@@ -151,6 +165,7 @@ async fn main() -> ExitCode {
         dev: cfg.dev(),
         migration_version,
         check_interval: CHECK_INTERVAL,
+        auth: Some(auth),
     };
     match serve(listener, db, opts, shutdown()).await {
         Ok(()) => {

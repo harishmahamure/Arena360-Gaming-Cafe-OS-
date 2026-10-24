@@ -1012,16 +1012,20 @@ sqld --http-listen-addr 127.0.0.1:8081 --db-path /tmp/gz_control.sqld &
 ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role control
 ```
 
-| Flag / variable          | Meaning                                                                                    |
-| ------------------------ | ------------------------------------------------------------------------------------------ |
-| `--role control\|all`    | Required. Any other role exits 64 with "role not available yet"                            |
-| `--role jobs --task <t>` | Run one task and exit (see **Nightly backup**); `--task` without `--role jobs` exits 64    |
-| `--dev`                  | Local dev mode (see **Local dev mode** below): no env, loopback only                       |
-| `--data-dir <dir>`       | With `--dev` only: where `gz_control.db` lives (default `./.arena-cloud-dev`)              |
-| `--listen <addr:port>`   | Listen address (default `0.0.0.0:8080`)                                                    |
-| `--help`, `--version`    | Print usage or the version and exit 0                                                      |
-| `ARENA_CONTROL_DB_URL`   | `libsql://` or `https://` (plain `http://` only for `127.0.0.1`/`localhost`); else exit 64 |
-| `ARENA_CONTROL_DB_TOKEN` | Turso auth token; may be empty only for loopback `http://`. Never logged                   |
+| Flag / variable            | Meaning                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| `--role control\|all`      | Required. Any other role exits 64 with "role not available yet"                            |
+| `--role jobs --task <t>`   | Run one task and exit (see **Nightly backup**); `--task` without `--role jobs` exits 64    |
+| `--dev`                    | Local dev mode (see **Local dev mode** below): no env, loopback only                       |
+| `--data-dir <dir>`         | With `--dev` only: where `gz_control.db` lives (default `./.arena-cloud-dev`)              |
+| `--listen <addr:port>`     | Listen address (default `0.0.0.0:8080`)                                                    |
+| `--help`, `--version`      | Print usage or the version and exit 0                                                      |
+| `ARENA_CONTROL_DB_URL`     | `libsql://` or `https://` (plain `http://` only for `127.0.0.1`/`localhost`); else exit 64 |
+| `ARENA_CONTROL_DB_TOKEN`   | Turso auth token; may be empty only for loopback `http://`. Never logged                   |
+| `ARENA_OTP_PEPPER`         | Sign-up code pepper, 32+ characters; missing or short exits 64. Never logged               |
+| `ARENA_WEB_ORIGINS`        | Comma-separated browser origins allowed with credentials (exact match); missing exits 64   |
+| `ARENA_SMS_PROVIDER`       | `gupshup` (`fake` only with `--dev`); else exits 64. Needs `ARENA_GUPSHUP_*` below         |
+| `ARENA_SMS_GLOBAL_PER_MIN` | SMS sends per rolling minute across all phones (default 60; `--dev` 10000)                 |
 
 - **Start-up.** Logs are JSON lines on stdout. A `gz_control` newer than the binary
   (`SCHEMA_TOO_NEW`) logs both versions and exits 2 without writing. An unreachable database is
@@ -1029,10 +1033,11 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
 - **Migrations.** `crates/arena-store/control-migrations/NNNN_*.sql`, embedded, numbered from 1,
   forward-only, separate from the Hub's. Each is applied with its `schema_migrations` row in one
   transaction; a concurrent runner (rolling update) that loses the race re-reads and carries on.
-  `0001_baseline` creates no tables. libsql lives only in `arena-store`'s `control` feature, so
+  `0001_baseline` creates no tables; `0002_owner_signup` adds `owners`, `otp_challenges`,
+  `owner_sessions` and `rate_limits`. All their SQL lives in `arena_store::control`. libsql lives only in `arena-store`'s `control` feature, so
   `cargo tree -p arena-hub` never shows it, and it is built remote-only (no C SQLite core).
 - **`GET /healthz`** always answers 200
-  `{"role":"control","version":"0.1.0","gz_control":{"reachable":true,"checked_at":<ms>},"migration_version":1}`.
+  `{"role":"control","version":"0.1.0","gz_control":{"reachable":true,"checked_at":<ms>},"migration_version":2}`.
   Reachability comes from a background `SELECT 1` every 15 s (3 s timeout); requests never hit
   Turso, and a Turso blip shows `reachable: false` without restarting the pod.
 - **Tests.** The `gz_control` tests use `ARENA_TEST_SQLD_URL` when set (CI's libsql-server
@@ -1111,6 +1116,66 @@ WhenRequired`, the smithy client on rustls + ring, so no aws-lc-rs) and static c
   `age -d -i key.txt x.sql.age | arena-cloud ops restore-control --from-file - --plaintext`. The
   restored database is already at the dump's migration version. No deploy ever runs it
   (`pnpm check:deploy` checks the workflow).
+- **Owner sign-up** (Story 2.4). The onboarding app (`apps/onboarding`, served at
+  `start.arena360.cloud`, staging `start.staging.arena360.cloud`) signs a café owner up with a
+  phone one-time code:
+  - `POST /v1/signup/start {name, phone, email, cafe_name, city}` validates the form (name, café
+    and city 1–80 characters after trim; phone E.164, `+` and 8–15 digits, `+91` needs 10 digits
+    starting 6–9; email `local@domain.tld` within 254 characters; else 422 `VALIDATION_FAILED`
+    with `field`), stores a challenge and sends `"<code> is your Arena 360 code. It expires in 5
+minutes."`, answering 202 `{challenge_id, expires_in_s: 300, resend_after_s: 30}`. The answer
+    is the same whether or not the phone has an account; no `owners` row exists before a correct
+    code.
+  - `POST /v1/signup/resend {challenge_id}` puts a new code on the same challenge (expiry and
+    attempts reset) 30 s after its previous send at the earliest (`RATE_LIMITED`, 429, with
+    `Retry-After`; of two concurrent resends one wins, the other is `RATE_LIMITED`). A used
+    challenge, or one voided by 5 wrong codes, is `OTP_EXPIRED`: start again.
+  - `POST /v1/signup/verify {challenge_id, code}`: a wrong code is 400 `OTP_INVALID`; the 5th
+    wrong code, an expired (5 min), void or used challenge is 400 `OTP_EXPIRED`. A right code
+    consumes the challenge, creates the owner (`mfa_state = pending`) if the phone has none and,
+    in the same transaction, a session: 200 `{next: "account_setup"}` plus the cookies. An owner
+    already `enrolled` gets `{next: "sign_in"}` and no session (the code alone never bypasses
+    TOTP; sign-in is Story 2.6). A repeated verify of the used challenge from the browser that
+    it signed in (its access cookie is that owner's) answers `account_setup` again.
+  - `GET /v1/session` answers `{owner: {name, mfa_state}}` or 401 `AUTH_FAILED`.
+    `POST /v1/session/refresh` rotates the refresh token (new pair, the old one marked
+    `rotated_at`, its access cookie no longer valid). A rotated token presented again within
+    10 s (two tabs refreshing at once) is 401 with nothing revoked; later it revokes the whole
+    session family (401).
+  - Cookies: `arena_access` (32 random bytes, 15 min, `Path=/v1`) and `arena_refresh` (30 days,
+    `Path=/v1/session/refresh`), both `HttpOnly; Secure; SameSite=Lax`, host-only. Tokens are
+    stored only as SHA-256; codes only as HMAC-SHA256(`ARENA_OTP_PEPPER`, `"otp\0"` ‖ challenge
+    id ‖ code), compared in constant time. Codes and tokens come from the OS CSPRNG. The form
+    kept on a challenge is cleared once it is used or voided; challenges expired over 24 h and
+    sessions whose refresh expired over a day ago are deleted when new ones are written.
+  - Limits: at most 5 sends per phone per rolling hour (minute buckets in `rate_limits`, pruned
+    after 2 h) and `ARENA_SMS_GLOBAL_PER_MIN` sends per rolling minute across all phones
+    (second buckets, key `sms:global`), each send reserved atomically before the SMS goes out.
+    Beyond either, 429 `RATE_LIMITED` with `Retry-After` until the oldest counted bucket leaves
+    its window, and nothing is sent. Per-IP limits are Cloudflare rules
+    ([`deploy/README.md`](deploy/README.md#6a-owner-sign-up-sms-pepper-web-origins-and-per-ip-limits)). A failed SMS is 503 `INTERNAL` and is not
+    counted (a timeout, where delivery is unknown, stays counted); a failed first send deletes
+    the new challenge, a failed resend keeps the previous code.
+  - CORS: only origins in `ARENA_WEB_ORIGINS` get `Access-Control-Allow-Origin` and
+    `-Allow-Credentials: true` (and `Retry-After` exposed); a preflight or a state-changing
+    request from any other `Origin` is 403 `FORBIDDEN`. Every `/v1` response has
+    `Vary: Origin`.
+  - Messaging goes through `crates/arena-cloud/src/messaging/` (`Sms::send`): `fake` records
+    messages in memory, `gupshup` posts the Gupshup Enterprise SMS API form (`method=SendMessage`,
+    `mask` = sender, `dltTemplateId`). Tests never call Gupshup (a local stub checks the request);
+    a live send is an operator check.
+  - Logs name a phone only as `phone_tag` (its last 2 digits and the first 8 hex characters of
+    HMAC-SHA256(pepper, `"tag\0"` ‖ phone)), never the name, email, code or a token
+    (`crates/arena-cloud/tests/signup.rs` asserts it on captured logs).
+
+  | Variable                        | Meaning                                             |
+  | ------------------------------- | --------------------------------------------------- |
+  | `ARENA_GUPSHUP_ENDPOINT`        | `https://enterprise.smsgupshup.com/GatewayAPI/rest` |
+  | `ARENA_GUPSHUP_USERID`          | The Enterprise account user id                      |
+  | `ARENA_GUPSHUP_PASSWORD`        | Its password. Never logged                          |
+  | `ARENA_GUPSHUP_SENDER`          | The DLT-registered sender id (`mask`)               |
+  | `ARENA_GUPSHUP_DLT_TEMPLATE_ID` | The DLT template id of the sign-up message          |
+
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
   fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the
@@ -1124,8 +1189,13 @@ No Turso, Cloudflare or token needed. MinIO stands in for R2:
 ```sh
 docker compose -f deploy/dev/compose.yaml up -d   # MinIO on 127.0.0.1:9000, bucket arena-dev
 cargo run -p arena-cloud -- --role all --dev
-curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":1}
+curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":2}
 ```
+
+Sign up locally: run the cloud as above and the onboarding app with
+`pnpm --filter @arena/onboarding dev` (<http://localhost:5179>; Vite proxies `/v1` to
+`127.0.0.1:8080`). Submit the form, read the code from `curl http://127.0.0.1:8080/v1/dev/sms`
+and enter it: you land on `/account-setup` signed in.
 
 - `--dev` keeps `gz_control` in `<--data-dir>/gz_control.db` (default `./.arena-cloud-dev`,
   created if missing) through rusqlite, with the same embedded migrations, the same
@@ -1135,8 +1205,11 @@ curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration
   warning log line says dev mode is on. The `ARENA_CONTROL_DB_*` variables are ignored.
 - It mounts dev-only routes that exercise each envelope failure: `POST /v1/dev/echo`
   (`{"text":"…"}` → the same), `GET /v1/dev/fail` (`INTERNAL`) and `GET /v1/dev/panic` (a
-  handler panic, answered with `INTERNAL`; the server keeps serving). Without `--dev` they do not
-  exist (404 `NOT_FOUND`).
+  handler panic, answered with `INTERNAL`; the server keeps serving), plus `GET /v1/dev/sms`
+  (every message the fake SMS provider recorded, `[{to, text, at}]`). Without `--dev` they do
+  not exist (404 `NOT_FOUND`).
+- Sign-up needs no env either: `--dev` uses a fixed dev pepper, always the fake SMS provider,
+  and allows the origin `http://localhost:5179` (or `ARENA_WEB_ORIGINS` when set).
 - The backup task runs against the same local file and MinIO (a throwaway key from
   `age-keygen`):
 
@@ -1216,6 +1289,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | aws-smithy-http-client              | =1.5.1                 | `Cargo.toml`                           |
 | age                                 | =0.12.1                | `Cargo.toml`                           |
 | reqwest                             | =0.13.5                | `Cargo.toml`                           |
+| hmac                                | =0.12.1                | `Cargo.toml`                           |
+| getrandom                           | =0.3.4                 | `Cargo.toml`                           |
 | sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`   |
 | age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`   |
 | gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile` |

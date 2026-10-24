@@ -8,6 +8,10 @@ environment:
 | `staging.enc.yaml`    | `arena-cloud-secrets`, `arena-cloud-backup`, `origin-tls` and `ghcr-pull` (all required) |
 | `production.enc.yaml` | the same, for production                                                                 |
 
+`arena-cloud-secrets` holds the `gz_control` URL and token, the sign-up OTP pepper
+(`ARENA_OTP_PEPPER`) and the Gupshup SMS account (`ARENA_GUPSHUP_*`, see
+[`../README.md`](../README.md#6a-owner-sign-up-sms-pepper-web-origins-and-per-ip-limits)).
+
 `arena-cloud-backup` holds the nightly backup's bucket-scoped R2 token and endpoint, the
 backup age **public** key(s) and the alert webhook URL. The backup's age **private** key is
 never here: two operators keep it offline (see

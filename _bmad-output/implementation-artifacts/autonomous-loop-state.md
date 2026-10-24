@@ -11,6 +11,13 @@ Read this file after a context flush (`/clear`). It's the single entry point for
 - (2026-10-24) The user asked to continue from 2.2 and complete all of Epic 2 in one run.
 - (2026-10-24) Sentry and the OpenTelemetry/Grafana export (Story 2.3's observability ACs) are moved to the **end of Epic 2**: build them after 2.31, before closing the epic. Until then, logs stay JSON on stdout with no PII.
 
+- **(2026-10-24) Speed-ups chosen by the user:**
+  - **Overlap stories:** when story N's implementation returns, commit it to master as `wip: story N`. Then create a worktree for N+1 from that commit (`git worktree add .claude/worktrees/<key> -b story-<key> HEAD`) and dispatch N+1's implementer there, while N goes through review and fixes on master.
+  - When N is final, squash its WIP and fixes into one `feat:` commit (`git reset --soft` to before the WIP), then `git rebase --onto <new N commit> <old WIP commit> story-<N+1>` and fast-forward master when N+1 is done.
+  - Reserve migration numbers and error codes per story in its spec to avoid conflicts.
+  - **Risk-based review:** auth, security, crypto, payments and data-integrity stories get all three reviewers. UI-only or config-only stories get the Verification Gap reviewer plus one Blind Hunter.
+  - **Reviewers run on Sonnet** (`model: sonnet`). Implementers stay on the session model.
+
 ## Where things stand
 
 - **Story order and status:** `_bmad-output/implementation-artifacts/sprint-status.yaml`. A story at `review` is committed; `in-progress` is mid-pipeline.

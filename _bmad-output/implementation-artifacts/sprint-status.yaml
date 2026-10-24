@@ -64,7 +64,7 @@ development_status:
   2-1-arena-360-cloud-runs-in-india-behind-cloudflare: review
   2-2-cloud-error-envelope-local-dev-mode-and-single-sqlite-linkag: review
   2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl: review
-  2-4-owner-signs-up-with-phone-otp: backlog
+  2-4-owner-signs-up-with-phone-otp: review
   2-5-owner-sets-a-password-and-enrols-totp-with-backup-codes: backlog
   2-6-owner-signs-in-on-a-new-device-with-totp-backup-code-or-sms: backlog
   2-7-resumable-setup-wizard-and-step-1-café-and-first-branch: backlog

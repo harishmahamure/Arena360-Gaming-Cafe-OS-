@@ -1,0 +1,67 @@
+{
+  "_comment": "Shared sign-up form rules (Story 2.4): read by crates/arena-cloud/src/auth.rs tests and apps/onboarding/tests/validate.unit.spec.ts. text: 1-80 characters after trim, no control characters. phone: E.164, '+' then a non-zero digit and 8-15 digits in all; +91 needs exactly 10 digits starting 6-9. email: trimmed, at most 254 characters, one '@', local part 1-64 characters without whitespace, domain of 2+ dot-separated labels of 1-63 ASCII letters, digits or hyphens (no leading or trailing hyphen), TLD of 2+ ASCII letters. text_lengths: a string of n 'x' characters.",
+  "text": [
+    ["Asha", true],
+    ["  Asha Rao  ", true],
+    ["é", true],
+    ["", false],
+    ["   ", false],
+    ["tab\tinside", false],
+    ["line\nbreak", false]
+  ],
+  "text_lengths": [
+    [1, true],
+    [80, true],
+    [81, false]
+  ],
+  "phone": [
+    ["+919876543210", true],
+    ["+916000000000", true],
+    ["+915876543210", false],
+    ["+91987654321", false],
+    ["+9198765432101", false],
+    ["+91123", false],
+    ["+14155550100", true],
+    ["+4420794600", true],
+    ["+97150123456", true],
+    ["+6591234567", true],
+    ["+1234567", false],
+    ["+12345678", true],
+    ["+123456789012345", true],
+    ["+1234567890123456", false],
+    ["+01234567890", false],
+    ["919876543210", false],
+    ["+91 9876543210", false],
+    ["+91-9876543210", false]
+  ],
+  "email": [
+    ["asha@example.in", true],
+    ["a.b+c@mail.example.co.in", true],
+    ["ASHA@Example.IN", true],
+    ["x@a-b.co", true],
+    ["asha@example", false],
+    ["asha@@example.in", false],
+    ["@example.in", false],
+    ["asha@.in", false],
+    ["asha@example.i", false],
+    ["as ha@example.in", false],
+    ["asha@exa_mple.in", false],
+    ["asha@example.in1", false],
+    ["asha@-example.in", false],
+    ["asha@example-.in", false],
+    ["asha@exa..mple.in", false],
+    ["asha@exämple.in", false],
+    ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.in", true],
+    ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.in", false],
+    [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.in",
+      true
+    ],
+    [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.in",
+      false
+    ],
+    ["a@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.in", true],
+    ["a@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.in", false]
+  ]
+}

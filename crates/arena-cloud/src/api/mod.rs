@@ -5,17 +5,27 @@
 //! valid JSON or doesn't match the request (`BAD_REQUEST`, 400, or 413 over [`BODY_LIMIT`]),
 //! and any internal failure or panic (`INTERNAL`, 500, a fixed message; the detail is only
 //! logged).
+//!
+//! With an [`AuthState`] the owner routes are mounted too: `/v1/signup/*` ([`signup`]) and
+//! `/v1/session*` ([`session`]), behind the CORS layer ([`cors`]); with `--dev` also
+//! `GET /v1/dev/sms`, the fake SMS outbox.
 
+mod cors;
 mod dev;
 mod error;
 mod json;
 mod panic;
+pub mod session;
+pub mod signup;
+
+use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 
+use crate::auth::AuthState;
 pub use error::{ApiError, INTERNAL_MESSAGE, status_of};
 pub use json::ApiJson;
 
@@ -23,9 +33,20 @@ pub use json::ApiJson;
 pub const BODY_LIMIT: usize = 64 * 1024;
 
 /// The `/v1` routes. The dev-only routes (`/v1/dev/*`) are mounted only when `dev` is set.
-fn v1(dev: bool) -> Router {
-    let v1 = Router::new();
-    if dev { v1.merge(dev::router()) } else { v1 }
+fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
+    let mut v1 = Router::new();
+    if let Some(st) = auth {
+        v1 = v1
+            .merge(signup::router(Arc::clone(st)))
+            .merge(session::router(Arc::clone(st)));
+    }
+    if dev {
+        v1 = v1.merge(dev::router());
+        if let Some(st) = auth {
+            v1 = v1.merge(dev::sms_router(Arc::clone(st)));
+        }
+    }
+    v1
 }
 
 /// Any error response (≥ 400) that is not already JSON, such as a rejection from an extractor
@@ -47,10 +68,24 @@ async fn envelope_plain_errors(res: Response) -> Response {
 /// envelope: the `NOT_FOUND` fallback, the wrong-method mapping, the body limit, the mapping of
 /// any other non-JSON error response and the panic-catching layer.
 pub fn with_envelope(base: Router, dev: bool) -> Router {
-    base.nest("/v1", v1(dev))
+    with_envelope_and_auth(base, dev, None)
+}
+
+/// [`with_envelope`] plus, when `auth` is set, the owner sign-up and session routes and the
+/// CORS layer for `auth.web_origins` (outermost, so error envelopes carry the CORS headers).
+pub fn with_envelope_and_auth(base: Router, dev: bool, auth: Option<Arc<AuthState>>) -> Router {
+    let app = base
+        .nest("/v1", v1(dev, auth.as_ref()))
         .method_not_allowed_fallback(error::method_not_allowed)
         .fallback(error::not_found)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(axum::middleware::map_response(envelope_plain_errors))
-        .layer(axum::middleware::from_fn(panic::catch_panic))
+        .layer(axum::middleware::from_fn(panic::catch_panic));
+    match auth {
+        Some(st) => app.layer(axum::middleware::from_fn_with_state(
+            cors::Origins(Arc::new(st.web_origins.clone())),
+            cors::cors,
+        )),
+        None => app,
+    }
 }

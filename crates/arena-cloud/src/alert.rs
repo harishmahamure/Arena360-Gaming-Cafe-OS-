@@ -39,7 +39,7 @@ pub fn alert_text(env_name: &str, task: &str, code: &str) -> String {
 }
 
 /// An HTTP client on the workspace rustls (ring) with the Mozilla roots.
-fn client(timeout: Duration) -> Result<reqwest::Client, String> {
+pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, String> {
     let roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };

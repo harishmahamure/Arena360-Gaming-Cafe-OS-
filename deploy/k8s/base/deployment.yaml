@@ -52,6 +52,42 @@ spec:
                 secretKeyRef:
                   name: arena-cloud-secrets
                   key: ARENA_CONTROL_DB_TOKEN
+            # Owner sign-up (Story 2.4): the OTP pepper and the Gupshup account are secrets;
+            # the provider and the web origins are plain values (the origins per overlay).
+            - name: ARENA_OTP_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_OTP_PEPPER
+            - name: ARENA_GUPSHUP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_GUPSHUP_ENDPOINT
+            - name: ARENA_GUPSHUP_USERID
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_GUPSHUP_USERID
+            - name: ARENA_GUPSHUP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_GUPSHUP_PASSWORD
+            - name: ARENA_GUPSHUP_SENDER
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_GUPSHUP_SENDER
+            - name: ARENA_GUPSHUP_DLT_TEMPLATE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_GUPSHUP_DLT_TEMPLATE_ID
+            - name: ARENA_SMS_PROVIDER
+              value: gupshup
+            - name: ARENA_WEB_ORIGINS
+              value: https://start.arena360.cloud
           # /healthz always answers 200 from a cached gz_control check, so a Turso blip never
           # restarts the pod; readiness uses the same path.
           livenessProbe:

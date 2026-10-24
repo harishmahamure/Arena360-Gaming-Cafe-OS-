@@ -11,10 +11,26 @@
 //!
 //! [`ControlDb::dump`] and [`ControlDb::restore`] (in `control/dump.rs`) back the database up as
 //! a self-contained SQL text and put it back into an empty database, verifying row counts.
+//!
+//! Owner sign-up (Story 2.4) has typed queries in `control/{owner,otp,session,rate_limit}.rs`;
+//! every SQL statement `arena-cloud` runs lives here.
 
 mod dump;
+mod otp;
+mod owner;
+mod rate_limit;
+mod session;
 
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
+pub use otp::{
+    NewOtpChallenge, OTP_PURPOSE_SIGNUP, OTP_RETENTION_MS, OtpChallenge, SignupCompletion,
+    SignupOutcome,
+};
+pub use owner::{NewOwner, Owner};
+pub use rate_limit::{RateReservation, RateRule, RateWindow};
+pub use session::{
+    NewOwnerSession, OwnerSession, REFRESH_RACE_MS, RefreshOutcome, SessionWithOwner,
+};
 
 use std::fmt;
 use std::ops::Range;
@@ -33,10 +49,16 @@ pub struct ControlMigration {
 
 /// Every control migration, in order. Append new files here; never edit or reorder applied
 /// ones.
-pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[ControlMigration {
-    version: 1,
-    sql: include_str!("../control-migrations/0001_baseline.sql"),
-}];
+pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
+    ControlMigration {
+        version: 1,
+        sql: include_str!("../control-migrations/0001_baseline.sql"),
+    },
+    ControlMigration {
+        version: 2,
+        sql: include_str!("../control-migrations/0002_owner_signup.sql"),
+    },
+];
 
 /// The `gz_control` schema version this binary writes.
 pub const LATEST_CONTROL_VERSION: u32 = CONTROL_MIGRATIONS[CONTROL_MIGRATIONS.len() - 1].version;
@@ -279,6 +301,117 @@ fn local_query(
         Ok::<_, rusqlite::Error>(out)
     };
     run().map_err(local_err)
+}
+
+/// One statement of a [`ControlDb::transact`] batch.
+struct Stmt {
+    sql: &'static str,
+    params: Vec<SqlValue>,
+    /// When set, the batch is rolled back (and `transact` answers `false`) unless the statement
+    /// changed exactly this many rows (for a [`Stmt::fetch`] statement: returned this many).
+    expect_changes: Option<u64>,
+    /// Run as a query (a `SELECT`, or a write with `RETURNING`) and keep its rows.
+    fetch: bool,
+}
+
+impl Stmt {
+    fn new(sql: &'static str, params: Vec<SqlValue>) -> Self {
+        Self {
+            sql,
+            params,
+            expect_changes: None,
+            fetch: false,
+        }
+    }
+
+    fn expect(mut self, n: u64) -> Self {
+        self.expect_changes = Some(n);
+        self
+    }
+
+    fn fetch(mut self) -> Self {
+        self.fetch = true;
+        self
+    }
+}
+
+/// The rows of each statement of a committed [`ControlDb::transact_rows`] batch (empty for a
+/// statement that is not [`Stmt::fetch`]).
+type BatchRows = Vec<Vec<Vec<SqlValue>>>;
+
+/// Runs `stmts` in one rusqlite transaction; `None` (rolled back) when a guard failed.
+fn local_transact(
+    c: &mut rusqlite::Connection,
+    stmts: Vec<Stmt>,
+) -> Result<Option<BatchRows>, ControlError> {
+    let run = |c: &mut rusqlite::Connection| {
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut out = Vec::with_capacity(stmts.len());
+        for s in stmts {
+            let params: Vec<rusqlite::types::Value> =
+                s.params.into_iter().map(Into::into).collect();
+            let (n, rows) = if s.fetch {
+                let mut st = tx.prepare(s.sql)?;
+                let cols = st.column_count();
+                let mut q = st.query(rusqlite::params_from_iter(params))?;
+                let mut rows = Vec::new();
+                while let Some(row) = q.next()? {
+                    let mut values = Vec::with_capacity(cols);
+                    for i in 0..cols {
+                        values.push(row.get::<_, rusqlite::types::Value>(i)?.into());
+                    }
+                    rows.push(values);
+                }
+                (rows.len() as u64, rows)
+            } else {
+                let n = tx.execute(s.sql, rusqlite::params_from_iter(params))?;
+                (n as u64, Vec::new())
+            };
+            if s.expect_changes.is_some_and(|want| want != n) {
+                tx.rollback()?;
+                return Ok(None);
+            }
+            out.push(rows);
+        }
+        tx.commit()?;
+        Ok::<_, rusqlite::Error>(Some(out))
+    };
+    run(c).map_err(local_err)
+}
+
+/// A text column.
+fn col_text(row: &[SqlValue], i: usize) -> Result<String, ControlError> {
+    match row.get(i) {
+        Some(SqlValue::Text(t)) => Ok(t.clone()),
+        other => Err(ControlError::Db(format!(
+            "column {i}: expected text, got {other:?}"
+        ))),
+    }
+}
+
+/// An integer column.
+fn col_int(row: &[SqlValue], i: usize) -> Result<i64, ControlError> {
+    match row.get(i) {
+        Some(SqlValue::Integer(n)) => Ok(*n),
+        other => Err(ControlError::Db(format!(
+            "column {i}: expected integer, got {other:?}"
+        ))),
+    }
+}
+
+/// A nullable integer column.
+fn col_opt_int(row: &[SqlValue], i: usize) -> Result<Option<i64>, ControlError> {
+    match row.get(i) {
+        Some(SqlValue::Null) => Ok(None),
+        Some(SqlValue::Integer(n)) => Ok(Some(*n)),
+        other => Err(ControlError::Db(format!(
+            "column {i}: expected integer or null, got {other:?}"
+        ))),
+    }
+}
+
+fn text(s: &str) -> SqlValue {
+    SqlValue::Text(s.to_owned())
 }
 
 /// See [`ControlDb::reader`].
@@ -534,6 +667,84 @@ impl ControlDb {
                 let sql = sql.to_owned();
                 Self::local(c, move |c| local_query(c, &sql, params)).await?
             }
+        }
+    }
+
+    /// Runs `sql` with positional `params` and returns how many rows it changed.
+    async fn execute(&self, sql: &'static str, params: Vec<SqlValue>) -> Result<u64, ControlError> {
+        match &self.backend {
+            Backend::Remote(r) => {
+                let params: Vec<libsql::Value> = params.into_iter().map(Into::into).collect();
+                r.conn
+                    .execute(sql, libsql::params_from_iter(params))
+                    .await
+                    .map_err(|e| r.err(e))
+            }
+            Backend::Local(c) => {
+                Self::local(c, move |c| {
+                    let params: Vec<rusqlite::types::Value> =
+                        params.into_iter().map(Into::into).collect();
+                    c.execute(sql, rusqlite::params_from_iter(params))
+                        .map(|n| n as u64)
+                        .map_err(local_err)
+                })
+                .await?
+            }
+        }
+    }
+
+    /// Runs `stmts` in one transaction. Answers `false`, with nothing written, when a statement
+    /// with [`Stmt::expect`] changed another number of rows. On the remote backend the
+    /// transaction has its own Hrana stream, so concurrent requests never share it.
+    async fn transact(&self, stmts: Vec<Stmt>) -> Result<bool, ControlError> {
+        Ok(self.transact_rows(stmts).await?.is_some())
+    }
+
+    /// [`ControlDb::transact`], answering the rows of each [`Stmt::fetch`] statement read
+    /// inside the transaction (`None`: a guard failed and nothing was written).
+    async fn transact_rows(&self, stmts: Vec<Stmt>) -> Result<Option<BatchRows>, ControlError> {
+        match &self.backend {
+            Backend::Remote(r) => {
+                let tx = r.conn.transaction().await.map_err(|e| r.err(e))?;
+                let mut out = Vec::with_capacity(stmts.len());
+                for s in stmts {
+                    let params: Vec<libsql::Value> = s.params.into_iter().map(Into::into).collect();
+                    let step = async {
+                        if s.fetch {
+                            let mut q = tx.query(s.sql, libsql::params_from_iter(params)).await?;
+                            let cols = q.column_count();
+                            let mut rows = Vec::new();
+                            while let Some(row) = q.next().await? {
+                                let mut values = Vec::new();
+                                for i in 0..cols {
+                                    values.push(SqlValue::from(row.get_value(i)?));
+                                }
+                                rows.push(values);
+                            }
+                            Ok::<_, libsql::Error>((rows.len() as u64, rows))
+                        } else {
+                            let n = tx.execute(s.sql, libsql::params_from_iter(params)).await?;
+                            Ok((n, Vec::new()))
+                        }
+                    };
+                    let (n, rows) = match step.await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let err = r.err(e);
+                            let _ = tx.rollback().await;
+                            return Err(err);
+                        }
+                    };
+                    if s.expect_changes.is_some_and(|want| want != n) {
+                        tx.rollback().await.map_err(|e| r.err(e))?;
+                        return Ok(None);
+                    }
+                    out.push(rows);
+                }
+                tx.commit().await.map_err(|e| r.err(e))?;
+                Ok(Some(out))
+            }
+            Backend::Local(c) => Self::local(c, move |c| local_transact(c, stmts)).await?,
         }
     }
 

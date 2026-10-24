@@ -16,6 +16,7 @@ mod kiosk;
 mod permission;
 mod process;
 mod scope;
+mod signup;
 mod snapshot;
 mod ui_auth;
 
@@ -62,6 +63,11 @@ pub use process::{
     is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
+pub use signup::{
+    MfaState, OTP_DIGITS, OTP_MAX_ATTEMPTS, OTP_RESEND_AFTER_S, OTP_SENDS_PER_HOUR, OTP_TTL_S,
+    SessionInfo, SessionOwner, SignupChallenge, SignupNext, SignupResend, SignupStart,
+    SignupVerified, SignupVerify,
+};
 pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
     SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLocale, SnapshotUi,

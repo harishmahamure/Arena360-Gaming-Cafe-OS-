@@ -27,6 +27,14 @@ pub const USAGE: &str =
 environment (not with --dev):
   ARENA_CONTROL_DB_URL    gz_control URL (libsql:// or https://)
   ARENA_CONTROL_DB_TOKEN  gz_control auth token
+  ARENA_OTP_PEPPER        sign-up code pepper, 32+ characters (--dev: a fixed dev pepper)
+  ARENA_WEB_ORIGINS       comma-separated browser origins allowed with credentials, exact
+                          match (--dev default: http://localhost:5179)
+  ARENA_SMS_PROVIDER      gupshup (--dev: always the fake, read at GET /v1/dev/sms)
+  ARENA_SMS_GLOBAL_PER_MIN  SMS sends per rolling minute across all phones (default 60;
+                          --dev 10000)
+  ARENA_GUPSHUP_ENDPOINT, ARENA_GUPSHUP_USERID, ARENA_GUPSHUP_PASSWORD, ARENA_GUPSHUP_SENDER,
+  ARENA_GUPSHUP_DLT_TEMPLATE_ID  the Gupshup Enterprise SMS account (gupshup only)
 environment (--task control-backup, ops restore-control --from-key):
   ARENA_BACKUP_S3_ENDPOINT, ARENA_BACKUP_S3_BUCKET, ARENA_BACKUP_S3_ACCESS_KEY_ID,
   ARENA_BACKUP_S3_SECRET_ACCESS_KEY  the backup bucket (R2; MinIO in dev)
@@ -453,5 +461,303 @@ mod tests {
             retry_window: DEFAULT_RETRY_WINDOW,
         };
         assert!(!format!("{cfg:?}").contains("tok-SECRET"));
+    }
+}
+
+/// The OTP pepper (a secret: never logged), at least [`MIN_PEPPER_LEN`] bytes.
+pub const OTP_PEPPER_ENV: &str = "ARENA_OTP_PEPPER";
+/// Comma-separated browser origins allowed to call `/v1` with credentials (exact match).
+pub const WEB_ORIGINS_ENV: &str = "ARENA_WEB_ORIGINS";
+/// `gupshup` (`fake` only with `--dev`).
+pub const SMS_PROVIDER_ENV: &str = "ARENA_SMS_PROVIDER";
+/// SMS sends allowed per rolling minute across every phone (default
+/// [`DEFAULT_SMS_GLOBAL_PER_MIN`]).
+pub const SMS_GLOBAL_PER_MIN_ENV: &str = "ARENA_SMS_GLOBAL_PER_MIN";
+pub const DEFAULT_SMS_GLOBAL_PER_MIN: u64 = 60;
+/// The `--dev` default of [`SMS_GLOBAL_PER_MIN_ENV`].
+pub const DEV_SMS_GLOBAL_PER_MIN: u64 = 10_000;
+pub const GUPSHUP_ENDPOINT_ENV: &str = "ARENA_GUPSHUP_ENDPOINT";
+pub const GUPSHUP_USERID_ENV: &str = "ARENA_GUPSHUP_USERID";
+/// A secret: never logged.
+pub const GUPSHUP_PASSWORD_ENV: &str = "ARENA_GUPSHUP_PASSWORD";
+pub const GUPSHUP_SENDER_ENV: &str = "ARENA_GUPSHUP_SENDER";
+pub const GUPSHUP_DLT_TEMPLATE_ID_ENV: &str = "ARENA_GUPSHUP_DLT_TEMPLATE_ID";
+/// The shortest accepted `ARENA_OTP_PEPPER`.
+pub const MIN_PEPPER_LEN: usize = 32;
+/// The fixed pepper `--dev` uses.
+pub const DEV_OTP_PEPPER: &str = "arena-dev-otp-pepper-not-for-production-use";
+/// The browser origin `--dev` allows when `ARENA_WEB_ORIGINS` is unset (the onboarding dev
+/// server).
+pub const DEV_WEB_ORIGIN: &str = "http://localhost:5179";
+
+/// Which SMS provider sends codes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SmsProviderConfig {
+    /// The recorded fake.
+    Fake,
+    Gupshup(crate::messaging::GupshupConfig),
+}
+
+/// Owner sign-up and session settings for the serving roles.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub pepper: Vec<u8>,
+    /// Exact origins (`https://start.arena360.cloud`).
+    pub web_origins: Vec<String>,
+    pub sms: SmsProviderConfig,
+    /// SMS sends allowed per rolling minute across every phone.
+    pub sms_global_per_min: u64,
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("pepper", &"[redacted]")
+            .field("web_origins", &self.web_origins)
+            .field("sms", &self.sms)
+            .field("sms_global_per_min", &self.sms_global_per_min)
+            .finish()
+    }
+}
+
+impl AuthConfig {
+    /// The `--dev` settings: the fixed pepper, the fake SMS and [`DEV_WEB_ORIGIN`].
+    pub fn dev() -> Self {
+        Self {
+            pepper: DEV_OTP_PEPPER.as_bytes().to_vec(),
+            web_origins: vec![DEV_WEB_ORIGIN.to_owned()],
+            sms: SmsProviderConfig::Fake,
+            sms_global_per_min: DEV_SMS_GLOBAL_PER_MIN,
+        }
+    }
+}
+
+/// Parses one origin: `http(s)://host[:port]`, no path, query or trailing slash.
+fn parse_origin(raw: &str) -> Result<String, String> {
+    let o = raw.trim();
+    let rest = o
+        .strip_prefix("https://")
+        .or_else(|| o.strip_prefix("http://"))
+        .ok_or_else(|| format!("{WEB_ORIGINS_ENV}: {o:?} must start with https:// or http://"))?;
+    let ok = !rest.is_empty()
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':'));
+    if !ok {
+        return Err(format!(
+            "{WEB_ORIGINS_ENV}: {o:?} must be an origin (scheme://host[:port]) with no path"
+        ));
+    }
+    Ok(o.to_ascii_lowercase())
+}
+
+/// Parses `ARENA_WEB_ORIGINS`.
+pub fn parse_origins(v: &str) -> Result<Vec<String>, String> {
+    v.split(',')
+        .filter(|p| !p.trim().is_empty())
+        .map(parse_origin)
+        .collect()
+}
+
+/// The sign-up settings from the environment. `--dev` needs none of it: the pepper is fixed,
+/// the SMS provider is the fake, and the origins default to [`DEV_WEB_ORIGIN`] (or
+/// `ARENA_WEB_ORIGINS` when set). Otherwise `ARENA_OTP_PEPPER`, `ARENA_WEB_ORIGINS` and
+/// `ARENA_SMS_PROVIDER` (plus `ARENA_GUPSHUP_*` for `gupshup`) are required. Errors name the
+/// variable, never a secret's value.
+pub fn auth_from_env(
+    dev: bool,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<AuthConfig, String> {
+    let origins = get_env(env, WEB_ORIGINS_ENV).filter(|v| !v.is_empty());
+    let global = match get_env(env, SMS_GLOBAL_PER_MIN_ENV).filter(|v| !v.is_empty()) {
+        None => None,
+        Some(v) => Some(
+            v.parse::<u64>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| format!("{SMS_GLOBAL_PER_MIN_ENV} must be a positive number"))?,
+        ),
+    };
+    if dev {
+        let mut cfg = AuthConfig::dev();
+        if let Some(v) = origins {
+            cfg.web_origins = parse_origins(&v)?;
+        }
+        if let Some(n) = global {
+            cfg.sms_global_per_min = n;
+        }
+        return Ok(cfg);
+    }
+    let pepper = get_env(env, OTP_PEPPER_ENV)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("{OTP_PEPPER_ENV} is not set"))?;
+    if pepper.len() < MIN_PEPPER_LEN {
+        return Err(format!(
+            "{OTP_PEPPER_ENV} must be at least {MIN_PEPPER_LEN} characters"
+        ));
+    }
+    let web_origins =
+        parse_origins(&origins.ok_or_else(|| format!("{WEB_ORIGINS_ENV} is not set"))?)?;
+    if web_origins.is_empty() {
+        return Err(format!("{WEB_ORIGINS_ENV} lists no origin"));
+    }
+    let sms = match get_env(env, SMS_PROVIDER_ENV).as_deref() {
+        Some("fake") => {
+            return Err(format!(
+                "{SMS_PROVIDER_ENV}=fake is only for --dev; use gupshup"
+            ));
+        }
+        Some("gupshup") => {
+            let req = |k: &str| {
+                get_env(env, k)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| format!("{k} is not set (ARENA_SMS_PROVIDER=gupshup)"))
+            };
+            let endpoint = req(GUPSHUP_ENDPOINT_ENV)?;
+            if !(endpoint.starts_with("https://") || is_loopback_http(&endpoint)) {
+                return Err(format!("{GUPSHUP_ENDPOINT_ENV} must be an https:// URL"));
+            }
+            SmsProviderConfig::Gupshup(crate::messaging::GupshupConfig {
+                endpoint,
+                userid: req(GUPSHUP_USERID_ENV)?,
+                password: req(GUPSHUP_PASSWORD_ENV)?,
+                sender: req(GUPSHUP_SENDER_ENV)?,
+                dlt_template_id: req(GUPSHUP_DLT_TEMPLATE_ID_ENV)?,
+            })
+        }
+        None | Some("") => return Err(format!("{SMS_PROVIDER_ENV} is not set (gupshup)")),
+        Some(_) => return Err(format!("{SMS_PROVIDER_ENV} must be gupshup")),
+    };
+    Ok(AuthConfig {
+        pepper: pepper.into_bytes(),
+        web_origins,
+        sms,
+        sms_global_per_min: global.unwrap_or(DEFAULT_SMS_GLOBAL_PER_MIN),
+    })
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    const PEPPER: &str = "pepper-SECRET-0123456789abcdef0123456789";
+
+    #[test]
+    fn the_fake_provider_is_refused_outside_dev_and_the_global_cap_parses() {
+        let base = [
+            ("ARENA_OTP_PEPPER", PEPPER),
+            ("ARENA_WEB_ORIGINS", "https://start.arena360.cloud"),
+        ];
+        let with = |extra: &'static [(&'static str, &'static str)]| {
+            let all: &'static [(&'static str, &'static str)] =
+                Box::leak([&base[..], extra].concat().into());
+            auth_from_env(false, &env_of(all))
+        };
+        let e = with(&[("ARENA_SMS_PROVIDER", "fake")]).unwrap_err();
+        assert!(e.contains("only for --dev"), "{e}");
+        assert_eq!(
+            auth_from_env(true, &env_of(&[]))
+                .unwrap()
+                .sms_global_per_min,
+            DEV_SMS_GLOBAL_PER_MIN
+        );
+        let dev = auth_from_env(true, &env_of(&[("ARENA_SMS_GLOBAL_PER_MIN", "7")])).unwrap();
+        assert_eq!(dev.sms_global_per_min, 7);
+        let e = with(&[
+            ("ARENA_SMS_PROVIDER", "gupshup"),
+            ("ARENA_SMS_GLOBAL_PER_MIN", "0"),
+        ])
+        .unwrap_err();
+        assert!(e.contains("ARENA_SMS_GLOBAL_PER_MIN"), "{e}");
+    }
+
+    #[test]
+    fn dev_needs_nothing_and_forces_the_fake() {
+        let cfg = auth_from_env(true, &env_of(&[("ARENA_SMS_PROVIDER", "gupshup")])).unwrap();
+        assert_eq!(cfg, AuthConfig::dev());
+        assert_eq!(cfg.web_origins, vec!["http://localhost:5179"]);
+        let cfg = auth_from_env(
+            true,
+            &env_of(&[(
+                "ARENA_WEB_ORIGINS",
+                "http://localhost:5179, http://127.0.0.1:5179",
+            )]),
+        )
+        .unwrap();
+        assert_eq!(cfg.web_origins.len(), 2);
+    }
+
+    #[test]
+    fn production_requires_each_variable_naming_it() {
+        for (pairs, needle) in [
+            (&[][..], "ARENA_OTP_PEPPER"),
+            (&[("ARENA_OTP_PEPPER", "short")][..], "at least 32"),
+            (&[("ARENA_OTP_PEPPER", PEPPER)][..], "ARENA_WEB_ORIGINS"),
+            (
+                &[
+                    ("ARENA_OTP_PEPPER", PEPPER),
+                    ("ARENA_WEB_ORIGINS", "https://start.arena360.cloud/path"),
+                ][..],
+                "no path",
+            ),
+            (
+                &[
+                    ("ARENA_OTP_PEPPER", PEPPER),
+                    ("ARENA_WEB_ORIGINS", "https://start.arena360.cloud"),
+                ][..],
+                "ARENA_SMS_PROVIDER",
+            ),
+            (
+                &[
+                    ("ARENA_OTP_PEPPER", PEPPER),
+                    ("ARENA_WEB_ORIGINS", "https://start.arena360.cloud"),
+                    ("ARENA_SMS_PROVIDER", "gupshup"),
+                ][..],
+                "ARENA_GUPSHUP_ENDPOINT",
+            ),
+        ] {
+            let pairs: &'static [(&'static str, &'static str)] = Box::leak(pairs.to_vec().into());
+            let e = auth_from_env(false, &env_of(pairs)).unwrap_err();
+            assert!(e.contains(needle), "{e}");
+            assert!(!e.contains(PEPPER), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_full_gupshup_config_parses_and_debug_hides_secrets() {
+        let cfg = auth_from_env(
+            false,
+            &env_of(&[
+                ("ARENA_OTP_PEPPER", PEPPER),
+                (
+                    "ARENA_WEB_ORIGINS",
+                    "https://start.arena360.cloud,https://start.staging.arena360.cloud",
+                ),
+                ("ARENA_SMS_PROVIDER", "gupshup"),
+                (
+                    "ARENA_GUPSHUP_ENDPOINT",
+                    "https://enterprise.smsgupshup.com/GatewayAPI/rest",
+                ),
+                ("ARENA_GUPSHUP_USERID", "2000000000"),
+                ("ARENA_GUPSHUP_PASSWORD", "gs-SECRET-pass"),
+                ("ARENA_GUPSHUP_SENDER", "ARENA"),
+                ("ARENA_GUPSHUP_DLT_TEMPLATE_ID", "1007000000000000000"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(cfg.web_origins.len(), 2);
+        assert!(matches!(cfg.sms, SmsProviderConfig::Gupshup(_)));
+        assert_eq!(cfg.sms_global_per_min, DEFAULT_SMS_GLOBAL_PER_MIN);
+        let d = format!("{cfg:?}");
+        assert!(!d.contains(PEPPER) && !d.contains("gs-SECRET-pass"), "{d}");
     }
 }

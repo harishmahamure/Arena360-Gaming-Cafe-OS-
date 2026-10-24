@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { HubSnapshot, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
 
 // Staff sign-in: the gate, the header, the generic failure, the lockout countdown, the inline
 // refusal on Settings and sign-out. The Hub's loopback API is stubbed with `page.route`.
@@ -15,7 +16,7 @@ const SNAPSHOT: HubSnapshot = {
   connectivity: { state: "online", checked_at: null },
 };
 const CORS = {
-  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-origin": ORIGIN,
   "access-control-allow-methods": "GET, POST",
   "access-control-allow-headers": "authorization, content-type",
 };

@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import type { HubSnapshot } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
 
 // The Hub app shell: landmarks, rail and bottom bar, placeholder screens, the More sheet,
 // Ctrl+1–4 and the unreachable-Hub state. The snapshot is served with `page.route`, and a
@@ -11,7 +12,7 @@ const SNAPSHOT_URL = "http://127.0.0.1:7409/ui/snapshot";
 const ME_URL = "http://127.0.0.1:7409/ui/me";
 const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
 const CORS = {
-  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-origin": ORIGIN,
   "access-control-allow-methods": "GET, POST",
   "access-control-allow-headers": "authorization, content-type",
 };
@@ -110,7 +111,9 @@ async function serve(page: Page, initial: Serve) {
     return route.fulfill({
       status: raw.status,
       contentType: "application/json",
-      headers: { "access-control-allow-origin": "http://localhost:5173" },
+      headers: {
+        "access-control-allow-origin": ORIGIN,
+      },
       body: raw.body,
     });
   });

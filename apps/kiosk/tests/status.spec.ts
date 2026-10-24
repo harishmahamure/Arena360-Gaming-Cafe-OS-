@@ -150,7 +150,7 @@ test("the app reports its route and restores it after a restart", async ({ page 
   // Never to another origin.
   await emit(page, names.events.restoreState, { route: "//evil.example/" });
   await page.waitForTimeout(200);
-  await expect(page).toHaveURL(/localhost:5174\/\?screen=games$/);
+  await expect(page).toHaveURL(/127\.0\.0\.1:\d+\/\?screen=games$/);
 });
 
 test("a restore that arrived before the page listened is applied on load", async ({ page }) => {

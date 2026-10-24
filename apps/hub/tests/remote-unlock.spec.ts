@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AuditDetail, AuditItem, HubSnapshot, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
 
 // Story 1.20 on the Hub: the floor's "Remote unlock" (an online paired kiosk, the kiosk's ack
 // over `/ui/events` within 5 s, "Failed — retry" otherwise and at once for an offline one, a
@@ -10,7 +11,7 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 
 const HUB = "http://127.0.0.1:7409";
 const CORS = {
-  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-origin": ORIGIN,
   "access-control-allow-methods": "GET, POST",
   "access-control-allow-headers": "authorization, content-type, x-arena-elevation",
 };

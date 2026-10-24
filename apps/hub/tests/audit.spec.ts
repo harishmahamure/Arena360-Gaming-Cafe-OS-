@@ -8,6 +8,7 @@ import type {
   SessionStaff,
 } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
 
 // System → Audit: filters, newest-first pages with "Load more" and scroll-to-load, the
 // details panel (before/after, "Changed" markers, "Created", hidden secrets, the approver),
@@ -17,7 +18,7 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 
 const HUB = "http://127.0.0.1:7409";
 const CORS = {
-  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-origin": ORIGIN,
   "access-control-allow-methods": "GET, POST",
   "access-control-allow-headers": "authorization, content-type, x-arena-elevation",
 };

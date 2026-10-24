@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { ConnectivityState, HubSnapshot } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
 
 // The header's `chip-offline` (Story 1.22): the Hub's WAN probe says which link is down, in the
 // snapshot and live as `event: connectivity.changed` on `/ui/events`. The chip names the link
@@ -10,7 +11,7 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 
 const HUB = "http://127.0.0.1:7409";
 const CORS = {
-  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-origin": ORIGIN,
   "access-control-allow-methods": "GET, POST",
   "access-control-allow-headers": "authorization, content-type",
 };

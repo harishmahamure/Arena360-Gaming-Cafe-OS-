@@ -3,6 +3,7 @@ import { expect, test, type BrowserContext, type Page, type Route } from "@playw
 import type { HubSnapshot, SessionStaff, SnapshotLocale } from "@arena/ui/generated";
 import currencies from "../../../packages/ui/src/generated/currencies.json" with { type: "json" };
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
 
 // Settings → Branch: the locale form, the live preview, save in sequence with base_rev, inline
 // field errors, STALE, the deferred tz note, live updates through
@@ -12,7 +13,7 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 
 const HUB = "http://127.0.0.1:7409";
 const CORS = {
-  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-origin": ORIGIN,
   "access-control-allow-methods": "GET, POST",
   "access-control-allow-headers": "authorization, content-type",
 };

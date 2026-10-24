@@ -5,6 +5,11 @@ const CI = Boolean(
   (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.CI,
 );
 
+const port = Number(
+  (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env
+    .ARENA_PW_PORT ?? 5181,
+);
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
@@ -12,7 +17,7 @@ export default defineConfig({
   retries: 0,
   reporter: CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: "http://localhost:5181",
+    baseURL: `http://127.0.0.1:${port}`,
     viewport: { width: 1280, height: 900 },
   },
   projects: [
@@ -26,7 +31,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "pnpm build && pnpm exec vite preview",
-    url: "http://localhost:5181",
+    url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
     timeout: 180_000,
   },

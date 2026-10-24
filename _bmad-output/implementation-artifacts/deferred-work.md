@@ -87,3 +87,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-7-resumable-setup-wizard-and-step-1-café-and-first-branch.md`
   summary: Guard edits to a branch's country, currency and timezone once rates, products or invoices exist, or define how existing data migrates.
   evidence: Step 1 edits rewrite these fields unconditionally; later stories denominate data in the branch currency.
+
+- source_spec: none (observed 2026-10-25 under load average ~19)
+  summary: Hub Playwright phone tests `devices-display.spec.ts` "a Counter's toggle asks for a manager's PIN…" and `shell.spec.ts` "More sheet: … traps focus …" flake under heavy CPU load (2/6 failures on master).
+  evidence: They pass when the machine is less loaded. The failures are timing-sensitive assertions (`toContainText`, `toBeFocused`) in Epic 1 code.

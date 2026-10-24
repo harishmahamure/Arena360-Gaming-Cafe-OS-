@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { HubSnapshot, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
 
 // Inline manager PIN elevation on Settings → Branch: a Counter edits, Save opens the PIN in
 // place, `/ui/elevate` answers a ticket and every `settings.set` carries it. Keyboard only,
@@ -11,7 +12,7 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 
 const HUB = "http://127.0.0.1:7409";
 const CORS = {
-  "access-control-allow-origin": "http://localhost:5173",
+  "access-control-allow-origin": ORIGIN,
   "access-control-allow-methods": "GET, POST",
   "access-control-allow-headers": "authorization, content-type",
 };

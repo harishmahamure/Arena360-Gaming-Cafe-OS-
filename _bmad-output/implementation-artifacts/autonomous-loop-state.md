@@ -36,6 +36,11 @@ Read this file after a context flush (`/clear`). It's the single entry point for
   - **Hub migration numbers reserved:** 2.26 = 0011, 2.18 = 0012, then 2.20 = 0013, 2.21 = 0014, 2.23 = 0015, 2.24 = 0016, 2.25 = 0017, 2.27 = 0018 (if needed).
   - **Control migrations:** 2.6 = 0004, 2.7 = 0005, then sequential.
 
+- **(2026-10-25) Playwright ports per worktree:**
+  - Each app's preview binds `127.0.0.1` and honours `ARENA_PW_PORT`; the Hub tests take their origin from `apps/hub/tests/origin.ts`. This came from a chore commit.
+  - Every verification run in a worktree sets a unique `ARENA_PW_PORT` (for example 54xx for Hub, 55xx for kiosk, 56xx for onboarding).
+  - **Why:** parallel worktrees shared the fixed ports. One preview on `[::1]` and another on `127.0.0.1` both started, and `localhost` hit the wrong build, causing false failures.
+
 ## Where things stand
 
 - **Story order and status:** `_bmad-output/implementation-artifacts/sprint-status.yaml`. A story at `review` is committed; `in-progress` is mid-pipeline.

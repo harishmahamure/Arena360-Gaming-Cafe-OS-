@@ -1,15 +1,17 @@
 //! Command-line arguments and the data directory.
 
 use std::ffi::OsString;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use arena_api::DEFAULT_HEALTH_PORT;
 use arena_api::lan::{DEFAULT_LAN_PORT, DEFAULT_WEB_PORT};
+use arena_tasks::{CloudHost, DEFAULT_CLOUD_HOST, default_internet_endpoints};
 
 #[cfg(not(feature = "dev-fixtures"))]
-pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--help] [--version]";
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--help] [--version]";
 #[cfg(feature = "dev-fixtures")]
-pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--help] [--version]
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--help] [--version]
        arena-hub dev seed [--data-dir <path>] [--kiosk-allow <path_glob>]... [--kiosk-process-mode <enforce|report>]
        arena-hub dev revoke-device <device_id> [--health-port <port>]";
 pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
@@ -23,6 +25,12 @@ pub struct Config {
     pub lan_port: u16,
     /// The sniffed TLS / plain HTTP port (default 7401).
     pub web_port: u16,
+    /// The cloud host the connectivity probe checks (`--cloud-host`, default
+    /// `api.arena360.in:443`, a placeholder until the cloud epic).
+    pub cloud_host: CloudHost,
+    /// The internet endpoints the probe connects to (`--probe-internet`, default `1.1.1.1:443`
+    /// and `8.8.8.8:443`).
+    pub probe_internet: Vec<SocketAddr>,
 }
 
 impl Config {
@@ -191,6 +199,8 @@ fn parse_flags(
     let mut health_port = DEFAULT_HEALTH_PORT;
     let mut lan_port = DEFAULT_LAN_PORT;
     let mut web_port = DEFAULT_WEB_PORT;
+    let mut cloud_host = CloudHost::parse(DEFAULT_CLOUD_HOST).expect("valid default cloud host");
+    let mut probe_internet = default_internet_endpoints();
     let mut args = args;
     while let Some(arg) = args.next() {
         let arg = arg
@@ -217,6 +227,13 @@ fn parse_flags(
             "--health-port" if ports => health_port = port(&flag, &value()?)?,
             "--lan-port" if ports => lan_port = port(&flag, &value()?)?,
             "--web-port" if ports => web_port = port(&flag, &value()?)?,
+            "--cloud-host" if ports => {
+                cloud_host = CloudHost::parse(&value()?.to_string_lossy())?;
+            }
+            "--probe-internet" if ports => {
+                probe_internet =
+                    arena_tasks::parse_internet_endpoints(&value()?.to_string_lossy())?;
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -239,6 +256,8 @@ fn parse_flags(
         health_port,
         lan_port,
         web_port,
+        cloud_host,
+        probe_internet,
     }))
 }
 
@@ -390,6 +409,8 @@ mod tests {
                     health_port: DEFAULT_HEALTH_PORT,
                     lan_port: DEFAULT_LAN_PORT,
                     web_port: DEFAULT_WEB_PORT,
+                    cloud_host: CloudHost::parse(DEFAULT_CLOUD_HOST).unwrap(),
+                    probe_internet: default_internet_endpoints(),
                 },
                 SeedOptions::default()
             )
@@ -471,6 +492,54 @@ mod tests {
         assert!(parse(args(&["dev", "wipe"]), &env, false).is_err());
         assert!(parse(args(&["dev", "seed", "--health-port", "1"]), &env, false).is_err());
         assert!(parse(args(&["--data-dir", "/d", "dev", "seed"]), &env, false).is_err());
+    }
+
+    #[test]
+    fn probe_flags_default_and_override() {
+        let env = env_of(&[("HOME", "/h")]);
+        let c = run(&[], &env, false).unwrap();
+        assert_eq!(c.cloud_host.host, "api.arena360.in");
+        assert_eq!(c.cloud_host.port, 443);
+        assert_eq!(
+            c.probe_internet,
+            vec![
+                "1.1.1.1:443".parse::<SocketAddr>().unwrap(),
+                "8.8.8.8:443".parse().unwrap()
+            ]
+        );
+        let c = run(
+            &[
+                "--cloud-host",
+                "cloud.example:8443",
+                "--probe-internet=9.9.9.9:443,[2606:4700::1111]:443",
+            ],
+            &env,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (c.cloud_host.host.as_str(), c.cloud_host.port),
+            ("cloud.example", 8443)
+        );
+        assert_eq!(
+            c.probe_internet,
+            vec![
+                "9.9.9.9:443".parse::<SocketAddr>().unwrap(),
+                "[2606:4700::1111]:443".parse().unwrap()
+            ]
+        );
+        for bad in [
+            &["--cloud-host", "cloud.example"][..],
+            &["--cloud-host", "cloud.example:0"],
+            &["--cloud-host"],
+            &["--probe-internet", "1.1.1.1"],
+            &["--probe-internet", ","],
+            &["--probe-internet"],
+        ] {
+            assert!(run(bad, &env, false).is_err(), "{bad:?}");
+        }
+        assert!(USAGE.contains("--cloud-host <host:port>"));
+        assert!(USAGE.contains("--probe-internet"));
     }
 
     #[test]

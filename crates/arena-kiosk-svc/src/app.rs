@@ -349,6 +349,28 @@ async fn serve(
                     let _ = out.send(reply).await;
                 });
             }
+            #[cfg(feature = "dev-fixtures")]
+            Ok(IpcMsg::Request { rid, kind, body })
+                if kind.starts_with(crate::dev::REQUEST_PREFIX) =>
+            {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = match crate::dev::handle(&ctx, &kind, body).await {
+                        Ok(body) => IpcMsg::Reply {
+                            rid,
+                            body,
+                            error: None,
+                        },
+                        Err(e) => IpcMsg::Reply {
+                            rid,
+                            body: Value::Null,
+                            error: Some(e),
+                        },
+                    };
+                    let _ = out.send(reply).await;
+                });
+            }
             Ok(IpcMsg::Request { rid, kind, body }) => {
                 let reply = match handle_request(&ctx, &kind, body) {
                     Ok(body) => IpcMsg::Reply {

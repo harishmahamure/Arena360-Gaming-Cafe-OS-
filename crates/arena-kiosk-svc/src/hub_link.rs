@@ -63,6 +63,16 @@ pub(crate) async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
         if *stop.borrow() {
             return;
         }
+        if *ctx.link_hold.borrow() {
+            // Held down (dev fixtures): unreachable until released, then connect at once.
+            ctx.set_hub_state(KioskHubState::Reconnecting);
+            let mut hold = ctx.link_hold.subscribe();
+            tokio::select! {
+                () = async { let _ = hold.wait_for(|held| !*held).await; } => {}
+                _ = stop.changed() => return,
+            }
+            continue;
+        }
         let ended = attempt(&ctx, &mut backoff, &mut stop).await;
         let wait = match ended {
             Ended::Shutdown => return,
@@ -190,6 +200,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
     }
     // Set once when a replay stops; new events do not push it back.
     let mut retry_at: Option<tokio::time::Instant> = None;
+    let mut hold = ctx.link_hold.subscribe();
     let mut skew_warned = false;
     loop {
         if retry_at.is_none() && replay(ctx, client, &mut skew_warned).await == ReplayStep::Stop {
@@ -209,6 +220,10 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                 };
             }
             () = ctx.queued.notified() => {}
+            () = async { let _ = hold.wait_for(|held| *held).await; } => {
+                tracing::info!("the hub link is held down; closing it");
+                return Ended::Closed;
+            }
             () = async {
                 match retry_at {
                     Some(at) => tokio::time::sleep_until(at).await,

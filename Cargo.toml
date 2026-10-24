@@ -40,6 +40,7 @@ sha2 = "=0.10.9"
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "=1.0.9"
 rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
 argon2 = "=0.6.0"
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }

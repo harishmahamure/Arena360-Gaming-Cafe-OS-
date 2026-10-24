@@ -1,8 +1,13 @@
 // The Hub's push stream (`GET /ui/events?token=`, server-sent events). Every open view
 // subscribes while someone is signed in; the Hub pushes, the UI never polls.
 
-import type { AdminUnlockAckEvent, SettingsChangedEvent, UnlockOk } from "@arena/ui/generated";
-import { isSnapshotLocale, normalizeUi } from "./snapshot";
+import type {
+  AdminUnlockAckEvent,
+  Connectivity,
+  SettingsChangedEvent,
+  UnlockOk,
+} from "@arena/ui/generated";
+import { isConnectivity, isSnapshotLocale, normalizeUi } from "./snapshot";
 
 export const EVENTS_URL = "http://127.0.0.1:7409/ui/events";
 /** Waits before reopening a stream the Hub closed or refused, in seconds (then 15 s each). */
@@ -17,6 +22,8 @@ export type EventHandlers = {
   onSessionUnlocked?: (event: UnlockOk) => void;
   /** `devices.changed`: a device came online or went offline; reload the snapshot. */
   onDevicesChanged?: () => void;
+  /** `connectivity.changed`: the WAN probe found a link down or back up. */
+  onConnectivityChanged?: (event: Connectivity) => void;
   /** `device.admin_unlock_ack`: a kiosk granted a remote unlock. */
   onAdminUnlockAck?: (event: AdminUnlockAckEvent) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
@@ -84,6 +91,14 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
         }
       } catch {
         // A malformed ack is ignored: the floor times out and offers a retry.
+      }
+    });
+    es.addEventListener("connectivity.changed", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        if (isConnectivity(data)) handlers.onConnectivityChanged?.(data);
+      } catch {
+        // A malformed event is ignored: the next snapshot carries the state.
       }
     });
     es.addEventListener("session.locked", () => handlers.onSessionLocked?.());

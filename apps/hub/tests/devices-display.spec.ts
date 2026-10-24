@@ -82,6 +82,7 @@ function snapshot(hub: Hub): HubSnapshot {
       pending: null,
     },
     ui: ui(hub),
+    connectivity: { state: "online", checked_at: null },
   };
 }
 

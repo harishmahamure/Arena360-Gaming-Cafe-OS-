@@ -33,6 +33,17 @@ pub async fn run_until(
     launcher: Arc<dyn AppLauncher>,
     shutdown: impl Future<Output = ()>,
 ) -> std::io::Result<()> {
+    run_until_with(data, launcher, |_| {}, shutdown).await
+}
+
+/// [`run_until`], with `setup` called on the started [`Runtime`] before it runs (the dev
+/// fixtures add their fake process enforcement there).
+pub async fn run_until_with(
+    data: DataDir,
+    launcher: Arc<dyn AppLauncher>,
+    setup: impl FnOnce(&mut Runtime),
+    shutdown: impl Future<Output = ()>,
+) -> std::io::Result<()> {
     std::fs::create_dir_all(data.root())?;
     // The token, its entropy and the config live here: SYSTEM and Administrators only, or the
     // service does not start.
@@ -49,7 +60,6 @@ pub async fn run_until(
     let ipc = crate::ipc::UnixIpcServer::bind(&data.socket())?;
     #[cfg(windows)]
     let enforce = crate::procs::EnforceOptions::for_this_install(&data.config());
-    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut runtime = Runtime::start(
         data,
         secrets,
@@ -66,6 +76,7 @@ pub async fn run_until(
         )),
         enforce,
     );
+    setup(&mut runtime);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "kiosk service started");
     shutdown.await;
     tracing::info!("kiosk service stopping");

@@ -1,0 +1,25 @@
+[package]
+name = "arena-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only end-to-end driver for the Epic 1 flows (the WAN-down job, Story 1.22)."
+
+[[bin]]
+name = "arena-e2e"
+path = "src/main.rs"
+
+[dependencies]
+arena-proto.workspace = true
+arena-store.workspace = true
+arena-kiosk-core.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
+ulid.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -12,6 +12,7 @@ const SNAPSHOT: HubSnapshot = {
   devices: [],
   locale: null,
   ui: { idle_lock_minutes: 5, hc: false },
+  connectivity: { state: "online", checked_at: null },
 };
 const CORS = {
   "access-control-allow-origin": "http://localhost:5173",

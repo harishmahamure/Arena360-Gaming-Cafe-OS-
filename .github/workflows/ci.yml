@@ -204,10 +204,46 @@ jobs:
             apps/kiosk/test-results/
           retention-days: 14
 
+  # Story 1.22: every Epic 1 flow inside a network namespace with no route out, under strace
+  # (only the connectivity probe may connect outside loopback), compared with the same run on
+  # the network; then a 3-minute WAN-down soak. Windows-only enforcement (the real lockdown
+  # and process killing) is covered by the Story 1.19 escape suite, not here.
+  wan-down:
+    name: wan-down (linux namespace)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wan-down
+      - name: Install strace
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y strace
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/hub exec playwright install --with-deps chromium
+      - run: scripts/wan-down/run.sh --soak-hours 0.05
+      - name: Upload the WAN-down logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wan-down-logs
+          path: |
+            target/wan-down/
+            apps/hub/test-results/
+          retention-days: 14
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [rust, checks, build, a11y, installer, kiosk-installer]
+    needs: [rust, checks, build, a11y, installer, kiosk-installer, wan-down]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed

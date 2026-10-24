@@ -78,6 +78,10 @@ pub struct Ctx {
     pub launcher: Arc<dyn AppLauncher>,
     /// The admin exit: throttle, running exit, cached verifier, live Hub link.
     pub admin: crate::admin_exit::AdminState,
+    /// While `true` the Hub link stays down (closing a live connection) as if the Hub were
+    /// unreachable. Only the dev-fixtures `dev.hub_link` request sets it; release builds
+    /// never do.
+    pub link_hold: watch::Sender<bool>,
 }
 
 impl Ctx {
@@ -174,6 +178,7 @@ impl Runtime {
                 data_verifier,
             )),
             launcher: Arc::clone(&launcher),
+            link_hold: watch::channel(false).0,
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![

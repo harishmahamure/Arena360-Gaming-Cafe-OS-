@@ -38,12 +38,14 @@ const SEEDED: HubSnapshot = {
     pending: null,
   },
   ui: { idle_lock_minutes: 5, hc: false },
+  connectivity: { state: "online", checked_at: null },
 };
 const NOT_SEEDED: HubSnapshot = {
   branch: null,
   devices: [],
   locale: null,
   ui: { idle_lock_minutes: 5, hc: false },
+  connectivity: { state: "online", checked_at: null },
 };
 
 const RAIL = [

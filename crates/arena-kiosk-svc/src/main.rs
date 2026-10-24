@@ -34,7 +34,11 @@ fn main() -> ExitCode {
             println!("arena-kiosk-svc {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Command::Console { data_dir: d, app } => console(data_dir(d), app),
+        Command::Console {
+            data_dir: d,
+            app,
+            dev_fake_procs,
+        } => console(data_dir(d), app, dev_fake_procs),
         Command::ServiceInstall | Command::ServiceUninstall | Command::ServiceRun => service(cmd),
         Command::Lockdown {
             action,
@@ -51,13 +55,20 @@ fn main() -> ExitCode {
     }
 }
 
-fn console(data: DataDir, app: Option<std::path::PathBuf>) -> ExitCode {
+fn console(data: DataDir, app: Option<std::path::PathBuf>, dev_fake_procs: bool) -> ExitCode {
+    #[cfg(not(feature = "dev-fixtures"))]
+    if dev_fake_procs {
+        eprintln!("arena-kiosk-svc: --dev-fake-procs needs a dev-fixtures build");
+        return ExitCode::from(EXIT_USAGE);
+    }
     if let Err(e) = arena_kiosk_svc::host::init_logs(&data) {
         eprintln!("arena-kiosk-svc: cannot open logs: {e}");
         return ExitCode::from(EXIT_FAILURE);
     }
     let launcher: Arc<dyn AppLauncher> = match app {
         Some(p) => Arc::new(CommandLauncher::new(p, Vec::new())),
+        #[cfg(feature = "dev-fixtures")]
+        None if dev_fake_procs => Arc::new(arena_kiosk_svc::dev::DevLauncher),
         None => Arc::new(NoopLauncher),
     };
     let runtime = match tokio::runtime::Runtime::new() {
@@ -71,9 +82,22 @@ fn console(data: DataDir, app: Option<std::path::PathBuf>) -> ExitCode {
         "arena-kiosk-svc: console mode, data in {}",
         data.root().display()
     );
-    let result = runtime.block_on(arena_kiosk_svc::host::run_until(data, launcher, async {
-        let _ = tokio::signal::ctrl_c().await;
-    }));
+    let setup = move |_rt: &mut arena_kiosk_svc::Runtime| {
+        #[cfg(feature = "dev-fixtures")]
+        if dev_fake_procs {
+            let (api, opts) = arena_kiosk_svc::dev::fake_enforcement();
+            _rt.enforce(api, opts);
+            println!("arena-kiosk-svc: enforcing against the dev fake process table");
+        }
+    };
+    let result = runtime.block_on(arena_kiosk_svc::host::run_until_with(
+        data,
+        launcher,
+        setup,
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        },
+    ));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

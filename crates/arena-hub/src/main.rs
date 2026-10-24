@@ -1,7 +1,7 @@
 //! `arena-hub`: the branch Hub service.
 //!
 //! Start-up: parse args, init logs, open the store (exit 2 on `SCHEMA_TOO_NEW`), load or mint
-//! the instance id, load or generate the LAN TLS certificate, start the lease task, `/healthz` + `/ui/snapshot` + the staff auth routes
+//! the instance id, load or generate the LAN TLS certificate, start the lease task and the WAN connectivity probe, `/healthz` + `/ui/snapshot` + the staff auth routes
 //! and the LAN listeners (`:7400`, `:7401`), then run until Ctrl+C or SIGTERM.
 //!
 //! Logs carry ids, codes and counts only — no PII (see `logs.rs`).
@@ -24,7 +24,7 @@ use arena_core::{
 };
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
-use arena_tasks::{HousekeepingTask, LeaseTask};
+use arena_tasks::{ConnectivityTask, HousekeepingTask, LeaseTask, NetProber};
 use tokio::sync::oneshot;
 use tracing_subscriber::EnvFilter;
 
@@ -231,6 +231,17 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         tokio::spawn(HousekeepingTask::new(w, Arc::clone(&clock), status_tx.subscribe()).run())
     });
     let mut lease_job = Some(tokio::spawn(lease.run()));
+    // The WAN probe: the branch's only outbound traffic. It runs on its own task, publishes
+    // into the status and never touches the writer, so no intent waits on it.
+    let prober = NetProber::new(cfg.probe_internet.clone(), cfg.cloud_host.clone())
+        .map_err(|e| internal(format!("connectivity probe: {e}")))?;
+    let probe_job =
+        tokio::spawn(ConnectivityTask::new(prober, Arc::clone(&clock), status_tx.clone()).run());
+    tracing::info!(
+        cloud_host = %format!("{}:{}", cfg.cloud_host.host, cfg.cloud_host.port),
+        internet_endpoints = cfg.probe_internet.len(),
+        "connectivity probe started"
+    );
 
     let lan_hub = Arc::new(
         LanHub::new(
@@ -260,6 +271,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             snapshots,
             Arc::clone(&clock),
             lan_hub.presence(),
+            Some(status_rx.clone()),
         ))
         .merge(arena_api::ui_auth_router(ui_auth));
     #[cfg(feature = "dev-fixtures")]
@@ -334,6 +346,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         job.abort();
         let _ = job.await;
     }
+    probe_job.abort();
+    let _ = probe_job.await;
     // Close every LAN session before the writer goes away.
     let _ = lan_stop_tx.send(());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), lan).await;

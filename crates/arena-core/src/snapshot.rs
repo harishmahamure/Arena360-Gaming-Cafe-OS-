@@ -24,6 +24,9 @@ pub fn build_snapshot(
     HubSnapshot {
         locale,
         ui,
+        // The probe's state is the Hub status's, not the database's: the snapshot handler
+        // fills it in.
+        connectivity: arena_proto::Connectivity::default(),
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -264,6 +267,7 @@ mod tests {
                     pending: None,
                 }),
                 ui: SnapshotUi::default(),
+                connectivity: arena_proto::Connectivity::default(),
             }
         );
     }
@@ -281,6 +285,7 @@ mod tests {
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),
+                connectivity: arena_proto::Connectivity::default(),
             }
         );
     }

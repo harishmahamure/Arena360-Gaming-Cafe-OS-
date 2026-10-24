@@ -26,7 +26,7 @@
   } from "../lib/auth";
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
-  import type { UnlockOk } from "@arena/ui/generated";
+  import type { Connectivity, ConnectivityState, UnlockOk } from "@arena/ui/generated";
   import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
   import type { LayoutData } from "./$types";
 
@@ -66,6 +66,16 @@
   let lockedHasPin = $state(true);
   /** Announced after an unlock that switched the member. */
   let announcement = $state("");
+  /** Which WAN link is down (`online`: no chip), from the snapshot and `connectivity.changed`. */
+  let link: ConnectivityState = $state("online");
+  /** When the Hub's probe found `link` (UTC ms; `null`, before any probe, is the oldest). */
+  let linkCheckedAt: number | null = null;
+  /** The link state last announced (so each change is announced once). */
+  let announcedLink: ConnectivityState = "online";
+  const LINK_LABELS = {
+    internet_offline: "hub.connectivity.internet_offline",
+    cloud_unreachable: "hub.connectivity.cloud_unreachable",
+  } as const;
   /** The `/ui/lock` call in flight, which an unlock waits for. */
   let lockAttempt: Promise<LockResult> | null = null;
   /** Bumped on every unlock, so a stale lock retry loop stops. */
@@ -142,16 +152,49 @@
   $effect(() => {
     const locale = data.hub.ok ? (data.hub.snapshot.locale ?? null) : null;
     const ui = data.hub.ok ? data.hub.snapshot.ui : null;
+    const connectivity = data.hub.ok ? data.hub.snapshot.connectivity : null;
     if (data.hub.ok)
       untrack(() => {
         setLocale(locale);
         setUiSettings(ui);
+        if (connectivity) takeLink(connectivity);
       });
   });
+
+  /**
+   * Takes a probe answer unless an older one: a snapshot that was in flight while a newer
+   * `connectivity.changed` arrived must not put the old state back.
+   */
+  function takeLink(c: Connectivity) {
+    const at = c.checked_at ?? -Infinity;
+    if (at < (linkCheckedAt ?? -Infinity)) return;
+    linkCheckedAt = c.checked_at;
+    link = c.state;
+  }
 
   // While someone is signed in, this view listens to the Hub's push stream, keyed on the token
   // (signing in again, even as the same member, reopens it with the new one).
   const streamToken = $derived(staff ? getToken() : null);
+
+  // The chip and its announcements need the live push stream (someone signed in); without it
+  // the state could be stale indefinitely.
+  const shownLink: ConnectivityState = $derived(streamToken ? link : "online");
+
+  // Each change of the WAN link is announced once through the polite region.
+  $effect(() => {
+    const now = shownLink;
+    const live = Boolean(streamToken);
+    untrack(() => {
+      if (!live) {
+        announcedLink = "online";
+        return;
+      }
+      if (now === announcedLink) return;
+      announcedLink = now;
+      announcement = now === "online" ? t("hub.connectivity.restored") : t(LINK_LABELS[now]);
+    });
+  });
+
   $effect(() => {
     const token = streamToken;
     if (!token) return;
@@ -167,6 +210,7 @@
           if (locked && !unlocking) void finishUnlock(e);
         },
         onDevicesChanged: () => void refresh(),
+        onConnectivityChanged: (e) => takeLink(e),
         onAdminUnlockAck: (e) => noteAck(e.exit_id),
         onResync: () => void refresh(),
         // Refused: find out whether the session is still there (sign-in otherwise).
@@ -401,6 +445,16 @@
           </p>
           <Button label="hub.header.sign_out" variant="secondary" onclick={onSignOut} />
         {/if}
+        {#if shownLink !== "online"}
+          <p
+            class="chip-offline type-hub-label"
+            data-testid="hub-chip-offline"
+            data-link={shownLink}
+          >
+            <span class="chip-glyph" aria-hidden="true">⚠</span>
+            {t(LINK_LABELS[shownLink])}
+          </p>
+        {/if}
         <Clock />
       </div>
     </header>
@@ -521,6 +575,19 @@
     align-items: center;
     gap: var(--space-4);
     min-width: 0;
+  }
+
+  /* The WAN link that is down: tinted, with a glyph and words (never colour alone). */
+  .chip-offline {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin: 0;
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-full);
+    background-color: var(--chip-offline-background);
+    color: var(--chip-offline-foreground);
+    white-space: nowrap;
   }
 
   .staff {

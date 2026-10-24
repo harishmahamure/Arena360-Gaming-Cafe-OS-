@@ -8,6 +8,8 @@ const CI = Boolean(
 
 export default defineConfig({
   testDir: "./tests",
+  // The WAN-down smoke runs against a real Hub (`playwright.wan-down.config.ts`).
+  testIgnore: "**/wan-down/**",
   fullyParallel: true,
   forbidOnly: CI,
   retries: 0,

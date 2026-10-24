@@ -26,6 +26,8 @@ export type { BranchSeedDefaults } from "./BranchSeedDefaults";
 export type { ChangeOpKind } from "./ChangeOpKind";
 export type { ChangeSummary } from "./ChangeSummary";
 export type { ClientClass } from "./ClientClass";
+export type { Connectivity } from "./Connectivity";
+export type { ConnectivityState } from "./ConnectivityState";
 export type { DeviceAdminExit } from "./DeviceAdminExit";
 export type { DeviceAdminRelock } from "./DeviceAdminRelock";
 export type { DeviceAdminUnlock } from "./DeviceAdminUnlock";

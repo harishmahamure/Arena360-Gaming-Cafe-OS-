@@ -41,3 +41,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-21-high-contrast-theme-as-a-per-device-branch-setting.md`
   summary: `arena-hub-ui` test `sidecar::tests::a_sidecar_that_exits_stops_the_wait_early` fails locally (it took over 5 s) in code this story doesn't touch.
   evidence: It fails 3 out of 3 runs on this Mac (the stub sidecar takes about 6 s to be seen exiting). It is environmental or a timing budget, and predates story 1.21.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of.md`
+  summary: The connectivity probe's default cloud host `api.arena360.in:443` is a placeholder, so every Hub with working internet shows "Cloud unreachable" until a real cloud `/healthz` exists.
+  evidence: The frozen intent sets this default "as a placeholder until the cloud epic". Story 2-1 (cloud in India behind Cloudflare) should provide the real host, or the check should be disabled while no cloud is configured. The user decides.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of.md`
+  summary: Hub Playwright phone tests are flaky under full-suite load. These failed once and passed 6 out of 6 alone: `devices-display.spec.ts:292` (Counter PIN toggle, from 1.21) and `shell.spec.ts:382` (More sheet); earlier, `auth.spec.ts:214` (locked sign-in).
+  evidence: Each failed only during a full `test:shell` run on a loaded machine and passed on every isolated rerun. This points to timing-sensitive waits, worth hardening before CI sees them.

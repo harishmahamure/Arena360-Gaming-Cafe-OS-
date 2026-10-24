@@ -270,3 +270,16 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - Fixes: the kiosk exits for a watchdog relaunch when the window can't be built; the theme is re-read just before the build (no eval before load); the real init script is in committed fixtures checked byte for byte; a config test for the `main` window; the kiosk layout no longer lets a stale `currentTheme()` reply overwrite a newer event; focus returns after cancelling the PIN or a refused save; a load sequence guard; a test renamed.
   - Deferred: the rev guard after a Hub database restore; the `arena-hub-ui` sidecar timing test failing locally (predates this story).
   - Not verified locally: Windows clippy (the cc builds for sqlite and ring need MSVC headers; CI covers it); gallery `test:a11y` (port 5181 held by a running gallery dev server; the diff doesn't touch the gallery).
+
+## Story 1.22: the branch runs with the WAN down
+
+- **Spec approval:** self-approved. Spec: `spec-1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of.md`.
+- **Token gate:** about 1,700 tokens. **Kept the full spec** (recommended): the probe and chip are what the namespace job allows through and checks, so splitting would leave a story that proves nothing.
+- **Probe:** a hand-written HTTP/1.1 `GET /healthz` over tokio-rustls, with one new pinned `webpki-roots` (no HTTP client crate). The state starts `online` until the first probe.
+- **UI:** the chip sits in the main header's `.header-end`, and announcements reuse the existing polite region.
+- **e2e:** a new `crates/arena-e2e`; the kiosk process-block and admin-exit hooks are added behind `dev-fixtures`.
+- **1.22 Chromium IPv6 probe (recommended option taken):** under strace, the traced UI smoke shows Chromium's network service making one `connect()` to `[2001:4860:4860::8888]:443`, its IPv6 reachability check: a UDP connect that fails with ENETUNREACH, so nothing is sent. No launch flag stops it. **Chose:** allow exactly that endpoint in `trace.ui.log` only, documented, rather than taking the browser out of strace. This narrowly widens the frozen rule ("only probe endpoints") for the browser. Flagged for the user.
+- **1.22 review outcome:** 11 fixes, 12 rejections and 1 deferral, plus the Chromium IPv6 exception above.
+  - Fixes: a doubled-insert check and a ledger without underflow; each new SSE stream gets the current connectivity, and the newer `checked_at` wins; the chip shows only while signed in; the probe allow-list applies to the Hub trace only; the UI smoke runs under strace; fallback tests; e2e IPC robustness and arg checks; node and pnpm checked up front; README wording.
+  - Deferred: the placeholder cloud host shows "Cloud unreachable" until Epic 2 (needs a user decision); Hub phone Playwright tests are flaky under load.
+  - Verified: `run.sh --soak-hours 0.05` passes in a privileged Debian arm64 container, not on GitHub's ubuntu x64; the 8-hour soak was not run; Windows clippy is not verified locally.

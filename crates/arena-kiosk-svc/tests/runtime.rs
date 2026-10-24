@@ -1617,3 +1617,129 @@ async fn a_cold_start_offline_sends_the_cached_high_contrast_first() {
     let mut app = kiosk.app().await;
     app.until(|m| *m == IpcMsg::Theme { hc: false }).await;
 }
+
+// ---- Story 1.22: the dev hooks a WAN-down driver uses (feature `dev-fixtures`) ----
+
+#[cfg(feature = "dev-fixtures")]
+impl App {
+    /// Sends the request `kind` and returns its reply.
+    async fn request(&mut self, kind: &str, body: serde_json::Value) -> IpcMsg {
+        let rid = format!("dev-{kind}");
+        self.send(&IpcMsg::Request {
+            rid: rid.clone(),
+            kind: kind.into(),
+            body,
+        })
+        .await;
+        self.until(|m| matches!(m, IpcMsg::Reply { rid: r, .. } if *r == rid))
+            .await
+    }
+}
+
+#[cfg(feature = "dev-fixtures")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dev_hooks_hold_the_link_spawn_a_blocked_process_relock_and_report_status() {
+    let (hub, mut kiosk, manager) = admin_setup().await;
+    let (api, opts) = arena_kiosk_svc::dev::fake_enforcement();
+    kiosk.runtime.as_mut().unwrap().enforce(api, opts);
+    let sys = arena_kiosk_svc::dev::fake_system();
+    eventually("the creation watch", || sys.subscribed()).await;
+    let mut app = kiosk.app().await;
+
+    // Status.
+    let IpcMsg::Reply { body, error, .. } = app.request("dev.status", serde_json::json!({})).await
+    else {
+        unreachable!()
+    };
+    assert_eq!(error, None);
+    assert_eq!(body["hub_state"], "connected");
+    assert!(body["verifier_version"].as_i64().is_some(), "{body}");
+    assert_eq!(body["admin_exit_until"], serde_json::Value::Null);
+
+    // A fake player process the lists do not allow is blocked and reported to the Hub.
+    let IpcMsg::Reply { body, error, .. } = app
+        .request(
+            "dev.spawn_process",
+            serde_json::json!({"path": r"C:\Users\player\Downloads\e2e-1.exe"}),
+        )
+        .await
+    else {
+        unreachable!()
+    };
+    assert_eq!(error, None);
+    let pid = u32::try_from(body["pid"].as_u64().unwrap()).unwrap();
+    eventually("the kill", || sys.killed().contains(&pid)).await;
+    eventually("the report at the hub", || {
+        hub.logged_of(&["process_blocked"]).len() == 1
+    })
+    .await;
+
+    // Held down: the kiosk goes offline and an admin exit uses the cached verifier.
+    let reply = app
+        .request("dev.hub_link", serde_json::json!({"online": false}))
+        .await;
+    assert_eq!(reply_code(&reply), None);
+    kiosk.wait_state(KioskHubState::Reconnecting).await;
+    eventually("the hub sees it offline", || !hub.online()).await;
+    let reply = app.admin_exit("2222").await;
+    assert_eq!(reply_code(&reply), None, "{reply:?}");
+    let reply = app.request("dev.relock", serde_json::json!({})).await;
+    assert_eq!(reply_code(&reply), None);
+    let IpcMsg::Reply { body, .. } = app.request("dev.status", serde_json::json!({})).await else {
+        unreachable!()
+    };
+    assert_eq!(body["admin_exit_until"], serde_json::Value::Null);
+    assert!(body["queued"].as_u64().unwrap() >= 2, "{body}");
+    assert!(hub.exits().is_empty(), "nothing reaches the hub while held");
+
+    // Released: it reconnects and replays the exit, recorded as a cached-verifier one.
+    let reply = app
+        .request("dev.hub_link", serde_json::json!({"online": true}))
+        .await;
+    assert_eq!(reply_code(&reply), None);
+    kiosk.wait_state(KioskHubState::Connected).await;
+    eventually("the exit at the hub", || {
+        hub.exits()
+            .iter()
+            .any(|r| matches!(&r["relocked_at"], arena_store::RowValue::Integer(_)))
+    })
+    .await;
+    let row = &hub.exits()[0];
+    assert_eq!(text(row, "mode"), "cached_verifier");
+    assert_eq!(text(row, "staff_id"), manager);
+
+    // Unknown and malformed dev requests are refused.
+    for (kind, body) in [
+        ("dev.nope", serde_json::json!({})),
+        ("dev.hub_link", serde_json::json!({})),
+        ("dev.spawn_process", serde_json::json!({"path": ""})),
+    ] {
+        assert!(
+            reply_code(&app.request(kind, body).await).is_some(),
+            "{kind}"
+        );
+    }
+}
+
+#[cfg(not(feature = "dev-fixtures"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dev_requests_are_unsupported_without_the_feature() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    let mut app = kiosk.app().await;
+    app.send(&IpcMsg::Request {
+        rid: "d".into(),
+        kind: "dev.hub_link".into(),
+        body: serde_json::json!({"online": false}),
+    })
+    .await;
+    let reply = app
+        .until(|m| matches!(m, IpcMsg::Reply { rid, .. } if rid == "d"))
+        .await;
+    assert_eq!(
+        reply_code(&reply),
+        Some(arena_proto::ErrorCode::Unsupported)
+    );
+}

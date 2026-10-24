@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use arena_proto::Connectivity;
 use arena_store::LeaseRow;
 use tokio::sync::watch;
 
@@ -76,6 +77,9 @@ pub struct HubStatus {
     pub schema_version: u32,
     /// The SHA-256 fingerprint (lower-case hex) of the LAN TLS certificate, once loaded.
     pub tls_fingerprint: Option<String>,
+    /// The WAN connectivity probe's last answer (`online`, `checked_at: null` until the first
+    /// probe finishes, so a Hub never shows the offline chip before it knows).
+    pub connectivity: Connectivity,
 }
 
 impl HubStatus {
@@ -88,6 +92,7 @@ impl HubStatus {
             lease: None,
             schema_version,
             tls_fingerprint: None,
+            connectivity: Connectivity::default(),
         }
     }
 }

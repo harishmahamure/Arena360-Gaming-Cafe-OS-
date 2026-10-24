@@ -18,6 +18,9 @@ pub struct HubSnapshot {
     pub locale: Option<SnapshotLocale>,
     /// Hub UI behaviour settings.
     pub ui: SnapshotUi,
+    /// Which WAN link is down, as the connectivity probe last saw it (the `chip-offline`).
+    #[serde(default)]
+    pub connectivity: crate::Connectivity,
 }
 
 /// The Hub UI settings every open view follows.
@@ -189,6 +192,7 @@ mod tests {
             }],
             locale: None,
             ui: SnapshotUi::default(),
+            connectivity: crate::Connectivity::default(),
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
@@ -196,7 +200,8 @@ mod tests {
                 "branch": null,
                 "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true}],
                 "locale": null,
-                "ui": {"idle_lock_minutes": 5, "hc": false}
+                "ui": {"idle_lock_minutes": 5, "hc": false},
+                "connectivity": {"state": "online", "checked_at": null}
             })
         );
     }

@@ -2,10 +2,15 @@ name: Release benchmark
 
 # Idle budgets on the reference hardware (2015 i3 + HDD): arena-hub < 50 MB, Hub UI + WebView2
 # < 250 MB; Kiosk service + app + WebView2 < 80 MB; no GPU use. Not part of ci-ok; runs on
-# demand and on release tags.
+# demand and on release tags. The `soak` input adds the 8-hour WAN-down soak (Story 1.22).
 
 on:
   workflow_dispatch:
+    inputs:
+      soak:
+        description: "Also run the 8-hour WAN-down soak (scripts/wan-down/soak.sh)"
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -161,3 +166,31 @@ jobs:
           } else {
             Write-Host "nothing to uninstall ($uninstall not found)"
           }
+
+  soak:
+    name: wan-down soak (8 h)
+    if: github.event_name == 'workflow_dispatch' && inputs.soak
+    # 8 h of flows plus the build: GitHub-hosted jobs stop at 6 h, so this runs on a
+    # self-hosted Linux runner (passwordless sudo, iptables, curl).
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 600
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wan-down
+      - run: pnpm install --frozen-lockfile
+      - run: scripts/wan-down/soak.sh --hours 8
+      - name: Upload the soak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wan-down-soak-logs
+          path: target/wan-down/soak/
+          retention-days: 14

@@ -116,6 +116,7 @@ function snapshot(hub: Hub): HubSnapshot {
     devices: [],
     locale: locale(hub),
     ui: { idle_lock_minutes: Number(hub.settings.get("idle_lock_minutes")?.value ?? 5), hc: false },
+    connectivity: { state: "online", checked_at: null },
   };
 }
 

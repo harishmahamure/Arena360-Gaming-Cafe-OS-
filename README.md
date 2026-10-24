@@ -27,7 +27,8 @@ Rust tests.
 
 Rust crates: `arena-proto`, `arena-store`, `arena-core`, `arena-api`, `arena-tasks`,
 `arena-replay`, `arena-cloud`, `arena-kiosk-core` (libraries) and `arena-hub`, `arena-kiosk-svc`,
-`arena-pi` (binaries).
+`arena-pi` (binaries), plus the test-only `arena-e2e` driver (see
+[The branch with the WAN down](#the-branch-with-the-wan-down)).
 
 ### Apps
 
@@ -74,14 +75,16 @@ cargo run -p arena-hub -- --data-dir /tmp/hub
 curl 127.0.0.1:7409/healthz
 ```
 
-| Flag                   | Meaning                                                    |
-| ---------------------- | ---------------------------------------------------------- |
-| `--data-dir <path>`    | Data directory (overrides `ARENA_HUB_DATA_DIR`)            |
-| `--health-port <port>` | Loopback port for `GET /healthz` (default `7409`, not `0`) |
-| `--lan-port <port>`    | TLS WebSocket port for paired apps (default `7400`)        |
-| `--web-port <port>`    | Sniffed TLS / plain HTTP port (default `7401`)             |
-| `--help`, `-h`         | Print usage and exit 0                                     |
-| `--version`            | Print the version and exit 0                               |
+| Flag                                 | Meaning                                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `--data-dir <path>`                  | Data directory (overrides `ARENA_HUB_DATA_DIR`)                                                              |
+| `--health-port <port>`               | Loopback port for `GET /healthz` (default `7409`, not `0`)                                                   |
+| `--lan-port <port>`                  | TLS WebSocket port for paired apps (default `7400`)                                                          |
+| `--web-port <port>`                  | Sniffed TLS / plain HTTP port (default `7401`)                                                               |
+| `--cloud-host <host:port>`           | Cloud host the connectivity probe checks (default `api.arena360.in:443`, a placeholder until the cloud epic) |
+| `--probe-internet <ip:port,ip:port>` | Internet endpoints the probe connects to (default `1.1.1.1:443,8.8.8.8:443`)                                 |
+| `--help`, `-h`                       | Print usage and exit 0                                                                                       |
+| `--version`                          | Print the version and exit 0                                                                                 |
 
 The three ports must differ. Tests pass free ports; production uses the defaults.
 
@@ -90,10 +93,20 @@ The three ports must differ. Tests pass free ports; production uses the defaults
   elsewhere. The database is `<data>/branch.db`; `<data>/branch.db.lock` is the process writer
   lock, so a second process on the same dir starts as a read-only follower.
 - **Health:** `GET 127.0.0.1:<port>/healthz` returns `db_open`, `role`, `lease`, `epoch`,
-  `schema_version`, `self_instance_id`, `tls_fingerprint` and `now`. It binds loopback only.
+  `schema_version`, `self_instance_id`, `tls_fingerprint`, `connectivity` and `now`. It binds
+  loopback only.
+- **Connectivity probe** (`arena-tasks::connectivity`): the branch's only outbound traffic. At
+  start and every 30 s it runs two checks at once, each with a 3 s timeout, on its own task (it
+  never touches the writer, so no intent waits on it): a TCP connect to each `--probe-internet`
+  endpoint (any success: the internet is up) and a TLS handshake (rustls with the pinned
+  `webpki-roots`) to `--cloud-host` followed by a hand-written `GET /healthz` that must answer 200. No internet is `internet_offline`, the internet without the cloud is
+  `cloud_unreachable`, both is `online`. `connectivity` is `{state, checked_at}` (UTC ms; it
+  reads `online` with `checked_at: null` until the first probe finishes, so no offline chip
+  shows before the Hub knows). A change of state is logged once at info.
 - **UI snapshot:** `GET 127.0.0.1:<port>/ui/snapshot` on the same loopback server returns
   `HubSnapshot {branch: {name, branch_code} | null, devices: [{device_id, label, class, zone,
-online}], locale}` (type in `arena-proto`; revoked devices are left out; `zone` is `null` until
+online}], locale, ui, connectivity}` (type in `arena-proto`; `connectivity` is the probe's
+  last answer, from the Hub status; revoked devices are left out; `zone` is `null` until
   zones exist; `online` is true while the device has a live paired LAN session, read from the
   LAN registry, and the floor shows it as the words Online / Offline; `locale` is `null` before bootstrap, see **Branch locale** below). It
   reads through `arena-core` on its own read-only connection. CORS allows only
@@ -499,12 +512,13 @@ The Kiosk is two processes with a privilege split:
 `arena-kiosk-core` holds the platform-neutral parts both use: the Hub client, the reconnect
 back-off, the IPC messages, the watchdog state machine and the queue ordering rules.
 
-| Command                                                                               | What it does                                                   |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `arena-kiosk-svc --console [--data-dir <path>] [--app <path>]`                        | Runs in the foreground on any OS (dev; `--app` is relaunched)  |
-| `arena-kiosk-svc service install` / `uninstall` / `run`                               | Windows: register (auto-start, LocalSystem), remove, SCM entry |
-| `arena-kiosk-svc lockdown apply\|restore [--player-user <name>] [--data-dir <path>]`  | Windows, elevated: lock the player account down / put it back  |
-| `arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>` | `dev-fixtures` builds only: write the config and the token     |
+| Command                                                                               | What it does                                                                      |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `arena-kiosk-svc --console [--data-dir <path>] [--app <path>]`                        | Runs in the foreground on any OS (dev; `--app` is relaunched)                     |
+| `arena-kiosk-svc --console --dev-fake-procs [...]`                                    | `dev-fixtures` builds only: also enforce against a fake process table (see below) |
+| `arena-kiosk-svc service install` / `uninstall` / `run`                               | Windows: register (auto-start, LocalSystem), remove, SCM entry                    |
+| `arena-kiosk-svc lockdown apply\|restore [--player-user <name>] [--data-dir <path>]`  | Windows, elevated: lock the player account down / put it back                     |
+| `arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>` | `dev-fixtures` builds only: write the config and the token                        |
 
 - **Data dir:** `--data-dir`, else `%PROGRAMDATA%\Arena360\Kiosk` on Windows, else
   `ARENA_KIOSK_DATA_DIR`, else `~/.arena360/kiosk`. It holds `config.json`
@@ -914,6 +928,66 @@ video (none yet) must be hidden in HC by the epics that add them.
   any page script runs, and only then shows it. Later changes arrive as the `theme` event and
   apply without a restart.
 
+## The branch with the WAN down
+
+Story 1.22. The branch works with no internet; the connectivity probe (see
+[Running the Hub](#running-the-hub)) is the only outbound connection anything makes.
+
+- **Hub header.** While the probe says a link is down, the main header shows a `chip-offline`
+  before the clock (the `chip-offline` tokens, inverted in HC): a ⚠ glyph and "Internet
+  offline" or "Cloud unreachable", so colour is never the only cue. The state comes from the
+  snapshot's `connectivity` and live from `connectivity.changed` on `/ui/events`; the existing
+  polite live region (`hub-announce`) announces each change once ("Internet and cloud back
+  online" when it clears). The chip disappears on the first probe that finds both up (within
+  30 s). A newly opened stream gets the current state first, and the layout keeps whichever
+  answer has the newer `checked_at`, so a slow snapshot never puts an old state back. The chip
+  shows only while someone is signed in (the push stream is live). Nothing else in the UI
+  changes.
+- **Kiosk dev hooks** (`dev-fixtures` builds only, `arena-kiosk-svc/src/dev.rs`): with
+  `--console --dev-fake-procs` the service enforces the process lists against an in-memory
+  process table with a logged-on `player` (and, without `--app`, a launcher whose admin-exit
+  desktop is a no-op). On the app channel, `dev.spawn_process {path}` starts a fake player
+  process, `dev.hub_link {online}` holds the Hub link down (or releases it) as if the Hub were
+  unreachable, `dev.relock` ends the running admin exit and `dev.status` answers
+  `{hub_state, verifier_version, admin_exit_until, queued}`. Release builds answer every
+  `dev.*` request `UNSUPPORTED`.
+- **e2e driver** (`crates/arena-e2e`, `publish = false`): `arena-e2e run` drives a running
+  Hub over its loopback HTTP API and a console kiosk over its app channel through every Epic 1
+  flow: staff sign-in, a branch settings save, PIN elevation (a Counter's save refused, then
+  approved with the Manager's PIN), idle lock and unlock, the audit list, the kiosk connected
+  and online on the floor, the HC toggle reaching the kiosk, a process block reported to the
+  Hub, and an admin exit through the Hub and one with the cached verifier while the link is
+  held down. It keeps a ledger of the intents it caused. `arena-e2e check` proves `seq`
+  gap-free per epoch, that no intent inserted the same row twice, and the applied intents per
+  kind equal to the ledger (none lost or doubled), and writes the normalised change table (ids, epochs, timestamps and hashes masked;
+  sorted, since kiosk events and UI intents interleave differently; the watchdog's own
+  `app_restarted` / `no_session` logs left out). `arena-e2e compare` diffs two tables.
+- **`scripts/wan-down/run.sh`** (Linux, passwordless sudo, `strace`, `curl`; CI job
+  `wan-down`, part of `ci-ok`) builds the release binaries with the dev fixtures and the Hub UI,
+  then runs a pass with the network up and one inside a network namespace with only `lo`
+  (`ip netns`). Each pass seeds a fresh Hub, starts it and the console kiosk, runs the driver
+  and the Hub UI smoke (`apps/hub/playwright.wan-down.config.ts`: sign-in, floor, settings
+  against the real Hub, failing on any request that leaves loopback). In the namespace the
+  Hub, the kiosk, the driver and the Hub UI smoke (vite preview and the browser) run under
+  `strace -f -e trace=connect`, and the Hub must report
+  `internet_offline`. It fails unless every flow passed, both normalised tables are equal, the
+  ledger and `seq` checks pass, the Hub logged no errors, and
+  `scripts/wan-down/check-trace.mjs` finds no `connect()` outside loopback and local socket
+  families except the probe's endpoints, and those only in the Hub's own trace (the internet
+  endpoints, plus whatever the cloud host
+  resolves to on the runner; inside the namespace name lookups go only to `files` and a
+  loopback resolver, so the cloud lookup normally fails there); every other trace must stay on
+  loopback, except that the UI's may make Chromium's built-in IPv6 reachability check (a UDP
+  connect to `[2001:4860:4860::8888]:443` that fails with ENETUNREACH in the namespace, so
+  nothing is sent; no launch flag disables it), `CHROMIUM_IPV6_PROBE` in `check-trace.mjs`. Windows-only enforcement (the real lockdown and process killing) is out of this
+  Linux job's reach; the Story 1.19 escape suite covers it.
+- **`scripts/wan-down/soak.sh --hours <h>`** runs the Hub and the kiosk in the namespace and
+  loops the driver for `h` hours, then restores the network while they run (a veth pair and
+  NAT into the namespace) and asserts that the probe sees the internet again, that `seq` is
+  gap-free and the ledger matches, and that the Hub logged no errors. CI runs it for 0.05 h
+  (3 minutes) at the end of `run.sh`; `release-bench.yml`'s manual `soak` input runs 8 hours on
+  a self-hosted Linux runner.
+
 ## Pinned versions
 
 This table is checked against the manifests by `pnpm check:pins`. Change the manifest and this
@@ -963,6 +1037,7 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | tokio-tungstenite            | =0.30.0       | `Cargo.toml`          |
 | rustls                       | =0.23.46      | `Cargo.toml`          |
 | tokio-rustls                 | =0.26.6       | `Cargo.toml`          |
+| webpki-roots                 | =1.0.9        | `Cargo.toml`          |
 | rcgen                        | =0.14.10      | `Cargo.toml`          |
 | argon2                       | =0.6.0        | `Cargo.toml`          |
 | futures-util                 | =0.3.34       | `Cargo.toml`          |
@@ -1032,7 +1107,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 `windows-latest`. The `ci-ok` job depends on all other jobs and is the single required status.
 Besides the Rust, checks and per-app build jobs, `a11y` runs the Playwright suites (the gallery
 and the Hub shell) and `installer` builds the Hub's Windows NSIS installer with the `arena-hub`
-sidecar and uploads it as the `hub-installer` artifact.
+sidecar and uploads it as the `hub-installer` artifact, and `wan-down` runs every Epic 1 flow
+with no route out (see [The branch with the WAN down](#the-branch-with-the-wan-down)).
 
 **One-time step after the GitHub remote is added:** protect the default branch so `ci-ok` (from
 GitHub Actions) must pass before a merge:

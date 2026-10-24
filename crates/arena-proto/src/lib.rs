@@ -6,6 +6,7 @@
 mod actor;
 mod admin;
 mod audit;
+mod connectivity;
 pub mod currency;
 mod display;
 mod error;
@@ -30,6 +31,7 @@ pub use audit::{
     AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,
     AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
 };
+pub use connectivity::{Connectivity, ConnectivityState};
 pub use display::{
     HC_DEFAULT, HC_PREFIX, HcTarget, KEY_HC_HUB, hc_key, parse_hc_key, parse_hc_value,
 };

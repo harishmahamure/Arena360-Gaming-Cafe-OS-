@@ -1,6 +1,6 @@
 // Reads the branch snapshot from the local Hub service over loopback (`GET /ui/snapshot`).
 
-import type { HubSnapshot, SnapshotLocale, SnapshotUi } from "@arena/ui/generated";
+import type { Connectivity, HubSnapshot, SnapshotLocale, SnapshotUi } from "@arena/ui/generated";
 
 /** The Hub service's loopback snapshot endpoint (the Tauri CSP allows only this host). */
 export const SNAPSHOT_URL = "http://127.0.0.1:7409/ui/snapshot";
@@ -31,6 +31,8 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
         locale: snapshot.locale ?? null,
         // A missing or malformed `ui` block falls back to the defaults.
         ui: normalizeUi(snapshot.ui),
+        // A Hub from before the connectivity probe sends none: online (no chip).
+        connectivity: normalizeConnectivity(snapshot.connectivity),
       },
     };
   } catch {
@@ -87,6 +89,25 @@ export function normalizeUi(v: unknown): SnapshotUi {
   return isSnapshotUi(v)
     ? { idle_lock_minutes: v.idle_lock_minutes, hc: v.hc === true }
     : { idle_lock_minutes: 5, hc: false };
+}
+
+const CONNECTIVITY_STATES: readonly string[] = ["online", "internet_offline", "cloud_unreachable"];
+
+/** Whether `v` has the `Connectivity` shape (the WAN probe's last answer). */
+export function isConnectivity(v: unknown): v is Connectivity {
+  return (
+    isObject(v) &&
+    typeof v.state === "string" &&
+    CONNECTIVITY_STATES.includes(v.state) &&
+    (v.checked_at === null || typeof v.checked_at === "number")
+  );
+}
+
+/** The connectivity in `v`, or `online` (no chip) when missing or malformed. */
+export function normalizeConnectivity(v: unknown): Connectivity {
+  return isConnectivity(v)
+    ? { state: v.state, checked_at: v.checked_at }
+    : { state: "online", checked_at: null };
 }
 
 /**

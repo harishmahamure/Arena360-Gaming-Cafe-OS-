@@ -113,6 +113,7 @@ function snapshot(hub: Hub): HubSnapshot {
       pending: null,
     },
     ui: { idle_lock_minutes: hub.idleLockMinutes, hc: false },
+    connectivity: { state: "online", checked_at: null },
   };
 }
 
@@ -246,6 +247,7 @@ function pushSettingsChanged(hub: Hub, keys: string[]) {
     locale: snapshot(hub).locale,
     keys,
     ui: { idle_lock_minutes: hub.idleLockMinutes, hc: false },
+    connectivity: { state: "online", checked_at: null },
   });
   for (const q of hub.queues) q.push(`event: settings.changed\ndata: ${data}\n\n`);
 }
@@ -538,6 +540,7 @@ test("a pushed settings.changed ui block applies without a snapshot reload", asy
     locale: snapshot(hub).locale,
     keys: ["idle_lock_minutes"],
     ui: { idle_lock_minutes: 1, hc: false },
+    connectivity: { state: "online", checked_at: null },
   });
   queue.push(`event: settings.changed\ndata: ${data}\n\n`);
   await page.clock.install();

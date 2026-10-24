@@ -34,6 +34,7 @@ struct HealthBody {
     schema_version: u32,
     self_instance_id: String,
     tls_fingerprint: Option<String>,
+    connectivity: arena_proto::Connectivity,
     now: i64,
 }
 
@@ -52,6 +53,7 @@ impl HealthBody {
             schema_version: s.schema_version,
             self_instance_id: s.self_instance_id.clone(),
             tls_fingerprint: s.tls_fingerprint.clone(),
+            connectivity: s.connectivity,
             now,
         }
     }
@@ -155,6 +157,7 @@ struct SnapshotState {
     reader: Arc<SnapshotReader>,
     clock: Arc<dyn Clock>,
     presence: crate::lan::Presence,
+    status: Option<watch::Receiver<HubStatus>>,
 }
 
 async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Response {
@@ -168,6 +171,9 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
         Ok(Ok(mut snapshot)) => {
             for d in &mut snapshot.devices {
                 d.online = state.presence.online(&d.device_id);
+            }
+            if let Some(status) = &state.status {
+                snapshot.connectivity = status.borrow().connectivity;
             }
             Json(snapshot).into_response()
         }
@@ -189,12 +195,14 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
 
 /// The local Hub UI's read API (merged into the loopback health server):
 /// `GET /ui/snapshot` returns a [`arena_proto::HubSnapshot`], its locale resolved at `clock`'s
-/// now, each device's `online` read from the LAN registry through `presence`. Only the
+/// now, each device's `online` read from the LAN registry through `presence`, and
+/// `connectivity` from `status` (the default `online` without one). Only the
 /// [`UI_ALLOWED_ORIGINS`] may read it from a browser.
 pub fn ui_router(
     reader: Arc<SnapshotReader>,
     clock: Arc<dyn Clock>,
     presence: crate::lan::Presence,
+    status: Option<watch::Receiver<HubStatus>>,
 ) -> Router {
     Router::new()
         .route("/ui/snapshot", get(ui_snapshot))
@@ -202,6 +210,7 @@ pub fn ui_router(
             reader,
             clock,
             presence,
+            status,
         })
         .layer(axum::middleware::from_fn(ui_guard))
 }
@@ -361,6 +370,10 @@ mod tests {
                 expires_at: 42,
             });
             s.tls_fingerprint = Some("ab".repeat(32));
+            s.connectivity = arena_proto::Connectivity {
+                state: arena_proto::ConnectivityState::InternetOffline,
+                checked_at: Some(900),
+            };
         });
         assert_eq!(
             get_json(rx).await,
@@ -372,6 +385,7 @@ mod tests {
                 "schema_version": 1,
                 "self_instance_id": "01JSELF",
                 "tls_fingerprint": "ab".repeat(32),
+                "connectivity": {"state": "internet_offline", "checked_at": 900},
                 "now": 1000
             })
         );
@@ -382,7 +396,7 @@ mod tests {
         let (_tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
         assert_eq!(
             get_json(rx).await,
-            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "now": 1000})
+            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "now": 1000})
         );
     }
 
@@ -485,7 +499,14 @@ mod tests {
             req: Request<Body>,
         ) -> (StatusCode, axum::http::HeaderMap, Value) {
             let clock = Arc::new(ManualClock::new(1_800_000_000_000));
-            let res = ui_router(reader, clock, crate::lan::Presence::none())
+            let (tx, rx) = status_channel(HubStatus::opened(1, "H"));
+            tx.send_modify(|s| {
+                s.connectivity = arena_proto::Connectivity {
+                    state: arena_proto::ConnectivityState::CloudUnreachable,
+                    checked_at: Some(7),
+                }
+            });
+            let res = ui_router(reader, clock, crate::lan::Presence::none(), Some(rx))
                 .oneshot(req)
                 .await
                 .unwrap();
@@ -525,7 +546,8 @@ mod tests {
                         "fy_start_month": 4,
                         "pending": null
                     },
-                    "ui": {"idle_lock_minutes": 5, "hc": false}
+                    "ui": {"idle_lock_minutes": 5, "hc": false},
+                    "connectivity": {"state": "cloud_unreachable", "checked_at": 7}
                 })
             );
         }
@@ -537,7 +559,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body,
-                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}})
+                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}})
             );
         }
 

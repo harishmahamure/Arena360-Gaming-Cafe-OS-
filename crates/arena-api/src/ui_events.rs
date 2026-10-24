@@ -14,6 +14,11 @@
 //! - `event: device.admin_unlock_ack`, data
 //!   [`AdminUnlockAckEvent`](arena_proto::AdminUnlockAckEvent): a kiosk granted a remote unlock
 //!   (the floor waits up to 5 s for it).
+//! - `event: connectivity.changed`, data [`Connectivity`](arena_proto::Connectivity): the WAN
+//!   probe's state moved (`online`, `internet_offline`, `cloud_unreachable`); sent once per
+//!   change of state, never for a probe that found the same state; also sent once, with the
+//!   current value, as the first event of every newly opened stream (so a change between the
+//!   snapshot load and the stream opening is not missed). The snapshot carries it too.
 //! - `event: resync`, data `{}`: this stream fell behind and missed events, or the Hub's role
 //!   changed (the stream then closes so the client reopens it). The view reloads the snapshot.
 //!
@@ -169,6 +174,12 @@ fn role_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Role> {
     status.as_ref().map(|s| s.borrow().role)
 }
 
+fn connectivity_of(
+    status: &Option<watch::Receiver<HubStatus>>,
+) -> Option<arena_proto::Connectivity> {
+    status.as_ref().map(|s| s.borrow().connectivity)
+}
+
 impl HubTask {
     /// The locale now, its next rollover and the Hub UI settings; `None` on a read failure
     /// (logged).
@@ -207,6 +218,7 @@ impl HubTask {
 
     async fn run(mut self) {
         let mut role = role_of(&self.status);
+        let mut link = connectivity_of(&self.status).map(|c| c.state);
         let (mut waiting, mut rollover) = match self.read().await {
             Some((locale, at, _)) => (pending_keys(locale.as_ref()), at),
             None => (Vec::new(), None),
@@ -293,6 +305,13 @@ impl HubTask {
                         self.status = None;
                         continue;
                     }
+                    if let Some(c) = connectivity_of(&self.status)
+                        && Some(c.state) != link
+                    {
+                        link = Some(c.state);
+                        let data = serde_json::to_string(&c).unwrap_or_default();
+                        self.send("connectivity.changed", data, false);
+                    }
                     let now = role_of(&self.status);
                     if now != role {
                         role = now;
@@ -336,6 +355,9 @@ struct Stream {
     recheck: tokio::time::Interval,
     last_full: Instant,
     closing: bool,
+    /// The connectivity now, sent first so a view never misses a change made between its
+    /// snapshot load and the stream opening.
+    opening: Option<Event>,
 }
 
 enum Wake {
@@ -379,6 +401,12 @@ pub(crate) async fn events(
     recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // An interval's first tick fires at once: start the stream idle instead.
     recheck.reset();
+    let opening = auth.status().map(|s| {
+        let c = s.borrow().connectivity;
+        Event::default()
+            .event("connectivity.changed")
+            .data(serde_json::to_string(&c).unwrap_or_default())
+    });
     let state = Stream {
         events: hub.subscribe(),
         ends: Some(auth.session_ends()),
@@ -387,11 +415,15 @@ pub(crate) async fn events(
         recheck,
         last_full: Instant::now(),
         closing: false,
+        opening,
     };
     let body = stream::unfold(state, |mut st| async move {
         loop {
             if st.closing {
                 return None;
+            }
+            if let Some(event) = st.opening.take() {
+                return Some((Ok::<_, Infallible>(event), st));
             }
             let wake = tokio::select! {
                 r = st.events.recv() => Wake::Pushed(r),
@@ -457,7 +489,17 @@ mod tests {
         Box<dyn futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Send>,
     >;
 
+    /// Opens a stream and, when it opened, reads its first event: the current connectivity.
     async fn open(hub: &Hub, token: Option<&str>) -> (StatusCode, Frames) {
+        let (status, mut frames) = open_raw(hub, token).await;
+        if status == StatusCode::OK {
+            let (event, _) = next_event(&mut frames).await.unwrap();
+            assert_eq!(event, "connectivity.changed");
+        }
+        (status, frames)
+    }
+
+    async fn open_raw(hub: &Hub, token: Option<&str>) -> (StatusCode, Frames) {
         let uri = match token {
             Some(t) => format!("/ui/events?token={t}"),
             None => "/ui/events".to_owned(),
@@ -777,6 +819,70 @@ mod tests {
         assert_eq!(data["keys"], serde_json::json!(["branch.tz"]));
         assert_eq!(data["locale"]["tz"], "Asia/Dubai");
         assert_eq!(data["locale"]["pending"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn a_new_stream_gets_the_current_connectivity_first() {
+        use arena_proto::{Connectivity, ConnectivityState};
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        hub._status.send_modify(|s| {
+            s.connectivity = Connectivity {
+                state: ConnectivityState::CloudUnreachable,
+                checked_at: Some(9),
+            }
+        });
+        let (status, mut frames) = open_raw(&hub, Some(&token)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            next_event(&mut frames).await.unwrap(),
+            (
+                "connectivity.changed".to_owned(),
+                serde_json::json!({"state": "cloud_unreachable", "checked_at": 9})
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_connectivity_change_is_pushed_once_per_state() {
+        use arena_proto::{Connectivity, ConnectivityState};
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let set = |state, at| {
+            hub._status.send_modify(|s| {
+                s.connectivity = Connectivity {
+                    state,
+                    checked_at: Some(at),
+                }
+            })
+        };
+        // The first probe finds the state it started with: nothing is pushed.
+        set(ConnectivityState::Online, 1);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        set(ConnectivityState::InternetOffline, 2);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // A later probe with the same state is not pushed again.
+        set(ConnectivityState::InternetOffline, 3);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        set(ConnectivityState::CloudUnreachable, 4);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        set(ConnectivityState::Online, 5);
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            assert_eq!(event, "connectivity.changed");
+            seen.push(data);
+        }
+        assert_eq!(
+            seen,
+            vec![
+                serde_json::json!({"state": "internet_offline", "checked_at": 2}),
+                serde_json::json!({"state": "cloud_unreachable", "checked_at": 4}),
+                serde_json::json!({"state": "online", "checked_at": 5}),
+            ]
+        );
     }
 
     #[tokio::test]

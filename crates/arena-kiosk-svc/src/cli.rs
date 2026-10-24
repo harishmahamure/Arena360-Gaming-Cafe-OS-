@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub const USAGE: &str = "usage:
-  arena-kiosk-svc --console [--data-dir <path>] [--app <path>]
+  arena-kiosk-svc --console [--data-dir <path>] [--app <path>] [--dev-fake-procs]
   arena-kiosk-svc service install|uninstall|run          (Windows)
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>
@@ -18,6 +18,9 @@ pub enum Command {
     Console {
         data_dir: Option<PathBuf>,
         app: Option<PathBuf>,
+        /// `--dev-fake-procs` (dev-fixtures builds): enforce the process lists against an
+        /// in-memory process table, so a console kiosk off Windows can block a process.
+        dev_fake_procs: bool,
     },
     /// Windows service management.
     ServiceInstall,
@@ -121,10 +124,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             })
         }
         "--console" => {
-            let (mut data_dir, mut app) = (None, None);
+            let (mut data_dir, mut app, mut dev_fake_procs) = (None, None, false);
             let mut it = args.into_iter().skip(1);
             while let Some(flag) = it.next() {
                 let flag = text(flag, "a flag")?;
+                if flag == "--dev-fake-procs" {
+                    dev_fake_procs = true;
+                    continue;
+                }
                 let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 match flag.as_str() {
                     "--data-dir" => data_dir = Some(PathBuf::from(value)),
@@ -132,7 +139,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     other => return Err(format!("unknown flag {other}")),
                 }
             }
-            Ok(Command::Console { data_dir, app })
+            Ok(Command::Console {
+                data_dir,
+                app,
+                dev_fake_procs,
+            })
         }
         "" => Err("no command given".into()),
         other => Err(format!("unknown command {other}")),
@@ -153,14 +164,24 @@ mod tests {
             p(&["--console"]).unwrap(),
             Command::Console {
                 data_dir: None,
-                app: None
+                app: None,
+                dev_fake_procs: false,
             }
         );
         assert_eq!(
             p(&["--console", "--data-dir", "/d", "--app", "/a"]).unwrap(),
             Command::Console {
                 data_dir: Some("/d".into()),
-                app: Some("/a".into())
+                app: Some("/a".into()),
+                dev_fake_procs: false,
+            }
+        );
+        assert_eq!(
+            p(&["--console", "--dev-fake-procs", "--data-dir", "/d"]).unwrap(),
+            Command::Console {
+                data_dir: Some("/d".into()),
+                app: None,
+                dev_fake_procs: true,
             }
         );
         assert_eq!(p(&["service", "install"]).unwrap(), Command::ServiceInstall);

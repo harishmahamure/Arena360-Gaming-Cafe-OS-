@@ -16,6 +16,15 @@
 //! a follower, for paired sessions and `kiosk.*` keys only (anything else is `FORBIDDEN`, the
 //! whole request); keys the branch lacks are left out.
 //!
+//! **Admin exit (Story 1.20).** A paired session gets the manager verifier as
+//! `event{kind:"verifier"}` right after `hello.ok`. `kiosk.verify_admin_pin{pin_proof}` checks a
+//! manager PIN (argon2id, active staff whose role allows `device.remote`, at most 50) and answers
+//! `kiosk.admin_pin_ok{staff_id, verifier_version}` or `PIN_REJECTED`; five wrong PINs in a row
+//! pause that device for 60 s (`AUTH_LOCKED`). The PIN is never logged. `kiosk.admin_unlock_ack
+//! {exit_id}` (the kiosk granted a remote unlock of its own) answers `ack` and tells the Hub UI.
+//! Only `device.admin_exit` keeps the kiosk's `elevated_by` (apply() checks it); every other LAN
+//! intent has it dropped.
+//!
 //! **Queues.** Replies and pushes share one bounded queue drained by the session's writer
 //! task, so a slow client only ever stalls itself; the fan-out drops a session whose queue is
 //! full.
@@ -431,6 +440,19 @@ pub(crate) async fn run<S>(
         "lan session open"
     );
     report_version(&hub, &authed, &hello.versions.app);
+    if authed.class == ClientClass::Paired && authed.device.is_some() {
+        let dir = Arc::clone(&hub.devices);
+        match tokio::task::spawn_blocking(move || dir.manager_verifier()).await {
+            Ok(Ok(v)) => {
+                let _ = out_tx.try_send(super::registry::verifier_message("ev-hello".into(), v));
+            }
+            Ok(Err(e)) => tracing::warn!(
+                code = e.code.as_str(),
+                "could not read the manager verifier"
+            ),
+            Err(e) => tracing::warn!(error = %e, "manager verifier read panicked"),
+        }
+    }
 
     let mut writer = tokio::spawn(write_loop(sink, out_rx, writer_kill));
     let permits = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
@@ -545,6 +567,20 @@ impl Ctx<'_> {
             },
             "settings.get" => match self.check_settings_get(value) {
                 Ok(keys) => self.spawn_settings_get(rid, keys, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "kiosk.verify_admin_pin" => match self.check_verify_pin(value) {
+                Ok((device, pin)) => {
+                    self.spawn_verify_pin(rid, device, pin, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "kiosk.admin_unlock_ack" => match self.check_unlock_ack(value) {
+                Ok((device, exit_id)) => {
+                    self.spawn_unlock_ack(rid, device, exit_id, permits, tasks)
+                        .await
+                }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
             other => {
@@ -687,6 +723,108 @@ impl Ctx<'_> {
         });
     }
 
+    /// The paired device asking, or `FORBIDDEN`.
+    fn paired_device(&self, what: &str) -> Result<String, AppError> {
+        match (self.authed.class, self.authed.device_id()) {
+            (ClientClass::Paired, Some(id)) => Ok(id.to_owned()),
+            _ => Err(app(
+                ErrorCode::Forbidden,
+                format!("{what} is for paired kiosks only"),
+            )),
+        }
+    }
+
+    fn check_verify_pin(&self, value: Value) -> Result<(String, String), AppError> {
+        let device = self.paired_device("kiosk.verify_admin_pin")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::VerifyAdminPin(v) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed kiosk.verify_admin_pin"));
+        };
+        Ok((device, v.pin_proof))
+    }
+
+    fn check_unlock_ack(&self, value: Value) -> Result<(String, String), AppError> {
+        let device = self.paired_device("kiosk.admin_unlock_ack")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::AdminUnlockAck(a) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed kiosk.admin_unlock_ack"));
+        };
+        Ok((device, a.exit_id))
+    }
+
+    async fn spawn_verify_pin(
+        &self,
+        rid: String,
+        device: String,
+        pin: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let hub = Arc::clone(self.hub);
+        let out = self.out.clone();
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match verify_admin_pin(&hub, &device, pin).await {
+                Ok(ok) => Frame::new(rid, FrameBody::AdminPinOk(ok)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_unlock_ack(
+        &self,
+        rid: String,
+        device: String,
+        exit_id: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let hub = Arc::clone(self.hub);
+        let out = self.out.clone();
+        tasks.spawn(async move {
+            let _permit = permit;
+            let dir = Arc::clone(&hub.devices);
+            let id = exit_id.clone();
+            let row = tokio::task::spawn_blocking(move || dir.admin_exit(&id)).await;
+            let reply = match row {
+                Ok(Ok(Some(r)))
+                    if r.device_id == device
+                        && r.mode == arena_proto::AdminExitMode::Remote.as_str() =>
+                {
+                    tracing::info!(exit_id = %exit_id, device_id = %device, "remote unlock acknowledged");
+                    hub.registry.ack_admin_unlock(arena_proto::AdminUnlockAckEvent {
+                        exit_id,
+                        device_id: device,
+                    });
+                    Frame::new(rid, FrameBody::Ack)
+                }
+                Ok(Ok(_)) => Frame::error(
+                    rid,
+                    AppError::with_field(
+                        ErrorCode::ValidationFailed,
+                        "exit_id",
+                        "no remote unlock of this device has that id",
+                    ),
+                ),
+                Ok(Err(e)) => Frame::error(rid, e),
+                Err(e) => Frame::error(
+                    rid,
+                    app(ErrorCode::Internal, format!("exit read failed: {e}")),
+                ),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
     async fn spawn_submit(
         &self,
         rid: String,
@@ -723,11 +861,78 @@ impl Ctx<'_> {
 }
 
 /// What a LAN `intent.submit` becomes: the session's actor replaces the frame's, and any
-/// `elevated_by` is dropped (only the Hub's loopback ticket path may elevate).
+/// `elevated_by` is dropped (only the Hub's loopback ticket path may elevate) — except on
+/// `device.admin_exit`, whose elevation is the manager PIN the kiosk checked (with the Hub, or
+/// offline against the cached verifier); apply() re-checks it.
 fn bind_to_session(mut intent: Intent, actor: &Actor) -> Intent {
     intent.actor = actor.clone();
-    intent.elevated_by = None;
+    if intent.payload.kind().elevator_permission().is_none() {
+        intent.elevated_by = None;
+    }
     intent
+}
+
+/// Checks a kiosk's admin-exit PIN: the device's throttle, then argon2id against the active
+/// staff whose role allows `device.remote` (never logged).
+async fn verify_admin_pin(
+    hub: &LanHub,
+    device: &str,
+    pin: String,
+) -> Result<arena_proto::AdminPinOk, AppError> {
+    let Some(staff) = hub.staff.clone() else {
+        return Err(app(
+            ErrorCode::Unsupported,
+            "this hub does not check admin-exit PINs",
+        ));
+    };
+    // Reserved before any check, so parallel attempts count toward the limit.
+    if let Err(s) = hub.admin_pin.begin(device, Instant::now()) {
+        return Err(app(
+            ErrorCode::AuthLocked,
+            format!("too many wrong PINs; try again in {s} s"),
+        ));
+    }
+    let checked = async {
+        let _permit = Arc::clone(&hub.verify_permits)
+            .acquire_owned()
+            .await
+            .map_err(|_| app(ErrorCode::Internal, "PIN checks are shut down"))?;
+        tokio::task::spawn_blocking(move || {
+            staff.match_pin(&[arena_proto::Permission::DeviceRemote], "", &pin)
+        })
+        .await
+        .map_err(|e| app(ErrorCode::Internal, format!("PIN check failed: {e}")))?
+    }
+    .await;
+    let matched = match checked {
+        Ok(m) => m,
+        Err(e) => {
+            // A check that could not run counts neither way.
+            hub.admin_pin.cancel(device);
+            return Err(e);
+        }
+    };
+    let Some((staff_id, _)) = matched else {
+        let paused = hub.admin_pin.finish(device, false, Instant::now());
+        tracing::warn!(device_id = %device, paused = paused.is_some(), "admin-exit PIN refused");
+        return Err(match paused {
+            Some(s) => app(
+                ErrorCode::AuthLocked,
+                format!("too many wrong PINs; try again in {s} s"),
+            ),
+            None => arena_core::staff::pin_rejected(),
+        });
+    };
+    hub.admin_pin.finish(device, true, Instant::now());
+    let dir = Arc::clone(&hub.devices);
+    let verifier = tokio::task::spawn_blocking(move || dir.manager_verifier())
+        .await
+        .map_err(|e| app(ErrorCode::Internal, format!("verifier read failed: {e}")))??;
+    tracing::info!(device_id = %device, staff_id = %staff_id, "admin-exit PIN accepted");
+    Ok(arena_proto::AdminPinOk {
+        staff_id,
+        verifier_version: verifier.version,
+    })
 }
 
 #[cfg(test)]
@@ -764,6 +969,18 @@ mod tests {
         };
         let bound = bind_to_session(forged.clone(), &device);
         assert_eq!(bound.elevated_by, None);
+        // The kiosk's admin exit keeps its PIN elevation for apply() to check.
+        let exit = Intent {
+            kind: IntentKind::DeviceAdminExit,
+            payload: IntentPayload::DeviceAdminExit(arena_proto::DeviceAdminExit {
+                exit_id: "01JAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                mode: arena_proto::AdminExitMode::CachedVerifier,
+            }),
+            ..forged.clone()
+        };
+        let kept = bind_to_session(exit.clone(), &device);
+        assert_eq!(kept.elevated_by, exit.elevated_by);
+        assert_eq!(kept.actor, device);
         assert_eq!(bound.actor, device);
         assert_eq!(bound.reason, forged.reason);
         assert_eq!(bound.payload, forged.payload);

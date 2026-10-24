@@ -19,3 +19,18 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-18-kiosk-process-allow-block-list.md`
   summary: A Hub-side test that a failed kiosk-settings read drops paired sessions (`drop_paired`).
   evidence: DeviceDirectory has no seam to inject a read failure.
+- source_spec: `spec-1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r.md`
+  summary: Bind hub-mode admin exits to the Hub's PIN check with a single-use ticket instead of trusting the kiosk's stated approver.
+  evidence: `bind_to_session` keeps the kiosk's `elevated_by`, and `permission()` checks only that the approver currently holds `device.remote`.
+- source_spec: `spec-1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r.md`
+  summary: Bound the kiosk-supplied `issued_at` on admin exits against the Hub's receive time, and use Hub-side time for the stale check where possible.
+  evidence: `started_at`, `relock_at` and `stale()` all use the kiosk's `issued_at`.
+- source_spec: `spec-1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r.md`
+  summary: Add a verifier epoch so kiosks accept a lower verifier version after a Hub restore or rebuild.
+  evidence: `replaces()` accepts only a strictly higher version, so restored Hubs leave kiosks holding departed managers' hashes.
+- source_spec: `spec-1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r.md`
+  summary: Reconcile admin exits whose `relock_at` passed without a relock, including remote exits whose push never reached the kiosk.
+  evidence: `push_admin_unlock` returning 0 is only logged; nothing closes the row.
+- source_spec: `spec-1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r.md`
+  summary: Manager PIN strength floor or rotation guidance, because every paired kiosk holds argon2 hashes of all `device.remote` holders.
+  evidence: The offline verifier is pushed to all paired kiosks; short numeric PINs are brute-forceable from a compromised kiosk.

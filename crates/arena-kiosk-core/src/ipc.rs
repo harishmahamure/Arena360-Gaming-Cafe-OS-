@@ -1,8 +1,9 @@
 //! The local channel between the Kiosk service (`arena-kiosk-svc`, privileged) and the Kiosk
 //! app (`arena-kiosk-ui`, the unprivileged player session): one JSON object per line.
 //!
-//! The service sends `ping`, `hub_status`, `restore_state`, `toast` and `reply`; the app sends
-//! `pong`, `app_state` and `request`. The app never talks to the Hub: everything it needs from the Hub
+//! The service sends `ping`, `hub_status`, `restore_state`, `toast`, `admin_exit_started`,
+//! `admin_exit_ended` and `reply`; the app sends `pong`, `app_state`, `request` and
+//! `admin_exit` (a manager PIN, answered with `reply`; the [`SecretPin`] never prints). The app never talks to the Hub: everything it needs from the Hub
 //! goes through a `request` the service answers. A line longer than [`MAX_LINE_BYTES`] or that
 //! does not parse is an error the reader skips (the connection stays up).
 
@@ -41,6 +42,42 @@ pub fn dev_data_dir(env: impl Fn(&str) -> Option<String>) -> std::path::PathBuf 
 /// The catalogue key of the toast shown after the service killed a disallowed program.
 pub const TOAST_APP_BLOCKED: &str = "player.app.blocked";
 
+/// A PIN on its way from the app to the service: it never shows in `Debug` output, and the
+/// service clears it right after checking it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretPin(String);
+
+impl SecretPin {
+    pub fn new(pin: impl Into<String>) -> Self {
+        Self(pin.into())
+    }
+
+    /// The PIN, for the one check that needs it.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Overwrites and drops the PIN.
+    pub fn clear(&mut self) {
+        let mut bytes = std::mem::take(&mut self.0).into_bytes();
+        bytes.iter_mut().for_each(|b| *b = 0);
+        std::hint::black_box(&bytes);
+    }
+}
+
+impl Drop for SecretPin {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+impl std::fmt::Debug for SecretPin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretPin([redacted])")
+    }
+}
+
 /// One IPC message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -67,6 +104,15 @@ pub enum IpcMsg {
     /// Service → app: show the player the catalogue line `key` as a toast that stays until
     /// dismissed (the same key again does not stack a second one).
     Toast { key: String },
+    /// App → service: a manager PIN for an admin exit (the hidden Ctrl+Alt+Shift+A panel). The
+    /// answer is `reply` `rid`: `{until}` when granted, else `PIN_REJECTED` or `AUTH_LOCKED`
+    /// with `{retry_after_s}`.
+    AdminExit { rid: String, pin: SecretPin },
+    /// Service → app: an admin exit runs until `until` (UTC ms): drop topmost and the keyboard
+    /// lockdown and show the countdown badge. Also sent on every connection while one runs.
+    AdminExitStarted { until: i64 },
+    /// Service → app: the exit is over: cover every screen and lock down again.
+    AdminExitEnded,
     /// Service → app: the answer to `request` `rid`: `body` on success, `error` otherwise.
     Reply {
         rid: String,
@@ -200,6 +246,31 @@ mod tests {
             .to_line(),
             "{\"type\":\"toast\",\"key\":\"player.app.blocked\"}\n"
         );
+    }
+
+    #[test]
+    fn admin_exit_messages_never_print_the_pin() {
+        let msg = IpcMsg::AdminExit {
+            rid: "a".into(),
+            pin: SecretPin::new("2222"),
+        };
+        assert!(!format!("{msg:?}").contains("2222"));
+        assert_eq!(
+            msg.to_line(),
+            "{\"type\":\"admin_exit\",\"rid\":\"a\",\"pin\":\"2222\"}\n"
+        );
+        assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
+        assert_eq!(
+            IpcMsg::AdminExitStarted { until: 5 }.to_line(),
+            "{\"type\":\"admin_exit_started\",\"until\":5}\n"
+        );
+        assert_eq!(
+            IpcMsg::AdminExitEnded.to_line(),
+            "{\"type\":\"admin_exit_ended\"}\n"
+        );
+        let mut pin = SecretPin::new("1234");
+        pin.clear();
+        assert_eq!(pin.expose(), "");
     }
 
     #[tokio::test]

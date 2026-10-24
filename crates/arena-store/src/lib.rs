@@ -3,6 +3,7 @@
 //! [`Store::open`] opens SQLite in WAL mode with `synchronous=FULL` (both verified by reading
 //! them back), refuses a schema newer than this binary and applies the embedded migrations.
 
+mod admin;
 mod audit;
 mod branch;
 mod dedupe;
@@ -17,6 +18,11 @@ use std::time::Duration;
 use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+pub use admin::{
+    AdminExitRow, META_VERIFIER_COUNTER, NewAdminExit, find_admin_exit, insert_admin_exit,
+    insert_verifier_version, latest_verifier, max_pin_verifier_version, set_admin_exit_relocked,
+    verifier_staff, verifier_version_at,
+};
 pub use audit::{
     AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,
     list_staff_names, previous_row_image,
@@ -375,6 +381,34 @@ impl Store {
             return Ok(Vec::new());
         }
         list_pin_candidates(&self.conn, permissions, exclude, limit)
+    }
+
+    /// The admin exit `exit_id`, outside any write transaction (`None` before migration 0010).
+    pub fn admin_exit(&self, exit_id: &str) -> Result<Option<AdminExitRow>, AppError> {
+        if !self.table_exists("device_admin_exits")? {
+            return Ok(None);
+        }
+        find_admin_exit(&self.conn, exit_id)
+    }
+
+    /// The newest manager-verifier version and up to `limit` of its entries (active staff with
+    /// a PIN whose role allows `permission`, ordered by id), read in one snapshot. The version
+    /// is 0 before any was recorded.
+    pub fn manager_verifier(
+        &self,
+        permission: &str,
+        limit: usize,
+    ) -> Result<(i64, Vec<PinCandidate>), AppError> {
+        if !self.table_exists("verifier_history")? {
+            return Ok((0, Vec::new()));
+        }
+        self.read_consistent(|s| {
+            let version = latest_verifier(&s.conn)?.map_or(0, |(v, _)| v);
+            Ok((
+                version,
+                list_pin_candidates(&s.conn, &[permission], "", limit)?,
+            ))
+        })
     }
 
     /// Up to `limit` active staff with a PIN, `first` ahead of the others (see

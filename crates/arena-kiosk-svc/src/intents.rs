@@ -53,3 +53,60 @@ pub fn kiosk_process_blocked(device_id: &str, now_ms: i64, blocked: KioskProcess
         payload: IntentPayload::KioskProcessBlocked(blocked),
     }
 }
+
+/// A `device.admin_exit` intent from `device_id`, minted at `now_ms` (the moment the exit was
+/// granted), elevated by the manager whose PIN was checked (`mode`: at the Hub, or offline
+/// against the cached verifier of `verifier_version`).
+#[allow(clippy::too_many_arguments)]
+pub fn device_admin_exit(
+    device_id: &str,
+    now_ms: i64,
+    exit_id: &str,
+    mode: arena_proto::AdminExitMode,
+    staff_id: &str,
+    elevation: arena_proto::ElevationMode,
+    verifier_version: i64,
+) -> Intent {
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::DeviceAdminExit,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: now_ms,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::Device,
+            id: device_id.to_owned(),
+        },
+        elevated_by: Some(arena_proto::ElevatedBy {
+            kind: arena_proto::ElevationKind::Pin,
+            id: staff_id.to_owned(),
+            mode: elevation,
+            verifier_version,
+        }),
+        reason: None,
+        payload: IntentPayload::DeviceAdminExit(arena_proto::DeviceAdminExit {
+            exit_id: exit_id.to_owned(),
+            mode,
+        }),
+    }
+}
+
+/// A `device.admin_relock` intent from `device_id`, minted at `now_ms` (when it re-locked).
+pub fn device_admin_relock(device_id: &str, now_ms: i64, exit_id: &str) -> Intent {
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::DeviceAdminRelock,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: now_ms,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::Device,
+            id: device_id.to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::DeviceAdminRelock(arena_proto::DeviceAdminRelock {
+            exit_id: exit_id.to_owned(),
+        }),
+    }
+}

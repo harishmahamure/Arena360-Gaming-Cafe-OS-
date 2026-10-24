@@ -12,7 +12,13 @@
 //! - A toast the process enforcer raises (`player.app.blocked`) is forwarded to the current app
 //!   as IPC `toast`; with no app connected it is dropped (the kill is still reported).
 //! - Requests: `log{level, code, detail}` queues a `kiosk.log`; `hub_status` answers the link
-//!   state. Anything else is `UNSUPPORTED`. The app gets nothing else: no Hub socket, no token.
+//!   state; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
+//!   running exit). Anything else is `UNSUPPORTED`. The app gets nothing else: no Hub socket,
+//!   no token.
+//! - `admin_exit{pin}` (the hidden admin-exit panel) is checked by [`crate::admin_exit`] on its
+//!   own task and answered with `reply`. While an exit runs the app gets
+//!   `admin_exit_started{until}`, and `admin_exit_ended` when it is over; every new connection
+//!   gets one of the two (idempotent on the app side).
 
 use std::sync::Arc;
 
@@ -112,6 +118,7 @@ pub(crate) async fn run<S: IpcServer>(
     let mut dog = Watchdog::with_timings(now_ms(), t.ping_interval, t.restart_grace);
     let mut hub_state = ctx.hub_state.subscribe();
     let mut toasts = ctx.toasts.subscribe();
+    let mut exits = ctx.admin.active.subscribe();
     let mut current: Option<Current> = None;
     let mut held = false;
     loop {
@@ -130,6 +137,12 @@ pub(crate) async fn run<S: IpcServer>(
                         if let Some(json) = last {
                             let _ = out.try_send(IpcMsg::RestoreState { json });
                         }
+                        // Always say where things stand: an exit that ended (or was re-locked by
+                        // a restart) while no app was connected must not leave it unlocked.
+                        let _ = out.try_send(match exits.borrow_and_update().as_ref() {
+                            Some(e) => IpcMsg::AdminExitStarted { until: e.until },
+                            None => IpcMsg::AdminExitEnded,
+                        });
                         dog.on_connected(now_ms());
                         tracing::info!(conn = id, "app connected");
                         current = Some(Current { id, out, kill });
@@ -196,6 +209,16 @@ pub(crate) async fn run<S: IpcServer>(
                     let _ = c.out.try_send(IpcMsg::HubStatus { state });
                 }
             }
+            changed = exits.changed() => {
+                if changed.is_err() { break; }
+                let msg = match exits.borrow_and_update().as_ref() {
+                    Some(e) => IpcMsg::AdminExitStarted { until: e.until },
+                    None => IpcMsg::AdminExitEnded,
+                };
+                if let Some(c) = &current {
+                    let _ = c.out.try_send(msg);
+                }
+            }
             toast = toasts.recv() => match toast {
                 Ok(key) => {
                     if let Some(c) = &current {
@@ -239,6 +262,22 @@ fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError>
             Ok(Value::Object(Default::default()))
         }
         "hub_status" => Ok(serde_json::json!({ "state": *ctx.hub_state.borrow() })),
+        "admin_exit_status" => {
+            let mut body = serde_json::Map::new();
+            if let arena_kiosk_core::admin_exit::Gate::Paused { seconds } = ctx
+                .admin
+                .throttle
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .gate(ctx.clock.now_ms())
+            {
+                body.insert("retry_after_s".into(), seconds.into());
+            }
+            if let Some(e) = ctx.admin.active.borrow().as_ref() {
+                body.insert("until".into(), e.until.into());
+            }
+            Ok(Value::Object(body))
+        }
         other => Err(AppError::new(
             ErrorCode::Unsupported,
             format!("unknown request kind {other}"),
@@ -276,6 +315,28 @@ async fn serve(
             }
             Ok(IpcMsg::AppState { json }) => {
                 *ctx.app_state.lock().unwrap_or_else(|p| p.into_inner()) = Some(json);
+            }
+            Ok(IpcMsg::AdminExit { rid, pin }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = match crate::admin_exit::request(&ctx, pin).await {
+                        Ok(until) => IpcMsg::Reply {
+                            rid,
+                            body: serde_json::json!({ "until": until }),
+                            error: None,
+                        },
+                        Err(r) => {
+                            let (error, body) = r.to_reply();
+                            IpcMsg::Reply {
+                                rid,
+                                body,
+                                error: Some(error),
+                            }
+                        }
+                    };
+                    let _ = out.send(reply).await;
+                });
             }
             Ok(IpcMsg::Request { rid, kind, body }) => {
                 let reply = match handle_request(&ctx, &kind, body) {

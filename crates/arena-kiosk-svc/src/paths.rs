@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "config.json";
 pub const TOKEN_FILE: &str = "token.bin";
+/// The cached manager verifier, next to the token.
+pub const VERIFIER_FILE: &str = "verifier.bin";
 pub const QUEUE_FILE: &str = "queue.db";
 pub const LOGS_DIR: &str = "logs";
 pub const LOCKDOWN_BACKUP_FILE: &str = "lockdown-backup.json";
@@ -41,6 +43,10 @@ impl DataDir {
     }
     pub fn queue(&self) -> PathBuf {
         self.0.join(QUEUE_FILE)
+    }
+    /// The cached manager verifier (DPAPI-protected, machine scope, on Windows).
+    pub fn verifier(&self) -> PathBuf {
+        self.0.join(VERIFIER_FILE)
     }
     pub fn logs(&self) -> PathBuf {
         self.0.join(LOGS_DIR)

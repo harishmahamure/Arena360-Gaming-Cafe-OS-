@@ -262,6 +262,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stale_offline_admin_exit_is_flagged_in_the_list_and_summarised_in_the_detail() {
+        let hub = hub().await;
+        let owner = Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let kiosk = hub
+            .writer
+            .submit_intent(intent_as(
+                owner.clone(),
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    class: arena_proto::ClientClass::Paired,
+                    label: "Kiosk 3".into(),
+                    token_hash: arena_core::devices::hash_token_secret("k").unwrap(),
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let dir = arena_core::DeviceDirectory::open(&hub.path).unwrap();
+        let old = dir.manager_verifier().unwrap().version;
+        // The Hub moves to a newer verifier; the kiosk still used the old one.
+        hub.clock.advance(60_000);
+        let mut add = intent_as(
+            owner,
+            IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                staff_id: None,
+                login: "manager2".into(),
+                display_name: "Manager 2".into(),
+                role_id: hub.manager_role.clone(),
+                password_hash: Some(arena_core::staff::hash_secret("pw").unwrap()),
+                pin_hash: Some(arena_core::staff::hash_secret("6666").unwrap()),
+                active: true,
+            }),
+            None,
+        );
+        add.issued_at = hub.clock.now_ms();
+        hub.writer.submit_intent(add).await.unwrap();
+        assert!(dir.manager_verifier().unwrap().version > old);
+        let exit_id = ulid::Ulid::generate().to_string();
+        let mut exit = intent_as(
+            Actor {
+                kind: ActorKind::Device,
+                id: kiosk.clone(),
+            },
+            IntentPayload::DeviceAdminExit(arena_proto::DeviceAdminExit {
+                exit_id: exit_id.clone(),
+                mode: arena_proto::AdminExitMode::CachedVerifier,
+            }),
+            None,
+        );
+        exit.issued_at = hub.clock.now_ms();
+        exit.elevated_by = Some(arena_proto::ElevatedBy {
+            kind: arena_proto::ElevationKind::Pin,
+            id: hub.manager_id.clone(),
+            mode: arena_proto::ElevationMode::CachedVerifier,
+            verifier_version: old,
+        });
+        hub.writer.submit_intent(exit).await.unwrap();
+
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (status, page) = get(&hub, "/ui/audit?module=device", &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let item = items(&page)
+            .iter()
+            .find(|i| i["tbl"] == "device_admin_exits")
+            .unwrap()
+            .clone();
+        assert_eq!(item["flagged"], true);
+        assert_eq!(item["row_id"], exit_id.as_str());
+        let others = items(&page)
+            .iter()
+            .filter(|i| i["tbl"] != "device_admin_exits");
+        for other in others {
+            assert!(other.get("flagged").is_none(), "{other}");
+        }
+        let uri = format!(
+            "/ui/audit/item?epoch={}&seq={}",
+            item["epoch"].as_str().unwrap(),
+            item["seq"]
+        );
+        let (status, detail) = get(&hub, &uri, &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{detail}");
+        let e = &detail["admin_exit"];
+        assert_eq!(e["device_label"], "Kiosk 3");
+        assert_eq!(e["staff_name"], "Manager");
+        assert_eq!(e["mode"], "cached_verifier");
+        assert_eq!(e["flagged"], true);
+        assert_eq!(e["flag_reason"], "stale_verifier");
+        assert_eq!(detail["item"]["flagged"], true);
+    }
+
+    #[tokio::test]
     async fn a_manager_pages_the_whole_log_newest_first_without_overlap_or_gap() {
         let hub = hub().await;
         let token = token_for(&hub, "manager", "m-pass").await;

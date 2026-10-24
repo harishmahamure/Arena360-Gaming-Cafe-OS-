@@ -31,6 +31,27 @@ const MODULE_LABELS: Record<string, MessageKey> = {
   kiosk: "hub.audit.module.kiosk",
 };
 
+/** Intent kinds with a catalogue label; any other kind shows as it is (`settings.set`). */
+const INTENT_LABELS: Record<string, MessageKey> = {
+  "device.admin_exit": "hub.audit.intent.device.admin_exit",
+  "device.admin_relock": "hub.audit.intent.device.admin_relock",
+  "device.admin_unlock": "hub.audit.intent.device.admin_unlock",
+};
+
+/** An intent kind's label. */
+export function intentLabel(kind: string): string {
+  const key = INTENT_LABELS[kind];
+  return key ? t(key) : kind;
+}
+
+/** How a kiosk admin exit was granted. */
+export const EXIT_MODE_LABELS: Record<string, MessageKey> = {
+  hub: "hub.audit.exit.mode.hub",
+  cached_verifier: "hub.audit.exit.mode.cached_verifier",
+  remote: "hub.audit.exit.mode.remote",
+  unknown: "hub.audit.exit.mode.unknown",
+};
+
 const OP_LABELS: Record<ChangeOpKind, MessageKey> = {
   insert: "hub.audit.op.insert",
   update: "hub.audit.op.update",

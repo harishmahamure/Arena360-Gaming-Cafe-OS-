@@ -253,6 +253,42 @@ mod tests {
                 id: device.changes[0].row_id.clone(),
             };
             writer.submit_intent(log).await.unwrap();
+            // A remote unlock of a paired kiosk and its re-lock (insert + update).
+            let kiosk = writer
+                .submit_intent(submit(
+                    IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                        class: arena_proto::ClientClass::Paired,
+                        label: "Kiosk".into(),
+                        token_hash: arena_core::devices::hash_token_secret("k").unwrap(),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            let exit = writer
+                .submit_intent(submit(
+                    IntentPayload::DeviceAdminUnlock(arena_proto::DeviceAdminUnlock {
+                        device_id: kiosk.clone(),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            let mut relock = submit(
+                IntentPayload::DeviceAdminRelock(arena_proto::DeviceAdminRelock { exit_id: exit }),
+                None,
+            );
+            relock.actor = Actor {
+                kind: ActorKind::Device,
+                id: kiosk,
+            };
+            writer.submit_intent(relock).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

@@ -169,3 +169,121 @@ mod kiosk_log_rate_tests {
         assert!(!r.take_at("D", t0 + Duration::from_secs(1)));
     }
 }
+
+/// Consecutive wrong admin-exit PINs from one device before it is paused.
+pub const ADMIN_PIN_MAX_FAILURES: u32 = 5;
+/// How long a device is paused after [`ADMIN_PIN_MAX_FAILURES`].
+pub const ADMIN_PIN_PAUSE: Duration = Duration::from_secs(60);
+
+/// One device's admin-PIN state: (wrong PINs in a row, checks in flight, paused until).
+type PinStreak = (u32, u32, Option<Instant>);
+
+/// Per-device admin-exit PIN throttle (`kiosk.verify_admin_pin`): five wrong PINs in a row pause
+/// that device's checks for a minute (`AUTH_LOCKED`), without touching argon2. Each check is
+/// reserved before it runs and counts toward the five while in flight, so parallel attempts
+/// cannot get past the limit. The kiosk keeps its own count too; this one holds even against a
+/// kiosk that does not.
+#[derive(Default)]
+pub(crate) struct AdminPinThrottle {
+    devices: Mutex<HashMap<String, PinStreak>>,
+}
+
+impl AdminPinThrottle {
+    /// Reserves one check for `device_id` at `now`. `Err` with the seconds to wait when the device
+    /// is paused, or when the wrong PINs so far plus the checks in flight already reach the limit.
+    pub(crate) fn begin(&self, device_id: &str, now: Instant) -> Result<(), u32> {
+        let Ok(mut map) = self.devices.lock() else {
+            return Err(ADMIN_PIN_PAUSE.as_secs() as u32);
+        };
+        if map.len() >= SWEEP_AT {
+            map.retain(|_, (n, f, until)| *n > 0 || *f > 0 || until.is_some_and(|u| u > now));
+        }
+        let entry = map.entry(device_id.to_owned()).or_insert((0, 0, None));
+        if let Some(until) = entry.2 {
+            if until > now {
+                return Err(until.duration_since(now).as_secs_f64().ceil().max(1.0) as u32);
+            }
+            entry.2 = None;
+        }
+        if entry.0 + entry.1 >= ADMIN_PIN_MAX_FAILURES {
+            return Err(ADMIN_PIN_PAUSE.as_secs() as u32);
+        }
+        entry.1 += 1;
+        Ok(())
+    }
+
+    /// Gives back a reserved check that could not run (it counts neither way).
+    pub(crate) fn cancel(&self, device_id: &str) {
+        if let Ok(mut map) = self.devices.lock()
+            && let Some(entry) = map.get_mut(device_id)
+        {
+            entry.1 = entry.1.saturating_sub(1);
+        }
+    }
+
+    /// Ends a reserved check. A failure that completes the streak pauses the device and answers
+    /// the pause in seconds.
+    pub(crate) fn finish(&self, device_id: &str, ok: bool, now: Instant) -> Option<u32> {
+        let Ok(mut map) = self.devices.lock() else {
+            return None;
+        };
+        let entry = map.entry(device_id.to_owned()).or_insert((0, 0, None));
+        entry.1 = entry.1.saturating_sub(1);
+        if ok {
+            entry.0 = 0;
+            return None;
+        }
+        entry.0 += 1;
+        if entry.0 >= ADMIN_PIN_MAX_FAILURES {
+            entry.0 = 0;
+            entry.2 = Some(now + ADMIN_PIN_PAUSE);
+            return Some(ADMIN_PIN_PAUSE.as_secs() as u32);
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod admin_pin_tests {
+    use super::*;
+
+    #[test]
+    fn five_wrong_pins_in_a_row_pause_the_device_for_a_minute() {
+        let t = AdminPinThrottle::default();
+        let t0 = Instant::now();
+        for _ in 0..4 {
+            t.begin("D", t0).unwrap();
+            assert_eq!(t.finish("D", false, t0), None);
+        }
+        t.begin("D", t0).unwrap();
+        assert_eq!(t.finish("D", false, t0), Some(60));
+        assert_eq!(t.begin("D", t0), Err(60));
+        assert!(t.begin("E", t0).is_ok());
+        assert!(t.begin("D", t0 + Duration::from_secs(60)).is_ok());
+        // A success resets the streak.
+        let t = AdminPinThrottle::default();
+        for _ in 0..4 {
+            t.begin("E", t0).unwrap();
+            t.finish("E", false, t0);
+        }
+        t.begin("E", t0).unwrap();
+        t.finish("E", true, t0);
+        t.begin("E", t0).unwrap();
+        assert_eq!(t.finish("E", false, t0), None);
+    }
+
+    #[test]
+    fn checks_in_flight_count_toward_the_limit() {
+        let t = AdminPinThrottle::default();
+        let t0 = Instant::now();
+        for _ in 0..5 {
+            t.begin("D", t0).unwrap();
+        }
+        assert!(
+            t.begin("D", t0).is_err(),
+            "a sixth parallel check is refused"
+        );
+        t.finish("D", true, t0);
+        assert!(t.begin("D", t0).is_ok());
+    }
+}

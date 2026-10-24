@@ -9,6 +9,7 @@
 //! player's session. Off Windows the same logic runs in console mode over a Unix socket, for dev
 //! and CI.
 
+pub mod admin_exit;
 pub mod app;
 pub mod cli;
 pub mod clock;

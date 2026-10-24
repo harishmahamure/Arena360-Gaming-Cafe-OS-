@@ -22,4 +22,8 @@ export type AuditItem = {
   tbl: string;
   row_id: string;
   op: ChangeOpKind;
+  /**
+   * A `device_admin_exits` change whose exit is flagged for review (absent otherwise).
+   */
+  flagged?: boolean;
 };

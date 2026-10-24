@@ -22,6 +22,7 @@
 //! nothing is written then, and the Writer does not emit. A success is recorded in
 //! `applied_intents` right after append_changes, in the same transaction.
 
+mod admin_exit;
 mod changes;
 mod devices;
 mod frame;
@@ -34,6 +35,7 @@ mod settings_set;
 mod staff_roles;
 mod ttl_dedupe;
 mod validate;
+pub(crate) mod verifier;
 
 #[cfg(test)]
 mod tests;
@@ -110,6 +112,12 @@ pub(crate) enum Target {
     /// `audit.read_granted`, `kiosk.log`, `kiosk.process_blocked`: the branch, if it has been
     /// bootstrapped.
     Branch(Option<String>),
+    /// `device.admin_exit`: the branch and whether the exit id is taken.
+    AdminExit(Box<admin_exit::ExitTarget>),
+    /// `device.admin_relock`: the exit row, if it exists.
+    AdminRelock(Option<arena_store::AdminExitRow>),
+    /// `device.admin_unlock`: the branch and the device.
+    AdminUnlock(Box<admin_exit::UnlockTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
@@ -124,6 +132,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::RoleUpsert(r) => Target::Role(Box::new(staff_roles::load_role(tx, intent, r)?)),
         P::AuditReadGranted(_) => read_grants::load(tx)?,
         P::KioskLog(_) | P::KioskProcessBlocked(_) => kiosk_log::load(tx)?,
+        P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
+        P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,
+        P::DeviceAdminUnlock(p) => admin_exit::load_unlock(tx, p)?,
     })
 }
 
@@ -168,6 +179,16 @@ pub(crate) fn run(
     guards::base_rev(intent, &target)?;
     validate::validate(intent, &target)?;
     let written = mutate::mutate(tx, intent, &target, now)?;
+    // A change to staff or roles may change who can unlock a kiosk offline.
+    if matches!(
+        intent.kind,
+        arena_proto::IntentKind::BranchBootstrap
+            | arena_proto::IntentKind::BranchSeedDefaults
+            | arena_proto::IntentKind::StaffUpsert
+            | arena_proto::IntentKind::RoleUpsert
+    ) {
+        verifier::refresh(tx, now)?;
+    }
     #[cfg(test)]
     if ctx.fail_after_mutate {
         return Err(AppError::new(

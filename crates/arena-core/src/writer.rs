@@ -225,7 +225,8 @@ impl WriterHandle {
         .await
     }
 
-    /// Brings an upgraded branch up to the current defaults: when the branch exists and lacks
+    /// Brings an upgraded branch up to the current defaults (and the manager verifier's history
+    /// up to date with the staff rows): when the branch exists and lacks
     /// default settings, built-in roles or their permission rows, submits `branch.seed_defaults`
     /// (system actor) through `apply()` in the same transaction as the check, then emits. With
     /// nothing missing (or no branch) it writes nothing, submits no intent and answers `None`.
@@ -237,6 +238,11 @@ impl WriterHandle {
             move |store| {
                 let ctx = ctx_from(clock.as_ref(), &status);
                 store.write_tx_mut(|tx| {
+                    // The manager verifier's history catches up with the staff rows (an
+                    // upgraded branch gets its first version here); kiosks hear it on hello.
+                    if crate::apply::check_epoch(tx, &ctx).is_ok() {
+                        crate::apply::verifier::refresh(tx, clock.now_ms())?;
+                    }
                     match crate::apply::seed_defaults::missing(tx)? {
                         Some(m) if !m.is_empty() => {}
                         _ => return Ok(None),

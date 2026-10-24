@@ -6,7 +6,7 @@ use arena_proto::{
 };
 use arena_store::{StoreTx, find_device, find_staff, read_lease};
 
-use super::{ApplyCtx, Target, devices, settings_set, staff_roles};
+use super::{ApplyCtx, Target, admin_exit, devices, settings_set, staff_roles};
 use crate::rbac;
 use crate::staff::pin_required;
 use crate::status::{Epoch, Role};
@@ -31,6 +31,11 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
     {
         return Err(refused("the device is revoked or unknown"));
     }
+    // The kiosk's admin exit: the device acts on a manager's PIN, checked at the Hub or, only
+    // here, against the cached verifier.
+    if intent.payload.kind().elevator_permission().is_some() {
+        return admin_exit::permission(tx, intent);
+    }
     match &intent.elevated_by {
         Some(e) => elevation(tx, intent, e),
         None => rbac::check(tx, intent),
@@ -40,7 +45,8 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
 /// The permission step of an elevated intent. Only the Hub's ticket path sets `elevated_by`
 /// (every edge strips a client's), and this re-checks everything the ticket was issued on:
 ///
-/// - the elevation is a PIN verified at the Hub (`mfa` and `cached_verifier` are later stories);
+/// - the elevation is a PIN verified at the Hub (`mfa` is a later story; `cached_verifier` is
+///   accepted only for `device.admin_exit`, which never comes here);
 /// - the actor is an active staff member, and the elevating member is someone else;
 /// - the kind's requirement is a permission, and the elevating member is active and holds it;
 /// - the elevating member's `pin_verifier_version` is still the one the PIN was checked
@@ -78,12 +84,15 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             ErrorCode::Internal,
             "the loaded target does not match the payload",
         )),
+        (Target::AdminRelock(row), _) => admin_exit::authorize_relock(intent, row.as_ref()),
         (
             Target::None
             | Target::Setting(_)
             | Target::NewDevice(_)
             | Target::Device(_)
-            | Target::Branch(_),
+            | Target::Branch(_)
+            | Target::AdminExit(_)
+            | Target::AdminUnlock(_),
             _,
         ) => Ok(()),
     }
@@ -120,7 +129,11 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
     match target {
         Target::None => Ok(()),
         Target::Setting(row) => settings_set::base_rev(intent, row.as_ref()),
-        Target::NewDevice(_) | Target::Branch(_) => Ok(()),
+        Target::NewDevice(_)
+        | Target::Branch(_)
+        | Target::AdminExit(_)
+        | Target::AdminRelock(_)
+        | Target::AdminUnlock(_) => Ok(()),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::Staff(t) => staff_roles::base_rev_staff(intent, t),
         Target::Role(t) => staff_roles::base_rev_role(intent, t),

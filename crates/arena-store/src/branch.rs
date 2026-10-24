@@ -35,11 +35,12 @@ pub enum Table {
     Staff,
     ReadGrants,
     DeviceEvents,
+    DeviceAdminExits,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 8] = [
+    pub const ALL: [Table; 9] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -48,6 +49,7 @@ impl Table {
         Table::Staff,
         Table::ReadGrants,
         Table::DeviceEvents,
+        Table::DeviceAdminExits,
     ];
 
     /// The SQL table name.
@@ -61,6 +63,7 @@ impl Table {
             Self::Staff => "staff",
             Self::ReadGrants => "read_grants",
             Self::DeviceEvents => "device_events",
+            Self::DeviceAdminExits => "device_admin_exits",
         }
     }
 
@@ -75,6 +78,7 @@ impl Table {
             Self::Staff => &["staff_id"],
             Self::ReadGrants => &["grant_id"],
             Self::DeviceEvents => &["event_id"],
+            Self::DeviceAdminExits => &["exit_id"],
         }
     }
 
@@ -86,7 +90,8 @@ impl Table {
             | Self::Roles
             | Self::Staff
             | Self::ReadGrants
-            | Self::DeviceEvents => true,
+            | Self::DeviceEvents
+            | Self::DeviceAdminExits => true,
             Self::Settings | Self::RolePerms => false,
         }
     }
@@ -114,6 +119,7 @@ pub enum RowKey {
     Staff { staff_id: String },
     ReadGrants { grant_id: String },
     DeviceEvents { event_id: String },
+    DeviceAdminExits { exit_id: String },
 }
 
 impl RowKey {
@@ -127,6 +133,7 @@ impl RowKey {
             Self::Staff { .. } => Table::Staff,
             Self::ReadGrants { .. } => Table::ReadGrants,
             Self::DeviceEvents { .. } => Table::DeviceEvents,
+            Self::DeviceAdminExits { .. } => Table::DeviceAdminExits,
         }
     }
 
@@ -144,6 +151,7 @@ impl RowKey {
             Self::Staff { staff_id } => staff_id.clone(),
             Self::ReadGrants { grant_id } => grant_id.clone(),
             Self::DeviceEvents { event_id } => event_id.clone(),
+            Self::DeviceAdminExits { exit_id } => exit_id.clone(),
         }
     }
 
@@ -181,6 +189,9 @@ impl RowKey {
             Table::DeviceEvents => Self::DeviceEvents {
                 event_id: text("event_id")?,
             },
+            Table::DeviceAdminExits => Self::DeviceAdminExits {
+                exit_id: text("exit_id")?,
+            },
         })
     }
 
@@ -197,6 +208,7 @@ impl RowKey {
             Self::Staff { staff_id } => vec![staff_id],
             Self::ReadGrants { grant_id } => vec![grant_id],
             Self::DeviceEvents { event_id } => vec![event_id],
+            Self::DeviceAdminExits { exit_id } => vec![exit_id],
         }
     }
 }
@@ -341,6 +353,7 @@ pub fn has_branch_data(conn: &Connection) -> Result<bool, AppError> {
              OR EXISTS (SELECT 1 FROM devices) OR EXISTS (SELECT 1 FROM roles)
              OR EXISTS (SELECT 1 FROM role_perms) OR EXISTS (SELECT 1 FROM staff)
              OR EXISTS (SELECT 1 FROM read_grants) OR EXISTS (SELECT 1 FROM device_events)
+             OR EXISTS (SELECT 1 FROM device_admin_exits)
              OR EXISTS (SELECT 1 FROM changes)",
         [],
         |r| r.get(0),

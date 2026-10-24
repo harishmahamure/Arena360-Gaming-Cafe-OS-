@@ -36,6 +36,8 @@ pub struct Timings {
     pub replay_retry: Duration,
     pub ping_interval: Duration,
     pub restart_grace: Duration,
+    /// How often the admin-exit timer re-reads the clock (at most).
+    pub admin_tick: Duration,
 }
 
 impl Default for Timings {
@@ -47,6 +49,7 @@ impl Default for Timings {
             replay_retry: REPLAY_RETRY,
             ping_interval: PING_INTERVAL,
             restart_grace: RESTART_GRACE,
+            admin_tick: Duration::from_secs(1),
         }
     }
 }
@@ -68,6 +71,10 @@ pub struct Ctx {
     pub lists: watch::Sender<Arc<ProcessLists>>,
     /// Toast catalogue keys for the app (the supervisor forwards them as IPC `toast`).
     pub toasts: broadcast::Sender<String>,
+    /// Restarts the app; starts and stops the admin exit's desktop.
+    pub launcher: Arc<dyn AppLauncher>,
+    /// The admin exit: throttle, running exit, cached verifier, live Hub link.
+    pub admin: crate::admin_exit::AdminState,
 }
 
 impl Ctx {
@@ -139,6 +146,7 @@ impl Runtime {
     ) -> std::io::Result<Self> {
         std::fs::create_dir_all(data.root())?;
         let queue = QueueDb::open(&data.queue())?;
+        let data_verifier = data.verifier();
         let (lists, _) = watch::channel(Arc::new(ProcessLists::load(&queue)));
         let (toasts, _) = broadcast::channel(16);
         let (hub_state, _) = watch::channel(KioskHubState::Reconnecting);
@@ -153,10 +161,15 @@ impl Runtime {
             app_state: Mutex::new(None),
             lists,
             toasts,
+            admin: crate::admin_exit::AdminState::load(crate::secret::platform_store(
+                data_verifier,
+            )),
+            launcher: Arc::clone(&launcher),
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![
             tokio::spawn(crate::hub_link::run(Arc::clone(&ctx), stop_rx.clone())),
+            tokio::spawn(crate::admin_exit::run(Arc::clone(&ctx), stop_rx.clone())),
             tokio::spawn(crate::app::run(Arc::clone(&ctx), ipc, launcher, stop_rx)),
         ];
         Ok(Self { ctx, stop, tasks })

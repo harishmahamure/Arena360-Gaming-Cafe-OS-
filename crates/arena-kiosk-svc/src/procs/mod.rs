@@ -27,6 +27,10 @@
 //!   minute. A failed kill is warned about once per pid and path and reported once as
 //!   `kiosk.log{error, kill_failed}`.
 //!
+//! **Admin exit (Story 1.20).** While an admin exit runs nothing is checked or killed. When it
+//! ends, every `explorer.exe` in the player's session (the exit's desktop) is closed, whatever
+//! the mode, under the same safety rules, and a sweep follows at once.
+//!
 //! **Safety rules** (checked before any decision, in this order; failing any one means the
 //! process is left alone):
 //!
@@ -107,6 +111,8 @@ pub const EVENT_QUEUE: usize = 1024;
 pub const MAX_IN_FLIGHT: usize = 8;
 /// The only image name exempt as a descendant of the kiosk app (its WebView2 runtime).
 pub const WEBVIEW2_IMAGE: &str = "msedgewebview2.exe";
+/// The admin exit's desktop, closed in the player's session when the exit ends.
+pub const EXPLORER_IMAGE: &str = "explorer.exe";
 /// How far up the parent chain the kiosk-app exemption looks.
 const MAX_ANCESTRY: usize = 32;
 /// Entries kept at most in each warn-once set (cleared when it fills).
@@ -791,7 +797,7 @@ impl Inner {
         lists: &ProcessLists,
         event: Option<&ProcStart>,
     ) -> Option<Hit> {
-        if pid == 0 || pid == 4 || pid == std::process::id() {
+        if pid == 0 || pid == 4 || pid == std::process::id() || self.ctx.admin.suspended() {
             return None;
         }
         let facts = match self.api.watcher.inspect(pid) {
@@ -888,6 +894,48 @@ impl Inner {
                 None
             }
         }
+    }
+
+    /// Closes every process in the player's session whose image file name is `name` (the
+    /// admin exit's Explorer), never the app, the service or a protected image. Returns how many.
+    fn close_named(&self, name: &str) -> usize {
+        self.refresh_app();
+        let Some(player) = self.player() else {
+            return 0;
+        };
+        let Ok(entries) = self.api.watcher.running() else {
+            return 0;
+        };
+        let app = lock(&self.app).clone();
+        let mut closed = 0;
+        for e in entries {
+            if e.pid == 0 || e.pid == 4 || e.pid == std::process::id() {
+                continue;
+            }
+            let Some(facts) = self.player_facts(e.pid, &player) else {
+                continue;
+            };
+            let path = normalize_path(&facts.path);
+            let lower = path.to_lowercase();
+            if !file_name(&path).eq_ignore_ascii_case(name)
+                || app.as_ref() == Some(&lower)
+                || self.own.contains(&lower)
+                || self.protected.contains(&lower)
+            {
+                continue;
+            }
+            match self.api.killer.kill(&facts) {
+                Ok(()) => {
+                    closed += 1;
+                    tracing::info!(pid = e.pid, path = %path, "admin exit over: closed the desktop");
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    tracing::warn!(pid = e.pid, error = %err, "could not close the desktop")
+                }
+            }
+        }
+        closed
     }
 
     fn player(&self) -> Option<PlayerSession> {
@@ -1133,6 +1181,8 @@ pub(crate) async fn run(
     let sweeps = tokio::spawn(sweeper(Arc::clone(&inner), Arc::clone(&sweep_now), polling));
     let mut lists = ctx.lists.subscribe();
     lists.mark_unchanged();
+    let mut exits = ctx.admin.active.subscribe();
+    exits.mark_unchanged();
     let mut rx = subscribe(&inner, &polling_tx, &sweep_now).await;
     let mut retry_at = tokio::time::Instant::now() + RESUBSCRIBE;
     'run: loop {
@@ -1169,6 +1219,16 @@ pub(crate) async fn run(
             () = tokio::time::sleep_until(retry_at), if rx.is_none() => {
                 rx = subscribe(&inner, &polling_tx, &sweep_now).await;
                 retry_at = tokio::time::Instant::now() + RESUBSCRIBE;
+            }
+            changed = exits.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                if exits.borrow_and_update().is_none() {
+                    let i = Arc::clone(&inner);
+                    blocking(move || i.close_named(EXPLORER_IMAGE)).await;
+                    sweep_now.notify_one();
+                }
             }
             changed = lists.changed() => {
                 if changed.is_err() {

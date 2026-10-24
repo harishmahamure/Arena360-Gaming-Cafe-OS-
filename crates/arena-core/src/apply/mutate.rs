@@ -142,6 +142,15 @@ pub(super) fn mutate(
             ),
             _ => Err(mismatch()),
         },
+        IntentPayload::DeviceAdminExit(p) => match target {
+            Target::AdminExit(t) => super::admin_exit::mutate_exit(tx, intent, p, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::DeviceAdminRelock(p) => super::admin_exit::mutate_relock(tx, intent, p),
+        IntentPayload::DeviceAdminUnlock(p) => match target {
+            Target::AdminUnlock(t) => super::admin_exit::mutate_unlock(tx, intent, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
     }
 }
 

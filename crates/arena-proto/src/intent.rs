@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::actor::{Actor, ElevatedBy};
+use crate::admin::{DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock};
 use crate::kiosk::KioskLog;
 use crate::permission::{Permission, Requirement};
 use crate::process::KioskProcessBlocked;
@@ -69,11 +70,21 @@ pub enum IntentKind {
     /// offline and replayed in order like `kiosk.log`.
     #[serde(rename = "kiosk.process_blocked")]
     KioskProcessBlocked,
+    /// A kiosk granted an admin exit after a manager's PIN (device actor, elevated by the
+    /// manager: checked by the Hub or, offline, against the cached verifier).
+    #[serde(rename = "device.admin_exit")]
+    DeviceAdminExit,
+    /// A kiosk re-locked after an admin exit (device actor).
+    #[serde(rename = "device.admin_relock")]
+    DeviceAdminRelock,
+    /// A manager unlocks a kiosk remotely from the Hub floor.
+    #[serde(rename = "device.admin_unlock")]
+    DeviceAdminUnlock,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 12] = [
+    pub const ALL: [IntentKind; 15] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -86,6 +97,9 @@ impl IntentKind {
         Self::AuditReadGranted,
         Self::KioskLog,
         Self::KioskProcessBlocked,
+        Self::DeviceAdminExit,
+        Self::DeviceAdminRelock,
+        Self::DeviceAdminUnlock,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -103,6 +117,9 @@ impl IntentKind {
             Self::AuditReadGranted => "audit.read_granted",
             Self::KioskLog => "kiosk.log",
             Self::KioskProcessBlocked => "kiosk.process_blocked",
+            Self::DeviceAdminExit => "device.admin_exit",
+            Self::DeviceAdminRelock => "device.admin_relock",
+            Self::DeviceAdminUnlock => "device.admin_unlock",
         }
     }
 
@@ -116,9 +133,12 @@ impl IntentKind {
         match self {
             Self::BranchBootstrap | Self::BranchSeedDefaults => IntentCategory::Branch,
             Self::SettingsSet => IntentCategory::Settings,
-            Self::DeviceRegister | Self::DeviceRevoke | Self::DeviceVersionReported => {
-                IntentCategory::Device
-            }
+            Self::DeviceRegister
+            | Self::DeviceRevoke
+            | Self::DeviceVersionReported
+            | Self::DeviceAdminExit
+            | Self::DeviceAdminRelock
+            | Self::DeviceAdminUnlock => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
@@ -139,6 +159,21 @@ impl IntentKind {
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
             Self::KioskLog | Self::KioskProcessBlocked => Requirement::Device,
+            // The kiosk itself acts; the approving manager must hold `device.remote`
+            // ([`elevator_permission`](Self::elevator_permission)).
+            Self::DeviceAdminExit | Self::DeviceAdminRelock => Requirement::Device,
+            Self::DeviceAdminUnlock => Requirement::Perm(Permission::DeviceRemote),
+        }
+    }
+
+    /// For a kind a device does on a manager's say-so: the permission the elevating staff
+    /// member must hold (the actor's own requirement is still [`requirement`](Self::requirement)).
+    /// Only `device.admin_exit` has one, and it is the only kind that accepts a
+    /// `cached_verifier` elevation.
+    pub fn elevator_permission(self) -> Option<Permission> {
+        match self {
+            Self::DeviceAdminExit => Some(Permission::DeviceRemote),
+            _ => None,
         }
     }
 
@@ -162,7 +197,10 @@ impl IntentKind {
             | Self::RoleUpsert
             | Self::AuditReadGranted
             | Self::KioskLog
-            | Self::KioskProcessBlocked => None,
+            | Self::KioskProcessBlocked
+            | Self::DeviceAdminExit
+            | Self::DeviceAdminRelock
+            | Self::DeviceAdminUnlock => None,
         }
     }
 
@@ -374,6 +412,12 @@ pub enum IntentPayload {
     KioskLog(KioskLog),
     #[serde(rename = "kiosk.process_blocked")]
     KioskProcessBlocked(KioskProcessBlocked),
+    #[serde(rename = "device.admin_exit")]
+    DeviceAdminExit(DeviceAdminExit),
+    #[serde(rename = "device.admin_relock")]
+    DeviceAdminRelock(DeviceAdminRelock),
+    #[serde(rename = "device.admin_unlock")]
+    DeviceAdminUnlock(DeviceAdminUnlock),
 }
 
 impl IntentPayload {
@@ -391,6 +435,9 @@ impl IntentPayload {
             Self::AuditReadGranted(_) => IntentKind::AuditReadGranted,
             Self::KioskLog(_) => IntentKind::KioskLog,
             Self::KioskProcessBlocked(_) => IntentKind::KioskProcessBlocked,
+            Self::DeviceAdminExit(_) => IntentKind::DeviceAdminExit,
+            Self::DeviceAdminRelock(_) => IntentKind::DeviceAdminRelock,
+            Self::DeviceAdminUnlock(_) => IntentKind::DeviceAdminUnlock,
         }
     }
 }
@@ -511,7 +558,10 @@ mod tests {
                 | "audit.read_granted" => Requirement::System,
                 "settings.set" => Requirement::Perm(Permission::SettingsEdit),
                 "device.register" => Requirement::Perm(Permission::DeviceManage),
-                "device.revoke" => Requirement::Perm(Permission::DeviceRemote),
+                "device.revoke" | "device.admin_unlock" => {
+                    Requirement::Perm(Permission::DeviceRemote)
+                }
+                "device.admin_exit" | "device.admin_relock" => Requirement::Device,
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" => Requirement::Device,
@@ -544,6 +594,20 @@ mod tests {
                 p.as_str()
             );
         }
+    }
+
+    #[test]
+    fn only_the_admin_exit_takes_an_elevating_permission() {
+        for kind in IntentKind::ALL {
+            let want = (kind == IntentKind::DeviceAdminExit).then_some(Permission::DeviceRemote);
+            assert_eq!(kind.elevator_permission(), want, "{}", kind.as_str());
+        }
+        let p: IntentPayload = serde_json::from_value(serde_json::json!({
+            "kind": "device.admin_exit", "exit_id": "01JAAAAAAAAAAAAAAAAAAAAAAA",
+            "mode": "cached_verifier"
+        }))
+        .unwrap();
+        assert_eq!(p.kind(), IntentKind::DeviceAdminExit);
     }
 
     #[test]

@@ -53,6 +53,8 @@ pub struct AuditRow {
     pub tbl: String,
     pub row_id: String,
     pub op: ChangeOp,
+    /// For a `device_admin_exits` change: whether that exit is flagged for review now.
+    pub flagged: Option<bool>,
 }
 
 impl From<&ChangeRecord> for AuditRow {
@@ -72,6 +74,7 @@ impl From<&ChangeRecord> for AuditRow {
             tbl: c.tbl.clone(),
             row_id: c.row_id.clone(),
             op: c.op,
+            flagged: None,
         }
     }
 }
@@ -110,6 +113,7 @@ pub fn list_audit(
                         format!("unknown op {op}").into(),
                     )
                 })?,
+                flagged: r.get::<_, Option<i64>>(14)?.map(|f| f != 0),
             })
         })
         .map_err(db_error)?;
@@ -155,7 +159,10 @@ fn audit_sql(filter: &AuditFilter, limit: u32) -> (String, Vec<Value>) {
     values.push(Value::Integer(i64::from(limit)));
     let sql = format!(
         "SELECT epoch, seq, at, business_day, actor_kind, actor_id, elevated_by_kind,
-                elevated_by_id, elevated_by_mode, intent_kind, intent_id, tbl, row_id, op
+                elevated_by_id, elevated_by_mode, intent_kind, intent_id, tbl, row_id, op,
+                CASE WHEN tbl = 'device_admin_exits'
+                     THEN (SELECT e.flagged FROM device_admin_exits e WHERE e.exit_id = changes.row_id)
+                END
          FROM changes {where_sql}
          ORDER BY at DESC, epoch DESC, seq DESC
          LIMIT ?"

@@ -55,7 +55,7 @@ development_status:
   1-17-kiosk-shell-replacement-and-windows-lockdown: review
   1-18-kiosk-process-allow-block-list: review
   1-19-automated-30-minute-kiosk-escape-suite-on-windows-10-and-11: in-progress
-  1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r: backlog
+  1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r: review
   1-21-high-contrast-theme-as-a-per-device-branch-setting: backlog
   1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of: backlog
   epic-1-retrospective: optional

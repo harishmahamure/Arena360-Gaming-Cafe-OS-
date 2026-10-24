@@ -124,6 +124,36 @@ pub struct AuditItem {
     pub tbl: String,
     pub row_id: String,
     pub op: ChangeOpKind,
+    /// A `device_admin_exits` change whose exit is flagged for review (absent otherwise).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub flagged: Option<bool>,
+}
+
+/// A kiosk admin exit, as the audit detail summarises a `device_admin_exits` change: the kiosk,
+/// the approving manager, how it was granted, when it started and when it re-locks (or did).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AuditAdminExit {
+    pub device_id: String,
+    /// The kiosk's label (its id when unknown).
+    pub device_label: String,
+    pub staff_id: String,
+    /// The approving manager's name (their id when unknown).
+    pub staff_name: String,
+    /// `hub`, `cached_verifier` or `remote` (`unknown` for anything else).
+    pub mode: String,
+    /// UTC ms.
+    #[ts(type = "number")]
+    pub started_at: i64,
+    /// When the exit ends, UTC ms.
+    #[ts(type = "number")]
+    pub relock_at: i64,
+    /// When the kiosk reported it re-locked, UTC ms (`null` until then).
+    #[ts(type = "number | null")]
+    pub relocked_at: Option<i64>,
+    pub flagged: bool,
+    pub flag_reason: Option<String>,
 }
 
 /// One page of `GET /ui/audit`, newest first. `next_cursor` is `null` on the last page.
@@ -160,6 +190,10 @@ pub struct AuditDetail {
     #[ts(type = "Record<string, string | number | null> | null")]
     pub before: Option<AuditImage>,
     pub changed: Vec<String>,
+    /// The exit summary, for a `device_admin_exits` change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub admin_exit: Option<AuditAdminExit>,
 }
 
 /// A staff member the audit actor filter offers.

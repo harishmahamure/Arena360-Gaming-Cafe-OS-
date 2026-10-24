@@ -12,7 +12,10 @@ mod shell;
 use std::sync::Arc;
 
 use arena_proto::KioskHubStatus;
-use bridge::{Bridge, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT, TOAST_EVENT};
+use bridge::{
+    ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, Answer, Bridge, Emit, HUB_STATUS_EVENT,
+    RESTORE_STATE_EVENT, TOAST_EVENT,
+};
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WindowEvent};
 
 fn crate_name() -> &'static str {
@@ -58,6 +61,50 @@ fn take_restore_state(bridge: tauri::State<'_, Arc<Bridge>>) -> Option<serde_jso
     bridge.take_restore()
 }
 
+/// The hidden admin-exit panel's PIN (Story 1.20): sent to the service only, as IPC
+/// `admin_exit{pin}`, and dropped here. `None` when the service did not answer.
+#[tauri::command]
+async fn admin_exit(
+    pin: String,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let pin = arena_kiosk_core::ipc::SecretPin::new(pin);
+    Ok(bridge
+        .request(move |rid| arena_kiosk_core::ipc::IpcMsg::AdminExit { rid, pin })
+        .await)
+}
+
+/// Whether the admin-exit prompt is paused (`retry_after_s`) and whether an exit runs (`until`).
+#[tauri::command]
+async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(bridge
+        .request(|rid| arena_kiosk_core::ipc::IpcMsg::Request {
+            rid,
+            kind: "admin_exit_status".into(),
+            body: serde_json::Value::Null,
+        })
+        .await)
+}
+
+/// Admin exit started (`Some`) or ended (`None`): the lockdown is suspended and the window
+/// becomes the corner badge, or the window covers every screen again and locks down.
+fn on_admin_exit<R: Runtime>(handle: &tauri::AppHandle<R>, running: bool) {
+    if shell::dev_unlocked() {
+        return;
+    }
+    shell::set_lockdown_suspended(running);
+    let h = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        if let Some(w) = h.get_webview_window("main") {
+            if running {
+                shell::place_badge(&w);
+            } else {
+                place_window(&w);
+            }
+        }
+    });
+}
+
 fn main() {
     // One kiosk per machine: a second instance (e.g. one the service relaunched while the
     // shell-launched one still runs) exits at once, so there are never two.
@@ -71,7 +118,9 @@ fn main() {
             report_app_state,
             hub_status,
             take_restore_state,
-            heartbeat
+            heartbeat,
+            admin_exit,
+            admin_exit_status
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).
@@ -134,6 +183,14 @@ fn main() {
                         Emit::HubStatus(s) => handle.emit(HUB_STATUS_EVENT, s),
                         Emit::RestoreState(v) => handle.emit(RESTORE_STATE_EVENT, v),
                         Emit::Toast(key) => handle.emit(TOAST_EVENT, key),
+                        Emit::AdminExit(until) => {
+                            on_admin_exit(&handle, true);
+                            handle.emit(ADMIN_EXIT_EVENT, serde_json::json!({ "until": until }))
+                        }
+                        Emit::AdminExitEnded => {
+                            on_admin_exit(&handle, false);
+                            handle.emit(ADMIN_EXIT_ENDED_EVENT, ())
+                        }
                     };
                 };
                 bridge.run(&emit).await;

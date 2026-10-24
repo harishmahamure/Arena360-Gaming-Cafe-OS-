@@ -10,16 +10,24 @@
 //! sessions of a device that is now revoked get `TOKEN_REVOKED` and are closed. If the fan-out
 //! lags behind the writer broadcast, events were lost, so every session is dropped (clients
 //! reconnect and resync) after revoked devices got their `TOKEN_REVOKED`.
+//!
+//! **Admin exit (Story 1.20).** After an intent that wrote staff or roles, the manager verifier
+//! is re-read and, when its version changed, pushed as `event{kind:"verifier"}` to every
+//! `paired` session (each session also gets it right after its hello). A `remote` row inserted
+//! into `device_admin_exits` is pushed as `event{kind:"admin_unlock", exit_id}` to that
+//! device's paired sessions only. The kiosk's `kiosk.admin_unlock_ack` is published on
+//! [`Registry::admin_unlock_acks`] for the Hub UI.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use arena_core::ChangeOp;
 use arena_core::{Applied, DeviceDirectory};
 use arena_proto::{
-    AppError, AppliedSummary, ChangeOpKind, ChangeSummary, ClientClass, ErrorCode, EventFrame,
-    Frame, FrameBody, HubEvent, SettingEntry, SettingsValues, may_read_setting,
+    AdminExitMode, AdminUnlockAckEvent, AppError, AppliedSummary, ChangeOpKind, ChangeSummary,
+    ClientClass, ErrorCode, EventFrame, Frame, FrameBody, HubEvent, ManagerVerifier, SettingEntry,
+    SettingsValues, may_read_setting,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -49,6 +57,10 @@ pub(crate) struct Registry {
     shutting_down: AtomicBool,
     /// Bumped whenever a paired device session is added or removed (device presence).
     presence: watch::Sender<u64>,
+    /// Remote unlocks a kiosk acknowledged (for the Hub UI).
+    acks: broadcast::Sender<AdminUnlockAckEvent>,
+    /// The manager-verifier version last pushed to every paired session (-1: none yet).
+    verifier_pushed: AtomicI64,
 }
 
 impl Default for Registry {
@@ -59,8 +71,38 @@ impl Default for Registry {
             next_event: AtomicU64::default(),
             shutting_down: AtomicBool::default(),
             presence: watch::channel(0).0,
+            acks: broadcast::channel(64).0,
+            verifier_pushed: AtomicI64::new(-1),
         }
     }
+}
+
+/// The `event` frame carrying `event`, with a Hub-minted rid.
+fn event_frame(rid: String, event: HubEvent) -> Message {
+    Message::text(Frame::new(rid, FrameBody::Event(EventFrame { event })).to_text())
+}
+
+/// The `event{kind:"verifier"}` frame for `verifier`.
+pub(crate) fn verifier_message(rid: String, verifier: ManagerVerifier) -> Message {
+    event_frame(rid, HubEvent::Verifier { verifier })
+}
+
+/// Whether `applied` wrote staff, roles or permission rows (the verifier may have changed).
+fn touches_staff(applied: &Applied) -> bool {
+    applied
+        .changes
+        .iter()
+        .any(|c| matches!(c.tbl.as_str(), "staff" | "roles" | "role_perms"))
+}
+
+/// The exits `applied` inserted.
+fn inserted_exits(applied: &Applied) -> Vec<String> {
+    applied
+        .changes
+        .iter()
+        .filter(|c| c.tbl == "device_admin_exits" && c.op == ChangeOp::Insert)
+        .map(|c| c.row_id.clone())
+        .collect()
 }
 
 /// A registered session: its kill switch and two receivers (writer task, reader loop) created
@@ -178,6 +220,110 @@ impl Registry {
     /// Bumped whenever a paired device session is added or removed.
     pub(crate) fn presence_changes(&self) -> watch::Receiver<u64> {
         self.presence.subscribe()
+    }
+
+    /// The remote unlocks kiosks acknowledge from now on.
+    pub(crate) fn admin_unlock_acks(&self) -> broadcast::Receiver<AdminUnlockAckEvent> {
+        self.acks.subscribe()
+    }
+
+    /// Publishes a kiosk's acknowledgement of a remote unlock (no subscriber is fine).
+    pub(crate) fn ack_admin_unlock(&self, ack: AdminUnlockAckEvent) {
+        let _ = self.acks.send(ack);
+    }
+
+    fn next_rid(&self) -> String {
+        format!("ev-{}", self.next_event.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Sends `msg` to the paired sessions matching `want` (every paired session, or one
+    /// device's). A session whose queue is full or closed is dropped. Returns how many got it.
+    fn push_paired(&self, msg: &Message, device_id: Option<&str>) -> usize {
+        let Ok(map) = self.sessions.lock() else {
+            return 0;
+        };
+        let mut sent = 0;
+        for (id, entry) in map.iter() {
+            if entry.class != ClientClass::Paired
+                || device_id.is_some_and(|d| entry.device_id.as_deref() != Some(d))
+            {
+                continue;
+            }
+            if entry.out.try_send(msg.clone()).is_err() {
+                tracing::warn!(session = id, "session queue full or closed; dropping it");
+                set_kill(&entry.kill, Kill::Drop);
+            } else {
+                sent += 1;
+            }
+        }
+        sent
+    }
+
+    /// Pushes the manager verifier to every paired session (never to a browser class).
+    pub(crate) fn push_verifier(&self, verifier: ManagerVerifier) {
+        self.verifier_pushed
+            .store(verifier.version, Ordering::Relaxed);
+        let msg = verifier_message(self.next_rid(), verifier);
+        self.push_paired(&msg, None);
+    }
+
+    /// Pushes `admin_unlock{exit_id}` to `device_id`'s paired sessions. Returns how many got it.
+    pub(crate) fn push_admin_unlock(&self, device_id: &str, exit_id: &str) -> usize {
+        let msg = event_frame(
+            self.next_rid(),
+            HubEvent::AdminUnlock {
+                exit_id: exit_id.to_owned(),
+            },
+        );
+        self.push_paired(&msg, Some(device_id))
+    }
+
+    /// Re-reads the verifier and pushes it when its version changed since the last push.
+    async fn push_verifier_if_changed(&self, devices: &Arc<DeviceDirectory>) {
+        let dir = Arc::clone(devices);
+        match tokio::task::spawn_blocking(move || dir.manager_verifier()).await {
+            Ok(Ok(v)) => {
+                if v.version != self.verifier_pushed.load(Ordering::Relaxed) {
+                    tracing::info!(
+                        version = v.version,
+                        "pushing the manager verifier to paired sessions"
+                    );
+                    self.push_verifier(v);
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    code = e.code.as_str(),
+                    "manager verifier read failed; dropping paired sessions"
+                );
+                self.drop_paired();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "manager verifier read panicked; dropping paired sessions");
+                self.drop_paired();
+            }
+        }
+    }
+
+    /// Pushes every remote exit `applied` inserted to its kiosk.
+    async fn push_remote_exits(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
+        for exit_id in inserted_exits(applied) {
+            let dir = Arc::clone(devices);
+            let id = exit_id.clone();
+            match tokio::task::spawn_blocking(move || dir.admin_exit(&id)).await {
+                Ok(Ok(Some(row))) if row.mode == AdminExitMode::Remote.as_str() => {
+                    let sent = self.push_admin_unlock(&row.device_id, &exit_id);
+                    tracing::info!(exit_id = %exit_id, device_id = %row.device_id, sessions = sent, "remote unlock pushed");
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!(exit_id = %exit_id, code = e.code.as_str(), "admin exit read failed")
+                }
+                Err(e) => {
+                    tracing::warn!(exit_id = %exit_id, error = %e, "admin exit read panicked")
+                }
+            }
+        }
     }
 
     /// Whether `device_id` has a live (not closing) `paired` session.
@@ -390,6 +536,10 @@ impl Registry {
                 Ok(applied) => {
                     self.push_applied(&applied);
                     self.push_kiosk_settings(&devices, &applied).await;
+                    if touches_staff(&applied) {
+                        self.push_verifier_if_changed(&devices).await;
+                    }
+                    self.push_remote_exits(&devices, &applied).await;
                     let mut touched: Vec<String> = applied
                         .changes
                         .iter()
@@ -578,6 +728,61 @@ mod tests {
         // Nothing a paired session may read: nothing is sent.
         reg.push_settings(vec![entry("branch.currency")]);
         assert!(paired_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn the_verifier_and_admin_unlocks_reach_paired_sessions_only() {
+        let reg = Arc::new(Registry::default());
+        let (kds_tx, mut kds_rx) = mpsc::channel(8);
+        let _kds = reg.register(ClientClass::Kds, Some("K".into()), kds_tx);
+        let (phone_tx, mut phone_rx) = mpsc::channel(8);
+        let _phone = reg.register(ClientClass::Phone, None, phone_tx);
+        let (a_tx, mut a_rx) = mpsc::channel(8);
+        let _a = reg.register(ClientClass::Paired, Some("A".into()), a_tx);
+        let (b_tx, mut b_rx) = mpsc::channel(8);
+        let _b = reg.register(ClientClass::Paired, Some("B".into()), b_tx);
+        reg.push_verifier(ManagerVerifier {
+            version: 7,
+            entries: vec![],
+        });
+        for rx in [&mut a_rx, &mut b_rx] {
+            let Some(Message::Text(t)) = rx.recv().await else {
+                panic!("text")
+            };
+            let frame = arena_proto::parse_frame(t.as_str()).unwrap();
+            assert!(matches!(
+                frame.body,
+                FrameBody::Event(EventFrame {
+                    event: HubEvent::Verifier { .. }
+                })
+            ));
+        }
+        assert!(
+            kds_rx.try_recv().is_err(),
+            "a kds session never gets the verifier"
+        );
+        assert!(phone_rx.try_recv().is_err());
+        assert_eq!(reg.push_admin_unlock("A", "E1"), 1);
+        let Some(Message::Text(t)) = a_rx.recv().await else {
+            panic!("text")
+        };
+        let frame = arena_proto::parse_frame(t.as_str()).unwrap();
+        assert_eq!(
+            frame.body,
+            FrameBody::Event(EventFrame {
+                event: HubEvent::AdminUnlock {
+                    exit_id: "E1".into()
+                }
+            })
+        );
+        assert!(b_rx.try_recv().is_err(), "only that device's sessions");
+        assert_eq!(reg.push_admin_unlock("K", "E2"), 0, "never a kds session");
+        let mut acks = reg.admin_unlock_acks();
+        reg.ack_admin_unlock(AdminUnlockAckEvent {
+            exit_id: "E1".into(),
+            device_id: "A".into(),
+        });
+        assert_eq!(acks.recv().await.unwrap().exit_id, "E1");
     }
 
     #[tokio::test]

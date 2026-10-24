@@ -44,8 +44,13 @@ impl ClientClass {
     }
 }
 
-/// Paired apps (the Kiosk service): kiosk events only so far.
-const PAIRED_SCOPE: &[IntentKind] = &[IntentKind::KioskLog, IntentKind::KioskProcessBlocked];
+/// Paired apps (the Kiosk service): kiosk events and its own admin exits.
+const PAIRED_SCOPE: &[IntentKind] = &[
+    IntentKind::KioskLog,
+    IntentKind::KioskProcessBlocked,
+    IntentKind::DeviceAdminExit,
+    IntentKind::DeviceAdminRelock,
+];
 /// Kitchen intents only (none exist yet).
 const KDS_SCOPE: &[IntentKind] = &[];
 const PHONE_SCOPE: &[IntentKind] = &[IntentKind::ConsolePlanRequested];
@@ -109,8 +114,17 @@ mod tests {
         );
         assert_eq!(
             class_scope(ClientClass::Paired),
-            &[IntentKind::KioskLog, IntentKind::KioskProcessBlocked]
+            &[
+                IntentKind::KioskLog,
+                IntentKind::KioskProcessBlocked,
+                IntentKind::DeviceAdminExit,
+                IntentKind::DeviceAdminRelock
+            ]
         );
+        assert!(!in_scope(
+            ClientClass::Paired,
+            IntentKind::DeviceAdminUnlock
+        ));
         for kind in IntentKind::ALL {
             assert_eq!(
                 in_scope(ClientClass::Phone, kind),

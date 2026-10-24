@@ -25,6 +25,7 @@
     type LockResult,
   } from "../lib/auth";
   import { connectEvents, uiOf } from "../lib/events";
+  import { noteAck } from "../lib/admin-unlock";
   import type { UnlockOk } from "@arena/ui/generated";
   import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
   import type { LayoutData } from "./$types";
@@ -166,6 +167,7 @@
           if (locked && !unlocking) void finishUnlock(e);
         },
         onDevicesChanged: () => void refresh(),
+        onAdminUnlockAck: (e) => noteAck(e.exit_id),
         onResync: () => void refresh(),
         // Refused: find out whether the session is still there (sign-in otherwise).
         onClosed: () => void invalidate(SESSION_DEPENDENCY),

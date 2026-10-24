@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
+use crate::admin::{AdminPinOk, AdminUnlockAck, ManagerVerifier, VerifyAdminPin};
 use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::scope::ClientClass;
@@ -61,10 +62,19 @@ pub enum FrameBody {
     SettingsGet(SettingsGet),
     #[serde(rename = "settings.values")]
     SettingsValues(SettingsValues),
+    #[serde(rename = "kiosk.verify_admin_pin")]
+    VerifyAdminPin(VerifyAdminPin),
+    #[serde(rename = "kiosk.admin_pin_ok")]
+    AdminPinOk(AdminPinOk),
+    #[serde(rename = "kiosk.admin_unlock_ack")]
+    AdminUnlockAck(AdminUnlockAck),
+    /// The Hub's empty reply to a request that has nothing to return.
+    #[serde(rename = "ack")]
+    Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 10] = [
+pub const FRAME_KINDS: [&str; 14] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -75,6 +85,10 @@ pub const FRAME_KINDS: [&str; 10] = [
     "pong",
     "settings.get",
     "settings.values",
+    "kiosk.verify_admin_pin",
+    "kiosk.admin_pin_ok",
+    "kiosk.admin_unlock_ack",
+    "ack",
 ];
 
 impl FrameBody {
@@ -91,6 +105,10 @@ impl FrameBody {
             Self::Pong => "pong",
             Self::SettingsGet(_) => "settings.get",
             Self::SettingsValues(_) => "settings.values",
+            Self::VerifyAdminPin(_) => "kiosk.verify_admin_pin",
+            Self::AdminPinOk(_) => "kiosk.admin_pin_ok",
+            Self::AdminUnlockAck(_) => "kiosk.admin_unlock_ack",
+            Self::Ack => "ack",
         }
     }
 }
@@ -205,6 +223,14 @@ pub enum HubEvent {
     /// An intent wrote `kiosk.*` settings: their values now (paired sessions only).
     #[serde(rename = "settings.changed")]
     SettingsChanged(SettingsValues),
+    /// The manager verifier for offline admin exits (paired sessions only): on hello and
+    /// whenever it changes.
+    #[serde(rename = "verifier")]
+    Verifier { verifier: ManagerVerifier },
+    /// A manager unlocked this kiosk remotely: grant the exit and answer
+    /// `kiosk.admin_unlock_ack` (to that device's paired sessions only).
+    #[serde(rename = "admin_unlock")]
+    AdminUnlock { exit_id: String },
 }
 
 /// The body of an `event` frame.
@@ -453,6 +479,56 @@ mod tests {
         assert_eq!(v["event"]["kind"], "settings.changed");
         assert_eq!(v["event"]["values"][0]["rev"], 2);
         assert_eq!(parse_frame(&ev.to_text()).unwrap(), ev);
+    }
+
+    #[test]
+    fn admin_exit_frames_round_trip() {
+        let verify =
+            parse_frame(r#"{"v":1,"kind":"kiosk.verify_admin_pin","rid":"a","pin_proof":"2222"}"#)
+                .unwrap();
+        assert!(matches!(verify.body, FrameBody::VerifyAdminPin(_)));
+        assert!(!format!("{verify:?}").contains("2222"));
+        for body in [
+            FrameBody::AdminPinOk(AdminPinOk {
+                staff_id: "S".into(),
+                verifier_version: 3,
+            }),
+            FrameBody::AdminUnlockAck(AdminUnlockAck {
+                exit_id: "E".into(),
+            }),
+            FrameBody::Ack,
+        ] {
+            let f = Frame::new("r", body);
+            assert_eq!(parse_frame(&f.to_text()).unwrap(), f);
+        }
+        let ev = Frame::new(
+            "e",
+            FrameBody::Event(EventFrame {
+                event: HubEvent::Verifier {
+                    verifier: ManagerVerifier {
+                        version: 4,
+                        entries: vec![],
+                    },
+                },
+            }),
+        );
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["event"]["kind"], "verifier");
+        assert_eq!(v["event"]["verifier"]["version"], 4);
+        assert_eq!(parse_frame(&ev.to_text()).unwrap(), ev);
+        let unlock = Frame::new(
+            "e",
+            FrameBody::Event(EventFrame {
+                event: HubEvent::AdminUnlock {
+                    exit_id: "X".into(),
+                },
+            }),
+        );
+        let v = serde_json::to_value(&unlock).unwrap();
+        assert_eq!(
+            v["event"],
+            serde_json::json!({"kind": "admin_unlock", "exit_id": "X"})
+        );
     }
 
     #[test]

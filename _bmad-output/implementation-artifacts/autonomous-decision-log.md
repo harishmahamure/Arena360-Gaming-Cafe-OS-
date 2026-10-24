@@ -234,3 +234,25 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **What happened:** two implementation attempts were stopped by safety checks partway through, and my own follow-up dispatch was stopped as well. The only parts kept are the `arena-hub dev seed --kiosk-allow <glob>` and `--kiosk-process-mode enforce|report` flags (tested), committed separately.
 - **Status:** 1.19 is left `in-progress` in sprint-status, and its spec is not done. A person should decide how to build this conformance suite: write it by hand, use an off-the-shelf kiosk-testing tool, or scope it differently. The loop skips it and continues with 1.20.
 - **Known product gap the suite would flag:** the watchdog relaunches the app after about 6 s, longer than the 2 s "screen uncovered" rule.
+
+## Story 1.20: kiosk admin exit (manager PIN, offline verifier, remote unlock)
+
+- **Resumed 2026-10-24** after the user said "approve and continue". The pre-drafted spec is self-approved and moved to in-progress.
+- **Token gate:** the spec is about 2,000 tokens, over the 1,600 guide. **Kept the full spec** (recommended): the three unlock paths share one intent, one table and one re-lock flow, so splitting them would leave a story that can't be shipped on its own.
+- **Code Map additions:** the next migration is 0010; reuse the existing `device.remote` permission and the kiosk-svc DPAPI, queue and launcher modules.
+- **1.20 implementation:** the implementer was stopped twice by API overloads (529) and resumed from the same transcript each time.
+- **1.20 review:** 24 findings. 11 were patched:
+  - stale-verifier acceptance limited to the staff listed in that version;
+  - lock state sent on every app connection;
+  - PIN throttle serialised or reserved (kiosk and Hub);
+  - a second grant refused while an exit runs;
+  - start or record failures undo the grant;
+  - the flaky PIN-in-log assertion fixed;
+  - 4 missing tests added (audit flagged, SSE ack, reconnect, enforcer exit end);
+  - the README wording on PIN clearing.
+- **1.20 deferred (5):** binding hub-mode exits to a ticket; bounding `issued_at`; a verifier epoch for Hub restores; reconciling exits never re-locked; a manager PIN strength or rotation policy. 8 findings were rejected; they are logged in the spec's triage table.
+- **1.20 verification:**
+  - Passing: the workspace tests, the dev-fixtures runs, clippy, fmt, every `check:*`, `test:scripts`, gallery a11y, kiosk Playwright and the app builds.
+  - Hub `test:shell` was not re-run, because the user's own dev server holds port 5173. The implementer ran the Hub suite against that server: 209 passed.
+  - `apps/hub/src-tauri` sidecar timing test: flaked once under load and passed on re-run. This story doesn't touch it.
+  - The Windows paths are type-checked only.

@@ -78,6 +78,18 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             ),
             _ => Err(internal_target()),
         },
+        IntentPayload::DeviceAdminExit(p) => match target {
+            Target::AdminExit(t) => super::admin_exit::validate_exit(intent, p, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::DeviceAdminRelock(p) => match target {
+            Target::AdminRelock(row) => super::admin_exit::validate_relock(intent, p, row.as_ref()),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::DeviceAdminUnlock(p) => match target {
+            Target::AdminUnlock(t) => super::admin_exit::validate_unlock(intent, p, t),
+            _ => Err(internal_target()),
+        },
     }
 }
 

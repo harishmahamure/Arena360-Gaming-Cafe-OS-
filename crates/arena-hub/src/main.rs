@@ -232,18 +232,21 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     });
     let mut lease_job = Some(tokio::spawn(lease.run()));
 
-    let lan_hub = Arc::new(LanHub::new(
-        writer.clone(),
-        status_rx.clone(),
-        Arc::clone(&clock),
-        devices,
-        server_tls,
-        env!("CARGO_PKG_VERSION"),
-    ));
+    let lan_hub = Arc::new(
+        LanHub::new(
+            writer.clone(),
+            status_rx.clone(),
+            Arc::clone(&clock),
+            devices,
+            server_tls,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .with_staff(Arc::clone(&staff)),
+    );
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let ui_auth = Arc::new(
         arena_api::UiAuth::new(
-            staff,
+            Arc::clone(&staff),
             Arc::clone(&snapshots),
             writer.clone(),
             Arc::clone(&clock),

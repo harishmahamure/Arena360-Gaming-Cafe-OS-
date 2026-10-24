@@ -20,7 +20,7 @@
     type AuditOutcome,
   } from "../../../lib/audit";
   import AuditDetailPanel from "../../../lib/audit/AuditDetailPanel.svelte";
-  import { actorName, KIND_LABELS, moduleLabel } from "../../../lib/audit/labels";
+  import { actorName, intentLabel, KIND_LABELS, moduleLabel } from "../../../lib/audit/labels";
   import { branchLocale } from "../../../lib/locale.svelte";
 
   // The audit log, read only: filters, newest-first pages ("Load more", or the next page as
@@ -488,7 +488,13 @@
                       <span class="kind">{t(KIND_LABELS[item.actor.kind])}</span>
                     </td>
                     <td>{moduleLabel(item.module)}</td>
-                    <td>{item.intent_kind}</td>
+                    <td>
+                      {intentLabel(item.intent_kind)}
+                      {#if item.flagged}<span class="flagged" data-testid="audit-flagged"
+                          ><span aria-hidden="true">⚠</span>
+                          {t("hub.audit.flagged")}</span
+                        >{/if}
+                    </td>
                     <td class="record">{item.tbl} / {item.row_id}</td>
                   </tr>
                 {/each}
@@ -720,5 +726,12 @@
 
   .sentinel {
     height: 1px;
+  }
+
+  .flagged {
+    display: inline-flex;
+    gap: var(--space-1);
+    margin-inline-start: var(--space-2);
+    font-weight: var(--type-hub-title-weight);
   }
 </style>

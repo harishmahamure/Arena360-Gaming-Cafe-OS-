@@ -2,12 +2,16 @@
   "events": {
     "hubStatus": "hub-status",
     "restoreState": "restore-state",
-    "toast": "toast"
+    "toast": "toast",
+    "adminExit": "admin-exit",
+    "adminExitEnded": "admin-exit-ended"
   },
   "commands": {
     "reportAppState": "report_app_state",
     "hubStatus": "hub_status",
     "takeRestoreState": "take_restore_state",
-    "heartbeat": "heartbeat"
+    "heartbeat": "heartbeat",
+    "adminExit": "admin_exit",
+    "adminExitStatus": "admin_exit_status"
   }
 }

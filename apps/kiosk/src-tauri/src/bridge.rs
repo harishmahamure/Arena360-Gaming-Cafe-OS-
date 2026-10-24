@@ -10,9 +10,16 @@
 //!   IPC reconnect after a service restart) are ignored, since the app already has its state.
 //! - **Latest state wins.** The webview's state is a single latest-value slot, never dropped
 //!   when the line is busy, and re-sent on every (re)connect.
+//! - **Admin exit (Story 1.20).** The webview's hidden panel sends the PIN through the
+//!   `admin_exit` command: it goes to the service as IPC `admin_exit{pin}` only (never stored or
+//!   logged) and the service's `reply` comes back as the command's result. `admin_exit_started`
+//!   and `admin_exit_ended` become the `admin-exit` / `admin-exit-ended` events; `main.rs`
+//!   suspends the lockdown and shrinks the window to the countdown badge in between.
 //! - **Windows:** the pipe's server must run as SYSTEM, or the connection is refused.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -20,7 +27,7 @@ use arena_kiosk_core::ipc::{IpcMsg, read_msg, write_msg};
 use arena_proto::{KioskHubState, KioskHubStatus};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// The Tauri event carrying a [`KioskHubStatus`].
 pub const HUB_STATUS_EVENT: &str = "hub-status";
@@ -28,14 +35,22 @@ pub const HUB_STATUS_EVENT: &str = "hub-status";
 pub const RESTORE_STATE_EVENT: &str = "restore-state";
 /// The Tauri event carrying a toast's catalogue key (e.g. `player.app.blocked`).
 pub const TOAST_EVENT: &str = "toast";
+/// The Tauri event of a started admin exit: `{until}` (UTC ms).
+pub const ADMIN_EXIT_EVENT: &str = "admin-exit";
+/// The Tauri event of an admin exit that is over.
+pub const ADMIN_EXIT_ENDED_EVENT: &str = "admin-exit-ended";
+/// How long the shell waits for the service's answer to a PIN.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 4] = [
+const COMMANDS: [&str; 6] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
     "heartbeat",
+    "admin_exit",
+    "admin_exit_status",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -49,6 +64,20 @@ pub enum Emit {
     RestoreState(Value),
     /// A catalogue key to show as a persistent toast.
     Toast(String),
+    /// An admin exit runs until this UTC ms.
+    AdminExit(i64),
+    /// The admin exit is over.
+    AdminExitEnded,
+}
+
+/// What the service answered to a request: the body, or the error code (and the body that came
+/// with it, e.g. `retry_after_s`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Answer {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    pub body: Value,
 }
 
 /// The shell's view of the channel, shared with the Tauri commands.
@@ -62,6 +91,14 @@ pub struct Bridge {
     /// Whether the OS lockdown (the keyboard hook) is degraded; when true the service is told
     /// over IPC so it queues a `kiosk.log{error, lockdown_degraded}` for the Hub.
     lockdown_degraded: watch::Sender<bool>,
+    /// The current connection's outbound queue (requests go out on it).
+    outbox: Mutex<Option<mpsc::Sender<IpcMsg>>>,
+    /// Requests waiting for their `reply`, by rid.
+    pending: Mutex<HashMap<String, oneshot::Sender<IpcMsg>>>,
+    next_rid: AtomicU64,
+    /// Whether an admin exit runs, as last told: `admin_exit_ended` (sent on every connection)
+    /// is passed on only when one ran, so a reconnect never re-covers the screen for nothing.
+    exit_running: AtomicBool,
 }
 
 impl Default for Bridge {
@@ -73,6 +110,10 @@ impl Default for Bridge {
             restore_seen: AtomicBool::new(false),
             heartbeat: Mutex::default(),
             lockdown_degraded: watch::channel(false).0,
+            outbox: Mutex::default(),
+            pending: Mutex::default(),
+            next_rid: AtomicU64::new(1),
+            exit_running: AtomicBool::new(false),
         }
     }
 }
@@ -86,6 +127,29 @@ impl Bridge {
     /// line allows; only the latest is ever sent).
     pub fn report(&self, state: Value) {
         self.state.send_replace(Some(state));
+    }
+
+    /// Sends `build(rid)` to the service and waits for its `reply` (`None`: no service, or no
+    /// answer in time).
+    pub async fn request(&self, build: impl FnOnce(String) -> IpcMsg) -> Option<Answer> {
+        let rid = format!("ui-{}", self.next_rid.fetch_add(1, Ordering::Relaxed));
+        let out = lock(&self.outbox).clone()?;
+        let (tx, rx) = oneshot::channel();
+        lock(&self.pending).insert(rid.clone(), tx);
+        if out.send(build(rid.clone())).await.is_err() {
+            lock(&self.pending).remove(&rid);
+            return None;
+        }
+        let reply = tokio::time::timeout(REQUEST_TIMEOUT, rx).await;
+        lock(&self.pending).remove(&rid);
+        match reply {
+            Ok(Ok(IpcMsg::Reply { body, error, .. })) => Some(Answer {
+                ok: error.is_none(),
+                code: error.map(|e| e.code.as_str().to_owned()),
+                body,
+            }),
+            _ => None,
+        }
     }
 
     /// The webview is alive.
@@ -159,6 +223,23 @@ impl Bridge {
                 (None, Some(Emit::RestoreState(json)))
             }
             IpcMsg::Toast { key } => (None, Some(Emit::Toast(key))),
+            IpcMsg::AdminExitStarted { until } => {
+                self.exit_running.store(true, Ordering::SeqCst);
+                (None, Some(Emit::AdminExit(until)))
+            }
+            IpcMsg::AdminExitEnded => {
+                if self.exit_running.swap(false, Ordering::SeqCst) {
+                    (None, Some(Emit::AdminExitEnded))
+                } else {
+                    (None, None)
+                }
+            }
+            IpcMsg::Reply { ref rid, .. } => {
+                if let Some(tx) = lock(&self.pending).remove(rid) {
+                    let _ = tx.send(msg);
+                }
+                (None, None)
+            }
             // Replies to requests and anything app-side are not for the shell.
             _ => (None, None),
         }
@@ -184,6 +265,7 @@ impl Bridge {
         W: AsyncWrite + Unpin + Send + 'static,
     {
         let (tx, mut rx) = mpsc::channel::<IpcMsg>(64);
+        *lock(&self.outbox) = Some(tx.clone());
         // The latest state goes out on every (re)connect: a restarted service lost it.
         let mut state = self.state.subscribe();
         state.mark_changed();
@@ -239,6 +321,9 @@ impl Bridge {
             }
         }
         writer_task.abort();
+        *lock(&self.outbox) = None;
+        // Waiting requests fail at once (their senders drop).
+        lock(&self.pending).clear();
     }
 
     /// Connects to the service and serves it, forever.
@@ -387,6 +472,73 @@ mod tests {
             (None, None),
             "a hung webview stops the pongs"
         );
+    }
+
+    #[tokio::test]
+    async fn an_admin_exit_pin_goes_to_the_service_and_its_reply_comes_back() {
+        let b = Arc::new(Bridge::default());
+        assert_eq!(
+            b.request(|rid| IpcMsg::AdminExit {
+                rid,
+                pin: arena_kiosk_core::ipc::SecretPin::new("2222"),
+            })
+            .await,
+            None,
+            "no service: no answer"
+        );
+        let (app, svc) = tokio::io::duplex(4096);
+        let (ar, aw) = tokio::io::split(app);
+        let (sr, mut sw) = tokio::io::split(svc);
+        let served = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move { b.serve(ar, aw, &|_| {}).await })
+        };
+        let mut sr = BufReader::new(sr);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let asking = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move {
+                b.request(|rid| IpcMsg::AdminExit {
+                    rid,
+                    pin: arena_kiosk_core::ipc::SecretPin::new("2222"),
+                })
+                .await
+            })
+        };
+        let IpcMsg::AdminExit { rid, pin } = read_msg(&mut sr).await.unwrap() else {
+            panic!("expected admin_exit")
+        };
+        assert_eq!(pin.expose(), "2222");
+        write_msg(
+            &mut sw,
+            &IpcMsg::Reply {
+                rid,
+                body: serde_json::json!({"retry_after_s": 60}),
+                error: Some(arena_proto::AppError::new(
+                    arena_proto::ErrorCode::AuthLocked,
+                    "x",
+                )),
+            },
+        )
+        .await
+        .unwrap();
+        let answer = asking.await.unwrap().unwrap();
+        assert!(!answer.ok);
+        assert_eq!(answer.code.as_deref(), Some("AUTH_LOCKED"));
+        assert_eq!(answer.body["retry_after_s"], 60);
+        assert_eq!(
+            b.on_message(IpcMsg::AdminExitStarted { until: 9 }).1,
+            Some(Emit::AdminExit(9))
+        );
+        assert_eq!(
+            b.on_message(IpcMsg::AdminExitEnded).1,
+            Some(Emit::AdminExitEnded)
+        );
+        // Ended again (a reconnect with no exit running): nothing to undo.
+        assert_eq!(b.on_message(IpcMsg::AdminExitEnded).1, None);
+        drop(sw);
+        drop(sr);
+        let _ = tokio::time::timeout(Duration::from_secs(2), served).await;
     }
 
     #[test]

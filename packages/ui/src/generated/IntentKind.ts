@@ -15,4 +15,7 @@ export type IntentKind =
   | "role.upsert"
   | "audit.read_granted"
   | "kiosk.log"
-  | "kiosk.process_blocked";
+  | "kiosk.process_blocked"
+  | "device.admin_exit"
+  | "device.admin_relock"
+  | "device.admin_unlock";

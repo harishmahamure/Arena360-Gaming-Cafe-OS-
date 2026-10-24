@@ -11,6 +11,9 @@
 //!   another window sharing the token), so every window locks and unlocks together.
 //! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN; the
 //!   view reloads the snapshot (which carries each device's `online`).
+//! - `event: device.admin_unlock_ack`, data
+//!   [`AdminUnlockAckEvent`](arena_proto::AdminUnlockAckEvent): a kiosk granted a remote unlock
+//!   (the floor waits up to 5 s for it).
 //! - `event: resync`, data `{}`: this stream fell behind and missed events, or the Hub's role
 //!   changed (the stream then closes so the client reopens it). The view reloads the snapshot.
 //!
@@ -98,6 +101,7 @@ impl EventsHub {
             events: auth.writer().map(WriterHandle::subscribe),
             status: auth.status().cloned(),
             presence: auth.presence().changes(),
+            acks: auth.presence().admin_unlock_acks(),
             tick: auth.events_config().tick,
         };
         tokio::spawn(task.run());
@@ -125,6 +129,7 @@ struct HubTask {
     events: Option<broadcast::Receiver<Applied>>,
     status: Option<watch::Receiver<HubStatus>>,
     presence: Option<watch::Receiver<u64>>,
+    acks: Option<broadcast::Receiver<arena_proto::AdminUnlockAckEvent>>,
     tick: Duration,
 }
 
@@ -264,6 +269,19 @@ impl HubTask {
                     } else {
                         self.presence = None;
                     }
+                },
+                ack = async {
+                    match &mut self.acks {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match ack {
+                    Ok(ack) => {
+                        let data = serde_json::to_string(&ack).unwrap_or_default();
+                        self.send("device.admin_unlock_ack", data, false);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => self.acks = None,
                 },
                 changed = async {
                     match &mut self.status {
@@ -576,6 +594,28 @@ mod tests {
         drop(session);
         let (event, _) = next_event(&mut frames).await.unwrap();
         assert_eq!(event, "devices.changed");
+    }
+
+    #[tokio::test]
+    async fn a_kiosks_remote_unlock_ack_is_pushed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (status, mut frames) = open(&hub, Some(&token)).await;
+        assert_eq!(status, StatusCode::OK);
+        // Give the stream's hub task a moment to subscribe.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        hub.lan.ack_admin_unlock(arena_proto::AdminUnlockAckEvent {
+            exit_id: "E1".into(),
+            device_id: "D1".into(),
+        });
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(
+            (event.as_str(), data),
+            (
+                "device.admin_unlock_ack",
+                serde_json::json!({"exit_id": "E1", "device_id": "D1"})
+            )
+        );
     }
 
     #[tokio::test]

@@ -2466,6 +2466,453 @@ mod rbac_matrix {
             (ErrorCode::ValidationFailed, Some("reason"))
         );
     }
+
+    // ---- Story 1.20: kiosk admin exit ----
+
+    mod admin_exit_matrix {
+        use super::*;
+        use arena_proto::{
+            ADMIN_EXIT_MS, AdminExitMode, DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock,
+        };
+
+        const MIN: i64 = 60_000;
+
+        /// The crew plus a registered paired kiosk.
+        async fn kiosk_crew() -> (Crew, String) {
+            let c = crew().await;
+            let hash = crate::devices::hash_token_secret("s".repeat(64).as_str()).unwrap();
+            let applied =
+                c.f.writer
+                    .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
+                    .await
+                    .unwrap();
+            let id = applied.changes[0].row_id.clone();
+            (c, id)
+        }
+
+        fn verifier(f: &Fixture) -> (i64, Vec<String>) {
+            let dir = crate::devices::DeviceDirectory::open(&f.path).unwrap();
+            let v = dir.manager_verifier().unwrap();
+            (
+                v.version,
+                v.entries.into_iter().map(|e| e.staff_id).collect(),
+            )
+        }
+
+        fn exit_by(
+            device: &str,
+            staff: &str,
+            mode: AdminExitMode,
+            version: i64,
+            at: i64,
+        ) -> (Intent, String) {
+            let exit_id = ulid::Ulid::generate().to_string();
+            let mut i = device_intent(
+                ActorKind::Device,
+                IntentPayload::DeviceAdminExit(DeviceAdminExit {
+                    exit_id: exit_id.clone(),
+                    mode,
+                }),
+            );
+            i.actor.id = device.into();
+            i.issued_at = at;
+            i.elevated_by = Some(ElevatedBy {
+                kind: ElevationKind::Pin,
+                id: staff.into(),
+                mode: match mode {
+                    AdminExitMode::CachedVerifier => ElevationMode::CachedVerifier,
+                    _ => ElevationMode::Hub,
+                },
+                verifier_version: version,
+            });
+            (i, exit_id)
+        }
+
+        fn relock(device: &str, exit_id: &str, at: i64) -> Intent {
+            let mut i = device_intent(
+                ActorKind::Device,
+                IntentPayload::DeviceAdminRelock(DeviceAdminRelock {
+                    exit_id: exit_id.into(),
+                }),
+            );
+            i.actor.id = device.into();
+            i.issued_at = at;
+            i
+        }
+
+        fn exit_row(f: &Fixture, exit_id: &str) -> arena_store::AdminExitRow {
+            crate::devices::DeviceDirectory::open(&f.path)
+                .unwrap()
+                .admin_exit(exit_id)
+                .unwrap()
+                .unwrap()
+        }
+
+        /// Rotates `staff`'s PIN (a new verifier version), at the clock's time.
+        async fn rotate_pin(f: &Fixture, staff: &str, pin: &str) {
+            let store = reopen(f);
+            let row = store
+                .rows(Table::Staff)
+                .unwrap()
+                .into_iter()
+                .find(|r| r["staff_id"] == RowValue::Text(staff.into()))
+                .unwrap();
+            let text = |c: &str| match &row[c] {
+                RowValue::Text(t) => t.clone(),
+                other => panic!("{c} is {other:?}"),
+            };
+            let RowValue::Integer(rev) = row["rev"] else {
+                panic!("rev")
+            };
+            let mut i = as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(staff.into()),
+                    login: text("login"),
+                    display_name: text("display_name"),
+                    role_id: text("role_id"),
+                    password_hash: None,
+                    pin_hash: Some(hash_secret(pin).unwrap()),
+                    active: true,
+                }),
+                Some(rev),
+            );
+            i.issued_at = f.clock.now_ms();
+            f.writer.submit_intent(i).await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn the_verifier_lists_device_remote_holders_and_rises_on_every_change() {
+            let (c, _) = kiosk_crew().await;
+            let (v1, entries) = verifier(&c.f);
+            // Owner and Manager hold device.remote; only the manager has a staff row and PIN.
+            assert_eq!(entries, vec![c.manager.clone()]);
+            assert!(v1 >= 1);
+            // An unrelated change keeps the version.
+            let rev = match setting(&reopen(&c.f), "receipt.footer")["rev"] {
+                RowValue::Integer(n) => n,
+                ref o => panic!("{o:?}"),
+            };
+            c.f.writer
+                .submit_intent(set("receipt.footer", "hi", Some(rev)))
+                .await
+                .unwrap();
+            assert_eq!(verifier(&c.f).0, v1);
+            // A PIN rotation raises it.
+            c.f.clock.advance(MIN);
+            rotate_pin(&c.f, &c.manager, "5555").await;
+            let (v2, _) = verifier(&c.f);
+            assert!(v2 > v1, "{v2} > {v1}");
+            // Another manager joins: it rises again and lists both.
+            c.f.clock.advance(MIN);
+            let second = add_staff_pin(&c.f, "manager2", ROLE_MANAGER, "6666").await;
+            let (v3, entries) = verifier(&c.f);
+            assert!(v3 > v2);
+            assert_eq!(entries.len(), 2);
+            assert!(entries.contains(&second));
+            // A counter joining changes nothing.
+            add_staff_pin(&c.f, "counter2", ROLE_COUNTER, "7777").await;
+            assert_eq!(verifier(&c.f).0, v3);
+            // The Hub's start brings an out-of-date history up to the staff rows.
+            reopen(&c.f)
+                .write_tx(|tx| {
+                    tx.execute("DELETE FROM verifier_history", [])
+                        .map_err(arena_store::db_error)?;
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(verifier(&c.f).0, 0);
+            c.f.writer.seed_defaults().await.unwrap();
+            assert!(verifier(&c.f).0 > v3, "never goes down");
+        }
+
+        #[tokio::test]
+        async fn an_online_exit_is_recorded_with_its_approver_and_relocks() {
+            let (c, kiosk) = kiosk_crew().await;
+            let (v, _) = verifier(&c.f);
+            let (i, exit_id) = exit_by(&kiosk, &c.manager, AdminExitMode::Hub, v, T0 + MIN);
+            let applied = c.f.writer.submit_intent(i).await.unwrap();
+            assert_eq!(applied.changes.len(), 1);
+            assert_eq!(applied.changes[0].tbl, "device_admin_exits");
+            let row = exit_row(&c.f, &exit_id);
+            assert_eq!(
+                (
+                    row.device_id.as_str(),
+                    row.staff_id.as_str(),
+                    row.mode.as_str()
+                ),
+                (kiosk.as_str(), c.manager.as_str(), "hub")
+            );
+            assert_eq!(
+                (row.started_at, row.relock_at),
+                (T0 + MIN, T0 + MIN + ADMIN_EXIT_MS)
+            );
+            assert!(!row.flagged);
+            let change = reopen(&c.f).changes().unwrap().pop().unwrap();
+            assert_eq!(
+                (
+                    change.actor_kind.as_str(),
+                    change.elevated_by_id.as_deref(),
+                    change.elevated_by_mode.as_deref()
+                ),
+                ("device", Some(c.manager.as_str()), Some("hub"))
+            );
+            // Re-lock (fake clock: 15 minutes later).
+            let at = T0 + MIN + ADMIN_EXIT_MS;
+            c.f.clock.advance(MIN + ADMIN_EXIT_MS);
+            let applied =
+                c.f.writer
+                    .submit_intent(relock(&kiosk, &exit_id, at))
+                    .await
+                    .unwrap();
+            assert_eq!(applied.changes[0].op, ChangeOp::Update);
+            assert_eq!(exit_row(&c.f, &exit_id).relocked_at, Some(at));
+            // Twice is refused.
+            let err = expect_err(&c.f, relock(&kiosk, &exit_id, at)).await;
+            assert_eq!(err.field.as_deref(), Some("exit_id"));
+        }
+
+        #[tokio::test]
+        async fn an_offline_exit_with_the_current_verifier_is_not_flagged() {
+            let (c, kiosk) = kiosk_crew().await;
+            let (v, _) = verifier(&c.f);
+            let (i, exit_id) = exit_by(
+                &kiosk,
+                &c.manager,
+                AdminExitMode::CachedVerifier,
+                v,
+                T0 + MIN,
+            );
+            c.f.writer.submit_intent(i).await.unwrap();
+            let row = exit_row(&c.f, &exit_id);
+            assert_eq!(row.mode, "cached_verifier");
+            assert_eq!((row.flagged, row.flag_reason), (false, None));
+            let change = reopen(&c.f).changes().unwrap().pop().unwrap();
+            assert_eq!(change.elevated_by_mode.as_deref(), Some("cached_verifier"));
+            assert_eq!(change.elevated_by_verifier_version, Some(v));
+        }
+
+        #[tokio::test]
+        async fn an_offline_exit_with_a_stale_verifier_is_applied_and_flagged() {
+            let (c, kiosk) = kiosk_crew().await;
+            let (v2, _) = verifier(&c.f);
+            // The Hub moves to a newer verifier at T0 + 10 min.
+            c.f.clock.advance(10 * MIN);
+            add_staff_pin(&c.f, "manager2", ROLE_MANAGER, "6666").await;
+            let (v3, _) = verifier(&c.f);
+            assert!(v3 > v2);
+            // An exit before the change, checked against v2: fine.
+            let (early, early_id) = exit_by(
+                &kiosk,
+                &c.manager,
+                AdminExitMode::CachedVerifier,
+                v2,
+                T0 + 5 * MIN,
+            );
+            c.f.writer.submit_intent(early).await.unwrap();
+            assert!(!exit_row(&c.f, &early_id).flagged);
+            // After it, still checked against v2: applied, flagged.
+            let (late, late_id) = exit_by(
+                &kiosk,
+                &c.manager,
+                AdminExitMode::CachedVerifier,
+                v2,
+                T0 + 11 * MIN,
+            );
+            c.f.writer.submit_intent(late).await.unwrap();
+            let row = exit_row(&c.f, &late_id);
+            assert!(row.flagged);
+            assert_eq!(row.flag_reason.as_deref(), Some("stale_verifier"));
+        }
+
+        #[tokio::test]
+        async fn a_removed_manager_passes_only_on_a_stale_offline_check() {
+            let (c, kiosk) = kiosk_crew().await;
+            let (v, _) = verifier(&c.f);
+            // The manager is demoted to Counter at T0 + 10 min.
+            c.f.clock.advance(10 * MIN);
+            let store = reopen(&c.f);
+            let row = store
+                .rows(Table::Staff)
+                .unwrap()
+                .into_iter()
+                .find(|r| r["staff_id"] == RowValue::Text(c.manager.clone()))
+                .unwrap();
+            let RowValue::Integer(rev) = row["rev"] else {
+                panic!()
+            };
+            let mut demote = as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: Some(c.manager.clone()),
+                    ..staff_body("manager", &role_id(&c.f, ROLE_COUNTER), None)
+                }),
+                Some(rev),
+            );
+            demote.issued_at = c.f.clock.now_ms();
+            c.f.writer.submit_intent(demote).await.unwrap();
+            assert!(verifier(&c.f).0 > v);
+            // Offline, with the verifier that still listed them: applied and flagged.
+            let (i, id) = exit_by(
+                &kiosk,
+                &c.manager,
+                AdminExitMode::CachedVerifier,
+                v,
+                T0 + 11 * MIN,
+            );
+            c.f.writer.submit_intent(i).await.unwrap();
+            assert!(exit_row(&c.f, &id).flagged);
+            // Checked by the Hub: refused.
+            let (now, _) = verifier(&c.f);
+            let (i, _) = exit_by(&kiosk, &c.manager, AdminExitMode::Hub, now, T0 + 11 * MIN);
+            assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+        }
+
+        #[tokio::test]
+        async fn a_stale_offline_check_never_admits_someone_the_verifier_did_not_list() {
+            let (c, kiosk) = kiosk_crew().await;
+            let (v, _) = verifier(&c.f);
+            c.f.clock.advance(10 * MIN);
+            add_staff_pin(&c.f, "manager2", ROLE_MANAGER, "6666").await;
+            assert!(verifier(&c.f).0 > v);
+            // A PIN-less staff member, created after the verifier the kiosk used.
+            let rid = role_id(&c.f, ROLE_MANAGER);
+            let mut i = as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(staff_body("nopin", &rid, Some("pw"))),
+                None,
+            );
+            i.issued_at = c.f.clock.now_ms();
+            let nopin = c.f.writer.submit_intent(i).await.unwrap().changes[0]
+                .row_id
+                .clone();
+            for who in [&c.counter, &nopin] {
+                let (i, _) = exit_by(&kiosk, who, AdminExitMode::CachedVerifier, v, T0 + 11 * MIN);
+                assert_eq!(
+                    expect_err(&c.f, i).await.code,
+                    ErrorCode::PermissionDenied,
+                    "{who}"
+                );
+            }
+            // A version that was never recorded admits nobody that way either.
+            let (i, _) = exit_by(
+                &kiosk,
+                &c.counter,
+                AdminExitMode::CachedVerifier,
+                0,
+                T0 + 11 * MIN,
+            );
+            assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+        }
+
+        #[tokio::test]
+        async fn only_device_remote_holders_approve_and_only_the_kiosk_acts() {
+            let (c, kiosk) = kiosk_crew().await;
+            let (v, _) = verifier(&c.f);
+            // A Counter's PIN (3333) cannot approve.
+            for mode in [AdminExitMode::Hub, AdminExitMode::CachedVerifier] {
+                let (i, _) = exit_by(&kiosk, &c.counter, mode, v, T0);
+                assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+            }
+            // No elevation, a mismatched mode, or a staff actor: refused.
+            let (mut i, _) = exit_by(&kiosk, &c.manager, AdminExitMode::Hub, v, T0);
+            i.elevated_by = None;
+            assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+            let (mut i, _) = exit_by(&kiosk, &c.manager, AdminExitMode::CachedVerifier, v, T0);
+            if let Some(e) = &mut i.elevated_by {
+                e.mode = ElevationMode::Hub;
+            }
+            assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+            let (mut i, _) = exit_by(&kiosk, &c.manager, AdminExitMode::Hub, v, T0);
+            i.actor = staff_actor(&c.counter);
+            assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+            // A remote mode is never the kiosk's own.
+            let (mut i, _) = exit_by(&kiosk, &c.manager, AdminExitMode::Hub, v, T0);
+            if let IntentPayload::DeviceAdminExit(p) = &mut i.payload {
+                p.mode = AdminExitMode::Remote;
+            }
+            assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+            // The cached verifier elevates nothing else.
+            let mut i = counter_sets_currency(&c.f, &c.counter, Some(pin_by(&c.manager, 1)));
+            if let Some(e) = &mut i.elevated_by {
+                e.mode = ElevationMode::CachedVerifier;
+            }
+            assert_eq!(expect_err(&c.f, i).await.code, ErrorCode::PermissionDenied);
+            // Another device cannot re-lock this kiosk's exit.
+            let (i, exit_id) = exit_by(&kiosk, &c.manager, AdminExitMode::Hub, v, T0);
+            c.f.writer.submit_intent(i).await.unwrap();
+            let hash = crate::devices::hash_token_secret(&"t".repeat(64)).unwrap();
+            let other =
+                c.f.writer
+                    .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
+                    .await
+                    .unwrap()
+                    .changes[0]
+                    .row_id
+                    .clone();
+            assert_eq!(
+                expect_err(&c.f, relock(&other, &exit_id, T0)).await.code,
+                ErrorCode::PermissionDenied
+            );
+            // An exit id already used is refused.
+            let (mut i, _) = exit_by(&kiosk, &c.manager, AdminExitMode::Hub, v, T0);
+            if let IntentPayload::DeviceAdminExit(p) = &mut i.payload {
+                p.exit_id = exit_id.clone();
+            }
+            assert_eq!(expect_err(&c.f, i).await.field.as_deref(), Some("exit_id"));
+        }
+
+        #[tokio::test]
+        async fn a_remote_unlock_records_a_remote_exit_for_a_live_paired_device() {
+            let (c, kiosk) = kiosk_crew().await;
+            let unlock = |actor: Actor, device: &str| {
+                as_actor(
+                    actor,
+                    IntentPayload::DeviceAdminUnlock(DeviceAdminUnlock {
+                        device_id: device.into(),
+                    }),
+                    None,
+                )
+            };
+            let applied =
+                c.f.writer
+                    .submit_intent(unlock(staff_actor(&c.manager), &kiosk))
+                    .await
+                    .unwrap();
+            let id = applied.changes[0].row_id.clone();
+            let row = exit_row(&c.f, &id);
+            assert_eq!(
+                (
+                    row.mode.as_str(),
+                    row.staff_id.as_str(),
+                    row.device_id.as_str()
+                ),
+                ("remote", c.manager.as_str(), kiosk.as_str())
+            );
+            assert_eq!(row.relock_at - row.started_at, ADMIN_EXIT_MS);
+            // A Counter is refused, unless a manager's PIN elevates them.
+            assert_eq!(
+                expect_err(&c.f, unlock(staff_actor(&c.counter), &kiosk))
+                    .await
+                    .code,
+                ErrorCode::PermissionDenied
+            );
+            let mut elevated = unlock(staff_actor(&c.counter), &kiosk);
+            elevated.elevated_by = Some(pin_by(&c.manager, 1));
+            let applied = c.f.writer.submit_intent(elevated).await.unwrap();
+            let row = exit_row(&c.f, &applied.changes[0].row_id);
+            assert_eq!(row.staff_id, c.manager);
+            // The kiosk re-locks a remote exit like any other.
+            c.f.clock.advance(ADMIN_EXIT_MS);
+            c.f.writer
+                .submit_intent(relock(&kiosk, &id, T0 + ADMIN_EXIT_MS))
+                .await
+                .unwrap();
+            // An unknown device is refused.
+            let err = expect_err(&c.f, unlock(staff_actor(&c.manager), "01JNOPE")).await;
+            assert_eq!(err.field.as_deref(), Some("device_id"));
+        }
+    }
 }
 
 // ---- Story 1.12: branch locale settings, deferred tz/day start, business_day and fy ----

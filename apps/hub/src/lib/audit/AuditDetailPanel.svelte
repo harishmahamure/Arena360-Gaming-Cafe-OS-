@@ -3,7 +3,7 @@
   import type { AuditDetail } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount } from "svelte";
-  import { actorLabel, opLabel } from "./labels";
+  import { actorLabel, EXIT_MODE_LABELS, intentLabel, opLabel } from "./labels";
 
   /**
    * One change, read only: who, when, what, the approver of an elevated change, and the row's
@@ -21,6 +21,7 @@
   const MODES: Record<string, MessageKey> = {
     hub: "hub.audit.mode.hub",
     cached_verifier: "hub.audit.mode.cached_verifier",
+    remote: "hub.audit.mode.remote",
     unknown: "hub.audit.mode.unknown",
   };
 
@@ -72,7 +73,7 @@
     <dt>{t("hub.audit.col.actor")}</dt>
     <dd>{actorLabel(detail.item.actor)}</dd>
     <dt>{t("hub.audit.col.intent")}</dt>
-    <dd>{detail.item.intent_kind} · {t(opLabel(detail.item.op))}</dd>
+    <dd>{intentLabel(detail.item.intent_kind)} · {t(opLabel(detail.item.op))}</dd>
     <dt>{t("hub.audit.col.record")}</dt>
     <dd>{detail.item.tbl} / {detail.item.row_id}</dd>
   </dl>
@@ -85,6 +86,35 @@
           : detail.item.elevated_by.mode,
       })}
     </p>
+  {/if}
+  {#if detail.admin_exit}
+    {@const exit = detail.admin_exit}
+    <section class="exit" aria-labelledby="audit-exit-title" data-testid="audit-exit">
+      <h3 class="type-hub-label" id="audit-exit-title">
+        {t("hub.audit.exit.title")}
+        {#if exit.flagged}<span class="flagged" data-testid="audit-exit-flagged"
+            ><span aria-hidden="true">⚠</span> {t("hub.audit.flagged")}</span
+          >{/if}
+      </h3>
+      <dl class="meta type-hub-label">
+        <dt>{t("hub.audit.exit.kiosk")}</dt>
+        <dd>{exit.device_label}</dd>
+        <dt>{t("hub.audit.exit.manager")}</dt>
+        <dd>{exit.staff_name}</dd>
+        <dt>{t("hub.audit.exit.mode")}</dt>
+        <dd>{t(EXIT_MODE_LABELS[exit.mode] ?? "hub.audit.exit.mode.unknown")}</dd>
+        <dt>{t("hub.audit.exit.started")}</dt>
+        <dd class="tabular-nums">{formatDateTime(exit.started_at, tz)}</dd>
+        <dt>{t("hub.audit.exit.relock")}</dt>
+        <dd class="tabular-nums">{formatDateTime(exit.relock_at, tz)}</dd>
+        <dt>{t("hub.audit.exit.relocked")}</dt>
+        <dd class="tabular-nums">
+          {exit.relocked_at === null
+            ? t("hub.audit.exit.not_relocked")
+            : formatDateTime(exit.relocked_at, tz)}
+        </dd>
+      </dl>
+    </section>
   {/if}
   {#if deleted}
     <p class="deleted type-hub-label" data-testid="audit-deleted">
@@ -229,5 +259,21 @@
   .marker {
     white-space: nowrap;
     font-weight: var(--type-hub-title-weight);
+  }
+
+  .exit {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .exit h3 {
+    display: flex;
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .flagged {
+    display: inline-flex;
+    gap: var(--space-1);
   }
 </style>

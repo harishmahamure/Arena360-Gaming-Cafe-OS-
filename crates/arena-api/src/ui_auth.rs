@@ -1556,6 +1556,17 @@ async fn intent(
             "this hub is not the primary writer",
         )));
     };
+    // A remote unlock needs the kiosk on the LAN now: refused at once otherwise, so no exit is
+    // recorded that nobody could grant.
+    if let arena_proto::IntentPayload::DeviceAdminUnlock(u) = &intent.payload
+        && !auth.presence.online(&u.device_id)
+    {
+        return fail(ui_error(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "device_id",
+            "the device is offline",
+        )));
+    }
     let mut redeemed = None;
     if let Some(ticket) = elevation_ticket {
         if intent.kind != intent.payload.kind() {
@@ -1997,6 +2008,66 @@ pub(crate) mod tests {
         assert_eq!(body["retry_after_s"], 30);
         hub.clock.advance(30_000);
         token_for(&hub, "counter", "c-pass").await;
+    }
+
+    #[tokio::test]
+    async fn a_remote_unlock_of_an_offline_kiosk_fails_at_once() {
+        let hub = hub().await;
+        let secret = arena_core::devices::new_token_secret().unwrap();
+        let device = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "owner".into(),
+                },
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    class: arena_proto::ClientClass::Paired,
+                    label: "Kiosk".into(),
+                    token_hash: arena_core::devices::hash_token_secret(&secret).unwrap(),
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let body = |id: &str| {
+            json!({"intent": serde_json::to_value(intent_as(
+                Actor { kind: ActorKind::Staff, id: "x".into() },
+                IntentPayload::DeviceAdminUnlock(arena_proto::DeviceAdminUnlock {
+                    device_id: id.into(),
+                }),
+                None,
+            )).unwrap()})
+        };
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(body(&device)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "device_id");
+        // Online: applied, one remote exit.
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(body(&device)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["applied"]["changes"][0]["tbl"], "device_admin_exits");
     }
 
     #[tokio::test]

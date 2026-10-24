@@ -187,6 +187,40 @@ impl DeviceDirectory {
             .collect())
     }
 
+    /// The manager verifier a kiosk caches for offline admin exits: the newest version and its
+    /// entries (active staff with a PIN whose role allows `device.remote`, at most
+    /// [`MAX_VERIFIER_ENTRIES`](arena_proto::MAX_VERIFIER_ENTRIES)), read in one snapshot. Only
+    /// PIN hashes, never a PIN.
+    pub fn manager_verifier(&self) -> Result<arena_proto::ManagerVerifier, AppError> {
+        let (version, entries) = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?
+            .manager_verifier(
+                arena_proto::Permission::DeviceRemote.as_str(),
+                arena_proto::MAX_VERIFIER_ENTRIES,
+            )?;
+        Ok(arena_proto::ManagerVerifier {
+            version,
+            entries: entries
+                .into_iter()
+                .map(|c| arena_proto::VerifierEntry {
+                    staff_id: c.staff_id,
+                    pin_hash: c.pin_hash,
+                    pin_verifier_version: c.pin_verifier_version,
+                })
+                .collect(),
+        })
+    }
+
+    /// The admin exit `exit_id`, if any.
+    pub fn admin_exit(&self, exit_id: &str) -> Result<Option<arena_store::AdminExitRow>, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?
+            .admin_exit(exit_id)
+    }
+
     /// Whether `device_id` is revoked (a missing device counts as revoked).
     pub fn is_revoked(&self, device_id: &str) -> Result<bool, AppError> {
         Ok(self

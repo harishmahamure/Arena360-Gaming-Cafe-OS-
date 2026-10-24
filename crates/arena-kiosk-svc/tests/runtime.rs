@@ -184,14 +184,19 @@ impl Hub {
 
     /// Starts (or restarts) the LAN server on the same port.
     async fn up(&mut self) {
-        let lan = Arc::new(LanHub::new(
-            (!self.follower).then(|| self.writer.clone()),
-            self.status.clone(),
-            Arc::new(SystemClock),
-            Arc::new(DeviceDirectory::open(&self.path).unwrap()),
-            self.cert.server_config().unwrap(),
-            env!("CARGO_PKG_VERSION"),
-        ));
+        let lan = Arc::new(
+            LanHub::new(
+                (!self.follower).then(|| self.writer.clone()),
+                self.status.clone(),
+                Arc::new(SystemClock),
+                Arc::new(DeviceDirectory::open(&self.path).unwrap()),
+                self.cert.server_config().unwrap(),
+                env!("CARGO_PKG_VERSION"),
+            )
+            .with_staff(Arc::new(
+                arena_core::StaffDirectory::open(&self.path).unwrap(),
+            )),
+        );
         self.presence = Some(lan.presence());
         let listeners = loop {
             match bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), self.lan_port, 0).await {
@@ -303,12 +308,23 @@ fn free_port() -> u16 {
 #[derive(Default)]
 struct MockLauncher {
     restarts: AtomicUsize,
+    desktops: AtomicUsize,
+    desktop_stops: AtomicUsize,
 }
 
 impl AppLauncher for MockLauncher {
     fn restart(&self) -> Result<(), String> {
         self.restarts.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn start_desktop(&self) -> Result<(), String> {
+        self.desktops.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn stop_desktop(&self) {
+        self.desktop_stops.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -320,6 +336,7 @@ fn fast() -> Timings {
         replay_retry: Duration::from_millis(200),
         ping_interval: Duration::from_millis(100),
         restart_grace: Duration::from_millis(400),
+        admin_tick: Duration::from_millis(20),
     }
 }
 
@@ -364,11 +381,15 @@ impl Kiosk {
     }
 
     fn start(&mut self) {
+        self.start_with_clock(Arc::new(arena_kiosk_svc::clock::SystemClock));
+    }
+
+    fn start_with_clock(&mut self, clock: Arc<dyn arena_kiosk_svc::clock::Clock>) {
         let ipc = UnixIpcServer::bind(&self.data.socket()).unwrap();
         let runtime = Runtime::start(
             self.data.clone(),
             arena_kiosk_svc::secret::platform_store(self.data.token()),
-            Arc::new(arena_kiosk_svc::clock::SystemClock),
+            clock,
             fast(),
             ipc,
             Arc::clone(&self.launcher) as Arc<dyn AppLauncher>,
@@ -395,6 +416,7 @@ impl Kiosk {
         App {
             reader: BufReader::new(r),
             writer: w,
+            skipped: Vec::new(),
         }
     }
 }
@@ -403,6 +425,8 @@ impl Kiosk {
 struct App {
     reader: BufReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
+    /// Messages `until` passed over, for a later `until` to find.
+    skipped: Vec<IpcMsg>,
 }
 
 impl App {
@@ -418,13 +442,22 @@ impl App {
 
     /// Reads until `pred` matches, answering pings on the way.
     async fn until(&mut self, mut pred: impl FnMut(&IpcMsg) -> bool) -> IpcMsg {
+        if let Some(i) = self.skipped.iter().position(&mut pred) {
+            return self.skipped.remove(i);
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
+            assert!(
+                Instant::now() < deadline,
+                "the awaited ipc message never came"
+            );
             let msg = self.recv().await.unwrap();
             if pred(&msg) {
                 return msg;
             }
-            if let IpcMsg::Ping { n } = msg {
-                self.send(&IpcMsg::Pong { n }).await;
+            match msg {
+                IpcMsg::Ping { n } => self.send(&IpcMsg::Pong { n }).await,
+                other => self.skipped.push(other),
             }
         }
     }
@@ -670,7 +703,7 @@ async fn the_newest_app_connection_wins_and_requests_are_answered() {
     loop {
         match first.recv().await {
             Err(IpcError::Closed) => break,
-            Ok(IpcMsg::Ping { .. }) => {}
+            Ok(IpcMsg::Ping { .. } | IpcMsg::AdminExitEnded) => {}
             other => panic!("{other:?}"),
         }
     }
@@ -1073,4 +1106,409 @@ async fn report_mode_from_the_hub_kills_nothing_and_reports_once() {
     {
         assert!(!matches!(m, IpcMsg::Toast { .. }), "{m:?}");
     }
+}
+
+// ---- Story 1.20: admin exit ----
+
+impl Hub {
+    /// Adds a staff member with a PIN in the built-in role `role`.
+    async fn add_staff(&self, login: &str, role: &str, pin: &str) -> String {
+        let role_id = Store::open_reader(&self.path)
+            .unwrap()
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == arena_store::RowValue::Text(role.into()))
+            .map(|r| match &r["role_id"] {
+                arena_store::RowValue::Text(t) => t.clone(),
+                other => panic!("{other:?}"),
+            })
+            .unwrap();
+        let applied = self
+            .writer
+            .submit_intent(intent(
+                owner(),
+                IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                    staff_id: None,
+                    login: login.into(),
+                    display_name: login.into(),
+                    role_id,
+                    password_hash: Some(hash_token_secret("pw").unwrap()),
+                    pin_hash: Some(hash_token_secret(pin).unwrap()),
+                    active: true,
+                }),
+            ))
+            .await
+            .unwrap();
+        applied.changes[0].row_id.clone()
+    }
+
+    fn exits(&self) -> Vec<arena_store::Row> {
+        Store::open_reader(&self.path)
+            .unwrap()
+            .rows(Table::DeviceAdminExits)
+            .unwrap()
+    }
+}
+
+fn text(row: &arena_store::Row, col: &str) -> String {
+    match &row[col] {
+        arena_store::RowValue::Text(t) => t.clone(),
+        other => panic!("{col} is {other:?}"),
+    }
+}
+
+fn int(row: &arena_store::Row, col: &str) -> i64 {
+    match &row[col] {
+        arena_store::RowValue::Integer(n) => *n,
+        other => panic!("{col} is {other:?}"),
+    }
+}
+
+impl App {
+    /// Sends `admin_exit{pin}` and returns the reply.
+    async fn admin_exit(&mut self, pin: &str) -> IpcMsg {
+        self.send(&IpcMsg::AdminExit {
+            rid: "x".into(),
+            pin: arena_kiosk_core::ipc::SecretPin::new(pin),
+        })
+        .await;
+        self.until(|m| matches!(m, IpcMsg::Reply { rid, .. } if rid == "x"))
+            .await
+    }
+}
+
+fn reply_code(reply: &IpcMsg) -> Option<arena_proto::ErrorCode> {
+    match reply {
+        IpcMsg::Reply { error, .. } => error.as_ref().map(|e| e.code),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A kiosk connected to a hub with a Manager (2222) and a Counter (3333), holding the verifier.
+async fn admin_setup() -> (Hub, Kiosk, String) {
+    let mut hub = Hub::seeded().await;
+    let manager = hub.add_staff("manager", "Manager", "2222").await;
+    hub.add_staff("counter", "Counter", "3333").await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    eventually("the verifier", || ctx.admin.verifier_version().is_some()).await;
+    (hub, kiosk, manager)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_online_exit_is_granted_recorded_with_its_approver_and_shown() {
+    let (hub, kiosk, _) = admin_setup().await;
+    // A PIN distinctive enough that no timestamp or id in the logs can contain it.
+    let manager = hub.add_staff("manager9", "Manager", "731946").await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let before = ctx.admin.verifier_version();
+    eventually("the newer verifier", || {
+        ctx.admin.verifier_version() > before
+    })
+    .await;
+    let mut app = kiosk.app().await;
+    let reply = app.admin_exit("731946").await;
+    assert_eq!(reply_code(&reply), None, "{reply:?}");
+    let IpcMsg::Reply { body, .. } = &reply else {
+        unreachable!()
+    };
+    let until = body["until"].as_i64().unwrap();
+    assert!(until > now_ms() + 14 * 60_000);
+    app.until(|m| matches!(m, IpcMsg::AdminExitStarted { .. }))
+        .await;
+    assert_eq!(kiosk.launcher.desktops.load(Ordering::SeqCst), 1);
+    eventually("the exit at the hub", || !hub.exits().is_empty()).await;
+    let row = &hub.exits()[0];
+    assert_eq!(text(row, "mode"), "hub");
+    assert_eq!(text(row, "staff_id"), manager);
+    assert_eq!(int(row, "flagged"), 0);
+    let change = Store::open_reader(&hub.path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .into_iter()
+        .rfind(|c| c.tbl == "device_admin_exits")
+        .unwrap();
+    assert_eq!(change.elevated_by_mode.as_deref(), Some("hub"));
+    assert!(!log_text().contains("731946"), "the PIN is never logged");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wrong_and_counter_pins_are_refused_and_five_pause_across_an_app_restart() {
+    let (hub, kiosk, _) = admin_setup().await;
+    let mut app = kiosk.app().await;
+    for pin in ["9999", "3333"] {
+        let reply = app.admin_exit(pin).await;
+        assert_eq!(
+            reply_code(&reply),
+            Some(arena_proto::ErrorCode::PinRejected),
+            "{pin}"
+        );
+    }
+    eventually("the failures logged at the hub", || {
+        hub.logged_of(&["admin_exit_failed"]).len() == 2
+    })
+    .await;
+    assert_eq!(kiosk.launcher.desktops.load(Ordering::SeqCst), 0);
+    for _ in 0..2 {
+        app.admin_exit("9999").await;
+    }
+    let reply = app.admin_exit("9999").await;
+    assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::AuthLocked));
+    let IpcMsg::Reply { body, .. } = &reply else {
+        unreachable!()
+    };
+    assert_eq!(body["retry_after_s"], 60);
+    // The app restarts: still paused, even for the right PIN.
+    drop(app);
+    let mut app = kiosk.app().await;
+    app.send(&IpcMsg::Request {
+        rid: "s".into(),
+        kind: "admin_exit_status".into(),
+        body: serde_json::Value::Null,
+    })
+    .await;
+    let status = app
+        .until(|m| matches!(m, IpcMsg::Reply { rid, .. } if rid == "s"))
+        .await;
+    let IpcMsg::Reply { body, .. } = status else {
+        unreachable!()
+    };
+    assert!(body["retry_after_s"].as_u64().unwrap() > 50);
+    let reply = app.admin_exit("2222").await;
+    assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::AuthLocked));
+    assert!(hub.exits().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offline_exits_use_the_cached_verifier_and_a_stale_one_is_flagged() {
+    let (mut hub, kiosk, manager) = admin_setup().await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let v2 = ctx.admin.verifier_version().unwrap();
+    assert!(kiosk.data.verifier().exists(), "stored in verifier.bin");
+    // A verifier update while connected replaces the cached one.
+    hub.add_staff("manager2", "Manager", "5555").await;
+    eventually("the newer verifier", || {
+        ctx.admin.verifier_version().is_some_and(|v| v > v2)
+    })
+    .await;
+    let v3 = ctx.admin.verifier_version().unwrap();
+    let mut app = kiosk.app().await;
+    // Hub down: the cached verifier v3 grants it.
+    hub.down().await;
+    kiosk.wait_state(KioskHubState::Reconnecting).await;
+    let reply = app.admin_exit("2222").await;
+    assert_eq!(reply_code(&reply), None, "{reply:?}");
+    // One exit at a time: the first one ends before the next.
+    arena_kiosk_svc::admin_exit::relock(&ctx).await;
+    // The Hub moves on to v4 while this kiosk is offline; the next offline exit used v3.
+    hub.add_staff("manager3", "Manager", "6666").await;
+    let reply = app.admin_exit("5555").await;
+    assert_eq!(reply_code(&reply), None, "{reply:?}");
+    assert!(hub.exits().is_empty(), "nothing reaches the hub offline");
+    hub.up().await;
+    eventually("both exits at the hub", || hub.exits().len() == 2).await;
+    let mut rows = hub.exits();
+    rows.sort_by_key(|r| int(r, "started_at"));
+    assert_eq!(text(&rows[0], "mode"), "cached_verifier");
+    assert_eq!(text(&rows[0], "staff_id"), manager);
+    assert_eq!(int(&rows[0], "flagged"), 0);
+    assert_eq!(int(&rows[1], "flagged"), 1);
+    assert_eq!(text(&rows[1], "flag_reason"), "stale_verifier");
+    let versions: Vec<Option<i64>> = Store::open_reader(&hub.path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.tbl == "device_admin_exits" && c.op == arena_store::ChangeOp::Insert)
+        .map(|c| c.elevated_by_verifier_version)
+        .collect();
+    assert_eq!(versions, vec![Some(v3), Some(v3)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_unlock_is_granted_and_acknowledged() {
+    let (hub, kiosk, _) = admin_setup().await;
+    let mut app = kiosk.app().await;
+    let mut acks = hub.presence.as_ref().unwrap().admin_unlock_acks().unwrap();
+    let applied = hub
+        .writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::DeviceAdminUnlock(arena_proto::DeviceAdminUnlock {
+                device_id: hub.device_id.clone(),
+            }),
+        ))
+        .await
+        .unwrap();
+    let exit_id = applied.changes[0].row_id.clone();
+    let ack = tokio::time::timeout(Duration::from_secs(5), acks.recv())
+        .await
+        .expect("an ack within 5 s")
+        .unwrap();
+    assert_eq!(ack.exit_id, exit_id);
+    app.until(|m| matches!(m, IpcMsg::AdminExitStarted { .. }))
+        .await;
+    assert_eq!(kiosk.launcher.desktops.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_exit_relocks_after_fifteen_minutes_and_a_restart_relocks_at_once() {
+    let mut hub = Hub::seeded().await;
+    hub.add_staff("manager", "Manager", "2222").await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    let clock = Arc::new(arena_kiosk_svc::clock::ManualClock::new(now_ms()));
+    kiosk.start_with_clock(clock.clone());
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    assert_eq!(reply_code(&app.admin_exit("2222").await), None);
+    app.until(|m| matches!(m, IpcMsg::AdminExitStarted { .. }))
+        .await;
+    eventually("the exit at the hub", || hub.exits().len() == 1).await;
+    // Fake clock: 15 minutes later it re-locks.
+    hub.down().await;
+    clock.advance(arena_proto::ADMIN_EXIT_MS);
+    app.until(|m| matches!(m, IpcMsg::AdminExitEnded)).await;
+    let launcher = Arc::clone(&kiosk.launcher);
+    eventually("the desktop stopped", || {
+        launcher.desktop_stops.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    eventually("the relock queued", || {
+        ctx.queue
+            .lock()
+            .unwrap()
+            .entries()
+            .unwrap()
+            .iter()
+            .any(|q| q.intent.kind == arena_proto::IntentKind::DeviceAdminRelock)
+    })
+    .await;
+    let relocks = || {
+        ctx.queue
+            .lock()
+            .unwrap()
+            .entries()
+            .unwrap()
+            .into_iter()
+            .filter(|q| q.intent.kind == arena_proto::IntentKind::DeviceAdminRelock)
+            .count()
+    };
+    assert_eq!(relocks(), 1);
+
+    // Another exit, then the service stops mid-exit: the restart re-locks at once.
+    drop(app);
+    clock.advance(1);
+    let mut app = kiosk.app().await;
+    assert_eq!(reply_code(&app.admin_exit("2222").await), None);
+    let runtime = kiosk.runtime.take().unwrap();
+    runtime.shutdown().await;
+    drop(app);
+    let _ = std::fs::remove_file(kiosk.data.socket());
+    kiosk.start_with_clock(clock.clone());
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    eventually("the restart re-lock", || {
+        ctx.queue
+            .lock()
+            .unwrap()
+            .entries()
+            .unwrap()
+            .into_iter()
+            .filter(|q| q.intent.kind == arena_proto::IntentKind::DeviceAdminRelock)
+            .count()
+            == 2
+    })
+    .await;
+    assert!(!ctx.admin.suspended());
+    assert_eq!(kiosk.launcher.desktop_stops.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reconnecting_app_learns_whether_an_exit_runs() {
+    let (_hub, kiosk, _) = admin_setup().await;
+    let mut app = kiosk.app().await;
+    assert_eq!(reply_code(&app.admin_exit("2222").await), None);
+    app.until(|m| matches!(m, IpcMsg::AdminExitStarted { .. }))
+        .await;
+    // The app goes away and comes back during the exit: it is told the exit runs.
+    drop(app);
+    let mut app = kiosk.app().await;
+    app.until(|m| matches!(m, IpcMsg::AdminExitStarted { .. }))
+        .await;
+    // The exit ends while no app is connected: the next connection is told it is over.
+    drop(app);
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    arena_kiosk_svc::admin_exit::relock(&ctx).await;
+    let mut app = kiosk.app().await;
+    app.until(|m| matches!(m, IpcMsg::AdminExitEnded)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_wrong_pins_at_the_kiosk_cannot_get_past_the_limit() {
+    let (hub, kiosk, _) = admin_setup().await;
+    let mut app = kiosk.app().await;
+    for i in 0..8 {
+        app.send(&IpcMsg::AdminExit {
+            rid: format!("p{i}"),
+            pin: arena_kiosk_core::ipc::SecretPin::new("9999"),
+        })
+        .await;
+    }
+    let mut codes = Vec::new();
+    for i in 0..8 {
+        let rid = format!("p{i}");
+        let reply = app
+            .until(|m| matches!(m, IpcMsg::Reply { rid: r, .. } if *r == rid))
+            .await;
+        codes.push(reply_code(&reply).unwrap());
+    }
+    let rejected = codes
+        .iter()
+        .filter(|c| **c == arena_proto::ErrorCode::PinRejected)
+        .count();
+    assert!(rejected <= 4, "{codes:?}");
+    assert!(
+        codes.contains(&arena_proto::ErrorCode::AuthLocked),
+        "{codes:?}"
+    );
+    // Paused even for the right PIN, and no exit was granted.
+    let reply = app.admin_exit("2222").await;
+    assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::AuthLocked));
+    assert!(hub.exits().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_end_of_an_exit_closes_explorer_and_resumes_enforcement() {
+    let mut hub = Hub::seeded().await;
+    hub.add_staff("manager", "Manager", "2222").await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.cache_mode("enforce");
+    let clock = Arc::new(arena_kiosk_svc::clock::ManualClock::new(now_ms()));
+    kiosk.start_with_clock(clock.clone());
+    let sys = fake_system();
+    kiosk.enforce(&sys);
+    eventually("the creation watch", || sys.subscribed()).await;
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    assert_eq!(reply_code(&app.admin_exit("2222").await), None);
+    // The exit's desktop, and something the manager started from it.
+    sys.spawn(300, player_proc(r"C:\Windows\explorer.exe"));
+    sys.spawn(301, player_proc(r"C:\Windows\System32\cmd.exe"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(sys.killed().is_empty(), "nothing is killed during the exit");
+    clock.advance(arena_proto::ADMIN_EXIT_MS);
+    app.until(|m| matches!(m, IpcMsg::AdminExitEnded)).await;
+    eventually("Explorer closed and the sweep done", || {
+        let k = sys.killed();
+        k.contains(&300) && k.contains(&301)
+    })
+    .await;
+    assert!(!sys.alive(300));
 }

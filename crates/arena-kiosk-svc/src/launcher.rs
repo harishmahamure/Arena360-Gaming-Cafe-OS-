@@ -9,6 +9,9 @@
 //! - Dev console mode ([`CommandLauncher`]): kill and respawn a child process.
 //! - Tests: any mock.
 //!
+//! Admin exit (Story 1.20): [`AppLauncher::start_desktop`] starts Explorer in the player's
+//! session the same way, in its own job, and [`AppLauncher::stop_desktop`] ends that job.
+//!
 //! The desktop is never exposed while the app restarts because the player's shell is the kiosk
 //! itself (Story 1.17's shell replacement: no Explorer behind it).
 
@@ -24,6 +27,15 @@ pub trait AppLauncher: Send + Sync {
     fn ready(&self) -> bool {
         true
     }
+
+    /// Admin exit (Story 1.20): starts Explorer in the player's session. The default has no
+    /// desktop to start.
+    fn start_desktop(&self) -> Result<(), String> {
+        Err("no desktop launcher on this host".into())
+    }
+
+    /// Ends the admin exit's Explorer (and what it started). The default does nothing.
+    fn stop_desktop(&self) {}
 }
 
 /// Does nothing but log (no app configured, e.g. a console run without `--app`).
@@ -153,6 +165,8 @@ mod session {
         exe: PathBuf,
         config: PathBuf,
         running: Mutex<Option<Running>>,
+        /// The admin exit's Explorer, in its own job.
+        desktop: Mutex<Option<Running>>,
     }
 
     impl SessionLauncher {
@@ -161,6 +175,7 @@ mod session {
                 exe,
                 config,
                 running: Mutex::new(None),
+                desktop: Mutex::new(None),
             }
         }
 
@@ -236,60 +251,93 @@ mod session {
         fn restart(&self) -> Result<(), String> {
             let token = self.player_token()?;
             self.stop_previous();
-            // SAFETY: plain Win32 calls; every handle and block is released.
-            unsafe {
-                let job = Owned(
-                    CreateJobObjectW(None, PCWSTR::null())
-                        .map_err(|e| format!("CreateJobObjectW: {e}"))?,
-                );
-                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                SetInformationJobObject(
-                    job.0,
-                    JobObjectExtendedLimitInformation,
-                    (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                )
-                .map_err(|e| format!("SetInformationJobObject: {e}"))?;
-                let mut env: *mut core::ffi::c_void = std::ptr::null_mut();
-                let env_ok = CreateEnvironmentBlock(&mut env, Some(token.0), false).is_ok();
-                let mut desktop = wide(r"winsta0\default");
-                let si = STARTUPINFOW {
-                    cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-                    lpDesktop: PWSTR(desktop.as_mut_ptr()),
-                    ..Default::default()
-                };
-                let mut pi = PROCESS_INFORMATION::default();
-                let mut cmd = wide(&format!("\"{}\"", self.exe.display()));
-                let cwd = self.exe.parent().map(|d| wide(&d.display().to_string()));
-                let created = CreateProcessAsUserW(
-                    Some(token.0),
-                    PCWSTR::null(),
-                    Some(PWSTR(cmd.as_mut_ptr())),
-                    None,
-                    None,
-                    false,
-                    CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
-                    env_ok.then_some(env as *const core::ffi::c_void),
-                    cwd.as_ref().map_or(PCWSTR::null(), |c| PCWSTR(c.as_ptr())),
-                    &si,
-                    &mut pi,
-                );
-                if env_ok {
-                    let _ = DestroyEnvironmentBlock(env);
-                }
-                created.map_err(|e| format!("CreateProcessAsUserW: {e}"))?;
-                let thread = Owned(pi.hThread);
-                let process = Owned(pi.hProcess);
-                if let Err(e) = AssignProcessToJobObject(job.0, process.0) {
-                    let _ = TerminateProcess(process.0, 1);
-                    return Err(format!("AssignProcessToJobObject: {e}"));
-                }
-                ResumeThread(thread.0);
-                *self.running.lock().unwrap_or_else(|p| p.into_inner()) =
-                    Some(Running { job, process });
-            }
+            let cmd = format!("\"{}\"", self.exe.display());
+            let cwd = self.exe.parent().map(|d| d.display().to_string());
+            let running = spawn_in_job(&token, &cmd, cwd.as_deref())?;
+            *self.running.lock().unwrap_or_else(|p| p.into_inner()) = Some(running);
             Ok(())
+        }
+
+        fn start_desktop(&self) -> Result<(), String> {
+            let token = self.player_token()?;
+            self.stop_desktop();
+            let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+            let cmd = format!("\"{windows}\\explorer.exe\"");
+            let running = spawn_in_job(&token, &cmd, Some(&windows))?;
+            *self.desktop.lock().unwrap_or_else(|p| p.into_inner()) = Some(running);
+            Ok(())
+        }
+
+        fn stop_desktop(&self) {
+            let previous = self
+                .desktop
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            if let Some(r) = previous {
+                // SAFETY: owned handles.
+                unsafe {
+                    let _ = TerminateJobObject(r.job.0, 1);
+                    let _ = WaitForSingleObject(r.process.0, EXIT_WAIT_MS);
+                }
+            }
+        }
+    }
+
+    /// Starts `cmd` as the token's user on `winsta0\default`, suspended, inside a fresh
+    /// kill-on-close job (so ending the job ends everything it started), then resumes it.
+    fn spawn_in_job(token: &Owned, cmd: &str, cwd: Option<&str>) -> Result<Running, String> {
+        // SAFETY: plain Win32 calls; every handle and block is released.
+        unsafe {
+            let job = Owned(
+                CreateJobObjectW(None, PCWSTR::null())
+                    .map_err(|e| format!("CreateJobObjectW: {e}"))?,
+            );
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+            .map_err(|e| format!("SetInformationJobObject: {e}"))?;
+            let mut env: *mut core::ffi::c_void = std::ptr::null_mut();
+            let env_ok = CreateEnvironmentBlock(&mut env, Some(token.0), false).is_ok();
+            let mut desktop = wide(r"winsta0\default");
+            let si = STARTUPINFOW {
+                cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+                lpDesktop: PWSTR(desktop.as_mut_ptr()),
+                ..Default::default()
+            };
+            let mut pi = PROCESS_INFORMATION::default();
+            let mut cmd = wide(cmd);
+            let cwd = cwd.map(wide);
+            let created = CreateProcessAsUserW(
+                Some(token.0),
+                PCWSTR::null(),
+                Some(PWSTR(cmd.as_mut_ptr())),
+                None,
+                None,
+                false,
+                CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+                env_ok.then_some(env as *const core::ffi::c_void),
+                cwd.as_ref().map_or(PCWSTR::null(), |c| PCWSTR(c.as_ptr())),
+                &si,
+                &mut pi,
+            );
+            if env_ok {
+                let _ = DestroyEnvironmentBlock(env);
+            }
+            created.map_err(|e| format!("CreateProcessAsUserW: {e}"))?;
+            let thread = Owned(pi.hThread);
+            let process = Owned(pi.hProcess);
+            if let Err(e) = AssignProcessToJobObject(job.0, process.0) {
+                let _ = TerminateProcess(process.0, 1);
+                return Err(format!("AssignProcessToJobObject: {e}"));
+            }
+            ResumeThread(thread.0);
+            Ok(Running { job, process })
         }
     }
 }

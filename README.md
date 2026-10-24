@@ -833,6 +833,56 @@ There is no staff GUI for the lists yet; edit them with `settings.set`. The fake
 (`procs::fake`) drives the service tests; the Windows code is type-checked in CI and exercised by
 the Story 1.19 escape suite on real Windows.
 
+## Kiosk admin exit
+
+A manager can drop a locked-down kiosk to the desktop for 15 minutes (`ADMIN_EXIT_MS`, shared by
+`arena-proto` and `arena-kiosk-core`), three ways. Every exit is a `device_admin_exits` row
+(migration 0010) shown in the audit viewer with the kiosk, the approving manager, the mode, the
+start and the re-lock time, and a "Flagged for review" marker when flagged.
+
+- **At the PC, Hub up (`hub`).** Ctrl+Alt+Shift+A (passed by the 1.17 keyboard hook; nothing on
+  screen mentions it) opens an `InlinePin` titled "Admin exit". The PIN goes over IPC
+  `admin_exit{pin}` to the service only. It is never stored or logged, and the service clears its
+  copy after the check on a best-effort basis (IPC and JSON buffers may still hold transient
+  copies until they are freed). The service sends
+  `kiosk.verify_admin_pin{pin_proof}` over the pinned-TLS LAN link; the Hub checks it with
+  argon2id against at most 50 active staff whose role allows `device.remote` and answers
+  `kiosk.admin_pin_ok{staff_id, verifier_version}` or `PIN_REJECTED` (five wrong in a row pause
+  that device for 60 s, `AUTH_LOCKED`). **Trade-off:** `pin_proof` is the PIN itself. It never
+  leaves the pinned TLS link between this kiosk and its Hub and is never stored or logged, the
+  same way the Hub UI's loopback `/ui/elevate` carries it; "the PIN never leaves the screen" holds
+  in spirit, not to the letter.
+- **At the PC, Hub down or slow (`cached_verifier`).** The Hub pushes the manager verifier
+  (`event{kind:"verifier", verifier}`: the staff ids, argon2id PIN hashes and PIN versions of the
+  same staff, never a PIN) to paired sessions after every hello and whenever it changes; browser
+  classes never get it. The service keeps the highest version in `verifier.bin` (DPAPI, machine
+  scope, on Windows) and checks the PIN against it off the async threads. The version is
+  `max(pin_verifier_version) + hub_meta.verifier_counter`, bumped on any change to that list, and
+  `verifier_history(version, valid_from)` records when each took effect.
+- **Remotely (`remote`).** The floor's "Remote unlock" on a paired device submits
+  `device.admin_unlock{device_id}` (`device.remote`; a Counter gets the manager PIN in place).
+  An offline device is refused at once. The Hub pushes `event{kind:"admin_unlock", exit_id}` to
+  that device; the kiosk grants it and answers `kiosk.admin_unlock_ack{exit_id}`, which reaches
+  the Hub UI as `event: device.admin_unlock_ack` on `/ui/events`. Without it within 5 s the floor
+  says "Failed — retry".
+
+The kiosk records each exit as `device.admin_exit{exit_id, mode}` (device actor, `elevated_by`
+`{pin, staff_id, hub|cached_verifier, verifier_version}`; the only intent that accepts a
+`cached_verifier` elevation and the only LAN intent whose `elevated_by` is kept), queued with its
+ULID key and `issued_at` minted at the moment of the exit and replayed through the offline queue.
+`apply()` requires the elevating member to hold `device.remote`; when the verifier version used is
+older than the one in effect at `issued_at` the exit is still applied, `flagged = 1`,
+`flag_reason = stale_verifier` (a manager removed since then is accepted only this way).
+
+During an exit the service starts Explorer in the player's session (its own job object),
+suspends process enforcement, and the app drops topmost and the keyboard lockdown and shrinks to a
+corner badge "Admin exit: 14:59 left". At the end Explorer's job is ended, any `explorer.exe`
+left in the player's session is closed, enforcement resumes with a sweep, the app covers every
+screen again and `device.admin_relock{exit_id}` is queued. A service restart re-locks a recorded
+exit at once. Five wrong PINs at the kiosk pause the prompt for 60 s with a countdown; the count
+lives in the service, so restarting the app does not reset it. A failed attempt is logged with
+the device and count (never the PIN) and queued as `kiosk.log{warn, admin_exit_failed}`.
+
 ## Pinned versions
 
 This table is checked against the manifests by `pnpm check:pins`. Change the manifest and this

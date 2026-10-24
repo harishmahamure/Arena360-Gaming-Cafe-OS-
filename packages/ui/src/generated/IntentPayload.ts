@@ -2,6 +2,9 @@
 import type { AuditReadGranted } from "./AuditReadGranted";
 import type { BranchBootstrap } from "./BranchBootstrap";
 import type { BranchSeedDefaults } from "./BranchSeedDefaults";
+import type { DeviceAdminExit } from "./DeviceAdminExit";
+import type { DeviceAdminRelock } from "./DeviceAdminRelock";
+import type { DeviceAdminUnlock } from "./DeviceAdminUnlock";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
@@ -25,4 +28,7 @@ export type IntentPayload =
   | ({ kind: "role.upsert" } & RoleUpsert)
   | ({ kind: "audit.read_granted" } & AuditReadGranted)
   | ({ kind: "kiosk.log" } & KioskLog)
-  | ({ kind: "kiosk.process_blocked" } & KioskProcessBlocked);
+  | ({ kind: "kiosk.process_blocked" } & KioskProcessBlocked)
+  | ({ kind: "device.admin_exit" } & DeviceAdminExit)
+  | ({ kind: "device.admin_relock" } & DeviceAdminRelock)
+  | ({ kind: "device.admin_unlock" } & DeviceAdminUnlock);

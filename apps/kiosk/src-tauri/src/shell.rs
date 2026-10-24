@@ -121,6 +121,41 @@ pub fn cover_all_monitors<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.set_focus();
 }
 
+/// Set while an admin exit runs (Story 1.20): the keyboard hook passes every key and the window
+/// stops re-asserting itself over the desktop.
+static LOCKDOWN_SUSPENDED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Suspends (`true`) or resumes the keyboard lockdown and the re-cover on focus loss.
+pub fn set_lockdown_suspended(suspended: bool) {
+    LOCKDOWN_SUSPENDED.store(suspended, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether an admin exit has suspended the lockdown.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn lockdown_suspended() -> bool {
+    LOCKDOWN_SUSPENDED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The admin exit's badge size, in logical px.
+const BADGE_SIZE: (f64, f64) = (360.0, 88.0);
+
+/// Shrinks `window` to the admin exit's countdown badge: not topmost, in the primary monitor's
+/// bottom-right corner, so the desktop behind it is usable.
+pub fn place_badge<R: Runtime>(window: &WebviewWindow<R>) {
+    let _ = window.set_always_on_top(false);
+    let _ = window.set_fullscreen(false);
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let (w, h) = (BADGE_SIZE.0 * scale, BADGE_SIZE.1 * scale);
+    let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
+    if let Ok(Some(m)) = window.primary_monitor() {
+        let margin = 16.0 * scale;
+        let x = f64::from(m.position().x) + f64::from(m.size().width) - w - margin;
+        let y = f64::from(m.position().y) + f64::from(m.size().height) - h - margin * 4.0;
+        let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
+    }
+}
+
 #[cfg(windows)]
 pub use win::start_input_thread;
 
@@ -195,7 +230,7 @@ mod win {
     }
 
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code == HC_ACTION as i32 {
+        if code == HC_ACTION as i32 && !super::lockdown_suspended() {
             // SAFETY: for WH_KEYBOARD_LL with HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
             let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
             let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
@@ -291,6 +326,9 @@ mod win {
     }
 
     fn reassert() {
+        if super::lockdown_suspended() {
+            return;
+        }
         if let Some(f) = ON_REASSERT.get() {
             f();
         }

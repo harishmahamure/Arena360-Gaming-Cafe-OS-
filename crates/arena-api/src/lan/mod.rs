@@ -18,7 +18,7 @@ pub mod tls;
 
 use std::sync::Arc;
 
-use arena_core::{Clock, DeviceDirectory, HubStatus, WriterHandle};
+use arena_core::{Clock, DeviceDirectory, HubStatus, StaffDirectory, WriterHandle};
 use tokio::sync::watch;
 
 pub use listener::MAX_CONNECTIONS;
@@ -99,6 +99,13 @@ impl Presence {
     pub fn changes(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
         self.0.as_ref().map(|r| r.presence_changes())
     }
+
+    /// The remote unlocks kiosks acknowledge from now on (`None` for [`Presence::none`]).
+    pub fn admin_unlock_acks(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<arena_proto::AdminUnlockAckEvent>> {
+        self.0.as_ref().map(|r| r.admin_unlock_acks())
+    }
 }
 
 /// Everything a LAN session needs from the Hub.
@@ -112,11 +119,14 @@ pub struct LanHub {
     pub tls: Arc<rustls::ServerConfig>,
     /// This Hub's version, `x.y.z`.
     pub version: String,
+    /// Checks admin-exit PINs (`kiosk.verify_admin_pin`); without it they are `UNSUPPORTED`.
+    pub staff: Option<Arc<StaffDirectory>>,
     registry: Arc<registry::Registry>,
     /// Bounds concurrent argon2id token checks across all connections.
     verify_permits: Arc<tokio::sync::Semaphore>,
     throttle: throttle::HelloThrottle,
     kiosk_log_rate: throttle::KioskLogRate,
+    admin_pin: throttle::AdminPinThrottle,
 }
 
 impl LanHub {
@@ -135,11 +145,19 @@ impl LanHub {
             devices,
             tls,
             version: version.into(),
+            staff: None,
             registry: Arc::new(registry::Registry::default()),
             verify_permits: Arc::new(tokio::sync::Semaphore::new(VERIFY_CONCURRENCY)),
             throttle: throttle::HelloThrottle::default(),
             kiosk_log_rate: throttle::KioskLogRate::default(),
+            admin_pin: throttle::AdminPinThrottle::default(),
         }
+    }
+
+    /// Checks kiosk admin-exit PINs against `staff` (Story 1.20).
+    pub fn with_staff(mut self, staff: Arc<StaffDirectory>) -> Self {
+        self.staff = Some(staff);
+        self
     }
 
     /// How many sessions are connected.

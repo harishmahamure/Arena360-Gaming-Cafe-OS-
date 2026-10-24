@@ -4,6 +4,7 @@
 //! decision and the Windows lockdown's pure parts (the registry plan, the keyboard filter, the
 //! monitor union). It depends only on `arena-proto` among the workspace crates.
 
+pub mod admin_exit;
 pub mod backoff;
 pub mod client;
 pub mod ipc;

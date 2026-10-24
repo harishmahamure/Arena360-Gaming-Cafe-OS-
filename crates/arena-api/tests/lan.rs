@@ -173,14 +173,17 @@ async fn start(version: &str, primary: bool) -> TestHub {
     };
 
     let cert = HubCert::generate(None).unwrap();
-    let hub = Arc::new(LanHub::new(
-        writer.clone(),
-        status_rx,
-        clock,
-        Arc::new(DeviceDirectory::open(&path).unwrap()),
-        cert.server_config().unwrap(),
-        version,
-    ));
+    let hub = Arc::new(
+        LanHub::new(
+            writer.clone(),
+            status_rx,
+            clock,
+            Arc::new(DeviceDirectory::open(&path).unwrap()),
+            cert.server_config().unwrap(),
+            version,
+        )
+        .with_staff(Arc::new(arena_core::StaffDirectory::open(&path).unwrap())),
+    );
     let presence = hub.presence();
     let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
         .await
@@ -356,11 +359,17 @@ async fn paired_hello_records_the_version_and_pushes_applies() {
     assert_eq!(ok.versions.app, "0.1.0");
     let mut events = client.events().unwrap();
 
-    // The version is recorded through `device.version_reported`, itself pushed as an event.
-    let first = tokio::time::timeout(Duration::from_secs(5), events.next())
-        .await
-        .unwrap()
-        .unwrap();
+    // The version is recorded through `device.version_reported`, itself pushed as an event
+    // (after the manager verifier every paired session gets on hello).
+    let first = loop {
+        let ev = tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap()
+            .unwrap();
+        if !matches!(ev, HubEvent::Verifier { .. }) {
+            break ev;
+        }
+    };
     let HubEvent::Applied(s) = first else {
         panic!("{:?}", first)
     };
@@ -1002,7 +1011,7 @@ async fn a_kiosk_list_change_is_pushed_to_paired_sessions_but_not_browsers() {
         let left = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(left, events.next()).await.unwrap() {
             Some(HubEvent::SettingsChanged(v)) => break v.values,
-            Some(HubEvent::Applied(_)) => continue,
+            Some(_) => continue,
             None => panic!("closed"),
         }
     };
@@ -1019,4 +1028,267 @@ async fn a_kiosk_list_change_is_pushed_to_paired_sessions_but_not_browsers() {
     ping(&mut kds, "p1").await;
     let next = tokio::time::timeout(Duration::from_millis(300), kds.next()).await;
     assert!(next.is_err(), "kds got {next:?}");
+}
+
+// ---- Story 1.20: kiosk admin exit ----
+
+/// Adds a staff member with `pin` in the built-in role `role`; returns the id.
+async fn add_staff(hub: &TestHub, login: &str, role: &str, pin: &str) -> String {
+    let role_id = Store::open_reader(&hub.path)
+        .unwrap()
+        .rows(arena_store::Table::Roles)
+        .unwrap()
+        .into_iter()
+        .find(|r| r["name"] == arena_store::RowValue::Text(role.into()))
+        .map(|r| match &r["role_id"] {
+            arena_store::RowValue::Text(t) => t.clone(),
+            other => panic!("{other:?}"),
+        })
+        .unwrap();
+    let applied = hub
+        .writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                staff_id: None,
+                login: login.into(),
+                display_name: login.into(),
+                role_id,
+                password_hash: Some(arena_core::staff::hash_secret("pw").unwrap()),
+                pin_hash: Some(arena_core::staff::hash_secret(pin).unwrap()),
+                active: true,
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "staff")
+        .unwrap()
+        .row_id
+        .clone()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paired_hello_gets_the_verifier_and_kds_never_does() {
+    let hub = start("0.1.0", true).await;
+    let manager = add_staff(&hub, "manager", "Manager", "2222").await;
+    add_staff(&hub, "counter", "Counter", "3333").await;
+    // A kds session first: it must never see the verifier, even when it changes.
+    let mut kds = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut kds, &hello).await;
+    assert!(matches!(
+        recv(&mut kds).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    let first = loop {
+        match tokio::time::timeout(Duration::from_secs(5), events.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            HubEvent::Verifier { verifier } => break verifier,
+            _ => continue,
+        }
+    };
+    assert_eq!(
+        first
+            .entries
+            .iter()
+            .map(|e| e.staff_id.clone())
+            .collect::<Vec<_>>(),
+        vec![manager.clone()],
+        "only device.remote holders"
+    );
+    assert!(first.entries[0].pin_hash.starts_with("$argon2id$"));
+    // Another manager: a newer verifier is pushed.
+    add_staff(&hub, "manager2", "Manager", "5555").await;
+    let second = loop {
+        match tokio::time::timeout(Duration::from_secs(5), events.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            HubEvent::Verifier { verifier } => break verifier,
+            _ => continue,
+        }
+    };
+    assert!(second.version > first.version);
+    assert_eq!(second.entries.len(), 2);
+    // The kds session got nothing at all (no verifier, no applies for unlisted tables).
+    ping(&mut kds, "k1").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hub_checks_admin_exit_pins_and_pauses_after_five_wrong() {
+    let hub = start("0.1.0", true).await;
+    let manager = add_staff(&hub, "manager", "Manager", "2222").await;
+    add_staff(&hub, "counter", "Counter", "3333").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let verify = |pin: &str| {
+        let body = serde_json::json!({ "pin_proof": pin });
+        client.request("kiosk.verify_admin_pin", body)
+    };
+    let frame = verify("2222").await.unwrap();
+    let FrameBody::AdminPinOk(ok) = frame.body else {
+        panic!("{frame:?}")
+    };
+    assert_eq!(ok.staff_id, manager);
+    assert!(ok.verifier_version >= 1);
+    // Wrong, and a Counter's PIN: the same refusal.
+    for pin in ["9999", "3333"] {
+        match verify(pin).await {
+            Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::PinRejected, "{pin}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    for _ in 0..2 {
+        verify("9999").await.unwrap_err();
+    }
+    match verify("9999").await {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::AuthLocked),
+        other => panic!("{other:?}"),
+    }
+    // Paused even for the right PIN.
+    match verify("2222").await {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::AuthLocked),
+        other => panic!("{other:?}"),
+    }
+    assert!(!log_text().contains("9999"), "the PIN is never logged");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_wrong_pins_cannot_get_past_the_limit() {
+    let hub = start("0.1.0", true).await;
+    add_staff(&hub, "manager", "Manager", "2222").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let attempts = (0..8).map(|_| {
+        client.request(
+            "kiosk.verify_admin_pin",
+            serde_json::json!({ "pin_proof": "9999" }),
+        )
+    });
+    let results = futures_util::future::join_all(attempts).await;
+    let codes: Vec<ErrorCode> = results
+        .into_iter()
+        .map(|r| match r {
+            Err(ClientError::Hub(e)) => e.code,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let checked = codes
+        .iter()
+        .filter(|c| **c == ErrorCode::PinRejected)
+        .count();
+    assert!(checked <= 5, "{codes:?}");
+    assert!(codes.contains(&ErrorCode::AuthLocked), "{codes:?}");
+    // And the right PIN is paused now too.
+    match client
+        .request(
+            "kiosk.verify_admin_pin",
+            serde_json::json!({ "pin_proof": "2222" }),
+        )
+        .await
+    {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::AuthLocked),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_unlock_reaches_the_kiosk_and_its_ack_reaches_the_hub_ui() {
+    let hub = start("0.1.0", true).await;
+    let mut acks = hub.presence.admin_unlock_acks().unwrap();
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    let applied = hub
+        .writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::DeviceAdminUnlock(arena_proto::DeviceAdminUnlock {
+                device_id: hub.paired_id.clone(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let exit_id = applied.changes[0].row_id.clone();
+    let pushed = loop {
+        match tokio::time::timeout(Duration::from_secs(5), events.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            HubEvent::AdminUnlock { exit_id } => break exit_id,
+            _ => continue,
+        }
+    };
+    assert_eq!(pushed, exit_id);
+    // An ack naming someone else's (or no) exit is refused.
+    let bad = client
+        .request(
+            "kiosk.admin_unlock_ack",
+            serde_json::json!({ "exit_id": "01JNOPEAAAAAAAAAAAAAAAAAAA" }),
+        )
+        .await;
+    assert!(matches!(bad, Err(ClientError::Hub(e)) if e.code == ErrorCode::ValidationFailed));
+    let frame = client
+        .request(
+            "kiosk.admin_unlock_ack",
+            serde_json::json!({ "exit_id": exit_id }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(frame.body, FrameBody::Ack);
+    let ack = tokio::time::timeout(Duration::from_secs(5), acks.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (ack.exit_id, ack.device_id),
+        (exit_id, hub.paired_id.clone())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kds_session_may_not_verify_admin_pins() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    send(
+        &mut ws,
+        r#"{"v":1,"kind":"kiosk.verify_admin_pin","rid":"v","pin_proof":"2222"}"#,
+    )
+    .await;
+    let frame = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
 }

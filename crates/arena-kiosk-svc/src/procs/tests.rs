@@ -57,6 +57,8 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         app_state: Mutex::new(None),
         lists,
         toasts,
+        launcher: Arc::new(crate::launcher::NoopLauncher),
+        admin: crate::admin_exit::AdminState::load(Box::new(NoSecret)),
     })
 }
 
@@ -614,4 +616,54 @@ fn the_app_path_is_re_read_from_the_config() {
         "the newly configured app is never killed"
     );
     assert!(sys.alive(50));
+}
+
+// ---- Story 1.20: the admin exit suspends enforcement, and its end closes Explorer ----
+
+#[test]
+fn an_admin_exit_suspends_enforcement_and_its_end_closes_explorer() {
+    let t = setup(enforcing());
+    t.sys
+        .add_running(50, player(r"C:\Windows\explorer.exe", None));
+    t.sys
+        .add_running(51, player(r"C:\Windows\System32\cmd.exe", Some(50)));
+    t.ctx
+        .admin
+        .active
+        .send_replace(Some(arena_kiosk_core::admin_exit::ActiveExit::start(
+            "E", 0,
+        )));
+    assert!(
+        t.inner.sweep().is_empty(),
+        "nothing is killed during an exit"
+    );
+    assert!(t.sys.killed().is_empty());
+    t.ctx.admin.active.send_replace(None);
+    // The end: Explorer closed (whatever the mode), then the sweep takes the rest.
+    assert_eq!(t.inner.close_named(EXPLORER_IMAGE), 1);
+    assert_eq!(t.sys.killed(), vec![50]);
+    let hits = t.inner.sweep();
+    assert_eq!(hits.iter().map(|h| h.pid).collect::<Vec<_>>(), vec![51]);
+}
+
+#[test]
+fn closing_explorer_never_touches_other_sessions_or_report_mode_rules() {
+    let t = setup(ProcessLists::defaults());
+    t.sys.add_running(
+        60,
+        FakeProc {
+            session_id: 0,
+            user_sid: "S-1-5-18".into(),
+            path: r"C:\Windows\explorer.exe".into(),
+            parent: None,
+        },
+    );
+    t.sys
+        .add_running(61, player(r"C:\Windows\explorer.exe", None));
+    assert_eq!(
+        t.inner.close_named(EXPLORER_IMAGE),
+        1,
+        "report mode still closes it"
+    );
+    assert_eq!(t.sys.killed(), vec![61]);
 }

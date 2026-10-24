@@ -14,6 +14,9 @@
 //!   `settings.changed` applies the same way, live. A failed or slow `settings.get` keeps the
 //!   cached values (they still apply offline). The applied revisions start from the cached
 //!   ones, so an older revision never replaces a newer one.
+//! - **Admin exit:** the live client is shared with [`crate::admin_exit`] (online PIN checks);
+//!   a pushed `verifier` is stored when newer, and `admin_unlock` grants a remote exit and is
+//!   acknowledged.
 
 use std::sync::Arc;
 
@@ -155,7 +158,11 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
     };
     backoff.reset();
     ctx.set_hub_state(KioskHubState::Connected);
-    serve(ctx, &client, stop).await
+    let client = Arc::new(client);
+    *ctx.admin.hub.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::clone(&client));
+    let ended = serve(ctx, &client, stop).await;
+    *ctx.admin.hub.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    ended
 }
 
 /// While connected: replay the queue, then wait for new events, the close or shutdown.
@@ -202,6 +209,12 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                 match ev {
                     Some(HubEvent::SettingsChanged(values)) => {
                         apply_settings(ctx, &values.values, &mut revs);
+                    }
+                    Some(HubEvent::Verifier { verifier }) => {
+                        crate::admin_exit::store_verifier(ctx, verifier);
+                    }
+                    Some(HubEvent::AdminUnlock { exit_id }) => {
+                        crate::admin_exit::grant_remote(ctx, client, exit_id).await;
                     }
                     Some(HubEvent::Applied(_)) => {}
                     None => events = None,

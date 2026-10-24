@@ -8,10 +8,10 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use arena_proto::{
-    AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, ActorKind, AppError, AuditActor, AuditActorKind,
-    AuditDetail, AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage,
-    AuditItem, AuditPage, AuditStaffOption, AuditValue, ChangeOpKind, ElevationKind, ElevationMode,
-    ErrorCode, IntentKind,
+    AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, ActorKind, AdminExitMode, AppError, AuditActor,
+    AuditActorKind, AuditAdminExit, AuditDetail, AuditElevatedBy, AuditElevationKind,
+    AuditElevationMode, AuditFacets, AuditImage, AuditItem, AuditPage, AuditStaffOption,
+    AuditValue, ChangeOpKind, ElevationKind, ElevationMode, ErrorCode, IntentKind,
 };
 use arena_store::{AuditCursor, AuditFilter, AuditRow, ChangeOp, Row, RowValue, Store};
 
@@ -265,6 +265,45 @@ impl Names {
                 ChangeOp::Update => ChangeOpKind::Update,
                 ChangeOp::Delete => ChangeOpKind::Delete,
             },
+            flagged: row.flagged,
+        })
+    }
+
+    /// The summary of a `device_admin_exits` row image: the kiosk and the approving manager by
+    /// name, how it was granted, its times and its review flag. `None` for other tables or an
+    /// image that lacks the columns.
+    pub fn admin_exit(&self, tbl: &str, image: &Row) -> Option<AuditAdminExit> {
+        if tbl != arena_store::Table::DeviceAdminExits.name() {
+            return None;
+        }
+        let text = |c: &str| match image.get(c) {
+            Some(RowValue::Text(t)) => Some(t.clone()),
+            _ => None,
+        };
+        let int = |c: &str| match image.get(c) {
+            Some(RowValue::Integer(n)) => Some(*n),
+            _ => None,
+        };
+        let device_id = text("device_id")?;
+        let staff_id = text("staff_id")?;
+        let mode = text("mode")?;
+        Some(AuditAdminExit {
+            device_label: self
+                .devices
+                .get(&device_id)
+                .cloned()
+                .unwrap_or_else(|| device_id.clone()),
+            device_id,
+            staff_name: self.staff_name(&staff_id),
+            staff_id,
+            mode: AdminExitMode::parse(&mode)
+                .map_or("unknown", AdminExitMode::as_str)
+                .to_owned(),
+            started_at: int("started_at")?,
+            relock_at: int("relock_at")?,
+            relocked_at: int("relocked_at"),
+            flagged: int("flagged").is_some_and(|f| f != 0),
+            flag_reason: text("flag_reason"),
         })
     }
 }
@@ -380,8 +419,12 @@ pub fn read_detail(store: &Store, epoch: &str, seq: i64) -> Result<Option<AuditD
     let after = decode_image(&change.row)?;
     let before = before.as_deref().map(decode_image).transpose()?;
     let changed = changed_fields(before.as_ref(), &after);
+    let admin_exit = names.admin_exit(&change.tbl, &after);
+    let mut row = AuditRow::from(&change);
+    row.flagged = admin_exit.as_ref().map(|e| e.flagged);
     Ok(Some(AuditDetail {
-        item: names.item(&AuditRow::from(&change))?,
+        admin_exit,
+        item: names.item(&row)?,
         after: redact(&after),
         before: before.as_ref().map(redact),
         changed,
@@ -632,6 +675,38 @@ mod tests {
     }
 
     #[test]
+    fn an_admin_exit_image_is_summarised_with_names() {
+        let names = Names::new(
+            vec![("S".into(), "Asha".into())],
+            vec![("D".into(), "Kiosk 3".into())],
+        );
+        let image = row(&[
+            ("exit_id", RowValue::Text("E".into())),
+            ("device_id", RowValue::Text("D".into())),
+            ("staff_id", RowValue::Text("S".into())),
+            ("mode", RowValue::Text("cached_verifier".into())),
+            ("started_at", RowValue::Integer(10)),
+            ("relock_at", RowValue::Integer(20)),
+            ("relocked_at", RowValue::Null),
+            ("flagged", RowValue::Integer(1)),
+            ("flag_reason", RowValue::Text("stale_verifier".into())),
+        ]);
+        let e = names.admin_exit("device_admin_exits", &image).unwrap();
+        assert_eq!(
+            (
+                e.device_label.as_str(),
+                e.staff_name.as_str(),
+                e.mode.as_str()
+            ),
+            ("Kiosk 3", "Asha", "cached_verifier")
+        );
+        assert_eq!((e.started_at, e.relock_at, e.relocked_at), (10, 20, None));
+        assert!(e.flagged);
+        assert_eq!(e.flag_reason.as_deref(), Some("stale_verifier"));
+        assert!(names.admin_exit("settings", &image).is_none());
+    }
+
+    #[test]
     fn unknown_stored_kinds_show_as_unknown() {
         let names = Names::default();
         let row = AuditRow {
@@ -649,6 +724,7 @@ mod tests {
             tbl: "settings".into(),
             row_id: "x".into(),
             op: ChangeOp::Update,
+            flagged: None,
         };
         let item = names.item(&row).unwrap();
         assert_eq!(item.actor.kind, AuditActorKind::Unknown);

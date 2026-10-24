@@ -12,6 +12,8 @@ import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 export const HUB_STATUS_EVENT = names.events.hubStatus;
 export const RESTORE_STATE_EVENT = names.events.restoreState;
 export const TOAST_EVENT = names.events.toast;
+export const ADMIN_EXIT_EVENT = names.events.adminExit;
+export const ADMIN_EXIT_ENDED_EVENT = names.events.adminExitEnded;
 const CMD = names.commands;
 /** How often the webview tells the shell it is alive (the shell answers pings only then). */
 export const HEARTBEAT_MS = 1000;
@@ -105,4 +107,84 @@ export function restoredRoute(v: unknown): string | null {
   // Never another origin: no `//host` or `/\host`.
   if (route.startsWith("//") || route.includes("\\")) return null;
   return route;
+}
+
+/** What the service answered to an admin-exit PIN (Story 1.20). */
+export type AdminExitResult =
+  | { kind: "granted"; until: number }
+  | { kind: "rejected" }
+  | { kind: "locked"; retryAfterS: number }
+  | { kind: "unreachable" };
+
+type Answer = { ok: boolean; code?: string; body: unknown };
+
+const isAnswer = (v: unknown): v is Answer =>
+  typeof v === "object" && v !== null && typeof (v as { ok?: unknown }).ok === "boolean";
+
+const field = (body: unknown, name: string): number | null => {
+  const v =
+    typeof body === "object" && body !== null ? (body as Record<string, unknown>)[name] : null;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+};
+
+/**
+ * Sends a manager PIN for an admin exit to the Kiosk service (through the shell, never the
+ * Hub directly). The caller drops its own copy of the PIN.
+ */
+export async function adminExit(pin: string): Promise<AdminExitResult> {
+  if (!inTauri()) return { kind: "unreachable" };
+  try {
+    const answer: unknown = await invoke(CMD.adminExit, { pin });
+    if (!isAnswer(answer)) return { kind: "unreachable" };
+    if (answer.ok) {
+      const until = field(answer.body, "until");
+      return until === null ? { kind: "unreachable" } : { kind: "granted", until };
+    }
+    if (answer.code === "AUTH_LOCKED") {
+      return {
+        kind: "locked",
+        retryAfterS: Math.max(1, field(answer.body, "retry_after_s") ?? 60),
+      };
+    }
+    if (answer.code === "PIN_REJECTED") return { kind: "rejected" };
+    return { kind: "unreachable" };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/** Whether the admin-exit prompt is paused (seconds left) and whether an exit runs (until). */
+export async function adminExitStatus(): Promise<{
+  retryAfterS: number | null;
+  until: number | null;
+}> {
+  const none = { retryAfterS: null, until: null };
+  if (!inTauri()) return none;
+  try {
+    const answer: unknown = await invoke(CMD.adminExitStatus);
+    if (!isAnswer(answer) || !answer.ok) return none;
+    return { retryAfterS: field(answer.body, "retry_after_s"), until: field(answer.body, "until") };
+  } catch {
+    return none;
+  }
+}
+
+/** Calls `cb` with `until` (UTC ms) whenever an admin exit starts. */
+export async function onAdminExit(cb: (until: number) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(ADMIN_EXIT_EVENT, (e) => {
+    const until = field(e.payload, "until");
+    if (until !== null) cb(until);
+  });
+}
+
+/** Calls `cb` whenever the admin exit ends. */
+export async function onAdminExitEnded(cb: () => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(ADMIN_EXIT_ENDED_EVENT, () => cb());
+}
+
+/** Whether `e` is the hidden admin-exit combination, Ctrl+Alt+Shift+A. */
+export function isAdminExitCombo(e: KeyboardEvent): boolean {
+  return e.ctrlKey && e.altKey && e.shiftKey && !e.metaKey && e.code === "KeyA";
 }

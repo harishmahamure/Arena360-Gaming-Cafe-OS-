@@ -4,6 +4,7 @@
 //! `packages/ui/src/generated`.
 
 mod actor;
+mod admin;
 mod audit;
 pub mod currency;
 mod error;
@@ -17,10 +18,16 @@ mod snapshot;
 mod ui_auth;
 
 pub use actor::{Actor, ActorKind, ElevatedBy, ElevationKind, ElevationMode};
+pub use admin::{
+    ADMIN_EXIT_FAILED_CODE, ADMIN_EXIT_MS, AdminExitMode, AdminPinOk, AdminUnlockAck,
+    AdminUnlockAckEvent, DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock,
+    FLAG_STALE_VERIFIER, MAX_VERIFIER_ENTRIES, ManagerVerifier, VerifierEntry, VerifyAdminPin,
+    validate_exit_id,
+};
 pub use audit::{
-    AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditDetail, AuditElevatedBy,
-    AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem, AuditPage,
-    AuditStaffOption, AuditValue, ELEVATION_HEADER,
+    AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditAdminExit, AuditDetail,
+    AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,
+    AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
 };
 pub use error::{AppError, ErrorCode};
 pub use frame::{

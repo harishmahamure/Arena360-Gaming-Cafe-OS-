@@ -15,6 +15,7 @@ tauri.workspace = true
 arena-kiosk-core.workspace = true
 arena-proto.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
 tracing.workspace = true
 

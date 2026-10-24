@@ -36,4 +36,6 @@ export type ErrorCode =
   | "PASSWORD_REQUIRED"
   | "TOTP_INVALID"
   | "SETUP_INCOMPLETE"
-  | "BRANCH_CODE_TAKEN";
+  | "BRANCH_CODE_TAKEN"
+  | "NO_HUB"
+  | "HUB_INCOMPATIBLE";

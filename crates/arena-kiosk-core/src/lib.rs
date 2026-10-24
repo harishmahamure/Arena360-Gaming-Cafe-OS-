@@ -18,7 +18,8 @@ pub mod watchdog;
 pub use backoff::Backoff;
 pub use client::{
     ClientError, Closed, DEFAULT_PORT, EventStream, HubClient, HubStream, IDLE_TIMEOUT,
-    PING_INTERVAL, REQUEST_TIMEOUT, connect_ws, hex_lower, parse_fingerprint, pinned_config,
+    PING_INTERVAL, REQUEST_TIMEOUT, capture_fingerprint, connect_ws, hex_lower, parse_fingerprint,
+    pinned_config,
 };
 pub use ipc::{IpcError, IpcMsg, read_msg, write_msg};
 pub use queue::{QUEUE_TTL_MS, ReplayStep};

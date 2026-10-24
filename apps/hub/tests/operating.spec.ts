@@ -86,6 +86,7 @@ function snapshot(hub: Hub): HubSnapshot {
       backup_location_set: hub.settings.get("system.backup_dir")!.value !== "",
       ad_consent: hub.adConsent,
     },
+    lan: null,
   };
 }
 

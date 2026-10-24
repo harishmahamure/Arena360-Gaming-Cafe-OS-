@@ -24,6 +24,8 @@ serde_json.workspace = true
 rusqlite.workspace = true
 ulid.workspace = true
 argon2.workspace = true
+mdns-sd.workspace = true
+if-addrs.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
@@ -36,6 +38,8 @@ dev-fixtures = []
 
 [dev-dependencies]
 arena-api.workspace = true
+arena-tasks.workspace = true
+tokio-rustls.workspace = true
 arena-core.workspace = true
 arena-store.workspace = true
 tempfile.workspace = true

@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use arena_proto::KioskHubStatus;
 use bridge::{
-    ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, Answer, Bridge, Emit, HUB_STATUS_EVENT,
-    RESTORE_STATE_EVENT, THEME_EVENT, TOAST_EVENT,
+    ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, Answer, Bridge, DISCOVERY_DONE_EVENT,
+    DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT, THEME_EVENT, TOAST_EVENT,
 };
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -85,6 +85,33 @@ async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Opti
             body: serde_json::Value::Null,
         })
         .await)
+}
+
+async fn service_request(bridge: &Bridge, kind: &str, body: serde_json::Value) -> Option<Answer> {
+    let kind = kind.to_owned();
+    bridge
+        .request(move |rid| arena_kiosk_core::ipc::IpcMsg::Request { rid, kind, body })
+        .await
+}
+
+#[tauri::command]
+async fn discover(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "discover", serde_json::Value::Null).await)
+}
+
+#[tauri::command]
+async fn probe_ip(ip: String, bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "probe_ip", serde_json::json!({ "ip": ip })).await)
+}
+
+#[tauri::command]
+async fn select_hub(
+    addr: String,
+    fingerprint: String,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let body = serde_json::json!({ "addr": addr, "fingerprint": fingerprint });
+    Ok(service_request(&bridge, "select_hub", body).await)
 }
 
 /// Whether this kiosk is high contrast now (the service's last word, or the first-paint
@@ -173,7 +200,10 @@ fn main() {
             heartbeat,
             admin_exit,
             admin_exit_status,
-            theme
+            theme,
+            discover,
+            probe_ip,
+            select_hub
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).
@@ -209,6 +239,14 @@ fn main() {
                             }
                             handle.emit(THEME_EVENT, serde_json::json!({ "hc": hc }))
                         }
+                        Emit::DiscoveryFound(search, hubs) => handle.emit(
+                            DISCOVERY_FOUND_EVENT,
+                            serde_json::json!({ "search": search, "hubs": hubs }),
+                        ),
+                        Emit::DiscoveryDone(search, hubs) => handle.emit(
+                            DISCOVERY_DONE_EVENT,
+                            serde_json::json!({ "search": search, "hubs": hubs }),
+                        ),
                     };
                 };
                 bridge.run(&emit).await;

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use arena_api::lan::{LanHub, bind_lan, serve_lan, tls};
+use arena_api::lan::{HubInfoSource, LanHub, bind_lan, serve_lan, tls};
 use arena_api::{bind_health, serve_router};
 use arena_core::{
     Clock, DeviceDirectory, HubStatus, Role, SnapshotReader, StaffDirectory, SystemClock,
@@ -24,7 +24,10 @@ use arena_core::{
 };
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
-use arena_tasks::{ConnectivityTask, HousekeepingTask, LeaseTask, NetProber};
+use arena_tasks::{
+    ConnectivityTask, HousekeepingTask, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber,
+    SystemInterfaces,
+};
 use tokio::sync::oneshot;
 use tracing_subscriber::EnvFilter;
 
@@ -195,9 +198,11 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
 
     // The LAN certificate: generated once by the writer, reused afterwards; a follower never
     // writes it. Its fingerprint goes into hub_meta like the instance id.
+    let hostname = tls::hostname();
+    let hub_name = arena_proto::sanitize_hub_name(hostname.as_deref().unwrap_or_default());
     let cert = tls::load_or_create(
         &cfg.data_dir,
-        tls::hostname().as_deref(),
+        hostname.as_deref(),
         store.holds_writer_lock(),
     )?;
     record_tls_fingerprint(&mut store, &cert.fingerprint)?;
@@ -209,6 +214,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
 
     let mut initial = HubStatus::opened(schema_version, instance_id.clone());
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
+    initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
     let (status_tx, status_rx) = status_channel(initial);
     let listener = bind_health(cfg.health_port)
         .await
@@ -242,6 +248,22 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         internet_endpoints = cfg.probe_internet.len(),
         "connectivity probe started"
     );
+    let (mdns_stop_tx, mdns_stop_rx) = oneshot::channel::<()>();
+    let mdns_job = tokio::spawn(
+        MdnsTask::new(
+            MdnsAdvertiser::default(),
+            Arc::clone(&snapshots),
+            SystemInterfaces,
+            status_tx.clone(),
+            hub_name.clone(),
+            cfg.lan_port,
+            cfg.web_port,
+        )
+        .with_applied(writer.as_ref().map(|w| w.subscribe()))
+        .run(async {
+            let _ = mdns_stop_rx.await;
+        }),
+    );
 
     let lan_hub = Arc::new(
         LanHub::new(
@@ -252,7 +274,13 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             server_tls,
             env!("CARGO_PKG_VERSION"),
         )
-        .with_staff(Arc::clone(&staff)),
+        .with_staff(Arc::clone(&staff))
+        .with_info(HubInfoSource {
+            reader: Arc::clone(&snapshots),
+            hub_name,
+            lan_port: cfg.lan_port,
+            web_port: cfg.web_port,
+        }),
     );
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let ui_auth = Arc::new(
@@ -353,6 +381,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let _ = probe_job.await;
     setup_job.abort();
     let _ = setup_job.await;
+    let _ = mdns_stop_tx.send(());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), mdns_job).await;
     // Close every LAN session before the writer goes away.
     let _ = lan_stop_tx.send(());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), lan).await;

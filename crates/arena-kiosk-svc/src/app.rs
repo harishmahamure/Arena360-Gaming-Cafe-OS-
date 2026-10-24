@@ -14,8 +14,9 @@
 //!   as IPC `toast`; with no app connected it is dropped (the kill is still reported).
 //! - Requests: `log{level, code, detail}` queues a `kiosk.log`; `hub_status` answers the link
 //!   state; `theme` answers `{hc}`; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
-//!   running exit). Anything else is `UNSUPPORTED`. The app gets nothing else: no Hub socket,
-//!   no token.
+//!   running exit); `discover`, `probe_ip{ip}` and `select_hub{addr, fingerprint}` find and
+//!   choose the Hub ([`crate::discovery`]). Anything else is `UNSUPPORTED`. The app gets
+//!   nothing else: no Hub socket, no token.
 //! - `admin_exit{pin}` (the hidden admin-exit panel) is checked by [`crate::admin_exit`] on its
 //!   own task and answered with `reply`. While an exit runs the app gets
 //!   `admin_exit_started{until}`, and `admin_exit_ended` when it is over; every new connection
@@ -248,6 +249,71 @@ pub(crate) async fn run<S: IpcServer>(
 }
 
 #[derive(Deserialize)]
+struct ProbeBody {
+    ip: String,
+}
+
+#[derive(Deserialize)]
+struct SelectBody {
+    addr: String,
+    fingerprint: String,
+}
+
+fn bad_body(kind: &str, e: serde_json::Error) -> AppError {
+    AppError::new(ErrorCode::BadFrame, format!("{kind} body: {e}"))
+}
+
+fn start_discovery(ctx: &Arc<Ctx>, out: mpsc::Sender<IpcMsg>) -> u64 {
+    let search = ctx.discovery.next_search();
+    crate::discovery::clear_selected(&ctx.data);
+    let job_ctx = Arc::clone(ctx);
+    let job = tokio::spawn(async move {
+        let d = &job_ctx.discovery;
+        let hubs = crate::discovery::discover(d.browser.as_ref(), d.window, |found| {
+            d.remember(found);
+            let msg = IpcMsg::DiscoveryFound {
+                search,
+                hubs: found.to_vec(),
+            };
+            if let Err(e) = out.try_send(msg) {
+                tracing::warn!(search, error = %e, "discovery.found not delivered to the app");
+            }
+        })
+        .await;
+        d.remember(&hubs);
+        if d.current_search() != search {
+            return;
+        }
+        tracing::info!(search, found = hubs.len(), "hub discovery done");
+        if out
+            .send(IpcMsg::DiscoveryDone { search, hubs })
+            .await
+            .is_err()
+        {
+            tracing::warn!(search, "discovery.done not delivered to the app");
+        }
+    });
+    ctx.discovery.replace_running(job);
+    search
+}
+
+async fn select(ctx: &Ctx, body: Value) -> Result<Value, AppError> {
+    let b: SelectBody = serde_json::from_value(body).map_err(|e| bad_body("select_hub", e))?;
+    let selected =
+        crate::discovery::select_hub(&ctx.discovery, &ctx.data, &b.addr, &b.fingerprint).await?;
+    serde_json::to_value(selected).map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))
+}
+
+async fn probe(ctx: &Ctx, body: Value) -> Result<Value, AppError> {
+    let b: ProbeBody = serde_json::from_value(body).map_err(|e| bad_body("probe_ip", e))?;
+    let d = &ctx.discovery;
+    let hub = crate::discovery::probe_ip(d.prober.as_ref(), &b.ip, d.web_port).await?;
+    ctx.discovery.remember(std::slice::from_ref(&hub));
+    serde_json::to_value(arena_proto::ProbeOk { hub })
+        .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))
+}
+
+#[derive(Deserialize)]
 struct LogBody {
     level: KioskLogLevel,
     code: String,
@@ -357,6 +423,42 @@ async fn serve(
                 let out = out_tx.clone();
                 tokio::spawn(async move {
                     let reply = match crate::dev::handle(&ctx, &kind, body).await {
+                        Ok(body) => IpcMsg::Reply {
+                            rid,
+                            body,
+                            error: None,
+                        },
+                        Err(e) => IpcMsg::Reply {
+                            rid,
+                            body: Value::Null,
+                            error: Some(e),
+                        },
+                    };
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "discover" => {
+                let search = start_discovery(&ctx, out_tx.clone());
+                let _ = out_tx
+                    .send(IpcMsg::Reply {
+                        rid,
+                        body: serde_json::json!({ "search": search }),
+                        error: None,
+                    })
+                    .await;
+            }
+            Ok(IpcMsg::Request { rid, kind, body })
+                if kind == "probe_ip" || kind == "select_hub" =>
+            {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let answer = if kind == "probe_ip" {
+                        probe(&ctx, body).await
+                    } else {
+                        select(&ctx, body).await
+                    };
+                    let reply = match answer {
                         Ok(body) => IpcMsg::Reply {
                             rid,
                             body,

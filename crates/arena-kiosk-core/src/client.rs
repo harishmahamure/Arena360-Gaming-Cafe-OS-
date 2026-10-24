@@ -264,6 +264,44 @@ pub async fn connect_ws(url: &str, pinned_fingerprint: &str) -> Result<HubStream
     Ok(ws)
 }
 
+pub async fn capture_fingerprint(
+    host: &str,
+    port: u16,
+    wait: Duration,
+) -> Result<String, ClientError> {
+    let presented: Arc<Mutex<Option<[u8; 32]>>> = Arc::default();
+    let config = pinned_config_with(&"0".repeat(64), Arc::clone(&presented))?;
+    let bare = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_owned();
+    let server_name = match bare.parse::<std::net::IpAddr>() {
+        Ok(ip) => ServerName::IpAddress(ip.into()),
+        Err(_) => ServerName::try_from(bare.clone())
+            .map_err(|e| ClientError::BadInput(format!("host: {e}")))?,
+    };
+    let attempt = async {
+        let tcp = TcpStream::connect((bare.as_str(), port))
+            .await
+            .map_err(|e| ClientError::Io(e.to_string()))?;
+        let _ = tcp.set_nodelay(true);
+        TlsConnector::from(config)
+            .connect(server_name, tcp)
+            .await
+            .map(|_| ())
+            .map_err(|e| ClientError::Tls(e.to_string()))
+    };
+    let outcome = timeout(wait, attempt)
+        .await
+        .map_err(|_| ClientError::Io("timed out".into()))?;
+    match presented.lock().ok().and_then(|p| *p) {
+        Some(got) => Ok(hex_lower(&got)),
+        None => Err(outcome
+            .err()
+            .unwrap_or_else(|| ClientError::Tls("no certificate".into()))),
+    }
+}
+
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Frame>>>>;
 
 /// Pushed events, in the order the Hub sent them.

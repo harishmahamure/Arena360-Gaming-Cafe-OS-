@@ -18,7 +18,7 @@ pub mod tls;
 
 use std::sync::Arc;
 
-use arena_core::{Clock, DeviceDirectory, HubStatus, StaffDirectory, WriterHandle};
+use arena_core::{Clock, DeviceDirectory, HubStatus, SnapshotReader, StaffDirectory, WriterHandle};
 use tokio::sync::watch;
 
 pub use listener::MAX_CONNECTIONS;
@@ -108,6 +108,13 @@ impl Presence {
     }
 }
 
+pub struct HubInfoSource {
+    pub reader: Arc<SnapshotReader>,
+    pub hub_name: String,
+    pub lan_port: u16,
+    pub web_port: u16,
+}
+
 /// Everything a LAN session needs from the Hub.
 pub struct LanHub {
     /// The writer, when this Hub started as primary.
@@ -121,6 +128,7 @@ pub struct LanHub {
     pub version: String,
     /// Checks admin-exit PINs (`kiosk.verify_admin_pin`); without it they are `UNSUPPORTED`.
     pub staff: Option<Arc<StaffDirectory>>,
+    pub info: Option<Arc<HubInfoSource>>,
     registry: Arc<registry::Registry>,
     /// Bounds concurrent argon2id token checks across all connections.
     verify_permits: Arc<tokio::sync::Semaphore>,
@@ -146,6 +154,7 @@ impl LanHub {
             tls,
             version: version.into(),
             staff: None,
+            info: None,
             registry: Arc::new(registry::Registry::default()),
             verify_permits: Arc::new(tokio::sync::Semaphore::new(VERIFY_CONCURRENCY)),
             throttle: throttle::HelloThrottle::default(),
@@ -158,6 +167,41 @@ impl LanHub {
     pub fn with_staff(mut self, staff: Arc<StaffDirectory>) -> Self {
         self.staff = Some(staff);
         self
+    }
+
+    pub fn with_info(mut self, info: HubInfoSource) -> Self {
+        self.info = Some(Arc::new(info));
+        self
+    }
+
+    pub async fn hub_info(&self) -> Option<arena_proto::HubInfo> {
+        let source = Arc::clone(self.info.as_ref()?);
+        let fingerprint = {
+            let status = self.status.borrow();
+            if status.role != arena_core::Role::Primary {
+                return None;
+            }
+            status.tls_fingerprint.clone()?
+        };
+        let reader = Arc::clone(&source.reader);
+        let branch = match tokio::task::spawn_blocking(move || reader.branch()).await {
+            Ok(Ok(b)) => b?,
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), "hub-info: the branch read failed");
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "hub-info: the branch read task failed");
+                return None;
+            }
+        };
+        Some(arena_proto::HubInfo::new(
+            branch.name,
+            source.hub_name.clone(),
+            fingerprint,
+            source.lan_port,
+            source.web_port,
+        ))
     }
 
     /// How many sessions are connected.

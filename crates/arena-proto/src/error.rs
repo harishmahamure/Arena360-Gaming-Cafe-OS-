@@ -78,6 +78,8 @@ pub enum ErrorCode {
     /// Account setup (password, authenticator app, saved backup codes) is not finished.
     SetupIncomplete,
     BranchCodeTaken,
+    NoHub,
+    HubIncompatible,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -128,6 +130,8 @@ impl ErrorCode {
             Self::TotpInvalid => "TOTP_INVALID",
             Self::SetupIncomplete => "SETUP_INCOMPLETE",
             Self::BranchCodeTaken => "BRANCH_CODE_TAKEN",
+            Self::NoHub => "NO_HUB",
+            Self::HubIncompatible => "HUB_INCOMPATIBLE",
         }
     }
 }
@@ -236,6 +240,8 @@ mod tests {
             (ErrorCode::TotpInvalid, "TOTP_INVALID"),
             (ErrorCode::SetupIncomplete, "SETUP_INCOMPLETE"),
             (ErrorCode::BranchCodeTaken, "BRANCH_CODE_TAKEN"),
+            (ErrorCode::NoHub, "NO_HUB"),
+            (ErrorCode::HubIncompatible, "HUB_INCOMPATIBLE"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

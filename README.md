@@ -286,7 +286,11 @@ fy_start_month, pending: {tz?, day_start_min?, effective_from} | null}`.
 
 ### LAN protocol
 
-The Hub listens on `0.0.0.0:7400` and `0.0.0.0:7401`; no other inbound port is opened.
+The Hub listens on TCP `0.0.0.0:7400` and `0.0.0.0:7401`, and takes part in mDNS on UDP 5353
+(multicast `224.0.0.251`) to advertise itself; no other inbound port is opened. Kiosks also need
+UDP 5353 to browse for the Hub. On Windows the firewall must allow mDNS (UDP 5353 in and out) for
+both the Hub and the kiosk service, or discovery finds nothing and kiosks fall back to the typed IP;
+an installer firewall rule is a follow-up.
 
 - **TLS.** At first start the writer generates a self-signed ECDSA P-256 certificate (SAN
   `arena360.local` plus the hostname) into `<data>/tls/hub.crt` and `hub.key` (the key is
@@ -296,7 +300,20 @@ The Hub listens on `0.0.0.0:7400` and `0.0.0.0:7401`; no other inbound port is o
 - **Ports.** `:7400` serves the TLS WebSocket at `/` for `paired` apps. `:7401` sniffs the first
   byte: `0x16` (TLS) is served exactly like `:7400`; otherwise it is plain HTTP, where `GET /ws`
   upgrades for the browser classes (`kds`, `phone`), `/kitchen` and `/console/<tv>` return a
-  placeholder page and everything else is 404.
+  placeholder page and everything else is 404. `GET /hub-info` on `:7401` (plain HTTP and TLS,
+  no auth, `Cache-Control: no-store`) answers the `HubInfo` JSON
+  `{product: "arena360-hub", branch_name, hub_name, protocol_version, fingerprint, lan_port,
+web_port}`, or 503 `NO_HUB` before the branch is bootstrapped or on a Hub that is not primary.
+- **mDNS.** Once a branch exists, a primary Hub advertises `_arena360-hub._tcp.local.`
+  (instance = the hostname, sanitised to at most 63 printable bytes; host
+  `<hub name>-<first 8 fingerprint hex>.local.`, so two Hubs on one LAN never share a host
+  record; port 7400) on every non-loopback IPv4 interface with the TXT keys `branch`, `hub`,
+  `proto`, `fp` (the 64-hex certificate fingerprint) and `web` (the web port, 7401 by default).
+  After a failed registration it retries only on the 30 s poll. It re-registers when the branch name or the
+  fingerprint changes and unregisters on shutdown. A failure to advertise (no multicast) is
+  logged at most once a minute and never stops the Hub. Settings → Devices shows the Hub's
+  IPv4 addresses (the snapshot's `lan` block, refreshed with `devices.changed`) and the short
+  fingerprint.
 - **Frames.** UTF-8 JSON text `{v: 1, kind, rid, ...body}` with kinds `hello`, `hello.ok`,
   `intent.submit`, `intent.result`, `event`, `error`, `ping`/`pong`, `settings.get`/`settings.values` (types in `arena-proto`,
   generated into `@arena/ui/generated`). Unknown fields are ignored; an unknown kind or a `v`
@@ -647,6 +664,31 @@ FILE_WRITE_ATTRIBUTES` only, so it cannot create pipe instances; no Everyone, Us
   instance is denied, the client image check and sequential connects. `pnpm --filter
 @arena/kiosk test:ui` (Playwright, the Tauri shell stubbed in the page) covers the status
   line, the heartbeat and state restore.
+
+## Kiosk discovery
+
+A kiosk with no `config.json` or no device token reports `unpaired`. The link stops its fast
+reconnects and wakes as soon as the service writes the config and token (`Ctx::provision`), or
+otherwise re-checks every 30 s; the app shows the discovery screen inside the locked shell (lockdown
+and the admin-exit combination are unchanged):
+
+- IPC `request{kind: "discover"}` browses `_arena360-hub._tcp.local.` for 10 s and pushes
+  `discovery.found{hubs}` as Hubs resolve (deduplicated by fingerprint; a Hub on another
+  protocol version is listed with `compatible: false`; a later resolution of the same Hub
+  replaces the earlier one), then `discovery.done{hubs}`. The reply and both events carry a
+  `search` id; a new `discover` stops the previous search, and the app ignores events of any
+  other search. The address shown skips loopback (unless it is the only one) and link-local
+  addresses and prefers one on the kiosk's own subnet. If `discovery.done` never arrives, the
+  app offers the typed IP after 12 s. A new `discover` deletes `selected_hub.json`.
+- With nothing found the app asks for the Hub's IP. `request{kind: "probe_ip", body: {ip}}`
+  accepts an IPv4 or IPv6 literal only (not link-local `fe80::/10`), reads `http://<ip>:7401/hub-info` (2 s), then captures
+  the TLS certificate on `<ip>:7401` and requires the product, the same fingerprint as
+  `hub-info` and the same protocol version: `{hub}`, else `NO_HUB` (`HUB_INCOMPATIBLE` when only
+  the version differs).
+- `request{kind: "select_hub", body: {addr, fingerprint}}` accepts only a Hub this service found
+  or probed at that address, then captures the certificate on its web port and requires the
+  advertised fingerprint (`NO_HUB` otherwise, so an mDNS advert alone is never trusted), and writes `selected_hub.json` (`{addr: "host:7400", fingerprint, branch_name}`) in
+  the data dir for pairing (Story 2.18). It never writes a token or a `config.json`.
 
 ## Kiosk lockdown
 
@@ -1430,6 +1472,8 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | getrandom                           | =0.3.4                 | `Cargo.toml`                                   |
 | ring                                | =0.17.14               | `Cargo.toml`                                   |
 | qrcode                              | =0.14.1                | `Cargo.toml`                                   |
+| mdns-sd                             | =0.21.6                | `Cargo.toml`                                   |
+| if-addrs                            | =0.15.0                | `Cargo.toml`                                   |
 | sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`           |
 | age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`           |
 | gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile`         |

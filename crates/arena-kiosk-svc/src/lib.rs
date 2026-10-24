@@ -16,6 +16,7 @@ pub mod clock;
 pub mod config;
 #[cfg(feature = "dev-fixtures")]
 pub mod dev;
+pub mod discovery;
 pub mod host;
 pub mod hub_link;
 pub mod intents;

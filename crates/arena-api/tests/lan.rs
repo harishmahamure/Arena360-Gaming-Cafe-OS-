@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use arena_api::lan::{HubCert, LanHub, Presence, bind_lan, serve_lan};
+use arena_api::lan::{HubCert, HubInfoSource, LanHub, Presence, bind_lan, serve_lan};
 use arena_core::devices::{format_token, hash_token_secret, new_token_secret};
 use arena_core::{
     DeviceDirectory, HubStatus, LeaseInfo, ManualClock, Role, Writer, WriterHandle, status_channel,
@@ -173,6 +173,7 @@ async fn start(version: &str, primary: bool) -> TestHub {
     };
 
     let cert = HubCert::generate(None).unwrap();
+    status_tx.send_modify(|s| s.tls_fingerprint = Some(cert.fingerprint.clone()));
     let hub = Arc::new(
         LanHub::new(
             writer.clone(),
@@ -182,7 +183,13 @@ async fn start(version: &str, primary: bool) -> TestHub {
             cert.server_config().unwrap(),
             version,
         )
-        .with_staff(Arc::new(arena_core::StaffDirectory::open(&path).unwrap())),
+        .with_staff(Arc::new(arena_core::StaffDirectory::open(&path).unwrap()))
+        .with_info(HubInfoSource {
+            reader: Arc::new(arena_core::SnapshotReader::open(&path).unwrap()),
+            hub_name: "test-hub".into(),
+            lan_port: 7400,
+            web_port: 7401,
+        }),
     );
     let presence = hub.presence();
     let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
@@ -1494,4 +1501,122 @@ async fn a_kds_session_may_not_verify_admin_pins() {
     .await;
     let frame = recv(&mut ws).await.unwrap();
     assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
+}
+
+fn http_body(resp: &str) -> serde_json::Value {
+    let (_, body) = resp.split_once("\r\n\r\n").unwrap();
+    serde_json::from_str(body).unwrap()
+}
+
+async fn https_get(addr: SocketAddr, fingerprint: &str, path: &str) -> String {
+    let config = arena_kiosk_core::pinned_config(fingerprint).unwrap();
+    let tcp = TcpStream::connect(addr).await.unwrap();
+    let name = rustls::pki_types::ServerName::IpAddress(addr.ip().into());
+    let mut tls = tokio_rustls::TlsConnector::from(config)
+        .connect(name, tcp)
+        .await
+        .unwrap();
+    tls.write_all(format!("GET {path} HTTP/1.1\r\nHost: hub\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), tls.read_to_end(&mut out)).await;
+    String::from_utf8(out).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hub_info_answers_over_plain_http_and_tls_without_auth() {
+    let hub = start("0.1.0", true).await;
+    let want = serde_json::json!({
+        "product": "arena360-hub",
+        "branch_name": "Dev Branch",
+        "hub_name": "test-hub",
+        "protocol_version": arena_proto::PROTOCOL_VERSION,
+        "fingerprint": hub.fingerprint,
+        "lan_port": 7400,
+        "web_port": 7401,
+    });
+    let plain = http_get(hub.web, "/hub-info").await;
+    assert!(plain.starts_with("HTTP/1.1 200 OK"), "{plain}");
+    assert!(
+        plain.contains("Content-Type: application/json\r\n"),
+        "{plain}"
+    );
+    assert!(plain.contains("Cache-Control: no-store\r\n"), "{plain}");
+    assert_eq!(http_body(&plain), want);
+    let tls = https_get(hub.web, &hub.fingerprint, "/hub-info").await;
+    assert!(tls.starts_with("HTTP/1.1 200 OK"), "{tls}");
+    assert_eq!(http_body(&tls), want);
+    let captured =
+        arena_kiosk_core::capture_fingerprint("127.0.0.1", hub.web.port(), Duration::from_secs(2))
+            .await
+            .unwrap();
+    assert_eq!(captured, hub.fingerprint);
+
+    let mut tcp = TcpStream::connect(hub.web).await.unwrap();
+    tcp.write_all(b"POST /hub-info HTTP/1.1\r\nHost: hub\r\nContent-Length: 0\r\n\r\n")
+        .await
+        .unwrap();
+    let mut out = String::new();
+    tokio::time::timeout(Duration::from_secs(5), tcp.read_to_string(&mut out))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(out.starts_with("HTTP/1.1 404"), "{out}");
+    let client = HubClient::connect(&hub.web_tls_url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    client
+        .request("ping", serde_json::Value::Null)
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hub_info_is_no_hub_before_the_branch_is_bootstrapped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("branch.db");
+    let store = Store::open(&path, T0).unwrap();
+    let mut initial = HubStatus::opened(store.schema_version().unwrap(), HUB_ID);
+    initial.role = Role::Primary;
+    let cert = HubCert::generate(None).unwrap();
+    initial.tls_fingerprint = Some(cert.fingerprint.clone());
+    let (_status_tx, status_rx) = status_channel(initial);
+    let hub = Arc::new(
+        LanHub::new(
+            None,
+            status_rx,
+            Arc::new(ManualClock::new(T0)),
+            Arc::new(DeviceDirectory::open(&path).unwrap()),
+            cert.server_config().unwrap(),
+            "0.1.0",
+        )
+        .with_info(HubInfoSource {
+            reader: Arc::new(arena_core::SnapshotReader::open(&path).unwrap()),
+            hub_name: "test-hub".into(),
+            lan_port: 7400,
+            web_port: 7401,
+        }),
+    );
+    let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
+        .await
+        .unwrap();
+    let web = listeners.web_addr().unwrap();
+    let (_stop_tx, stop_rx) = oneshot::channel::<()>();
+    tokio::spawn(serve_lan(listeners, hub, async {
+        let _ = stop_rx.await;
+    }));
+    let resp = http_get(web, "/hub-info").await;
+    assert!(resp.starts_with("HTTP/1.1 503"), "{resp}");
+    assert!(resp.contains("Cache-Control: no-store\r\n"), "{resp}");
+    assert_eq!(http_body(&resp)["code"], "NO_HUB");
+    drop(store);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_answers_hub_info_no_hub() {
+    let hub = start("0.1.0", false).await;
+    let resp = http_get(hub.web, "/hub-info").await;
+    assert!(resp.starts_with("HTTP/1.1 503"), "{resp}");
+    assert_eq!(http_body(&resp)["code"], "NO_HUB");
 }

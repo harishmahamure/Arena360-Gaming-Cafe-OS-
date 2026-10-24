@@ -597,3 +597,42 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Verification (after rebase onto `4a6da95`, `ARENA_PW_PORT=5426`):**
   - Passing: clippy, workspace and dev-fixtures tests, 188 scripts, and Hub Playwright 277/278.
   - Failing: only `auth.spec.ts:216` (lock countdown), a load flake at load average ~32 (1/6 on rerun), recorded.
+
+## Story 2.9: step 3, single-use Hub pairing code (control track A)
+
+- **Spec approval:** self-approved. Control migration 0007.
+- **Code:** 8 characters from an unambiguous 30-character alphabet, HMAC-hashed with the pepper (label `pair\0`), 15 minutes, one live code per branch.
+- **Reload rule:** a reload issues a new code, which invalidates the old one.
+- **Redeem helper:** built for 2.10.
+- Started on 2.8's WIP (overlap).
+- **2.17 implementation choices, accepted:**
+  - only a primary Hub advertises;
+  - `select_hub` accepts only an address the service found or probed;
+  - probe port override for tests;
+  - `discovery.done` carries the final list;
+  - `if-addrs =0.15.0` pin.
+- **2.17 review outcome (Sonnet ×3):** 21 fixes, 9 rejections and 1 deferral.
+  - **Fixes:**
+    - `select_hub` re-verifies the TLS certificate (high);
+    - distinct mDNS host names;
+    - subnet-aware address choice;
+    - hub-info sanitising and lowercase fp;
+    - link-local refused;
+    - follower 503;
+    - `selected_hub.json` cleared;
+    - provisioning notify;
+    - search ids;
+    - client timeout fallback;
+    - retry on tick;
+    - TXT `web`;
+    - pure conversion test;
+    - binary e2e wiring test;
+    - copy feedback;
+    - README ports.
+  - **Deferred:** Windows firewall rules in the installers.
+- **Landing fixes (mine):**
+  - kiosk theme fixtures restored (an agent had Prettier-formatted the byte-compared fixtures);
+  - the discovery test's browse count made race-free.
+- **Verification (`ARENA_PW_PORT` 5417/5517, 2 workers):**
+  - Passing: clippy, workspace and dev-fixtures tests, 188 scripts, `check:generated`, kiosk Playwright, and Hub Playwright 283/286.
+  - Failing: only the three known load flakes (lock countdown, Counter PIN, More sheet), recorded in `deferred-work.md`.

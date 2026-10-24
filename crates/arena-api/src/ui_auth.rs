@@ -755,7 +755,10 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::Stale | ErrorCode::AlreadyBootstrapped | ErrorCode::IdempotencyConflict => {
             StatusCode::CONFLICT
         }
-        ErrorCode::NotPrimary | ErrorCode::HubSlow => StatusCode::SERVICE_UNAVAILABLE,
+        ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }

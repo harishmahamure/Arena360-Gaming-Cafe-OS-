@@ -28,6 +28,7 @@ pub fn build_snapshot(
         // fills it in.
         connectivity: arena_proto::Connectivity::default(),
         setup: None,
+        lan: None,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -145,6 +146,17 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         Ok(store.path().to_path_buf())
+    }
+
+    pub fn branch(&self) -> Result<Option<SnapshotBranch>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store.branch_summary()?.map(|b| SnapshotBranch {
+            name: b.name,
+            branch_code: b.branch_code,
+        }))
     }
 
     /// The snapshot at `now_ms`. Blocking (SQLite).
@@ -323,6 +335,7 @@ mod tests {
                     backup_location_set: false,
                     ad_consent: arena_proto::AdConsentState::Missing,
                 }),
+                lan: None,
             }
         );
     }
@@ -342,6 +355,7 @@ mod tests {
                 ui: SnapshotUi::default(),
                 connectivity: arena_proto::Connectivity::default(),
                 setup: None,
+                lan: None,
             }
         );
     }

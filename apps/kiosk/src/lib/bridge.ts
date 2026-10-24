@@ -6,7 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { KioskHubState, KioskHubStatus } from "@arena/ui/generated";
+import type { DiscoveredHub, KioskHubState, KioskHubStatus } from "@arena/ui/generated";
 // The event and command names, shared with the Rust shell (its tests read the same file).
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 
@@ -16,11 +16,18 @@ export const TOAST_EVENT = names.events.toast;
 export const ADMIN_EXIT_EVENT = names.events.adminExit;
 export const ADMIN_EXIT_ENDED_EVENT = names.events.adminExitEnded;
 export const THEME_EVENT = names.events.theme;
+export const DISCOVERY_FOUND_EVENT = names.events.discoveryFound;
+export const DISCOVERY_DONE_EVENT = names.events.discoveryDone;
 const CMD = names.commands;
 /** How often the webview tells the shell it is alive (the shell answers pings only then). */
 export const HEARTBEAT_MS = 1000;
 
-const STATES: readonly KioskHubState[] = ["connected", "reconnecting", "token_rejected"];
+const STATES: readonly KioskHubState[] = [
+  "connected",
+  "reconnecting",
+  "token_rejected",
+  "unpaired",
+];
 
 const inTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -222,4 +229,109 @@ export async function onTheme(cb: (hc: boolean) => void): Promise<() => void> {
     const hc = hcOf(e.payload);
     if (hc !== null) cb(hc);
   });
+}
+
+export function isDiscoveredHub(v: unknown): v is DiscoveredHub {
+  if (typeof v !== "object" || v === null) return false;
+  const h = v as Record<string, unknown>;
+  return (
+    typeof h.addr === "string" &&
+    typeof h.branch_name === "string" &&
+    typeof h.hub_name === "string" &&
+    typeof h.fingerprint === "string" &&
+    typeof h.protocol_version === "number" &&
+    typeof h.compatible === "boolean" &&
+    typeof h.web_port === "number"
+  );
+}
+
+export const DISCOVERY_FALLBACK_MS = 12_000;
+
+export type DiscoveryEvent = { search: number; hubs: DiscoveredHub[] };
+
+const searchOf = (payload: unknown): number | null => {
+  const search =
+    typeof payload === "object" && payload !== null
+      ? (payload as { search?: unknown }).search
+      : undefined;
+  return typeof search === "number" && Number.isInteger(search) ? search : null;
+};
+
+const hubsOf = (payload: unknown): DiscoveredHub[] | null => {
+  const hubs =
+    typeof payload === "object" && payload !== null
+      ? (payload as { hubs?: unknown }).hubs
+      : undefined;
+  return Array.isArray(hubs) ? hubs.filter(isDiscoveredHub) : null;
+};
+
+export async function onDiscoveryFound(cb: (e: DiscoveryEvent) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(DISCOVERY_FOUND_EVENT, (e) => {
+    const hubs = hubsOf(e.payload);
+    const search = searchOf(e.payload);
+    if (hubs && search !== null) cb({ search, hubs });
+  });
+}
+
+export async function onDiscoveryDone(cb: (e: DiscoveryEvent) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(DISCOVERY_DONE_EVENT, (e) => {
+    const search = searchOf(e.payload);
+    if (search !== null) cb({ search, hubs: hubsOf(e.payload) ?? [] });
+  });
+}
+
+export async function startDiscovery(): Promise<number | null> {
+  if (!inTauri()) return null;
+  try {
+    const answer: unknown = await invoke(CMD.discover);
+    if (!isAnswer(answer) || !answer.ok) return null;
+    return searchOf(answer.body);
+  } catch {
+    return null;
+  }
+}
+
+export type ProbeResult =
+  | { kind: "found"; hub: DiscoveredHub }
+  | { kind: "no_hub" }
+  | { kind: "incompatible" }
+  | { kind: "unreachable" };
+
+export async function probeIp(ip: string): Promise<ProbeResult> {
+  if (!inTauri()) return { kind: "unreachable" };
+  try {
+    const answer: unknown = await invoke(CMD.probeIp, { ip });
+    if (!isAnswer(answer)) return { kind: "unreachable" };
+    if (answer.ok) {
+      const hub =
+        typeof answer.body === "object" && answer.body !== null
+          ? (answer.body as { hub?: unknown }).hub
+          : undefined;
+      return isDiscoveredHub(hub) ? { kind: "found", hub } : { kind: "unreachable" };
+    }
+    if (answer.code === "HUB_INCOMPATIBLE") return { kind: "incompatible" };
+    if (answer.code === "NO_HUB") return { kind: "no_hub" };
+    return { kind: "unreachable" };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+export type SelectResult = "selected" | "no_hub" | "unreachable";
+
+export async function selectHub(hub: DiscoveredHub): Promise<SelectResult> {
+  if (!inTauri()) return "unreachable";
+  try {
+    const answer: unknown = await invoke(CMD.selectHub, {
+      addr: hub.addr,
+      fingerprint: hub.fingerprint,
+    });
+    if (!isAnswer(answer)) return "unreachable";
+    if (answer.ok) return "selected";
+    return answer.code === "NO_HUB" ? "no_hub" : "unreachable";
+  } catch {
+    return "unreachable";
+  }
 }

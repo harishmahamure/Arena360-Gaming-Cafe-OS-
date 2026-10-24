@@ -15,6 +15,7 @@
     submitIntent,
   } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
+  import { shortFingerprint } from "../../../lib/snapshot";
 
   // Settings → Devices & display (Story 1.21): high contrast per device, set by a manager.
   // "This Hub" is `display.hc.hub`; each paired device is `display.hc.<device_id>`. Each switch
@@ -36,6 +37,43 @@
     return session?.state === "signed_in" ? (session.staff ?? null) : null;
   });
   const needsApproval = $derived(!hasPermission(staff, "settings.edit"));
+
+  const lan = $derived(snapshot?.lan ?? null);
+  type CopyStatus = { address: string; ok: boolean };
+  let copyStatus: CopyStatus | null = $state(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  const ipNodes: Record<string, HTMLElement | undefined> = $state({});
+
+  function showCopy(status: CopyStatus | null) {
+    clearTimeout(copyTimer);
+    copyStatus = status;
+    if (status) copyTimer = setTimeout(() => (copyStatus = null), 4000);
+  }
+
+  function selectAddress(address: string) {
+    const node = ipNodes[address];
+    const selection = window.getSelection();
+    if (!node || !selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  async function copyAddress(address: string) {
+    try {
+      await navigator.clipboard.writeText(address);
+      showCopy({ address, ok: true });
+    } catch {
+      selectAddress(address);
+      showCopy({ address, ok: false });
+    }
+  }
+
+  $effect(() => {
+    void lan?.addresses.join(" ");
+    untrack(() => showCopy(null));
+  });
 
   /** This Hub first, then every non-revoked paired device in the snapshot (it lists no revoked). */
   const rows: Row[] = $derived([
@@ -216,6 +254,45 @@
     {t("hub.settings.nav.devices_display")}
   </h2>
   <p class="intro type-hub-body">{t("hub.settings.devices_display.intro")}</p>
+  {#if lan}
+    <div class="row address" data-testid="hub-address">
+      <p class="name type-hub-label">{t("hub.settings.devices_display.address")}</p>
+      {#if lan.addresses.length > 0}
+        <ul class="addresses">
+          {#each lan.addresses as address (address)}
+            <li class="line">
+              <span
+                class="ip type-hub-title"
+                data-testid="hub-address-ip"
+                bind:this={ipNodes[address]}>{address}</span
+              >
+              <button
+                type="button"
+                class="ui-interactive copy type-hub-label"
+                aria-label={t("hub.settings.devices_display.copy_address", { address })}
+                onclick={() => copyAddress(address)}
+              >
+                {t("hub.settings.devices_display.copy")}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="note type-hub-label">{t("hub.settings.devices_display.address_none")}</p>
+      {/if}
+      <p class="note type-hub-label" data-testid="hub-address-fingerprint">
+        {t("hub.settings.devices_display.fingerprint", {
+          fingerprint: shortFingerprint(lan.fingerprint),
+        })}
+      </p>
+      <p class="note type-hub-label">{t("hub.settings.devices_display.address_hint")}</p>
+      <p class="status type-hub-label" role="status" data-testid="hub-address-status">
+        {#if copyStatus?.ok}<span
+            >{t("hub.settings.devices_display.copied", { address: copyStatus.address })}</span
+          >{:else if copyStatus}<span>{t("hub.settings.devices_display.copy_manual")}</span>{/if}
+      </p>
+    </div>
+  {/if}
   {#if loadFailed}
     <p class="status refusal type-hub-label" role="status" data-testid="hc-load-failed">
       <span aria-hidden="true">⚠</span>
@@ -415,5 +492,29 @@
   .approval {
     display: grid;
     gap: var(--space-2);
+  }
+
+  .addresses {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ip {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .copy {
+    min-height: var(--space-touch-min);
+    min-width: var(--space-touch-min);
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    background-color: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
   }
 </style>

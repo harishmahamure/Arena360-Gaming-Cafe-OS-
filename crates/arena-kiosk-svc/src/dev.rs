@@ -182,13 +182,7 @@ pub fn provision(
             .unwrap_or_else(|| DEFAULT_PLAYER_USER.to_owned()),
         app_path: None,
     };
-    cfg.validate()?;
-    std::fs::create_dir_all(data.root()).map_err(|e| format!("create data dir: {e}"))?;
-    secrets
-        .save(p.token.as_bytes())
-        .map_err(|e| format!("save token: {e}"))?;
-    cfg.save(&data.config())
-        .map_err(|e| format!("save config: {e}"))?;
+    crate::config::write_provisioning(data, secrets, &cfg, p.token.as_bytes())?;
     Ok(cfg.device_id)
 }
 

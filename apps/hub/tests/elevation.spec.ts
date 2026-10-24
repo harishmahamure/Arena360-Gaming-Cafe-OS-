@@ -100,6 +100,7 @@ function snapshot(): HubSnapshot {
     },
     ui: { idle_lock_minutes: 5, hc: false },
     connectivity: { state: "online", checked_at: null },
+    lan: null,
   };
 }
 

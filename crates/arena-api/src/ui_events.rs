@@ -9,8 +9,9 @@
 //! - `event: session.locked`, data `{}`, and `event: session.unlocked`, data
 //!   [`UnlockOk`](arena_proto::UnlockOk): this stream's own session was locked or unlocked (from
 //!   another window sharing the token), so every window locks and unlocks together.
-//! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN; the
-//!   view reloads the snapshot (which carries each device's `online`).
+//! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN, or
+//!   the Hub's LAN addresses changed; the view reloads the snapshot (which carries each
+//!   device's `online` and the `lan` block).
 //! - `event: device.admin_unlock_ack`, data
 //!   [`AdminUnlockAckEvent`](arena_proto::AdminUnlockAckEvent): a kiosk granted a remote unlock
 //!   (the floor waits up to 5 s for it).
@@ -174,6 +175,10 @@ fn role_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Role> {
     status.as_ref().map(|s| s.borrow().role)
 }
 
+fn lan_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Vec<std::net::Ipv4Addr>> {
+    status.as_ref().map(|s| s.borrow().lan_addresses.clone())
+}
+
 fn connectivity_of(
     status: &Option<watch::Receiver<HubStatus>>,
 ) -> Option<arena_proto::Connectivity> {
@@ -219,6 +224,7 @@ impl HubTask {
     async fn run(mut self) {
         let mut role = role_of(&self.status);
         let mut link = connectivity_of(&self.status).map(|c| c.state);
+        let mut lan = lan_of(&self.status);
         let (mut waiting, mut rollover) = match self.read().await {
             Some((locale, at, _)) => (pending_keys(locale.as_ref()), at),
             None => (Vec::new(), None),
@@ -311,6 +317,11 @@ impl HubTask {
                         link = Some(c.state);
                         let data = serde_json::to_string(&c).unwrap_or_default();
                         self.send("connectivity.changed", data, false);
+                    }
+                    let now_lan = lan_of(&self.status);
+                    if now_lan != lan {
+                        lan = now_lan;
+                        self.send("devices.changed", "{}".into(), false);
                     }
                     let now = role_of(&self.status);
                     if now != role {
@@ -882,6 +893,20 @@ mod tests {
                 serde_json::json!({"state": "cloud_unreachable", "checked_at": 4}),
                 serde_json::json!({"state": "online", "checked_at": 5}),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lan_address_change_pushes_devices_changed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        hub._status
+            .send_modify(|s| s.lan_addresses = vec![std::net::Ipv4Addr::new(10, 0, 0, 4)]);
+        assert_eq!(
+            next_event(&mut frames).await.unwrap(),
+            ("devices.changed".to_owned(), serde_json::json!({}))
         );
     }
 

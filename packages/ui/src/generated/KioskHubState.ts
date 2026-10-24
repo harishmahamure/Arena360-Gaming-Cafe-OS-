@@ -3,4 +3,4 @@
 /**
  * The state of the Kiosk service's link to the Hub.
  */
-export type KioskHubState = "connected" | "reconnecting" | "token_rejected";
+export type KioskHubState = "connected" | "reconnecting" | "token_rejected" | "unpaired";

@@ -110,7 +110,7 @@ pub async fn serve_lan(
         conns.spawn(async move {
             let _slot = slot;
             if tls_only {
-                serve_tls(tcp, peer, acceptor, hub).await;
+                serve_tls(tcp, peer, acceptor, hub, false).await;
             } else {
                 serve_web(tcp, peer, acceptor, hub).await;
             }
@@ -148,15 +148,42 @@ fn only_root(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
 }
 
 /// TLS, then a WebSocket at `/` (paired apps).
-async fn serve_tls(tcp: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor, hub: Arc<LanHub>) {
+async fn serve_tls(
+    tcp: TcpStream,
+    peer: SocketAddr,
+    acceptor: TlsAcceptor,
+    hub: Arc<LanHub>,
+    web: bool,
+) {
     let _ = tcp.set_nodelay(true);
-    let tls = match timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await {
+    let mut tls = match timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return tracing::debug!(error = %e, "tls handshake failed"),
         Err(_) => return tracing::debug!("tls handshake timed out"),
     };
+    if !web {
+        return upgrade_tls(tls, peer, hub).await;
+    }
+    let Ok(Some(head)) = timeout(HANDSHAKE_TIMEOUT, read_head(&mut tls)).await else {
+        return;
+    };
+    if route(&request_line(&head)) == Route::HubInfo {
+        return answer_hub_info(&mut tls, &hub).await;
+    }
+    let stream = Prefixed {
+        prefix: head,
+        pos: 0,
+        inner: tls,
+    };
+    upgrade_tls(stream, peer, hub).await;
+}
+
+async fn upgrade_tls<S>(stream: S, peer: SocketAddr, hub: Arc<LanHub>)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let upgrade =
-        tokio_tungstenite::accept_hdr_async_with_config(tls, only_root, Some(ws_config()));
+        tokio_tungstenite::accept_hdr_async_with_config(stream, only_root, Some(ws_config()));
     match timeout(HANDSHAKE_TIMEOUT, upgrade).await {
         Ok(Ok(ws)) => session::run(ws, Transport::Tls, peer, hub).await,
         Ok(Err(e)) => tracing::debug!(error = %e, "websocket upgrade failed"),
@@ -172,7 +199,7 @@ async fn serve_web(tcp: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor, hub:
         _ => return,
     }
     if first[0] == 0x16 {
-        return serve_tls(tcp, peer, acceptor, hub).await;
+        return serve_tls(tcp, peer, acceptor, hub, true).await;
     }
     let _ = tcp.set_nodelay(true);
     serve_plain(tcp, peer, hub).await;
@@ -185,6 +212,7 @@ pub(crate) enum Route {
     Ws,
     /// `GET /kitchen`, `GET /console/<tv>`: a placeholder page.
     Placeholder,
+    HubInfo,
     NotFound,
 }
 
@@ -200,6 +228,7 @@ pub(crate) fn route(request_line: &str) -> Route {
     let path = target.split(['?', '#']).next().unwrap_or("");
     match path {
         "/ws" => Route::Ws,
+        "/hub-info" => Route::HubInfo,
         "/kitchen" | "/kitchen/" => Route::Placeholder,
         p => match p.strip_prefix("/console/") {
             Some(tv) if is_tv_id(tv.strip_suffix('/').unwrap_or(tv)) => Route::Placeholder,
@@ -217,7 +246,7 @@ fn is_tv_id(tv: &str) -> bool {
 }
 
 /// Reads the request head (up to the blank line), keeping every byte read.
-async fn read_head(tcp: &mut TcpStream) -> Option<Vec<u8>> {
+async fn read_head<S: AsyncRead + Unpin>(tcp: &mut S) -> Option<Vec<u8>> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     loop {
@@ -237,9 +266,18 @@ async fn read_head(tcp: &mut TcpStream) -> Option<Vec<u8>> {
 
 const PLACEHOLDER: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Arena 360</title></head><body><main>Arena 360</main></body></html>";
 
-async fn respond(tcp: &mut TcpStream, status: &str, body: &str) {
+async fn respond<S: AsyncWrite + Unpin>(tcp: &mut S, status: &str, body: &str) {
+    respond_as(tcp, status, "text/html; charset=utf-8", body).await;
+}
+
+async fn respond_as<S: AsyncWrite + Unpin>(
+    tcp: &mut S,
+    status: &str,
+    content_type: &str,
+    body: &str,
+) {
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = timeout(HANDSHAKE_TIMEOUT, async {
@@ -250,16 +288,35 @@ async fn respond(tcp: &mut TcpStream, status: &str, body: &str) {
     .await;
 }
 
-async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
-    let Ok(Some(head)) = timeout(HANDSHAKE_TIMEOUT, read_head(&mut tcp)).await else {
-        return;
-    };
+fn request_line(head: &[u8]) -> String {
     let line_end = head
         .windows(2)
         .position(|w| w == b"\r\n")
         .unwrap_or(head.len());
-    let line = String::from_utf8_lossy(&head[..line_end]).into_owned();
-    match route(&line) {
+    String::from_utf8_lossy(&head[..line_end]).into_owned()
+}
+
+async fn answer_hub_info<S: AsyncWrite + Unpin>(stream: &mut S, hub: &LanHub) {
+    let (status, body) = match hub.hub_info().await {
+        Some(info) => ("200 OK", serde_json::to_string(&info).unwrap_or_default()),
+        None => (
+            "503 Service Unavailable",
+            serde_json::to_string(&arena_proto::AppError::new(
+                arena_proto::ErrorCode::NoHub,
+                "this hub has no branch yet",
+            ))
+            .unwrap_or_default(),
+        ),
+    };
+    respond_as(stream, status, "application/json", &body).await;
+}
+
+async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
+    let Ok(Some(head)) = timeout(HANDSHAKE_TIMEOUT, read_head(&mut tcp)).await else {
+        return;
+    };
+    match route(&request_line(&head)) {
+        Route::HubInfo => answer_hub_info(&mut tcp, &hub).await,
         Route::Placeholder => respond(&mut tcp, "200 OK", PLACEHOLDER).await,
         Route::NotFound => respond(&mut tcp, "404 Not Found", "not found").await,
         Route::Ws => {
@@ -334,6 +391,10 @@ mod tests {
         assert_eq!(route("GET /console/a/b HTTP/1.1"), Route::NotFound);
         assert_eq!(route("GET /nope HTTP/1.1"), Route::NotFound);
         assert_eq!(route("POST /kitchen HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("GET /hub-info HTTP/1.1"), Route::HubInfo);
+        assert_eq!(route("GET /hub-info?x HTTP/1.1"), Route::HubInfo);
+        assert_eq!(route("POST /hub-info HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("GET /hub-info/x HTTP/1.1"), Route::NotFound);
         assert_eq!(route("garbage"), Route::NotFound);
     }
 }

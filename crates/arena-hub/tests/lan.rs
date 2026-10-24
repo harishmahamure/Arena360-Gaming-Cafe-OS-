@@ -180,6 +180,28 @@ async fn seeded_hub_accepts_the_printed_token_and_revocation_closes_it() {
             "fy_start_month": 4, "pending": null
         })
     );
+    assert_eq!(snapshot["lan"]["lan_port"], lan);
+    assert_eq!(snapshot["lan"]["web_port"], web);
+    assert_eq!(snapshot["lan"]["fingerprint"], fingerprint);
+    assert!(snapshot["lan"]["addresses"].is_array());
+
+    let mut s = TcpStream::connect(("127.0.0.1", web)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    s.write_all(b"GET /hub-info HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    assert!(out.starts_with("HTTP/1.1 200 OK"), "{out}");
+    let info: serde_json::Value =
+        serde_json::from_str(out.split_once("\r\n\r\n").unwrap().1).unwrap();
+    let hub_name =
+        arena_proto::sanitize_hub_name(&arena_api::lan::tls::hostname().unwrap_or_default());
+    assert_eq!(info["product"], "arena360-hub");
+    assert_eq!(info["branch_name"], "Dev Branch");
+    assert_eq!(info["hub_name"], hub_name);
+    assert_eq!(info["fingerprint"], fingerprint);
+    assert_eq!(info["lan_port"], lan);
+    assert_eq!(info["web_port"], web);
 
     // A signed-in Hub UI view gets `devices.changed` when the kiosk comes online.
     let signed_in = post_json(

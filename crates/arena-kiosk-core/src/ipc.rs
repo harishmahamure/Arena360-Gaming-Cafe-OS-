@@ -7,7 +7,7 @@
 //! goes through a `request` the service answers. A line longer than [`MAX_LINE_BYTES`] or that
 //! does not parse is an error the reader skips (the connection stays up).
 
-use arena_proto::{AppError, KioskHubState};
+use arena_proto::{AppError, DiscoveredHub, KioskHubState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
@@ -117,6 +117,16 @@ pub enum IpcMsg {
     AdminExitStarted { until: i64 },
     /// Service → app: the exit is over: cover every screen and lock down again.
     AdminExitEnded,
+    #[serde(rename = "discovery.found")]
+    DiscoveryFound {
+        search: u64,
+        hubs: Vec<DiscoveredHub>,
+    },
+    #[serde(rename = "discovery.done")]
+    DiscoveryDone {
+        search: u64,
+        hubs: Vec<DiscoveredHub>,
+    },
     /// Service → app: the answer to `request` `rid`: `body` on success, `error` otherwise.
     Reply {
         rid: String,
@@ -283,6 +293,36 @@ mod tests {
         let mut pin = SecretPin::new("1234");
         pin.clear();
         assert_eq!(pin.expose(), "");
+    }
+
+    #[test]
+    fn discovery_events_are_dotted() {
+        let hub = DiscoveredHub {
+            addr: "10.0.0.2:7400".into(),
+            branch_name: "B".into(),
+            hub_name: "H".into(),
+            fingerprint: "ab".repeat(32),
+            protocol_version: 1,
+            compatible: true,
+            web_port: 7401,
+        };
+        let found = IpcMsg::DiscoveryFound {
+            search: 3,
+            hubs: vec![hub.clone()],
+        };
+        let v: Value = serde_json::from_str(&found.to_line()).unwrap();
+        assert_eq!(v["type"], "discovery.found");
+        assert_eq!(v["hubs"][0]["addr"], "10.0.0.2:7400");
+        assert_eq!(v["search"], 3);
+        assert_eq!(IpcMsg::parse(&found.to_line()).unwrap(), found);
+        assert_eq!(
+            IpcMsg::DiscoveryDone {
+                search: 1,
+                hubs: vec![]
+            }
+            .to_line(),
+            "{\"type\":\"discovery.done\",\"search\":1,\"hubs\":[]}\n"
+        );
     }
 
     #[tokio::test]

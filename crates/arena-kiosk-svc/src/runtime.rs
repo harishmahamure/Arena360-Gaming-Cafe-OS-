@@ -82,6 +82,8 @@ pub struct Ctx {
     /// unreachable. Only the dev-fixtures `dev.hub_link` request sets it; release builds
     /// never do.
     pub link_hold: watch::Sender<bool>,
+    pub discovery: crate::discovery::Discovery,
+    pub provisioned: Notify,
 }
 
 impl Ctx {
@@ -94,6 +96,12 @@ impl Ctx {
                 None
             }
         }
+    }
+
+    pub fn provision(&self, cfg: &KioskConfig, token: &[u8]) -> Result<(), String> {
+        crate::config::write_provisioning(&self.data, self.secrets.as_ref(), cfg, token)?;
+        self.provisioned.notify_one();
+        Ok(())
     }
 
     /// Queues a `kiosk.log` event, stamped now, and wakes the Hub link.
@@ -151,6 +159,26 @@ impl Runtime {
         ipc: S,
         launcher: Arc<dyn AppLauncher>,
     ) -> std::io::Result<Self> {
+        Self::start_with_discovery(
+            data,
+            secrets,
+            clock,
+            timings,
+            ipc,
+            launcher,
+            crate::discovery::Discovery::system(),
+        )
+    }
+
+    pub fn start_with_discovery<S: IpcServer>(
+        data: DataDir,
+        secrets: Box<dyn SecretStore>,
+        clock: Arc<dyn Clock>,
+        timings: Timings,
+        ipc: S,
+        launcher: Arc<dyn AppLauncher>,
+        discovery: crate::discovery::Discovery,
+    ) -> std::io::Result<Self> {
         std::fs::create_dir_all(data.root())?;
         let queue = QueueDb::open(&data.queue())?;
         let data_verifier = data.verifier();
@@ -179,6 +207,8 @@ impl Runtime {
             )),
             launcher: Arc::clone(&launcher),
             link_hold: watch::channel(false).0,
+            discovery,
+            provisioned: Notify::new(),
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![

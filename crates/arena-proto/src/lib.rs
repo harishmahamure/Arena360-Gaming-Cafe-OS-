@@ -9,6 +9,7 @@ mod admin;
 mod audit;
 mod connectivity;
 pub mod currency;
+mod discovery;
 mod display;
 mod error;
 mod frame;
@@ -41,6 +42,12 @@ pub use audit::{
     AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
 };
 pub use connectivity::{Connectivity, ConnectivityState};
+pub use discovery::{
+    DEFAULT_WEB_PORT, DISCOVERY_WINDOW_MS, DiscoveredHub, DiscoveryFound, HUB_PRODUCT, HubInfo,
+    MAX_BRANCH_NAME_BYTES, MAX_HUB_NAME_BYTES, MDNS_SERVICE, PROBE_TIMEOUT_MS, ProbeOk,
+    SelectedHub, TXT_BRANCH, TXT_FP, TXT_HUB, TXT_PROTO, TXT_WEB, is_fingerprint,
+    sanitize_branch_name, sanitize_hub_name, txt_records,
+};
 pub use display::{
     HC_DEFAULT, HC_PREFIX, HcTarget, KEY_HC_HUB, hc_key, parse_hc_key, parse_hc_value,
 };
@@ -93,7 +100,7 @@ pub use signup::{
 };
 pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
-    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLocale, SnapshotUi,
+    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLan, SnapshotLocale, SnapshotUi,
     SymbolPosition,
 };
 pub use ui_auth::{

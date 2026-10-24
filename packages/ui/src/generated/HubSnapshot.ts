@@ -3,6 +3,7 @@ import type { Connectivity } from "./Connectivity";
 import type { SetupStatus } from "./SetupStatus";
 import type { SnapshotBranch } from "./SnapshotBranch";
 import type { SnapshotDevice } from "./SnapshotDevice";
+import type { SnapshotLan } from "./SnapshotLan";
 import type { SnapshotLocale } from "./SnapshotLocale";
 import type { SnapshotUi } from "./SnapshotUi";
 
@@ -31,4 +32,5 @@ export type HubSnapshot = {
    */
   connectivity: Connectivity;
   setup?: SetupStatus | null;
+  lan: SnapshotLan | null;
 };

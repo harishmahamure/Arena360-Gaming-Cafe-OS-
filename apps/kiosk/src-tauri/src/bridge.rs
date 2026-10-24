@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use arena_kiosk_core::ipc::{IpcMsg, read_msg, write_msg};
-use arena_proto::{KioskHubState, KioskHubStatus};
+use arena_proto::{DiscoveredHub, KioskHubState, KioskHubStatus};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -44,12 +44,14 @@ pub const ADMIN_EXIT_EVENT: &str = "admin-exit";
 pub const ADMIN_EXIT_ENDED_EVENT: &str = "admin-exit-ended";
 /// The Tauri event carrying the theme: `{hc}`.
 pub const THEME_EVENT: &str = "theme";
+pub const DISCOVERY_FOUND_EVENT: &str = "discovery-found";
+pub const DISCOVERY_DONE_EVENT: &str = "discovery-done";
 /// How long the shell waits for the service's answer to a PIN.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 7] = [
+const COMMANDS: [&str; 10] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -57,6 +59,9 @@ const COMMANDS: [&str; 7] = [
     "admin_exit",
     "admin_exit_status",
     "theme",
+    "discover",
+    "probe_ip",
+    "select_hub",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -76,6 +81,8 @@ pub enum Emit {
     AdminExitEnded,
     /// The theme changed: high contrast on (`true`) or off.
     Theme(bool),
+    DiscoveryFound(u64, Vec<DiscoveredHub>),
+    DiscoveryDone(u64, Vec<DiscoveredHub>),
 }
 
 /// What the service answered to a request: the body, or the error code (and the body that came
@@ -278,6 +285,12 @@ impl Bridge {
                 } else {
                     (None, None)
                 }
+            }
+            IpcMsg::DiscoveryFound { search, hubs } => {
+                (None, Some(Emit::DiscoveryFound(search, hubs)))
+            }
+            IpcMsg::DiscoveryDone { search, hubs } => {
+                (None, Some(Emit::DiscoveryDone(search, hubs)))
             }
             IpcMsg::Reply { ref rid, .. } => {
                 if let Some(tx) = lock(&self.pending).remove(rid) {
@@ -491,6 +504,8 @@ mod tests {
         assert_eq!(names["events"]["restoreState"], RESTORE_STATE_EVENT);
         assert_eq!(names["events"]["toast"], TOAST_EVENT);
         assert_eq!(names["events"]["theme"], THEME_EVENT);
+        assert_eq!(names["events"]["discoveryFound"], DISCOVERY_FOUND_EVENT);
+        assert_eq!(names["events"]["discoveryDone"], DISCOVERY_DONE_EVENT);
         let mut listed: Vec<&str> = names["commands"]
             .as_object()
             .unwrap()
@@ -614,6 +629,34 @@ mod tests {
             (None, Some(Emit::Theme(false)))
         );
         assert_eq!(b.wait_theme(Duration::from_millis(1)).await, Some(false));
+    }
+
+    #[test]
+    fn discovery_events_are_forwarded() {
+        let b = Bridge::default();
+        let hub = DiscoveredHub {
+            addr: "10.0.0.2:7400".into(),
+            branch_name: "B".into(),
+            hub_name: "H".into(),
+            fingerprint: "ab".repeat(32),
+            protocol_version: 1,
+            compatible: true,
+            web_port: 7401,
+        };
+        assert_eq!(
+            b.on_message(IpcMsg::DiscoveryFound {
+                search: 4,
+                hubs: vec![hub.clone()]
+            }),
+            (None, Some(Emit::DiscoveryFound(4, vec![hub.clone()])))
+        );
+        assert_eq!(
+            b.on_message(IpcMsg::DiscoveryDone {
+                search: 4,
+                hubs: vec![hub.clone()]
+            }),
+            (None, Some(Emit::DiscoveryDone(4, vec![hub])))
+        );
     }
 
     #[test]

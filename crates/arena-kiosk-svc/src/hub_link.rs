@@ -83,11 +83,16 @@ pub(crate) async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
             }
             Ended::NotProvisioned => {
                 if !warned_unprovisioned {
-                    tracing::warn!("not provisioned: no config.json or token; waiting");
+                    tracing::info!("unpaired: no config.json or token; waiting for pairing");
                     warned_unprovisioned = true;
                 }
-                ctx.set_hub_state(KioskHubState::Reconnecting);
-                t.rejected_retry
+                ctx.set_hub_state(KioskHubState::Unpaired);
+                tokio::select! {
+                    () = tokio::time::sleep(t.rejected_retry) => {}
+                    () = ctx.provisioned.notified() => {}
+                    _ = stop.changed() => return,
+                }
+                continue;
             }
             Ended::Closed => {
                 rejected = false;

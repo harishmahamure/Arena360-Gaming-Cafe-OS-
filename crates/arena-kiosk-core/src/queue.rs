@@ -52,7 +52,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PasswordRequired
         | ErrorCode::TotpInvalid
         | ErrorCode::SetupIncomplete
-        | ErrorCode::BranchCodeTaken => true,
+        | ErrorCode::BranchCodeTaken
+        | ErrorCode::HubIncompatible => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary
@@ -64,7 +65,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::AuthFailed
         | ErrorCode::AuthLocked
         | ErrorCode::SessionLocked
-        | ErrorCode::RateLimited => false,
+        | ErrorCode::RateLimited
+        | ErrorCode::NoHub => false,
     }
 }
 

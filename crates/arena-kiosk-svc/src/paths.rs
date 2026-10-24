@@ -17,6 +17,7 @@ pub const VERIFIER_FILE: &str = "verifier.bin";
 pub const QUEUE_FILE: &str = "queue.db";
 pub const LOGS_DIR: &str = "logs";
 pub const LOCKDOWN_BACKUP_FILE: &str = "lockdown-backup.json";
+pub const SELECTED_HUB_FILE: &str = "selected_hub.json";
 
 /// The data directory when none is given on the command line.
 pub fn default_data_dir(env: impl Fn(&str) -> Option<String>, windows: bool) -> PathBuf {
@@ -54,6 +55,9 @@ impl DataDir {
     /// What `lockdown apply` replaced in the player's hive (`lockdown restore` puts it back).
     pub fn lockdown_backup(&self) -> PathBuf {
         self.0.join(LOCKDOWN_BACKUP_FILE)
+    }
+    pub fn selected_hub(&self) -> PathBuf {
+        self.0.join(SELECTED_HUB_FILE)
     }
     /// The IPC socket (non-Windows builds), inside a 0700 directory.
     pub fn socket(&self) -> PathBuf {

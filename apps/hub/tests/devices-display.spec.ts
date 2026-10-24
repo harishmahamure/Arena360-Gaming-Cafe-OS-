@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { HubSnapshot, SessionStaff, SnapshotDevice } from "@arena/ui/generated";
+import type { HubSnapshot, SessionStaff, SnapshotDevice, SnapshotLan } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -39,6 +39,7 @@ type Item = { intent_kind: string; key?: string };
 type Hub = {
   settings: Map<string, { value: string; rev: number }>;
   devices: SnapshotDevice[];
+  lan: SnapshotLan | null;
   intents: { key: string; value: string; base_rev?: number; ticket?: string }[];
   elevations: { items: Item[]; pin: string }[];
   tickets: Map<string, Item[]>;
@@ -54,6 +55,12 @@ function newHub(): Hub {
       [KIOSK_KEY, { value: "false", rev: 1 }],
     ]),
     devices: [{ device_id: KIOSK, label: "Dev Kiosk", class: "paired", zone: null, online: true }],
+    lan: {
+      addresses: ["192.168.1.20", "10.0.0.4"],
+      lan_port: 7400,
+      web_port: 7401,
+      fingerprint: "ab12cd34ef56" + "0".repeat(52),
+    },
     intents: [],
     elevations: [],
     tickets: new Map(),
@@ -84,6 +91,7 @@ function snapshot(hub: Hub): HubSnapshot {
     },
     ui: ui(hub),
     connectivity: { state: "online", checked_at: null },
+    lan: hub.lan,
   };
 }
 
@@ -425,4 +433,100 @@ test("HC More sheet: an opaque backdrop, no translucency", async ({ page }, info
       .evaluate((el) => getComputedStyle(el).backgroundColor),
   ).toBe("rgb(0, 0, 0)");
   await expectNoSeriousAxe(page);
+});
+
+test("the Hub address row lists each LAN address with copy, the short fingerprint and the hint", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const hub = newHub();
+  await openSection(page, hub);
+  const row = page.getByTestId("hub-address");
+  await expect(row).toContainText(en["hub.settings.devices_display.address"]);
+  await expect(row.getByTestId("hub-address-ip")).toHaveText(["192.168.1.20", "10.0.0.4"]);
+  await expect(row.getByTestId("hub-address-fingerprint")).toHaveText(
+    en["hub.settings.devices_display.fingerprint"].replace("{fingerprint}", "ab12 cd34 ef56 0000"),
+  );
+  await expect(row).toContainText(en["hub.settings.devices_display.address_hint"]);
+  const copy = row.getByRole("button", {
+    name: en["hub.settings.devices_display.copy_address"].replace("{address}", "10.0.0.4"),
+  });
+  const box = await copy.boundingBox();
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+  await copy.click();
+  await expect(row.getByTestId("hub-address-status")).toHaveText(
+    en["hub.settings.devices_display.copied"].replace("{address}", "10.0.0.4"),
+  );
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("10.0.0.4");
+  await expectNoSeriousAxe(page);
+
+  hub.lan = { ...hub.lan!, addresses: ["192.168.1.21"] };
+  pushRaw(hub, "event: devices.changed\ndata: {}\n\n");
+  await expect(row.getByTestId("hub-address-ip")).toHaveText(["192.168.1.21"]);
+});
+
+test("a Hub without a LAN address says so, and an older Hub shows no address row", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.lan = { ...hub.lan!, addresses: [] };
+  await openSection(page, hub);
+  await expect(page.getByTestId("hub-address")).toContainText(
+    en["hub.settings.devices_display.address_none"],
+  );
+  hub.lan = null;
+  pushRaw(hub, "event: devices.changed\ndata: {}\n\n");
+  await expect(page.getByTestId("hub-address")).toHaveCount(0);
+});
+
+test("the copied note clears after a few seconds and when the addresses change", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.clock.install();
+  const hub = newHub();
+  await openSection(page, hub);
+  const row = page.getByTestId("hub-address");
+  const status = row.getByTestId("hub-address-status");
+  const copy = (address: string) =>
+    row.getByRole("button", {
+      name: en["hub.settings.devices_display.copy_address"].replace("{address}", address),
+    });
+  await copy("10.0.0.4").click();
+  await expect(status).toHaveText(
+    en["hub.settings.devices_display.copied"].replace("{address}", "10.0.0.4"),
+  );
+  await page.clock.fastForward(4500);
+  await expect(status).toHaveText("");
+
+  await copy("10.0.0.4").click();
+  await expect(status).not.toHaveText("");
+  hub.lan = { ...hub.lan!, addresses: ["192.168.1.21"] };
+  pushRaw(hub, "event: devices.changed\ndata: {}\n\n");
+  await page.clock.fastForward(1000);
+  await expect(row.getByTestId("hub-address-ip")).toHaveText(["192.168.1.21"]);
+  await expect(status).toHaveText("");
+});
+
+test("without a clipboard the address is selected with a Ctrl+C hint", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+    });
+  });
+  const hub = newHub();
+  await openSection(page, hub);
+  const row = page.getByTestId("hub-address");
+  await row
+    .getByRole("button", {
+      name: en["hub.settings.devices_display.copy_address"].replace("{address}", "192.168.1.20"),
+    })
+    .click();
+  await expect(row.getByTestId("hub-address-status")).toHaveText(
+    en["hub.settings.devices_display.copy_manual"],
+  );
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("192.168.1.20");
 });

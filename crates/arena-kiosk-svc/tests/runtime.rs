@@ -1782,3 +1782,49 @@ async fn dev_requests_are_unsupported_without_the_feature() {
         Some(arena_proto::ErrorCode::Unsupported)
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unpaired_link_connects_as_soon_as_it_is_provisioned() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let dir = tempfile::tempdir().unwrap();
+    let data = DataDir(dir.path().join("kiosk"));
+    std::fs::create_dir_all(data.root()).unwrap();
+    let ipc = UnixIpcServer::bind(&data.socket()).unwrap();
+    let runtime = Runtime::start(
+        data.clone(),
+        arena_kiosk_svc::secret::platform_store(data.token()),
+        Arc::new(arena_kiosk_svc::clock::SystemClock),
+        Timings {
+            rejected_retry: Duration::from_secs(600),
+            ..fast()
+        },
+        ipc,
+        Arc::new(MockLauncher::default()) as Arc<dyn AppLauncher>,
+    )
+    .unwrap();
+    let mut state = runtime.hub_state();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        state.wait_for(|s| *s == KioskHubState::Unpaired),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let cfg = KioskConfig {
+        hub_addr: hub.addr(),
+        hub_fingerprint: hub.cert.fingerprint.clone(),
+        device_id: hub.device_id.clone(),
+        player_user: "player".into(),
+        app_path: None,
+    };
+    runtime.ctx().provision(&cfg, hub.token.as_bytes()).unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        state.wait_for(|s| *s == KioskHubState::Connected),
+    )
+    .await
+    .expect("connected without waiting for the slow retry")
+    .unwrap();
+    runtime.shutdown().await;
+}

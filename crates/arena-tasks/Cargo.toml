@@ -15,6 +15,8 @@ tracing.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 webpki-roots.workspace = true
+mdns-sd.workspace = true
+if-addrs.workspace = true
 
 [dev-dependencies]
 arena-core = { workspace = true, features = ["test-jobs"] }

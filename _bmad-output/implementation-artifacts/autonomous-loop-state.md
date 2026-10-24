@@ -33,7 +33,7 @@ Read this file after a context flush (`/clear`). It's the single entry point for
   - **Track C, Hub settings:** 2.26 and 2.27.
   - **Joint:** 2.19, 2.22 and 2.28–2.31 after A and B.
   - **Limits:** at most 4 implementers at once.
-  - **Hub migration numbers reserved:** 2.26 = 0011, 2.18 = 0012, then 2.20 = 0013, 2.21 = 0014, 2.23 = 0015, 2.24 = 0016, 2.25 = 0017, 2.27 = 0018 (if needed).
+  - **Hub migration numbers** (the runner requires contiguous numbers): 2.26 added none, so 2.18 = 0011. Then, in landing order: 2.20 = 0012, 2.21 = 0013, 2.23 = 0014, 2.24 = 0015, 2.25 = 0016. A story that lands after a sibling renumbers to the next free number on rebase.
   - **Control migrations:** 2.6 = 0004, 2.7 = 0005, then sequential.
 
 - **(2026-10-25) Playwright ports per worktree:**

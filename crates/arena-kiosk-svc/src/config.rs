@@ -105,6 +105,21 @@ impl KioskConfig {
     }
 }
 
+pub fn write_provisioning(
+    data: &crate::paths::DataDir,
+    secrets: &dyn crate::secret::SecretStore,
+    cfg: &KioskConfig,
+    token: &[u8],
+) -> Result<(), String> {
+    cfg.validate()?;
+    std::fs::create_dir_all(data.root()).map_err(|e| format!("create data dir: {e}"))?;
+    secrets
+        .save(token)
+        .map_err(|e| format!("save token: {e}"))?;
+    cfg.save(&data.config())
+        .map_err(|e| format!("save config: {e}"))
+}
+
 /// On Windows, refuses a file not owned by SYSTEM or Administrators (one another account could
 /// have planted). A no-op elsewhere.
 pub(crate) fn check_owner(path: &Path) -> io::Result<()> {

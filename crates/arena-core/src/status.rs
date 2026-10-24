@@ -81,6 +81,8 @@ pub struct HubStatus {
     /// probe finishes, so a Hub never shows the offline chip before it knows).
     pub connectivity: Connectivity,
     pub setup: Option<arena_proto::SetupStatus>,
+    pub lan_addresses: Vec<std::net::Ipv4Addr>,
+    pub lan_ports: Option<(u16, u16)>,
 }
 
 impl HubStatus {
@@ -95,6 +97,8 @@ impl HubStatus {
             tls_fingerprint: None,
             connectivity: Connectivity::default(),
             setup: None,
+            lan_addresses: Vec::new(),
+            lan_ports: None,
         }
     }
 }

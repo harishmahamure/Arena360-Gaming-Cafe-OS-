@@ -24,6 +24,7 @@
     takeRestoreState,
     type ToastKey,
   } from "../lib/bridge";
+  import Discovery from "../lib/Discovery.svelte";
   import { installKioskGuards, placeOnPrimary } from "../lib/guards";
 
   let { children }: { children: Snippet } = $props();
@@ -139,7 +140,11 @@
 </script>
 
 <div class="kiosk" bind:this={stage} hidden={exitUntil !== null}>
-  {@render children()}
+  {#if hub === "unpaired"}
+    <Discovery />
+  {:else}
+    {@render children()}
+  {/if}
   {#if adminPanel}
     <div class="admin-exit" data-testid="admin-exit-panel">
       <InlinePin

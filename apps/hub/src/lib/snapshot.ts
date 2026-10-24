@@ -1,6 +1,12 @@
 // Reads the branch snapshot from the local Hub service over loopback (`GET /ui/snapshot`).
 
-import type { Connectivity, HubSnapshot, SnapshotLocale, SnapshotUi } from "@arena/ui/generated";
+import type {
+  Connectivity,
+  HubSnapshot,
+  SnapshotLan,
+  SnapshotLocale,
+  SnapshotUi,
+} from "@arena/ui/generated";
 
 /** The Hub service's loopback snapshot endpoint (the Tauri CSP allows only this host). */
 export const SNAPSHOT_URL = "http://127.0.0.1:7409/ui/snapshot";
@@ -33,6 +39,7 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
         ui: normalizeUi(snapshot.ui),
         // A Hub from before the connectivity probe sends none: online (no chip).
         connectivity: normalizeConnectivity(snapshot.connectivity),
+        lan: normalizeLan(snapshot.lan),
       },
     };
   } catch {
@@ -89,6 +96,23 @@ export function normalizeUi(v: unknown): SnapshotUi {
   return isSnapshotUi(v)
     ? { idle_lock_minutes: v.idle_lock_minutes, hc: v.hc === true }
     : { idle_lock_minutes: 5, hc: false };
+}
+
+export function normalizeLan(v: unknown): SnapshotLan | null {
+  if (!isObject(v) || !Array.isArray(v.addresses)) return null;
+  if (!isInt(v.lan_port, 1, 65535) || !isInt(v.web_port, 1, 65535) || !isString(v.fingerprint)) {
+    return null;
+  }
+  return {
+    addresses: v.addresses.filter(isString),
+    lan_port: v.lan_port,
+    web_port: v.web_port,
+    fingerprint: v.fingerprint,
+  };
+}
+
+export function shortFingerprint(fp: string): string {
+  return (fp.replace(/[^0-9a-fA-F]/g, "").match(/.{1,4}/g) ?? []).slice(0, 4).join(" ");
 }
 
 const CONNECTIVITY_STATES: readonly string[] = ["online", "internet_offline", "cloud_unreachable"];

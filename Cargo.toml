@@ -72,6 +72,8 @@ getrandom = "=0.3.4"
 # image crate).
 ring = "=0.17.14"
 qrcode = { version = "=0.14.1", default-features = false, features = ["svg"] }
+mdns-sd = { version = "=0.21.6", default-features = false, features = ["async"] }
+if-addrs = "=0.15.0"
 # Windows-only (arena-kiosk-svc, arena-kiosk-ui): DPAPI, ACLs, pipe peers, WTS session launch,
 # job objects, the service host; the lockdown (local accounts, profiles, hives), the keyboard
 # hook and the monitor layout; process enforcement (WMI process-start events, Authenticode

@@ -87,6 +87,7 @@ pub enum KioskHubState {
     /// The Hub refused the device token (`TOKEN_REVOKED`/`TOKEN_INVALID`): the device must be
     /// provisioned again. The service retries only slowly.
     TokenRejected,
+    Unpaired,
 }
 
 /// The `hub-status` event the Kiosk UI receives from its Tauri shell.

@@ -24,6 +24,17 @@ pub struct HubSnapshot {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub setup: Option<crate::SetupStatus>,
+    #[serde(default)]
+    pub lan: Option<SnapshotLan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotLan {
+    pub addresses: Vec<String>,
+    pub lan_port: u16,
+    pub web_port: u16,
+    pub fingerprint: String,
 }
 
 /// The Hub UI settings every open view follows.
@@ -197,6 +208,7 @@ mod tests {
             ui: SnapshotUi::default(),
             connectivity: crate::Connectivity::default(),
             setup: None,
+            lan: None,
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
@@ -206,7 +218,8 @@ mod tests {
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5, "hc": false},
                 "connectivity": {"state": "online", "checked_at": null},
-                "setup": null
+                "setup": null,
+                "lan": null
             })
         );
     }

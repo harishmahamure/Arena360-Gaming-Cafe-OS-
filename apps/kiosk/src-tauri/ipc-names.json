@@ -5,7 +5,9 @@
     "toast": "toast",
     "adminExit": "admin-exit",
     "adminExitEnded": "admin-exit-ended",
-    "theme": "theme"
+    "theme": "theme",
+    "discoveryFound": "discovery-found",
+    "discoveryDone": "discovery-done"
   },
   "commands": {
     "reportAppState": "report_app_state",
@@ -14,6 +16,9 @@
     "heartbeat": "heartbeat",
     "adminExit": "admin_exit",
     "adminExitStatus": "admin_exit_status",
-    "theme": "theme"
+    "theme": "theme",
+    "discover": "discover",
+    "probeIp": "probe_ip",
+    "selectHub": "select_hub"
   }
 }

@@ -61,6 +61,8 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         launcher: Arc::new(crate::launcher::NoopLauncher),
         admin: crate::admin_exit::AdminState::load(Box::new(NoSecret)),
         link_hold: watch::channel(false).0,
+        discovery: crate::discovery::Discovery::system(),
+        provisioned: Notify::new(),
     })
 }
 

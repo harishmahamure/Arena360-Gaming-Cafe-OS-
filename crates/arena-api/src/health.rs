@@ -163,6 +163,17 @@ struct SnapshotState {
     status: Option<watch::Receiver<HubStatus>>,
 }
 
+pub fn snapshot_lan(status: &HubStatus) -> Option<arena_proto::SnapshotLan> {
+    let fingerprint = status.tls_fingerprint.clone()?;
+    let (lan_port, web_port) = status.lan_ports?;
+    Some(arena_proto::SnapshotLan {
+        addresses: status.lan_addresses.iter().map(|a| a.to_string()).collect(),
+        lan_port,
+        web_port,
+        fingerprint,
+    })
+}
+
 async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
@@ -181,6 +192,7 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                 if status.setup.is_some() {
                     snapshot.setup = status.setup;
                 }
+                snapshot.lan = snapshot_lan(&status);
             }
             Json(snapshot).into_response()
         }
@@ -512,7 +524,10 @@ mod tests {
                 s.connectivity = arena_proto::Connectivity {
                     state: arena_proto::ConnectivityState::CloudUnreachable,
                     checked_at: Some(7),
-                }
+                };
+                s.tls_fingerprint = Some("ab".repeat(32));
+                s.lan_ports = Some((7400, 7401));
+                s.lan_addresses = vec![std::net::Ipv4Addr::new(192, 168, 1, 20)];
             });
             let res = ui_router(reader, clock, crate::lan::Presence::none(), Some(rx))
                 .oneshot(req)
@@ -556,7 +571,13 @@ mod tests {
                     },
                     "ui": {"idle_lock_minutes": 5, "hc": false},
                     "connectivity": {"state": "cloud_unreachable", "checked_at": 7},
-                    "setup": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing"}
+                    "setup": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing"},
+                    "lan": {
+                        "addresses": ["192.168.1.20"],
+                        "lan_port": 7400,
+                        "web_port": 7401,
+                        "fingerprint": "ab".repeat(32)
+                    }
                 })
             );
         }
@@ -568,7 +589,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body,
-                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null})
+                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32)}})
             );
         }
 

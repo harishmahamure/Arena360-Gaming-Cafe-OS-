@@ -44,8 +44,10 @@ const FIXTURE: &str = "
 fn expected_counts() -> BTreeMap<String, u64> {
     // The fixture's tables, plus every migration's (empty) tables.
     [
+        ("branches", 0),
         ("licences", 1500),
         ("members", 2),
+        ("onboarding_progress", 0),
         ("otp_challenges", 0),
         ("owner_backup_codes", 0),
         ("owner_devices", 0),
@@ -58,6 +60,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
             u64::from(arena_store::control::LATEST_CONTROL_VERSION),
         ),
         ("signin_challenges", 0),
+        ("tenants", 0),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v))
@@ -715,8 +718,10 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
     assert_eq!(
         local_tables(&target),
         vec![
+            "branches",
             "licences",
             "members",
+            "onboarding_progress",
             "otp_challenges",
             "owner_backup_codes",
             "owner_devices",
@@ -725,7 +730,8 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "owners",
             "rate_limits",
             "schema_migrations",
-            "signin_challenges"
+            "signin_challenges",
+            "tenants"
         ]
     );
 }

@@ -6,6 +6,8 @@ import type { MfaState } from "./MfaState";
  */
 export type SessionOwner = {
   name: string;
+  cafe_name: string;
+  city: string;
   mfa_state: MfaState;
   /**
    * Whether the owner has set a password.

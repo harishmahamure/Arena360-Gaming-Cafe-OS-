@@ -123,6 +123,8 @@ impl MfaState {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SessionOwner {
     pub name: String,
+    pub cafe_name: String,
+    pub city: String,
     pub mfa_state: MfaState,
     /// Whether the owner has set a password.
     pub has_password: bool,

@@ -7,6 +7,9 @@ import { goto } from "$app/navigation";
 import type {
   AppError,
   BackupCodes,
+  BranchCodeSet,
+  CafeDetails,
+  Country,
   ErrorCode,
   SessionInfo,
   SignupChallenge,
@@ -18,7 +21,9 @@ import type {
   SigninVerified,
   TotpStarted,
   TrustedDevice,
+  WizardState,
 } from "@arena/ui/generated";
+import { clearWizard } from "./wizard.svelte";
 
 /** The API origin (empty: same origin, through the dev/preview proxy). */
 const base = () => (PUBLIC_API_BASE ?? "").replace(/\/$/, "");
@@ -51,6 +56,7 @@ const CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "TOTP_INVALID",
   "SETUP_INCOMPLETE",
   "AUTH_LOCKED",
+  "BRANCH_CODE_TAKEN",
 ]);
 
 function isAppError(v: unknown): v is AppError {
@@ -105,6 +111,7 @@ async function call<T>(
       parsed = null;
     }
   }
+  if (res.status === 401) clearWizard();
   if (res.ok) return { ok: true, status: res.status, data: parsed as T };
   if (!isAppError(parsed)) return internal(res.status, false);
   const error: AppError = CODES.has(parsed.code) ? parsed : { ...parsed, code: "INTERNAL" };
@@ -122,7 +129,13 @@ export const startSignup = (form: SignupStart) =>
 export const resendCode = (challenge_id: string) =>
   call<SignupChallenge>("POST", "/signup/resend", { challenge_id });
 export const verifyCode = (challenge_id: string, code: string) =>
-  call<SignupVerified>("POST", "/signup/verify", { challenge_id, code });
+  signedInAgain(call<SignupVerified>("POST", "/signup/verify", { challenge_id, code }));
+async function signedInAgain<T>(request: Promise<ApiResult<T>>): Promise<ApiResult<T>> {
+  const res = await request;
+  if (res.ok) clearWizard();
+  return res;
+}
+
 export const getSession = () => call<SessionInfo>("GET", "/session");
 export const refreshSession = () => call<SessionInfo>("POST", "/session/refresh");
 
@@ -159,7 +172,7 @@ export const regenerateBackupCodes = (code: string) =>
   withRefresh(() => call<BackupCodes>("POST", "/account/mfa/backup-codes/regenerate", { code }));
 
 export const signIn = (login: string, password: string) =>
-  call<SigninReply>("POST", "/signin", { login, password });
+  signedInAgain(call<SigninReply>("POST", "/signin", { login, password }));
 export const sendSigninSms = (challenge_id: string) =>
   call<SigninSmsSent>("POST", "/signin/sms", { challenge_id });
 export const verifySignin = (
@@ -167,12 +180,28 @@ export const verifySignin = (
   method: SigninMethod,
   code: string,
   trust_device: boolean,
-) => call<SigninVerified>("POST", "/signin/verify", { challenge_id, method, code, trust_device });
+) =>
+  signedInAgain(
+    call<SigninVerified>("POST", "/signin/verify", { challenge_id, method, code, trust_device }),
+  );
 export const setSmsFallback = (enabled: boolean) =>
   withRefresh(() => call<null>("PUT", "/account/security/sms-fallback", { enabled }));
 export const listDevices = () =>
   withRefresh(() => call<TrustedDevice[]>("GET", "/account/devices"));
 export const removeDevice = (id: string) =>
   withRefresh(() => call<null>("DELETE", `/account/devices/${encodeURIComponent(id)}`));
-export const signOutEverywhere = () =>
-  withRefresh(() => call<null>("POST", "/account/sign-out-everywhere"));
+export const signOutEverywhere = async () => {
+  const res = await withRefresh(() => call<null>("POST", "/account/sign-out-everywhere"));
+  if (res.ok) clearWizard();
+  return res;
+};
+
+export const getWizard = () => withRefresh(() => call<WizardState>("GET", "/wizard"));
+export const saveCafe = (details: CafeDetails) =>
+  withRefresh(() => call<WizardState>("PUT", "/wizard/cafe", details));
+export const setBranchCode = (branchId: string, code: string) =>
+  withRefresh(() =>
+    call<BranchCodeSet>("PUT", `/branches/${encodeURIComponent(branchId)}/code`, { code }),
+  );
+export const listCountries = () => call<Country[]>("GET", "/meta/countries");
+export const listTimezones = () => call<string[]>("GET", "/meta/timezones");

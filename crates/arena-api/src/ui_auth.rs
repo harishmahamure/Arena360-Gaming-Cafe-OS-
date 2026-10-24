@@ -682,7 +682,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::BAD_REQUEST
         }
         ErrorCode::PasswordTooShort | ErrorCode::PasswordCommon => StatusCode::UNPROCESSABLE_ENTITY,
-        ErrorCode::AlreadySet => StatusCode::CONFLICT,
+        ErrorCode::AlreadySet | ErrorCode::BranchCodeTaken => StatusCode::CONFLICT,
         ErrorCode::PasswordRequired | ErrorCode::SetupIncomplete => StatusCode::FORBIDDEN,
         ErrorCode::PermissionDenied
         | ErrorCode::Forbidden

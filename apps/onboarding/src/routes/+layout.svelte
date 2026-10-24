@@ -1,6 +1,7 @@
 <script lang="ts">
   import "@arena/ui/base.css";
   import { ThemeToggle, t } from "@arena/ui";
+  import { page } from "$app/state";
   import type { Snippet } from "svelte";
 
   let { children }: { children: Snippet } = $props();
@@ -10,7 +11,7 @@
   <header class="header">
     <a class="brand" href="/">{t("app.name")}</a>
   </header>
-  <main class="main">
+  <main class="main" class:wide={page.url.pathname.startsWith("/setup")}>
     {@render children()}
   </main>
   <footer class="footer">
@@ -55,6 +56,10 @@
     width: 100%;
     max-width: 36rem;
     padding-bottom: var(--space-6);
+  }
+
+  .main.wide {
+    max-width: none;
   }
 
   .footer {

@@ -148,15 +148,21 @@ pub(super) async fn backup_codes_acked(st: &AuthState, owner_id: &str) -> Result
         .is_some_and(|m| m.confirmed_at.is_some() && m.backup_ack_at.is_some()))
 }
 
+fn session_owner(owner: &Owner, acked: bool) -> SessionOwner {
+    SessionOwner {
+        name: owner.name.clone(),
+        cafe_name: owner.cafe_name.clone(),
+        city: owner.city.clone(),
+        mfa_state: owner.mfa_state,
+        has_password: owner.has_password(),
+        backup_codes_acked: acked,
+        sms_fallback: owner.sms_fallback,
+    }
+}
+
 async fn info(st: &AuthState, owner: &Owner) -> Result<SessionInfo, ApiError> {
     Ok(SessionInfo {
-        owner: SessionOwner {
-            name: owner.name.clone(),
-            mfa_state: owner.mfa_state,
-            has_password: owner.has_password(),
-            backup_codes_acked: backup_codes_acked(st, &owner.id).await?,
-            sms_fallback: owner.sms_fallback,
-        },
+        owner: session_owner(owner, backup_codes_acked(st, &owner.id).await?),
     })
 }
 
@@ -188,13 +194,7 @@ async fn refresh(State(st): State<Arc<AuthState>>, headers: HeaderMap) -> Respon
         RefreshOutcome::Rotated(owner) => {
             let acked = backup_codes_acked(&st, &owner.id).await.unwrap_or(false);
             let body = SessionInfo {
-                owner: SessionOwner {
-                    name: owner.name.clone(),
-                    mfa_state: owner.mfa_state,
-                    has_password: owner.has_password(),
-                    backup_codes_acked: acked,
-                    sms_fallback: owner.sms_fallback,
-                },
+                owner: session_owner(&owner, acked),
             };
             with_session_cookies(axum::Json(body).into_response(), &issued)
         }

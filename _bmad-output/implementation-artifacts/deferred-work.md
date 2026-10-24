@@ -75,3 +75,15 @@
 - source_spec: none (observed during 2.6 verification)
   summary: `arena-kiosk-svc` test `wrong_and_counter_pins_are_refused_and_five_pause_across_an_app_restart` (`tests/runtime.rs:261`, "no entry found for key") flakes under heavy parallel load.
   evidence: Failed once in the full workspace run while three other builds ran, then passed 3/3 alone. It is Story 1.20 code that this work didn't touch.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-17-kiosk-finds-the-hub-on-the-lan-or-by-typed-ip.md`
+  summary: Add Windows Defender Firewall rules (UDP 5353 mDNS for the Hub and the kiosk, plus TCP 7400/7401 inbound for the Hub) to the Hub and kiosk installers.
+  evidence: Discovery uses multicast DNS, and the installers don't open the port. On a default Windows profile, browse replies may be blocked.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-26-branch-operating-settings-opening-hours-fulfilment-kiosk-vol.md`
+  summary: Run the backup-directory writability probe for `system.backup_dir` values arriving by non-HTTP paths (the command mailbox in Story 2.15), not only `/ui/intent`.
+  evidence: The probe lives in the HTTP handler; the core rule now only requires an absolute path.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-7-resumable-setup-wizard-and-step-1-café-and-first-branch.md`
+  summary: Guard edits to a branch's country, currency and timezone once rates, products or invoices exist, or define how existing data migrates.
+  evidence: Step 1 edits rewrite these fields unconditionally; later stories denominate data in the branch currency.

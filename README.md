@@ -1262,6 +1262,47 @@ Secure; SameSite=Lax`). The device label is `device_label` (up to 60 characters)
   - Per-IP limits for `/v1/signin*` are Cloudflare rules
     ([`deploy/README.md`](deploy/README.md#6a-owner-sign-up-sms-pepper-web-origins-and-per-ip-limits)).
 
+- **Setup wizard** (Story 2.7). `/setup` in the onboarding app redirects to `/setup/<current>`,
+  the first step not done, so setup resumes on any device. Ten steps, in order: `cafe`, `tier`,
+  `install_hub`, `devices`, `rates`, `products`, `staff`, `printer_payments`, `test_session`,
+  `go_live` (the three before the test session can be skipped in a later story). A later
+  step that isn't done redirects to the current one; any done step opens for edit and saving it
+  returns to the current step. The wizard state is fetched again on every visit to `/setup` and
+  when the tab regains focus, and cleared on sign-in, sign-out and any 401. Steps 2–10 say "This step is coming soon" until their stories land.
+  - Every wizard and branch route needs a finished account setup (else 403
+    `SETUP_INCOMPLETE`). The tenant always comes from the session owner, never the request.
+  - `GET /v1/wizard` → `{current, steps: [{key, state, can_skip}], tenant?: {id, name},
+branch?: {id, name, city, country, currency, timezone, gst_registered, gstin, branch_code,
+code_editable}}` (the owner's first branch; with no tenant yet, `current` is `cafe` and
+    every step is `pending`).
+  - `PUT /v1/wizard/cafe {cafe_name, city, country, currency, timezone, gst_registered,
+gstin?}` answers the same body. The first call creates the tenant (one per owner), the
+    first branch (named after the café), its `branch_code` and all ten `onboarding_progress`
+    rows with `cafe` done, in one transaction; later calls update the tenant name and the
+    branch and keep `cafe` done. `country` is one of `GET /v1/meta/countries`
+    (`[{code, name, currency, timezone, gst}]`: IN, NP, LK, BD, AE, SG, MY, GB, US), the
+    currency one of `arena_proto::currency::CURRENCIES` and the time zone one of the canonical
+    tz-database names that `GET /v1/meta/timezones` lists (aliases such as `US/Eastern` are
+    refused; both lists are sent with `Cache-Control: public, max-age=86400`); the country's
+    currency and zone are
+    only defaults. `gst_registered` is allowed only where the country has GST (India). With
+    it, `gstin` is required: 15 characters (uppercased, trimmed), state code 01–38, a PAN, an
+    entity character, `Z` and the GSTN mod-36 check character; without it, a `gstin` is
+    refused. Every refusal is 422 `VALIDATION_FAILED` with `field`.
+  - `branch_code` comes from the branch name: the initials of up to 6 words, else the first 3
+    letters and digits of the name, padded with `X`. A name with no Latin letters or digits
+    uses the city the same way, then `BRX`. On a clash within the tenant the last character
+    becomes 2–9, then A–Z. `PUT /v1/branches/{id}/code {code}` → `{branch_code}`
+    takes 3–6 of `[A-Z0-9]` (lower case is uppercased; else 422 `VALIDATION_FAILED`,
+    `field: "code"`), unique in the tenant (else 409 `BRANCH_CODE_TAKEN`), while
+    `code_locked_at` is null (else 409 `ALREADY_SET`; Hub pairing locks it in Story 2.10).
+  - A branch id in a path that doesn't exist or belongs to another tenant is 403 `FORBIDDEN`,
+    read only by the ownership check and never written (the `OwnedBranch` extractor).
+  - `GET /v1/session` adds the sign-up `cafe_name` and `city`, which prefill step 1.
+  - Tables (migration 0005): `tenants`, `branches` and `onboarding_progress(branch_id, step,
+state, completed_at)`, which keeps completion times for the sign-up-to-go-live metric and
+    no personal data.
+
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
   fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the
@@ -1275,7 +1316,7 @@ No Turso, Cloudflare or token needed. MinIO stands in for R2:
 ```sh
 docker compose -f deploy/dev/compose.yaml up -d   # MinIO on 127.0.0.1:9000, bucket arena-dev
 cargo run -p arena-cloud -- --role all --dev
-curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":4}
+curl http://127.0.0.1:8080/healthz                # {"role":"all",…,"migration_version":5}
 ```
 
 Sign up locally: run the cloud as above and the onboarding app with
@@ -1287,7 +1328,10 @@ authenticator app (or paste the setup key into it), enter its code and save the 
 `GET /v1/dev/setup-gate` answers `{"setup_complete": true}`. To sign in again, open
 <http://localhost:5179/sign-in> in a fresh browser profile: the password, then the current
 authenticator code. Tick "Trust this device for 30 days" and the next sign-in in that profile
-skips the code; Account → Security → "Sign out everywhere" makes it ask again.
+skips the code; Account → Security → "Sign out everywhere" makes it ask again. "Setup wizard
+starts here" opens <http://localhost:5179/setup>: save step 1 (café details) and it moves on to
+step 2; signing in again in another profile opens `/setup` on step 2 with step 1 done and
+editable.
 
 - `--dev` keeps `gz_control` in `<--data-dir>/gz_control.db` (default `./.arena-cloud-dev`,
   created if missing) through rusqlite, with the same embedded migrations, the same

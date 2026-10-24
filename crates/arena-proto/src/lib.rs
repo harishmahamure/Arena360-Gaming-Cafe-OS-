@@ -21,6 +21,7 @@ mod signin;
 mod signup;
 mod snapshot;
 mod ui_auth;
+mod wizard;
 
 pub use account::{
     BACKUP_CODE_CHARS, BACKUP_CODE_COUNT, BackupCodes, PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS,
@@ -88,6 +89,11 @@ pub use snapshot::{
 pub use ui_auth::{
     ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_TICKET_USES, SessionStaff,
     SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk, UnlockRequest,
+};
+pub use wizard::{
+    BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, COUNTRIES, CafeDetails, Country, CountryRow,
+    SetBranchCode, StepState, WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant,
+    country, current_step, valid_branch_code,
 };
 
 /// Returns this crate's name.

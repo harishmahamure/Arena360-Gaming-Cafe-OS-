@@ -23,6 +23,7 @@ mod owner;
 mod rate_limit;
 mod session;
 mod signin;
+mod tenant;
 
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
@@ -39,6 +40,7 @@ pub use signin::{
     NewOwnerDevice, NewSigninChallenge, OwnerDevice, SigninChallenge, SigninCompletion,
     SigninFactor, SigninFailure,
 };
+pub use tenant::{Branch, BranchCodeOutcome, BranchProfile, NewTenantBranch, ProgressRow, Tenant};
 
 use std::fmt;
 use std::ops::Range;
@@ -73,6 +75,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 4,
         sql: include_str!("../control-migrations/0004_owner_signin.sql"),
+    },
+    ControlMigration {
+        version: 5,
+        sql: include_str!("../control-migrations/0005_tenants_branches.sql"),
     },
 ];
 

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { GOOD_TOTP, PASSWORD, stubCloud, t, toCodeStep, type Cloud } from "./stub";
+import { GOOD_TOTP, PASSWORD, READY_OWNER, stubCloud, t, toCodeStep, type Cloud } from "./stub";
 
 // Accessibility floor for every onboarding view in light and dark: landmarks, one h1, labelled
 // fields, targets of at least 44 × 44 px and no serious or critical axe violations.
@@ -183,6 +183,36 @@ const VIEWS: {
       await page.getByRole("button", { name: t("onboarding.regenerate.button") }).click();
       await page.keyboard.insertText(GOOD_TOTP);
       await expect(page.getByRole("dialog", { name: t("onboarding.codes.title") })).toBeVisible();
+    },
+  },
+  {
+    name: "setup, café step with GST",
+    cloud: { signedIn: true, owner: READY_OWNER },
+    open: async (page) => {
+      await page.goto("/setup");
+      await expect(h1(page, "ui.wizard.step.cafe")).toBeVisible();
+      await page.getByLabel(t("onboarding.cafe.gst.yes"), { exact: true }).check();
+      await page.getByRole("button", { name: t("onboarding.cafe.save"), exact: true }).click();
+      await expect(page.getByText(t("onboarding.cafe.error.gstin_required"))).toBeVisible();
+    },
+  },
+  {
+    name: "setup, editing the branch code",
+    cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {} } },
+    open: async (page) => {
+      await page.goto("/setup/cafe");
+      await page.getByRole("button", { name: t("onboarding.cafe.code.edit"), exact: true }).click();
+      await page.getByLabel(t("onboarding.cafe.code.field"), { exact: true }).fill("ab");
+      await page.getByRole("button", { name: t("onboarding.cafe.code.save"), exact: true }).click();
+      await expect(page.getByText(t("onboarding.cafe.code.invalid"))).toBeVisible();
+    },
+  },
+  {
+    name: "setup, a coming-soon step",
+    cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {} } },
+    open: async (page) => {
+      await page.goto("/setup");
+      await expect(h1(page, "ui.wizard.step.tier")).toBeVisible();
     },
   },
 ];

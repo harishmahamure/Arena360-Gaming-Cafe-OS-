@@ -77,6 +77,7 @@ pub enum ErrorCode {
     TotpInvalid,
     /// Account setup (password, authenticator app, saved backup codes) is not finished.
     SetupIncomplete,
+    BranchCodeTaken,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -126,6 +127,7 @@ impl ErrorCode {
             Self::PasswordRequired => "PASSWORD_REQUIRED",
             Self::TotpInvalid => "TOTP_INVALID",
             Self::SetupIncomplete => "SETUP_INCOMPLETE",
+            Self::BranchCodeTaken => "BRANCH_CODE_TAKEN",
         }
     }
 }
@@ -233,6 +235,7 @@ mod tests {
             (ErrorCode::PasswordRequired, "PASSWORD_REQUIRED"),
             (ErrorCode::TotpInvalid, "TOTP_INVALID"),
             (ErrorCode::SetupIncomplete, "SETUP_INCOMPLETE"),
+            (ErrorCode::BranchCodeTaken, "BRANCH_CODE_TAKEN"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

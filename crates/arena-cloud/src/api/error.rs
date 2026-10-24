@@ -40,7 +40,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::Stale
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::IdempotencyConflict
-        | ErrorCode::AlreadySet => StatusCode::CONFLICT,
+        | ErrorCode::AlreadySet
+        | ErrorCode::BranchCodeTaken => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -255,6 +256,7 @@ mod tests {
             (ErrorCode::PasswordRequired, 403),
             (ErrorCode::TotpInvalid, 400),
             (ErrorCode::SetupIncomplete, 403),
+            (ErrorCode::BranchCodeTaken, 409),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

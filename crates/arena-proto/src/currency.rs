@@ -68,6 +68,33 @@ pub fn currencies_json() -> String {
     out
 }
 
+pub fn canonical_timezones() -> Vec<&'static str> {
+    const AREAS: [&str; 10] = [
+        "Africa/",
+        "America/",
+        "Antarctica/",
+        "Arctic/",
+        "Asia/",
+        "Atlantic/",
+        "Australia/",
+        "Europe/",
+        "Indian/",
+        "Pacific/",
+    ];
+    let mut names: Vec<&'static str> = chrono_tz::TZ_VARIANTS
+        .iter()
+        .map(|tz| tz.name())
+        .filter(|n| *n == "UTC" || AREAS.iter().any(|a| n.starts_with(a)))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+pub fn is_canonical_timezone(name: &str) -> bool {
+    canonical_timezones().contains(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,32 +150,6 @@ mod tests {
         );
     }
 
-    /// Canonical IANA zone names from the bundled tz database (the one `branch.tz` is validated
-    /// against): the region zones plus `UTC`, without the backward-compatibility areas
-    /// (`US/…`, `Etc/…`, single-word legacy names). Sorted.
-    fn canonical_timezones() -> Vec<&'static str> {
-        const AREAS: [&str; 10] = [
-            "Africa/",
-            "America/",
-            "Antarctica/",
-            "Arctic/",
-            "Asia/",
-            "Atlantic/",
-            "Australia/",
-            "Europe/",
-            "Indian/",
-            "Pacific/",
-        ];
-        let mut names: Vec<&'static str> = chrono_tz::TZ_VARIANTS
-            .iter()
-            .map(|tz| tz.name())
-            .filter(|n| *n == "UTC" || AREAS.iter().any(|a| n.starts_with(a)))
-            .collect();
-        names.sort_unstable();
-        names.dedup();
-        names
-    }
-
     #[test]
     fn the_timezone_list_has_utc_and_the_branch_zones() {
         let names = canonical_timezones();
@@ -166,6 +167,10 @@ mod tests {
                 .iter()
                 .any(|n| n.starts_with("US/") || n.starts_with("Etc/"))
         );
+        assert!(is_canonical_timezone("Asia/Kolkata") && is_canonical_timezone("UTC"));
+        for alias in ["US/Eastern", "Etc/GMT+5", "Factory", "Mars/Base", ""] {
+            assert!(!is_canonical_timezone(alias), "{alias}");
+        }
     }
 
     #[cfg(feature = "export-ts")]

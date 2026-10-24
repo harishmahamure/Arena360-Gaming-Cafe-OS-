@@ -360,7 +360,7 @@ async fn the_password_rule_and_a_single_set() {
     let owner = h.session().await;
     assert_eq!(
         owner,
-        json!({"name": "Asha Rao", "mfa_state": "pending", "has_password": false, "backup_codes_acked": false, "sms_fallback": false})
+        json!({"name": "Asha Rao", "cafe_name": "Level Up Gaming", "city": "Pune", "mfa_state": "pending", "has_password": false, "backup_codes_acked": false, "sms_fallback": false})
     );
 
     // Short: 9 characters.
@@ -485,7 +485,7 @@ async fn confirm_enrols_and_answers_ten_hashed_codes_once() {
     }
     assert_eq!(
         h.session().await,
-        json!({"name": "Asha Rao", "mfa_state": "enrolled", "has_password": true, "backup_codes_acked": false, "sms_fallback": false})
+        json!({"name": "Asha Rao", "cafe_name": "Level Up Gaming", "city": "Pune", "mfa_state": "enrolled", "has_password": true, "backup_codes_acked": false, "sms_fallback": false})
     );
 
     // Enrolled: no second start or confirm.
@@ -855,7 +855,7 @@ async fn a_refresh_answers_the_owner_even_if_the_mfa_lookup_fails() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(
         r.body["owner"],
-        json!({"name": "Asha Rao", "mfa_state": "enrolled", "has_password": true, "backup_codes_acked": false, "sms_fallback": false})
+        json!({"name": "Asha Rao", "cafe_name": "Level Up Gaming", "city": "Pune", "mfa_state": "enrolled", "has_password": true, "backup_codes_acked": false, "sms_fallback": false})
     );
     assert!(
         r.headers

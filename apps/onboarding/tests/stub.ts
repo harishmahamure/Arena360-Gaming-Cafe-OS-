@@ -1,12 +1,18 @@
 import type { Page, Route } from "@playwright/test";
 import type {
   AppError,
+  CafeDetails,
+  Country,
   SessionOwner,
   SignupChallenge,
   TotpStarted,
   TrustedDevice,
+  WizardBranch,
+  WizardState,
+  WizardStep,
 } from "@arena/ui/generated";
 import { t } from "../../../packages/ui/src/messages/index.js";
+import { normalizeGstin, validGstin } from "../src/lib/gstin";
 
 export { t };
 
@@ -29,6 +35,8 @@ export const CHALLENGE: SignupChallenge = {
 };
 export const NEW_OWNER: SessionOwner = {
   name: "Asha",
+  cafe_name: "Pixel Arena Gaming",
+  city: "Pune",
   mfa_state: "pending",
   has_password: false,
   backup_codes_acked: false,
@@ -73,6 +81,53 @@ export const NEW_CODES = Array.from(
   { length: 10 },
   (_, i) => `NEWCO-DE${String(i).padStart(3, "0")}`,
 );
+
+export const STEPS: WizardStep[] = [
+  "cafe",
+  "tier",
+  "install_hub",
+  "devices",
+  "rates",
+  "products",
+  "staff",
+  "printer_payments",
+  "test_session",
+  "go_live",
+];
+export const COUNTRIES: Country[] = [
+  { code: "IN", name: "India", currency: "INR", timezone: "Asia/Kolkata", gst: true },
+  { code: "NP", name: "Nepal", currency: "NPR", timezone: "Asia/Kathmandu", gst: false },
+  { code: "AE", name: "United Arab Emirates", currency: "AED", timezone: "Asia/Dubai", gst: false },
+  { code: "GB", name: "United Kingdom", currency: "GBP", timezone: "Europe/London", gst: false },
+];
+export const TIMEZONES = [
+  "America/New_York",
+  "Asia/Dubai",
+  "Asia/Kathmandu",
+  "Asia/Kolkata",
+  "Europe/London",
+  "UTC",
+];
+export const GSTIN = "27AAPFU0939F1ZV";
+export const BRANCH: WizardBranch = {
+  id: "01JBRANCH0000000000000000000",
+  name: "Pixel Arena Gaming",
+  city: "Pune",
+  country: "IN",
+  currency: "INR",
+  timezone: "Asia/Kolkata",
+  gst_registered: false,
+  gstin: null,
+  branch_code: "PAG",
+  code_editable: true,
+};
+export const READY_OWNER: Partial<SessionOwner> = {
+  has_password: true,
+  mfa_state: "enrolled",
+  backup_codes_acked: true,
+};
+
+export type WizardStart = { done?: WizardStep[]; branch?: Partial<WizardBranch> };
 
 export const err = (code: AppError["code"], extra: Partial<AppError> = {}): AppError => ({
   code,
@@ -121,6 +176,14 @@ export type Cloud = {
   smsFallbackSets: boolean[];
   removedDevices: string[];
   signOuts: number;
+  done: Set<WizardStep>;
+  tenant: { id: string; name: string } | null;
+  branch: WizardBranch | null;
+  cafeSaves: CafeDetails[];
+  codeSets: { id: string; code: string }[];
+  takenCodes: string[];
+  wizardLoads: number;
+  nextWizard: Reply[];
 };
 
 async function fulfil(route: Route, r: Reply) {
@@ -145,7 +208,7 @@ const NO_CONTENT: Reply = { status: 204, body: null };
  */
 export async function stubCloud(
   page: Page,
-  start: { signedIn?: boolean; owner?: Partial<SessionOwner> } = {},
+  start: { signedIn?: boolean; owner?: Partial<SessionOwner>; wizard?: WizardStart } = {},
 ): Promise<Cloud> {
   const cloud: Cloud = {
     starts: [],
@@ -179,6 +242,16 @@ export async function stubCloud(
     smsFallbackSets: [],
     removedDevices: [],
     signOuts: 0,
+    done: new Set(start.wizard?.done ?? (start.wizard?.branch ? ["cafe"] : [])),
+    tenant: start.wizard?.branch
+      ? { id: "01JTENANT0000000000000000000", name: start.wizard.branch.name ?? BRANCH.name }
+      : null,
+    branch: start.wizard?.branch ? { ...BRANCH, ...start.wizard.branch } : null,
+    cafeSaves: [],
+    codeSets: [],
+    takenCodes: ["SEC"],
+    wizardLoads: 0,
+    nextWizard: [],
   };
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -266,7 +339,17 @@ export async function stubCloud(
             : { next: "done" };
         return fulfil(route, { status: 200, body: reply });
       }
+      case "/v1/meta/countries":
+        return fulfil(route, { status: 200, body: COUNTRIES });
+      case "/v1/meta/timezones":
+        return fulfil(route, { status: 200, body: TIMEZONES });
       default: {
+        if (url.pathname.startsWith("/v1/wizard") || url.pathname.startsWith("/v1/branches/")) {
+          if (url.pathname === "/v1/wizard") cloud.wizardLoads += 1;
+          const next = cloud.nextWizard.shift();
+          if (next) return fulfil(route, next);
+          return fulfil(route, wizardRoute(cloud, url.pathname, body, route.request().method()));
+        }
         const next = cloud.nextAccount.shift();
         if (next) return fulfil(route, next);
         if (!cloud.signedIn) return fulfil(route, { status: 401, body: err("AUTH_FAILED") });
@@ -275,6 +358,96 @@ export async function stubCloud(
     }
   });
   return cloud;
+}
+
+export function wizardBody(cloud: Cloud): WizardState {
+  const current = STEPS.find((s) => !cloud.done.has(s)) ?? "go_live";
+  return {
+    current,
+    steps: STEPS.map((key) => ({
+      key,
+      state: cloud.done.has(key) ? "done" : "pending",
+      can_skip: key === "products" || key === "staff" || key === "printer_payments",
+    })),
+    ...(cloud.tenant ? { tenant: cloud.tenant } : {}),
+    ...(cloud.branch ? { branch: cloud.branch } : {}),
+  };
+}
+
+function initials(name: string): string {
+  const words = name
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .filter(Boolean);
+  let code =
+    words.length > 1
+      ? words
+          .slice(0, 6)
+          .map((w) => w[0])
+          .join("")
+      : "";
+  if (code.length < 3) code = words.join("").slice(0, 3);
+  return code.padEnd(3, "X");
+}
+
+function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string): Reply {
+  if (!cloud.signedIn) return { status: 401, body: err("AUTH_FAILED") };
+  const o = cloud.owner;
+  if (!o.has_password || o.mfa_state !== "enrolled" || !o.backup_codes_acked) {
+    return { status: 403, body: err("SETUP_INCOMPLETE") };
+  }
+  if (path === "/v1/wizard" && method === "GET") return { status: 200, body: wizardBody(cloud) };
+  if (path === "/v1/wizard/cafe" && method === "PUT") {
+    const d = body as CafeDetails;
+    cloud.cafeSaves.push(d);
+    const invalid = (field: string) => ({
+      status: 422,
+      body: err("VALIDATION_FAILED", { field }),
+    });
+    if (!d.cafe_name?.trim()) return invalid("cafe_name");
+    if (!d.city?.trim()) return invalid("city");
+    if (!TIMEZONES.includes(d.timezone)) return invalid("timezone");
+    const gstin = d.gstin ? normalizeGstin(d.gstin) : "";
+    if (d.gst_registered && !validGstin(gstin)) return invalid("gstin");
+    if (!d.gst_registered && gstin) return invalid("gstin");
+    const fields = {
+      name: d.cafe_name.trim(),
+      city: d.city.trim(),
+      country: d.country,
+      currency: d.currency,
+      timezone: d.timezone,
+      gst_registered: d.gst_registered,
+      gstin: d.gst_registered ? gstin : null,
+    };
+    if (cloud.branch) {
+      cloud.branch = { ...cloud.branch, ...fields };
+      cloud.tenant = { id: cloud.tenant?.id ?? "01JTENANT0000000000000000000", name: fields.name };
+    } else {
+      cloud.branch = { ...BRANCH, ...fields, branch_code: initials(fields.name) };
+      cloud.tenant = { id: "01JTENANT0000000000000000000", name: fields.name };
+    }
+    cloud.done.add("cafe");
+    return { status: 200, body: wizardBody(cloud) };
+  }
+  const m = /^\/v1\/branches\/([^/]+)\/code$/.exec(path);
+  if (m && method === "PUT") {
+    const id = decodeURIComponent(m[1]);
+    const code = String((body as { code?: string } | null)?.code ?? "")
+      .trim()
+      .toUpperCase();
+    cloud.codeSets.push({ id, code });
+    if (!cloud.branch || cloud.branch.id !== id) return { status: 403, body: err("FORBIDDEN") };
+    if (!cloud.branch.code_editable) return { status: 409, body: err("ALREADY_SET") };
+    if (!/^[A-Z0-9]{3,6}$/.test(code)) {
+      return { status: 422, body: err("VALIDATION_FAILED", { field: "code" }) };
+    }
+    if (cloud.takenCodes.includes(code)) {
+      return { status: 409, body: err("BRANCH_CODE_TAKEN", { field: "code" }) };
+    }
+    cloud.branch.branch_code = code;
+    return { status: 200, body: { branch_code: code } };
+  }
+  return { status: 404, body: err("NOT_FOUND") };
 }
 
 /** The cloud's account-setup rules, on `cloud.owner`. */

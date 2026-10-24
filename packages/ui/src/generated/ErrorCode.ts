@@ -35,4 +35,5 @@ export type ErrorCode =
   | "ALREADY_SET"
   | "PASSWORD_REQUIRED"
   | "TOTP_INVALID"
-  | "SETUP_INCOMPLETE";
+  | "SETUP_INCOMPLETE"
+  | "BRANCH_CODE_TAKEN";

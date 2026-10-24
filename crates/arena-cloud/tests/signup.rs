@@ -342,6 +342,8 @@ async fn the_right_code_creates_a_pending_owner_and_signs_in() {
         me.body,
         json!({"owner": {
             "name": "Asha Rao",
+            "cafe_name": "Level Up Gaming",
+            "city": "Pune",
             "mfa_state": "pending",
             "has_password": false,
             "backup_codes_acked": false,

@@ -526,3 +526,53 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - **Deferred:** a lockout-DoS mitigation (needs an intent decision).
   - **Accepted explanation:** an expired SMS code within a live challenge can't occur, because a send extends the challenge.
 - **Verification (worktree):** everything passes, including 188 script tests and the onboarding suite. One flaky failure: `arena-kiosk-svc` `wrong_and_counter_pins_are_refused_and_five_pause_across_an_app_restart` failed once under load and passed 3/3 on rerun. It predates this story and is deferred.
+
+## Story 2.18: kiosk pairs with a 6-digit code or a manager PIN (Hub track B)
+
+- **Spec approval:** self-approved. Hub migration 0012 (`devices_meta`).
+- **Pairing code:** held in Hub memory, hashed, one live code, 10 minutes, renewed after use via SSE.
+- **Pair endpoint:** `POST /pair` on `:7401`, TLS only, with the kiosk pinning the discovery fingerprint.
+- **PIN path:** pauses for 60 s after 5 wrong PINs per source IP. Caps and other pairing rate limits stay in 2.19.
+- **Codes reserved:** `PAIR_CODE_INVALID`, `PAIR_PIN_PAUSED`.
+- Started on 2.17's WIP (overlap); it will be rebased onto the final 2.17.
+
+## Story 2.27: printer detection and test print (Hub track C)
+
+- **Spec approval:** self-approved.
+- **Adapter:** USB through the Windows spooler (RAW), a LAN `:9100` scan limited to the Hub's own /24 subnets (300 ms per connect, 64 concurrent, 8 s total), and a recorded fake.
+- **Test page:** ESC/POS Font A on code page PC437, with a 32- or 48-column ruler and golden byte tests.
+- **Status:** `printer.status` is written only by test and skip, and is reported in `SetupStatus`.
+- Started on 2.26's WIP (overlap).
+
+## Story 2.8: step 2, Free tier issues a signed licence (control track A)
+
+- **Spec approval:** self-approved. Control migration 0006.
+- **Tier table:** in arena-proto. Free values come from the story. Paid values beyond the device caps are **provisional**, for review in Epic 10: users 10/50, retention 365/1095, upload 300 s, summary 900 s.
+- **Licence:** EdDSA via `jsonwebtoken` 11.1 (rust-crypto). A dev keypair is committed and clearly named. The production verify set ships **empty**, so tokens are refused until the operator runs `ops licence-keygen` and adds the public keys.
+- **Paid tiers:** Basic and Premium are disabled behind `ARENA_BILLING_ENABLED` (off).
+- **New codes:** `ONE_FREE_BRANCH`, `BILLING_DISABLED`.
+- **Operator CLI:** `ops grant-comp`, audited in `ops_audit`.
+- Started on 2.7's WIP (overlap).
+- **2.7 implementation choices, accepted:**
+  - new code `BRANCH_CODE_TAKEN` (409);
+  - GST offered only in GST countries (India);
+  - an empty GSTIN counts as none;
+  - a lower-case code is uppercased;
+  - the branch is named after the café, and renamed with it;
+  - the meta lists are public;
+  - a one-word name uses its first 3 letters.
+- **2.7 review outcome (Sonnet ×3):** 18 fixes, 7 rejections and 1 deferral.
+  - **Fixes:**
+    - the wizard store is cleared and refetched (it could show another owner's data; high);
+    - done later steps open;
+    - clash handling wired in, with a city/BRX fallback for non-Latin names;
+    - canonical timezones only;
+    - a meta cache header;
+    - concurrent-first-save and rollback tests;
+    - a tenant without a branch recovers;
+    - Taken misreport fixed;
+    - GSTIN TS vectors;
+    - UI error routing;
+    - a11y fixes.
+  - **Deferred:** guard currency, country and tz edits once downstream data exists.
+  - **Verification:** fully green (workspace, store control, linkage, 188 scripts, onboarding check, build and Playwright).

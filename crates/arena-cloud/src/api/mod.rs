@@ -13,17 +13,21 @@
 //! [`gate::RequireSetupComplete`].
 
 pub mod account;
+pub mod branches;
 mod cors;
 mod dev;
 mod error;
 pub mod gate;
 mod json;
+mod meta;
 pub mod mfa;
+pub mod owned;
 mod panic;
 pub mod security;
 pub mod session;
 pub mod signin;
 pub mod signup;
+pub mod wizard;
 
 use std::sync::Arc;
 
@@ -49,7 +53,10 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
             .merge(account::router(Arc::clone(st)))
             .merge(mfa::router(Arc::clone(st)))
             .merge(signin::router(Arc::clone(st)))
-            .merge(security::router(Arc::clone(st)));
+            .merge(security::router(Arc::clone(st)))
+            .merge(wizard::router(Arc::clone(st)))
+            .merge(branches::router(Arc::clone(st)))
+            .merge(meta::router());
     }
     if dev {
         v1 = v1.merge(dev::router());

@@ -51,7 +51,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::AlreadySet
         | ErrorCode::PasswordRequired
         | ErrorCode::TotpInvalid
-        | ErrorCode::SetupIncomplete => true,
+        | ErrorCode::SetupIncomplete
+        | ErrorCode::BranchCodeTaken => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary

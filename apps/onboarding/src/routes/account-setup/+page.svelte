@@ -270,7 +270,7 @@
   {/if}
 {:else}
   <h1 bind:this={heading} tabindex="-1">{t("onboarding.done.title")}</h1>
-  <p class="intro">{t("onboarding.done.body")}</p>
+  <p class="intro"><a class="link" href="/setup">{t("onboarding.done.body")}</a></p>
   <p><a class="link" href="/account/security">{t("onboarding.done.security")}</a></p>
 {/if}
 

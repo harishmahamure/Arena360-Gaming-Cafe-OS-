@@ -25,3 +25,4 @@ export { default as CodeField } from "./components/CodeField.svelte";
 export { default as ThemeToggle } from "./components/ThemeToggle.svelte";
 export { THEME_KEY, readThemeChoice, resolveTheme, storeThemeChoice } from "./theme.js";
 export { default as PasswordField } from "./components/PasswordField.svelte";
+export { default as WizardProgress } from "./components/WizardProgress.svelte";

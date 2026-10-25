@@ -45,6 +45,17 @@ Read this file after a context flush (`/clear`). It's the single entry point for
   - Finish only what's in flight (2.9 verify and land, 2.18 rebase/verify/land, 2.10 implementation committed as WIP on `story-2-10` without review).
   - Then start nothing new. Resume only when the user asks.
 
+- **(2026-10-25) Stopped as requested. Resume notes:**
+  - **Landed on master (local, nothing pushed):** 2.1–2.9, 2.17, 2.18, 2.26, 2.27 (HEAD `67a1447`), plus chore `4a6da95`.
+  - **2.10:** implemented, **not reviewed**. WIP commit on branch `story-2-10` in worktree `.claude/worktrees/2-10`, based on 2.9's old WIP. To resume:
+    1. `git rebase --onto <master> <2.9 wip base> story-2-10`, then resolve:
+       - **Hub migration clash:** 2.10's `0011_hub_identity.sql` must become `0012` (2.18 owns 0011).
+       - **`PAIR_CODE_INVALID`:** added by both 2.10 and 2.18; keep one.
+       - **`arena-proto` pairing types:** 2.18's moved to `kiosk_pairing.rs`, and its TS type is now `KioskPairingCode`.
+    2. Run the three-reviewer pass on Sonnet, then fix, verify and land.
+    3. Open question from the implementer: should pairing mark wizard step 3 done, or leave it for 2.11's heartbeat (the current behaviour)?
+  - **Next specs drafted, untracked in `_bmad-output/implementation-artifacts`:** 2.11 (heartbeat) and 2.20 (device groups; Hub migration at the next free number). The Hub fan-out (2.20, 2.21, 2.23, 2.24) can start now that 2.18 has landed.
+
 ## Where things stand
 
 - **Story order and status:** `_bmad-output/implementation-artifacts/sprint-status.yaml`. A story at `review` is committed; `in-progress` is mid-pipeline.

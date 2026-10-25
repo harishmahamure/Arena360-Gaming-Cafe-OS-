@@ -27,6 +27,7 @@ mod scope;
 mod signin;
 mod signup;
 mod snapshot;
+mod tax;
 pub mod tier;
 mod ui_auth;
 mod wizard;
@@ -137,6 +138,10 @@ pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
     SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
     SnapshotLocale, SnapshotUi, SymbolPosition,
+};
+pub use tax::{
+    DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,
+    TaxSettings, gstin_valid,
 };
 pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use ui_auth::{

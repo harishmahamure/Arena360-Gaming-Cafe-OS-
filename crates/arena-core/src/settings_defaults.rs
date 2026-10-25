@@ -17,6 +17,7 @@ use arena_proto::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
 };
+use arena_proto::{DEFAULT_TAX, KEY_TAX, TaxSettings};
 
 /// The branch locale keys. They are authoritative for the locale; the `branch` row's columns
 /// only hold the bootstrap values.
@@ -86,6 +87,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_KITCHEN_KOT_MODE, DEFAULT_KITCHEN_KOT_MODE),
     (KEY_KITCHEN_KOT_PRINTER, DEFAULT_KITCHEN_KOT_PRINTER),
     (KEY_KITCHEN_KOT_PAPER_MM, DEFAULT_KITCHEN_KOT_PAPER_MM),
+    (KEY_TAX, DEFAULT_TAX),
 ];
 
 pub const SYSTEM_MANAGED_KEYS: [&str; 4] = [
@@ -95,10 +97,11 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 4] = [
     KEY_LICENCE_FLAGS,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 12] = [
+pub const KEYED_FIELD_KEYS: [&str; 13] = [
     KEY_KITCHEN_KOT_MODE,
     KEY_KITCHEN_KOT_PRINTER,
     KEY_KITCHEN_KOT_PAPER_MM,
+    KEY_TAX,
     KEY_OPENING_HOURS,
     KEY_OPENING_HOURS_SET,
     KEY_FULFILMENT,
@@ -150,6 +153,7 @@ pub enum SettingRule {
     AdsConsent,
     PrinterSelected,
     PrinterStatus,
+    Tax,
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -209,6 +213,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         KEY_KITCHEN_KOT_PAPER_MM,
         SettingRule::OneOf(PRINTER_PAPER_WIDTHS_MM),
     ),
+    (KEY_TAX, SettingRule::Tax),
 ];
 
 /// The rule for every key that starts with `display.hc.` and names `hub` or a device id
@@ -261,6 +266,7 @@ impl SettingRule {
             Self::AdsConsent => arena_proto::AdsConsent::parse(value).is_some(),
             Self::PrinterSelected => arena_proto::PrinterSelected::parse(value).is_ok(),
             Self::PrinterStatus => arena_proto::PrinterStatus::parse(value).is_some(),
+            Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
         }
     }
 
@@ -499,6 +505,7 @@ mod tests {
             ("printer.selected", ""),
             ("printer.paper_mm", "80"),
             ("printer.status", DEFAULT_PRINTER_STATUS),
+            ("branch.tax", DEFAULT_TAX),
         ] {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
         }

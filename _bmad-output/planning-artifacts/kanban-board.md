@@ -25,7 +25,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | CP | Control plane | 63 | 1 | 0 | 62 |
 | HUB-A | Hub floor and sessions | 80 | 1 | 0 | 79 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
-| HUB-B | Hub POS and money | 39 | 0 | 0 | 39 |
+| HUB-B | Hub POS and money | 39 | 1 | 0 | 38 |
 | OWNER | Owner app | 30 | 2 | 0 | 28 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
 | KITCHEN | Kitchen | 14 | 1 | 0 | 13 |
@@ -40,7 +40,7 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 
 - **CP** 2.11 Hub checks in by heartbeat and the wizard advances by itself (`2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself`)
 - **HUB-A** 2.21 Register consoles, VR rigs and simulators manually (`2-21-register-consoles-vr-rigs-and-simulators-manually`)
-- **HUB-B** 5.1 Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India (`5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a`)
+- **HUB-B** 5.2 Tax is computed once per rate on every bill, in minor units (`5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units`)
 - **OWNER** 8.12 On Free, the Owner app shows only Subscription, pairing and support (`8-12-on-free-the-owner-app-shows-only-subscription-pairing-and-su`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
@@ -263,7 +263,7 @@ Windows Hub: tax, products, stock, POS, shifts, receipts, printing, reports, CSV
 
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
-| 1 | 5.1 | Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India | MVP | backlog |  |
+| 1 | 5.1 | Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India | MVP | review |  |
 | 2 | 5.2 | Tax is computed once per rate on every bill, in minor units | MVP | backlog |  |
 | 3 | 5.3 | Products with categories, barcodes, images and the kitchen flag | MVP | backlog |  |
 | 4 | 5.4 | Bundles priced on their own | MVP | backlog |  |

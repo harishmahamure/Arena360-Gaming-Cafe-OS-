@@ -158,3 +158,10 @@
 - HC label assertions for variance flags, data-age warnings and command-row states: add when those Owner components land.
 - Owner HC focus-ring test relies on a Tab round trip and a literal colour; read the token instead.
 - No unit test for `packages/ui/src/theme.js`; no assertion that choosing HC makes no network call.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a.md`
+  summary: Story 5.2 must decide which rates an Indian branch without GST registration uses (`product_bp`/`play_bp` or the simple `rate_bp` and label); the Tax screen shows the GST pair for every Indian branch.
+  evidence: Review finding (Blind Hunter).
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a.md`
+  summary: When Story 2.13 lands, seed `branch.tax.country` from the cloud profile (bootstrap and `branch.seed_defaults`) instead of defaulting to `IN`, and show "Locked after the first invoice" beside the invoice prefix once `branch.code_locked_at` exists.
+  evidence: Spec decisions; the profile and the column do not exist yet.

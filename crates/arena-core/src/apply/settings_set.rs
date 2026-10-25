@@ -10,8 +10,8 @@
 
 use arena_proto::{
     AppError, ErrorCode, Intent, KEY_KITCHEN_KOT_PRINTER, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET,
-    KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PrinterSelected, PrinterStatus,
-    SettingsSet,
+    KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, KEY_TAX, PrinterSelected,
+    PrinterStatus, SettingsSet, TaxSettings,
 };
 use arena_store::{ChangeOp, RowKey, SettingRef, StoreTx, find_setting, update_setting};
 use chrono::NaiveDate;
@@ -91,6 +91,11 @@ pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), 
                 arena_proto::BackupDirProblem::NotFound.as_str(),
             ));
         }
+        SettingRule::Tax => {
+            let tax = TaxSettings::parse(&s.value)
+                .ok_or_else(|| invalid(field, "tax settings are malformed"))?;
+            return tax.check().map_err(|(f, m)| invalid(f, m));
+        }
         SettingRule::PrinterSelected => {
             return PrinterSelected::parse(&s.value)
                 .map(|_| ())
@@ -124,10 +129,14 @@ pub(super) fn mutate(
     let printer = (row.key == KEY_PRINTER_SELECTED || row.key == KEY_KITCHEN_KOT_PRINTER)
         .then(|| PrinterSelected::parse(&s.value).ok().flatten())
         .flatten();
-    let value = match (&opening_hours, &printer) {
-        (Some(week), _) => arena_proto::opening_hours_json(week),
-        (None, Some(p)) => p.to_json(),
-        (None, None) => s.value.clone(),
+    let tax = (row.key == KEY_TAX)
+        .then(|| TaxSettings::parse(&s.value))
+        .flatten();
+    let value = match (&opening_hours, &printer, &tax) {
+        (Some(week), _, _) => arena_proto::opening_hours_json(week),
+        (None, Some(p), _) => p.to_json(),
+        (None, None, Some(t)) => t.to_json(),
+        _ => s.value.clone(),
     };
     update_setting(
         tx,

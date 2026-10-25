@@ -12,6 +12,7 @@
     { href: "/settings/branch", label: "hub.settings.branch.nav.locale" },
     { href: "/settings/branch/hours", label: "hub.settings.branch.nav.hours" },
     { href: "/settings/branch/service", label: "hub.settings.branch.nav.service" },
+    { href: "/settings/branch/tax", label: "hub.settings.branch.nav.tax" },
     ...(showAds
       ? [{ href: "/settings/branch/ads", label: "hub.settings.branch.nav.ads" as MessageKey }]
       : []),

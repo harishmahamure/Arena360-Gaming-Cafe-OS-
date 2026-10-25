@@ -154,8 +154,8 @@ development_status:
   4-17-android-hub-proven-on-a-3-gb-device-with-20-kiosks-doze-and: backlog
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a: backlog
+  epic-5: in-progress
+  5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a: review
   5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units: backlog
   5-3-products-with-categories-barcodes-images-and-the-kitchen-fla: backlog
   5-4-bundles-priced-on-their-own: backlog

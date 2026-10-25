@@ -156,7 +156,7 @@ mod tests {
         assert!(paired("branch.fulfilment"));
         assert!(!paired("branch.opening_hours"));
         assert!(!paired("system.backup_dir"));
-        assert!(!paired("branch.ads_consent"));
+        assert!(!paired("branch.ads_consent") && !paired("branch.tax"));
         assert!(!paired("kiosk"));
         assert!(!paired("Kiosk.process_allow"));
         for class in [ClientClass::Kds, ClientClass::Phone] {

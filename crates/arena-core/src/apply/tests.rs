@@ -3574,7 +3574,7 @@ mod seed_defaults {
             .iter()
             .filter(|(k, _)| k.starts_with("branch."))
             .count();
-        assert_eq!(branch_defaults, 4);
+        assert_eq!(branch_defaults, 5);
         assert_eq!(
             applied.changes.len(),
             crate::LOCALE_KEYS.len() + branch_defaults + roles
@@ -5407,5 +5407,112 @@ mod kitchen {
                 Ok(())
             })
             .unwrap();
+    }
+}
+
+mod tax {
+    use super::*;
+    use arena_proto::{DEFAULT_TAX, TaxMode, TaxSettings};
+
+    const GSTIN: &str = "27AAPFU0939F1ZV";
+
+    fn value(f: &Fixture) -> String {
+        match setting(&reopen(f), "branch.tax")["value"].clone() {
+            RowValue::Text(t) => t,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    async fn save(f: &Fixture, edit: impl FnOnce(&mut TaxSettings)) -> Result<Applied, AppError> {
+        let rev = match setting(&reopen(f), "branch.tax")["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        };
+        let mut tax = TaxSettings::parse(DEFAULT_TAX).unwrap();
+        edit(&mut tax);
+        let mut intent = set("branch.tax", &tax.to_json(), Some(rev));
+        intent.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(intent).await
+    }
+
+    #[tokio::test]
+    async fn tax_defaults_are_seeded_and_gst_saves() {
+        let f = bootstrapped().await;
+        assert_eq!(value(&f), DEFAULT_TAX);
+        save(&f, |t| {
+            t.gst = true;
+            t.gstin = GSTIN.into();
+            t.inclusive = false;
+        })
+        .await
+        .unwrap();
+        let tax = TaxSettings::parse(&value(&f)).unwrap();
+        assert_eq!((tax.tax_mode(), tax.inclusive), (TaxMode::GstIn, false));
+    }
+
+    #[tokio::test]
+    async fn tax_is_stored_in_canonical_form() {
+        let f = bootstrapped().await;
+        let loose = DEFAULT_TAX.replace(',', " , ");
+        let mut intent = set("branch.tax", &loose, Some(1));
+        intent.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(intent).await.unwrap();
+        assert_eq!(value(&f), DEFAULT_TAX);
+    }
+
+    #[tokio::test]
+    async fn invalid_tax_names_the_field_and_writes_nothing() {
+        let f = bootstrapped().await;
+        let before = snapshot(&f);
+        for (field, edit) in [
+            (
+                "branch.tax.gstin",
+                (|t: &mut TaxSettings| t.gst = true) as fn(&mut TaxSettings),
+            ),
+            ("branch.tax.gstin", |t| {
+                t.gst = true;
+                t.gstin = "27AAPFU0939F1ZW".into();
+            }),
+            ("branch.tax.product_bp", |t| t.product_bp = 2801),
+            ("branch.tax.rate_bp", |t| {
+                t.country = "AE".into();
+                t.rate_bp = 10001;
+            }),
+            ("branch.tax.gst", |t| {
+                t.country = "AE".into();
+                t.gst = true;
+            }),
+        ] {
+            let e = save(&f, edit).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed);
+            assert_eq!(e.field.as_deref(), Some(field));
+            assert!(
+                e.message.contains("GSTIN_INVALID")
+                    || e.message.contains("RATE_RANGE")
+                    || field == "branch.tax.gst",
+                "{}",
+                e.message
+            );
+        }
+        for raw in [
+            r#"{"country":"IN"}"#,
+            "nope",
+            &DEFAULT_TAX.replace('}', r#","x":1}"#),
+        ] {
+            let mut intent = set("branch.tax", raw, Some(1));
+            intent.issued_at = f.clock.now_ms();
+            let e = f.writer.submit_intent(intent).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{raw}");
+        }
+        assert_eq!(snapshot(&f), before);
+    }
+
+    #[tokio::test]
+    async fn a_stale_tax_save_is_refused() {
+        let f = bootstrapped().await;
+        let mut intent = set("branch.tax", DEFAULT_TAX, Some(99));
+        intent.issued_at = f.clock.now_ms();
+        let e = f.writer.submit_intent(intent).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Stale);
     }
 }

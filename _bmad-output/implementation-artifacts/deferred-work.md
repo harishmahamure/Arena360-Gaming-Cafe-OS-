@@ -180,3 +180,8 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself.md`
   summary: Heartbeat test gaps: Hub end-to-end (`/healthz.tier` against a stub cloud), validation and per-Hub limit edges, SSE scoping to the branch, Playwright poll suppression while streaming, control migration 8 to 9 upgrade with existing hubs, `record_heartbeat` guards, and an intent submitted while an answer is being applied.
   evidence: Verification Gap findings.
+## Deferred from Story 8.12 review
+
+- `FEATURE_NOT_ENTITLED` for Free branches on owner read and command endpoints (AC 3): add the gate with each endpoint (8.13 and later), with a test per endpoint.
+- Pass the branch into `Section` children for paid branches when the real section content lands.
+- Empty branch list in `Section` renders unlocked content; decide a message when Branches (2.30) defines the empty tenant.

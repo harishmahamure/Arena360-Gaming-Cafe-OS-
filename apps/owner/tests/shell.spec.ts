@@ -98,9 +98,47 @@ test("on Free the four data sections show only the tier-lock, with no Upgrade li
   expect([...new Set(calls)].sort()).toEqual(["GET /v1/branches", "GET /v1/session"]);
 });
 
-test("with a paid branch the sections are not locked", async ({ page }) => {
-  await stubCloud(page);
+test("with only paid branches the sections are not locked", async ({ page }) => {
+  await stubCloud(page, [{ ...PAID[0] }]);
   await page.goto("/reports");
+  await expect(page.getByText(t("owner.section.soon"))).toBeVisible();
+  await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
+});
+
+test("a mixed tenant locks the Free branch and leaves the paid branch working", async ({
+  page,
+}) => {
+  const calls = await stubCloud(page);
+  for (const k of ["today", "reports", "alerts", "manage"] as const) {
+    await page.goto(k === "today" ? "/" : `/${k}`);
+    const paid = page.getByRole("listitem").filter({ hasText: PAID[0].name });
+    const free = page.getByRole("listitem").filter({ hasText: PAID[1].name });
+    await expect(paid.getByText(t("owner.section.soon"))).toBeVisible();
+    await expect(paid.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
+    await expect(free.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toBeVisible();
+    await expect(free.getByText(t("owner.section.soon"))).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /upgrade/i })).toHaveCount(0);
+  }
+  expect([...new Set(calls)].sort()).toEqual(["GET /v1/branches", "GET /v1/session"]);
+});
+
+test("on Free, pairing and Support stay usable", async ({ page }) => {
+  await stubCloud(page, FREE);
+  await page.goto("/account/branches");
+  await expect(page.getByText(FREE[0].name)).toBeVisible();
+  await page.goto("/account/support");
+  await expect(page.getByRole("link", { name: /@/ })).toBeVisible();
+});
+
+test("a Free branch that upgrades unlocks on the next open without signing out", async ({
+  page,
+}) => {
+  await stubCloud(page, FREE);
+  await page.goto("/reports");
+  await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toBeVisible();
+  await page.unroute("**/v1/**");
+  await stubCloud(page, [{ ...FREE[0], tier: "basic" }]);
+  await page.reload();
   await expect(page.getByText(t("owner.section.soon"))).toBeVisible();
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
 });

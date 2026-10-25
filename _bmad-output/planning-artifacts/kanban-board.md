@@ -26,7 +26,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | HUB-A | Hub floor and sessions | 80 | 1 | 0 | 79 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
 | HUB-B | Hub POS and money | 39 | 1 | 0 | 38 |
-| OWNER | Owner app | 30 | 2 | 0 | 28 |
+| OWNER | Owner app | 30 | 3 | 0 | 27 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
 | KITCHEN | Kitchen | 14 | 1 | 0 | 13 |
 | ANDROID | Android Hub | 21 | 0 | 0 | 21 |
@@ -41,7 +41,6 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 - **CP** 2.12 Hub verifies its licence against trusted time and enforces its limits (`2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i`)
 - **HUB-A** 2.21 Register consoles, VR rigs and simulators manually (`2-21-register-consoles-vr-rigs-and-simulators-manually`)
 - **HUB-B** 5.2 Tax is computed once per rate on every bill, in minor units (`5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units`)
-- **OWNER** 8.12 On Free, the Owner app shows only Subscription, pairing and support (`8-12-on-free-the-owner-app-shows-only-subscription-pairing-and-su`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
 
@@ -311,7 +310,7 @@ Owner PWA: shell, dashboards, reports, commands, alerts, audit, live view, subsc
 |---:|---|---|---|---|---|
 | 1 | 8.10 | The Owner app shell — navigation, themes, install and Free limits | MVP | review | ~~2.6~~ |
 | 2 | 8.11 | The Owner app offers a high-contrast theme | MVP | review |  |
-| 3 | 8.12 | On Free, the Owner app shows only Subscription, pairing and support | MVP | backlog |  |
+| 3 | 8.12 | On Free, the Owner app shows only Subscription, pairing and support | MVP | review |  |
 | 4 | 8.14 | The Owner app stays in setup mode until a branch goes live, then opens its dashboard | MVP | backlog | 2.31 |
 | 5 | 8.13 | Today shows every branch with its figures, cash variance and data age | MVP | backlog | 8.9 |
 | 6 | 8.15 | Reports — revenue and cash reconciliation | MVP | backlog | 8.9 |

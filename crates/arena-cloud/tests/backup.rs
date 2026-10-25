@@ -56,6 +56,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
         ("owner_mfa", 0),
         ("owner_sessions", 0),
         ("owners", 0),
+        ("pairing_codes", 0),
         ("rate_limits", 0),
         (
             "schema_migrations",
@@ -732,6 +733,7 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "owner_mfa",
             "owner_sessions",
             "owners",
+            "pairing_codes",
             "rate_limits",
             "schema_migrations",
             "signin_challenges",

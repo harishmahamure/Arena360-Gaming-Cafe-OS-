@@ -8,4 +8,8 @@ export const variables = defineEnvVars({
     public: true,
     schema: (value) => value ?? "",
   },
+  PUBLIC_HUB_DOWNLOAD_URL: {
+    public: true,
+    schema: (value) => value || "/download/hub",
+  },
 });

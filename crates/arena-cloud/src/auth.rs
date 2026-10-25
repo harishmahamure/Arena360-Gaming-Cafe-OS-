@@ -20,6 +20,7 @@ type HmacSha256 = Hmac<Sha256>;
 const OTP_LABEL: &[u8] = b"otp\0";
 /// The HMAC input label of a phone tag.
 const TAG_LABEL: &[u8] = b"tag\0";
+const PAIR_LABEL: &[u8] = b"pair\0";
 
 /// What the sign-up and session routes share.
 pub struct AuthState {
@@ -79,6 +80,12 @@ impl AuthState {
         mac
     }
 
+    pub fn pairing_code_hash(&self, code: &str) -> String {
+        let mut mac = self.mac(PAIR_LABEL);
+        mac.update(arena_proto::normalize_pairing_code(code).as_bytes());
+        hex(&mac.finalize().into_bytes())
+    }
+
     /// Whether `code` matches `stored_hash` (hex) for `challenge_id`, in constant time.
     pub fn code_matches(&self, challenge_id: &str, code: &str, stored_hash: &str) -> bool {
         let Some(expected) = unhex(stored_hash) else {
@@ -130,7 +137,7 @@ pub fn token_hash(token: &str) -> String {
 }
 
 /// `n` bytes from the OS CSPRNG.
-fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
     let mut b = [0u8; N];
     getrandom::fill(&mut b).map_err(|e| format!("os rng: {e}"))?;
     Ok(b)

@@ -11,6 +11,8 @@ import type {
   CafeDetails,
   Country,
   ErrorCode,
+  InstallHubState,
+  PairingCodeIssued,
   SessionInfo,
   SignupChallenge,
   SignupStart,
@@ -61,6 +63,7 @@ const CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "BRANCH_CODE_TAKEN",
   "BILLING_DISABLED",
   "ONE_FREE_BRANCH",
+  "STEP_NOT_READY",
 ]);
 
 function isAppError(v: unknown): v is AppError {
@@ -214,3 +217,7 @@ export const chooseTier = (tier: Tier, branchId?: string) =>
   withRefresh(() =>
     call<WizardState>("PUT", "/wizard/tier", branchId ? { tier, branch_id: branchId } : { tier }),
   );
+export const getInstallHub = () =>
+  withRefresh(() => call<InstallHubState>("GET", "/wizard/install-hub"));
+export const issuePairingCode = () =>
+  withRefresh(() => call<PairingCodeIssued>("POST", "/wizard/install-hub/code", {}));

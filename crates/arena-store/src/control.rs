@@ -21,6 +21,7 @@ mod entitlement;
 mod mfa;
 mod otp;
 mod owner;
+mod pairing;
 mod rate_limit;
 mod session;
 mod signin;
@@ -34,6 +35,9 @@ pub use otp::{
     SignupOutcome,
 };
 pub use owner::{NewOwner, Owner};
+pub use pairing::{
+    IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
+};
 pub use rate_limit::{RateReservation, RateRule, RateWindow};
 pub use session::{
     NewOwnerSession, OwnerSession, REFRESH_RACE_MS, RefreshOutcome, SessionWithOwner,
@@ -85,6 +89,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 6,
         sql: include_str!("../control-migrations/0006_entitlements.sql"),
+    },
+    ControlMigration {
+        version: 7,
+        sql: include_str!("../control-migrations/0007_pairing_codes.sql"),
     },
 ];
 

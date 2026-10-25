@@ -25,6 +25,7 @@ pub mod health;
 pub mod licence;
 pub mod messaging;
 pub mod ops;
+pub mod pairing_code;
 pub mod passwords;
 pub mod store;
 pub mod totp;

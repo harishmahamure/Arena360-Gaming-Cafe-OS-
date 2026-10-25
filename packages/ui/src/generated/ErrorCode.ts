@@ -40,4 +40,5 @@ export type ErrorCode =
   | "NO_HUB"
   | "HUB_INCOMPATIBLE"
   | "BILLING_DISABLED"
-  | "ONE_FREE_BRANCH";
+  | "ONE_FREE_BRANCH"
+  | "STEP_NOT_READY";

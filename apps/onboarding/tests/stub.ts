@@ -134,7 +134,11 @@ export type WizardStart = {
   branch?: Partial<WizardBranch>;
   tier?: Tier;
   otherFree?: boolean;
+  hubPaired?: boolean;
 };
+
+export const PAIR_CODES = ["7K2M9PQR", "HX4TW8NB", "3FJD6YZC", "QW5RS2KV"];
+export const PAIR_TTL_MS = 15 * 60 * 1000;
 
 export const TIER_LIMITS: Record<Tier, { devices: number; users: number; branches: number }> = {
   free: { devices: 20, users: 3, branches: 1 },
@@ -201,6 +205,10 @@ export type Cloud = {
   otherFree: boolean;
   tierPicks: Tier[];
   tierBodies: unknown[];
+  hubPaired: boolean;
+  pairGets: number;
+  pairCodes: { code: string; expires_at: number }[];
+  clockMs: number | null;
 };
 
 async function fulfil(route: Route, r: Reply) {
@@ -273,6 +281,10 @@ export async function stubCloud(
     otherFree: start.wizard?.otherFree ?? false,
     tierPicks: [],
     tierBodies: [],
+    hubPaired: start.wizard?.hubPaired ?? false,
+    pairGets: 0,
+    pairCodes: [],
+    clockMs: null,
   };
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -484,6 +496,34 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
       cloud.tier = "free";
       cloud.done.add("tier");
       return { status: 200, body: wizardBody(cloud) };
+    }
+  }
+  if (path === "/v1/wizard/install-hub" || path === "/v1/wizard/install-hub/code") {
+    if (!cloud.branch) return { status: 403, body: err("FORBIDDEN") };
+    if (!cloud.done.has("cafe") || !cloud.done.has("tier")) {
+      return { status: 409, body: err("STEP_NOT_READY") };
+    }
+    const now = cloud.clockMs ?? Date.now();
+    if (path === "/v1/wizard/install-hub" && method === "GET") {
+      cloud.pairGets += 1;
+      const live = cloud.pairCodes.at(-1);
+      return {
+        status: 200,
+        body: {
+          active: live && live.expires_at > now ? { expires_at: live.expires_at } : null,
+          hub_paired: cloud.hubPaired,
+          server_now: now,
+        },
+      };
+    }
+    if (path === "/v1/wizard/install-hub/code" && method === "POST") {
+      const issued = {
+        code: PAIR_CODES[cloud.pairCodes.length % PAIR_CODES.length],
+        expires_at: now + PAIR_TTL_MS,
+        server_now: now,
+      };
+      cloud.pairCodes.push(issued);
+      return { status: 200, body: issued };
     }
   }
   const m = /^\/v1\/branches\/([^/]+)\/code$/.exec(path);

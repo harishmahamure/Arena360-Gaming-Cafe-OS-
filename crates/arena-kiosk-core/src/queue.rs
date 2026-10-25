@@ -55,7 +55,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::BranchCodeTaken
         | ErrorCode::HubIncompatible
         | ErrorCode::BillingDisabled
-        | ErrorCode::OneFreeBranch => true,
+        | ErrorCode::OneFreeBranch
+        | ErrorCode::StepNotReady => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary
@@ -97,6 +98,11 @@ pub fn is_expired(issued_at_ms: i64, now_ms: i64) -> bool {
 mod tests {
     use super::*;
     use arena_proto::{AppError, AppliedSummary};
+
+    #[test]
+    fn a_step_not_ready_refusal_is_deterministic() {
+        assert!(is_deterministic(ErrorCode::StepNotReady));
+    }
 
     #[test]
     fn applied_and_deterministic_refusals_delete_transient_ones_stop() {

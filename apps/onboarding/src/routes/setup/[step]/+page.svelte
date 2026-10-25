@@ -3,6 +3,7 @@
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import CafeStep from "../../../lib/CafeStep.svelte";
+  import InstallHubStep from "../../../lib/InstallHubStep.svelte";
   import TierStep from "../../../lib/TierStep.svelte";
   import { STEP_NAMES, isStep, stepIndex, stepPath, wizard } from "../../../lib/wizard.svelte";
 
@@ -24,6 +25,8 @@
   <CafeStep />
 {:else if open === "tier"}
   <TierStep />
+{:else if open === "install_hub"}
+  <InstallHubStep />
 {:else if open}
   <h1 tabindex="-1">{t(STEP_NAMES[open])}</h1>
   <p class="soon">{t("onboarding.setup.coming_soon")}</p>

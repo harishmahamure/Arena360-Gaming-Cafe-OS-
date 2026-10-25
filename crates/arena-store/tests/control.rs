@@ -25,6 +25,7 @@ const ALL_TABLES: &[&str] = &[
     "owner_mfa",
     "owner_sessions",
     "owners",
+    "pairing_codes",
     "rate_limits",
     "schema_migrations",
     "signin_challenges",

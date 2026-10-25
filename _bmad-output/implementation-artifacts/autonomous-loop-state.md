@@ -41,6 +41,10 @@ Read this file after a context flush (`/clear`). It's the single entry point for
   - Every verification run in a worktree sets a unique `ARENA_PW_PORT` (for example 54xx for Hub, 55xx for kiosk, 56xx for onboarding).
   - **Why:** parallel worktrees shared the fixed ports. One preview on `[::1]` and another on `127.0.0.1` both started, and `localhost` hit the wrong build, causing false failures.
 
+- **(2026-10-25) STOP requested by the user:** "stop after current execution gets done".
+  - Finish only what's in flight (2.9 verify and land, 2.18 rebase/verify/land, 2.10 implementation committed as WIP on `story-2-10` without review).
+  - Then start nothing new. Resume only when the user asks.
+
 ## Where things stand
 
 - **Story order and status:** `_bmad-output/implementation-artifacts/sprint-status.yaml`. A story at `review` is committed; `in-progress` is mid-pipeline.

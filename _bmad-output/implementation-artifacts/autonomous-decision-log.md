@@ -683,3 +683,34 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Verification:**
   - Before landing: full run green except one Hub Playwright load flake (`operating.spec:311`, 8/8 on rerun).
   - Post-rebase onto 2.8 (conflicts in Cargo/README/health/tasks): clippy, the arena-tasks/core/api/hub tests, checks, and the printer/operating/devices specs all pass. Added `lan: null` to `printer.spec`'s stub for the 2.17 snapshot field.
+
+## Story 2.10: Hub installer pairs with the code (control track A)
+
+- **Spec approval:** self-approved. Control migration 0008 (`hubs`); a Hub migration at the next free number (`hub_identity`, `licence_cache`).
+- **Entitlement check before consuming:** Windows on Free is refused with `FEATURE_NOT_ENTITLED` and the code is left valid.
+- **Rate limits:** per code, 5 failures invalidate it; per IP, 20/h via `rate_reserve`, trusting `CF-Connecting-IP` only from Cloudflare ranges. The Cloudflare rule is committed as config.
+- **Hub side:** `/ui/pair-hub` (no staff session, only while unpaired); every other `/ui/*` answers `HUB_NOT_PAIRED` until paired; the token goes in DPAPI/keystore. Dev seed writes a dev identity so Epic 1 flows stay paired.
+- **New codes:** `PAIR_CODE_EXPIRED`, `FEATURE_NOT_ENTITLED`, `CLOUD_UNREACHABLE`, `HUB_NOT_PAIRED`.
+- Started on 2.9's WIP (overlap).
+- **2.9 implementation choices, accepted:**
+  - the step is rendered through the shared step route (`lib/InstallHubStep.svelte`);
+  - optional `branch_id` ownership check;
+  - redeem returns the tier at issue;
+  - POST needs `{}`;
+  - StatusBadge gets a surface background in light.
+- **2.9 review outcome (Sonnet ×3):** 15 fixes and 9 rejections.
+  - **Fixes:**
+    - per-branch issue limit;
+    - partial unique index and purge;
+    - tier read in the txn;
+    - rollback test;
+    - no-store;
+    - `server_now` skew offset, visibility refresh and focus at expiry;
+    - shape check before HMAC;
+    - redeem logs;
+    - scoped log test;
+    - lost-regenerate reload;
+    - paired-state and status-mapping tests;
+    - README.
+  - Redeem throttling is routed to 2.10, whose spec has the per-code and per-IP limits.
+- **2.9 verification:** green except the known intermittent `arena-api` lan "PIN is never logged" test, which passes on rerun.

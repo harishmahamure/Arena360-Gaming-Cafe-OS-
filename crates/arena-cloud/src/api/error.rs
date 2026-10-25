@@ -43,7 +43,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::AlreadySet
         | ErrorCode::BranchCodeTaken
         | ErrorCode::BillingDisabled
-        | ErrorCode::OneFreeBranch => StatusCode::CONFLICT,
+        | ErrorCode::OneFreeBranch
+        | ErrorCode::StepNotReady => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }
@@ -264,6 +265,7 @@ mod tests {
             (ErrorCode::BranchCodeTaken, 409),
             (ErrorCode::BillingDisabled, 409),
             (ErrorCode::OneFreeBranch, 409),
+            (ErrorCode::StepNotReady, 409),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

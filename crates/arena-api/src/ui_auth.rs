@@ -765,7 +765,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::AlreadySet
         | ErrorCode::BranchCodeTaken
         | ErrorCode::BillingDisabled
-        | ErrorCode::OneFreeBranch => StatusCode::CONFLICT,
+        | ErrorCode::OneFreeBranch
+        | ErrorCode::StepNotReady => StatusCode::CONFLICT,
         ErrorCode::PasswordRequired | ErrorCode::SetupIncomplete => StatusCode::FORBIDDEN,
         ErrorCode::PermissionDenied
         | ErrorCode::Forbidden
@@ -1759,6 +1760,11 @@ pub(crate) mod tests {
     use axum::http::Request;
     use serde_json::{Value, json};
     use tower::ServiceExt;
+
+    #[test]
+    fn step_not_ready_is_a_conflict() {
+        assert_eq!(status_of(ErrorCode::StepNotReady), StatusCode::CONFLICT);
+    }
 
     const T0: i64 = 1_800_000_000_000;
 

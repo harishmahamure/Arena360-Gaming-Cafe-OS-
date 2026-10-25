@@ -212,11 +212,34 @@ const VIEWS: {
     cloud: {
       signedIn: true,
       owner: READY_OWNER,
-      wizard: { branch: {}, done: ["cafe", "tier"] },
+      wizard: { branch: {}, done: ["cafe", "tier", "install_hub"] },
     },
     open: async (page) => {
       await page.goto("/setup");
-      await expect(h1(page, "ui.wizard.step.install_hub")).toBeVisible();
+      await expect(h1(page, "ui.wizard.step.devices")).toBeVisible();
+    },
+  },
+  {
+    name: "setup, install the Hub with a live code",
+    cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {}, done: ["cafe", "tier"] } },
+    open: async (page) => {
+      await page.goto("/setup/install_hub");
+      await expect(page.getByTestId("pairing-code-value")).toBeVisible();
+      await page.getByRole("button", { name: t("ui.pairing_code.copy"), exact: true }).click();
+      await expect(page.getByTestId("pairing-code-status")).not.toBeEmpty();
+    },
+  },
+  {
+    name: "setup, install the Hub with an expired code",
+    cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {}, done: ["cafe", "tier"] } },
+    open: async (page, cloud) => {
+      const start = Date.UTC(2026, 9, 25, 9, 0);
+      cloud.clockMs = start;
+      await page.clock.install({ time: start });
+      await page.goto("/setup/install_hub");
+      await expect(page.getByTestId("pairing-code-value")).toBeVisible();
+      await page.clock.runFor(15 * 60 * 1000);
+      await expect(page.getByTestId("pairing-code-expired")).toBeVisible();
     },
   },
   {

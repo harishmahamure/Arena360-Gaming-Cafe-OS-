@@ -26,7 +26,7 @@ fn cafe_first() -> ApiError {
     ApiError::forbidden("Save your café details first.")
 }
 
-async fn target_branch(
+pub(super) async fn target_branch(
     st: &AuthState,
     owner_id: &str,
     branch_id: Option<&str>,

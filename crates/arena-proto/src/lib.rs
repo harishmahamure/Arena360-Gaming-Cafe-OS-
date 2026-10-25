@@ -17,6 +17,7 @@ mod intent;
 mod kiosk;
 pub mod licence;
 mod operating;
+pub mod pairing;
 mod permission;
 mod printer;
 mod process;
@@ -79,6 +80,11 @@ pub use operating::{
     KEY_OPENING_HOURS_SET, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, LAST_MINUTE, OpeningDay,
     OpeningHoursError, SetupStatus, has_open_day, is_absolute_path, opening_hours_json,
     parse_opening_hours,
+};
+pub use pairing::{
+    ActivePairingCode, InstallHubState, IssuePairingCode, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN,
+    PAIRING_CODE_TTL_MS, PairingCodeIssued, format_pairing_code, normalize_pairing_code,
+    valid_pairing_code,
 };
 pub use permission::{Permission, Requirement};
 pub use printer::{

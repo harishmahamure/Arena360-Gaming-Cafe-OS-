@@ -230,6 +230,8 @@ it in the Deployment if launch traffic needs more.
   at `start.arena360.cloud` (staging `start.staging.arena360.cloud`). Its `PUBLIC_API_BASE` is
   the API origin of the same environment (`https://api.arena360.cloud`,
   `https://api.staging.arena360.cloud`); session cookies are host-only on the API host.
+  `PUBLIC_HUB_DOWNLOAD_URL` is the Windows Hub installer link on wizard step 3 (default
+  `/download/hub`).
 - **Per-IP limits (Cloudflare).** The cloud limits sends per phone (5 per hour); per-IP limits
   are Cloudflare rate-limiting rules on the `arena360.cloud` zone (Security → WAF → Rate
   limiting rules), one per host, counting by IP, action **Block** with a 429 for the period:

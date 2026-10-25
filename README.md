@@ -1438,6 +1438,48 @@ rollup_schema, retention_days, limits, iat, exp}` from the tier table and the en
 until, updated_at)` and `ops_audit(id, at, operator, action, target, reason,
 details_json)`.
 
+- **Hub pairing code** (Story 2.9). Wizard step 3 (`/setup/install_hub`) has three parts:
+  "1 · Download" (Hub for Windows 10 or 11, linked from `PUBLIC_HUB_DOWNLOAD_URL`, default
+  `/download/hub`, plus "Installing on an Android tablet or phone instead?" to
+  `/help/android-hub`), "2 · Install" and "3 · Type the code", which shows the shared
+  `PairingCode` card from `@arena/ui`: the code grouped 4 + 4 in `web-display` tabular
+  figures, "Single use", "Expires in mm:ss", "Copy code" (on a clipboard failure the code is
+  selected with "Press Ctrl+C to copy") and "Generate a new code". The countdown is announced
+  politely only at 10, 5 and 1 minutes left and at expiry; at zero the code is struck through
+  with an "Expired" badge and "Generate a new code" is the one primary action. No QR code.
+  - Codes are 8 characters from `23456789ABCDEFGHJKMNPQRSTVWXYZ` (no 0, O, 1, I, L or U),
+    drawn uniformly from the OS CSPRNG by rejection sampling. They encode nothing and live 15
+    minutes. Only `HMAC-SHA256(ARENA_OTP_PEPPER, "pair\0" ‖ normalised code)` is stored
+    (normalised: every Unicode whitespace character, `-` and `_` removed, then uppercased); the
+    plain code is never stored or logged. Redeem refuses a normalised code that isn't exactly 8
+    alphabet characters as `RedeemInvalid` before hashing it.
+  - `POST /v1/wizard/install-hub/code {branch_id?}` → `{code, expires_at, server_now}` (the
+    only place the code appears), sent with `Cache-Control: no-store`. In one transaction it
+    deletes codes that expired more than 24 h ago, invalidates every code of the branch that is
+    neither used nor invalidated (an expired code not yet marked included) and inserts the new
+    one with the branch's tier read from `entitlements`; a partial unique index on `branch_id`
+    (unused and not invalidated) keeps a branch from ever holding two live codes. Opening or
+    reloading the step issues a new code. Issuing is limited to 30 codes per branch per hour
+    (`rate_limits` key `pairissue:{branch_id}`); past that it is 429 `RATE_LIMITED` with
+    `Retry-After`, nothing is written and the live code stays valid. The page then shows "Too
+    many new codes. Try again in m:ss."
+  - `GET /v1/wizard/install-hub[?branch_id=]` → `{active: {expires_at} | null, hub_paired,
+server_now}`; it never returns the code. `server_now` (Unix ms) lets the page count down
+    against the server clock: the card offsets the client clock by the skew and refreshes on
+    focus and visibility changes. `hub_paired` stays false until Story 2.10, and step 3 completes
+    only when a Hub pairs (Stories 2.10 and 2.11).
+  - Both need a finished account setup and an owned branch (else 403 `FORBIDDEN`) with steps
+    `cafe` and `tier` done (else 409 `STEP_NOT_READY`).
+  - For Story 2.10: `arena_cloud::pairing_code::redeem_pairing_code(state, code)` (over
+    `ControlDb::redeem_pairing_code`) marks `used_at` in one transaction only if the code is
+    unused, not invalidated and unexpired, and answers `{branch_id, tenant_id, tier}` (the tier
+    at issue), or `RedeemInvalid`. Of two concurrent redeems exactly one wins. Both outcomes
+    are logged with the branch id or the reason, never the code.
+  - Table (migration 0007): `pairing_codes(id, branch_id, code_hash UNIQUE, tier_at_issue,
+created_at, expires_at, used_at, invalidated_at)`, indexed on `branch_id`, plus the partial
+    unique index `pairing_codes_live` on `branch_id` where `used_at` and `invalidated_at` are
+    null.
+
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test
   fixtures). `pnpm check:deploy` renders both overlays with `kubectl kustomize` and checks the

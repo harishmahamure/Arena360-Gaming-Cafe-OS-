@@ -152,3 +152,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-7-1-kitchen-settings-at-the-hub-locked-on-free.md`
   summary: Counter and Kitchen roles keep editable fields with a PIN on Save (screen-lock precedent), not read-only. Revisit if the UX review insists.
   evidence: Story 7.1 AC says read-only fields; spec and decision log choose the precedent.
+
+## Deferred from Story 8.11 review
+
+- HC label assertions for variance flags, data-age warnings and command-row states: add when those Owner components land.
+- Owner HC focus-ring test relies on a Tab round trip and a literal colour; read the token instead.
+- No unit test for `packages/ui/src/theme.js`; no assertion that choosing HC makes no network call.

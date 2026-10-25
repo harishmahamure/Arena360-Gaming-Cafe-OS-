@@ -45,3 +45,12 @@ test("the stored theme is set before the app starts", async ({ page }) => {
   await page.goto("/");
   await expect(html(page)).toHaveAttribute("data-theme", "dark");
 });
+
+test("High contrast is set before the app starts and wins over the OS", async ({ page }) => {
+  await stubCloud(page);
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.addInitScript(() => localStorage.setItem("arena.theme", "hc"));
+  await page.goto("/sign-in");
+  await expect(html(page)).toHaveAttribute("data-theme", "hc");
+  await expect(tab(page, "ui.theme.hc")).toHaveAttribute("aria-selected", "true");
+});

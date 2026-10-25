@@ -603,6 +603,7 @@
   "ui.theme.system": "System",
   "ui.theme.light": "Light",
   "ui.theme.dark": "Dark",
+  "ui.theme.hc": "High contrast",
   "ui.code.label": "Code",
   "ui.code.count": "{count} of {length} digits",
 

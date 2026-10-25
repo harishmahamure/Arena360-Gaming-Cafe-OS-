@@ -14,7 +14,7 @@ const ROUTES = [
 ];
 const INTERACTIVE = 'button, a, input, [role="tab"]';
 
-for (const theme of ["light", "dark"] as const) {
+for (const theme of ["light", "dark", "hc"] as const) {
   for (const [name, branches] of [
     ["paid", PAID],
     ["free", FREE],

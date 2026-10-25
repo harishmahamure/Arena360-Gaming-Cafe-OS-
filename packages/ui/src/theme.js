@@ -1,14 +1,14 @@
-// The web surfaces' theme choice (System · Light · Dark), remembered per device. The onboarding
+// The web surfaces' theme choice (System · Light · Dark · High contrast), remembered per device. The onboarding
 // app's `app.html` repeats `THEME_KEY` and `resolveTheme` in a small inline script, so the
 // stored theme is set on `<html>` before first paint.
 
 /** The `localStorage` key holding the choice. */
 export const THEME_KEY = "arena.theme";
 
-/** @typedef {"system" | "light" | "dark"} ThemeChoice */
+/** @typedef {"system" | "light" | "dark" | "hc"} ThemeChoice */
 
 /** @type {ThemeChoice[]} */
-export const THEME_CHOICES = ["system", "light", "dark"];
+export const THEME_CHOICES = ["system", "light", "dark", "hc"];
 
 /**
  * The stored choice, or `system` when nothing (or something unreadable) is stored.
@@ -17,7 +17,7 @@ export const THEME_CHOICES = ["system", "light", "dark"];
 export function readThemeChoice() {
   try {
     const v = globalThis.localStorage?.getItem(THEME_KEY);
-    return v === "light" || v === "dark" ? v : "system";
+    return v === "light" || v === "dark" || v === "hc" ? v : "system";
   } catch {
     return "system";
   }
@@ -39,9 +39,9 @@ export function storeThemeChoice(choice) {
  * The theme a choice paints: `system` follows `prefers-color-scheme`.
  * @param {ThemeChoice} choice
  * @param {boolean} prefersDark
- * @returns {"light" | "dark"}
+ * @returns {"light" | "dark" | "hc"}
  */
 export function resolveTheme(choice, prefersDark) {
-  if (choice === "light" || choice === "dark") return choice;
+  if (choice === "light" || choice === "dark" || choice === "hc") return choice;
   return prefersDark ? "dark" : "light";
 }

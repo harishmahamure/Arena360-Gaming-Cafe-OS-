@@ -4,7 +4,7 @@
   import { readThemeChoice, resolveTheme, storeThemeChoice, type ThemeChoice } from "../theme.js";
 
   /**
-   * System · Light · Dark for the web surfaces (never the branch apps). System is the default
+   * System · Light · Dark · High contrast for the web surfaces (never the branch apps). System is the default
    * and follows `prefers-color-scheme` live. The choice is remembered per device and sets
    * `data-theme` on `<html>`.
    */
@@ -15,6 +15,7 @@
     { id: "system", label: "ui.theme.system" as const },
     { id: "light", label: "ui.theme.light" as const },
     { id: "dark", label: "ui.theme.dark" as const },
+    { id: "hc", label: "ui.theme.hc" as const },
   ];
 
   function apply() {
@@ -22,7 +23,7 @@
   }
 
   function onchange(id: string) {
-    choice = id === "light" || id === "dark" ? id : "system";
+    choice = id === "light" || id === "dark" || id === "hc" ? id : "system";
     storeThemeChoice(choice);
     apply();
   }

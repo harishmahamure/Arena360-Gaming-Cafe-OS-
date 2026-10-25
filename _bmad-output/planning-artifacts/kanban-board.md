@@ -26,9 +26,9 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | HUB-A | Hub floor and sessions | 80 | 1 | 0 | 79 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
 | HUB-B | Hub POS and money | 39 | 0 | 0 | 39 |
-| OWNER | Owner app | 30 | 1 | 0 | 29 |
+| OWNER | Owner app | 30 | 2 | 0 | 28 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
-| KITCHEN | Kitchen | 14 | 0 | 0 | 14 |
+| KITCHEN | Kitchen | 14 | 1 | 0 | 13 |
 | ANDROID | Android Hub | 21 | 0 | 0 | 21 |
 | WEB | Marketing, admin and partner | 22 | 0 | 0 | 22 |
 | PI | Console TVs | 17 | 0 | 0 | 17 |
@@ -41,8 +41,7 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 - **CP** 2.11 Hub checks in by heartbeat and the wizard advances by itself (`2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself`)
 - **HUB-A** 2.21 Register consoles, VR rigs and simulators manually (`2-21-register-consoles-vr-rigs-and-simulators-manually`)
 - **HUB-B** 5.1 Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India (`5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a`)
-- **OWNER** 8.11 The Owner app offers a high-contrast theme (`8-11-the-owner-app-offers-a-high-contrast-theme`)
-- **KITCHEN** 7.1 Kitchen settings at the Hub, locked on Free (`7-1-kitchen-settings-at-the-hub-locked-on-free`)
+- **OWNER** 8.12 On Free, the Owner app shows only Subscription, pairing and support (`8-12-on-free-the-owner-app-shows-only-subscription-pairing-and-su`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
 
@@ -311,7 +310,7 @@ Owner PWA: shell, dashboards, reports, commands, alerts, audit, live view, subsc
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
 | 1 | 8.10 | The Owner app shell — navigation, themes, install and Free limits | MVP | review | ~~2.6~~ |
-| 2 | 8.11 | The Owner app offers a high-contrast theme | MVP | backlog |  |
+| 2 | 8.11 | The Owner app offers a high-contrast theme | MVP | review |  |
 | 3 | 8.12 | On Free, the Owner app shows only Subscription, pairing and support | MVP | backlog |  |
 | 4 | 8.14 | The Owner app stays in setup mode until a branch goes live, then opens its dashboard | MVP | backlog | 2.31 |
 | 5 | 8.13 | Today shows every branch with its figures, cash variance and data age | MVP | backlog | 8.9 |
@@ -409,7 +408,7 @@ Hub kitchen tickets, KOT printing and the kitchen display app.
 
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
-| 1 | 7.1 | Kitchen settings at the Hub, locked on Free | MVP | backlog | ~~2.26~~ |
+| 1 | 7.1 | Kitchen settings at the Hub, locked on Free | MVP | review | ~~2.26~~ |
 | 2 | 7.2 | Kitchen notes on order lines from the POS and the kiosk cart | MVP | backlog | 5.12, 6.31 |
 | 3 | 7.3 | Every order with kitchen items opens a kitchen ticket that the Hub can move | MVP | backlog | 7.2, 5.3 |
 | 4 | 7.4 | The floor tile shows READY and the Hub chimes when food is ready | MVP | backlog | 7.3, 3.25 |

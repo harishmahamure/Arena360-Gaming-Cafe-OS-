@@ -1,63 +1,63 @@
 generated: 10-23-2026 14:00
-last_updated: 10-24-2026 16:37
+last_updated: 10-26-2026 01:21
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 development_status:
   epic-1: in-progress
-  1-1-monorepo-workspace-with-pinned-toolchains-and-ci-gates: review
-  1-2-app-skeletons-for-every-surface-build-in-ci: review
-  1-3-generated-protocol-types-and-the-message-catalogue-lint: review
-  1-4-design-tokens-generated-from-design-md-with-a-contrast-gate: review
-  1-5-shared-base-components-meet-the-accessibility-floor: review
-  1-6-hub-service-starts-as-the-single-writer-of-its-branch-databa: review
-  1-7-every-change-goes-through-apply-into-a-gap-free-change-log-s: review
-  1-8-idempotent-intents-optimistic-row-versions-and-property-test: review
-  1-9-lan-protocol-envelope-hello-handshake-and-client-classes: review
-  1-10-hub-app-shell-with-left-rail-header-and-floor-placeholder-on: review
-  1-11-staff-sign-in-to-the-hub-with-roles-and-permissions: review
-  1-12-branch-locale-settings-currency-number-format-and-timezone: review
-  1-13-inline-manager-pin-elevation: review
-  1-14-hub-idle-lock-with-pin-unlock-in-place: review
-  1-15-audit-log-viewer-on-the-hub: review
-  1-16-kiosk-privilege-split-locked-service-and-unprivileged-ui: review
-  1-17-kiosk-shell-replacement-and-windows-lockdown: review
-  1-18-kiosk-process-allow-block-list: review
-  1-19-automated-30-minute-kiosk-escape-suite-on-windows-10-and-11: in-progress
-  1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r: review
-  1-21-high-contrast-theme-as-a-per-device-branch-setting: review
-  1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of: review
+  1-1-monorepo-workspace-with-pinned-toolchains-and-ci-gates: done
+  1-2-app-skeletons-for-every-surface-build-in-ci: done
+  1-3-generated-protocol-types-and-the-message-catalogue-lint: done
+  1-4-design-tokens-generated-from-design-md-with-a-contrast-gate: done
+  1-5-shared-base-components-meet-the-accessibility-floor: done
+  1-6-hub-service-starts-as-the-single-writer-of-its-branch-databa: done
+  1-7-every-change-goes-through-apply-into-a-gap-free-change-log-s: done
+  1-8-idempotent-intents-optimistic-row-versions-and-property-test: done
+  1-9-lan-protocol-envelope-hello-handshake-and-client-classes: done
+  1-10-hub-app-shell-with-left-rail-header-and-floor-placeholder-on: done
+  1-11-staff-sign-in-to-the-hub-with-roles-and-permissions: done
+  1-12-branch-locale-settings-currency-number-format-and-timezone: done
+  1-13-inline-manager-pin-elevation: done
+  1-14-hub-idle-lock-with-pin-unlock-in-place: done
+  1-15-audit-log-viewer-on-the-hub: done
+  1-16-kiosk-privilege-split-locked-service-and-unprivileged-ui: done
+  1-17-kiosk-shell-replacement-and-windows-lockdown: done
+  1-18-kiosk-process-allow-block-list: done
+  1-19-automated-30-minute-kiosk-escape-suite-on-windows-10-and-11: blocked
+  1-20-kiosk-admin-exit-with-manager-pin-offline-verifier-and-hub-r: done
+  1-21-high-contrast-theme-as-a-per-device-branch-setting: done
+  1-22-the-branch-runs-with-the-wan-down-and-shows-which-link-is-of: done
   epic-1-retrospective: optional
 
   epic-2: in-progress
-  2-1-arena-360-cloud-runs-in-india-behind-cloudflare: review
-  2-2-cloud-error-envelope-local-dev-mode-and-single-sqlite-linkag: review
-  2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl: review
-  2-4-owner-signs-up-with-phone-otp: review
-  2-5-owner-sets-a-password-and-enrols-totp-with-backup-codes: review
-  2-6-owner-signs-in-on-a-new-device-with-totp-backup-code-or-sms: review
-  2-7-resumable-setup-wizard-and-step-1-café-and-first-branch: review
-  2-8-step-2-free-tier-issues-a-signed-licence: review
-  2-9-step-3-single-use-8-character-hub-pairing-code: review
-  2-10-hub-installer-pairs-with-the-code-and-retries-in-place: review
-  2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself: review
-  2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i: review
-  2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai: review
-  2-14-owner-and-staff-set-their-own-pin-and-password-at-the-hub-wi: review
+  2-1-arena-360-cloud-runs-in-india-behind-cloudflare: done
+  2-2-cloud-error-envelope-local-dev-mode-and-single-sqlite-linkag: done
+  2-3-control-data-is-backed-up-nightly-and-the-cloud-is-observabl: done
+  2-4-owner-signs-up-with-phone-otp: done
+  2-5-owner-sets-a-password-and-enrols-totp-with-backup-codes: done
+  2-6-owner-signs-in-on-a-new-device-with-totp-backup-code-or-sms: done
+  2-7-resumable-setup-wizard-and-step-1-café-and-first-branch: done
+  2-8-step-2-free-tier-issues-a-signed-licence: done
+  2-9-step-3-single-use-8-character-hub-pairing-code: done
+  2-10-hub-installer-pairs-with-the-code-and-retries-in-place: done
+  2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself: done
+  2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i: done
+  2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai: done
+  2-14-owner-and-staff-set-their-own-pin-and-password-at-the-hub-wi: done
   2-15-owner-changes-reach-the-hub-through-the-command-mailbox-with: backlog
   2-16-step-7-invite-staff-by-phone-with-a-role-and-a-one-time-setu: backlog
-  2-17-kiosk-finds-the-hub-on-the-lan-or-by-typed-ip: review
-  2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi: review
+  2-17-kiosk-finds-the-hub-on-the-lan-or-by-typed-ip: done
+  2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi: done
   2-19-device-cap-and-pairing-rate-limits-at-the-hub: backlog
-  2-20-device-groups-with-six-swatches-held-at-the-hub: review
-  2-21-register-consoles-vr-rigs-and-simulators-manually: review
+  2-20-device-groups-with-six-swatches-held-at-the-hub: done
+  2-21-register-consoles-vr-rigs-and-simulators-manually: done
   2-22-step-4-owner-groups-devices-in-the-web-wizard-as-they-arrive: backlog
-  2-23-floor-zones-and-grid-layout-per-branch: review
-  2-24-device-status-and-maintenance: backlog
+  2-23-floor-zones-and-grid-layout-per-branch: done
+  2-24-device-status-and-maintenance: done
   2-25-hourly-postpaid-rate-per-device-group: backlog
-  2-26-branch-operating-settings-opening-hours-fulfilment-kiosk-vol: review
-  2-27-printer-detection-and-test-print-at-the-hub: review
+  2-26-branch-operating-settings-opening-hours-fulfilment-kiosk-vol: done
+  2-27-printer-detection-and-test-print-at-the-hub: done
   2-28-wizard-steps-5-6-and-8-follow-the-hub-s-setup-progress: backlog
   2-29-step-9-2-minute-test-session-locks-a-kiosk-at-zero: backlog
   2-30-owner-manages-branches-create-rename-timezone-new-hub-pairin: backlog
@@ -105,8 +105,8 @@ development_status:
   epic-3-retrospective: optional
 
   epic-4: in-progress
-  4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t: review
-  4-2-the-android-hub-keeps-serving-while-the-screen-is-off-in-doz: review
+  4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t: done
+  4-2-the-android-hub-keeps-serving-while-the-screen-is-off-in-doz: done
   4-3-the-android-hub-pairs-with-the-wizard-code-and-keeps-its-sec: backlog
   4-4-kiosks-find-and-pair-with-an-android-hub-on-the-lan: backlog
   4-5-the-hub-works-on-an-android-phone-and-tablet-by-touch: backlog
@@ -125,11 +125,11 @@ development_status:
   epic-4-retrospective: optional
 
   epic-5: in-progress
-  5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a: review
-  5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units: review
-  5-3-products-with-categories-barcodes-images-and-the-kitchen-fla: review
-  5-4-bundles-priced-on-their-own: review
-  5-5-stock-in-with-expiry-lots-and-weighted-average-cost: review
+  5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a: done
+  5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units: done
+  5-3-products-with-categories-barcodes-images-and-the-kitchen-fla: done
+  5-4-bundles-priced-on-their-own: done
+  5-5-stock-in-with-expiry-lots-and-weighted-average-cost: done
   5-6-record-waste-with-a-reason: backlog
   5-7-expiry-alerts-and-expired-stock-held-from-sale-until-written: backlog
   5-8-low-stock-thresholds-and-alerts: backlog
@@ -208,7 +208,7 @@ development_status:
   epic-6-retrospective: optional
 
   epic-7: in-progress
-  7-1-kitchen-settings-at-the-hub-locked-on-free: review
+  7-1-kitchen-settings-at-the-hub-locked-on-free: done
   7-2-kitchen-notes-on-order-lines-from-the-pos-and-the-kiosk-cart: backlog
   7-3-every-order-with-kitchen-items-opens-a-kitchen-ticket-that-t: backlog
   7-4-the-floor-tile-shows-ready-and-the-hub-chimes-when-food-is-r: backlog
@@ -231,9 +231,9 @@ development_status:
   8-7-rollups-regenerate-after-a-schema-bump-and-the-cloud-accepts: backlog
   8-8-the-hub-uploads-a-daily-snapshot-after-close: backlog
   8-9-the-owner-read-api-serves-the-live-summary-and-rollup-ranges: backlog
-  8-10-the-owner-app-shell-navigation-themes-install-and-free-limit: review
-  8-11-the-owner-app-offers-a-high-contrast-theme: review
-  8-12-on-free-the-owner-app-shows-only-subscription-pairing-and-su: review
+  8-10-the-owner-app-shell-navigation-themes-install-and-free-limit: done
+  8-11-the-owner-app-offers-a-high-contrast-theme: done
+  8-12-on-free-the-owner-app-shows-only-subscription-pairing-and-su: done
   8-13-today-shows-every-branch-with-its-figures-cash-variance-and: backlog
   8-14-the-owner-app-stays-in-setup-mode-until-a-branch-goes-live-t: backlog
   8-15-reports-revenue-and-cash-reconciliation: backlog

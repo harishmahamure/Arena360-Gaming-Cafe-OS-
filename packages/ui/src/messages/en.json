@@ -966,6 +966,7 @@
   "onboarding.staff.reason.user_limit": "This branch has reached its staff limit.",
   "onboarding.staff.reason.other": "The Hub refused the invite.",
   "onboarding.staff.new_code": "New code",
+  "onboarding.staff.continue": "Continue",
   "onboarding.staff.error.name": "Enter their name, up to 80 characters.",
   "onboarding.staff.error.phone": "Enter their mobile number with the country code, like +91 98765 43210.",
   "onboarding.staff.error.not_ready": "Pair your Hub first.",

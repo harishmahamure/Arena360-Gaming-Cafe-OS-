@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Button, TextField, TierLock, focusFirstInvalid, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
-  import type { InviteRole, InviteStatus, StaffInviteView } from "@arena/ui/generated";
+  import type { InviteRole, InviteStatus, StaffInviteView, WizardState } from "@arena/ui/generated";
   import { onMount } from "svelte";
   import {
     getStaff,
@@ -37,6 +37,7 @@
   let busy = $state(false);
   let shown: { name: string; code: string } | null = $state(null);
   let copied: MessageKey | null = $state(null);
+  let next: WizardState | null = $state(null);
   let valueEl: HTMLElement | undefined = $state();
   let form: HTMLFormElement | undefined = $state();
 
@@ -59,7 +60,10 @@
 
   async function refresh() {
     const res = await getStaff();
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (!loaded) formError = failure(res);
+      return;
+    }
     const before = invites.filter((i) => i.status === "waiting").map((i) => i.id);
     invites = res.data.invites;
     loaded = true;
@@ -68,6 +72,7 @@
     const wizard = await getWizard();
     if (!wizard.ok) return;
     if (wizard.data.current === "staff") setWizard(wizard.data);
+    else if (shown) next = wizard.data;
     else await advance(wizard.data);
   }
 
@@ -139,8 +144,7 @@
 
   onMount(() => {
     refresh().then(() => {
-      if (invites.length === 0) role = "manager";
-      else role = "counter";
+      if (invites.length && role === "manager") role = "counter";
     });
     const timer = setInterval(() => {
       if (invites.some((i) => i.status === "waiting")) refresh();
@@ -195,6 +199,7 @@
     <p class="once">{t("onboarding.setup_code.once")}</p>
     <div class="actions">
       <Button label="ui.pairing_code.copy" variant="secondary" onclick={copy} />
+      {#if next}<Button label="onboarding.staff.continue" onclick={() => advance(next!)} />{/if}
     </div>
     <p class="once" role="status">
       {#if copied}{t(copied)}{/if}

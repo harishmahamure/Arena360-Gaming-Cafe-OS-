@@ -358,3 +358,48 @@ async fn a_new_code_for_a_member_who_has_a_password_is_refused() {
     assert!(!r.applied);
     assert_eq!(code(&r), ErrorCode::ValidationFailed);
 }
+
+#[tokio::test]
+async fn an_unknown_staff_id_needs_a_ulid_and_a_setup_code() {
+    let f = bootstrapped().await;
+    let hash = crate::staff::hash_secret("K7Q49MZD").unwrap();
+    let bad = invite(1, "not-a-ulid", "+919876543210", &hash);
+    let mut bare = invite(
+        2,
+        &ulid::Ulid::generate().to_string(),
+        "+919876543211",
+        &hash,
+    );
+    bare.payload["password_hash"] = json!(hash);
+    bare.payload["setup_code_hash"] = json!(null);
+    bare.payload["setup_expires_at"] = json!(null);
+    for c in [bad, bare] {
+        let r = f.writer.apply_command(c).await.unwrap();
+        assert!(!r.applied);
+        assert_eq!(code(&r), ErrorCode::ValidationFailed);
+    }
+    assert!(staff_rows(&f).is_empty());
+}
+
+#[tokio::test]
+async fn a_new_code_still_applies_at_the_users_limit() {
+    let f = bootstrapped().await;
+    user_cap(&f, 1).await;
+    let id = ulid::Ulid::generate().to_string();
+    let one = crate::staff::hash_secret("K7Q49MZD").unwrap();
+    let two = crate::staff::hash_secret("Q4K79MZD").unwrap();
+    assert!(
+        f.writer
+            .apply_command(invite(1, &id, "+919876543210", &one))
+            .await
+            .unwrap()
+            .applied
+    );
+    let r = f
+        .writer
+        .apply_command(invite(2, &id, "+919876543210", &two))
+        .await
+        .unwrap();
+    assert!(r.applied, "{:?}", r.error);
+    assert_eq!(staff_rows(&f)[0]["setup_code_hash"], RowValue::Text(two));
+}

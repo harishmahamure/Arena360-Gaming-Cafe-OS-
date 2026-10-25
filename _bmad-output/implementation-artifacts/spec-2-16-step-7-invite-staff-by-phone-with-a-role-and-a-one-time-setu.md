@@ -2,7 +2,7 @@
 title: 'Story 2.16: Step 7 — invite staff by phone with a role and a one-time setup code'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: '170fdba'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -72,3 +72,6 @@ Decisions: the cloud picks the Hub's `staff_id` (a ULID kept in `staff_invites`)
 Known limits: an invite for the owner's own phone is only refused at the Hub (`LOGIN_TAKEN`); the plain setup code cannot be shown again once the page is left; the list refreshes every 5 s only while an invite is waiting; the Upgrade link's `href` default is a placeholder until Story 10.5; a `USER_LIMIT` rejection is shown as `tier-lock` but the cloud does not know the licence limit up front.
 
 ## Review Triage Log
+
+- Patched: role-by-name resolves built-in roles only; an inactive create takes no licence seat; the wizard no longer auto-advances while the one-time code is on screen (Continue button instead); a failed first list load shows an error; tests for unknown `staff_id` and re-issue at the users limit.
+- Deferred: New code offered on applied invites (Hub refuses once a password exists); re-issue overwrites name/role/active on a passwordless member; no duplicate-phone check in the cloud; no expiry bound at the Hub; no `expired` status; TierLock tier fixed to Basic; migration 0012 data-preservation test; proptest no longer seeds Kitchen; HTTP status assertions for LOGIN_TAKEN/USER_LIMIT; rate-limit test.

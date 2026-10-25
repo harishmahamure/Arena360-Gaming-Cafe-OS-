@@ -134,12 +134,12 @@ pub(super) fn load_staff(
         _ => None,
     };
     let full = match (&row, crate::entitlement::limit(tx, "users")?) {
-        (None, Some(cap)) => count_active_staff(tx)? >= cap,
+        (None, Some(cap)) if s.active => count_active_staff(tx)? >= cap,
         _ => false,
     };
     let role = match find_role(tx, &s.role_id)? {
         Some(r) => Some(r),
-        None => find_role_by_name(tx, &s.role_id)?,
+        None => find_role_by_name(tx, &s.role_id)?.filter(|r| r.builtin),
     };
     Ok(StaffTarget {
         branch: current_branch_id(tx)?,

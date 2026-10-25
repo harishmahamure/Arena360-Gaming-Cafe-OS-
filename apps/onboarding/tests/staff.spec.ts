@@ -134,3 +134,17 @@ test("the wizard moves on by itself once a Manager invite is applied at the Hub"
   await page.clock.runFor(5000);
   await expect(h1(page, "ui.wizard.step.printer_payments")).toBeVisible();
 });
+
+test("the wizard waits for Continue while the setup code is on screen", async ({ page }) => {
+  await page.clock.install();
+  const cloud = await open(page);
+  await fill(page, "Neha", "+91 98765 43211");
+  await button(page, "onboarding.staff.invite").click();
+  await expect(page.getByTestId("staff-code-text")).toBeVisible();
+  cloud.invites[0].status = "applied";
+  cloud.done.add("staff");
+  await page.clock.runFor(5000);
+  await expect(page.getByTestId("staff-code-text")).toBeVisible();
+  await button(page, "onboarding.staff.continue").click();
+  await expect(h1(page, "ui.wizard.step.printer_payments")).toBeVisible();
+});

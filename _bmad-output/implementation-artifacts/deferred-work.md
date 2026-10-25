@@ -123,3 +123,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-10-hub-installer-pairs-with-the-code-and-retries-in-place.md`
   summary: Hub hardening and tests. Re-check `hub_identity` and the writer epoch before the cloud call and after startup; Windows DPAPI user scope and ACLs; verify the licence before caching; Hub-side log scrub, Retry-After over HTTP, post-consume failure, dev-seed identity and IPv6 /64 tests.
   evidence: Review findings.
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-10-the-owner-app-shell-navigation-themes-install-and-free-limit.md`
+  summary: Key the Owner app's IndexedDB cache by owner id, treat a 403 as a refused session, and add PNG and maskable manifest icons, a service worker update test, a ticking data age and a 768 px layout test.
+  evidence: The cache is cleared on sign-out and a refused session, but not when a different owner signs in without a sign-out; the manifest has one SVG icon; the tablet breakpoint is untested.

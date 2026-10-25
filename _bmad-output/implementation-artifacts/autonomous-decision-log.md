@@ -736,3 +736,16 @@ Each entry gives the story, the decision point, the choice taken (the recommende
   - **Deferred:** idempotent pairing (orphan rows), and a Tauri handler-registration test.
 - **2.18 landing:** full verification fully green on `91823f6`. Then rebased onto 2.9 by me: both stories had added `arena-proto/src/pairing.rs`, so 2.18's became `kiosk_pairing.rs`, and its TS type `PairingCode` became `KioskPairingCode` (it clashed with 2.9's `PairingCode` component). Post-rebase: clippy, checks, the pair test and the pair-kiosk Playwright spec pass. The known `arena-kiosk-svc` PIN-pause flake was seen once.
 - **2.10 landing:** rebased onto master (2.18 owns Hub migration 0011, so `hub_identity` is 0012). Resolutions: 2.10's cloud types renamed `HubPairRequest`/`HubPairResponse` (2.18 owns `PairRequest`/`PairResponse`); `PAIR_CODE_INVALID` kept once; `UiAuth` gate field and method renamed `pair_gate`/`with_pair_gate` beside 2.18's `pairing`; `valid_pairing_code` from 2.9 replaces `is_pairing_code`. Decision: pairing does not mark wizard step 3 done; Story 2.11's heartbeat does. Three reviewers on Sonnet. Patched: Cloudflare rule per IP only, bare edge 429 mapped to `RATE_LIMITED`, IPv6 /64 key, no redirects, Android link in a new tab. Deferred: idempotent `/v1/pair`, trusted-proxy client IP, Hub hardening and test gaps.
+
+## Story 8.10: The Owner app shell (owner lane)
+
+- **Spec approval:** self-approved; UI-only, no Rust, no migration.
+- **Breakpoint:** one switch at 768 px (bottom bar below, sidebar from 768 px) instead of a third tablet layout.
+- **Data endpoints:** the shell reads `GET /v1/session` and `GET /v1/branches` (`[{id, name, tier, flags}]`) and calls `POST /v1/signout`. The cloud ships the last two with Stories 2.12, 2.30 and the sign-out work; the app tolerates their absence through the cache and error path, and tests stub them.
+- **Free limit:** Free is "every branch is free"; the lock is in the shell, Story 8.12 adds its detail.
+- **MFA:** Account → MFA links to the onboarding app's `/account/security` (`PUBLIC_ONBOARDING_URL`); the screens are not copied.
+- **Icon:** one SVG icon in the manifest; PNG sizes deferred.
+- **`TierLock`:** added to `@arena/ui` without a gallery entry.
+- **Light nav:** the generated light tokens keep the dark hub tones, so the light theme sets the nav ground to `surface` and the active item to `bg` locally.
+- **Review (Sonnet: Verification Gap and Blind Hunter):** 10 patches (Retry on unavailable data, one shared session refresh, refresh failures no longer sign out, an epoch guard against late cache writes, network-first navigations, Free fails closed, JSON-parse fallback, offline listener, exact route match, oldest `as_of`), 2 rejections, 4 deferrals (owner-keyed cache, 403, icons and update path, ticking age).
+- **Verification:** all `check:*`, `test:scripts` (189), format, owner Playwright (96 tests, both widths, light and dark axe), gallery `test:a11y` (32), builds of every app except marketing, onboarding check. No Rust touched. Playwright ports 5413 (owner) and 5513 (gallery).

@@ -1,9 +1,5 @@
 <script lang="ts">
-  import { Placeholder, t } from "@arena/ui";
+  import Section from "../lib/Section.svelte";
 </script>
 
-<svelte:head>
-  <title>{t("app.title", { surface: t("surface.owner") })}</title>
-</svelte:head>
-
-<Placeholder surface={t("surface.owner")} />
+<Section title="owner.nav.today" />

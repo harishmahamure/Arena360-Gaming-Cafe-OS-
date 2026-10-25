@@ -1,0 +1,10 @@
+{
+  "name": "Arena 360 Owner",
+  "short_name": "Arena 360",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#16123a",
+  "theme_color": "#16123a",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

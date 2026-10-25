@@ -464,6 +464,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopping_the_hub_is_audited_with_the_counter_and_the_approving_manager() {
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let body = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "hub.stopped_at".into(),
+                value: "1730000000000".into(),
+            }),
+            Some(rev_of(&hub, "hub.stopped_at")),
+        ) });
+        let (status, refused) = call(&hub, "POST", "/ui/intent", Some(&counter), Some(body)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        set(&hub, &counter, "hub.stopped_at", "1730000000000", true).await;
+        let (status, page) = get(&hub, "/ui/audit?module=settings", &manager, None).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let stop = items(&page)
+            .iter()
+            .find(|i| i["row_id"].as_str().unwrap().ends_with("/hub.stopped_at"))
+            .unwrap();
+        assert_eq!(stop["actor"]["name"], "Counter");
+        assert_eq!(
+            stop["elevated_by"],
+            json!({"kind": "pin", "id": hub.manager_id, "name": "Manager", "mode": "hub"})
+        );
+    }
+
+    #[tokio::test]
     async fn detail_shows_before_and_after_and_redacts_secrets() {
         let hub = hub().await;
         let manager = token_for(&hub, "manager", "m-pass").await;

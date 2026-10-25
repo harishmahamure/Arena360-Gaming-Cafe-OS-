@@ -16,6 +16,16 @@ export function gbOf(bytes: number): number {
   return Math.round(bytes / 1e8) / 10;
 }
 
+let started = false;
+
+async function startHub(invoke: Invoke | null) {
+  const hub = (globalThis as { ArenaHub?: { startHub(): void } }).ArenaHub;
+  if (started || !hub) return;
+  started = true;
+  hub.startHub();
+  await invoke?.("hub_ready").catch(() => null);
+}
+
 function tauriInvoke(): Invoke | null {
   const g = (window as { __TAURI__?: { core?: { invoke?: Invoke } } }).__TAURI__;
   return g?.core?.invoke ?? null;
@@ -32,6 +42,7 @@ export async function loadDevice(
   if (Array.isArray(spec?.failures) && spec.failures.length > 0) {
     return { kind: "spec", failures: spec.failures };
   }
+  await startHub(invoke);
   const major = webviewMajor(ua);
   return major !== null && major < MIN_WEBVIEW_MAJOR ? { kind: "webview", major } : { kind: "ok" };
 }

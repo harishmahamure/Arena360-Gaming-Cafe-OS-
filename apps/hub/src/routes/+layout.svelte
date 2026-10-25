@@ -1,6 +1,6 @@
 <script lang="ts">
   import "@arena/ui/base.css";
-  import { Button, StatusBadge, t } from "@arena/ui";
+  import { AlertBadge, Button, StatusBadge, t } from "@arena/ui";
   import { onMount, tick, untrack, type Snippet } from "svelte";
   import { goto, invalidate } from "$app/navigation";
   import { page } from "$app/state";
@@ -28,6 +28,7 @@
     type LockResult,
   } from "../lib/auth";
   import { catalog } from "../lib/catalog.svelte";
+  import { alertCount, refreshAccess, service } from "../lib/service.svelte";
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
   import { notePairingCode } from "../lib/pairing";
@@ -400,11 +401,16 @@
     });
   });
 
+  onMount(refreshAccess);
+
   onMount(() => {
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    const onFocus = () => void refresh();
+    const onFocus = () => {
+      refreshAccess();
+      void refresh();
+    };
     const onReady = () => void refresh();
     // Back above 840px the bottom bar (and its More button) is hidden: close the sheet.
     const wide = window.matchMedia(WIDE);
@@ -519,6 +525,15 @@
               <StatusBadge state="warning" label="hub.clock.wrong" />
             {/if}
           </div>
+        {/if}
+        {#if alertCount(service.access) > 0}
+          <a
+            class="service-alert ui-interactive"
+            href="/system/service"
+            data-testid="hub-service-alert"
+          >
+            <AlertBadge count={alertCount(service.access)} />
+          </a>
         {/if}
         <Clock />
       </div>
@@ -669,6 +684,15 @@
     background-color: var(--chip-offline-background);
     color: var(--chip-offline-foreground);
     white-space: nowrap;
+  }
+
+  .service-alert {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--space-touch-min);
+    min-width: var(--space-touch-min);
+    justify-content: center;
+    text-decoration: none;
   }
 
   .status-slot {

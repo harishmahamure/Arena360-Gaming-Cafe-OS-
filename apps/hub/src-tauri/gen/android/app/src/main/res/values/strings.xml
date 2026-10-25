@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">"Arena 360 Hub"</string>
     <string name="main_activity_title">"Arena 360 Hub"</string>
+    <string name="hub_channel">"Hub service"</string>
+    <plurals name="hub_running">
+        <item quantity="one">"Hub running · %d device online"</item>
+        <item quantity="other">"Hub running · %d devices online"</item>
+    </plurals>
 </resources>

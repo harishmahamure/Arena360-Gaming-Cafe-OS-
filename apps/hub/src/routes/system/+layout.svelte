@@ -3,14 +3,21 @@
   import type { MessageKey } from "@arena/ui/messages";
   import type { Snippet } from "svelte";
   import { page } from "$app/state";
+  import { onMount } from "svelte";
+  import { refreshAccess, service } from "../../lib/service.svelte";
 
   let { children }: { children: Snippet } = $props();
 
   /** The System sections. */
-  const SECTIONS: { href: string; label: MessageKey }[] = [
+  const sections: { href: string; label: MessageKey }[] = $derived([
     { href: "/system/audit", label: "hub.system.nav.audit" },
-  ];
-  const section = $derived(SECTIONS.find((s) => page.url.pathname.startsWith(s.href)));
+    ...(service.access
+      ? [{ href: "/system/service", label: "hub.system.nav.service" as const }]
+      : []),
+  ]);
+  const section = $derived(sections.find((s) => page.url.pathname.startsWith(s.href)));
+
+  onMount(refreshAccess);
 </script>
 
 <svelte:head>
@@ -27,7 +34,7 @@
   <h1 class="type-hub-numeric">{t("hub.nav.system")}</h1>
   <nav class="sections" aria-label={t("hub.system.sections")}>
     <ul>
-      {#each SECTIONS as s (s.href)}
+      {#each sections as s (s.href)}
         <li>
           <a
             class="section ui-interactive type-hub-label"

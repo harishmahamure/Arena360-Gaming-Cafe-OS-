@@ -63,6 +63,50 @@ export function checkManifest(manifest, res) {
   return errors;
 }
 
+export const SERVICE_PERMISSIONS = [
+  "FOREGROUND_SERVICE",
+  "FOREGROUND_SERVICE_CONNECTED_DEVICE",
+  "WAKE_LOCK",
+  "POST_NOTIFICATIONS",
+  "RECEIVE_BOOT_COMPLETED",
+  "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+];
+export const BOOT_ACTIONS = ["BOOT_COMPLETED", "MY_PACKAGE_REPLACED"];
+
+const element = (xml, tag, name) =>
+  [...xml.matchAll(new RegExp(`<${tag}\\b[^>]*?(?:/>|>[\\s\\S]*?</${tag}>)`, "g"))]
+    .map((m) => m[0])
+    .find((e) => attr(e, "android:name") === name);
+
+export function checkService(manifest) {
+  const errors = SERVICE_PERMISSIONS.filter(
+    (p) =>
+      !new RegExp(`<uses-permission\\b[^>]*android:name="android\\.permission\\.${p}"`).test(
+        manifest,
+      ),
+  ).map((p) => `manifest: permission ${p} is missing`);
+  const service = element(manifest, "service", ".HubService");
+  if (service === undefined) errors.push("manifest: .HubService is not declared");
+  else {
+    if (attr(service, "android:foregroundServiceType") !== "connectedDevice") {
+      errors.push('manifest: .HubService must have foregroundServiceType="connectedDevice"');
+    }
+    if (attr(service, "android:exported") !== "false") {
+      errors.push('manifest: .HubService must have exported="false"');
+    }
+  }
+  const receiver = element(manifest, "receiver", ".BootReceiver");
+  if (receiver === undefined) errors.push("manifest: .BootReceiver is not declared");
+  else {
+    for (const a of BOOT_ACTIONS) {
+      if (!receiver.includes(`android.intent.action.${a}"`)) {
+        errors.push(`manifest: .BootReceiver does not listen for ${a}`);
+      }
+    }
+  }
+  return errors;
+}
+
 export function checkRepoManifest(root) {
   const main = join(root, ANDROID_DIR);
   const res = {};
@@ -74,7 +118,8 @@ export function checkRepoManifest(root) {
   }
   const path = join(main, "AndroidManifest.xml");
   if (!existsSync(path)) return [`${path} is missing`];
-  return checkManifest(readFileSync(path, "utf8"), res);
+  const manifest = readFileSync(path, "utf8");
+  return [...checkManifest(manifest, res), ...checkService(manifest)];
 }
 
 export function elfProblem(buf) {

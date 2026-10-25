@@ -4,7 +4,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkAab, checkManifest, checkRepoManifest, elfProblem } from "./check-android.mjs";
+import {
+  checkAab,
+  checkManifest,
+  checkRepoManifest,
+  checkService,
+  elfProblem,
+} from "./check-android.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -168,5 +174,49 @@ test("attribute order in an exclude does not matter, a narrower path does", () =
   };
   assert.deepEqual(checkManifest(manifest(), narrow), [
     "fullBackupContent: does not exclude the file domain",
+  ]);
+});
+
+const serviceManifest = (drop = []) =>
+  [
+    ...[
+      "FOREGROUND_SERVICE",
+      "FOREGROUND_SERVICE_CONNECTED_DEVICE",
+      "WAKE_LOCK",
+      "POST_NOTIFICATIONS",
+      "RECEIVE_BOOT_COMPLETED",
+      "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+    ]
+      .filter((p) => !drop.includes(p))
+      .map((p) => `<uses-permission android:name="android.permission.${p}" />`),
+    drop.includes("service")
+      ? ""
+      : `<service android:name=".HubService" android:exported="${drop.includes("exported") ? "true" : "false"}" android:foregroundServiceType="${drop.includes("type") ? "dataSync" : "connectedDevice"}" />`,
+    drop.includes("receiver")
+      ? ""
+      : `<receiver android:name=".BootReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" />${drop.includes("replaced") ? "" : '<action android:name="android.intent.action.MY_PACKAGE_REPLACED" />'}</intent-filter></receiver>`,
+  ].join("");
+
+test("a manifest with the foreground service, its permissions and the boot receiver passes", () => {
+  assert.deepEqual(checkService(serviceManifest()), []);
+});
+
+test("a missing permission, service, wrong type or exported service fails", () => {
+  assert.deepEqual(checkService(serviceManifest(["WAKE_LOCK"])), [
+    "manifest: permission WAKE_LOCK is missing",
+  ]);
+  assert.deepEqual(checkService(serviceManifest(["service"])), [
+    "manifest: .HubService is not declared",
+  ]);
+  assert.match(checkService(serviceManifest(["type"]))[0], /connectedDevice/);
+  assert.match(checkService(serviceManifest(["exported"]))[0], /exported="false"/);
+});
+
+test("the boot receiver must listen for boot and for a package update", () => {
+  assert.deepEqual(checkService(serviceManifest(["receiver"])), [
+    "manifest: .BootReceiver is not declared",
+  ]);
+  assert.deepEqual(checkService(serviceManifest(["replaced"])), [
+    "manifest: .BootReceiver does not listen for MY_PACKAGE_REPLACED",
   ]);
 });

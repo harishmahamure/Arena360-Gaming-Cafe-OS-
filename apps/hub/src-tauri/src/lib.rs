@@ -7,8 +7,8 @@
 //! (`arena:hub-ready`) and shows the window (hidden until then). The service
 //! keeps running when the UI closes.
 //!
-//! On Android there is no sidecar: [`android`] checks the device spec on the first run and then
-//! runs `arena-hub` in this process.
+//! On Android there is no sidecar: [`android`] checks the device spec on the first run, and the
+//! Kotlin `HubService` (a foreground service) runs `arena-hub` in this process.
 
 #[cfg(target_os = "android")]
 mod android;
@@ -28,9 +28,10 @@ fn crate_name() -> &'static str {
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "android")]
-    let builder = builder
-        .manage(android::Hub::default())
-        .invoke_handler(tauri::generate_handler![android::device_spec]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        android::device_spec,
+        android::hub_ready
+    ]);
     builder
         .setup(|app| {
             #[cfg(target_os = "android")]

@@ -4,6 +4,7 @@
   import { PUBLIC_ANDROID_HUB_URL } from "$app/env/public";
   import { onDestroy, onMount, tick } from "svelte";
   import { invalidate } from "$app/navigation";
+  import AccessPrompt from "../../lib/AccessPrompt.svelte";
   import { SNAPSHOT_DEPENDENCY } from "../../lib/snapshot";
   import { closeShellWindow, formatCountdown, pairHub } from "../../lib/pair";
 
@@ -109,6 +110,7 @@
 <section class="pair" aria-labelledby="pair-title" data-testid="hub-pair">
   <h1 class="type-hub-numeric" id="pair-title">{t("hub.pair.title")}</h1>
   <p class="type-hub-body muted">{t("hub.pair.intro")}</p>
+  <AccessPrompt />
 
   <form class="form" {onsubmit} novalidate>
     <div class="field">

@@ -29,8 +29,17 @@ use arena_tasks::{
     CloudClient, CloudEndpoint, CloudPairer, ConnectivityTask, HeartbeatTask, HousekeepingTask,
     Keystore, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber, SystemInterfaces, platform_keystore,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 use tracing_subscriber::EnvFilter;
+
+static STOP: std::sync::Mutex<Option<Arc<Notify>>> = std::sync::Mutex::new(None);
+
+pub fn stop() {
+    let slot = STOP.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(n) = slot {
+        n.notify_one();
+    }
+}
 
 const EXIT_FAILURE: u8 = 1;
 const EXIT_SCHEMA_TOO_NEW: u8 = 2;
@@ -188,6 +197,8 @@ fn internal(message: String) -> AppError {
 }
 
 async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError> {
+    let stop_signal = Arc::new(Notify::new());
+    *STOP.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&stop_signal));
     let mut store = Store::open(cfg.db_path(), clock.now_ms())?;
     let schema_version = store.schema_version()?;
     let instance_id = load_or_mint_instance_id(&mut store)?;
@@ -428,6 +439,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             }
             () = terminate() => {
                 tracing::info!(signal = "sigterm", "shutting down");
+                break Ok(());
+            }
+            () = stop_signal.notified() => {
+                tracing::info!(signal = "stop", "shutting down");
                 break Ok(());
             }
             res = &mut server => {

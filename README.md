@@ -1675,6 +1675,7 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | jsonwebtoken                        | =11.1.0                | `Cargo.toml`                                          |
 | base64                              | =0.22.1                | `Cargo.toml`                                          |
 | libc                                | =0.2.191               | `Cargo.toml`                                          |
+| jni                                 | =0.21.1                | `Cargo.toml`                                          |
 | Android compileSdk                  | 36                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts` |
 | Android targetSdk                   | 36                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts` |
 | Android minSdk                      | 28                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts` |
@@ -1706,6 +1707,14 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
   reports below the marketed size, so the check passes from 2.5 GB reported) and 20 GB free on the
   app data volume. The check runs only while `branch.db` does not exist; a failing device sees one
   screen with "Check again" and no database is created.
+- **Foreground service:** the core runs inside `HubService`, a foreground service of type
+  `connectedDevice`, not in the activity. It holds a partial wake lock and Wi-Fi locks, shows
+  "Hub running · n devices online", restarts after a kill (sticky) and starts on boot and after an
+  app update (`BootReceiver`) once a `branch.db` exists. The UI asks for notifications and the
+  battery-optimisation exemption once on the pairing screen; "Stop Hub" is in System → Hub
+  service (a Manager's PIN, audited as `settings.set hub.stopped_at`). Test it with
+  `adb shell dumpsys deviceidle force-idle`, `adb shell input keyevent KEYCODE_SLEEP`,
+  `adb shell am kill in.arena360.hub` and `adb reboot`.
 - **Build:** `pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64`
   (debug APK) and `... --aab --target aarch64 --target x86_64` (release AAB). Needs the Android SDK
   (platform 36), the NDK from the pin table (`NDK_HOME`), JDK 17 and the Rust Android targets.

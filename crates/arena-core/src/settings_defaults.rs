@@ -19,6 +19,10 @@ use arena_proto::{
 };
 use arena_proto::{DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_TAX, TaxSettings};
 
+/// When staff last stopped the Android Hub service (epoch ms as text, empty until then). Staff
+/// set it through `settings.set`, so the audit log records the stop with both actors.
+pub const KEY_HUB_STOPPED_AT: &str = "hub.stopped_at";
+
 /// The branch locale keys. They are authoritative for the locale; the `branch` row's columns
 /// only hold the bootstrap values.
 pub const KEY_CURRENCY: &str = "branch.currency";
@@ -66,6 +70,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("idle_lock_minutes", "5"),
     ("hub.locale", "en-IN"),
     ("receipt.footer", ""),
+    (KEY_HUB_STOPPED_AT, ""),
     // Story 1.18: the kiosk process lists (JSON arrays of `{path_glob, signer?}`).
     (KEY_PROCESS_ALLOW, DEFAULT_PROCESS_ALLOW),
     (KEY_PROCESS_BLOCK, DEFAULT_PROCESS_BLOCK),
@@ -166,6 +171,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     ),
     ("hub.locale", SettingRule::Locale),
     ("receipt.footer", SettingRule::Text),
+    (KEY_HUB_STOPPED_AT, SettingRule::Text),
     (KEY_CURRENCY, SettingRule::Currency),
     (
         KEY_SYMBOL_POSITION,
@@ -509,6 +515,7 @@ mod tests {
             ("idle_lock_minutes", "5"),
             ("hub.locale", "en-IN"),
             ("receipt.footer", ""),
+            (KEY_HUB_STOPPED_AT, ""),
             ("kiosk.process_allow", DEFAULT_PROCESS_ALLOW),
             ("kiosk.process_block", DEFAULT_PROCESS_BLOCK),
             ("kiosk.process_mode", "enforce"),

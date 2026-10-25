@@ -32,8 +32,32 @@ pub struct Gate {
 }
 
 impl Gate {
+    pub const fn new() -> Self {
+        Self { started: false }
+    }
+
     pub fn stopped(&mut self) {
         self.started = false;
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.started
+    }
+
+    pub fn check(
+        &self,
+        dir: &Path,
+        probe: impl FnOnce(&Path) -> io::Result<DeviceSpec>,
+        log: impl FnOnce(&str),
+    ) -> DeviceSpec {
+        if !self.started && !dir.join(DB_FILE).exists() {
+            match probe(dir) {
+                Ok(spec) if !spec.ok() => return spec,
+                Ok(_) => {}
+                Err(e) => log(&format!("device spec probe failed, starting anyway: {e}")),
+            }
+        }
+        DeviceSpec { failures: vec![] }
     }
 
     pub fn run(
@@ -43,20 +67,12 @@ impl Gate {
         start: impl FnOnce(),
         log: impl FnOnce(&str),
     ) -> DeviceSpec {
-        let pass = DeviceSpec { failures: vec![] };
-        if self.started {
-            return pass;
+        let spec = self.check(dir, probe, log);
+        if spec.ok() && !self.started {
+            self.started = true;
+            start();
         }
-        if !dir.join(DB_FILE).exists() {
-            match probe(dir) {
-                Ok(spec) if !spec.ok() => return spec,
-                Ok(_) => {}
-                Err(e) => log(&format!("device spec probe failed, starting anyway: {e}")),
-            }
-        }
-        self.started = true;
-        start();
-        pass
+        spec
     }
 }
 
@@ -125,6 +141,32 @@ mod tests {
             probe(dir.path()).is_ok(),
             Path::new("/proc/meminfo").exists()
         );
+    }
+
+    #[test]
+    fn check_alone_never_starts_the_hub_and_passes_once_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut gate = Gate::new();
+        let probed = Cell::new(0);
+        let spec = gate.check(
+            dir.path(),
+            |_| {
+                probed.set(probed.get() + 1);
+                Ok(failing())
+            },
+            |_| {},
+        );
+        assert_eq!(
+            (spec.ok(), gate.is_started(), probed.get()),
+            (false, false, 1)
+        );
+        run(
+            dir.path(),
+            &mut gate,
+            Ok(check_device(4_000_000_000, 30_000_000_000)),
+        );
+        assert!(gate.is_started());
+        assert!(gate.check(dir.path(), |_| Ok(failing()), |_| {}).ok());
     }
 
     #[test]

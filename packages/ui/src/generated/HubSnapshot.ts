@@ -47,4 +47,5 @@ export type HubSnapshot = {
   pairing_revoked?: boolean;
   licence_unverified?: boolean;
   clock_wrong?: boolean;
+  device_cap?: number;
 };

@@ -169,6 +169,19 @@ test("a wrong code clears the cells with one plain line, and the right one pairs
   await expect(page.getByTestId("locked")).toBeVisible();
 });
 
+test("a full branch and too many tries each get one plain line", async ({ page }) => {
+  await openPairing(page, [
+    { ok: false, code: "DEVICE_LIMIT", body: null },
+    { ok: false, code: "RATE_LIMITED", body: null },
+  ]);
+  await codeInput(page).fill("123456");
+  await expect(page.getByText(en["player.pairing.device_limit"])).toBeVisible();
+  await expect(codeInput(page)).toHaveValue("");
+  await codeInput(page).fill("123456");
+  await expect(page.getByText(en["player.pairing.rate_limited"])).toBeVisible();
+  await noSeriousViolations(page);
+});
+
 test("an empty PC name is refused before anything is sent", async ({ page }) => {
   await openPairing(page, [paired]);
   const name = page.getByLabel(en["player.pairing.pc_name"]);

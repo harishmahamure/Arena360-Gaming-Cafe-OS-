@@ -35,6 +35,7 @@ type Hub = {
   elevations: { items: { intent_kind: string }[]; pin: string }[];
   queues: Set<string[]>;
   stale: boolean;
+  cap?: number;
 };
 
 function newHub(): Hub {
@@ -71,6 +72,7 @@ const snapshot = (hub: Hub): HubSnapshot => ({
   connectivity: { state: "online", checked_at: null },
   lan: null,
   paired: true,
+  device_cap: hub.cap,
 });
 
 const json = (route: Route, status: number, body: unknown) =>
@@ -244,6 +246,18 @@ test("the device limit shows the tier lock", async ({ page }) => {
   const limit = page.getByTestId("device-limit");
   await expect(limit).toContainText(en["hub.devices.limit"]);
   await expect(limit.locator('[data-component="tier-lock"]')).toBeVisible();
+  await expectNoSeriousAxe(page);
+});
+
+test("a branch at its device cap shows the tier lock and below it does not", async ({ page }) => {
+  const hub = newHub();
+  hub.cap = 1;
+  await open(page, hub);
+  await expect(page.getByTestId("device-limit")).toHaveCount(0);
+  await addConsole(page, "PS5 Two", "4");
+  const limit = page.getByTestId("device-limit");
+  await expect(limit).toContainText(en["hub.devices.limit"]);
+  await expect(limit).toContainText(en["staff.tier.available_on"].replace("{tier}", "Basic"));
   await expectNoSeriousAxe(page);
 });
 

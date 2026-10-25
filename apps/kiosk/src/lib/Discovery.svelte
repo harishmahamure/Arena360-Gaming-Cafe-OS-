@@ -232,6 +232,10 @@
     switch (kind) {
       case "code_invalid":
         return "player.pairing.code_invalid";
+      case "device_limit":
+        return "player.pairing.device_limit";
+      case "rate_limited":
+        return "player.pairing.rate_limited";
       case "no_hub":
         return "player.pairing.no_hub";
       case "invalid":

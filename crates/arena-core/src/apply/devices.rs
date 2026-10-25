@@ -11,8 +11,8 @@
 //!   `base_rev`, checked against that row's `rev`).
 //! - A register with an empty `token_hash` is a manual device: a console, VR rig or simulator
 //!   with no token, so it can never sign in. A console needs a `tv_number`, unique among live
-//!   consoles; `DEVICE_LIMIT` when the cap in `licence.device_cap` is reached (manual devices only;
-//!   Story 2.19 extends the cap to pairing). `device.revoke`
+//!   consoles; `DEVICE_LIMIT` when the cap in `licence.device_cap` is reached (paired and manual
+//!   devices alike). `device.revoke`
 //!   also soft-deletes the device's `devices_meta` row, which frees the slot and the TV number.
 
 use arena_proto::{
@@ -53,8 +53,8 @@ pub(super) fn load_register(tx: &StoreTx<'_>, d: &DeviceRegister) -> Result<Targ
             Ok(Target::NewDevice(Box::new(NewDev {
                 branch: current_branch_id(tx)?,
                 full: match cap {
-                    Some(cap) if d.token_hash.is_empty() => count_live_devices(tx)? >= cap,
-                    _ => false,
+                    Some(cap) => count_live_devices(tx)? >= cap,
+                    None => false,
                 },
                 tv_taken: tv_taken(tx, d, None)?,
                 group: match &d.group_id {

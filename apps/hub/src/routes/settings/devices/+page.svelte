@@ -56,6 +56,8 @@
   const groups = $derived(snapshot?.groups ?? []);
   const manual = $derived((snapshot?.devices ?? []).filter((d) => d.manual));
   const all = $derived(snapshot?.devices ?? []);
+  const cap = $derived(snapshot?.device_cap ?? null);
+  const atCap = $derived(cap !== null && all.filter((d) => d.kind).length >= cap);
   const fits = (kind: string) => (kind === "sim" ? "other" : kind);
 
   let editing: SnapshotDevice | null = $state(null);
@@ -246,10 +248,10 @@
       <span>{t(status.message)}</span>
     {/if}
   </p>
-  {#if limit}
+  {#if limit || atCap}
     <div role="alert" data-testid="device-limit">
       <p class="type-hub-label">{t("hub.devices.limit")}</p>
-      <TierLock tier="Basic" />
+      <TierLock tier={cap !== null && cap >= 60 ? "Premium" : "Basic"} />
     </div>
   {/if}
 

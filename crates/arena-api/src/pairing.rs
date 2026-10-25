@@ -1,18 +1,19 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use arena_core::Clock;
 use arena_proto::{
-    AppError, ErrorCode, KioskPairingCode, PAIR_CODE_DIGITS, PAIR_CODE_TTL_MS,
-    PAIR_PIN_MAX_FAILURES, PAIR_PIN_PAUSE_S, PAIR_PIN_WINDOW_MS,
+    AppError, ErrorCode, KioskPairingCode, PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_CODE_DIGITS,
+    PAIR_CODE_TTL_MS, PAIR_FAILURES_PER_CODE, PAIR_PIN_MAX_FAILURES, PAIR_PIN_PAUSE_S,
+    PAIR_PIN_WINDOW_MS,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 pub const RENEW_TICK: Duration = Duration::from_millis(500);
-pub const MAX_WRONG_CODES: u32 = 10;
+pub const ATTEMPT_WINDOW_MS: i64 = 60 * 60 * 1000;
 pub const MAX_PIN_PAUSE_S: u32 = 15 * 60;
 pub const PIN_STRIKES_RESET_MS: i64 = 60 * 60 * 1000;
 pub const GLOBAL_PIN_FAILURES: usize = 20;
@@ -83,6 +84,8 @@ struct PinState {
     global_paused_until: Option<i64>,
 }
 
+type Attempts = Mutex<HashMap<IpAddr, VecDeque<i64>>>;
+
 type OwnerCheck = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 pub struct Pairing {
@@ -90,6 +93,7 @@ pub struct Pairing {
     clock: Arc<dyn Clock>,
     live: Mutex<Option<Live>>,
     pins: Mutex<PinState>,
+    attempts: Attempts,
     changes: Mutex<Option<mpsc::Sender<CodeChanged>>>,
     owner_alive: OnceLock<OwnerCheck>,
     renewer: OnceLock<()>,
@@ -109,6 +113,13 @@ fn internal(message: &str) -> AppError {
 
 pub fn code_invalid() -> AppError {
     AppError::new(ErrorCode::PairCodeInvalid, "that pairing code is not valid")
+}
+
+pub fn rate_limited() -> AppError {
+    AppError::new(
+        ErrorCode::RateLimited,
+        "too many pairing attempts; try again later",
+    )
 }
 
 pub fn pin_paused() -> AppError {
@@ -170,6 +181,7 @@ impl Pairing {
             clock,
             live: Mutex::new(None),
             pins: Mutex::new(PinState::default()),
+            attempts: Mutex::default(),
             changes: Mutex::new(None),
             owner_alive: OnceLock::new(),
             renewer: OnceLock::new(),
@@ -311,11 +323,11 @@ impl Pairing {
         }
         if !arena_proto::is_pair_code(code) || !same(&current.hash, &presented) {
             current.wrong += 1;
-            if current.wrong >= MAX_WRONG_CODES {
+            if current.wrong >= PAIR_FAILURES_PER_CODE {
                 let owner = Arc::clone(&current.owner);
                 *live = None;
                 tracing::warn!(
-                    wrong = MAX_WRONG_CODES,
+                    wrong = PAIR_FAILURES_PER_CODE,
                     "too many wrong pairing codes; replacing the code"
                 );
                 self.renew_into(&mut live, owner, "wrong_codes");
@@ -380,6 +392,32 @@ impl Pairing {
                 me.renew_expired();
             }
         });
+    }
+
+    pub fn attempt(&self, ip: IpAddr) -> Result<(), u32> {
+        let now = self.clock.now_ms();
+        let key = peer_key(ip);
+        let Ok(mut map) = self.attempts.lock() else {
+            return Err(PAIR_PIN_PAUSE_S);
+        };
+        if !map.contains_key(&key) && map.len() >= self.max_peers {
+            map.retain(|_, q| q.back().is_some_and(|t| now - t < ATTEMPT_WINDOW_MS));
+            if map.len() >= self.max_peers {
+                tracing::warn!("too many peers trying to pair; refusing new ones");
+                return Err(PAIR_PIN_PAUSE_S);
+            }
+        }
+        let q = map.entry(key).or_default();
+        while q.front().is_some_and(|t| now - t >= ATTEMPT_WINDOW_MS) {
+            q.pop_front();
+        }
+        if q.len() >= PAIR_ATTEMPTS_PER_IP_PER_HOUR as usize {
+            let until = q.front().map_or(now, |t| t + ATTEMPT_WINDOW_MS);
+            tracing::warn!(peer = %key, "too many pairing attempts from one address");
+            return Err(retry_after(until, now));
+        }
+        q.push_back(now);
+        Ok(())
     }
 
     pub fn pin_begin(&self, ip: IpAddr) -> Result<(), u32> {
@@ -613,12 +651,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ten_wrong_codes_replace_the_live_code() {
+    async fn five_wrong_codes_replace_the_live_code() {
         let (_clock, p) = pairing();
         let mut changes = p.subscribe();
         let code = p.issue("tok").unwrap().code;
         let wrong = if code == "000000" { "000001" } else { "000000" };
-        for _ in 0..MAX_WRONG_CODES {
+        for _ in 0..PAIR_FAILURES_PER_CODE {
             assert!(p.take(wrong).is_err());
         }
         let fresh = changes.try_recv().unwrap().code.unwrap();
@@ -732,5 +770,31 @@ mod tests {
         assert_eq!(p.pin_begin(ip("10.0.0.3")), Err(PAIR_PIN_PAUSE_S));
         clock.advance(PIN_STRIKES_RESET_MS);
         p.pin_begin(ip("10.0.0.3")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn twenty_attempts_an_hour_per_address_then_the_oldest_ages_out() {
+        let (clock, p) = pairing();
+        let peer = ip("10.0.0.5");
+        for _ in 0..PAIR_ATTEMPTS_PER_IP_PER_HOUR {
+            p.attempt(peer).unwrap();
+            clock.advance(1000);
+        }
+        let wait = ATTEMPT_WINDOW_MS / 1000 - i64::from(PAIR_ATTEMPTS_PER_IP_PER_HOUR);
+        assert_eq!(p.attempt(peer), Err(u32::try_from(wait).unwrap()));
+        p.attempt(ip("10.0.0.6")).unwrap();
+        clock.advance(wait * 1000);
+        p.attempt(peer).unwrap();
+        assert!(p.attempt(peer).is_err());
+    }
+
+    #[tokio::test]
+    async fn ipv6_attempts_share_a_budget_per_64() {
+        let (_clock, p) = pairing();
+        for i in 0..PAIR_ATTEMPTS_PER_IP_PER_HOUR {
+            p.attempt(ip(&format!("fd00:1:2:3::{i:x}"))).unwrap();
+        }
+        assert!(p.attempt(ip("fd00:1:2:3:ffff::9")).is_err());
+        p.attempt(ip("fd00:1:2:4::1")).unwrap();
     }
 }

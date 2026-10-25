@@ -8,13 +8,13 @@ use arena_api::pairing::Pairing;
 use arena_core::rbac::{BUILTIN_ROLES, ROLE_COUNTER, ROLE_MANAGER};
 use arena_core::staff::hash_secret;
 use arena_core::{
-    DeviceDirectory, HubStatus, LeaseInfo, ManualClock, Role, StaffDirectory, Writer,
+    DeviceDirectory, HubStatus, LeaseInfo, ManualClock, Role, StaffDirectory, Writer, WriterHandle,
     status_channel,
 };
 use arena_kiosk_core::{HubClient, PairError, pair};
 use arena_proto::{
-    Actor, ActorKind, BranchBootstrap, ClientClass, ErrorCode, Hello, Intent, IntentPayload,
-    PairRequest, PairResponse, StaffUpsert, Versions,
+    Actor, ActorKind, BranchBootstrap, ClientClass, DeviceRevoke, ErrorCode, Hello, Intent,
+    IntentPayload, PairRequest, PairResponse, StaffUpsert, Versions,
 };
 use arena_store::{LeaseRow, Store, write_lease};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,6 +33,7 @@ struct TestHub {
     clock: Arc<ManualClock>,
     pairing: Arc<Pairing>,
     manager_id: String,
+    writer: WriterHandle,
     _status: watch::Sender<HubStatus>,
     _stop: oneshot::Sender<()>,
 }
@@ -135,7 +136,7 @@ async fn start_with_lease(expires_at: i64) -> TestHub {
     pairing.set_owner_check(|_| true);
     let hub = Arc::new(
         LanHub::new(
-            Some(writer),
+            Some(writer.clone()),
             status_rx,
             clock.clone(),
             Arc::new(DeviceDirectory::open(&path).unwrap()),
@@ -162,6 +163,7 @@ async fn start_with_lease(expires_at: i64) -> TestHub {
         clock,
         pairing,
         manager_id: ids[0].clone(),
+        writer,
         _status: status_tx,
         _stop: stop_tx,
     }
@@ -195,6 +197,31 @@ impl TestHub {
             Duration::from_secs(20),
         )
         .await
+    }
+
+    async fn cap(&self, value: u32) {
+        let sql = format!(
+            "INSERT OR REPLACE INTO settings (branch_id, key, value, rev, updated_at)
+             SELECT branch_id, 'licence.device_cap', '{value}', 0, 0 FROM branch"
+        );
+        self.writer
+            .submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+            .await
+            .unwrap();
+    }
+
+    async fn revoke(&self, device_id: &str) {
+        let mut revoke = intent(
+            Actor {
+                kind: ActorKind::Owner,
+                id: "owner".into(),
+            },
+            IntentPayload::DeviceRevoke(DeviceRevoke {
+                device_id: device_id.into(),
+            }),
+        );
+        revoke.reason = Some(arena_proto::ReasonCode::Other);
+        self.writer.submit_intent(revoke).await.unwrap();
     }
 
     fn store(&self) -> Store {
@@ -429,11 +456,11 @@ async fn a_pairing_the_writer_refuses_keeps_the_code_valid() {
 }
 
 #[tokio::test]
-async fn ten_wrong_codes_retire_the_live_code() {
+async fn five_wrong_codes_retire_the_live_code() {
     let hub = start().await;
     let code = hub.pairing.issue("panel").unwrap().code;
     let wrong = if code == "000000" { "000001" } else { "000000" };
-    for _ in 0..arena_api::pairing::MAX_WRONG_CODES {
+    for _ in 0..arena_proto::PAIR_FAILURES_PER_CODE {
         assert_eq!(
             hub_code(hub.pair(&by_code(wrong, "PC-01")).await).0,
             ErrorCode::PairCodeInvalid
@@ -444,6 +471,46 @@ async fn ten_wrong_codes_retire_the_live_code() {
         ErrorCode::PairCodeInvalid
     );
     assert!(hub.store().devices().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_full_branch_refuses_pairing_keeps_the_code_and_a_revoke_frees_the_slot() {
+    let hub = start().await;
+    hub.cap(2).await;
+    let first = {
+        let code = hub.pairing.issue("panel").unwrap().code;
+        hub.pair(&by_code(&code, "PC-01")).await.unwrap()
+    };
+    let code = hub.pairing.issue("panel").unwrap().code;
+    hub.pair(&by_code(&code, "PC-02")).await.unwrap();
+    let code = hub.pairing.issue("panel").unwrap().code;
+    assert_eq!(
+        hub_code(hub.pair(&by_code(&code, "PC-03")).await).0,
+        ErrorCode::DeviceLimit
+    );
+    assert_eq!(hub.store().devices().unwrap().len(), 2);
+    hub.revoke(&first.device_id).await;
+    hub.pair(&by_code(&code, "PC-03")).await.unwrap();
+    assert_eq!(hub.store().devices().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn the_twenty_first_attempt_from_one_address_is_rate_limited_until_the_hour_rolls() {
+    let hub = start().await;
+    let code = hub.pairing.issue("panel").unwrap().code;
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    for i in 0..arena_proto::PAIR_ATTEMPTS_PER_IP_PER_HOUR {
+        let (code, _) = hub_code(hub.pair(&by_code(wrong, "PC-01")).await);
+        assert_eq!(code, ErrorCode::PairCodeInvalid, "attempt {i}");
+        hub.clock.advance(1000);
+    }
+    let (code, retry) = hub_code(hub.pair(&by_pin("2222", "PC-01")).await);
+    assert_eq!(code, ErrorCode::RateLimited);
+    assert_eq!(retry, Some(3600 - 20));
+    assert!(hub.store().devices().unwrap().is_empty());
+    hub.clock.advance(3600 * 1000 - 20 * 1000);
+    let code = hub.pairing.issue("panel").unwrap().code;
+    hub.pair(&by_code(&code, "PC-01")).await.unwrap();
 }
 
 #[tokio::test]

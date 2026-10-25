@@ -41,6 +41,7 @@ pub fn build_snapshot(
         pairing_revoked: None,
         licence_unverified: None,
         clock_wrong: None,
+        device_cap: None,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -127,7 +128,16 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
+    snapshot.device_cap = Some(read_device_cap(&store.settings()?));
     Ok(snapshot)
+}
+
+fn read_device_cap(settings: &[arena_store::SettingRow]) -> u32 {
+    settings
+        .iter()
+        .find(|s| s.key == arena_proto::KEY_DEVICE_CAP)
+        .and_then(|s| s.value.parse().ok())
+        .unwrap_or(arena_proto::Tier::Free.defaults().limits.devices)
 }
 
 fn read_setup(store: &Store) -> Result<Option<SetupStatus>, AppError> {
@@ -438,6 +448,7 @@ mod tests {
                 pairing_revoked: None,
                 licence_unverified: None,
                 clock_wrong: None,
+                device_cap: Some(20),
             }
         );
     }
@@ -464,6 +475,7 @@ mod tests {
                 pairing_revoked: None,
                 licence_unverified: None,
                 clock_wrong: None,
+                device_cap: Some(20),
             }
         );
     }

@@ -596,6 +596,8 @@
   "player.pairing.code_hint": "The code is on the Hub under Settings → Devices → Pair a kiosk.",
   "player.pairing.code_incomplete": "Enter all 6 digits.",
   "player.pairing.code_invalid": "That code didn't work. Check the code on the Hub and try again.",
+  "player.pairing.device_limit": "This branch has reached its device limit — ask the owner.",
+  "player.pairing.rate_limited": "Too many tries. Wait a while, then try again.",
   "player.pairing.no_hub": "Couldn't reach the Hub. Check the network or choose a different Hub.",
   "player.pairing.unavailable": "The kiosk service isn't answering. Try again in a moment.",
   "player.pairing.submit": "Pair",

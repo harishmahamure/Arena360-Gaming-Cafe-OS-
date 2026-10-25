@@ -342,6 +342,8 @@ export type PairResult =
   | { kind: "paired"; branchName: string; deviceId: string }
   | { kind: "code_invalid" }
   | { kind: "pin_rejected" }
+  | { kind: "device_limit" }
+  | { kind: "rate_limited" }
   | { kind: "pin_paused"; retryAfterS: number }
   | { kind: "no_hub" }
   | { kind: "invalid" }
@@ -379,6 +381,10 @@ export async function pairKiosk(input: PairInput, pcName: string): Promise<PairR
           kind: "pin_paused",
           retryAfterS: Math.max(1, field(answer.body, "retry_after_s") ?? 60),
         };
+      case "DEVICE_LIMIT":
+        return { kind: "device_limit" };
+      case "RATE_LIMITED":
+        return { kind: "rate_limited" };
       case "NO_HUB":
         return { kind: "no_hub" };
       case "VALIDATION_FAILED":

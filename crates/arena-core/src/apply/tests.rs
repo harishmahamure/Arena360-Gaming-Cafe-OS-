@@ -6532,16 +6532,20 @@ mod manual_devices {
     }
 
     #[tokio::test]
-    async fn the_cap_does_not_block_a_token_and_a_revoke_leaves_a_change_row() {
+    async fn the_cap_counts_paired_devices_and_a_revoke_frees_the_slot_with_a_change_row() {
         let f = bootstrapped().await;
-        cap(&f, "0").await;
+        cap(&f, "1").await;
+        let mut tokened = reg(DeviceKind::Pc, "PC", None);
+        tokened.token_hash = crate::devices::hash_token_secret("s").unwrap();
+        let id = add(&f, tokened.clone()).await.unwrap();
+        assert_eq!(
+            err(&f, tokened.clone()).await,
+            (ErrorCode::DeviceLimit, None)
+        );
         assert_eq!(
             err(&f, reg(DeviceKind::Vr, "VR", None)).await,
             (ErrorCode::DeviceLimit, None)
         );
-        let mut tokened = reg(DeviceKind::Console, "PS5", None);
-        tokened.token_hash = crate::devices::hash_token_secret("s").unwrap();
-        let id = add(&f, tokened).await.unwrap();
         let applied = send(
             &f,
             ActorKind::Owner,
@@ -6558,6 +6562,7 @@ mod manual_devices {
                 .iter()
                 .any(|c| c.tbl == "devices_meta" && c.row_id == id)
         );
+        add(&f, tokened).await.unwrap();
     }
 
     #[tokio::test]

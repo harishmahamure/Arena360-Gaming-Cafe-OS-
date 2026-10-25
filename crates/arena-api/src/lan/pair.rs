@@ -10,7 +10,7 @@ use arena_proto::{
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::LanHub;
-use crate::pairing::{PinOutcome, pin_paused};
+use crate::pairing::{PinOutcome, pin_paused, rate_limited};
 
 pub const MAX_BODY_BYTES: usize = 4 * 1024;
 
@@ -40,10 +40,10 @@ fn failed(e: AppError) -> Answer {
     }
 }
 
-fn paused(seconds: u32) -> Answer {
+fn waiting(e: AppError, seconds: u32) -> Answer {
     Answer {
         retry_after_s: Some(seconds),
-        ..failed(pin_paused())
+        ..failed(e)
     }
 }
 
@@ -122,13 +122,15 @@ pub(crate) async fn handle(hub: &Arc<LanHub>, peer: SocketAddr, body: &[u8]) -> 
             retry_after_s: None,
         },
         Err(Refusal::Error(e)) => failed(e),
-        Err(Refusal::Paused(s)) => paused(s),
+        Err(Refusal::Paused(s)) => waiting(pin_paused(), s),
+        Err(Refusal::Limited(s)) => waiting(rate_limited(), s),
     }
 }
 
 enum Refusal {
     Error(AppError),
     Paused(u32),
+    Limited(u32),
 }
 
 impl From<AppError> for Refusal {
@@ -152,6 +154,7 @@ async fn pair(hub: &Arc<LanHub>, peer: SocketAddr, body: &[u8]) -> Result<PairRe
     let Some(pairing) = hub.pairing.clone() else {
         return Err(AppError::new(ErrorCode::NotFound, "pairing is not available").into());
     };
+    pairing.attempt(peer.ip()).map_err(Refusal::Limited)?;
     let req: PairRequest = serde_json::from_slice(body)
         .map_err(|_| AppError::new(ErrorCode::BadFrame, "the body must be a pairing request"))?;
     let secret = req.validate()?;

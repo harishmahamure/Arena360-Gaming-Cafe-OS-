@@ -63,6 +63,12 @@ Read this file after a context flush (`/clear`). It's the single entry point for
   - After every landing, re-run the script so the **Pull next** list is current, and amend the regenerated board into the landing commit.
   - This supersedes the "Develop every epic in order (1 → 14)" instruction and the Epic 2 track lists above; those are kept as history.
 
+- **(2026-10-25) STOP requested by the user:** "stop wherever current build gets done".
+  - Finish only what is in flight: 2.14, 2.24, 4.2 and 5.5. Land each as it reports (rebase onto master, verify, fast-forward, bookkeeping). Then start nothing new.
+  - **Landed on master since the kanban switch (local, nothing pushed):** 8.11, 5.1, 2.11, 8.12, 2.21, 5.2, 2.12, 2.23, 5.3, 4.1, 2.13, 5.4 (HEAD `8cecad6`). Hub migrations are contiguous through `0019_bundles.sql`; control migrations through `0010`.
+  - **Resume:** re-run `uv run _bmad-output/planning-artifacts/kanban/build_board.py` and pull from "Pull next". Worktrees for unlanded stories live in `.claude/worktrees/`; `web-11-1` holds unfinished, uncommitted 11.1 work from an earlier session and `1-19` stays blocked.
+  - **Disk:** `target/` caches in worktrees reach 20 GB or more each. Delete them for landed worktrees before the disk fills (it hit 99% once).
+
 ## Where things stand
 
 - **Story order and status:** `_bmad-output/implementation-artifacts/sprint-status.yaml`. A story at `review` is committed; `in-progress` is mid-pipeline.

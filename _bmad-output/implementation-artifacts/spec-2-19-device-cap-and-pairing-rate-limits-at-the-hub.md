@@ -2,7 +2,7 @@
 title: 'Story 2.19: Device cap and pairing rate limits at the Hub'
 type: 'feature'
 created: '2026-10-26'
-status: 'in-review'
+status: 'review'
 baseline_commit: 'cc055acfffdfcb2ff46cb1cb934691150dc2a364'
 review_loop_iteration: 0
 followup_review_recommended: false

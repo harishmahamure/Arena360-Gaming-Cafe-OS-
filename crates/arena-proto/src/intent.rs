@@ -86,11 +86,17 @@ pub enum IntentKind {
     AdsConsent,
     #[serde(rename = "printer.status")]
     PrinterStatus,
+    #[serde(rename = "group.upsert")]
+    GroupUpsert,
+    #[serde(rename = "group.delete")]
+    GroupDelete,
+    #[serde(rename = "device.assign")]
+    DeviceAssign,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 17] = [
+    pub const ALL: [IntentKind; 20] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -108,6 +114,9 @@ impl IntentKind {
         Self::DeviceAdminUnlock,
         Self::AdsConsent,
         Self::PrinterStatus,
+        Self::GroupUpsert,
+        Self::GroupDelete,
+        Self::DeviceAssign,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -130,6 +139,9 @@ impl IntentKind {
             Self::DeviceAdminUnlock => "device.admin_unlock",
             Self::AdsConsent => "ads.consent",
             Self::PrinterStatus => "printer.status",
+            Self::GroupUpsert => "group.upsert",
+            Self::GroupDelete => "group.delete",
+            Self::DeviceAssign => "device.assign",
         }
     }
 
@@ -148,7 +160,10 @@ impl IntentKind {
             | Self::DeviceVersionReported
             | Self::DeviceAdminExit
             | Self::DeviceAdminRelock
-            | Self::DeviceAdminUnlock => IntentCategory::Device,
+            | Self::DeviceAdminUnlock
+            | Self::GroupUpsert
+            | Self::GroupDelete
+            | Self::DeviceAssign => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
@@ -164,7 +179,9 @@ impl IntentKind {
             Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => {
                 Requirement::Perm(Permission::SettingsEdit)
             }
-            Self::DeviceRegister => Requirement::Perm(Permission::DeviceManage),
+            Self::DeviceRegister | Self::GroupUpsert | Self::GroupDelete | Self::DeviceAssign => {
+                Requirement::Perm(Permission::DeviceManage)
+            }
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
             Self::DeviceVersionReported => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
@@ -214,7 +231,10 @@ impl IntentKind {
             | Self::DeviceAdminRelock
             | Self::DeviceAdminUnlock
             | Self::AdsConsent
-            | Self::PrinterStatus => None,
+            | Self::PrinterStatus
+            | Self::GroupUpsert
+            | Self::GroupDelete
+            | Self::DeviceAssign => None,
         }
     }
 
@@ -421,6 +441,42 @@ pub struct RoleUpsert {
     pub perms: Vec<RolePerm>,
 }
 
+/// The payload of `group.upsert`. Without `id` it creates a group (the writer mints the id);
+/// with one it edits that group. `group_kind` (not `kind`, which tags the payload) is one of
+/// [`GROUP_KINDS`] and `colour` one of
+/// [`GROUP_COLOURS`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct GroupUpsert {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    pub name: String,
+    pub group_kind: String,
+    pub colour: String,
+    #[ts(type = "number")]
+    pub sort_order: i64,
+}
+
+/// The payload of `group.delete`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct GroupDelete {
+    pub id: String,
+}
+
+/// The payload of `device.assign`: `group_id` `null` makes the device Unassigned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct DeviceAssign {
+    pub device_id: String,
+    #[serde(default)]
+    pub group_id: Option<String>,
+}
+
+pub const GROUP_KINDS: [&str; 4] = ["pc", "console", "vr", "other"];
+pub const GROUP_COLOURS: [&str; 6] = ["teal", "orange", "lime", "sand", "coral", "silver"];
+
 /// The intent's payload, tagged by its kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
@@ -458,6 +514,12 @@ pub enum IntentPayload {
     AdsConsent(AdsConsentSet),
     #[serde(rename = "printer.status")]
     PrinterStatus(PrinterStatusSet),
+    #[serde(rename = "group.upsert")]
+    GroupUpsert(GroupUpsert),
+    #[serde(rename = "group.delete")]
+    GroupDelete(GroupDelete),
+    #[serde(rename = "device.assign")]
+    DeviceAssign(DeviceAssign),
 }
 
 impl IntentPayload {
@@ -480,6 +542,9 @@ impl IntentPayload {
             Self::DeviceAdminUnlock(_) => IntentKind::DeviceAdminUnlock,
             Self::AdsConsent(_) => IntentKind::AdsConsent,
             Self::PrinterStatus(_) => IntentKind::PrinterStatus,
+            Self::GroupUpsert(_) => IntentKind::GroupUpsert,
+            Self::GroupDelete(_) => IntentKind::GroupDelete,
+            Self::DeviceAssign(_) => IntentKind::DeviceAssign,
         }
     }
 }
@@ -588,6 +653,32 @@ mod tests {
     ];
 
     #[test]
+    fn group_payloads_round_trip() {
+        let up = IntentPayload::GroupUpsert(GroupUpsert {
+            id: None,
+            name: "PCs".into(),
+            group_kind: "pc".into(),
+            colour: "teal".into(),
+            sort_order: 1,
+        });
+        let json = serde_json::to_value(&up).unwrap();
+        assert_eq!(json["kind"], "group.upsert");
+        assert_eq!(json["group_kind"], "pc");
+        assert_eq!(serde_json::from_value::<IntentPayload>(json).unwrap(), up);
+        let assign: IntentPayload = serde_json::from_value(
+            serde_json::json!({"kind": "device.assign", "device_id": "D", "group_id": null}),
+        )
+        .unwrap();
+        assert_eq!(
+            assign,
+            IntentPayload::DeviceAssign(DeviceAssign {
+                device_id: "D".into(),
+                group_id: None
+            })
+        );
+    }
+
+    #[test]
     fn every_kind_has_exactly_one_requirement() {
         let mut seen = std::collections::HashSet::new();
         for kind in IntentKind::ALL {
@@ -601,7 +692,9 @@ mod tests {
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }
-                "device.register" => Requirement::Perm(Permission::DeviceManage),
+                "device.register" | "group.upsert" | "group.delete" | "device.assign" => {
+                    Requirement::Perm(Permission::DeviceManage)
+                }
                 "device.revoke" | "device.admin_unlock" => {
                     Requirement::Perm(Permission::DeviceRemote)
                 }

@@ -23,6 +23,8 @@ export type EventHandlers = {
   onSessionUnlocked?: (event: UnlockOk) => void;
   /** `devices.changed`: a device came online or went offline; reload the snapshot. */
   onDevicesChanged?: () => void;
+  /** `groups.changed`: a group or a device's group changed; `byOwner` for an owner command. */
+  onGroupsChanged?: (byOwner: boolean) => void;
   /** `connectivity.changed`: the WAN probe found a link down or back up. */
   onConnectivityChanged?: (event: Connectivity) => void;
   /** `device.admin_unlock_ack`: a kiosk granted a remote unlock. */
@@ -85,6 +87,14 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
     });
     es.addEventListener("resync", () => handlers.onResync());
     es.addEventListener("devices.changed", () => handlers.onDevicesChanged?.());
+    es.addEventListener("groups.changed", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        handlers.onGroupsChanged?.(isObject(data) && data.by_owner === true);
+      } catch {
+        handlers.onGroupsChanged?.(false);
+      }
+    });
     es.addEventListener("device.admin_unlock_ack", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent<string>).data) as Partial<AdminUnlockAckEvent>;

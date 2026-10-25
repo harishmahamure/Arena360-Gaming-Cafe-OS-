@@ -3,6 +3,7 @@ import type { Connectivity } from "./Connectivity";
 import type { SetupStatus } from "./SetupStatus";
 import type { SnapshotBranch } from "./SnapshotBranch";
 import type { SnapshotDevice } from "./SnapshotDevice";
+import type { SnapshotGroup } from "./SnapshotGroup";
 import type { SnapshotLan } from "./SnapshotLan";
 import type { SnapshotLocale } from "./SnapshotLocale";
 import type { SnapshotUi } from "./SnapshotUi";
@@ -19,6 +20,10 @@ export type HubSnapshot = {
    * Every device that is not revoked, ordered by id.
    */
   devices: Array<SnapshotDevice>;
+  /**
+   * The live device groups, in `sort_order` then name order.
+   */
+  groups: Array<SnapshotGroup>;
   /**
    * The branch locale in effect now, or `null` before the branch is set up.
    */

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Button, InlinePin, StatusBadge, t } from "@arena/ui";
-  import type { SessionStaff } from "@arena/ui/generated";
+  import { Button, GroupChip, InlinePin, StatusBadge, t } from "@arena/ui";
+  import type { SessionStaff, SnapshotDevice, SnapshotGroup } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
@@ -107,12 +107,65 @@
   };
 
   const snapshot = $derived(data.hub.ok ? data.hub.snapshot : null);
-  const unassigned = $derived(snapshot?.devices.filter((d) => (d.group_id ?? null) === null) ?? []);
+  const groups = $derived(snapshot?.groups ?? []);
+  const unassigned = $derived(
+    snapshot?.devices.filter((d) => !groups.some((g) => g.id === d.group_id)) ?? [],
+  );
 </script>
 
 <svelte:head>
   <title>{t("hub.page_title", { screen: t("hub.nav.floor") })}</title>
 </svelte:head>
+
+{#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined)}
+  <li
+    class="device"
+    class:assigned={group}
+    data-device-id={device.device_id}
+    data-testid={group ? "group-device" : "unassigned-device"}
+  >
+    <span class="label type-hub-title">{device.label}</span>
+    {#if group}<GroupChip name={group.name} colour={group.colour} />{:else}<StatusBadge
+        state="unassigned"
+      />{/if}
+    <!-- Presence in words (never colour alone): a live paired session or not. -->
+    <span class="presence type-hub-body" data-testid="device-presence"
+      >{device.online ? t("hub.floor.online") : t("hub.floor.offline")}</span
+    >
+    {#if device.class === "paired"}
+      <span class="unlock" bind:this={wraps[device.device_id]}>
+        <Button
+          label="hub.floor.remote_unlock"
+          variant="secondary"
+          disabled={unlocks[device.device_id] === "waiting" || approving === device.device_id}
+          disabledReason={approving === device.device_id
+            ? "hub.floor.remote_unlock_needs_approval"
+            : "hub.floor.remote_unlock_waiting"}
+          onclick={() => void unlock(device.device_id, device.online)}
+        />
+      </span>
+      {#if needsApproval && approving !== device.device_id}
+        <span class="note type-hub-label" data-testid="unlock-needs-approval"
+          >{t("hub.floor.remote_unlock_needs_approval")}</span
+        >
+      {/if}
+      <span class="status type-hub-label" role="status" data-testid="unlock-status">
+        {#if unlocks[device.device_id]}
+          {#if unlocks[device.device_id] === "failed"}<span aria-hidden="true">⚠</span>{/if}
+          <span>{t(STATUS[unlocks[device.device_id]])}</span>
+        {/if}
+      </span>
+      {#if approving === device.device_id}
+        <InlinePin
+          message={approvalPrompt}
+          onsubmit={approve}
+          oncancel={() => (approving = null)}
+          returnFocusTo={buttonOf(device.device_id)}
+        />
+      {/if}
+    {/if}
+  </li>
+{/snippet}
 
 <div class="floor">
   <h1 class="type-hub-numeric">{t("hub.nav.floor")}</h1>
@@ -125,6 +178,20 @@
   {:else if snapshot}
     <p class="type-hub-body muted" data-testid="floor-no-zones">{t("hub.floor.no_zones")}</p>
 
+    {#each groups as group (group.id)}
+      {@const members = snapshot.devices.filter((d) => d.group_id === group.id)}
+      {#if members.length > 0}
+        <section class="unassigned" aria-labelledby="floor-group-{group.id}">
+          <h2 class="type-hub-title" id="floor-group-{group.id}">{group.name}</h2>
+          <ul class="devices">
+            {#each members as device (device.device_id)}
+              {@render tile(device, group)}
+            {/each}
+          </ul>
+        </section>
+      {/if}
+    {/each}
+
     <section class="unassigned" aria-labelledby="floor-unassigned-title">
       <h2 class="type-hub-title" id="floor-unassigned-title">{t("hub.floor.unassigned")}</h2>
       {#if unassigned.length === 0}
@@ -132,48 +199,7 @@
       {:else}
         <ul class="devices">
           {#each unassigned as device (device.device_id)}
-            <li class="device" data-device-id={device.device_id} data-testid="unassigned-device">
-              <span class="label type-hub-title">{device.label}</span>
-              <StatusBadge state="unassigned" />
-              <!-- Presence in words (never colour alone): a live paired session or not. -->
-              <span class="presence type-hub-body" data-testid="device-presence"
-                >{device.online ? t("hub.floor.online") : t("hub.floor.offline")}</span
-              >
-              {#if device.class === "paired"}
-                <span class="unlock" bind:this={wraps[device.device_id]}>
-                  <Button
-                    label="hub.floor.remote_unlock"
-                    variant="secondary"
-                    disabled={unlocks[device.device_id] === "waiting" ||
-                      approving === device.device_id}
-                    disabledReason={approving === device.device_id
-                      ? "hub.floor.remote_unlock_needs_approval"
-                      : "hub.floor.remote_unlock_waiting"}
-                    onclick={() => void unlock(device.device_id, device.online)}
-                  />
-                </span>
-                {#if needsApproval && approving !== device.device_id}
-                  <span class="note type-hub-label" data-testid="unlock-needs-approval"
-                    >{t("hub.floor.remote_unlock_needs_approval")}</span
-                  >
-                {/if}
-                <span class="status type-hub-label" role="status" data-testid="unlock-status">
-                  {#if unlocks[device.device_id]}
-                    {#if unlocks[device.device_id] === "failed"}<span aria-hidden="true">⚠</span
-                      >{/if}
-                    <span>{t(STATUS[unlocks[device.device_id]])}</span>
-                  {/if}
-                </span>
-                {#if approving === device.device_id}
-                  <InlinePin
-                    message={approvalPrompt}
-                    onsubmit={approve}
-                    oncancel={() => (approving = null)}
-                    returnFocusTo={buttonOf(device.device_id)}
-                  />
-                {/if}
-              {/if}
-            </li>
+            {@render tile(device, undefined)}
           {/each}
         </ul>
       {/if}
@@ -237,5 +263,9 @@
     border-radius: var(--radius-md);
     background-color: var(--floor-tile-background);
     overflow-wrap: anywhere;
+  }
+
+  .device.assigned {
+    border: 1px solid var(--line);
   }
 </style>

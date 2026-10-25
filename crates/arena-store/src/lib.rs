@@ -43,9 +43,11 @@ pub use dedupe::{
     insert_applied_intent, prune_applied_intents,
 };
 pub use devices::{
-    DeviceMetaRow, DeviceRow, NewDevice, devices_meta_exists, find_device, find_device_meta,
-    insert_device, insert_device_meta, list_device_meta, list_devices, set_device_label,
-    set_device_reported_version, set_device_revoked, update_device_meta,
+    DeviceMetaRow, DeviceRow, GroupRow, NewDevice, count_group_devices, devices_meta_exists,
+    find_device, find_device_meta, find_group, find_group_by_name, insert_device,
+    insert_device_meta, insert_group, list_device_meta, list_devices, list_groups,
+    set_device_group, set_device_label, set_device_reported_version, set_device_revoked,
+    set_group_deleted, update_device_meta, update_group,
 };
 pub use identity::{
     CachedLicence, HubIdentity, find_cached_licence, find_hub_identity, insert_hub_identity,
@@ -498,6 +500,17 @@ impl Store {
 
     pub fn devices_meta(&self) -> Result<Vec<DeviceMetaRow>, AppError> {
         list_device_meta(&self.conn)
+    }
+
+    pub fn groups(&self) -> Result<Vec<GroupRow>, AppError> {
+        if !self.table_exists("device_groups")? {
+            return Ok(Vec::new());
+        }
+        list_groups(&self.conn)
+    }
+
+    pub fn change_actor_kind(&self, epoch: &str, seq: i64) -> Result<Option<String>, AppError> {
+        devices::change_actor_kind(&self.conn, epoch, seq)
     }
 
     pub fn device_meta(&self, device_id: &str) -> Result<Option<DeviceMetaRow>, AppError> {

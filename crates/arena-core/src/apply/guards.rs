@@ -6,7 +6,7 @@ use arena_proto::{
 };
 use arena_store::{StoreTx, find_device, find_staff, read_lease};
 
-use super::{ApplyCtx, Target, admin_exit, devices, settings_set, staff_roles};
+use super::{ApplyCtx, Target, admin_exit, devices, groups, settings_set, staff_roles};
 use crate::rbac;
 use crate::staff::pin_required;
 use crate::status::{Epoch, Role};
@@ -96,7 +96,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::Device(_)
             | Target::Branch(_)
             | Target::AdminExit(_)
-            | Target::AdminUnlock(_),
+            | Target::AdminUnlock(_)
+            | Target::Group(_),
             _,
         ) => Ok(()),
     }
@@ -147,5 +148,6 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),
         Target::Staff(t) => staff_roles::base_rev_staff(intent, t),
         Target::Role(t) => staff_roles::base_rev_role(intent, t),
+        Target::Group(t) => groups::base_rev(intent, t),
     }
 }

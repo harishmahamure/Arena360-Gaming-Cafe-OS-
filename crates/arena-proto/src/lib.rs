@@ -64,9 +64,10 @@ pub use frame::{
     check_envelope, parse_frame, parse_frame_value, parse_json,
 };
 pub use intent::{
-    AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceRegister, DeviceRevoke,
-    DeviceVersionReported, Intent, IntentCategory, IntentKind, IntentPayload, PermEffect,
-    ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffUpsert, reasons_json,
+    AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceAssign, DeviceRegister,
+    DeviceRevoke, DeviceVersionReported, GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert,
+    Intent, IntentCategory, IntentKind, IntentPayload, PermEffect, ReasonCode, RolePerm,
+    RoleUpsert, SettingsSet, StaffUpsert, reasons_json,
 };
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
@@ -127,8 +128,8 @@ pub use signup::{
 };
 pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
-    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotLan, SnapshotLocale, SnapshotUi,
-    SymbolPosition,
+    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
+    SnapshotLocale, SnapshotUi, SymbolPosition,
 };
 pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use ui_auth::{

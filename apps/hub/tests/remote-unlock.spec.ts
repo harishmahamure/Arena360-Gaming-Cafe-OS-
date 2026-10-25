@@ -34,6 +34,7 @@ const STAFF: Record<string, SessionStaff> = {
 
 const snapshot = (online: boolean): HubSnapshot => ({
   branch: { name: "Dev Branch", branch_code: "DEV01" },
+  groups: [],
   devices: [{ device_id: KIOSK, label: "Kiosk 3", class: "paired", zone: null, online }],
   locale: {
     currency: "INR",

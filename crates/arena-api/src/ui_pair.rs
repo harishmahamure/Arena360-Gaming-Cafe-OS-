@@ -34,6 +34,7 @@ fn already_paired() -> UiError {
 pub fn unpaired_snapshot(full: HubSnapshot) -> HubSnapshot {
     HubSnapshot {
         branch: None,
+        groups: Vec::new(),
         devices: Vec::new(),
         locale: None,
         ui: full.ui,
@@ -223,6 +224,7 @@ mod tests {
                 name: "B".into(),
                 branch_code: "B1".into(),
             }),
+            groups: vec![],
             devices: vec![],
             locale: None,
             ui: arena_proto::SnapshotUi::default(),

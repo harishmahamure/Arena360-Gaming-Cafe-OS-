@@ -14,6 +14,9 @@ pub struct HubSnapshot {
     pub branch: Option<SnapshotBranch>,
     /// Every device that is not revoked, ordered by id.
     pub devices: Vec<SnapshotDevice>,
+    /// The live device groups, in `sort_order` then name order.
+    #[serde(default)]
+    pub groups: Vec<SnapshotGroup>,
     /// The branch locale in effect now, or `null` before the branch is set up.
     pub locale: Option<SnapshotLocale>,
     /// Hub UI behaviour settings.
@@ -181,6 +184,20 @@ pub struct SnapshotBranch {
     pub branch_code: String,
 }
 
+/// One device group.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotGroup {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub colour: String,
+    #[ts(type = "number")]
+    pub sort_order: i64,
+    #[ts(type = "number")]
+    pub rev: i64,
+}
+
 /// One device on the floor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -212,6 +229,7 @@ mod tests {
     fn serializes_with_null_branch_and_zone() {
         let s = HubSnapshot {
             branch: None,
+            groups: vec![],
             devices: vec![SnapshotDevice {
                 device_id: "D".into(),
                 label: "Dev Kiosk".into(),
@@ -233,6 +251,7 @@ mod tests {
             serde_json::to_value(&s).unwrap(),
             serde_json::json!({
                 "branch": null,
+                "groups": [],
                 "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1}],
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5, "hc": false},

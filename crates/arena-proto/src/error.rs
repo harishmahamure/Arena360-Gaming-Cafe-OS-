@@ -89,6 +89,10 @@ pub enum ErrorCode {
     FeatureNotEntitled,
     CloudUnreachable,
     HubNotPaired,
+    /// The group still has devices; move them out first.
+    GroupNotEmpty,
+    /// The device's kind does not fit the group's kind.
+    GroupKindMismatch,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -150,6 +154,8 @@ impl ErrorCode {
             Self::FeatureNotEntitled => "FEATURE_NOT_ENTITLED",
             Self::CloudUnreachable => "CLOUD_UNREACHABLE",
             Self::HubNotPaired => "HUB_NOT_PAIRED",
+            Self::GroupNotEmpty => "GROUP_NOT_EMPTY",
+            Self::GroupKindMismatch => "GROUP_KIND_MISMATCH",
         }
     }
 }
@@ -269,6 +275,8 @@ mod tests {
             (ErrorCode::FeatureNotEntitled, "FEATURE_NOT_ENTITLED"),
             (ErrorCode::CloudUnreachable, "CLOUD_UNREACHABLE"),
             (ErrorCode::HubNotPaired, "HUB_NOT_PAIRED"),
+            (ErrorCode::GroupNotEmpty, "GROUP_NOT_EMPTY"),
+            (ErrorCode::GroupKindMismatch, "GROUP_KIND_MISMATCH"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

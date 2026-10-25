@@ -86,6 +86,7 @@ function newHub(): Hub {
 function snapshot(): HubSnapshot {
   return {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
+    groups: [],
     devices: [],
     locale: {
       currency: "INR",

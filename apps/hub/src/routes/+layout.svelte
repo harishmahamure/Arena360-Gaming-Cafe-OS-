@@ -71,6 +71,8 @@
   let lockedHasPin = $state(true);
   /** Announced after an unlock that switched the member. */
   let announcement = $state("");
+  let toast = $state("");
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
   /** Which WAN link is down (`online`: no chip), from the snapshot and `connectivity.changed`. */
   let link: ConnectivityState = $state("online");
   /** When the Hub's probe found `link` (UTC ms; `null`, before any probe, is the oldest). */
@@ -223,6 +225,13 @@
           if (locked && !unlocking) void finishUnlock(e);
         },
         onDevicesChanged: () => void refresh(),
+        onGroupsChanged: (byOwner) => {
+          void refresh();
+          if (!byOwner) return;
+          toast = t("hub.groups.owner_toast");
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => (toast = ""), 5000);
+        },
         onConnectivityChanged: (e) => takeLink(e),
         onAdminUnlockAck: (e) => noteAck(e.exit_id),
         onPairingCodeChanged: (c) => notePairingCode(c),
@@ -559,11 +568,27 @@
 {/if}
 
 <p class="visually-hidden" aria-live="polite" data-testid="hub-announce">{announcement}</p>
+{#if toast}
+  <p class="toast type-hub-label" role="status" data-testid="hub-toast">{toast}</p>
+{/if}
 
 <style>
   :global(body) {
     margin: 0;
     background-color: var(--hub-bg);
+  }
+
+  .toast {
+    position: fixed;
+    right: var(--space-4);
+    bottom: var(--space-4);
+    z-index: 10;
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--hud-toast-border);
+    border-radius: var(--radius-md);
+    background-color: var(--hud-toast-bg);
+    color: var(--hud-toast-text);
   }
 
   .shell {

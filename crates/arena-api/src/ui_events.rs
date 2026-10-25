@@ -12,6 +12,8 @@
 //! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN, or
 //!   the Hub's LAN addresses changed; the view reloads the snapshot (which carries each
 //!   device's `online` and the `lan` block).
+//! - `event: groups.changed`, data `{"by_owner": bool}`: a device group or a device's group
+//!   changed (`by_owner`: an owner setup command wrote it); sent with `devices.changed`.
 //! - `event: device.admin_unlock_ack`, data
 //!   [`AdminUnlockAckEvent`](arena_proto::AdminUnlockAckEvent): a kiosk granted a remote unlock
 //!   (the floor waits up to 5 s for it).
@@ -255,6 +257,20 @@ impl HubTask {
                             .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta"))
                         {
                             self.send("devices.changed", "{}".into(), false);
+                        }
+                        if let Some(c) = applied
+                            .changes
+                            .iter()
+                            .find(|c| matches!(c.tbl.as_str(), "device_groups" | "devices_meta"))
+                        {
+                            let (reader, epoch, seq) =
+                                (Arc::clone(&self.reader), c.epoch.clone(), c.seq);
+                            let owner = tokio::task::spawn_blocking(move || {
+                                reader.owner_wrote(&epoch, seq)
+                            })
+                            .await
+                            .unwrap_or(false);
+                            self.send("groups.changed", format!(r#"{{"by_owner":{owner}}}"#), false);
                         }
                         if keys.is_empty() {
                             let data = serde_json::to_string(&AppliedEvent {

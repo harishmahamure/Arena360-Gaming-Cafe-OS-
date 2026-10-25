@@ -45,7 +45,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::BillingDisabled
         | ErrorCode::OneFreeBranch
         | ErrorCode::StepNotReady
-        | ErrorCode::HubNotPaired => StatusCode::CONFLICT,
+        | ErrorCode::HubNotPaired
+        | ErrorCode::GroupNotEmpty
+        | ErrorCode::GroupKindMismatch => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
         ErrorCode::FeatureNotEntitled => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,

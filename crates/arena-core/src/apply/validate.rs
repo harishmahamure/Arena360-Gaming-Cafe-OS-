@@ -1,6 +1,6 @@
 //! **validate.** Payload checks; a failure is `VALIDATION_FAILED` naming the field.
 
-use super::{Target, devices, settings_set, staff_roles};
+use super::{Target, devices, groups, settings_set, staff_roles};
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
 /// Longest branch name, in characters, after trimming.
@@ -97,6 +97,18 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
         },
         IntentPayload::DeviceAdminUnlock(p) => match target {
             Target::AdminUnlock(t) => super::admin_exit::validate_unlock(intent, p, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::GroupUpsert(g) => match target {
+            Target::Group(t) => groups::validate_upsert(g, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::GroupDelete(_) => match target {
+            Target::Group(t) => groups::validate_delete(t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::DeviceAssign(a) => match target {
+            Target::Group(t) => groups::validate_assign(a, t),
             _ => Err(internal_target()),
         },
     }

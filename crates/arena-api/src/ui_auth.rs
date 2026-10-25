@@ -826,9 +826,11 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         }
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::ValidationFailed | ErrorCode::Expired => StatusCode::UNPROCESSABLE_ENTITY,
-        ErrorCode::Stale | ErrorCode::AlreadyBootstrapped | ErrorCode::IdempotencyConflict => {
-            StatusCode::CONFLICT
-        }
+        ErrorCode::Stale
+        | ErrorCode::AlreadyBootstrapped
+        | ErrorCode::IdempotencyConflict
+        | ErrorCode::GroupNotEmpty
+        | ErrorCode::GroupKindMismatch => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }

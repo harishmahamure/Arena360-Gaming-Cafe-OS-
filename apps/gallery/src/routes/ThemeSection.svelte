@@ -5,6 +5,7 @@
     Card,
     InlinePin,
     ReasonPicker,
+    GroupChip,
     StatusBadge,
     TabControl,
     TextField,
@@ -206,6 +207,9 @@
       <div class="row">
         {#each STATES as state (state)}
           <StatusBadge {state} />
+        {/each}
+        {#each ["teal", "orange", "lime", "sand", "coral", "silver"] as colour (colour)}
+          <GroupChip name={colour} {colour} />
         {/each}
       </div>
     {:else}

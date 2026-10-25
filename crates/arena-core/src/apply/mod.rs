@@ -27,6 +27,7 @@ mod ads_consent;
 mod changes;
 mod devices;
 mod frame;
+mod groups;
 mod guards;
 mod kiosk_log;
 mod mutate;
@@ -121,6 +122,7 @@ pub(crate) enum Target {
     AdminRelock(Option<arena_store::AdminExitRow>),
     /// `device.admin_unlock`: the branch and the device.
     AdminUnlock(Box<admin_exit::UnlockTarget>),
+    Group(Box<groups::GroupTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
@@ -140,6 +142,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
         P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,
         P::DeviceAdminUnlock(p) => admin_exit::load_unlock(tx, p)?,
+        P::GroupUpsert(_) | P::GroupDelete(_) | P::DeviceAssign(_) => {
+            Target::Group(Box::new(groups::load(tx, &intent.payload)?))
+        }
     })
 }
 

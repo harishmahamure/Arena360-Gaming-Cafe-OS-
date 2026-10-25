@@ -4866,3 +4866,359 @@ mod printer {
         assert_eq!(snapshot(&f), before);
     }
 }
+
+mod device_groups {
+    use super::*;
+    use crate::rbac::{ROLE_COUNTER, ROLE_MANAGER};
+    use crate::staff::hash_secret;
+    use arena_proto::{
+        ClientClass, DeviceAssign, DeviceKind, DeviceRegister, GroupDelete, GroupUpsert,
+        StaffUpsert,
+    };
+
+    fn actor(kind: ActorKind, id: &str) -> Actor {
+        Actor {
+            kind,
+            id: id.into(),
+        }
+    }
+
+    fn as_actor(a: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
+        Intent {
+            kind: payload.kind(),
+            payload,
+            actor: a,
+            base_rev,
+            ..bootstrap()
+        }
+    }
+
+    fn upsert(id: Option<&str>, name: &str, kind: &str, colour: &str) -> IntentPayload {
+        IntentPayload::GroupUpsert(GroupUpsert {
+            id: id.map(Into::into),
+            name: name.into(),
+            group_kind: kind.into(),
+            colour: colour.into(),
+            sort_order: 1,
+        })
+    }
+
+    fn assign(device: &str, group: Option<&str>) -> IntentPayload {
+        IntentPayload::DeviceAssign(DeviceAssign {
+            device_id: device.into(),
+            group_id: group.map(Into::into),
+        })
+    }
+
+    async fn owner(
+        f: &Fixture,
+        payload: IntentPayload,
+        base_rev: Option<i64>,
+    ) -> Result<Applied, AppError> {
+        f.writer
+            .submit_intent(as_actor(actor(ActorKind::Owner, "o"), payload, base_rev))
+            .await
+    }
+
+    async fn group(f: &Fixture, name: &str, kind: &str) -> String {
+        owner(f, upsert(None, name, kind, "teal"), None)
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone()
+    }
+
+    async fn device(f: &Fixture, kind: DeviceKind) -> String {
+        let mut d = DeviceRegister::new(
+            ClientClass::Paired,
+            "D",
+            crate::devices::hash_token_secret("s").unwrap(),
+        );
+        d.kind = kind;
+        f.writer
+            .submit_intent(as_actor(
+                actor(ActorKind::System, arena_proto::PAIR_SYSTEM_ACTOR),
+                IntentPayload::DeviceRegister(d),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone()
+    }
+
+    fn group_rev(f: &Fixture, id: &str) -> i64 {
+        reopen(f)
+            .groups()
+            .unwrap()
+            .iter()
+            .find(|g| g.group_id == id)
+            .unwrap()
+            .rev
+    }
+
+    fn device_rev(f: &Fixture, id: &str) -> i64 {
+        reopen(f).device_meta(id).unwrap().unwrap().rev
+    }
+
+    async fn field(
+        f: &Fixture,
+        payload: IntentPayload,
+        base_rev: Option<i64>,
+    ) -> (ErrorCode, Option<String>) {
+        let e = owner(f, payload, base_rev).await.unwrap_err();
+        (e.code, e.field)
+    }
+
+    #[tokio::test]
+    async fn create_edit_and_validate() {
+        let f = bootstrapped().await;
+        let applied = owner(&f, upsert(None, "PCs", "pc", "teal"), None)
+            .await
+            .unwrap();
+        let id = applied.changes[0].row_id.clone();
+        let c = &applied.changes[0];
+        assert_eq!(
+            reopen(&f)
+                .change_actor_kind(&c.epoch, c.seq)
+                .unwrap()
+                .as_deref(),
+            Some("owner")
+        );
+        let stored = reopen(&f).groups().unwrap();
+        assert_eq!(
+            (
+                stored[0].name.as_str(),
+                stored[0].colour.as_str(),
+                stored[0].rev
+            ),
+            ("PCs", "teal", 1)
+        );
+
+        let invalid = |field: &str| (ErrorCode::ValidationFailed, Some(field.to_owned()));
+        assert_eq!(
+            field(&f, upsert(None, "pcs", "pc", "teal"), None).await,
+            invalid("name")
+        );
+        assert_eq!(
+            field(&f, upsert(None, "X", "pc", "purple"), None).await,
+            invalid("colour")
+        );
+        assert_eq!(
+            field(&f, upsert(None, "X", "tv", "teal"), None).await,
+            invalid("kind")
+        );
+        assert_eq!(
+            field(&f, upsert(None, " ", "pc", "teal"), None).await,
+            invalid("name")
+        );
+        let staff = actor(ActorKind::Staff, "x");
+        let e = f
+            .writer
+            .submit_intent(as_actor(
+                staff,
+                upsert(Some(&id), "PCs", "pc", "lime"),
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            field(&f, upsert(Some("nope"), "Y", "pc", "lime"), Some(1)).await,
+            invalid("id")
+        );
+
+        owner(&f, upsert(Some(&id), "Gaming PCs", "pc", "lime"), Some(1))
+            .await
+            .unwrap();
+        let g = &reopen(&f).groups().unwrap()[0];
+        assert_eq!(
+            (g.name.as_str(), g.colour.as_str(), g.rev),
+            ("Gaming PCs", "lime", 2)
+        );
+    }
+
+    #[tokio::test]
+    async fn kind_matrix() {
+        let f = bootstrapped().await;
+        let groups = [
+            ("pc", group(&f, "G-pc", "pc").await),
+            ("console", group(&f, "G-console", "console").await),
+            ("vr", group(&f, "G-vr", "vr").await),
+            ("other", group(&f, "G-other", "other").await),
+        ];
+        let kinds = [
+            (DeviceKind::Pc, "pc"),
+            (DeviceKind::Console, "console"),
+            (DeviceKind::Vr, "vr"),
+            (DeviceKind::Sim, "other"),
+        ];
+        for (dk, ok) in kinds {
+            let dev = device(&f, dk).await;
+            for (gk, gid) in &groups {
+                let rev = device_rev(&f, &dev);
+                let r = owner(&f, assign(&dev, Some(gid)), Some(rev)).await;
+                if *gk == ok {
+                    r.unwrap();
+                    assert_eq!(
+                        reopen(&f)
+                            .device_meta(&dev)
+                            .unwrap()
+                            .unwrap()
+                            .group_id
+                            .as_deref(),
+                        Some(gid.as_str())
+                    );
+                } else {
+                    assert_eq!(
+                        r.unwrap_err().code,
+                        ErrorCode::GroupKindMismatch,
+                        "{ok} -> {gk}"
+                    );
+                }
+            }
+            let rev = device_rev(&f, &dev);
+            owner(&f, assign(&dev, None), Some(rev)).await.unwrap();
+            assert_eq!(
+                reopen(&f).device_meta(&dev).unwrap().unwrap().group_id,
+                None
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_needs_an_empty_group_and_frees_the_name() {
+        let f = bootstrapped().await;
+        let id = group(&f, "PCs", "pc").await;
+        let dev = device(&f, DeviceKind::Pc).await;
+        owner(&f, assign(&dev, Some(&id)), Some(1)).await.unwrap();
+        let del = || IntentPayload::GroupDelete(GroupDelete { id: id.clone() });
+        let e = owner(&f, del(), Some(1)).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::GroupNotEmpty);
+        assert_eq!(
+            field(&f, upsert(Some(&id), "PCs", "console", "teal"), Some(1)).await,
+            (ErrorCode::ValidationFailed, Some("kind".into()))
+        );
+        owner(&f, assign(&dev, None), Some(2)).await.unwrap();
+        owner(&f, del(), Some(1)).await.unwrap();
+        assert!(reopen(&f).groups().unwrap().is_empty());
+        assert_eq!(
+            field(&f, del(), Some(2)).await.0,
+            ErrorCode::ValidationFailed
+        );
+        let again = group(&f, "pcs", "pc").await;
+        assert_ne!(again, id);
+    }
+
+    #[tokio::test]
+    async fn stale_staff_edits_fail_but_an_owner_command_wins() {
+        let f = bootstrapped().await;
+        let id = group(&f, "PCs", "pc").await;
+        owner(&f, upsert(Some(&id), "PCs", "pc", "lime"), Some(1))
+            .await
+            .unwrap();
+        let role = |name: &str| -> String {
+            match reopen(&f)
+                .rows(Table::Roles)
+                .unwrap()
+                .into_iter()
+                .find(|r| r["name"] == RowValue::Text(name.into()))
+                .unwrap()["role_id"]
+                .clone()
+            {
+                RowValue::Text(t) => t,
+                other => panic!("{other:?}"),
+            }
+        };
+        let mut staff = Vec::new();
+        for (login, name) in [("mgr", ROLE_MANAGER), ("ctr", ROLE_COUNTER)] {
+            let applied = owner(
+                &f,
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: None,
+                    login: login.into(),
+                    display_name: login.into(),
+                    role_id: role(name),
+                    password_hash: Some(hash_secret("pw").unwrap()),
+                    pin_hash: Some(hash_secret("2222").unwrap()),
+                    active: true,
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+            staff.push(applied.changes[0].row_id.clone());
+        }
+        let by = |id: &str, p| as_actor(actor(ActorKind::Staff, id), p, Some(1));
+        let e = f
+            .writer
+            .submit_intent(by(&staff[0], upsert(Some(&id), "PCs", "pc", "coral")))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Stale);
+        assert_eq!(group_rev(&f, &id), 2);
+        f.writer
+            .submit_intent(as_actor(
+                actor(ActorKind::Staff, &staff[0]),
+                upsert(Some(&id), "PCs", "pc", "coral"),
+                Some(2),
+            ))
+            .await
+            .unwrap();
+        owner(&f, upsert(Some(&id), "PCs", "pc", "sand"), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(reopen(&f).groups().unwrap()[0].colour, "sand");
+
+        let e = f
+            .writer
+            .submit_intent(by(&staff[1], upsert(None, "New", "pc", "lime")))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        let mut approved = by(&staff[1], upsert(None, "New", "pc", "lime"));
+        approved.base_rev = None;
+        approved.elevated_by = Some(ElevatedBy {
+            kind: ElevationKind::Pin,
+            id: staff[0].clone(),
+            mode: ElevationMode::Hub,
+            verifier_version: 1,
+        });
+        f.writer.submit_intent(approved).await.unwrap();
+        assert_eq!(reopen(&f).groups().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn assign_and_delete_checks() {
+        let f = bootstrapped().await;
+        let id = group(&f, "PCs", "pc").await;
+        let dev = device(&f, DeviceKind::Pc).await;
+        let bad = |field: &str| (ErrorCode::ValidationFailed, Some(field.to_owned()));
+        assert_eq!(
+            field(&f, assign(&dev, Some("nope")), Some(1)).await,
+            bad("group_id")
+        );
+        assert_eq!(
+            field(&f, assign("nope", None), Some(1)).await,
+            bad("device_id")
+        );
+        let mgr = actor(ActorKind::Staff, "x");
+        let e = f
+            .writer
+            .submit_intent(as_actor(mgr, assign(&dev, Some(&id)), Some(1)))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        owner(&f, assign(&dev, Some(&id)), Some(1)).await.unwrap();
+        owner(&f, assign(&dev, None), Some(1)).await.unwrap();
+        assert_eq!(device_rev(&f, &dev), 3);
+        let del = IntentPayload::GroupDelete(GroupDelete { id: id.clone() });
+        owner(&f, del.clone(), None).await.unwrap();
+        assert_eq!(
+            field(&f, assign(&dev, Some(&id)), Some(3)).await,
+            bad("group_id")
+        );
+    }
+}

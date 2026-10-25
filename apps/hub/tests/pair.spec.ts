@@ -12,6 +12,7 @@ const CORS = {
 };
 const UNPAIRED: HubSnapshot = {
   branch: null,
+  groups: [],
   devices: [],
   locale: null,
   ui: { idle_lock_minutes: 5, hc: true },
@@ -22,6 +23,7 @@ const UNPAIRED: HubSnapshot = {
 };
 const PAIRED: HubSnapshot = {
   branch: { name: "Dev Branch", branch_code: "DEV01" },
+  groups: [],
   devices: [],
   locale: null,
   ui: { idle_lock_minutes: 5, hc: false },

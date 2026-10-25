@@ -215,6 +215,148 @@ pub fn set_device_label(conn: &Connection, device_id: &str, label: &str) -> Resu
     expect_one(n, device_id)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupRow {
+    pub group_id: String,
+    pub name: String,
+    pub kind: String,
+    pub colour: String,
+    pub sort_order: i64,
+    pub rev: i64,
+    pub deleted_at: Option<i64>,
+}
+
+const GROUP_COLUMNS: &str = "group_id, name, kind, colour, sort_order, rev, deleted_at";
+
+fn group_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRow> {
+    Ok(GroupRow {
+        group_id: r.get(0)?,
+        name: r.get(1)?,
+        kind: r.get(2)?,
+        colour: r.get(3)?,
+        sort_order: r.get(4)?,
+        rev: r.get(5)?,
+        deleted_at: r.get(6)?,
+    })
+}
+
+pub fn find_group(conn: &Connection, group_id: &str) -> Result<Option<GroupRow>, AppError> {
+    conn.query_row(
+        &format!("SELECT {GROUP_COLUMNS} FROM device_groups WHERE group_id = ?1"),
+        [group_id],
+        group_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn find_group_by_name(conn: &Connection, name: &str) -> Result<Option<GroupRow>, AppError> {
+    conn.query_row(
+        &format!(
+            "SELECT {GROUP_COLUMNS} FROM device_groups
+             WHERE name = ?1 COLLATE NOCASE AND deleted_at IS NULL"
+        ),
+        [name],
+        group_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn list_groups(conn: &Connection) -> Result<Vec<GroupRow>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {GROUP_COLUMNS} FROM device_groups WHERE deleted_at IS NULL
+             ORDER BY sort_order, name COLLATE NOCASE, group_id"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], group_from).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+pub fn count_group_devices(conn: &Connection, group_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM devices_meta WHERE group_id = ?1 AND deleted_at IS NULL",
+        [group_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+pub fn insert_group(
+    conn: &Connection,
+    group_id: &str,
+    name: &str,
+    kind: &str,
+    colour: &str,
+    sort_order: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO device_groups (group_id, name, kind, colour, sort_order, rev, deleted_at,
+                                    created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, NULL, 0, 0)",
+        params![group_id, name, kind, colour, sort_order],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn update_group(
+    conn: &Connection,
+    group_id: &str,
+    name: &str,
+    kind: &str,
+    colour: &str,
+    sort_order: i64,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE device_groups SET name = ?2, kind = ?3, colour = ?4, sort_order = ?5
+             WHERE group_id = ?1",
+            params![group_id, name, kind, colour, sort_order],
+        )
+        .map_err(db_error)?;
+    expect_one(n, group_id)
+}
+
+pub fn set_group_deleted(conn: &Connection, group_id: &str, at_ms: i64) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE device_groups SET deleted_at = ?2 WHERE group_id = ?1",
+            params![group_id, at_ms],
+        )
+        .map_err(db_error)?;
+    expect_one(n, group_id)
+}
+
+pub fn set_device_group(
+    conn: &Connection,
+    device_id: &str,
+    group_id: Option<&str>,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE devices_meta SET group_id = ?2 WHERE device_id = ?1",
+            params![device_id, group_id],
+        )
+        .map_err(db_error)?;
+    expect_one(n, device_id)
+}
+
+pub fn change_actor_kind(
+    conn: &Connection,
+    epoch: &str,
+    seq: i64,
+) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT actor_kind FROM changes WHERE epoch = ?1 AND seq = ?2",
+        params![epoch, seq],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +487,68 @@ mod tests {
                 .write_tx(|tx| insert_device_meta(tx, "nope", "pc", "x"))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn migration_0012_keeps_devices_and_enforces_the_group_fk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            for m in crate::migrations::MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 11)
+            {
+                conn.execute_batch(m.sql).unwrap();
+                crate::record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            insert_branch(
+                &conn,
+                &NewBranch {
+                    branch_id: "B",
+                    name: "N",
+                    branch_code: "C",
+                    currency: "INR",
+                    tz: "UTC",
+                    day_start_min: 0,
+                    fy_start_month: 1,
+                },
+            )
+            .unwrap();
+            insert_device(
+                &conn,
+                &NewDevice {
+                    device_id: "K",
+                    branch_id: "B",
+                    class: "paired",
+                    label: "Dev Kiosk",
+                    token_hash: "$argon2id$x",
+                },
+            )
+            .unwrap();
+            insert_device_meta(&conn, "K", "pc", "Dev Kiosk").unwrap();
+        }
+        let mut store = Store::open(&path, 0).unwrap();
+        assert_eq!(store.device_meta("K").unwrap().unwrap().label, "Dev Kiosk");
+        assert!(store.groups().unwrap().is_empty());
+        assert!(
+            store
+                .write_tx(|tx| set_device_group(tx, "K", Some("nope")))
+                .is_err()
+        );
+        store
+            .write_tx(|tx| {
+                insert_group(tx, "G", "PCs", "pc", "teal", 1)?;
+                assert_eq!(count_group_devices(tx, "G")?, 0);
+                set_device_group(tx, "K", Some("G"))?;
+                assert_eq!(count_group_devices(tx, "G")?, 1);
+                assert!(insert_group(tx, "H", "pcs", "pc", "teal", 2).is_err());
+                set_device_group(tx, "K", None)?;
+                set_group_deleted(tx, "G", 5)?;
+                insert_group(tx, "H", "pcs", "pc", "teal", 2)
+            })
+            .unwrap();
+        assert_eq!(store.groups().unwrap().len(), 1);
     }
 }

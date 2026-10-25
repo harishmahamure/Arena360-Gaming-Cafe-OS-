@@ -6,9 +6,9 @@ use std::sync::Mutex;
 
 use arena_proto::{
     AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SetupStatus, SnapshotBranch,
-    SnapshotDevice, SnapshotLocale, SnapshotUi,
+    SnapshotDevice, SnapshotGroup, SnapshotLocale, SnapshotUi,
 };
-use arena_store::{BranchSummary, DeviceMetaRow, DeviceRow, Store};
+use arena_store::{BranchSummary, DeviceMetaRow, DeviceRow, GroupRow, Store};
 
 use crate::locale::{locale_rows, next_rollover, snapshot_locale};
 
@@ -19,6 +19,7 @@ pub fn build_snapshot(
     branch: Option<BranchSummary>,
     devices: Vec<DeviceRow>,
     meta: Vec<DeviceMetaRow>,
+    groups: Vec<GroupRow>,
     locale: Option<SnapshotLocale>,
     ui: SnapshotUi,
 ) -> HubSnapshot {
@@ -40,6 +41,17 @@ pub fn build_snapshot(
             name: b.name,
             branch_code: b.branch_code,
         }),
+        groups: groups
+            .into_iter()
+            .map(|g| SnapshotGroup {
+                id: g.group_id,
+                name: g.name,
+                kind: g.kind,
+                colour: g.colour,
+                sort_order: g.sort_order,
+                rev: g.rev,
+            })
+            .collect(),
         devices: devices
             .into_iter()
             .filter(|d| d.revoked_at.is_none())
@@ -73,17 +85,18 @@ pub fn build_snapshot(
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, meta, locale, ui, setup) = store.read_consistent(|s| {
+    let (branch, devices, meta, groups, locale, ui, setup) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
             s.devices()?,
             s.devices_meta()?,
+            s.groups()?,
             read_locale(s, now_ms)?,
             read_ui(s)?,
             read_setup(s)?,
         ))
     })?;
-    let mut snapshot = build_snapshot(branch, devices, meta, locale, ui);
+    let mut snapshot = build_snapshot(branch, devices, meta, groups, locale, ui);
     snapshot.setup = setup;
     Ok(snapshot)
 }
@@ -158,6 +171,14 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         Ok(store.path().to_path_buf())
+    }
+
+    pub fn owner_wrote(&self, epoch: &str, seq: i64) -> bool {
+        self.reader
+            .lock()
+            .ok()
+            .and_then(|s| s.change_actor_kind(epoch, seq).ok().flatten())
+            .is_some_and(|k| k == "owner")
     }
 
     pub fn branch(&self) -> Result<Option<SnapshotBranch>, AppError> {
@@ -325,6 +346,7 @@ mod tests {
                     name: "Dev Branch".into(),
                     branch_code: "DEV01".into(),
                 }),
+                groups: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
                     label: "Front PC".into(),
@@ -370,6 +392,7 @@ mod tests {
             snap,
             HubSnapshot {
                 branch: None,
+                groups: vec![],
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),
@@ -394,7 +417,7 @@ mod tests {
             rev: 1,
         };
         assert!(
-            build_snapshot(None, vec![row], vec![], None, SnapshotUi::default())
+            build_snapshot(None, vec![row], vec![], vec![], None, SnapshotUi::default())
                 .devices
                 .is_empty()
         );

@@ -88,6 +88,16 @@ function snapshot(hub: Hub): HubSnapshot {
   return {
     paired: true,
     branch: { name: "Koramangala", branch_code: "KOR01" },
+    groups: [
+      {
+        id: "01JGROUP00000000000000000A",
+        name: "PCs",
+        kind: "pc",
+        colour: "teal",
+        sort_order: 1,
+        rev: 1,
+      },
+    ],
     devices: hub.devices,
     locale: {
       currency: "INR",

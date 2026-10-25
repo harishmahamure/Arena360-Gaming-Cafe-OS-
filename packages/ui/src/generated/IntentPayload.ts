@@ -6,9 +6,12 @@ import type { BranchSeedDefaults } from "./BranchSeedDefaults";
 import type { DeviceAdminExit } from "./DeviceAdminExit";
 import type { DeviceAdminRelock } from "./DeviceAdminRelock";
 import type { DeviceAdminUnlock } from "./DeviceAdminUnlock";
+import type { DeviceAssign } from "./DeviceAssign";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
+import type { GroupDelete } from "./GroupDelete";
+import type { GroupUpsert } from "./GroupUpsert";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { PrinterStatusSet } from "./PrinterStatusSet";
@@ -35,4 +38,7 @@ export type IntentPayload =
   | ({ kind: "device.admin_relock" } & DeviceAdminRelock)
   | ({ kind: "device.admin_unlock" } & DeviceAdminUnlock)
   | ({ kind: "ads.consent" } & AdsConsentSet)
-  | ({ kind: "printer.status" } & PrinterStatusSet);
+  | ({ kind: "printer.status" } & PrinterStatusSet)
+  | ({ kind: "group.upsert" } & GroupUpsert)
+  | ({ kind: "group.delete" } & GroupDelete)
+  | ({ kind: "device.assign" } & DeviceAssign);

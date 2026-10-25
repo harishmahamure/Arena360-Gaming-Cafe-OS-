@@ -20,4 +20,7 @@ export type IntentKind =
   | "device.admin_relock"
   | "device.admin_unlock"
   | "ads.consent"
-  | "printer.status";
+  | "printer.status"
+  | "group.upsert"
+  | "group.delete"
+  | "device.assign";

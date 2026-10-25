@@ -59,7 +59,9 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::StepNotReady
         | ErrorCode::PairCodeInvalid
         | ErrorCode::PairCodeExpired
-        | ErrorCode::FeatureNotEntitled => true,
+        | ErrorCode::FeatureNotEntitled
+        | ErrorCode::GroupNotEmpty
+        | ErrorCode::GroupKindMismatch => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary

@@ -126,3 +126,16 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-10-the-owner-app-shell-navigation-themes-install-and-free-limit.md`
   summary: Key the Owner app's IndexedDB cache by owner id, treat a 403 as a refused session, and add PNG and maskable manifest icons, a service worker update test, a ticking data age and a 768 px layout test.
   evidence: The cache is cleared on sign-out and a refused session, but not when a different owner signs in without a sign-out; the manifest has one SVG icon; the tablet breakpoint is untested.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-20-device-groups-with-six-swatches-held-at-the-hub.md`
+  summary: Tests for 2.20: `groups.changed` SSE (`by_owner` true only for owner) and the 409 mapping over HTTP; axe in HC; keyboard select via key presses and drag-drop in Playwright; a snapshot-mapping test with real groups; Counter delete/assign cases.
+  evidence: The Rust apply tests and the stubbed Playwright spec cover the logic, not the HTTP/SSE edge.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-20-device-groups-with-six-swatches-held-at-the-hub.md`
+  summary: Map a unique-name constraint violation on `device_groups` (a race, or non-ASCII case folding) to `VALIDATION_FAILED name`.
+  evidence: `COLLATE NOCASE` folds ASCII only; the pre-check and index disagree only for such names.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi.md`
+  summary: `DeviceRegister.kind` has the same name as the `IntentPayload` tag (`kind`), so the JSON of a `device.register` intent carries a duplicate key. Rename it (as 2.20 did with `group_kind`) before any client submits it over the wire.
+  evidence: Found while adding `group.upsert`; in-process tests do not serialise it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-20-device-groups-with-six-swatches-held-at-the-hub.md`
+  summary: Hub shell Playwright is load-sensitive: under a saturated machine (load 40) different tests fail per run (the phone More-sheet focus test, audit paging, the devices-display copy row) and all pass in isolation.
+  evidence: Full `test:shell` at load: 4 and then 3 failures, different each time; reruns with 1–2 workers pass.

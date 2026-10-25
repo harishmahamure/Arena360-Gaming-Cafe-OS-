@@ -272,6 +272,32 @@ mod tests {
                 .changes[0]
                 .row_id
                 .clone();
+            let group = writer
+                .submit_intent(submit(
+                    IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                        id: None,
+                        name: "PCs".into(),
+                        group_kind: "pc".into(),
+                        colour: "teal".into(),
+                        sort_order: 1,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                        device_id: kiosk.clone(),
+                        group_id: Some(group),
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
             let exit = writer
                 .submit_intent(submit(
                     IntentPayload::DeviceAdminUnlock(arena_proto::DeviceAdminUnlock {

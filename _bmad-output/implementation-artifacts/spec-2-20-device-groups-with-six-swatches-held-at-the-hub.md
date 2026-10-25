@@ -2,7 +2,8 @@
 title: 'Story 2.20: Device groups with six swatches, held at the Hub'
 type: 'feature'
 created: '2026-10-25'
-status: 'draft'
+status: 'done'
+baseline_commit: 'b8d2fd660d1c83e7536c6c20b1a7452c76baa631'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -97,3 +98,28 @@ Investigate from 2.18 (`devices_meta`, `device.register`, Unassigned floor secti
 **Commands:**
 - `cargo test --locked --workspace --no-fail-fast`; `-p arena-hub --features dev-fixtures`; `-p arena-api --features dev-fixtures`; clippy incl. dev-fixtures; fmt -- pass (known flaky tests recorded).
 - `pnpm --filter @arena/hub check && pnpm --filter @arena/hub test:shell`; every `pnpm run check:*`; `pnpm run test:scripts`.
+
+## Review Triage Log
+
+Pass 1 (Verification Gap, Blind Hunter; on Sonnet). P = patch, R = reject, D = defer.
+
+Implementation deviations: the migration is `0012_device_groups.sql` (the runner needs contiguous numbers and 2.10's 0012 has not landed; renumber on rebase). The `group.upsert` field is `group_kind`, because `kind` tags the payload. A Counter without a ticket gets `PERMISSION_DENIED` and the UI opens `inline-pin` up front. `STALE` carries no current values; the UI reloads the snapshot. The owner toast comes from `groups.changed {by_owner}`, read from the change row's actor kind.
+
+| # | Finding | Verdict | Route |
+|---|---------|---------|-------|
+| 1 | BH: `groups.changed` did not refresh other windows | medium | P: layout refreshes on every event |
+| 2 | BH: move select kept a refused value | medium | P: select resets after the attempt |
+| 3 | BH: a device with an unknown `group_id` showed nowhere | medium | P: floor lists it as Unassigned |
+| 4 | BH: toast live region toggled by display | medium | P: rendered only while shown |
+| 5 | BH/VG: owner command without `base_rev` failed | medium | P: owners may omit it (last write wins); tests |
+| 6 | BH: default order collided | low | P: max + 1 |
+| 7 | BH: id/base_rev validation shown as a generic failure | low | P: stale message and reload |
+| 8 | BH: drag of a wrong-kind device sent a doomed intent | low | P: `fits` guard |
+| 9 | BH/VG: migration would fail on a non-null `group_id` | low | P: copy NULL (2.18 never set one) |
+| 10 | VG: negative owner-toast test; assign/delete stale, deleted group, unknown device tests | medium | P |
+| 11 | BH: unique violation race maps to a generic DB error | low | D |
+| 12 | VG: no HTTP-level test of `groups.changed` / 409 mapping | high | D |
+| 13 | VG: axe in HC and light only default theme; select test uses `selectOption`; drag-drop test | medium | D |
+| 14 | VG: snapshot mapping test with real groups; Counter delete/assign tests | low | D |
+| 15 | BH: `.claude/settings.json` in diff | n/a | R: not part of the commit |
+| 16 | `DeviceRegister.kind` shares the payload tag name `kind` (2.18), so the wire form is ambiguous | medium | D (see deferred-work) |

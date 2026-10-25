@@ -10,6 +10,7 @@ import { ORIGIN } from "./origin";
 const HUB = "http://127.0.0.1:7409";
 const SNAPSHOT: HubSnapshot = {
   branch: { name: "Dev Branch", branch_code: "DEV01" },
+  groups: [],
   devices: [],
   locale: null,
   ui: { idle_lock_minutes: 5, hc: false },

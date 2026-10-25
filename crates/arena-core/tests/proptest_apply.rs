@@ -94,6 +94,14 @@ enum Op {
         bundle: bool,
         who: Index,
     },
+    /// `stock.in` of a quantity and cost (valid or not) into the first tracked product, then
+    /// maybe `stock.in.reverted` straight after.
+    Stock {
+        qty: i64,
+        cost: i64,
+        past: bool,
+        undo: bool,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -174,6 +182,13 @@ fn op() -> impl Strategy<Value = Op> {
                 who,
             },
         ),
+        3 => (
+            prop_oneof![3 => 1..=1_000i64, 1 => -2..=2i64, 1 => 999_999..=1_000_002i64],
+            prop_oneof![3 => 0..=100_000i64, 1 => -2..=2i64, 1 => Just(arena_proto::MAX_PRICE_MINOR), 1 => Just(arena_proto::MAX_PRICE_MINOR + 1)],
+            prop::bool::weighted(0.1),
+            any::<bool>(),
+        )
+            .prop_map(|(qty, cost, past, undo)| Op::Stock { qty, cost, past, undo }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -677,6 +692,95 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     changes_before + 1 + usize::from(*bundle)
                 );
             }
+        }
+        Op::Stock {
+            qty,
+            cost,
+            past,
+            undo,
+        } => {
+            let Some(p) = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .find(|p| !p.bundle && p.track_stock)
+            else {
+                return Ok(());
+            };
+            let id = p.product_id;
+            let held = |hub: &Hub| {
+                hub.reader
+                    .stock(&id)
+                    .unwrap()
+                    .map_or((0, 0), |s| (s.qty, s.avg_cost_minor))
+            };
+            let (old_qty, old_avg) = held(hub);
+            let intent = hub.intent(
+                IntentPayload::StockIn(arena_proto::StockIn {
+                    product_id: id.clone(),
+                    qty: *qty,
+                    unit_cost_minor: *cost,
+                    supplier: "s".into(),
+                    expiry: past.then(|| "2000-01-01".to_owned()),
+                }),
+                None,
+            );
+            let out = hub.submit_new(intent);
+            let valid = (1..=arena_proto::MAX_STOCK_IN_QTY).contains(qty)
+                && (0..=arena_proto::MAX_PRICE_MINOR).contains(cost)
+                && !past
+                && old_qty + qty <= arena_proto::MAX_STOCK_QTY;
+            if !valid {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), changes_before);
+                return assert_gap_free(hub);
+            }
+            prop_assert!(out.is_ok(), "{:?}", out);
+            let (new_qty, new_avg) = held(hub);
+            prop_assert_eq!(new_qty, old_qty + qty);
+            prop_assert_eq!(
+                new_avg,
+                arena_proto::weighted_avg_cost(old_qty, old_avg, *qty, *cost)
+            );
+            let (lo, hi) = if old_qty == 0 {
+                (*cost, *cost)
+            } else {
+                (old_avg.min(*cost), old_avg.max(*cost))
+            };
+            prop_assert!((lo..=hi).contains(&new_avg));
+            prop_assert_eq!(hub.change_count(), changes_before + 3);
+            if *undo {
+                let move_id = out
+                    .unwrap()
+                    .changes
+                    .iter()
+                    .find(|c| c.tbl == "stock_moves")
+                    .unwrap()
+                    .row_id
+                    .clone();
+                let revert = hub.intent(
+                    IntentPayload::StockInReverted(arena_proto::StockInReverted { move_id }),
+                    None,
+                );
+                let out = hub.submit_new(revert);
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(held(hub), (old_qty, old_avg));
+                prop_assert_eq!(hub.change_count(), changes_before + 6);
+            }
+            let lots: i64 = hub
+                .reader
+                .lots(&id)
+                .unwrap()
+                .iter()
+                .map(|l| l.qty_remaining)
+                .sum();
+            prop_assert_eq!(lots, held(hub).0);
         }
         Op::Advance { ms } => hub.clock.advance(*ms),
     }

@@ -1,6 +1,6 @@
 //! **validate.** Payload checks; a failure is `VALIDATION_FAILED` naming the field.
 
-use super::{Target, devices, groups, products, settings_set, staff_roles, zones};
+use super::{Target, devices, groups, products, settings_set, staff_roles, stock, zones};
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
 /// Longest branch name, in characters, after trimming.
@@ -137,6 +137,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
         },
         IntentPayload::ProductDelete(_) => match target {
             Target::Product(t) => products::validate_delete(t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::StockIn(u) => match target {
+            Target::Stock(t) => stock::validate_in(u, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::StockInReverted(r) => match target {
+            Target::Stock(t) => stock::validate_revert(intent, r, t),
             _ => Err(internal_target()),
         },
     }

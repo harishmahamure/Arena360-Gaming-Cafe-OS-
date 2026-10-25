@@ -14,6 +14,7 @@ mod identity;
 mod migrations;
 mod products;
 mod staff;
+mod stock;
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -69,6 +70,10 @@ pub use staff::{
     find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
     insert_staff, list_pin_candidates, list_role_perms, list_roles, list_unlock_candidates,
     role_perm_effect, set_staff_credentials, set_staff_setup_code, update_role_name, update_staff,
+};
+pub use stock::{
+    LotRow, MoveRow, StockRow, find_lot, find_move, find_stock, insert_lot, insert_move,
+    insert_stock, latest_move_id, list_lots, list_moves, set_lot_remaining, update_stock,
 };
 
 /// The transaction `apply()` and the replayer run in.
@@ -577,6 +582,27 @@ impl Store {
         live_bundles_with(&self.conn, component_id)
     }
 
+    pub fn stock(&self, product_id: &str) -> Result<Option<StockRow>, AppError> {
+        if !self.table_exists("stock")? {
+            return Ok(None);
+        }
+        find_stock(&self.conn, product_id)
+    }
+
+    pub fn lots(&self, product_id: &str) -> Result<Vec<LotRow>, AppError> {
+        if !self.table_exists("stock_lots")? {
+            return Ok(Vec::new());
+        }
+        list_lots(&self.conn, product_id)
+    }
+
+    pub fn moves(&self, product_id: &str) -> Result<Vec<MoveRow>, AppError> {
+        if !self.table_exists("stock_moves")? {
+            return Ok(Vec::new());
+        }
+        list_moves(&self.conn, product_id)
+    }
+
     pub fn products(&self) -> Result<Vec<ProductRow>, AppError> {
         if !self.table_exists("products")? {
             return Ok(Vec::new());
@@ -1020,6 +1046,44 @@ mod tests {
             assert!(exists, "{table}");
         }
         assert_eq!(store.lease().unwrap(), Some(lease));
+    }
+
+    #[test]
+    fn v19_database_upgrades_to_stock_and_moves_stay_append_only() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &migrations::MIGRATIONS[..19] {
+                conn.execute_batch(m.sql).unwrap();
+                record_schema_version(&conn, m.version, 0).unwrap();
+            }
+        }
+        let mut store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        store
+            .write_tx(|tx| {
+                tx.execute_batch(
+                    "INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
+                         track_stock, image, barcode, kitchen, favourite, active, bundle, rev,
+                         deleted_at, created_at, updated_at)
+                     VALUES ('P', 'P', '', 1, 0, '', 1, '', NULL, 0, 0, 1, 0, 1, NULL, 0, 0);
+                     INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
+                         before_avg_cost_minor, unit_cost_minor, supplier, lot_id, lots_used,
+                         staff_id, at, rev, created_at, updated_at)
+                     VALUES ('M', 'P', 'stock_in', 1, 0, 0, 1, '', NULL, '[]', 's', 0, 1, 0, 0);
+                     UPDATE stock_moves SET rev = 2, updated_at = 5;",
+                )
+                .map_err(db_error)?;
+                for sql in [
+                    "UPDATE stock_moves SET delta = 2",
+                    "UPDATE stock_moves SET lots_used = '[1]'",
+                    "DELETE FROM stock_moves",
+                ] {
+                    assert!(tx.execute(sql, []).is_err(), "{sql}");
+                }
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

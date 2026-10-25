@@ -280,6 +280,7 @@
   <h1 class="type-hub-numeric" id="products-title">{t("hub.nav.inventory")}</h1>
   <h2 class="type-hub-title">{t("hub.products.title")}</h2>
   <p class="intro type-hub-body">{t("hub.products.intro")}</p>
+  <a class="link type-hub-label" href="/inventory/stock-in">{t("hub.products.stock_link")}</a>
 
   <form class="form" bind:this={formEl} onsubmit={save} data-testid="product-form">
     <TextField label="hub.products.name" bind:value={form.name} error={errors.name} required />
@@ -505,6 +506,10 @@
   h2,
   p {
     margin: 0;
+  }
+
+  .link {
+    color: var(--text);
   }
 
   .intro,

@@ -18,6 +18,7 @@ export type Product = {
   components: Array<ComponentView>;
   rev: number;
   quantity: number;
+  avg_cost_minor: number;
   available: boolean;
   reason?: string;
 };

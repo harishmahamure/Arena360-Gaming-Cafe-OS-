@@ -30,4 +30,6 @@ export type IntentKind =
   | "device.place"
   | "product.upsert"
   | "product.delete"
-  | "staff.set_credentials";
+  | "staff.set_credentials"
+  | "stock.in"
+  | "stock.in.reverted";

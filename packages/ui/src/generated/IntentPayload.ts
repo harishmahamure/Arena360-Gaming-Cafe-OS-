@@ -23,6 +23,8 @@ import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffSetCredentials } from "./StaffSetCredentials";
 import type { StaffUpsert } from "./StaffUpsert";
+import type { StockIn } from "./StockIn";
+import type { StockInReverted } from "./StockInReverted";
 import type { ZoneDelete } from "./ZoneDelete";
 import type { ZoneUpsert } from "./ZoneUpsert";
 
@@ -55,4 +57,6 @@ export type IntentPayload =
   | ({ kind: "device.place" } & DevicePlace)
   | ({ kind: "product.upsert" } & ProductUpsert)
   | ({ kind: "product.delete" } & ProductDelete)
-  | ({ kind: "staff.set_credentials" } & StaffSetCredentials);
+  | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
+  | ({ kind: "stock.in" } & StockIn)
+  | ({ kind: "stock.in.reverted" } & StockInReverted);

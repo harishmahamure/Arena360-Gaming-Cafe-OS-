@@ -4,10 +4,9 @@ use arena_proto::{
 };
 use arena_store::{ProductRow, Store};
 
-const UNRECORDED_STOCK: i64 = 0;
-
 struct Status {
     quantity: i64,
+    avg_cost_minor: i64,
     available: bool,
     reason: Option<&'static str>,
     components: Vec<ComponentView>,
@@ -16,9 +15,12 @@ struct Status {
 fn status(store: &Store, p: &ProductRow) -> Result<Status, AppError> {
     let deleted = p.deleted_at.is_some();
     if !p.bundle {
-        let (available, reason) = availability(p.active, deleted, p.track_stock, UNRECORDED_STOCK);
+        let stock = store.stock(&p.product_id)?;
+        let quantity = stock.as_ref().map_or(0, |s| s.qty);
+        let (available, reason) = availability(p.active, deleted, p.track_stock, quantity);
         return Ok(Status {
-            quantity: UNRECORDED_STOCK,
+            quantity,
+            avg_cost_minor: stock.map_or(0, |s| s.avg_cost_minor),
             available,
             reason,
             components: Vec::new(),
@@ -30,7 +32,7 @@ fn status(store: &Store, p: &ProductRow) -> Result<Status, AppError> {
         let row = store.product(&id)?;
         let live = row.as_ref().filter(|c| c.deleted_at.is_none());
         if live.is_some_and(|c| c.track_stock) {
-            parts.push((UNRECORDED_STOCK, qty));
+            parts.push((store.stock(&id)?.map_or(0, |s| s.qty), qty));
         }
         components.push(ComponentView {
             name: row.as_ref().map_or_else(|| id.clone(), |c| c.name.clone()),
@@ -49,6 +51,7 @@ fn status(store: &Store, p: &ProductRow) -> Result<Status, AppError> {
     };
     Ok(Status {
         quantity: quantity.unwrap_or(0),
+        avg_cost_minor: 0,
         available,
         reason,
         components,
@@ -78,6 +81,7 @@ pub(crate) fn products(store: &Store) -> Result<Vec<Product>, AppError> {
                 components: s.components,
                 rev: p.rev,
                 quantity: s.quantity,
+                avg_cost_minor: s.avg_cost_minor,
                 available: s.available,
                 reason: s.reason.map(str::to_owned),
             })

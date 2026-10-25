@@ -428,6 +428,35 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            let stock_in = |qty: i64, cost: i64| {
+                submit(
+                    IntentPayload::StockIn(arena_proto::StockIn {
+                        product_id: cola.clone(),
+                        qty,
+                        unit_cost_minor: cost,
+                        supplier: "Acme".into(),
+                        expiry: None,
+                    }),
+                    None,
+                )
+            };
+            writer.submit_intent(stock_in(10, 2000)).await.unwrap();
+            writer.submit_intent(stock_in(30, 2400)).await.unwrap();
+            let last = writer.submit_intent(stock_in(5, 100)).await.unwrap();
+            let move_id = last
+                .changes
+                .iter()
+                .find(|c| c.tbl == "stock_moves")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::StockInReverted(arena_proto::StockInReverted { move_id }),
+                    None,
+                ))
+                .await
+                .unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

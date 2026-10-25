@@ -25,7 +25,7 @@ use arena_store::{META_HUB_INSTANCE_ID, Store, insert_meta_if_absent, set_meta};
 pub use apply::{
     Applied, ApplyCtx, ChangeMeta, INTENT_TTL_MS, MAX_CLOCK_SKEW_MS, MAX_KIOSK_LOG_CODE_LEN,
     MAX_KIOSK_LOG_DETAIL_CHARS, MAX_SETTING_VALUE_CHARS, MAX_VERSION_LEN, PROCESS_BLOCKED_CODE,
-    apply, emit, fingerprint, is_ulid, lock_branch_code, validate_frame,
+    Written, apply, decrement, emit, fingerprint, is_ulid, lock_branch_code, validate_frame,
 };
 pub use arena_store::{ChangeOp, META_TLS_FINGERPRINT};
 pub use audit::{AuditQuery, AuditReader};

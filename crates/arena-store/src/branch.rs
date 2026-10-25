@@ -41,11 +41,14 @@ pub enum Table {
     FloorZones,
     Products,
     BundleComponents,
+    Stock,
+    StockLots,
+    StockMoves,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 14] = [
+    pub const ALL: [Table; 17] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -60,6 +63,9 @@ impl Table {
         Table::FloorZones,
         Table::Products,
         Table::BundleComponents,
+        Table::Stock,
+        Table::StockLots,
+        Table::StockMoves,
     ];
 
     /// The SQL table name.
@@ -79,6 +85,9 @@ impl Table {
             Self::FloorZones => "floor_zones",
             Self::Products => "products",
             Self::BundleComponents => "bundle_components",
+            Self::Stock => "stock",
+            Self::StockLots => "stock_lots",
+            Self::StockMoves => "stock_moves",
         }
     }
 
@@ -99,6 +108,9 @@ impl Table {
             Self::FloorZones => &["zone_id"],
             Self::Products => &["product_id"],
             Self::BundleComponents => &["bundle_id", "component_id"],
+            Self::Stock => &["product_id"],
+            Self::StockLots => &["lot_id"],
+            Self::StockMoves => &["move_id"],
         }
     }
 
@@ -115,7 +127,10 @@ impl Table {
             | Self::DevicesMeta
             | Self::DeviceGroups
             | Self::FloorZones
-            | Self::Products => true,
+            | Self::Products
+            | Self::Stock
+            | Self::StockLots
+            | Self::StockMoves => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -180,6 +195,15 @@ pub enum RowKey {
         bundle_id: String,
         component_id: String,
     },
+    Stock {
+        product_id: String,
+    },
+    StockLots {
+        lot_id: String,
+    },
+    StockMoves {
+        move_id: String,
+    },
 }
 
 impl RowKey {
@@ -199,6 +223,9 @@ impl RowKey {
             Self::FloorZones { .. } => Table::FloorZones,
             Self::Products { .. } => Table::Products,
             Self::BundleComponents { .. } => Table::BundleComponents,
+            Self::Stock { .. } => Table::Stock,
+            Self::StockLots { .. } => Table::StockLots,
+            Self::StockMoves { .. } => Table::StockMoves,
         }
     }
 
@@ -225,6 +252,9 @@ impl RowKey {
                 bundle_id,
                 component_id,
             } => format!("{bundle_id}/{component_id}"),
+            Self::Stock { product_id } => product_id.clone(),
+            Self::StockLots { lot_id } => lot_id.clone(),
+            Self::StockMoves { move_id } => move_id.clone(),
         }
     }
 
@@ -281,6 +311,15 @@ impl RowKey {
                 bundle_id: text("bundle_id")?,
                 component_id: text("component_id")?,
             },
+            Table::Stock => Self::Stock {
+                product_id: text("product_id")?,
+            },
+            Table::StockLots => Self::StockLots {
+                lot_id: text("lot_id")?,
+            },
+            Table::StockMoves => Self::StockMoves {
+                move_id: text("move_id")?,
+            },
         })
     }
 
@@ -306,6 +345,9 @@ impl RowKey {
                 bundle_id,
                 component_id,
             } => vec![bundle_id, component_id],
+            Self::Stock { product_id } => vec![product_id],
+            Self::StockLots { lot_id } => vec![lot_id],
+            Self::StockMoves { move_id } => vec![move_id],
         }
     }
 }

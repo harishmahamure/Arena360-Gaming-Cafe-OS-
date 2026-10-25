@@ -18,6 +18,8 @@ use crate::clock::ManualClock;
 use crate::status::{HubStatus, LeaseInfo, status_channel};
 use crate::writer::{Writer, WriterHandle};
 
+mod stock;
+
 const T0: i64 = 1_800_000_000_000;
 const HUB: &str = "01JHUBAAAAAAAAAAAAAAAAAAAA";
 

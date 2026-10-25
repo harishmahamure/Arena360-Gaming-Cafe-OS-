@@ -120,7 +120,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::Group(_)
             | Target::Zone(_)
             | Target::Product(_)
-            | Target::Credentials(_),
+            | Target::Credentials(_)
+            | Target::Stock(_),
             _,
         ) => Ok(()),
     }
@@ -167,7 +168,8 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         | Target::AdminExit(_)
         | Target::AdminRelock(_)
         | Target::AdminUnlock(_)
-        | Target::Credentials(_) => Ok(()),
+        | Target::Credentials(_)
+        | Target::Stock(_) => Ok(()),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),
         Target::Staff(t) => staff_roles::base_rev_staff(intent, t),

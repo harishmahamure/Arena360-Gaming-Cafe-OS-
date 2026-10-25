@@ -66,6 +66,7 @@ const product = (over: Partial<Product>): Product => ({
   components: [],
   rev: 3,
   quantity: 0,
+  avg_cost_minor: 0,
   available: false,
   reason: "out_of_stock",
   ...over,

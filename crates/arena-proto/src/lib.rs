@@ -30,6 +30,7 @@ mod scope;
 mod signin;
 mod signup;
 mod snapshot;
+mod stock;
 mod tax;
 pub mod tier;
 mod ui_auth;
@@ -160,6 +161,11 @@ pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
     SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
     SnapshotLocale, SnapshotUi, SnapshotZone, SymbolPosition,
+};
+pub use stock::{
+    LotView, MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_STOCK_IN,
+    MOVE_STOCK_IN_REVERTED, STOCK_UNDO_MS, StockIn, StockInReverted, consume_plan, valid_date,
+    weighted_avg_cost,
 };
 pub use tax::{
     DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,

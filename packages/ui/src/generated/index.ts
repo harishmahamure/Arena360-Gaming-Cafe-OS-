@@ -177,6 +177,8 @@ export type { SpecRequirement } from "./SpecRequirement";
 export type { StaffSetCredentials } from "./StaffSetCredentials";
 export type { StaffUpsert } from "./StaffUpsert";
 export type { StepState } from "./StepState";
+export type { StockIn } from "./StockIn";
+export type { StockInReverted } from "./StockInReverted";
 export type { SymbolPosition } from "./SymbolPosition";
 export type { TaxMode } from "./TaxMode";
 export type { Tier } from "./Tier";

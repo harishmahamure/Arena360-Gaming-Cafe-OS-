@@ -94,6 +94,8 @@ pub struct Product {
     pub rev: i64,
     #[ts(type = "number")]
     pub quantity: i64,
+    #[ts(type = "number")]
+    pub avg_cost_minor: i64,
     pub available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

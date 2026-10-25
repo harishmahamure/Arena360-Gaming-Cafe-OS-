@@ -611,7 +611,7 @@ pub(crate) fn product_ids(applied: &Applied) -> Vec<String> {
     let mut ids: Vec<String> = applied
         .changes
         .iter()
-        .filter(|c| c.tbl == "products")
+        .filter(|c| matches!(c.tbl.as_str(), "products" | "stock"))
         .map(|c| c.row_id.clone())
         .collect();
     ids.sort();

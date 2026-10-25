@@ -6,13 +6,13 @@ use arena_store::{
     insert_role, insert_role_perm, insert_setting, insert_staff, set_staff_setup_code, stamp_row,
 };
 
-use super::{Target, devices, groups, products, settings_set, staff_roles, zones};
+use super::{Target, devices, groups, products, settings_set, staff_roles, stock, zones};
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
 
 /// One row the intent wrote.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct Written {
+pub struct Written {
     pub key: RowKey,
     pub op: ChangeOp,
     /// For a delete: the row as it was before the delete (read by mutate before deleting).
@@ -226,6 +226,14 @@ pub(super) fn mutate(
         },
         IntentPayload::ProductDelete(p) => match target {
             Target::Product(t) => products::mutate_delete(tx, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::StockIn(u) => match target {
+            Target::Stock(t) => stock::mutate_in(tx, intent, u, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::StockInReverted(_) => match target {
+            Target::Stock(t) => stock::mutate_revert(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
     }

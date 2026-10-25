@@ -40,6 +40,7 @@ pub(crate) mod seed_defaults;
 mod settings_set;
 mod staff_credentials;
 mod staff_roles;
+mod stock;
 mod ttl_dedupe;
 mod validate;
 pub(crate) mod verifier;
@@ -60,7 +61,9 @@ pub use devices::MAX_VERSION_LEN;
 pub use frame::{is_ulid, validate_frame};
 pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE};
 pub(crate) use licence::pending as licence_pending;
+pub use mutate::Written;
 pub use settings_set::MAX_SETTING_VALUE_CHARS;
+pub use stock::decrement;
 pub(crate) use ttl_dedupe::record_rejection;
 pub use ttl_dedupe::{INTENT_TTL_MS, MAX_CLOCK_SKEW_MS, fingerprint};
 
@@ -133,9 +136,10 @@ pub(crate) enum Target {
     Zone(Box<zones::ZoneTarget>),
     Product(Box<products::ProductTarget>),
     Credentials(Option<arena_store::StaffRow>),
+    Stock(Box<stock::StockTarget>),
 }
 
-fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
+fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
     use arena_proto::IntentPayload as P;
     Ok(match &intent.payload {
         P::BranchBootstrap(_) | P::BranchSeedDefaults(_) => Target::None,
@@ -162,6 +166,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::StaffSetCredentials(c) => Target::Credentials(staff_credentials::load(tx, c)?),
         P::ProductUpsert(_) | P::ProductDelete(_) => {
             Target::Product(Box::new(products::load(tx, &intent.payload)?))
+        }
+        P::StockIn(_) | P::StockInReverted(_) => {
+            Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }
     })
 }
@@ -203,7 +210,7 @@ pub(crate) fn run(
         return Ok(Outcome::Replayed(stored));
     }
     guards::tier(tx, intent, arena_proto::kitchen_gate)?;
-    let target = load(tx, intent)?;
+    let target = load(tx, intent, now)?;
     guards::authorize(intent, &target)?;
     guards::base_rev(intent, &target)?;
     validate::validate(intent, &target)?;

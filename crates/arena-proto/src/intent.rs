@@ -107,11 +107,15 @@ pub enum IntentKind {
     ProductDelete,
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials,
+    #[serde(rename = "stock.in")]
+    StockIn,
+    #[serde(rename = "stock.in.reverted")]
+    StockInReverted,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 27] = [
+    pub const ALL: [IntentKind; 29] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -139,6 +143,8 @@ impl IntentKind {
         Self::ProductUpsert,
         Self::ProductDelete,
         Self::StaffSetCredentials,
+        Self::StockIn,
+        Self::StockInReverted,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -171,6 +177,8 @@ impl IntentKind {
             Self::ProductUpsert => "product.upsert",
             Self::ProductDelete => "product.delete",
             Self::StaffSetCredentials => "staff.set_credentials",
+            Self::StockIn => "stock.in",
+            Self::StockInReverted => "stock.in.reverted",
         }
     }
 
@@ -204,7 +212,9 @@ impl IntentKind {
             }
             Self::AuditReadGranted => IntentCategory::Audit,
             Self::KioskLog | Self::KioskProcessBlocked => IntentCategory::Kiosk,
-            Self::ProductUpsert | Self::ProductDelete => IntentCategory::Catalog,
+            Self::ProductUpsert | Self::ProductDelete | Self::StockIn | Self::StockInReverted => {
+                IntentCategory::Catalog
+            }
         }
     }
 
@@ -236,6 +246,7 @@ impl IntentKind {
             Self::DeviceAdminExit | Self::DeviceAdminRelock => Requirement::Device,
             Self::DeviceAdminUnlock => Requirement::Perm(Permission::DeviceRemote),
             Self::ProductUpsert | Self::ProductDelete => Requirement::Perm(Permission::CatalogEdit),
+            Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
         }
     }
 
@@ -285,7 +296,9 @@ impl IntentKind {
             | Self::DevicePlace
             | Self::ProductUpsert
             | Self::ProductDelete
-            | Self::StaffSetCredentials => None,
+            | Self::StaffSetCredentials
+            | Self::StockIn
+            | Self::StockInReverted => None,
         }
     }
 
@@ -670,6 +683,10 @@ pub enum IntentPayload {
     ProductDelete(crate::ProductDelete),
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials(StaffSetCredentials),
+    #[serde(rename = "stock.in")]
+    StockIn(crate::StockIn),
+    #[serde(rename = "stock.in.reverted")]
+    StockInReverted(crate::StockInReverted),
 }
 
 impl IntentPayload {
@@ -702,6 +719,8 @@ impl IntentPayload {
             Self::ProductUpsert(_) => IntentKind::ProductUpsert,
             Self::ProductDelete(_) => IntentKind::ProductDelete,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
+            Self::StockIn(_) => IntentKind::StockIn,
+            Self::StockInReverted(_) => IntentKind::StockInReverted,
         }
     }
 }
@@ -795,7 +814,6 @@ mod tests {
         Permission::RefundIssue,
         Permission::DiscountManual,
         Permission::KitchenUse,
-        Permission::StockIn,
         Permission::StockAdjust,
         Permission::StockOverride,
         Permission::ShiftOpen,
@@ -886,6 +904,7 @@ mod tests {
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" => Requirement::Perm(Permission::CatalogEdit),
+                "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),

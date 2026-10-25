@@ -22,6 +22,7 @@ mod json;
 mod meta;
 pub mod mfa;
 pub mod owned;
+mod pair;
 mod panic;
 pub mod security;
 pub mod session;
@@ -60,6 +61,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
             .merge(wizard_tier::router(Arc::clone(st)))
             .merge(wizard_install::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
+            .merge(pair::router(Arc::clone(st)))
             .merge(meta::router());
     }
     if dev {

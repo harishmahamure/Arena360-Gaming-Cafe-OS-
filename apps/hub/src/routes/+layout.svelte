@@ -12,11 +12,13 @@
   import { setUiSettings, uiSettings } from "../lib/ui-settings.svelte";
   import { BOTTOM_BAR, MORE, SCREENS, screenOf, shortcutTarget, type Screen } from "../lib/nav";
   import { SNAPSHOT_DEPENDENCY } from "../lib/snapshot";
+  import { PAIR_PATH } from "../lib/pair";
   import {
     SESSION_DEPENDENCY,
     getLocalLocked,
     getToken,
     lockSession,
+    onHubNotPaired,
     onSessionLocked,
     safeRedirect,
     setLocalLocked,
@@ -45,6 +47,8 @@
 
   const current = $derived(screenOf(page.url.pathname));
   const onSignIn = $derived(page.url.pathname === SIGN_IN);
+  const onPair = $derived(page.url.pathname === PAIR_PATH);
+  const unpaired = $derived(data.hub.ok && data.hub.snapshot.paired === false);
   const staff = $derived(data.session.state === "signed_in" ? data.session.staff : null);
   const signedOut = $derived(data.session.state === "signed_out");
   /** The Hub answered the snapshot and said who is signed in (an unknown session retries). */
@@ -140,6 +144,14 @@
   // The gate: nobody signed in goes to sign-in; a signed-in member never stays on it.
   $effect(() => {
     if (!data.hub.ok) return;
+    if (unpaired) {
+      if (!onPair) void goto(PAIR_PATH, { replaceState: true });
+      return;
+    }
+    if (onPair) {
+      void goto("/floor", { replaceState: true });
+      return;
+    }
     if (signedOut && !onSignIn) {
       // Remember where we were going, so sign-in returns there.
       const back = page.url.pathname + page.url.search;
@@ -152,7 +164,7 @@
   // The branch locale comes from each (re)loaded snapshot, then live from `/ui/events`.
   $effect(() => {
     const locale = data.hub.ok ? (data.hub.snapshot.locale ?? null) : null;
-    const ui = data.hub.ok ? data.hub.snapshot.ui : null;
+    const ui = data.hub.ok && data.hub.snapshot.paired !== false ? data.hub.snapshot.ui : null;
     const connectivity = data.hub.ok ? data.hub.snapshot.connectivity : null;
     if (data.hub.ok)
       untrack(() => {
@@ -345,7 +357,11 @@
 
   onMount(() => {
     onSessionLocked(() => lockScreen(false));
-    return () => onSessionLocked(null);
+    onHubNotPaired(() => void refresh());
+    return () => {
+      onSessionLocked(null);
+      onHubNotPaired(null);
+    };
   });
 
   // Every load result: back off while unreachable; on recovery stop retrying and move focus
@@ -353,7 +369,8 @@
   $effect(() => {
     // Read `data` itself (not the `reachable` derived): every load result must re-run this,
     // even when it is unreachable again.
-    const ok = data.hub.ok && data.session.state !== "unknown";
+    const ok =
+      data.hub.ok && (data.hub.snapshot.paired === false || data.session.state !== "unknown");
     untrack(() => {
       if (ok) {
         clearTimeout(retryTimer);
@@ -397,7 +414,7 @@
 <svelte:window {onkeydown} />
 
 <svelte:head>
-  {#if !reachable}
+  {#if !reachable && !unpaired}
     <title>{t("hub.page_title", { screen: t("hub.error.unreachable.title") })}</title>
   {/if}
 </svelte:head>
@@ -422,7 +439,15 @@
   </section>
 {/snippet}
 
-{#if gated}
+{#if unpaired}
+  <div class="pair-screen" data-theme="dark">
+    <main class="hub-main" bind:this={mainEl}>
+      {#if onPair}
+        {@render children()}
+      {/if}
+    </main>
+  </div>
+{:else if gated}
   <div class="gate" inert={locked} aria-hidden={locked ? "true" : undefined}>
     <header class="hub-header">
       <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
@@ -479,7 +504,7 @@
     </nav>
 
     <main class="hub-main" bind:this={mainEl}>
-      {#if data.hub.ok}
+      {#if data.hub.ok && !onPair}
         {@render children()}
       {:else}
         {@render unreachable()}
@@ -606,6 +631,21 @@
     height: 100dvh;
     background-color: var(--hub-bg);
     color: var(--text);
+  }
+
+  .pair-screen {
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    min-height: 100dvh;
+    background-color: var(--hub-bg);
+    color: var(--text);
+  }
+
+  .pair-screen .hub-main {
+    width: 100%;
+    max-width: 32rem;
+    box-sizing: border-box;
   }
 
   .gate .hub-header {

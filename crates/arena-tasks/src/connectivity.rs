@@ -123,6 +123,7 @@ pub struct NetProber {
     internet: Vec<SocketAddr>,
     cloud: CloudHost,
     tls: Arc<ClientConfig>,
+    plain: bool,
 }
 
 impl NetProber {
@@ -149,42 +150,59 @@ impl NetProber {
             internet,
             cloud,
             tls: Arc::new(tls),
+            plain: false,
         })
+    }
+
+    pub fn plain_http(mut self, plain: bool) -> Self {
+        self.plain = plain;
+        self
     }
 
     async fn healthz(&self) -> Result<bool, String> {
         let CloudHost { host, port } = &self.cloud;
-        let name = ServerName::try_from(host.clone()).map_err(|e| e.to_string())?;
         let tcp = TcpStream::connect((host.as_str(), *port))
             .await
             .map_err(|e| e.to_string())?;
         let _ = tcp.set_nodelay(true);
-        let mut tls = TlsConnector::from(Arc::clone(&self.tls))
-            .connect(name, tcp)
-            .await
-            .map_err(|e| e.to_string())?;
         let authority = if host.contains(':') {
             format!("[{host}]:{port}")
         } else {
             format!("{host}:{port}")
         };
-        let request = format!(
-            "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: arena-hub-probe\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-        );
-        tls.write_all(request.as_bytes())
+        if self.plain {
+            return healthz_over(tcp, &authority).await;
+        }
+        let name = ServerName::try_from(host.clone()).map_err(|e| e.to_string())?;
+        let tls = TlsConnector::from(Arc::clone(&self.tls))
+            .connect(name, tcp)
             .await
             .map_err(|e| e.to_string())?;
-        let mut head = Vec::with_capacity(256);
-        let mut buf = [0u8; 512];
-        while !head.windows(2).any(|w| w == b"\r\n") && head.len() < MAX_RESPONSE_HEAD {
-            let n = tls.read(&mut buf).await.map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            head.extend_from_slice(&buf[..n]);
-        }
-        Ok(status_is_200(&head))
+        healthz_over(tls, &authority).await
     }
+}
+
+async fn healthz_over<S>(mut stream: S, authority: &str) -> Result<bool, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let request = format!(
+        "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: arena-hub-probe\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut head = Vec::with_capacity(256);
+    let mut buf = [0u8; 512];
+    while !head.windows(2).any(|w| w == b"\r\n") && head.len() < MAX_RESPONSE_HEAD {
+        let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        head.extend_from_slice(&buf[..n]);
+    }
+    Ok(status_is_200(&head))
 }
 
 /// Whether an HTTP/1.x response starts with status 200.

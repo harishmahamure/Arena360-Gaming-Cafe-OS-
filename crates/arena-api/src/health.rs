@@ -161,6 +161,7 @@ struct SnapshotState {
     clock: Arc<dyn Clock>,
     presence: crate::lan::Presence,
     status: Option<watch::Receiver<HubStatus>>,
+    pairing: Option<arena_core::PairGate>,
 }
 
 pub fn snapshot_lan(status: &HubStatus) -> Option<arena_proto::SnapshotLan> {
@@ -183,16 +184,21 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
     let read = tokio::task::spawn_blocking(move || reader.snapshot(now)).await;
     match read {
         Ok(Ok(mut snapshot)) => {
+            if state.pairing.as_ref().is_some_and(|g| !g.is_paired()) {
+                snapshot = crate::ui_pair::unpaired_snapshot(snapshot);
+            }
             for d in &mut snapshot.devices {
                 d.online = state.presence.online(&d.device_id);
             }
             if let Some(status) = &state.status {
                 let status = status.borrow();
                 snapshot.connectivity = status.connectivity;
-                if status.setup.is_some() {
-                    snapshot.setup = status.setup;
+                if snapshot.paired {
+                    if status.setup.is_some() {
+                        snapshot.setup = status.setup;
+                    }
+                    snapshot.lan = snapshot_lan(&status);
                 }
-                snapshot.lan = snapshot_lan(&status);
             }
             Json(snapshot).into_response()
         }
@@ -222,6 +228,7 @@ pub fn ui_router(
     clock: Arc<dyn Clock>,
     presence: crate::lan::Presence,
     status: Option<watch::Receiver<HubStatus>>,
+    pairing: Option<arena_core::PairGate>,
 ) -> Router {
     Router::new()
         .route("/ui/snapshot", get(ui_snapshot))
@@ -230,6 +237,7 @@ pub fn ui_router(
             clock,
             presence,
             status,
+            pairing,
         })
         .layer(axum::middleware::from_fn(ui_guard))
 }
@@ -550,7 +558,7 @@ mod tests {
                 s.lan_ports = Some((7400, 7401));
                 s.lan_addresses = vec![std::net::Ipv4Addr::new(192, 168, 1, 20)];
             });
-            let res = ui_router(reader, clock, crate::lan::Presence::none(), Some(rx))
+            let res = ui_router(reader, clock, crate::lan::Presence::none(), Some(rx), None)
                 .oneshot(req)
                 .await
                 .unwrap();
@@ -598,7 +606,8 @@ mod tests {
                         "lan_port": 7400,
                         "web_port": 7401,
                         "fingerprint": "ab".repeat(32)
-                    }
+                    },
+                    "paired": true
                 })
             );
         }
@@ -610,7 +619,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body,
-                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32)}})
+                json!({"branch": null, "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32)}, "paired": true})
             );
         }
 

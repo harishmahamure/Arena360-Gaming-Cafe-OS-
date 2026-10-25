@@ -18,6 +18,7 @@ pub mod api;
 pub mod auth;
 pub mod backup;
 pub mod branch_code;
+pub mod client_ip;
 pub mod config;
 pub mod crypto;
 pub mod gstin;
@@ -260,9 +261,12 @@ pub async fn serve(
         },
     ));
     let app = app_with_auth(role, dev, rx, migration_version, auth);
-    let served = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await;
+    let served = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await;
     check.abort();
     served
 }

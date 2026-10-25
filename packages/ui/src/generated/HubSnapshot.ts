@@ -33,4 +33,5 @@ export type HubSnapshot = {
   connectivity: Connectivity;
   setup?: SetupStatus | null;
   lan: SnapshotLan | null;
+  paired: boolean;
 };

@@ -156,6 +156,41 @@ impl ControlDb {
         rows.first().map(|r| pairing_from(r)).transpose()
     }
 
+    pub async fn pairing_code_by_hash(
+        &self,
+        code_hash: &str,
+    ) -> Result<Option<PairingCodeRow>, ControlError> {
+        let sql = format!("SELECT {PAIRING_COLUMNS} FROM pairing_codes WHERE code_hash = ?");
+        let rows = self.query(&sql, vec![text(code_hash)]).await?;
+        rows.first().map(|r| pairing_from(r)).transpose()
+    }
+
+    pub async fn invalidate_failed_pairing_code(
+        &self,
+        code_hash: &str,
+        failures_key: &str,
+        since: i64,
+        limit: u64,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        let n = self
+            .execute(
+                "UPDATE pairing_codes SET invalidated_at = ? WHERE code_hash = ? \
+                 AND used_at IS NULL AND invalidated_at IS NULL \
+                 AND (SELECT COALESCE(SUM(count), 0) FROM rate_limits \
+                 WHERE key = ? AND window_start > ?) >= ?",
+                vec![
+                    SqlValue::Integer(now),
+                    text(code_hash),
+                    text(failures_key),
+                    SqlValue::Integer(since),
+                    SqlValue::Integer(i64::try_from(limit).unwrap_or(i64::MAX)),
+                ],
+            )
+            .await?;
+        Ok(n == 1)
+    }
+
     pub async fn redeem_pairing_code(
         &self,
         code_hash: &str,

@@ -6,6 +6,7 @@ pub mod audit;
 mod clock;
 pub mod devices;
 pub mod locale;
+pub mod pairing;
 pub mod printer;
 pub mod rbac;
 mod settings_defaults;
@@ -27,6 +28,7 @@ pub use arena_store::{ChangeOp, META_TLS_FINGERPRINT};
 pub use audit::{AuditQuery, AuditReader};
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use devices::{DeviceDirectory, VerifiedDevice};
+pub use pairing::{HubPairer, PairFuture, PairGate};
 pub use settings_defaults::{
     DEFAULT_SETTINGS, DEFERRED_KEYS, KEY_CURRENCY, KEY_DAY_START_MIN, KEY_FY_START_MONTH,
     KEY_NUMBER_FORMAT, KEY_SYMBOL_POSITION, KEY_TZ, LOCALE_KEYS, SETTING_RULES, SettingRule,

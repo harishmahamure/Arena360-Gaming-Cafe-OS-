@@ -86,6 +86,7 @@ function newHub(): Hub {
 
 function snapshot(hub: Hub): HubSnapshot {
   return {
+    paired: true,
     branch: { name: "Koramangala", branch_code: "KOR01" },
     devices: hub.devices,
     locale: {

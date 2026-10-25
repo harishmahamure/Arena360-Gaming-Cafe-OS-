@@ -10,6 +10,7 @@ mod branch;
 pub mod control;
 mod dedupe;
 mod devices;
+mod identity;
 mod migrations;
 mod staff;
 
@@ -45,6 +46,10 @@ pub use devices::{
     DeviceMetaRow, DeviceRow, NewDevice, devices_meta_exists, find_device, find_device_meta,
     insert_device, insert_device_meta, list_device_meta, list_devices, set_device_label,
     set_device_reported_version, set_device_revoked, update_device_meta,
+};
+pub use identity::{
+    CachedLicence, HubIdentity, find_cached_licence, find_hub_identity, insert_hub_identity,
+    store_licence,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
@@ -547,6 +552,20 @@ impl Store {
             return Ok(None);
         }
         get_meta(&self.conn, key)
+    }
+
+    pub fn hub_identity(&self) -> Result<Option<HubIdentity>, AppError> {
+        if self.schema_version()? == 0 {
+            return Ok(None);
+        }
+        find_hub_identity(&self.conn)
+    }
+
+    pub fn cached_licence(&self) -> Result<Option<CachedLicence>, AppError> {
+        if self.schema_version()? == 0 {
+            return Ok(None);
+        }
+        find_cached_licence(&self.conn)
     }
 
     /// Reads the lease row outside any write transaction (`None` on a database not yet

@@ -13,6 +13,7 @@ import {
   checkRbac,
   checkOverlay,
   checkParity,
+  checkRateLimits,
   checkRepo,
   checkWorkflow,
   parseDocs,
@@ -417,4 +418,21 @@ test("a missing kubectl is one clear error", () => {
   } finally {
     process.env.PATH = saved;
   }
+});
+
+test("the Cloudflare /v1/pair rate limit is committed at 20 per IP per hour", () => {
+  const text = read("deploy/cloudflare/rate-limits.json");
+  assert.deepEqual(checkRateLimits(text), []);
+  const config = JSON.parse(text);
+  const raised = structuredClone(config);
+  raised.rules[0].ratelimit.requests_per_period = 50;
+  assert.match(checkRateLimits(JSON.stringify(raised)).join("\n"), /must allow 20 per 3600 s/);
+  const perColo = structuredClone(config);
+  perColo.rules[0].ratelimit.characteristics = ["ip.src", "cf.colo.id"];
+  assert.match(checkRateLimits(JSON.stringify(perColo)).join("\n"), /per ip.src/);
+  const logged = structuredClone(config);
+  logged.rules[0].action = "log";
+  assert.match(checkRateLimits(JSON.stringify(logged)).join("\n"), /must block/);
+  assert.match(checkRateLimits(JSON.stringify({ rules: [] })).join("\n"), /no rule for \/v1\/pair/);
+  assert.match(checkRateLimits("{").join("\n"), /not JSON/);
 });

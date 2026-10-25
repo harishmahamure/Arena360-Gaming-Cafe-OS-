@@ -113,3 +113,13 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi.md`
   summary: Pin the kiosk Tauri `generate_handler!` registration against `ipc-names.json` (for example by parsing `main.rs` in the existing COMMANDS test).
   evidence: Removing `pair`/`pair_info` from the handler list passes every test.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-10-hub-installer-pairs-with-the-code-and-retries-in-place.md`
+  summary: Idempotent `/v1/pair`. When the cloud commits but the Hub loses the answer or fails its keystore or DB write, the code is burned and the old Hub revoked. Replay with the same `hub_instance_id` should re-mint; write the DB before the keystore or stage the token.
+  evidence: Review findings from Blind Hunter and Edge Case Hunter; no test covers these paths.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-10-hub-installer-pairs-with-the-code-and-retries-in-place.md`
+  summary: Per-IP limit behind Traefik. `client_ip` trusts `CF-Connecting-IP` only from Cloudflare peers, but the app's peer is the Traefik pod, so all clients share one bucket in the cluster. Needs a trusted-proxy setting.
+  evidence: `deploy/k8s/base/ingress.yaml`; tests inject a Cloudflare peer.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-10-hub-installer-pairs-with-the-code-and-retries-in-place.md`
+  summary: Hub hardening and tests. Re-check `hub_identity` and the writer epoch before the cloud call and after startup; Windows DPAPI user scope and ACLs; verify the licence before caching; Hub-side log scrub, Retry-After over HTTP, post-consume failure, dev-seed identity and IPv6 /64 tests.
+  evidence: Review findings.

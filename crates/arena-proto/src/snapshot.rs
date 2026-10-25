@@ -26,6 +26,12 @@ pub struct HubSnapshot {
     pub setup: Option<crate::SetupStatus>,
     #[serde(default)]
     pub lan: Option<SnapshotLan>,
+    #[serde(default = "paired_default")]
+    pub paired: bool,
+}
+
+fn paired_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -221,6 +227,7 @@ mod tests {
             connectivity: crate::Connectivity::default(),
             setup: None,
             lan: None,
+            paired: true,
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
@@ -231,7 +238,8 @@ mod tests {
                 "ui": {"idle_lock_minutes": 5, "hc": false},
                 "connectivity": {"state": "online", "checked_at": null},
                 "setup": null,
-                "lan": null
+                "lan": null,
+                "paired": true
             })
         );
     }

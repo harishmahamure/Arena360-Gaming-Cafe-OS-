@@ -35,6 +35,7 @@ pub fn build_snapshot(
         connectivity: arena_proto::Connectivity::default(),
         setup: None,
         lan: None,
+        paired: true,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -354,6 +355,7 @@ mod tests {
                     printer: arena_proto::PrinterState::Unset,
                 }),
                 lan: None,
+                paired: true,
             }
         );
     }
@@ -374,6 +376,7 @@ mod tests {
                 connectivity: arena_proto::Connectivity::default(),
                 setup: None,
                 lan: None,
+                paired: true,
             }
         );
     }

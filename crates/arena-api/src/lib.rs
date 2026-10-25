@@ -8,6 +8,7 @@ pub mod pairing;
 pub mod ui_audit;
 pub mod ui_auth;
 pub mod ui_events;
+pub mod ui_pair;
 mod ui_pairing;
 mod ui_printer;
 
@@ -16,3 +17,4 @@ pub use health::{
     ui_router,
 };
 pub use ui_auth::{UiAuth, ui_auth_router};
+pub use ui_pair::ui_pair_router;

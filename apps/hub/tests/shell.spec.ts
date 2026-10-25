@@ -41,6 +41,7 @@ const SEEDED: HubSnapshot = {
   ui: { idle_lock_minutes: 5, hc: false },
   connectivity: { state: "online", checked_at: null },
   lan: null,
+  paired: true,
 };
 const NOT_SEEDED: HubSnapshot = {
   branch: null,
@@ -49,6 +50,7 @@ const NOT_SEEDED: HubSnapshot = {
   ui: { idle_lock_minutes: 5, hc: false },
   connectivity: { state: "online", checked_at: null },
   lan: null,
+  paired: true,
 };
 
 const RAIL = [

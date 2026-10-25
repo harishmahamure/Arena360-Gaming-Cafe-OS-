@@ -6,12 +6,14 @@ use std::path::PathBuf;
 
 use arena_api::DEFAULT_HEALTH_PORT;
 use arena_api::lan::{DEFAULT_LAN_PORT, DEFAULT_WEB_PORT};
-use arena_tasks::{CloudHost, DEFAULT_CLOUD_HOST, default_internet_endpoints};
+use arena_proto::HubPlatform;
+use arena_tasks::{CloudEndpoint, CloudHost, DEFAULT_CLOUD_HOST, default_internet_endpoints};
 
 #[cfg(not(feature = "dev-fixtures"))]
 pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--printer system] [--help] [--version]";
 #[cfg(feature = "dev-fixtures")]
-pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--printer <system|fake>] [--help] [--version]
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--printer <system|fake>] [--platform <windows|android>] [--help] [--version]
+       (dev-fixtures: --cloud-host also takes http://127.0.0.1:<port> for a local arena-cloud --dev)
        arena-hub dev seed [--data-dir <path>] [--kiosk-allow <path_glob>]... [--kiosk-process-mode <enforce|report>]
        arena-hub dev revoke-device <device_id> [--health-port <port>]";
 pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
@@ -28,6 +30,8 @@ pub struct Config {
     /// The cloud host the connectivity probe checks (`--cloud-host`, default
     /// `api.arena360.cloud:443`, the production `arena-cloud` behind Cloudflare).
     pub cloud_host: CloudHost,
+    pub cloud_plain_http: bool,
+    pub platform: HubPlatform,
     /// The internet endpoints the probe connects to (`--probe-internet`, default `1.1.1.1:443`
     /// and `8.8.8.8:443`).
     pub probe_internet: Vec<SocketAddr>,
@@ -40,6 +44,19 @@ pub enum PrinterChoice {
     System,
     #[cfg(feature = "dev-fixtures")]
     Fake,
+}
+
+fn platform_choice(v: &OsString) -> Result<HubPlatform, String> {
+    match v.to_str().and_then(HubPlatform::parse) {
+        Some(HubPlatform::Windows) => Ok(HubPlatform::Windows),
+        #[cfg(feature = "dev-fixtures")]
+        Some(HubPlatform::Android) => Ok(HubPlatform::Android),
+        #[cfg(not(feature = "dev-fixtures"))]
+        Some(HubPlatform::Android) => {
+            Err("--platform android needs a dev-fixtures build".to_owned())
+        }
+        None => Err(format!("invalid --platform {v:?} (windows or android)")),
+    }
 }
 
 fn printer_choice(v: &OsString) -> Result<PrinterChoice, String> {
@@ -220,6 +237,8 @@ fn parse_flags(
     let mut lan_port = DEFAULT_LAN_PORT;
     let mut web_port = DEFAULT_WEB_PORT;
     let mut cloud_host = CloudHost::parse(DEFAULT_CLOUD_HOST).expect("valid default cloud host");
+    let mut cloud_plain_http = false;
+    let mut platform = HubPlatform::Windows;
     let mut probe_internet = default_internet_endpoints();
     let mut printer = PrinterChoice::default();
     let mut args = args;
@@ -249,13 +268,19 @@ fn parse_flags(
             "--lan-port" if ports => lan_port = port(&flag, &value()?)?,
             "--web-port" if ports => web_port = port(&flag, &value()?)?,
             "--cloud-host" if ports => {
-                cloud_host = CloudHost::parse(&value()?.to_string_lossy())?;
+                let endpoint = CloudEndpoint::parse(
+                    &value()?.to_string_lossy(),
+                    cfg!(feature = "dev-fixtures"),
+                )?;
+                cloud_host = endpoint.host;
+                cloud_plain_http = endpoint.plain_http;
             }
             "--probe-internet" if ports => {
                 probe_internet =
                     arena_tasks::parse_internet_endpoints(&value()?.to_string_lossy())?;
             }
             "--printer" if ports => printer = printer_choice(&value()?)?,
+            "--platform" if ports => platform = platform_choice(&value()?)?,
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -279,6 +304,8 @@ fn parse_flags(
         lan_port,
         web_port,
         cloud_host,
+        cloud_plain_http,
+        platform,
         probe_internet,
         printer,
     }))
@@ -433,6 +460,8 @@ mod tests {
                     lan_port: DEFAULT_LAN_PORT,
                     web_port: DEFAULT_WEB_PORT,
                     cloud_host: CloudHost::parse(DEFAULT_CLOUD_HOST).unwrap(),
+                    cloud_plain_http: false,
+                    platform: HubPlatform::Windows,
                     probe_internet: default_internet_endpoints(),
                     printer: PrinterChoice::System,
                 },
@@ -589,6 +618,47 @@ mod tests {
         }
         assert!(USAGE.contains("--cloud-host <host:port>"));
         assert!(USAGE.contains("--probe-internet"));
+    }
+
+    #[test]
+    fn cloud_scheme_and_platform_flags() {
+        let env = env_of(&[("HOME", "/h")]);
+        let c = run(&[], &env, false).unwrap();
+        assert_eq!(
+            (c.cloud_plain_http, c.platform),
+            (false, HubPlatform::Windows)
+        );
+        let c = run(&["--cloud-host", "https://cloud.example"], &env, false).unwrap();
+        assert_eq!(
+            (
+                c.cloud_host.host.as_str(),
+                c.cloud_host.port,
+                c.cloud_plain_http
+            ),
+            ("cloud.example", 443, false)
+        );
+        assert!(run(&["--cloud-host", "http://cloud.example:80"], &env, false).is_err());
+        assert!(run(&["--platform", "linux"], &env, false).is_err());
+        let local = run(&["--cloud-host", "http://127.0.0.1:8080"], &env, false);
+        let android = run(&["--platform", "android"], &env, false);
+        #[cfg(feature = "dev-fixtures")]
+        {
+            let c = local.unwrap();
+            assert_eq!(
+                (
+                    c.cloud_host.host.as_str(),
+                    c.cloud_host.port,
+                    c.cloud_plain_http
+                ),
+                ("127.0.0.1", 8080, true)
+            );
+            assert_eq!(android.unwrap().platform, HubPlatform::Android);
+        }
+        #[cfg(not(feature = "dev-fixtures"))]
+        {
+            assert!(local.unwrap_err().contains("dev-fixtures"));
+            assert!(android.unwrap_err().contains("dev-fixtures"));
+        }
     }
 
     #[test]

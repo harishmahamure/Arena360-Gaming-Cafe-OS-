@@ -67,6 +67,30 @@ pub const DEV_LICENCE_VERIFY_KEYS: &[VerifyKey<'static>] = &[VerifyKey {
     public_key: "AgGeVhPGCGq0I3VTItyqjQKbxNFhvxrr2Mea5fU_DEc",
 }];
 
+#[cfg(any(test, feature = "dev-keys"))]
+const DEV_SIGNING_KEY_PEM: &str =
+    include_str!("../../arena-cloud/dev/fixtures/licence-dev-signing-key.pem");
+
+#[cfg(any(test, feature = "dev-keys"))]
+pub fn dev_sign(claims: &LicenceClaims) -> Result<String, String> {
+    use base64::engine::general_purpose::STANDARD;
+    let body: String = DEV_SIGNING_KEY_PEM
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect();
+    let der = STANDARD
+        .decode(body.trim())
+        .map_err(|e| format!("dev key: {e}"))?;
+    let mut header = jsonwebtoken::Header::new(Algorithm::EdDSA);
+    header.kid = Some(DEV_LICENCE_KID.to_owned());
+    jsonwebtoken::encode(
+        &header,
+        claims,
+        &jsonwebtoken::EncodingKey::from_ed_der(&der),
+    )
+    .map_err(|e| format!("dev licence sign: {e}"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LicenceError {
     NoKeys,
@@ -167,6 +191,17 @@ pub fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_dev_signer_signs_what_the_dev_verify_set_trusts() {
+        let claims = LicenceClaims::for_tier("t", "b", Tier::Free, 1_800_000_000);
+        let token = dev_sign(&claims).unwrap();
+        assert_eq!(
+            verify(&token, DEV_LICENCE_VERIFY_KEYS, 1_800_000_000_000).unwrap(),
+            claims
+        );
+        assert!(verify(&token, LICENCE_VERIFY_KEYS, 1_800_000_000_000).is_err());
+    }
 
     #[test]
     fn free_claims_take_the_tier_defaults_and_a_seven_day_life() {

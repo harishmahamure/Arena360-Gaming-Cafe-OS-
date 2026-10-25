@@ -80,20 +80,42 @@ cargo run -p arena-hub -- --data-dir /tmp/hub
 curl 127.0.0.1:7409/healthz
 ```
 
-| Flag                                 | Meaning                                                                                                                                |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `--data-dir <path>`                  | Data directory (overrides `ARENA_HUB_DATA_DIR`)                                                                                        |
-| `--health-port <port>`               | Loopback port for `GET /healthz` (default `7409`, not `0`)                                                                             |
-| `--lan-port <port>`                  | TLS WebSocket port for paired apps (default `7400`)                                                                                    |
-| `--web-port <port>`                  | Sniffed TLS / plain HTTP port (default `7401`)                                                                                         |
-| `--cloud-host <host:port>`           | Cloud host the connectivity probe checks (default `api.arena360.cloud:443`, the production `arena-cloud` `/healthz` behind Cloudflare) |
-| `--probe-internet <ip:port,ip:port>` | Internet endpoints the probe connects to (default `1.1.1.1:443,8.8.8.8:443`)                                                           |
-| `--printer <system\|fake>`           | Receipt printer adapter (default `system`: the Windows spooler for USB plus LAN `:9100`); `fake` records jobs and needs `dev-fixtures` |
-| `--help`, `-h`                       | Print usage and exit 0                                                                                                                 |
-| `--version`                          | Print the version and exit 0                                                                                                           |
+| Flag                                 | Meaning                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--data-dir <path>`                  | Data directory (overrides `ARENA_HUB_DATA_DIR`)                                                                                                                                                                                                                                                             |
+| `--health-port <port>`               | Loopback port for `GET /healthz` (default `7409`, not `0`)                                                                                                                                                                                                                                                  |
+| `--lan-port <port>`                  | TLS WebSocket port for paired apps (default `7400`)                                                                                                                                                                                                                                                         |
+| `--web-port <port>`                  | Sniffed TLS / plain HTTP port (default `7401`)                                                                                                                                                                                                                                                              |
+| `--cloud-host <host:port>`           | Cloud host the connectivity probe checks and pairing calls over HTTPS (default `api.arena360.cloud:443`, the production `arena-cloud` behind Cloudflare; `https://<host>` also works). `http://127.0.0.1:<port>` (loopback only) is accepted only in `dev-fixtures` builds, for a local `arena-cloud --dev` |
+| `--platform <windows\|android>`      | The platform the Hub reports when it pairs (default `windows`); `android` needs `dev-fixtures` (to pair on Free in dev)                                                                                                                                                                                     |
+| `--probe-internet <ip:port,ip:port>` | Internet endpoints the probe connects to (default `1.1.1.1:443,8.8.8.8:443`)                                                                                                                                                                                                                                |
+| `--printer <system\|fake>`           | Receipt printer adapter (default `system`: the Windows spooler for USB plus LAN `:9100`); `fake` records jobs and needs `dev-fixtures`                                                                                                                                                                      |
+| `--help`, `-h`                       | Print usage and exit 0                                                                                                                                                                                                                                                                                      |
+| `--version`                          | Print the version and exit 0                                                                                                                                                                                                                                                                                |
 
 The three ports must differ. Tests pass free ports; production uses the defaults.
 
+- **Pairing** (Story 2.10). Until the Hub is paired, `GET /ui/snapshot` answers only the
+  minimal fields (`branch`, `devices`, `locale`, `setup` and `lan` empty) with
+  `paired: false`, and every other `/ui/*` route answers 409 `HUB_NOT_PAIRED` (`/healthz`,
+  `/ui/pair-hub`, `/ui/snapshot` and the `dev-fixtures` routes are exempt). The Hub UI then
+  shows only the always-dark "Pair this Hub" screen. `POST /ui/pair-hub {code}` (no staff
+  session; 409 `ALREADY_SET` once paired) normalises the code (uppercase, spaces and hyphens
+  removed; anything that is not 8 alphabet characters is `PAIR_CODE_INVALID` without a cloud
+  call) and calls `POST /v1/pair` on `--cloud-host` with `{code, platform, hub_instance_id,
+version}` (reqwest, rustls + ring, webpki roots, 15 s timeout). Answers: 200
+  `{paired: true}`; 401 `PAIR_CODE_INVALID` (a wrong, used, invalidated or expired code, one
+  line in the UI); 403 `FEATURE_NOT_ENTITLED` (`field: "platform"`); 429 `RATE_LIMITED` with
+  `retry_after_s` and `Retry-After`; 503 `CLOUD_UNREACHABLE` (no network, or the cloud
+  failed). On success the token goes to the OS keystore (`<data>/hub-token.bin`: DPAPI
+  `CryptProtectData`, machine scope plus a random entropy file `hub-token.entropy` on Windows;
+  a `0600` file, NOT encrypted, elsewhere for dev and tests; the Android Keystore is a stub
+  until Epic 4), then `hub_identity(tenant_id, branch_id, hub_id, tier, paired_at)` and
+  `licence_cache(jwt, received_at)` (migration 0011, singletons) are written in one Hub DB
+  transaction through the writer. A paired Hub skips the screen on restart and never calls
+  `/v1/pair` again. `dev seed` writes a dev identity (`dev-tenant`, the seeded branch,
+  `dev-hub`, tier free) with a licence signed by the committed dev key, so dev flows stay
+  paired. The token is never logged.
 - **Data dir:** `--data-dir`, else `ARENA_HUB_DATA_DIR`, else `%PROGRAMDATA%\Arena360\Hub` on
   Windows and `$XDG_DATA_HOME/arena360/hub` (falling back to `~/.local/share/arena360/hub`)
   elsewhere. The database is `<data>/branch.db`; `<data>/branch.db.lock` is the process writer
@@ -1466,8 +1488,8 @@ details_json)`.
   - `GET /v1/wizard/install-hub[?branch_id=]` → `{active: {expires_at} | null, hub_paired,
 server_now}`; it never returns the code. `server_now` (Unix ms) lets the page count down
     against the server clock: the card offsets the client clock by the skew and refreshes on
-    focus and visibility changes. `hub_paired` stays false until Story 2.10, and step 3 completes
-    only when a Hub pairs (Stories 2.10 and 2.11).
+    focus and visibility changes. `hub_paired` is true once the branch has an active Hub (Story 2.10); step 3
+    completes when the Hub checks in (Story 2.11).
   - Both need a finished account setup and an owned branch (else 403 `FORBIDDEN`) with steps
     `cafe` and `tier` done (else 409 `STEP_NOT_READY`).
   - For Story 2.10: `arena_cloud::pairing_code::redeem_pairing_code(state, code)` (over
@@ -1479,6 +1501,37 @@ server_now}`; it never returns the code. `server_now` (Unix ms) lets the page co
 created_at, expires_at, used_at, invalidated_at)`, indexed on `branch_id`, plus the partial
     unique index `pairing_codes_live` on `branch_id` where `used_at` and `invalidated_at` are
     null.
+
+- **Hub pairing** (Story 2.10). `POST /v1/pair {code, platform, hub_instance_id, version}`
+  (unauthenticated; `platform` is `windows` or `android`) pairs a Hub with the branch of a
+  step-3 code.
+  - Every attempt first reserves one of 20 per client IP per rolling hour (`pair_ip:<ip>`,
+    else 429 `RATE_LIMITED` with `Retry-After`). The IP is `CF-Connecting-IP` only when the
+    socket peer is in the committed Cloudflare ranges (`deploy/cloudflare/ips-*.txt`, compiled
+    in), else the peer itself. Cloudflare enforces the same limit at the edge
+    (`deploy/cloudflare/rate-limits.json`).
+  - A wrong, malformed, used or invalidated code is 401 `PAIR_CODE_INVALID`; an expired one 401
+    `PAIR_CODE_EXPIRED`. When the branch's effective tier (`tier_at(now)`) is Free and the
+    platform is `windows`, it is 403 `FEATURE_NOT_ENTITLED` with `field: "platform"` and the
+    code stays unconsumed. Such a refusal of a live code counts as a failure of that code
+    (`pair_code:<code_hash>`, rolling hour); the 5th invalidates it (`invalidated_at`), and a
+    later correct entry is `PAIR_CODE_INVALID`. A wrong code matches no row, so it counts only
+    against the IP.
+  - Otherwise, in one transaction: the code is marked used (only if still unused, unexpired
+    and entitled), the branch code is locked (`code_locked_at`, the `lock_branch_code` update),
+    the branch's active Hub is revoked (one active Hub per branch for now) and a `hubs` row is
+    inserted. The token is `hub_<hub_id>.<base64url of 32 random bytes>`; only the argon2id
+    hash of its secret part is stored (behind the same 4-permit hashing semaphore as
+    passwords). Of two concurrent pairs with one code exactly one succeeds.
+  - 200 `{hub_id, token, tenant_id, branch_id, tier, branch_code, licence}`: the token is
+    returned this once and never logged; `licence` is signed by the configured licence signer
+    for the branch's entitlement.
+  - Table (migration 0008): `hubs(id, branch_id, platform, hub_instance_id, version,
+token_hash, paired_at, last_seen_at, revoked_at)`, one active (`revoked_at IS NULL`) row per
+    branch.
+  - Local end to end: `arena-cloud --role all --dev`, an owner at step 3, then
+    `cargo run -p arena-hub --features dev-fixtures -- --data-dir /tmp/hub --cloud-host
+http://127.0.0.1:8080 --platform android` and type the code into the Hub's pairing screen.
 
 - **Checks.** `pnpm check:secrets` fails on plaintext secrets (unencrypted `deploy/secrets/*`,
   env files, `kind: Secret` under `deploy/k8s`, age/PEM private keys, long JWTs outside test

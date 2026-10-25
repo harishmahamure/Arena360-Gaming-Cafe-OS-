@@ -16,6 +16,6 @@ export async function load({ fetch, depends }) {
   depends(SESSION_DEPENDENCY);
   const [hub, session] = await Promise.all([loadSnapshot(fetch), loadSession(fetch)]);
   // The theme is on <html> before the shell renders (no dark flash on an HC Hub).
-  if (hub.ok) applyTheme(hub.snapshot.ui.hc);
+  if (hub.ok) applyTheme(hub.snapshot.paired !== false && hub.snapshot.ui.hc);
   return { hub, session };
 }

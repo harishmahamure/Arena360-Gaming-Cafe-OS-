@@ -49,6 +49,7 @@ const snapshot = (online: boolean): HubSnapshot => ({
   ui: { idle_lock_minutes: 5, hc: false },
   connectivity: { state: "online", checked_at: null },
   lan: null,
+  paired: true,
 });
 
 const json = (route: Route, status: number, body: unknown) =>

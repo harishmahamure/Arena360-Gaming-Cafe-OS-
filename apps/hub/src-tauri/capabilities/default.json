@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The Hub window may only close itself (Quit setup on the pairing screen).",
+  "windows": ["main"],
+  "permissions": ["core:window:allow-close"]
+}

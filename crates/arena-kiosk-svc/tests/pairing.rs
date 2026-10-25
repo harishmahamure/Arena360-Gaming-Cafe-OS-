@@ -166,7 +166,7 @@ async fn hub() -> Hub {
         .with_presence(presence.clone())
         .with_pairing(pairing),
     );
-    let router = arena_api::ui_router(snapshots, clock, presence.clone(), Some(status))
+    let router = arena_api::ui_router(snapshots, clock, presence.clone(), Some(status), None)
         .merge(arena_api::ui_auth_router(ui_auth));
     let health_listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await

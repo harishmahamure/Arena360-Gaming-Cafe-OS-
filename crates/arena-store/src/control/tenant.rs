@@ -66,6 +66,9 @@ pub enum BranchCodeOutcome {
     Missing,
 }
 
+pub(super) const LOCK_BRANCH_CODE: &str =
+    "UPDATE branches SET code_locked_at = ? WHERE id = ? AND code_locked_at IS NULL";
+
 const TENANT_COLUMNS: &str = "id, owner_id, name, created_at";
 
 const BRANCH_COLUMNS: &str = "b.id, b.tenant_id, b.name, b.city, b.country, b.currency, \
@@ -381,7 +384,7 @@ impl ControlDb {
     pub async fn lock_branch_code(&self, branch_id: &str, now: i64) -> Result<bool, ControlError> {
         let n = self
             .execute(
-                "UPDATE branches SET code_locked_at = ? WHERE id = ? AND code_locked_at IS NULL",
+                LOCK_BRANCH_CODE,
                 vec![SqlValue::Integer(now), text(branch_id)],
             )
             .await?;

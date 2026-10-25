@@ -71,6 +71,98 @@ pub struct InstallHubState {
     pub server_now: i64,
 }
 
+pub const HUB_TOKEN_PREFIX: &str = "hub_";
+pub const PAIR_FAILURES_PER_CODE: u32 = 5;
+pub const PAIR_ATTEMPTS_PER_IP_PER_HOUR: u32 = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum HubPlatform {
+    Windows,
+    Android,
+}
+
+impl HubPlatform {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Android => "android",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::Windows, Self::Android]
+            .into_iter()
+            .find(|p| p.as_str() == s)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HubPairRequest {
+    pub code: String,
+    pub platform: HubPlatform,
+    pub hub_instance_id: String,
+    pub version: String,
+}
+
+impl std::fmt::Debug for HubPairRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HubPairRequest")
+            .field("code", &"[redacted]")
+            .field("platform", &self.platform)
+            .field("hub_instance_id", &self.hub_instance_id)
+            .field("version", &self.version)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HubPairResponse {
+    pub hub_id: String,
+    pub token: String,
+    pub tenant_id: String,
+    pub branch_id: String,
+    pub tier: crate::tier::Tier,
+    pub branch_code: String,
+    pub licence: String,
+}
+
+impl std::fmt::Debug for HubPairResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HubPairResponse")
+            .field("hub_id", &self.hub_id)
+            .field("token", &"[redacted]")
+            .field("tenant_id", &self.tenant_id)
+            .field("branch_id", &self.branch_id)
+            .field("tier", &self.tier)
+            .field("branch_code", &self.branch_code)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PairHubRequest {
+    pub code: String,
+}
+
+impl std::fmt::Debug for PairHubRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairHubRequest")
+            .field("code", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PairHubOk {
+    pub paired: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +216,47 @@ mod tests {
         ] {
             assert!(!valid_pairing_code(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn pairing_codes_are_eight_alphabet_characters() {
+        assert!(valid_pairing_code("7K2M9PQR"));
+        assert!(!valid_pairing_code("7K2M9PQ"));
+        assert!(!valid_pairing_code("7K2M9PQ0"));
+        assert!(!valid_pairing_code("7k2m9pqr"));
+    }
+
+    #[test]
+    fn platforms_round_trip_and_secrets_never_show_in_debug() {
+        for p in [HubPlatform::Windows, HubPlatform::Android] {
+            assert_eq!(HubPlatform::parse(p.as_str()), Some(p));
+            assert_eq!(
+                serde_json::to_string(&p).unwrap(),
+                format!("\"{}\"", p.as_str())
+            );
+        }
+        assert_eq!(HubPlatform::parse("linux"), None);
+        let req = HubPairRequest {
+            code: "7K2M9PQR".into(),
+            platform: HubPlatform::Android,
+            hub_instance_id: "i".into(),
+            version: "0.1.0".into(),
+        };
+        assert!(!format!("{req:?}").contains("7K2M9PQR"));
+        let res = HubPairResponse {
+            hub_id: "h".into(),
+            token: "hub_h.secret".into(),
+            tenant_id: "t".into(),
+            branch_id: "b".into(),
+            tier: crate::tier::Tier::Free,
+            branch_code: "LVL".into(),
+            licence: "jwt".into(),
+        };
+        assert!(!format!("{res:?}").contains("secret"));
+        let hub = PairHubRequest {
+            code: "7K2M9PQR".into(),
+        };
+        assert!(!format!("{hub:?}").contains("7K2M9PQR"));
     }
 
     #[test]

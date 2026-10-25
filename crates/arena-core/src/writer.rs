@@ -225,6 +225,27 @@ impl WriterHandle {
         .await
     }
 
+    pub async fn record_pairing(
+        &self,
+        identity: arena_store::HubIdentity,
+        licence: String,
+    ) -> Result<bool, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                if !arena_store::insert_hub_identity(tx, &identity)? {
+                    return Ok(false);
+                }
+                arena_store::store_licence(tx, &licence, identity.paired_at)?;
+                Ok(true)
+            })
+        })
+        .await
+    }
+
     /// Brings an upgraded branch up to the current defaults (and the manager verifier's history
     /// up to date with the staff rows): when the branch exists and lacks
     /// default settings, built-in roles or their permission rows, submits `branch.seed_defaults`

@@ -88,6 +88,7 @@ function snapshot(hub: Hub): HubSnapshot {
       printer: "unset",
     },
     lan: null,
+    paired: true,
   };
 }
 

@@ -627,6 +627,38 @@ export function checkCiWorkflow(text) {
     : ["ci.yml: no workflow_call trigger (deploy-cloud.yml runs CI first)"];
 }
 
+export const PAIR_RATE_LIMIT = { path: "/v1/pair", period: 3600, requests: 20 };
+
+export function checkRateLimits(text) {
+  let config;
+  try {
+    config = JSON.parse(text);
+  } catch (e) {
+    return [`deploy/cloudflare/rate-limits.json: not JSON (${e.message})`];
+  }
+  const rules = Array.isArray(config?.rules) ? config.rules : [];
+  const rule = rules.find((r) => String(r?.expression ?? "").includes(`"${PAIR_RATE_LIMIT.path}"`));
+  if (!rule) return [`deploy/cloudflare/rate-limits.json: no rule for ${PAIR_RATE_LIMIT.path}`];
+  const errors = [];
+  const rl = rule.ratelimit ?? {};
+  if (rl.requests_per_period !== PAIR_RATE_LIMIT.requests || rl.period !== PAIR_RATE_LIMIT.period) {
+    errors.push(
+      `deploy/cloudflare/rate-limits.json: ${PAIR_RATE_LIMIT.path} must allow ${PAIR_RATE_LIMIT.requests} per ${PAIR_RATE_LIMIT.period} s (found ${rl.requests_per_period} per ${rl.period} s)`,
+    );
+  }
+  if (!Array.isArray(rl.characteristics) || rl.characteristics.join() !== "ip.src") {
+    errors.push(
+      `deploy/cloudflare/rate-limits.json: ${PAIR_RATE_LIMIT.path} must count per ip.src`,
+    );
+  }
+  if (rule.action !== "block") {
+    errors.push(
+      `deploy/cloudflare/rate-limits.json: ${PAIR_RATE_LIMIT.path} must block over the limit`,
+    );
+  }
+  return errors;
+}
+
 export function render(root, env) {
   try {
     return execFileSync("kubectl", ["kustomize", join(root, "deploy/k8s/overlays", env)], {
@@ -654,6 +686,7 @@ export function checkRepo(root, renderOverlay = (env) => render(root, env)) {
   }
   errors.push(...checkParity(rendered.staging, rendered.production));
   errors.push(...checkCluster(read("deploy/k8s/cluster/traefik-config.yaml")));
+  errors.push(...checkRateLimits(read("deploy/cloudflare/rate-limits.json")));
   errors.push(...checkRbac(read("deploy/k8s/cluster/deployer-rbac.yaml")));
   errors.push(...checkCiWorkflow(read(".github/workflows/ci.yml")));
   const channel = read("rust-toolchain.toml").match(/^\s*channel\s*=\s*"([^"]+)"/m)?.[1];

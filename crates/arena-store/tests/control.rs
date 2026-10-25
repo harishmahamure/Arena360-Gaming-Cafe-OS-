@@ -17,6 +17,7 @@ const BASELINE: &[ControlMigration] = CONTROL_MIGRATIONS.split_at(1).0;
 const ALL_TABLES: &[&str] = &[
     "branches",
     "entitlements",
+    "hubs",
     "onboarding_progress",
     "ops_audit",
     "otp_challenges",

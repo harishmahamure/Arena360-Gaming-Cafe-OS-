@@ -1,0 +1,25 @@
+{
+  "zone": "arena360.cloud",
+  "phase": "http_ratelimit",
+  "rules": [
+    {
+      "ref": "hub-pair-per-ip",
+      "description": "POST /v1/pair: 20 attempts per IP per hour",
+      "expression": "(http.request.uri.path eq \"/v1/pair\")",
+      "action": "block",
+      "action_parameters": {
+        "response": {
+          "status_code": 429,
+          "content_type": "application/json",
+          "content": "{\"code\":\"RATE_LIMITED\",\"message\":\"Too many requests. Try again later.\"}"
+        }
+      },
+      "ratelimit": {
+        "characteristics": ["ip.src"],
+        "period": 3600,
+        "requests_per_period": 20,
+        "mitigation_timeout": 3600
+      }
+    }
+  ]
+}

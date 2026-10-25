@@ -116,6 +116,7 @@ function snapshot(hub: Hub): HubSnapshot {
     ui: { idle_lock_minutes: hub.idleLockMinutes, hc: false },
     connectivity: { state: "online", checked_at: null },
     lan: null,
+    paired: true,
   };
 }
 

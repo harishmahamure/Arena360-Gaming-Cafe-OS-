@@ -70,7 +70,7 @@ development_status:
   2-7-resumable-setup-wizard-and-step-1-café-and-first-branch: review
   2-8-step-2-free-tier-issues-a-signed-licence: review
   2-9-step-3-single-use-8-character-hub-pairing-code: review
-  2-10-hub-installer-pairs-with-the-code-and-retries-in-place: in-progress
+  2-10-hub-installer-pairs-with-the-code-and-retries-in-place: review
   2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself: backlog
   2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i: backlog
   2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai: backlog

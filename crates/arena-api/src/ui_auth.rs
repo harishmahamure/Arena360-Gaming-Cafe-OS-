@@ -410,6 +410,7 @@ pub struct UiAuth {
     printer_job: tokio::sync::Mutex<()>,
     pairing: Option<Arc<crate::pairing::Pairing>>,
     streams: Mutex<HashMap<String, usize>>,
+    pair_gate: Option<arena_core::PairGate>,
 }
 
 pub type BackupProbe =
@@ -457,8 +458,14 @@ impl UiAuth {
             printer_find: tokio::sync::Mutex::new(()),
             printer_job: tokio::sync::Mutex::new(()),
             pairing: None,
+            pair_gate: None,
             streams: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_pair_gate(mut self, gate: arena_core::PairGate) -> Self {
+        self.pair_gate = Some(gate);
+        self
     }
 
     pub fn with_printer(mut self, printer: Arc<dyn arena_core::printer::Printer>) -> Self {
@@ -802,7 +809,11 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::BranchCodeTaken
         | ErrorCode::BillingDisabled
         | ErrorCode::OneFreeBranch
-        | ErrorCode::StepNotReady => StatusCode::CONFLICT,
+        | ErrorCode::StepNotReady
+        | ErrorCode::HubNotPaired => StatusCode::CONFLICT,
+        ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
+        ErrorCode::FeatureNotEntitled => StatusCode::FORBIDDEN,
+        ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PasswordRequired | ErrorCode::SetupIncomplete => StatusCode::FORBIDDEN,
         ErrorCode::PermissionDenied
         | ErrorCode::Forbidden
@@ -822,7 +833,6 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::SERVICE_UNAVAILABLE
         }
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
-        ErrorCode::PairCodeInvalid => StatusCode::UNAUTHORIZED,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1789,7 +1799,11 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/audit/item", get(crate::ui_audit::item))
         .route("/ui/audit/facets", get(crate::ui_audit::facets))
         .route("/ui/events", get(crate::ui_events::events))
-        .with_state(auth)
+        .with_state(Arc::clone(&auth))
+        .layer(axum::middleware::from_fn_with_state(
+            auth.pair_gate.clone(),
+            crate::ui_pair::pair_gate,
+        ))
         .layer(axum::middleware::from_fn(crate::health::ui_guard))
 }
 

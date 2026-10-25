@@ -92,6 +92,7 @@ function snapshot(hub: Hub): HubSnapshot {
     ui: ui(hub),
     connectivity: { state: "online", checked_at: null },
     lan: hub.lan,
+    paired: true,
   };
 }
 

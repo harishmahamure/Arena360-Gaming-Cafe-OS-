@@ -57,7 +57,9 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::BillingDisabled
         | ErrorCode::OneFreeBranch
         | ErrorCode::StepNotReady
-        | ErrorCode::PairCodeInvalid => true,
+        | ErrorCode::PairCodeInvalid
+        | ErrorCode::PairCodeExpired
+        | ErrorCode::FeatureNotEntitled => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary
@@ -71,7 +73,9 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::SessionLocked
         | ErrorCode::RateLimited
         | ErrorCode::NoHub
-        | ErrorCode::PairPinPaused => false,
+        | ErrorCode::PairPinPaused
+        | ErrorCode::CloudUnreachable
+        | ErrorCode::HubNotPaired => false,
     }
 }
 

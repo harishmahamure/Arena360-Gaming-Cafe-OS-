@@ -42,6 +42,9 @@ pub fn seed_payload() -> BranchBootstrap {
     }
 }
 
+pub const DEV_TENANT_ID: &str = "dev-tenant";
+pub const DEV_HUB_ID: &str = "dev-hub";
+
 /// The label of the seeded kiosk.
 pub const DEV_KIOSK_LABEL: &str = "Dev Kiosk";
 
@@ -78,6 +81,7 @@ pub struct Seeded {
     /// The device token, shown once.
     pub token: String,
     pub staff: Vec<SeededStaff>,
+    pub identity: arena_store::HubIdentity,
 }
 
 fn intent(clock: &dyn Clock, kind: ActorKind, payload: IntentPayload) -> Intent {
@@ -233,11 +237,33 @@ pub async fn seed(
                 pin,
             });
         }
+        let branch_id = bootstrap
+            .changes
+            .iter()
+            .find(|c| c.tbl == "branch")
+            .map(|c| c.row_id.clone())
+            .ok_or_else(|| AppError::new(ErrorCode::Internal, "bootstrap wrote no branch"))?;
+        let identity = arena_store::HubIdentity {
+            tenant_id: DEV_TENANT_ID.into(),
+            branch_id,
+            hub_id: DEV_HUB_ID.into(),
+            tier: arena_proto::Tier::Free,
+            paired_at: clock.now_ms(),
+        };
+        let licence = arena_proto::licence::dev_sign(&arena_proto::LicenceClaims::for_tier(
+            &identity.tenant_id,
+            &identity.branch_id,
+            identity.tier,
+            identity.paired_at.div_euclid(1000),
+        ))
+        .map_err(|e| AppError::new(ErrorCode::Internal, e))?;
+        writer.record_pairing(identity.clone(), licence).await?;
         Ok::<_, AppError>(Seeded {
             changes,
             token: format_token(&device_id, &secret),
             device_id,
             staff,
+            identity,
         })
     }
     .await;

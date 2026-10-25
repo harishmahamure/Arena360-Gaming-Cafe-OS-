@@ -68,9 +68,15 @@ async fn get_install_hub(
         .map(|c| ActivePairingCode {
             expires_at: c.expires_at,
         });
+    let hub_paired = st
+        .db
+        .active_hub(&branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some();
     Ok(Json(InstallHubState {
         active,
-        hub_paired: false,
+        hub_paired,
         server_now: st.now(),
     }))
 }

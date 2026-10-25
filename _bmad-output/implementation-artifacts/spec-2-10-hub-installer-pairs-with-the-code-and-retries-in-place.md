@@ -2,7 +2,7 @@
 title: 'Story 2.10: Hub installer pairs with the code and retries in place'
 type: 'feature'
 created: '2026-10-25'
-status: 'in-progress'
+status: 'done'
 baseline_commit: '597c0954c8feaccabf7a1f4dbd3a9e4c929e2422'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -128,3 +128,24 @@ Investigate from 2.9 (`pairing_codes`, redeem helper, pepper label), 2.8 (signer
 **Commands:**
 - `cargo test --locked --workspace --no-fail-fast` (`ARENA_REQUIRE_SQLD=1`); dev-fixtures runs for hub, api, kiosk-svc; clippy incl. control + dev-fixtures; fmt; linkage script.
 - `pnpm --filter @arena/hub check && ARENA_PW_PORT=54xx pnpm --filter @arena/hub exec playwright test --workers=2`; onboarding suite unaffected; every `pnpm run check:*`; `pnpm run test:scripts`.
+
+## Review Triage Log
+
+Pass 1 (Blind Hunter, Edge Case Hunter, Verification Gap; on Sonnet). P = patch, D = defer, R = reject.
+
+| # | Finding | Verdict | Route | Evidence |
+|---|---------|---------|-------|----------|
+| 1 | ECH: only Windows-on-Free refusals count toward the 5-failure invalidation | medium | R | wrong codes have no row to count against; the per-IP limit bounds guessing; matches the spec matrix |
+| 2 | BH/ECH: code burned when the Hub fails after the cloud commit (timeout, keystore, DB) | high | D | needs idempotent `/v1/pair` per `hub_instance_id`; a design change |
+| 3 | BH: per-IP key collapses to the proxy IP behind Traefik | high | D | needs a trusted-proxy decision; the spec says socket peer otherwise; availability, not secrecy |
+| 4 | BH/ECH/VG: Cloudflare rule counted per colo | medium | P | `characteristics` is `["ip.src"]` and `check:deploy` requires exactly that |
+| 5 | ECH: edge 429 without an `AppError` body shown as unreachable | medium | P | `CloudClient::pair` maps a bare 429 to `RATE_LIMITED` |
+| 6 | BH/ECH: IPv6 limit bypass inside a /64 | medium | P | the IP key masks IPv6 to /64 |
+| 7 | BH: reqwest follows redirects | low | P | `redirect(Policy::none())` |
+| 8 | BH: Android link navigates the only Hub window | low | P | `target="_blank" rel="noopener"` |
+| 9 | BH: stale writer or gate can overwrite a good token | medium | D | follower and lease handling |
+| 10 | BH/ECH: DPAPI machine scope and ACLs | medium | D | Windows hardening |
+| 11 | BH: licence not verified before caching | low | D | |
+| 12 | BH: expired vs invalid oracle on the cloud API | low | R | by spec; the Hub collapses them |
+| 13 | BH: double failure count in the concurrent-use path | low | D | |
+| 14 | VG: no test for Retry-After over HTTP, the Hub log scrub, post-consume failures, the dev seed identity, IPv6 /64 | medium | D | |

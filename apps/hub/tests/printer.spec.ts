@@ -97,6 +97,7 @@ function snapshot(hub: Hub): HubSnapshot {
     ui: { idle_lock_minutes: 5, hc: hub.hc },
     connectivity: { state: "online", checked_at: null },
     lan: null,
+    paired: true,
     setup: {
       opening_hours_set: false,
       backup_location_set: false,

@@ -85,6 +85,10 @@ pub enum ErrorCode {
     StepNotReady,
     PairCodeInvalid,
     PairPinPaused,
+    PairCodeExpired,
+    FeatureNotEntitled,
+    CloudUnreachable,
+    HubNotPaired,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -142,6 +146,10 @@ impl ErrorCode {
             Self::StepNotReady => "STEP_NOT_READY",
             Self::PairCodeInvalid => "PAIR_CODE_INVALID",
             Self::PairPinPaused => "PAIR_PIN_PAUSED",
+            Self::PairCodeExpired => "PAIR_CODE_EXPIRED",
+            Self::FeatureNotEntitled => "FEATURE_NOT_ENTITLED",
+            Self::CloudUnreachable => "CLOUD_UNREACHABLE",
+            Self::HubNotPaired => "HUB_NOT_PAIRED",
         }
     }
 }
@@ -257,6 +265,10 @@ mod tests {
             (ErrorCode::StepNotReady, "STEP_NOT_READY"),
             (ErrorCode::PairCodeInvalid, "PAIR_CODE_INVALID"),
             (ErrorCode::PairPinPaused, "PAIR_PIN_PAUSED"),
+            (ErrorCode::PairCodeExpired, "PAIR_CODE_EXPIRED"),
+            (ErrorCode::FeatureNotEntitled, "FEATURE_NOT_ENTITLED"),
+            (ErrorCode::CloudUnreachable, "CLOUD_UNREACHABLE"),
+            (ErrorCode::HubNotPaired, "HUB_NOT_PAIRED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

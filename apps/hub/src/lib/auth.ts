@@ -60,8 +60,15 @@ export function onSessionLocked(handler: (() => void) | null) {
   sessionLockedHandler = handler;
 }
 
+let notPairedHandler: (() => void) | null = null;
+
+export function onHubNotPaired(handler: (() => void) | null) {
+  notPairedHandler = handler;
+}
+
 export function noticeLocked(err: UiError | null) {
   if (err?.code === "SESSION_LOCKED") sessionLockedHandler?.();
+  if (err?.code === "HUB_NOT_PAIRED") notPairedHandler?.();
 }
 
 export function getToken(): string | null {

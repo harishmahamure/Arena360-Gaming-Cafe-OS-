@@ -19,14 +19,14 @@ use std::net::{IpAddr, Ipv4Addr};
 use arena_api::lan::{HubInfoSource, LanHub, bind_lan, serve_lan, tls};
 use arena_api::{bind_health, serve_router};
 use arena_core::{
-    Clock, DeviceDirectory, HubStatus, Role, SnapshotReader, StaffDirectory, SystemClock,
+    Clock, DeviceDirectory, HubStatus, PairGate, Role, SnapshotReader, StaffDirectory, SystemClock,
     load_or_mint_instance_id, record_tls_fingerprint, status_channel,
 };
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
 use arena_tasks::{
-    ConnectivityTask, HousekeepingTask, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber,
-    SystemInterfaces,
+    CloudClient, CloudEndpoint, CloudPairer, ConnectivityTask, HousekeepingTask, Keystore,
+    LeaseTask, MdnsAdvertiser, MdnsTask, NetProber, SystemInterfaces, platform_keystore,
 };
 use tokio::sync::oneshot;
 use tracing_subscriber::EnvFilter;
@@ -120,6 +120,12 @@ async fn dev_seed(cfg: config::Config, opts: config::SeedOptions) -> ExitCode {
                 seeded.device_id
             );
             println!("dev seed: device token (shown once): {}", seeded.token);
+            println!(
+                "dev seed: paired as {} for tenant {} (tier {}, dev licence)",
+                seeded.identity.hub_id,
+                seeded.identity.tenant_id,
+                seeded.identity.tier.as_str()
+            );
             // Dev-fixtures builds only: release builds have no dev module.
             println!("dev seed: staff credentials (shown once, dev only):");
             for s in &seeded.staff {
@@ -195,6 +201,12 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         writer_lock = store.holds_writer_lock(),
         "store open"
     );
+    let pair_gate = PairGate::new(store.hub_identity()?.is_some());
+    if pair_gate.is_paired() {
+        tracing::info!("hub paired; pairing screen skipped");
+    } else {
+        tracing::info!("hub not paired yet; serving the pairing screen");
+    }
 
     // The LAN certificate: generated once by the writer, reused afterwards; a follower never
     // writes it. Its fingerprint goes into hub_meta like the instance id.
@@ -229,7 +241,13 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             ))
         })?;
 
-    let lease = LeaseTask::start(store, instance_id, Arc::clone(&clock), status_tx.clone()).await?;
+    let lease = LeaseTask::start(
+        store,
+        instance_id.clone(),
+        Arc::clone(&clock),
+        status_tx.clone(),
+    )
+    .await?;
     let writer = lease.writer();
     // Housekeeping (dedupe prune) runs at start and daily while primary; it ends once the
     // writer closes.
@@ -240,7 +258,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     // The WAN probe: the branch's only outbound traffic. It runs on its own task, publishes
     // into the status and never touches the writer, so no intent waits on it.
     let prober = NetProber::new(cfg.probe_internet.clone(), cfg.cloud_host.clone())
-        .map_err(|e| internal(format!("connectivity probe: {e}")))?;
+        .map_err(|e| internal(format!("connectivity probe: {e}")))?
+        .plain_http(cfg.cloud_plain_http);
     let probe_job =
         tokio::spawn(ConnectivityTask::new(prober, Arc::clone(&clock), status_tx.clone()).run());
     tracing::info!(
@@ -307,8 +326,25 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         .with_status(status_rx.clone())
         .with_presence(lan_hub.presence())
         .with_printer(printer)
-        .with_pairing(pairing),
+        .with_pairing(pairing)
+        .with_pair_gate(pair_gate.clone()),
     );
+    let cloud = CloudClient::new(&CloudEndpoint {
+        host: cfg.cloud_host.clone(),
+        plain_http: cfg.cloud_plain_http,
+    })
+    .map_err(|e| internal(format!("cloud client: {e}")))?;
+    let keystore: Arc<dyn Keystore> = Arc::from(platform_keystore(&cfg.data_dir));
+    let pairer: Arc<dyn arena_core::HubPairer> = Arc::new(CloudPairer::new(
+        cloud,
+        writer.clone(),
+        keystore,
+        pair_gate.clone(),
+        Arc::clone(&clock),
+        cfg.platform,
+        instance_id,
+        env!("CARGO_PKG_VERSION").to_owned(),
+    ));
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
     let setup_job = tokio::spawn(arena_core::setup::publish_setup(
         Arc::clone(&snapshots),
@@ -321,8 +357,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             Arc::clone(&clock),
             lan_hub.presence(),
             Some(status_rx.clone()),
+            Some(pair_gate.clone()),
         ))
-        .merge(arena_api::ui_auth_router(ui_auth));
+        .merge(arena_api::ui_auth_router(ui_auth))
+        .merge(arena_api::ui_pair_router(pairer, pair_gate));
     #[cfg(feature = "dev-fixtures")]
     let router = router.merge(arena_api::health::dev_router(
         writer.clone(),

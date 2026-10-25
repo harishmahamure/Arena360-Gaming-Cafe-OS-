@@ -122,9 +122,25 @@ async fn heartbeat(
             "This Hub is no longer paired.",
         ));
     };
-    if hub.last_seen_at.is_none() {
-        let _ = st.wizard_tx.send(hub.branch_id.clone());
+    let mut changed = hub.last_seen_at.is_none();
+    if changed {
         tracing::info!(hub_id = %hub.id, branch_id = %hub.branch_id, "first hub heartbeat");
+    }
+    if let Some(setup) = body.setup.as_ref().filter(|s| s.valid()) {
+        let json = serde_json::to_string(setup).map_err(ApiError::internal)?;
+        let before = st
+            .db
+            .branch_setup(&hub.branch_id)
+            .await
+            .map_err(ApiError::internal)?;
+        st.db
+            .record_setup(&hub.branch_id, &json, setup.grouped(), now)
+            .await
+            .map_err(ApiError::internal)?;
+        changed |= before.is_none_or(|(b, _)| b != json);
+    }
+    if changed {
+        let _ = st.wizard_tx.send(hub.branch_id.clone());
     }
     let branch = st
         .db

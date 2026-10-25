@@ -2,10 +2,10 @@
   import { t } from "@arena/ui";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
+  import DevicesStep from "../../../lib/DevicesStep.svelte";
   import CafeStep from "../../../lib/CafeStep.svelte";
   import InstallHubStep from "../../../lib/InstallHubStep.svelte";
   import StaffStep from "../../../lib/StaffStep.svelte";
-  import SetupCodeNotice from "../../../lib/SetupCodeNotice.svelte";
   import TierStep from "../../../lib/TierStep.svelte";
   import { STEP_NAMES, isStep, stepIndex, stepPath, wizard } from "../../../lib/wizard.svelte";
 
@@ -29,13 +29,12 @@
   <TierStep />
 {:else if open === "install_hub"}
   <InstallHubStep />
+{:else if open === "devices"}
+  <DevicesStep />
 {:else if open === "staff"}
   <StaffStep />
 {:else if open}
   <h1 tabindex="-1">{t(STEP_NAMES[open])}</h1>
-  {#if open === "devices"}
-    <SetupCodeNotice />
-  {/if}
   <p class="soon">{t("onboarding.setup.coming_soon")}</p>
 {/if}
 

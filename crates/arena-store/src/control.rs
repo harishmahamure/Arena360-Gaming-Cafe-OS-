@@ -27,6 +27,7 @@ mod pairing;
 mod rate_limit;
 mod session;
 mod setup_codes;
+mod setup_status;
 mod signin;
 mod staff_invites;
 mod tenant;
@@ -49,6 +50,7 @@ pub use session::{
     NewOwnerSession, OwnerSession, REFRESH_RACE_MS, RefreshOutcome, SessionWithOwner,
 };
 pub use setup_codes::{NewSetupCode, SealedSetupCode, SetupCodeRow};
+pub use setup_status::SETUP_KINDS;
 pub use signin::{
     NewOwnerDevice, NewSigninChallenge, OwnerDevice, SigninChallenge, SigninCompletion,
     SigninFactor, SigninFailure,
@@ -121,6 +123,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 12,
         sql: include_str!("../control-migrations/0012_staff_invites.sql"),
+    },
+    ControlMigration {
+        version: 13,
+        sql: include_str!("../control-migrations/0013_branch_setup_status.sql"),
     },
 ];
 

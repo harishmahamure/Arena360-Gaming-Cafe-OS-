@@ -132,6 +132,41 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
     Ok(snapshot)
 }
 
+pub fn branch_setup(
+    snapshot: HubSnapshot,
+    presence: impl Fn(&str) -> (bool, Option<i64>),
+) -> arena_proto::BranchSetup {
+    arena_proto::BranchSetup {
+        devices: snapshot
+            .devices
+            .into_iter()
+            .filter(|d| d.class == ClientClass::Paired)
+            .map(|mut d| {
+                let (online, seen) = presence(&d.device_id);
+                d.apply_presence(online, seen);
+                arena_proto::SetupDevice {
+                    id: d.device_id,
+                    label: d.label,
+                    kind: d.kind.unwrap_or_default(),
+                    group_id: d.group_id,
+                    status: d.status,
+                }
+            })
+            .collect(),
+        groups: snapshot
+            .groups
+            .into_iter()
+            .map(|g| arena_proto::SetupGroup {
+                id: g.id,
+                name: g.name,
+                kind: g.kind,
+                colour: g.colour,
+                sort: g.sort_order,
+            })
+            .collect(),
+    }
+}
+
 fn read_device_cap(settings: &[arena_store::SettingRow]) -> u32 {
     settings
         .iter()
@@ -451,6 +486,19 @@ mod tests {
                 device_cap: Some(20),
             }
         );
+    }
+
+    #[test]
+    fn the_setup_block_has_paired_devices_with_presence_and_the_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        seed(&path, true);
+        let snap = SnapshotReader::open(&path).unwrap().snapshot(0).unwrap();
+        let block = branch_setup(snap, |id| (id == "D1", Some(5)));
+        assert_eq!(block.devices.len(), 1);
+        assert_eq!(block.devices[0].id, "D1");
+        assert_eq!(block.devices[0].status, DeviceStatus::Online);
+        assert!(block.groups.is_empty() && !block.grouped());
     }
 
     #[test]

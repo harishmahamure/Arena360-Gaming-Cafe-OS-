@@ -212,11 +212,11 @@ const VIEWS: {
     cloud: {
       signedIn: true,
       owner: READY_OWNER,
-      wizard: { branch: {}, done: ["cafe", "tier", "install_hub"] },
+      wizard: { branch: {}, done: ["cafe", "tier", "install_hub", "devices"] },
     },
     open: async (page) => {
       await page.goto("/setup");
-      await expect(h1(page, "ui.wizard.step.devices")).toBeVisible();
+      await expect(h1(page, "ui.wizard.step.rates")).toBeVisible();
     },
   },
   {

@@ -39,7 +39,7 @@ pub use settings_defaults::{
     KEY_NUMBER_FORMAT, KEY_SYMBOL_POSITION, KEY_TZ, LOCALE_KEYS, SETTING_RULES, SettingRule,
     bootstrap_locale_settings, setting_rule,
 };
-pub use snapshot::{SnapshotReader, build_snapshot, read_snapshot};
+pub use snapshot::{SnapshotReader, branch_setup, build_snapshot, read_snapshot};
 pub use staff::StaffDirectory;
 pub use status::{CloudTime, Epoch, HubStatus, LeaseInfo, PairingState, Role, status_channel};
 pub use writer::{LeaseRenewal, LicenceState, Writer, WriterHandle};

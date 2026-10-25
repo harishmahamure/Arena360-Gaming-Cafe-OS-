@@ -416,6 +416,12 @@ impl WriterHandle {
         .await
     }
 
+    pub async fn snapshot(&self) -> Result<arena_proto::HubSnapshot, AppError> {
+        let now = self.clock.now_ms();
+        self.run(move |store| crate::snapshot::read_snapshot(store, now))
+            .await
+    }
+
     pub async fn apply_licence(
         &self,
         payload: arena_proto::LicenceApply,

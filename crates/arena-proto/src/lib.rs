@@ -28,6 +28,7 @@ mod permission;
 mod printer;
 mod process;
 mod scope;
+mod setup_devices;
 mod signin;
 mod signup;
 mod snapshot;
@@ -154,6 +155,10 @@ pub use process::{
     is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
+pub use setup_devices::{
+    BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
+    SetupDevicesView, SetupGroup,
+};
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,
     SIGNIN_MAX_ATTEMPTS, SIGNIN_MAX_FAILURES, Signin, SigninMethod, SigninNext, SigninReply,

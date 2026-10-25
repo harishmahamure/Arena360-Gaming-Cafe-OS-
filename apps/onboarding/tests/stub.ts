@@ -4,6 +4,8 @@ import type {
   CafeDetails,
   Country,
   SessionOwner,
+  SetupCommandView,
+  SetupDevicesView,
   SignupChallenge,
   StaffInvite,
   StaffInviteView,
@@ -140,6 +142,7 @@ export type WizardStart = {
   setupCode?: string;
   skipped?: WizardStep[];
   invites?: StaffInviteView[];
+  devices?: Partial<SetupDevicesView>;
 };
 
 export const STAFF_CODES = ["K7Q49MZD", "Q4K79MZD", "M3XT8PRW"];
@@ -221,6 +224,8 @@ export type Cloud = {
   skipped: Set<WizardStep>;
   invites: StaffInviteView[];
   invitePosts: StaffInvite[];
+  deviceView: SetupDevicesView;
+  devicePosts: { kind: string; payload: unknown }[];
   reissued: string[];
 };
 
@@ -303,6 +308,15 @@ export async function stubCloud(
     skipped: new Set(start.wizard?.skipped ?? []),
     invites: start.wizard?.invites ?? [],
     invitePosts: [],
+    deviceView: {
+      setup: null,
+      reported_at: null,
+      now: Date.now(),
+      hub_online: true,
+      commands: [],
+      ...start.wizard?.devices,
+    },
+    devicePosts: [],
     reissued: [],
   };
   await page.route("**/v1/**", async (route) => {
@@ -546,6 +560,21 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
       cloud.pairCodes.push(issued);
       return { status: 200, body: issued };
     }
+  }
+  if (path === "/v1/wizard/devices") {
+    if (!cloud.hubPaired) return { status: 409, body: err("STEP_NOT_READY") };
+    if (method === "GET") return { status: 200, body: cloud.deviceView };
+    const b = body as { kind: string; payload: unknown };
+    cloud.devicePosts.push(b);
+    const command: SetupCommandView = {
+      key: `01JCOMMAND${String(cloud.devicePosts.length).padStart(16, "0")}`,
+      kind: b.kind,
+      payload: b.payload,
+      status: "pending",
+      error: null,
+    };
+    cloud.deviceView.commands.push(command);
+    return { status: 200, body: command };
   }
   if (path.startsWith("/v1/wizard/staff")) {
     if (!cloud.hubPaired) return { status: 409, body: err("STEP_NOT_READY") };

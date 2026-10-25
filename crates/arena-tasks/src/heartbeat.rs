@@ -43,7 +43,10 @@ pub struct HeartbeatTask {
     fails: u32,
     rejected: bool,
     poke: Option<Arc<Notify>>,
+    presence: Option<Presence>,
 }
+
+pub type Presence = Arc<dyn Fn(&str) -> (bool, Option<i64>) + Send + Sync>;
 
 impl HeartbeatTask {
     pub fn new(
@@ -66,7 +69,13 @@ impl HeartbeatTask {
             fails: 0,
             rejected: false,
             poke: None,
+            presence: None,
         }
+    }
+
+    pub fn with_presence(mut self, presence: Presence) -> Self {
+        self.presence = Some(presence);
+        self
     }
 
     pub fn with_poke(mut self, poke: Arc<Notify>) -> Self {
@@ -157,6 +166,21 @@ impl HeartbeatTask {
             let s = self.status.borrow();
             (s.live, s.schema_version, s.role, s.lease.clone())
         };
+        let setup = match (&self.writer, live) {
+            (Some(w), false) => w
+                .snapshot()
+                .await
+                .inspect_err(|e| {
+                    tracing::warn!(code = e.code.as_str(), "heartbeat: no setup block")
+                })
+                .ok()
+                .map(|snap| {
+                    arena_core::branch_setup(snap, |id| {
+                        self.presence.as_ref().map_or((false, None), |p| p(id))
+                    })
+                }),
+            _ => None,
+        };
         let interval = Duration::from_secs(if live {
             HEARTBEAT_LIVE_INTERVAL_S
         } else {
@@ -178,6 +202,7 @@ impl HeartbeatTask {
             version: self.version.clone(),
             schema_version,
             last_seq_uploaded: 0,
+            setup,
         };
         let sent = Instant::now();
         match self.cloud.heartbeat(&token, &req).await {
@@ -572,7 +597,8 @@ mod tests {
                 "epoch": format!("1:{}", OWN.to_ascii_lowercase()),
                 "version": "0.2.0",
                 "schema_version": 12,
-                "last_seq_uploaded": 0
+                "last_seq_uploaded": 0,
+                "setup": {"devices": [], "groups": []}
             })
         );
     }

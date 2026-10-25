@@ -32,7 +32,7 @@ struct StaffQuery {
     branch_id: Option<String>,
 }
 
-async fn ready_branch(
+pub(super) async fn ready_branch(
     st: &AuthState,
     owner_id: &str,
     branch_id: Option<&str>,

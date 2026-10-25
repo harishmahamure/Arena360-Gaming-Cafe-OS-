@@ -43,7 +43,7 @@ const SELECT_BY_ID: &str = "SELECT id, branch_id, idempotency_key, kind, schema_
      payload, issued_by, status, error, applied_seq, created_at, resolved_at FROM commands \
      WHERE id = ?";
 
-fn command_from(row: &[SqlValue]) -> Result<CommandRow, ControlError> {
+pub(super) fn command_from(row: &[SqlValue]) -> Result<CommandRow, ControlError> {
     let status = col_text(row, 7)?;
     Ok(CommandRow {
         id: col_int(row, 0)?,

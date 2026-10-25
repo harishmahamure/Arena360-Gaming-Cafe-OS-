@@ -364,6 +364,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             env!("CARGO_PKG_VERSION").to_owned(),
         )
         .with_poke(Arc::clone(&command_poke))
+        .with_presence({
+            let presence = lan_hub.presence();
+            Arc::new(move |id| presence.status(id))
+        })
         .run(),
     );
     let command_job = tokio::spawn(

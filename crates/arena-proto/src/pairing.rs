@@ -282,6 +282,9 @@ pub struct HeartbeatRequest {
     pub schema_version: u32,
     #[ts(type = "number")]
     pub last_seq_uploaded: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub setup: Option<crate::BranchSetup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -1899,3 +1899,140 @@ async fn skipping_marks_step_seven_skipped_and_a_manager_invite_can_still_finish
         .await;
     assert_eq!(h.step(&a, "staff").await, "done");
 }
+
+impl Harness {
+    async fn beat_with(&self, token: &str, setup: Value) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/heartbeat")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(
+                json!({"epoch": "1:HUBA", "version": "0.2.0", "schema_version": 13, "last_seq_uploaded": 0, "setup": setup})
+                    .to_string(),
+            ))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+}
+
+fn pc(group_id: Value) -> Value {
+    json!({"id": "D1", "label": "PC-1", "kind": "pc", "group_id": group_id, "status": "online"})
+}
+
+#[tokio::test]
+async fn a_setup_block_is_stored_and_a_grouped_device_finishes_step_four() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let early = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    assert_eq!((early.status, early.code()), (409, "STEP_NOT_READY"));
+    let token = h.paired_and_seen(&a).await;
+    let none = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    assert_eq!(none.body["setup"], Value::Null);
+    assert!(none.body["hub_online"].as_bool().unwrap());
+
+    h.advance(6_000);
+    let setup = json!({"devices": [pc(Value::Null)], "groups": []});
+    assert_eq!(h.beat_with(&token, setup.clone()).await.status, 200);
+    let seen = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    assert_eq!(seen.body["setup"], setup);
+    assert_eq!(h.step(&a, "devices").await, "pending");
+
+    h.advance(6_000);
+    let grouped = json!({
+        "devices": [pc(json!("G1"))],
+        "groups": [{"id": "G1", "name": "Gaming", "kind": "pc", "colour": "teal", "sort": 0}],
+    });
+    assert_eq!(h.beat_with(&token, grouped.clone()).await.status, 200);
+    assert_eq!(h.step(&a, "devices").await, "done");
+    let again = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    assert_eq!(again.body["setup"], grouped);
+
+    h.advance(4 * 60 * 1000);
+    let stale = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    assert!(!stale.body["hub_online"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn a_malformed_or_oversized_setup_block_is_ignored_or_refused() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    h.advance(6_000);
+    let many: Vec<Value> = (0..501).map(|_| pc(Value::Null)).collect();
+    let big = h
+        .beat_with(&token, json!({"devices": many, "groups": []}))
+        .await;
+    assert_eq!(big.status, 200);
+    let view = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    assert_eq!(view.body["setup"], Value::Null);
+    h.advance(6_000);
+    let bad = h.beat_with(&token, json!({"devices": "x"})).await;
+    assert_eq!(bad.status, 400);
+}
+
+#[tokio::test]
+async fn a_device_command_waits_until_the_hub_reports_and_a_refusal_shows_its_reason() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let post = |kind: &str, payload: Value| {
+        let body = json!({"kind": kind, "payload": payload});
+        h.call("POST", "/v1/wizard/devices", Some(body), &a)
+    };
+    let made = post(
+        "group.upsert",
+        json!({"name": "Gaming", "group_kind": "pc", "colour": "teal", "sort_order": 0}),
+    )
+    .await;
+    assert_eq!(made.status, 200, "{}", made.body);
+    assert_eq!(made.body["status"], "pending");
+    let assign = post(
+        "device.assign",
+        json!({"device_id": "D1", "group_id": "G1"}),
+    )
+    .await;
+    let refused = post("staff.upsert", json!({})).await;
+    assert_eq!((refused.status, refused.code()), (422, "VALIDATION_FAILED"));
+
+    let view = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    let kinds: Vec<&str> = view.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["group.upsert", "device.assign"]);
+
+    let page = h.fetch_commands(&token, 0).await;
+    let ids: Vec<i64> = page.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect();
+    h.command_result(&token, ids[0], json!({"epoch": "1:HUBA", "applied_seq": 3}))
+        .await;
+    let error = json!({"code": "GROUP_KIND_MISMATCH", "message": "That group is for another kind of device."});
+    h.command_result(&token, ids[1], json!({"epoch": "1:HUBA", "error": error}))
+        .await;
+    let view = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    let cmds = view.body["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 2);
+    assert_eq!(cmds[0]["status"], "applied");
+    assert_eq!(cmds[1]["status"], "rejected");
+    assert_eq!(cmds[1]["error"]["code"], "GROUP_KIND_MISMATCH");
+    assert_eq!(cmds[1]["key"], assign.body["key"]);
+
+    h.advance(6_000);
+    h.beat_with(&token, json!({"devices": [], "groups": []}))
+        .await;
+    let view = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    let cmds = view.body["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0]["status"], "rejected");
+
+    h.advance(6 * 60 * 1000);
+    let view = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    assert!(view.body["commands"].as_array().unwrap().is_empty());
+}

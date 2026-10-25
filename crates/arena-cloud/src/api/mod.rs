@@ -31,6 +31,7 @@ pub mod session;
 pub mod signin;
 pub mod signup;
 pub mod wizard;
+pub mod wizard_devices;
 mod wizard_events;
 pub mod wizard_install;
 pub mod wizard_staff;
@@ -68,6 +69,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(wizard_tier::router(Arc::clone(st)))
             .merge(wizard_install::router(Arc::clone(st)))
             .merge(wizard_staff::router(Arc::clone(st)))
+            .merge(wizard_devices::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))

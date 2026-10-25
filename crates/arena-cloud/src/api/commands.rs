@@ -137,6 +137,7 @@ async fn result(
             .await
             .map_err(ApiError::internal)?;
     }
+    let _ = st.wizard_tx.send(hub.branch_id.clone());
     Ok(Json(CommandResultAck { status }))
 }
 

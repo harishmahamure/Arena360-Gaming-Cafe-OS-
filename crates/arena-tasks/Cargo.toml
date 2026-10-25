@@ -28,5 +28,6 @@ windows.workspace = true
 arena-proto = { workspace = true, features = ["dev-keys"] }
 arena-core = { workspace = true, features = ["test-jobs"] }
 tempfile.workspace = true
+ulid.workspace = true
 rcgen.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

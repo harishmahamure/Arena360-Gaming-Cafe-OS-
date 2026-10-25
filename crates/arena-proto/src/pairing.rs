@@ -298,6 +298,9 @@ pub struct HeartbeatResponse {
     pub fence: HeartbeatFence,
     #[ts(type = "number")]
     pub cloud_time: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pending_commands: Option<u32>,
 }
 
 impl std::fmt::Debug for HeartbeatResponse {
@@ -305,6 +308,7 @@ impl std::fmt::Debug for HeartbeatResponse {
         f.debug_struct("HeartbeatResponse")
             .field("fence", &self.fence)
             .field("cloud_time", &self.cloud_time)
+            .field("pending_commands", &self.pending_commands)
             .finish_non_exhaustive()
     }
 }

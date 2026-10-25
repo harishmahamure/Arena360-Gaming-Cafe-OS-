@@ -42,7 +42,8 @@ const copy = (env) => {
   if (renderError) throw renderError;
   return structuredClone(rendered[env]);
 };
-const doc = (docs, kind) => docs.find((d) => d.kind === kind);
+const doc = (docs, kind) =>
+  docs.find((d) => d.kind === kind && !d.metadata?.name?.endsWith("-command"));
 const container = (docs) => doc(docs, "Deployment").spec.template.spec.containers[0];
 const check = (docs, env = "staging") => checkOverlay(env, docs, ENVIRONMENTS[env], RANGES);
 

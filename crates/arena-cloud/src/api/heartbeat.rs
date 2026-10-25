@@ -30,7 +30,11 @@ fn invalid() -> ApiError {
     refused(ErrorCode::TokenInvalid, "This Hub's token isn't valid.")
 }
 
-async fn authenticate(st: &AuthState, headers: &HeaderMap, now: i64) -> Result<HubRow, ApiError> {
+pub(super) async fn authenticate(
+    st: &AuthState,
+    headers: &HeaderMap,
+    now: i64,
+) -> Result<HubRow, ApiError> {
     let token = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -136,6 +140,11 @@ async fn heartbeat(
     let claims =
         crate::licence::claims_for(&branch.tenant_id, &branch.id, entitlement.as_ref(), now);
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
+    let pending = st
+        .db
+        .pending_commands(&hub.branch_id)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(HeartbeatResponse {
         licence,
         fence: HeartbeatFence {
@@ -143,6 +152,7 @@ async fn heartbeat(
             epoch: fence,
         },
         cloud_time: now,
+        pending_commands: Some(pending).filter(|n| *n > 0),
     }))
 }
 

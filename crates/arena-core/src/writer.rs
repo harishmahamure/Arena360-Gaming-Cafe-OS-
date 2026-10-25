@@ -17,12 +17,17 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use arena_proto::{AppError, ErrorCode, Intent};
-use arena_store::{LeaseRow, Store, prune_applied_intents, read_lease, write_lease};
+use arena_proto::{AppError, CommandWire, ErrorCode, Intent};
+use arena_store::{
+    AppliedCommand, LeaseRow, Store, find_applied_command, insert_applied_command,
+    mark_command_reported, max_applied_command_id, prune_applied_intents, read_lease,
+    unreported_commands, write_lease,
+};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::apply::{Applied, ApplyCtx, Outcome, emit, record_rejection, run, validate_frame};
 use crate::clock::Clock;
+use crate::commands::{command_intent, owner_wins};
 use crate::status::{HubStatus, LeaseInfo};
 
 type Job = Box<dyn FnOnce(&mut Store) + Send>;
@@ -307,6 +312,90 @@ impl WriterHandle {
                 }
                 Ok(())
             })
+        })
+        .await
+    }
+
+    /// Applies one owner command from the cloud mailbox exactly once: its changes and its
+    /// `applied_commands` row commit together, and a deterministic rejection is recorded alone.
+    /// A command already recorded (by id or key) returns its stored row without writing.
+    /// `NOT_PRIMARY` and `INTERNAL` record nothing, so the next poll retries the command.
+    pub async fn apply_command(&self, cmd: CommandWire) -> Result<AppliedCommand, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        let events = self.events.clone();
+        let (row, _) = self
+            .run_then(
+                move |store| {
+                    let ctx = ctx_from(clock.as_ref(), &status);
+                    let now = clock.now_ms();
+                    let record = |applied: Option<i64>, error: Option<String>| AppliedCommand {
+                        command_id: cmd.id,
+                        idempotency_key: cmd.idempotency_key.clone(),
+                        kind: cmd.kind.clone(),
+                        applied: error.is_none(),
+                        applied_seq: applied,
+                        error,
+                        applied_at: now,
+                        reported_at: None,
+                    };
+                    let tried = store.write_tx_mut(|tx| {
+                        crate::apply::check_epoch(tx, &ctx)?;
+                        if let Some(done) = find_applied_command(tx, cmd.id, &cmd.idempotency_key)?
+                        {
+                            return Ok((done, None));
+                        }
+                        let mut intent = command_intent(&cmd, now)?;
+                        owner_wins(tx, &mut intent)?;
+                        let (applied, fresh) = match run(tx, &ctx, &intent)? {
+                            Outcome::Fresh(a) => (a, true),
+                            Outcome::Replayed(stored) => (stored?, false),
+                        };
+                        let row = record(applied.changes.last().map(|c| c.seq), None);
+                        insert_applied_command(tx, &row)?;
+                        Ok((row, fresh.then_some(applied)))
+                    });
+                    match tried {
+                        Err(e)
+                            if !matches!(e.code, ErrorCode::NotPrimary | ErrorCode::Internal) =>
+                        {
+                            let error = serde_json::to_string(&e).map_err(|err| {
+                                AppError::new(ErrorCode::Internal, format!("encode error: {err}"))
+                            })?;
+                            let row = record(None, Some(error));
+                            store.write_tx(|tx| {
+                                crate::apply::check_epoch(tx, &ctx)?;
+                                insert_applied_command(tx, &row).map(|_| ())
+                            })?;
+                            Ok((row, None))
+                        }
+                        other => other,
+                    }
+                },
+                move |(_, applied)| {
+                    if let Some(applied) = applied {
+                        emit(&events, applied);
+                    }
+                },
+            )
+            .await?;
+        Ok(row)
+    }
+
+    pub async fn command_cursor(&self) -> Result<i64, AppError> {
+        self.run(|store| store.write_tx(|tx| max_applied_command_id(tx)))
+            .await
+    }
+
+    pub async fn unreported_commands(&self, limit: usize) -> Result<Vec<AppliedCommand>, AppError> {
+        self.run(move |store| store.write_tx(|tx| unreported_commands(tx, limit)))
+            .await
+    }
+
+    pub async fn mark_command_reported(&self, command_id: i64) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        self.run(move |store| {
+            store.write_tx(|tx| mark_command_reported(tx, command_id, clock.now_ms()))
         })
         .await
     }

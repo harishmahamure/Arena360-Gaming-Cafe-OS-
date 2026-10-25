@@ -508,3 +508,67 @@ async fn an_unreachable_cloud_and_a_windows_hub_on_free_retry_in_place() {
     let (s, _) = request(port, "POST", "/ui/pair-hub", Some(json!({"code": code}))).await;
     assert_eq!(s, 200, "the refused code was left unconsumed");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_command_reaches_the_paired_hub_within_one_poll_and_applies_once() {
+    let cloud = start_cloud().await;
+    let branch = cloud.branch_at_step_3().await;
+    let code = cloud.code(&branch).await;
+    let data = tempfile::tempdir().unwrap();
+    let (hub, port) = start_hub(data.path(), &cloud.url, "android").await;
+    let (s, body) = request(port, "POST", "/ui/pair-hub", Some(json!({"code": code}))).await;
+    assert_eq!((s, body.clone()), (200, json!({"paired": true})), "{body}");
+
+    let key = ulid::Ulid::generate().to_string();
+    let payload = json!({"name": "Row A", "group_kind": "pc", "colour": "teal", "sort_order": 1});
+    let submit = || {
+        arena_cloud::api::commands::submit_command(
+            &cloud.st,
+            &branch,
+            &key,
+            "group.upsert",
+            &payload,
+            "o1",
+        )
+    };
+    let queued = submit().await.unwrap();
+    assert_eq!(submit().await.unwrap().id, queued.id);
+
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let done = loop {
+        let row = cloud.db.command(queued.id).await.unwrap().unwrap();
+        if row.status != arena_proto::CommandStatus::Pending
+            && row.status != arena_proto::CommandStatus::Fetched
+        {
+            break row;
+        }
+        assert!(Instant::now() < deadline, "the command was never resolved");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(done.status, arena_proto::CommandStatus::Applied, "{done:?}");
+    assert!(done.applied_seq.is_some());
+
+    let store = arena_store::Store::open_reader(data.path().join("branch.db")).unwrap();
+    let groups = store.rows(arena_store::Table::DeviceGroups).unwrap();
+    assert_eq!(groups.len(), 1);
+    let change = store
+        .changes()
+        .unwrap()
+        .into_iter()
+        .find(|c| Some(c.seq) == done.applied_seq)
+        .unwrap();
+    assert_eq!(
+        (change.actor_kind.as_str(), change.actor_id.as_str()),
+        ("owner", "o1")
+    );
+    drop(store);
+
+    hub.stop();
+    let (_hub, _port) = start_hub(data.path(), &cloud.url, "android").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let store = arena_store::Store::open_reader(data.path().join("branch.db")).unwrap();
+    assert_eq!(
+        store.rows(arena_store::Table::DeviceGroups).unwrap().len(),
+        1
+    );
+}

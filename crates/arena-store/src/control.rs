@@ -16,6 +16,7 @@
 //! and the owner's password, TOTP and backup codes (Story 2.5) in `control/mfa.rs`; every SQL
 //! statement `arena-cloud` runs lives here.
 
+mod commands;
 mod dump;
 mod entitlement;
 mod hubs;
@@ -29,6 +30,7 @@ mod setup_codes;
 mod signin;
 mod tenant;
 
+pub use commands::{CommandRow, NewCommand};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
 pub use hubs::{Beat, HubRow, NewHub, PairOutcome};
@@ -109,6 +111,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 10,
         sql: include_str!("../control-migrations/0010_owner_setup_codes.sql"),
+    },
+    ControlMigration {
+        version: 11,
+        sql: include_str!("../control-migrations/0011_commands.sql"),
     },
 ];
 

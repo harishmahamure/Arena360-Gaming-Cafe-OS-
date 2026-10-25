@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub const USAGE: &str =
-    "usage: arena-cloud --role control|all [--listen <addr:port>] [--help] [--version]
-       arena-cloud --role control|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
+    "usage: arena-cloud --role control|command|all [--listen <addr:port>] [--help] [--version]
+       arena-cloud --role control|command|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
        arena-cloud --role jobs --task control-backup [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
@@ -15,7 +15,7 @@ pub const USAGE: &str =
                                   --operator <name> --reason <text> [--dev [--data-dir <dir>]]
        arena-cloud ops licence-keygen [--kid <kid>]
 
-  --role all   every serving role this build has (control)
+  --role all   every serving role this build has (control, command)
   --role jobs  run one --task and exit (0 on success, 1 on failure)
   --task       control-backup: dump gz_control, age-encrypt it, put it in the backup bucket
                under gz_control/nightly/ and keep the newest 30
@@ -78,9 +78,11 @@ pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Control,
+    /// The Hub command mailbox (`/v1/commands`).
+    Command,
     /// Run one [`Task`] and exit.
     Jobs,
-    /// Every serving role this build has (only `control` today).
+    /// Every serving role this build has (`control` and `command`).
     All,
 }
 
@@ -88,6 +90,7 @@ impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Control => "control",
+            Self::Command => "command",
             Self::Jobs => "jobs",
             Self::All => "all",
         }
@@ -437,8 +440,9 @@ pub fn parse(
         return Ok(cmd);
     }
     let role = match role.as_deref() {
-        None => return Err("--role is required (control, jobs or all)".to_owned()),
+        None => return Err("--role is required (control, command, jobs or all)".to_owned()),
         Some("control") => Role::Control,
+        Some("command") => Role::Command,
         Some("jobs") => Role::Jobs,
         Some("all") => Role::All,
         Some(other) => return Err(format!("role not available yet: {other}")),

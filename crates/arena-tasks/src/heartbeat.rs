@@ -7,7 +7,7 @@ use arena_proto::{
     HeartbeatResponse, LicenceStanding, VerifyKey,
 };
 use arena_store::TrustedClockRow;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use crate::cloud::{CloudClient, CloudFailure};
 use crate::keystore::Keystore;
@@ -27,7 +27,7 @@ fn mono_ms() -> i64 {
     START.get_or_init(Instant::now).elapsed().as_millis() as i64
 }
 
-fn unit() -> f64 {
+pub(crate) fn unit() -> f64 {
     use std::hash::BuildHasher;
     (std::collections::hash_map::RandomState::new().hash_one(0u8) % 1000) as f64 / 1000.0
 }
@@ -42,6 +42,7 @@ pub struct HeartbeatTask {
     version: String,
     fails: u32,
     rejected: bool,
+    poke: Option<Arc<Notify>>,
 }
 
 impl HeartbeatTask {
@@ -64,7 +65,13 @@ impl HeartbeatTask {
             version,
             fails: 0,
             rejected: false,
+            poke: None,
         }
+    }
+
+    pub fn with_poke(mut self, poke: Arc<Notify>) -> Self {
+        self.poke = Some(poke);
+        self
     }
 
     pub async fn run(mut self) {
@@ -209,6 +216,11 @@ impl HeartbeatTask {
         res: HeartbeatResponse,
         at: Instant,
     ) {
+        if let Some(poke) = &self.poke
+            && res.pending_commands.is_some_and(|n| n > 0)
+        {
+            poke.notify_one();
+        }
         let Ok(state) = writer.licence_state().await else {
             return;
         };
@@ -480,6 +492,32 @@ mod tests {
             assert_eq!(lo, hi / 2, "{fails}");
         }
         assert_eq!(backoff(0, iv, 1.0), Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn pending_commands_in_the_answer_wake_the_command_poller() {
+        let (status, body) = answer(true, Tier::Free);
+        let mut with = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+        with["pending_commands"] = 2.into();
+        let port = serve(
+            vec![(status, with.to_string()), answer(true, Tier::Free)],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        let poke = Arc::new(Notify::new());
+        f.task.poke = Some(Arc::clone(&poke));
+        f.task.beat().await;
+        tokio::time::timeout(Duration::from_millis(200), poke.notified())
+            .await
+            .expect("the first answer carried pending commands");
+        f.task.beat().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), poke.notified())
+                .await
+                .is_err(),
+            "an answer without pending commands pokes nothing"
+        );
     }
 
     #[tokio::test]

@@ -6,7 +6,9 @@ use arena_store::{
     insert_role, insert_role_perm, insert_setting, insert_staff, set_staff_setup_code, stamp_row,
 };
 
-use super::{Target, devices, groups, maintenance, products, settings_set, staff_roles, stock, zones};
+use super::{
+    Target, devices, groups, maintenance, products, settings_set, staff_roles, stock, zones,
+};
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
 

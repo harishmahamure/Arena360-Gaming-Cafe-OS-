@@ -17,6 +17,7 @@ tracing.workspace = true
 chrono-tz.workspace = true
 chrono.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 argon2.workspace = true
 
 [features]
@@ -26,6 +27,5 @@ test-jobs = []
 [dev-dependencies]
 arena-replay.workspace = true
 tempfile.workspace = true
-serde_json.workspace = true
 proptest.workspace = true
 base64.workspace = true

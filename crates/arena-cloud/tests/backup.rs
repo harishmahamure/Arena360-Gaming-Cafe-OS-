@@ -46,6 +46,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
     [
         ("branch_fence", 0),
         ("branches", 0),
+        ("commands", 0),
         ("entitlements", 0),
         ("hubs", 0),
         ("licences", 1500),
@@ -726,6 +727,7 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
         vec![
             "branch_fence",
             "branches",
+            "commands",
             "entitlements",
             "hubs",
             "licences",

@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod branches;
+pub mod commands;
 mod cors;
 mod dev;
 mod error;
@@ -49,8 +50,11 @@ pub use json::ApiJson;
 pub const BODY_LIMIT: usize = 64 * 1024;
 
 /// The `/v1` routes. The dev-only routes (`/v1/dev/*`) are mounted only when `dev` is set.
-fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
+fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
     let mut v1 = Router::new();
+    if let (true, Some(st)) = (commands_only, auth) {
+        return v1.merge(commands::router(Arc::clone(st)));
+    }
     if let Some(st) = auth {
         v1 = v1
             .merge(signup::router(Arc::clone(st)))
@@ -65,6 +69,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
             .merge(branches::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
+            .merge(commands::router(Arc::clone(st)))
             .merge(wizard_events::router(Arc::clone(st)))
             .merge(meta::router());
     }
@@ -104,8 +109,23 @@ pub fn with_envelope(base: Router, dev: bool) -> Router {
 /// [`with_envelope`] plus, when `auth` is set, the owner sign-up and session routes and the
 /// CORS layer for `auth.web_origins` (outermost, so error envelopes carry the CORS headers).
 pub fn with_envelope_and_auth(base: Router, dev: bool, auth: Option<Arc<AuthState>>) -> Router {
+    with_envelope_for(base, dev, auth, false)
+}
+
+/// [`with_envelope_and_auth`] for the `command` role: only the Hub's command mailbox routes
+/// under `/v1`.
+pub fn with_envelope_commands(base: Router, dev: bool, auth: Option<Arc<AuthState>>) -> Router {
+    with_envelope_for(base, dev, auth, true)
+}
+
+fn with_envelope_for(
+    base: Router,
+    dev: bool,
+    auth: Option<Arc<AuthState>>,
+    commands_only: bool,
+) -> Router {
     let app = base
-        .nest("/v1", v1(dev, auth.as_ref()))
+        .nest("/v1", v1(dev, auth.as_ref(), commands_only))
         .method_not_allowed_fallback(error::method_not_allowed)
         .fallback(error::not_found)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))

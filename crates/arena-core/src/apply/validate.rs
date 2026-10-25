@@ -1,6 +1,8 @@
 //! **validate.** Payload checks; a failure is `VALIDATION_FAILED` naming the field.
 
-use super::{Target, devices, groups, maintenance, products, settings_set, staff_roles, stock, zones};
+use super::{
+    Target, devices, groups, maintenance, products, settings_set, staff_roles, stock, zones,
+};
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
 /// Longest branch name, in characters, after trimming.

@@ -19,6 +19,13 @@ spec:
     - host: HOST
       http:
         paths:
+          - path: /v1/commands
+            pathType: Prefix
+            backend:
+              service:
+                name: arena-cloud-command
+                port:
+                  name: http
           - path: /
             pathType: Prefix
             backend:

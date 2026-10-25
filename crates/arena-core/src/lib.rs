@@ -5,6 +5,7 @@ mod apply;
 pub mod audit;
 mod catalog;
 mod clock;
+mod commands;
 pub mod devices;
 pub mod entitlement;
 pub mod invoice;
@@ -30,6 +31,7 @@ pub use apply::{
 pub use arena_store::{ChangeOp, META_TLS_FINGERPRINT};
 pub use audit::{AuditQuery, AuditReader};
 pub use clock::{Clock, ManualClock, SystemClock};
+pub use commands::command_intent;
 pub use devices::{DeviceDirectory, VerifiedDevice};
 pub use pairing::{HubPairer, PairFuture, PairGate};
 pub use settings_defaults::{

@@ -16,18 +16,18 @@ none. Both environments deploy by digest (`@sha256:`).
 
 ## What is in the repository
 
-| Path                                    | What                                                                                                                                 |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `docker/arena-cloud.Dockerfile`         | Multi-stage image: `rust:<rust-toolchain.toml>` build, `distroless/cc` non-root runtime                                              |
-| `k8s/base/`                             | Deployment `arena-cloud-control`, Service, Traefik Ingress, `cloudflare-only` Middleware, CronJob `arena-cloud-control-backup`       |
-| `k8s/overlays/{staging,production}/`    | Namespace, host, replicas, resources, image tag, backup bucket                                                                       |
-| `k8s/cluster/deployer-rbac.yaml`        | One-time: Namespaces, and per namespace a `deployer` ServiceAccount, Role, RoleBinding                                               |
-| `k8s/cluster/traefik-config.yaml`       | One-time: k3s Traefik `HelmChartConfig`, `externalTrafficPolicy: Local` (real source IP)                                             |
-| `cloudflare/ips-v4.txt`, `ips-v6.txt`   | Cloudflare's published ranges; the Middleware allow list must equal them (and `arena-cloud` compiles them in for `CF-Connecting-IP`) |
-| `cloudflare/rate-limits.json`           | The Cloudflare rate-limiting rules kept as config (`/v1/pair`: 20 per IP per hour)                                                   |
-| `secrets/<env>.enc.yaml`                | SOPS + age encrypted `arena-cloud-secrets`, `arena-cloud-backup`, `origin-tls` and `ghcr-pull` Secrets                               |
-| `../.sops.yaml`                         | SOPS creation rules (age recipients per environment)                                                                                 |
-| `../.github/workflows/deploy-cloud.yml` | CI, build or promote, decrypt and apply over SSH, rollout, smoke                                                                     |
+| Path                                    | What                                                                                                                                                                                                 |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docker/arena-cloud.Dockerfile`         | Multi-stage image: `rust:<rust-toolchain.toml>` build, `distroless/cc` non-root runtime                                                                                                              |
+| `k8s/base/`                             | Deployments `arena-cloud-control` and `arena-cloud-command` (the Hub command mailbox, `/v1/commands`), Services, Traefik Ingress, `cloudflare-only` Middleware, CronJob `arena-cloud-control-backup` |
+| `k8s/overlays/{staging,production}/`    | Namespace, host, replicas, resources, image tag, backup bucket                                                                                                                                       |
+| `k8s/cluster/deployer-rbac.yaml`        | One-time: Namespaces, and per namespace a `deployer` ServiceAccount, Role, RoleBinding                                                                                                               |
+| `k8s/cluster/traefik-config.yaml`       | One-time: k3s Traefik `HelmChartConfig`, `externalTrafficPolicy: Local` (real source IP)                                                                                                             |
+| `cloudflare/ips-v4.txt`, `ips-v6.txt`   | Cloudflare's published ranges; the Middleware allow list must equal them (and `arena-cloud` compiles them in for `CF-Connecting-IP`)                                                                 |
+| `cloudflare/rate-limits.json`           | The Cloudflare rate-limiting rules kept as config (`/v1/pair`: 20 per IP per hour)                                                                                                                   |
+| `secrets/<env>.enc.yaml`                | SOPS + age encrypted `arena-cloud-secrets`, `arena-cloud-backup`, `origin-tls` and `ghcr-pull` Secrets                                                                                               |
+| `../.sops.yaml`                         | SOPS creation rules (age recipients per environment)                                                                                                                                                 |
+| `../.github/workflows/deploy-cloud.yml` | CI, build or promote, decrypt and apply over SSH, rollout, smoke                                                                                                                                     |
 
 `pnpm check:deploy` renders both overlays and checks them (including the backup CronJob's
 schedule, time zone, `Forbid`, deadlines, history limits, image, security context, secret refs

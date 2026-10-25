@@ -26,8 +26,9 @@ use arena_core::{
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
 use arena_tasks::{
-    CloudClient, CloudEndpoint, CloudPairer, ConnectivityTask, HeartbeatTask, HousekeepingTask,
-    Keystore, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber, SystemInterfaces, platform_keystore,
+    CloudClient, CloudEndpoint, CloudPairer, CommandTask, ConnectivityTask, HeartbeatTask,
+    HousekeepingTask, Keystore, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber, SystemInterfaces,
+    platform_keystore,
 };
 use tokio::sync::{Notify, oneshot};
 use tracing_subscriber::EnvFilter;
@@ -351,6 +352,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         arena_proto::licence::DEV_LICENCE_VERIFY_KEYS,
     ]
     .concat();
+    let command_poke = Arc::new(Notify::new());
     let heartbeat_job = tokio::spawn(
         HeartbeatTask::new(
             cloud.clone(),
@@ -360,6 +362,18 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             status_tx.clone(),
             verify_keys,
             env!("CARGO_PKG_VERSION").to_owned(),
+        )
+        .with_poke(Arc::clone(&command_poke))
+        .run(),
+    );
+    let command_job = tokio::spawn(
+        CommandTask::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            writer.clone(),
+            pair_gate.clone(),
+            status_tx.clone(),
+            command_poke,
         )
         .run(),
     );
@@ -486,6 +500,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let _ = probe_job.await;
     heartbeat_job.abort();
     let _ = heartbeat_job.await;
+    command_job.abort();
+    let _ = command_job.await;
     setup_job.abort();
     let _ = setup_job.await;
     let _ = mdns_stop_tx.send(());

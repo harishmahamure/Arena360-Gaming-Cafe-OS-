@@ -1348,3 +1348,369 @@ async fn a_profile_the_hub_would_refuse_fails_before_the_pairing_code_is_spent()
         .unwrap();
     assert_eq!(h.pair(&code, "android").await.status, 200);
 }
+
+impl Harness {
+    async fn submit(&self, branch: &str, key: &str, kind: &str, payload: Value) -> Reply {
+        use arena_cloud::api::commands::submit_command;
+        match submit_command(&self.st, branch, key, kind, &payload, "owner-1").await {
+            Ok(row) => Reply {
+                status: 200,
+                body: json!({"id": row.id, "status": row.status.as_str(), "kind": row.kind}),
+                retry_after: None,
+            },
+            Err(e) => Reply {
+                status: e.status().as_u16(),
+                body: serde_json::to_value(e.body()).unwrap(),
+                retry_after: None,
+            },
+        }
+    }
+
+    async fn fetch_commands(&self, token: &str, after: i64) -> Reply {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/v1/commands?after={after}&epoch=1:HUBA"))
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn command_result(&self, token: &str, id: i64, body: Value) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/commands/{id}/result"))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+}
+
+fn key() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
+fn group(name: &str) -> Value {
+    json!({"name": name, "kind": "pc", "colour": "teal"})
+}
+
+#[tokio::test]
+async fn a_setup_command_is_stored_pending_and_a_repeat_key_returns_the_same_row() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let _ = h.paired_hub(&a).await;
+    let k = key();
+    let first = h.submit(&branch, &k, "group.upsert", group("Row A")).await;
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.body["status"], "pending");
+    let again = h.submit(&branch, &k, "group.upsert", group("Row B")).await;
+    assert_eq!(again.body["id"], first.body["id"]);
+    let next = h
+        .submit(&branch, &key(), "group.upsert", group("Row C"))
+        .await;
+    assert!(next.body["id"].as_i64() > first.body["id"].as_i64());
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    let (rows, payload): (i64, String) = c
+        .query_row(
+            "SELECT COUNT(*), (SELECT payload FROM commands WHERE id = ?) FROM commands",
+            [first.body["id"].as_i64().unwrap()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(rows, 2);
+    assert!(payload.contains("Row A"), "{payload}");
+}
+
+#[tokio::test]
+async fn only_setup_kinds_with_a_valid_key_and_payload_are_accepted() {
+    let h = Harness::new().await;
+    let (_a, branch) = h.ready().await;
+    for kind in [
+        "branch.bootstrap",
+        "pricing.set",
+        "product.upsert",
+        "device.revoke",
+    ] {
+        let r = h.submit(&branch, &key(), kind, json!({})).await;
+        assert_eq!((r.status, r.code()), (400, "UNSUPPORTED"), "{kind}");
+    }
+    for kind in [
+        "group.upsert",
+        "device.assign",
+        "device.register",
+        "staff.upsert",
+        "setup.test_session",
+        "branch.go_live",
+    ] {
+        let r = h.submit(&branch, &key(), kind, json!({})).await;
+        assert_eq!(r.status, 200, "{kind}: {}", r.body);
+    }
+    let bad_key = h
+        .submit(&branch, "not-a-ulid", "group.upsert", json!({}))
+        .await;
+    assert_eq!((bad_key.status, bad_key.code()), (422, "VALIDATION_FAILED"));
+    let not_object = h.submit(&branch, &key(), "group.upsert", json!([1])).await;
+    assert_eq!(not_object.body["field"], "payload");
+    let big = h
+        .submit(
+            &branch,
+            &key(),
+            "group.upsert",
+            json!({"name": "x".repeat(20_000)}),
+        )
+        .await;
+    assert_eq!(big.body["field"], "payload");
+    for (key_name, want) in [
+        ("branch.tz", 200),
+        ("branch.name", 200),
+        ("branch.currency", 422),
+        ("kiosk.volume_default", 422),
+    ] {
+        let r = h
+            .submit(
+                &branch,
+                &key(),
+                "settings.set",
+                json!({"key": key_name, "value": "x"}),
+            )
+            .await;
+        assert_eq!(r.status, want, "{key_name}: {}", r.body);
+    }
+    let no_key = h
+        .submit(&branch, &key(), "settings.set", json!({"value": "x"}))
+        .await;
+    assert_eq!(no_key.status, 422);
+}
+
+#[tokio::test]
+async fn the_hub_fetches_open_commands_in_id_order_and_a_heartbeat_pokes_when_some_are_pending() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.advance(1_000);
+    let quiet = h.beat(&token, "1:HUBA").await;
+    assert!(
+        quiet.body.get("pending_commands").is_none(),
+        "{}",
+        quiet.body
+    );
+    let mut ids = Vec::new();
+    for n in 0..3 {
+        let r = h
+            .submit(&branch, &key(), "group.upsert", group(&format!("G{n}")))
+            .await;
+        ids.push(r.body["id"].as_i64().unwrap());
+    }
+    h.advance(5_000);
+    let poke = h.beat(&token, "1:HUBA").await;
+    assert_eq!(poke.body["pending_commands"], 3);
+    let page = h.fetch_commands(&token, 0).await;
+    assert_eq!(page.status, 200, "{}", page.body);
+    let got: Vec<i64> = page.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(got, ids);
+    let first = &page.body["commands"][0];
+    assert_eq!(first["kind"], "group.upsert");
+    assert_eq!(first["schema_version"], 1);
+    assert_eq!(first["issued_by"], "owner-1");
+    assert_eq!(first["payload"]["name"], "G0");
+    assert_eq!(first["idempotency_key"].as_str().unwrap().len(), 26);
+    h.advance(5_000);
+    let after_fetch = h.beat(&token, "1:HUBA").await;
+    assert!(after_fetch.body.get("pending_commands").is_none());
+    let again = h.fetch_commands(&token, ids[0]).await;
+    assert_eq!(again.body["commands"].as_array().unwrap().len(), 2);
+    let none = h.fetch_commands(&token, ids[2]).await;
+    assert!(none.body["commands"].as_array().unwrap().is_empty());
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    let fetched: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM commands WHERE status = 'fetched'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fetched, 3);
+}
+
+#[tokio::test]
+async fn a_result_resolves_the_command_once_and_a_repeat_changes_nothing() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    let ok = h
+        .submit(&branch, &key(), "group.upsert", group("G"))
+        .await
+        .body["id"]
+        .as_i64()
+        .unwrap();
+    let bad = h
+        .submit(&branch, &key(), "device.assign", json!({}))
+        .await
+        .body["id"]
+        .as_i64()
+        .unwrap();
+    h.fetch_commands(&token, 0).await;
+    let applied = h
+        .command_result(&token, ok, json!({"epoch": "1:HUBA", "applied_seq": 41}))
+        .await;
+    assert_eq!(applied.status, 200, "{}", applied.body);
+    assert_eq!(applied.body["status"], "applied");
+    let repeat = h
+        .command_result(&token, ok, json!({"epoch": "1:HUBA", "applied_seq": 41}))
+        .await;
+    assert_eq!(repeat.body["status"], "applied");
+    let conflicting = h
+        .command_result(
+            &token,
+            ok,
+            json!({"epoch": "1:HUBA", "error": {"code": "STALE", "message": "no"}}),
+        )
+        .await;
+    assert_eq!(conflicting.body["status"], "applied");
+    let rejected = h
+        .command_result(
+            &token,
+            bad,
+            json!({"epoch": "1:HUBA", "error": {"code": "VALIDATION_FAILED", "message": "no group", "field": "group_id"}}),
+        )
+        .await;
+    assert_eq!(rejected.body["status"], "rejected");
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    let rows: Vec<(i64, String, Option<i64>, Option<String>)> = c
+        .prepare("SELECT id, status, applied_seq, error FROM commands ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(rows[0], (ok, "applied".into(), Some(41), None));
+    assert_eq!(rows[1].1, "rejected");
+    assert!(rows[1].3.as_deref().unwrap().contains("VALIDATION_FAILED"));
+    assert!(
+        h.fetch_commands(&token, 0).await.body["commands"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_hub_reaches_only_its_own_branchs_commands() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    let other_owner = h.owner("+919876543299", "Other Arena").await;
+    let other = h.tier_done(&other_owner).await;
+    let theirs = h
+        .submit(&other, &key(), "group.upsert", group("Theirs"))
+        .await
+        .body["id"]
+        .as_i64()
+        .unwrap();
+    let mine = h
+        .submit(&branch, &key(), "group.upsert", group("Mine"))
+        .await
+        .body["id"]
+        .as_i64()
+        .unwrap();
+    let page = h.fetch_commands(&token, 0).await;
+    let ids: Vec<i64> = page.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![mine]);
+    let r = h
+        .command_result(&token, theirs, json!({"epoch": "1:HUBA", "applied_seq": 1}))
+        .await;
+    assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    let status: String = c
+        .query_row("SELECT status FROM commands WHERE id = ?", [theirs], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "pending");
+}
+
+#[tokio::test]
+async fn the_mailbox_needs_a_valid_hub_token_and_an_epoch() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    let none = Request::builder()
+        .method("GET")
+        .uri("/v1/commands?epoch=1:HUBA")
+        .body(Body::empty())
+        .unwrap();
+    let r = reply(h.app.clone().oneshot(none).await.unwrap()).await;
+    assert_eq!((r.status, r.code()), (401, "TOKEN_INVALID"));
+    let forged = h.fetch_commands("hub_nope.nope", 0).await;
+    assert_eq!((forged.status, forged.code()), (401, "TOKEN_INVALID"));
+    let no_epoch = Request::builder()
+        .method("GET")
+        .uri("/v1/commands")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let r = reply(h.app.clone().oneshot(no_epoch).await.unwrap()).await;
+    assert_eq!(r.status, 400);
+    let blank = h
+        .command_result(&token, 1, json!({"epoch": "", "applied_seq": 1}))
+        .await;
+    assert_eq!((blank.status, blank.code()), (422, "VALIDATION_FAILED"));
+}
+
+#[tokio::test]
+async fn the_command_role_serves_the_mailbox_and_nothing_else() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.submit(&branch, &key(), "group.upsert", group("G")).await;
+    let (_tx, rx) = watch::channel(Reachability {
+        reachable: true,
+        checked_at: None,
+    });
+    let app = app_with_auth(
+        Role::Command,
+        false,
+        rx,
+        LATEST_CONTROL_VERSION,
+        Some(Arc::clone(&h.st)),
+    );
+    let get = |uri: &str| {
+        Request::builder()
+            .method("GET")
+            .uri(uri.to_owned())
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let mail = reply(
+        app.clone()
+            .oneshot(get("/v1/commands?epoch=1:HUBA"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(mail.status, 200, "{}", mail.body);
+    assert_eq!(mail.body["commands"].as_array().unwrap().len(), 1);
+    let health = reply(app.clone().oneshot(get("/healthz")).await.unwrap()).await;
+    assert_eq!(health.body["role"], "command");
+    let beat = Request::builder()
+        .method("POST")
+        .uri("/v1/heartbeat")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let r = reply(app.oneshot(beat).await.unwrap()).await;
+    assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+}

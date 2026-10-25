@@ -169,7 +169,11 @@ pub fn app_with_auth(
     migration_version: u32,
     auth: Option<Arc<AuthState>>,
 ) -> axum::Router {
-    api::with_envelope_and_auth(health::router(role, reach, migration_version), dev, auth)
+    let base = health::router(role, reach, migration_version);
+    match role {
+        Role::Command => api::with_envelope_commands(base, dev, auth),
+        _ => api::with_envelope_and_auth(base, dev, auth),
+    }
 }
 
 /// The sign-up state for `cfg`: the configured SMS provider over `db`, timed by `clock`.

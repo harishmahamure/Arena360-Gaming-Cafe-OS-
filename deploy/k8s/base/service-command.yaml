@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: arena-cloud-command
+  labels:
+    app.kubernetes.io/name: arena-cloud-command
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: arena-cloud-command
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

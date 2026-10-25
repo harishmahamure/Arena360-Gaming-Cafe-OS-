@@ -8,6 +8,7 @@ mod actor;
 mod admin;
 mod audit;
 mod catalog;
+mod commands;
 mod connectivity;
 pub mod currency;
 mod device_spec;
@@ -57,6 +58,11 @@ pub use catalog::{
     MAX_BUNDLE_COMPONENTS, MAX_CATEGORY_CHARS, MAX_COMPONENT_QTY, MAX_IMAGE_BYTES, MAX_IMAGE_PX,
     MAX_PRICE_MINOR, MAX_PRODUCT_NAME_CHARS, Product, ProductDelete, ProductUpsert,
     REASON_COMPONENT_INACTIVE, availability, bundle_quantity, hsn_valid, image_problem,
+};
+pub use commands::{
+    COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION, COMMANDS_PAGE, CommandResult, CommandResultAck,
+    CommandStatus, CommandWire, CommandsPage, SETTINGS_COMMAND_KEYS, SETUP_COMMAND_KINDS,
+    is_setup_command,
 };
 pub use connectivity::{Connectivity, ConnectivityState};
 pub use device_spec::{

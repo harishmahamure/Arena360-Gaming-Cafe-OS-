@@ -38,6 +38,22 @@ patches:
           limits:
             cpu: 1000m
             memory: 512Mi
+  - target:
+      kind: Deployment
+      name: arena-cloud-command
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
   # This environment's onboarding origin, merged into the env list by name.
   - patch: |-
       apiVersion: apps/v1
@@ -49,6 +65,19 @@ patches:
           spec:
             containers:
               - name: control
+                env:
+                  - name: ARENA_WEB_ORIGINS
+                    value: https://start.arena360.cloud
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: arena-cloud-command
+      spec:
+        template:
+          spec:
+            containers:
+              - name: command
                 env:
                   - name: ARENA_WEB_ORIGINS
                     value: https://start.arena360.cloud

@@ -6,6 +6,7 @@
 mod admin;
 mod audit;
 mod branch;
+mod commands;
 #[cfg(feature = "control")]
 pub mod control;
 mod dedupe;
@@ -39,6 +40,10 @@ pub use branch::{
     insert_branch, insert_change, insert_device_event, insert_read_grant, insert_setting,
     list_settings, next_change_seq, read_changes, read_row, stamp_row, update_setting,
     update_setting_value, upsert_row,
+};
+pub use commands::{
+    AppliedCommand, find_applied_command, insert_applied_command, mark_command_reported,
+    max_applied_command_id, unreported_commands,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,

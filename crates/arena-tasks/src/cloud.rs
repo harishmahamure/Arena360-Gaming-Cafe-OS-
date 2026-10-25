@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
-    AppError, ErrorCode, HeartbeatRequest, HeartbeatResponse, HubPairRequest, HubPairResponse,
-    HubPlatform, UiError, normalize_pairing_code, valid_pairing_code,
+    AppError, CommandResult, CommandResultAck, CommandsPage, ErrorCode, HeartbeatRequest,
+    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, UiError,
+    normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 
@@ -129,6 +130,32 @@ impl CloudClient {
         self.post("/v1/heartbeat", Some(token), req).await
     }
 
+    pub async fn commands(
+        &self,
+        token: &str,
+        after: i64,
+        epoch: &str,
+    ) -> Result<CommandsPage, CloudFailure> {
+        let call = self
+            .http
+            .get(format!(
+                "{}/v1/commands?after={after}&epoch={epoch}",
+                self.base
+            ))
+            .bearer_auth(token);
+        self.send(call).await
+    }
+
+    pub async fn command_result(
+        &self,
+        token: &str,
+        id: i64,
+        req: &CommandResult,
+    ) -> Result<CommandResultAck, CloudFailure> {
+        self.post(&format!("/v1/commands/{id}/result"), Some(token), req)
+            .await
+    }
+
     async fn post<Q: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -145,6 +172,13 @@ impl CloudClient {
         if let Some(token) = bearer {
             call = call.bearer_auth(token);
         }
+        self.send(call).await
+    }
+
+    async fn send<R: serde::de::DeserializeOwned>(
+        &self,
+        call: reqwest::RequestBuilder,
+    ) -> Result<R, CloudFailure> {
         let res = call
             .send()
             .await

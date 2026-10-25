@@ -1,6 +1,7 @@
 //! `arena-tasks`: the Hub's background tasks.
 
 pub mod cloud;
+pub mod commands;
 pub mod connectivity;
 pub mod heartbeat;
 pub mod housekeeping;
@@ -10,6 +11,7 @@ pub mod mdns;
 pub mod printer;
 
 pub use cloud::{CloudClient, CloudEndpoint, CloudFailure, CloudPairer};
+pub use commands::{COMMAND_POLL_INTERVAL, CommandTask};
 pub use connectivity::{
     CloudHost, ConnectivityTask, DEFAULT_CLOUD_HOST, DEFAULT_INTERNET_ENDPOINTS, NetProber,
     PROBE_INTERVAL, PROBE_TIMEOUT, Prober, decide, default_internet_endpoints,

@@ -305,7 +305,7 @@ impl IntentKind {
             | Self::StaffSetCredentials
             | Self::StockIn
             | Self::StockInReverted => None,
-            | Self::DeviceMaintenance => None,
+            Self::DeviceMaintenance => None,
         }
     }
 

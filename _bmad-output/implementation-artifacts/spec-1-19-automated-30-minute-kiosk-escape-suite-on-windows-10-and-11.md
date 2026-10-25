@@ -2,7 +2,7 @@
 title: 'Story 1.19: Automated 30-minute kiosk escape suite on Windows 10 and 11'
 type: 'feature'
 created: '2026-10-23'
-status: 'in-progress'
+status: 'blocked'
 baseline_commit: '7809586199583b3d8c7c8944fd524580ffdc359b'
 route: 'dispatch'
 review_loop_iteration: 0

@@ -17,7 +17,7 @@ use arena_proto::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
 };
-use arena_proto::{DEFAULT_TAX, KEY_TAX, TaxSettings};
+use arena_proto::{DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_TAX, TaxSettings};
 
 /// The branch locale keys. They are authoritative for the locale; the `branch` row's columns
 /// only hold the bootstrap values.
@@ -90,7 +90,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_TAX, DEFAULT_TAX),
 ];
 
-pub const SYSTEM_MANAGED_KEYS: [&str; 4] = [
+pub const SYSTEM_MANAGED_KEYS: [&str; 5] = [
+    KEY_BRANCH_CODE_LOCKED_AT,
     KEY_OPENING_HOURS_SET,
     KEY_ADS_CONSENT,
     KEY_PRINTER_STATUS,
@@ -154,6 +155,7 @@ pub enum SettingRule {
     PrinterSelected,
     PrinterStatus,
     Tax,
+    BranchCode,
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -214,6 +216,8 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         SettingRule::OneOf(PRINTER_PAPER_WIDTHS_MM),
     ),
     (KEY_TAX, SettingRule::Tax),
+    (KEY_BRANCH_CODE, SettingRule::BranchCode),
+    (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),
 ];
 
 /// The rule for every key that starts with `display.hc.` and names `hub` or a device id
@@ -267,6 +271,7 @@ impl SettingRule {
             Self::PrinterSelected => arena_proto::PrinterSelected::parse(value).is_ok(),
             Self::PrinterStatus => arena_proto::PrinterStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
+            Self::BranchCode => arena_proto::valid_branch_code(value),
         }
     }
 
@@ -289,17 +294,26 @@ mod tests {
         // covered by the `display.hc.` prefix rule.
         assert_eq!(
             SETTING_RULES.len() + 1,
-            DEFAULT_SETTINGS.len() + LOCALE_KEYS.len()
+            DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 2
         );
         for (key, _) in SETTING_RULES {
             assert!(
-                DEFAULT_SETTINGS.iter().any(|(k, _)| k == key) || LOCALE_KEYS.contains(key),
+                DEFAULT_SETTINGS.iter().any(|(k, _)| k == key)
+                    || LOCALE_KEYS.contains(key)
+                    || [KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT].contains(key),
                 "{key} has a rule but no default"
             );
         }
         for (key, value) in DEFAULT_SETTINGS {
             let rule = setting_rule(key).unwrap_or_else(|| panic!("{key} has no rule"));
             assert!(rule.accepts(value), "{key}={value:?}");
+        }
+        assert!(setting_rule(KEY_BRANCH_CODE).unwrap().accepts("LVL01"));
+        for bad in ["", "lv", "lvl", "LV", "TOOLONG1", "AB-12"] {
+            assert!(
+                !setting_rule(KEY_BRANCH_CODE).unwrap().accepts(bad),
+                "{bad}"
+            );
         }
         assert_eq!(setting_rule("nope"), None);
     }
@@ -312,6 +326,7 @@ mod tests {
             tz: "Asia/Kolkata".into(),
             day_start_min: 360,
             fy_start_month: 4,
+            onboarding: None,
         }
     }
 

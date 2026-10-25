@@ -272,6 +272,7 @@
   "hub.settings.tax.label": "Tax label (for example VAT)",
   "hub.settings.tax.rate": "Default rate (%)",
   "hub.settings.tax.prefix": "Invoice prefix",
+  "hub.settings.tax.prefix_locked": "Locked after the first invoice",
   "hub.settings.tax.invalid.country": "Enter a two-letter country code in capitals.",
   "hub.settings.tax.invalid.gst": "GST applies only in India.",
   "hub.settings.tax.invalid.gstin": "Enter a valid 15-character GSTIN.",
@@ -881,6 +882,9 @@
   "ui.pairing_code.minutes_left": "The pairing code expires in {n} minutes.",
   "ui.pairing_code.minute_left": "The pairing code expires in 1 minute.",
 
+  "onboarding.setup_code.title": "Your Hub sign-in code",
+  "onboarding.setup_code.text": "Your Hub sign-in code: {code}. Enter it at the Hub to choose your PIN and password.",
+  "onboarding.setup_code.once": "It works once and is shown only now. Copy it before you leave this page.",
   "onboarding.install.intro": "Install the Hub on the PC at your counter, then pair it with this café by typing the code below.",
   "onboarding.install.download.title": "1 · Download",
   "onboarding.install.download.platform": "Hub for Windows 10 or 11",

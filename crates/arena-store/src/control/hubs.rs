@@ -1,5 +1,6 @@
 use arena_proto::HubPlatform;
 
+use super::setup_codes::{INSERT_SETUP_CODE, NewSetupCode, insert_params};
 use super::tenant::LOCK_BRANCH_CODE;
 use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_text, text};
 
@@ -12,6 +13,7 @@ pub struct NewHub<'a> {
     pub version: &'a str,
     pub token_hash: &'a str,
     pub code_hash: &'a str,
+    pub setup: NewSetupCode<'a>,
     pub now: i64,
 }
 
@@ -107,10 +109,14 @@ impl ControlDb {
                         text(h.hub_instance_id),
                         text(h.version),
                         text(h.token_hash),
-                        now,
+                        now.clone(),
                     ],
                 )
                 .expect(1),
+                Stmt::new(
+                    INSERT_SETUP_CODE,
+                    insert_params(h.branch_id, &h.setup, h.now),
+                ),
             ])
             .await?;
         let Some(rows) = rows else {
@@ -162,6 +168,14 @@ impl ControlDb {
                     vec![text(b.branch_id)],
                 )
                 .fetch(),
+                Stmt::new(
+                    "UPDATE owner_setup_codes SET ciphertext = NULL, nonce = NULL \
+                     WHERE branch_id = ? AND ciphertext IS NOT NULL AND created_at <= ?",
+                    vec![
+                        text(b.branch_id),
+                        SqlValue::Integer(b.now - arena_proto::SETUP_CODE_PLAINTEXT_TTL_MS),
+                    ],
+                ),
             ])
             .await?;
         rows.and_then(|r| r.get(3).and_then(|x| x.first().map(|row| col_text(row, 0))))

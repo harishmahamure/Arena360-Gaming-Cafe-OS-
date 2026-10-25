@@ -22,7 +22,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 
 | Lane | Scope | Stories | Landed | In progress | Backlog |
 |---|---|---:|---:|---:|---:|
-| CP | Control plane | 63 | 3 | 0 | 60 |
+| CP | Control plane | 63 | 4 | 0 | 59 |
 | HUB-A | Hub floor and sessions | 80 | 3 | 0 | 77 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
 | HUB-B | Hub POS and money | 39 | 3 | 0 | 36 |
@@ -38,7 +38,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 
 Candidates in priority order. Take the top ones until the 4 implementer slots are full.
 
-- **CP** 2.13 branch.bootstrap applies the onboarding profile at first pairing, with branch code lock (`2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai`)
+- **CP** 2.14 Owner and staff set their own PIN and password at the Hub with a one-time setup code (`2-14-owner-and-staff-set-their-own-pin-and-password-at-the-hub-wi`)
 - **HUB-A** 2.24 Device status and maintenance (`2-24-device-status-and-maintenance`)
 - **HUB-B** 5.4 Bundles priced on their own (`5-4-bundles-priced-on-their-own`)
 - **ANDROID** 4.2 The Android Hub keeps serving while the screen is off, in Doze and after a reboot (`4-2-the-android-hub-keeps-serving-while-the-screen-is-off-in-doz`)
@@ -59,7 +59,7 @@ After 2.31 and before 6.1, finish Story 2.3's deferred observability ACs (Sentry
 | 1 | 2.10 | Hub installer pairs with the code and retries in place | MVP | review |  |
 | 2 | 2.11 | Hub checks in by heartbeat and the wizard advances by itself | MVP | review |  |
 | 3 | 2.12 | Hub verifies its licence against trusted time and enforces its limits | MVP | review |  |
-| 4 | 2.13 | branch.bootstrap applies the onboarding profile at first pairing, with branch code lock | MVP | backlog |  |
+| 4 | 2.13 | branch.bootstrap applies the onboarding profile at first pairing, with branch code lock | MVP | review |  |
 | 5 | 2.14 | Owner and staff set their own PIN and password at the Hub with a one-time setup code | MVP | backlog |  |
 | 6 | 2.15 | Owner changes reach the Hub through the command mailbox within one poll | MVP | backlog |  |
 | 7 | 2.16 | Step 7 — invite staff by phone with a role and a one-time setup code | MVP | backlog |  |

@@ -4,6 +4,7 @@
   import { page } from "$app/state";
   import CafeStep from "../../../lib/CafeStep.svelte";
   import InstallHubStep from "../../../lib/InstallHubStep.svelte";
+  import SetupCodeNotice from "../../../lib/SetupCodeNotice.svelte";
   import TierStep from "../../../lib/TierStep.svelte";
   import { STEP_NAMES, isStep, stepIndex, stepPath, wizard } from "../../../lib/wizard.svelte";
 
@@ -29,6 +30,9 @@
   <InstallHubStep />
 {:else if open}
   <h1 tabindex="-1">{t(STEP_NAMES[open])}</h1>
+  {#if open === "devices"}
+    <SetupCodeNotice />
+  {/if}
   <p class="soon">{t("onboarding.setup.coming_soon")}</p>
 {/if}
 

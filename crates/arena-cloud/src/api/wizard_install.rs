@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arena_proto::{
     ActivePairingCode, AppError, ErrorCode, InstallHubState, IssuePairingCode, PAIRING_CODE_TTL_MS,
-    PairingCodeIssued,
+    PairingCodeIssued, SetupCodeReveal,
 };
 use arena_store::control::{Branch, IssueOutcome, NewPairingCode, RateRule};
 use axum::extract::{Query, State};
@@ -143,9 +143,60 @@ async fn post_code(
     Err(ApiError::internal("no free pairing code"))
 }
 
+async fn post_reveal_setup_code(
+    State(st): State<Arc<AuthState>>,
+    RequireSetupComplete(signed): RequireSetupComplete,
+    ApiJson(body): ApiJson<IssuePairingCode>,
+) -> Result<impl IntoResponse, ApiError> {
+    let branch = target_branch(&st, &signed.owner.id, body.branch_id.as_deref()).await?;
+    let seen = st
+        .db
+        .active_hub(&branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some_and(|h| h.last_seen_at.is_some());
+    if !seen {
+        return Err(step_not_ready());
+    }
+    let gone = || {
+        ApiError::from(AppError::new(
+            ErrorCode::NotFound,
+            "Your Hub sign-in code was already shown. Ask for a new one when you add staff.",
+        ))
+    };
+    let now = st.now();
+    let Some(sealed) = st
+        .db
+        .peek_setup_code(&branch.id, now)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(gone());
+    };
+    let code = st
+        .mfa_key
+        .open(&branch.id, &sealed.ciphertext, &sealed.nonce)
+        .map_err(ApiError::internal)?;
+    let code = String::from_utf8(code).map_err(ApiError::internal)?;
+    if !st
+        .db
+        .consume_setup_code(&branch.id, now)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(gone());
+    }
+    tracing::info!(owner_id = %signed.owner.id, branch_id = %branch.id, "owner setup code shown");
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(SetupCodeReveal { code }),
+    ))
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/wizard/install-hub", get(get_install_hub))
         .route("/wizard/install-hub/code", post(post_code))
+        .route("/wizard/setup-code/reveal", post(post_reveal_setup_code))
         .with_state(st)
 }

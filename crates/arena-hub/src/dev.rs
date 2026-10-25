@@ -39,6 +39,7 @@ pub fn seed_payload() -> BranchBootstrap {
         tz: "Asia/Kolkata".into(),
         day_start_min: 360,
         fy_start_month: 4,
+        onboarding: None,
     }
 }
 
@@ -259,7 +260,9 @@ pub async fn seed(
             identity.paired_at.div_euclid(1000),
         ))
         .map_err(|e| AppError::new(ErrorCode::Internal, e))?;
-        writer.record_pairing(identity.clone(), licence).await?;
+        writer
+            .record_pairing(identity.clone(), licence, None)
+            .await?;
         Ok::<_, AppError>(Seeded {
             changes,
             token: format_token(&device_id, &secret),

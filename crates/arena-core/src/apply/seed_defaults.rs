@@ -8,10 +8,14 @@
 
 use std::collections::BTreeSet;
 
-use arena_proto::{AppError, ErrorCode, HC_DEFAULT, hc_key, parse_hc_key};
+use arena_proto::{
+    AppError, ErrorCode, HC_DEFAULT, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, hc_key,
+    parse_hc_key,
+};
 use arena_store::{
-    ChangeOp, RowKey, StoreTx, current_branch_id, find_branch_locale, insert_role,
-    insert_role_perm, insert_setting, list_devices, list_role_perms, list_roles, list_settings,
+    ChangeOp, RowKey, StoreTx, current_branch_id, find_branch_locale, find_branch_summary,
+    insert_role, insert_role_perm, insert_setting, list_devices, list_role_perms, list_roles,
+    list_settings,
 };
 
 use super::mutate::Written;
@@ -51,6 +55,16 @@ pub fn missing(tx: &StoreTx<'_>) -> Result<Option<Missing>, AppError> {
         if !have.contains(*key) {
             out.settings
                 .push(((*key).to_owned(), backfill_value(key, value).to_owned()));
+        }
+    }
+    if let Some(summary) = find_branch_summary(tx)? {
+        for (key, value) in [
+            (KEY_BRANCH_CODE, summary.branch_code.as_str()),
+            (KEY_BRANCH_CODE_LOCKED_AT, ""),
+        ] {
+            if !have.contains(key) {
+                out.settings.push((key.to_owned(), value.to_owned()));
+            }
         }
     }
     for key in LOCALE_KEYS {

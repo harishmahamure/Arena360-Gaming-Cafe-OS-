@@ -346,6 +346,7 @@ fn bootstrap_payload() -> IntentPayload {
         tz: "Asia/Kolkata".into(),
         day_start_min: 360,
         fy_start_month: 4,
+        onboarding: None,
     })
 }
 
@@ -403,7 +404,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .sum();
                 prop_assert_eq!(
                     hub.change_count(),
-                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + roles
+                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 2 + roles
                 );
                 hub.bootstrapped = true;
                 // One staff member per built-in role (outside the history: not retried).
@@ -437,7 +438,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
                 prop_assert_eq!(
                     hub.change_count(),
-                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + roles + STAFF_ROLES.len()
+                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 2 + roles + STAFF_ROLES.len()
                 );
             }
         }

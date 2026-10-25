@@ -24,6 +24,7 @@
 
 mod admin_exit;
 mod ads_consent;
+mod branch_code;
 mod changes;
 mod devices;
 mod frame;
@@ -53,6 +54,7 @@ use tokio::sync::broadcast;
 use crate::clock::Clock;
 use crate::status::{Epoch, Role};
 
+pub use branch_code::lock_branch_code;
 pub use devices::MAX_VERSION_LEN;
 pub use frame::{is_ulid, validate_frame};
 pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE};

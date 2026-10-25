@@ -227,6 +227,7 @@ mod tests {
             branch: Some(arena_proto::SnapshotBranch {
                 name: "B".into(),
                 branch_code: "B1".into(),
+                code_locked: None,
             }),
             groups: vec![],
             zones: vec![],

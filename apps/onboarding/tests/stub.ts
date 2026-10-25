@@ -135,6 +135,7 @@ export type WizardStart = {
   tier?: Tier;
   otherFree?: boolean;
   hubPaired?: boolean;
+  setupCode?: string;
 };
 
 export const PAIR_CODES = ["7K2M9PQR", "HX4TW8NB", "3FJD6YZC", "QW5RS2KV"];
@@ -206,6 +207,8 @@ export type Cloud = {
   tierPicks: Tier[];
   tierBodies: unknown[];
   hubPaired: boolean;
+  setupCode: string | null;
+  setupReveals: number;
   pairGets: number;
   pairCodes: { code: string; expires_at: number }[];
   clockMs: number | null;
@@ -282,6 +285,8 @@ export async function stubCloud(
     tierPicks: [],
     tierBodies: [],
     hubPaired: start.wizard?.hubPaired ?? false,
+    setupCode: start.wizard?.setupCode ?? null,
+    setupReveals: 0,
     pairGets: 0,
     pairCodes: [],
     clockMs: null,
@@ -527,6 +532,13 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
       cloud.pairCodes.push(issued);
       return { status: 200, body: issued };
     }
+  }
+  if (path === "/v1/wizard/setup-code/reveal" && method === "POST") {
+    cloud.setupReveals += 1;
+    if (!cloud.done.has("install_hub")) return { status: 409, body: err("STEP_NOT_READY") };
+    const code = cloud.setupCode;
+    cloud.setupCode = null;
+    return code ? { status: 200, body: { code } } : { status: 404, body: err("NOT_FOUND") };
   }
   const m = /^\/v1\/branches\/([^/]+)\/code$/.exec(path);
   if (m && method === "PUT") {

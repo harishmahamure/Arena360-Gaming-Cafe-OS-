@@ -40,6 +40,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::SessionLocked => StatusCode::LOCKED,
         ErrorCode::Stale
         | ErrorCode::AlreadyBootstrapped
+        | ErrorCode::BranchCodeLocked
         | ErrorCode::IdempotencyConflict
         | ErrorCode::AlreadySet
         | ErrorCode::BranchCodeTaken

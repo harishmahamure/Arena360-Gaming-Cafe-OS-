@@ -101,6 +101,15 @@ impl ControlDb {
         rows.first().map(|r| owner_from(r, 0)).transpose()
     }
 
+    pub async fn owner_of_branch(&self, branch_id: &str) -> Result<Option<Owner>, ControlError> {
+        let sql = format!(
+            "SELECT {OWNER_COLUMNS} FROM owners WHERE id = (SELECT t.owner_id FROM tenants t \
+             JOIN branches b ON b.tenant_id = t.id WHERE b.id = ?)"
+        );
+        let rows = self.query(&sql, vec![text(branch_id)]).await?;
+        rows.first().map(|r| owner_from(r, 0)).transpose()
+    }
+
     /// How many owners exist.
     pub async fn owner_count(&self) -> Result<u64, ControlError> {
         let rows = self.query("SELECT COUNT(*) FROM owners", vec![]).await?;

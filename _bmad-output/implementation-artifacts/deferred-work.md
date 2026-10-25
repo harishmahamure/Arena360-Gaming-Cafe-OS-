@@ -251,3 +251,18 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t.md`
   summary: A WebView older than Chrome 87 (the Vite target) may never run the bundle, so the update screen cannot show; a delayed-invoke Playwright test for the "Checking…" state; the first-run PASS path on a device image with 20 GB free and 4 GB RAM; RAM failure on a device; x86_64, NDK 28 and the signed AAB run in CI.
   evidence: Verification Gap findings; none could run on this machine.
+
+## Deferred from Story 2.13 review
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai.md`
+  summary: Settings → Branch has no editable branch code field yet (the `settings.set` path, the `BRANCH_CODE_LOCKED` rule and the Tax screen lock note exist). A code edited at the Hub is not reported to the cloud, whose `(tenant, branch_code)` is unique, and the `branch.branch_code` column keeps the bootstrap value.
+  evidence: Spec accepted limits; Blind Hunter and Edge Case Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai.md`
+  summary: `lock_branch_code()` has no production caller until the invoice engine (Story 5.x) calls it; the caller must add the returned `RowKey` to its written rows so the lock is stamped and audited. Add an integration test then.
+  evidence: Blind Hunter, Edge Case Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai.md`
+  summary: Owner setup code hardening. Validate `setup_expires_at` against time; plaintext window starts at pairing and a never-beating Hub keeps the sealed code until a reveal or heartbeat (no sweeper); a re-pair needs the new Hub's first beat before reveal; the 40-bit code is brute-forceable offline from a stolen change log; the sealing key is the MFA key without a purpose label; `owner_setup_codes` has no cascade on branch removal; a lost reveal response loses the code until staff setup codes can be reissued (Story 2.16).
+  evidence: Review findings from Blind Hunter and Edge Case Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai.md`
+  summary: Test gaps. Status-code mappings for `BRANCH_CODE_LOCKED` in the three crates, the `CloudPairer` mapping of `ALREADY_BOOTSTRAPPED`, onboarding Playwright for Copy success and denied-clipboard states and the 409 path, E.164 length boundaries, `branch.seed_defaults` cannot seed the tax country of an upgraded branch.
+  evidence: Verification Gap findings.

@@ -341,18 +341,23 @@ pub struct BranchSummary {
     pub branch_id: String,
     pub name: String,
     pub branch_code: String,
+    pub code_locked: bool,
 }
 
 /// The branch's display fields, if it has been bootstrapped (a database holds one branch).
 pub fn find_branch_summary(conn: &Connection) -> Result<Option<BranchSummary>, AppError> {
     conn.query_row(
-        "SELECT branch_id, name, branch_code FROM branch LIMIT 1",
+        "SELECT branch_id, name,
+                COALESCE((SELECT value FROM settings WHERE key = 'branch.code'), branch_code),
+                COALESCE((SELECT value <> '' FROM settings WHERE key = 'branch.code_locked_at'), 0)
+         FROM branch LIMIT 1",
         [],
         |r| {
             Ok(BranchSummary {
                 branch_id: r.get(0)?,
                 name: r.get(1)?,
                 branch_code: r.get(2)?,
+                code_locked: r.get(3)?,
             })
         },
     )

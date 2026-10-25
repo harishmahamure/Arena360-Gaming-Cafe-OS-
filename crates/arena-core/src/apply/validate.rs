@@ -217,5 +217,26 @@ fn validate_bootstrap(b: &BranchBootstrap) -> Result<(), AppError> {
     if !(1..=12).contains(&b.fy_start_month) {
         return Err(invalid("fy_start_month", "fy_start_month must be 1–12"));
     }
-    Ok(())
+    b.onboarding
+        .as_ref()
+        .map_or(Ok(()), |o| validate_onboarding(b, o))
+}
+
+fn validate_onboarding(
+    b: &BranchBootstrap,
+    o: &arena_proto::BootstrapOnboarding,
+) -> Result<(), AppError> {
+    arena_proto::check_bootstrap(
+        &b.branch_code,
+        &o.country,
+        o.gst_registered,
+        &o.gstin,
+        o.tax_mode,
+        &o.owner_staff,
+    )
+    .map_err(|(field, message)| invalid(field, message))
+}
+
+pub(crate) fn default_tax() -> arena_proto::TaxSettings {
+    arena_proto::TaxSettings::parse(arena_proto::DEFAULT_TAX).expect("DEFAULT_TAX parses")
 }

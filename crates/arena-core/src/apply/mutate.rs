@@ -2,8 +2,8 @@
 
 use arena_proto::{AppError, ErrorCode, Intent, IntentPayload};
 use arena_store::{
-    ChangeOp, NewBranch, Row, RowKey, StoreTx, branch_exists, insert_branch, insert_role,
-    insert_role_perm, insert_setting, stamp_row,
+    ChangeOp, NewBranch, Row, RowKey, StaffWrite, StoreTx, branch_exists, insert_branch,
+    insert_role, insert_role_perm, insert_setting, insert_staff, set_staff_setup_code, stamp_row,
 };
 
 use super::{Target, devices, groups, products, settings_set, staff_roles, zones};
@@ -56,10 +56,26 @@ pub(super) fn mutate(
                 before: None,
             }];
             let locale = bootstrap_locale_settings(b);
+            let tax = b.onboarding.as_ref().map(|o| {
+                arena_proto::TaxSettings {
+                    country: o.country.clone(),
+                    gst: o.gst_registered,
+                    gstin: o.gstin.clone(),
+                    ..super::validate::default_tax()
+                }
+                .to_json()
+            });
             let seeded = DEFAULT_SETTINGS
                 .iter()
-                .map(|(k, v)| (*k, *v))
-                .chain(locale.iter().map(|(k, v)| (*k, v.as_str())));
+                .map(|(k, v)| match (&tax, *k == arena_proto::KEY_TAX) {
+                    (Some(t), true) => (*k, t.as_str()),
+                    _ => (*k, *v),
+                })
+                .chain(locale.iter().map(|(k, v)| (*k, v.as_str())))
+                .chain([
+                    (arena_proto::KEY_BRANCH_CODE, b.branch_code.as_str()),
+                    (arena_proto::KEY_BRANCH_CODE_LOCKED_AT, ""),
+                ]);
             for (key, value) in seeded {
                 insert_setting(tx, &branch_id, key, value)?;
                 written.push(Written {
@@ -89,6 +105,36 @@ pub(super) fn mutate(
                             role_id: role_id.clone(),
                             permission: p.as_str().to_owned(),
                         },
+                        op: ChangeOp::Insert,
+                        before: None,
+                    });
+                }
+                if name == crate::rbac::ROLE_OWNER
+                    && let Some(o) = &b.onboarding
+                {
+                    let staff_id = ulid::Ulid::generate().to_string();
+                    insert_staff(
+                        tx,
+                        &StaffWrite {
+                            staff_id: &staff_id,
+                            branch_id: &branch_id,
+                            login: &o.owner_staff.login,
+                            display_name: o.owner_staff.name.trim(),
+                            role_id: &role_id,
+                            password_hash: None,
+                            pin_hash: None,
+                            pin_verifier_version: 1,
+                            active: true,
+                        },
+                    )?;
+                    set_staff_setup_code(
+                        tx,
+                        &staff_id,
+                        &o.owner_staff.setup_code_hash,
+                        o.owner_staff.setup_expires_at,
+                    )?;
+                    written.push(Written {
+                        key: RowKey::Staff { staff_id },
                         op: ChangeOp::Insert,
                         before: None,
                     });

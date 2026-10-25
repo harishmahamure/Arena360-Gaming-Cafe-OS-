@@ -60,6 +60,7 @@ async fn real_hub(claimed_fingerprint: Option<String>) -> RealHub {
         tz: "Asia/Kolkata".into(),
         day_start_min: 360,
         fy_start_month: 4,
+        onboarding: None,
     });
     writer
         .submit_intent(Intent {

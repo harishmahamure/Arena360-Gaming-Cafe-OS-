@@ -77,6 +77,7 @@
   const locked = $derived(saving || approving);
   const saveButton = $derived(saveWrap?.querySelector("button") ?? null);
   const code = $derived(snapshotOf(page.data)?.branch?.branch_code ?? "");
+  const codeLocked = $derived(snapshotOf(page.data)?.branch?.code_locked === true);
   const india = $derived(form.country.trim().toUpperCase() === "IN");
   const base = $derived(server ? parseTax(server.value) : null);
   const draft = $derived(base && taxJson(base, form));
@@ -323,6 +324,11 @@
         <output class="type-hub-title" aria-labelledby="tax-prefix-label" data-testid="tax-prefix"
           >{code}</output
         >
+        {#if codeLocked}
+          <p class="label type-hub-label" data-testid="tax-prefix-locked">
+            {t("hub.settings.tax.prefix_locked")}
+          </p>
+        {/if}
       </div>
 
       <div class="actions">

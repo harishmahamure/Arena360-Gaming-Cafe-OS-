@@ -25,6 +25,7 @@ mod owner;
 mod pairing;
 mod rate_limit;
 mod session;
+mod setup_codes;
 mod signin;
 mod tenant;
 
@@ -44,6 +45,7 @@ pub use rate_limit::{RateReservation, RateRule, RateWindow};
 pub use session::{
     NewOwnerSession, OwnerSession, REFRESH_RACE_MS, RefreshOutcome, SessionWithOwner,
 };
+pub use setup_codes::{NewSetupCode, SealedSetupCode, SetupCodeRow};
 pub use signin::{
     NewOwnerDevice, NewSigninChallenge, OwnerDevice, SigninChallenge, SigninCompletion,
     SigninFactor, SigninFailure,
@@ -103,6 +105,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 9,
         sql: include_str!("../control-migrations/0009_branch_fence.sql"),
+    },
+    ControlMigration {
+        version: 10,
+        sql: include_str!("../control-migrations/0010_owner_setup_codes.sql"),
     },
 ];
 

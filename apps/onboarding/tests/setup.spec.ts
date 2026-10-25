@@ -96,6 +96,25 @@ test.describe("routes", () => {
     await expect(page.getByText(t("onboarding.setup.coming_soon"))).toBeVisible();
   });
 
+  test("the owner sees the Hub sign-in code once, with Copy, after step 3", async ({ page }) => {
+    const cloud = await stubCloud(page, {
+      ...ready,
+      wizard: { branch: {}, done: ["cafe", "tier", "install_hub"], setupCode: "7K2M9PQR" },
+    });
+    await page.goto("/setup/devices");
+    const text = page.getByTestId("setup-code-text");
+    await expect(text).toHaveText(t("onboarding.setup_code.text", { code: "7K2M 9PQR" }));
+    await expect(
+      page.getByRole("button", { name: t("ui.pairing_code.copy"), exact: true }),
+    ).toBeVisible();
+    await expect(text).toBeVisible();
+    expect(cloud.setupReveals).toBe(1);
+    await page.reload();
+    await expect(h1(page, "ui.wizard.step.devices")).toBeVisible();
+    await expect(page.getByTestId("setup-code-notice")).toHaveCount(0);
+    expect(cloud.setupReveals).toBe(2);
+  });
+
   test("a later step's URL redirects to the current step", async ({ page }) => {
     await stubCloud(page, created);
     await page.goto("/setup/devices");

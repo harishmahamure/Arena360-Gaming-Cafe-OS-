@@ -2,11 +2,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, ErrorCode, HUB_TOKEN_PREFIX, HubPairRequest, HubPairResponse, HubPlatform,
-    PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE, Tier, normalize_pairing_code,
-    valid_pairing_code,
+    AppError, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile, BranchBootstrapCommand,
+    ErrorCode, HUB_TOKEN_PREFIX, HubPairRequest, HubPairResponse, HubPlatform, OWNER_ROLE,
+    PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE, SETUP_CODE_HUB_TTL_MS, TaxSettings,
+    Tier, check_bootstrap, normalize_pairing_code, valid_pairing_code,
 };
-use arena_store::control::{Branch, Entitlement, NewHub, PairOutcome, PairingCodeRow, RateRule};
+use arena_store::control::{
+    Branch, Entitlement, NewHub, NewSetupCode, Owner, PairOutcome, PairingCodeRow, RateRule,
+};
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Extension, State};
 use axum::http::HeaderMap;
@@ -21,6 +24,7 @@ use super::json::ApiJson;
 use super::signup::ceil_s;
 use crate::auth::{AuthState, random_bytes};
 use crate::client_ip::client_ip;
+use crate::pairing_code::new_pairing_code;
 use crate::passwords::hash_secret;
 
 const MINUTE_MS: i64 = 60 * 1000;
@@ -186,6 +190,62 @@ async fn classify(
     })
 }
 
+fn bootstrap_key(branch_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(format!("bootstrap\0{branch_id}").as_bytes());
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&d[..16]);
+    b[0] &= 0x7f;
+    ulid::Ulid::from(u128::from_be_bytes(b)).to_string()
+}
+
+fn bootstrap_of(
+    branch: &Branch,
+    owner: &Owner,
+    setup_code_hash: String,
+    setup_expires_at: i64,
+) -> Result<BranchBootstrapCommand, ApiError> {
+    let gstin = branch.gstin.clone().filter(|_| branch.gst_registered);
+    let tax = TaxSettings {
+        country: branch.country.clone(),
+        gst: branch.gst_registered && branch.country == "IN",
+        gstin: gstin.unwrap_or_default(),
+        ..TaxSettings::parse(arena_proto::DEFAULT_TAX).ok_or_else(|| ApiError::internal("tax"))?
+    };
+    let command = BranchBootstrapCommand {
+        idempotency_key: bootstrap_key(&branch.id),
+        profile: BootstrapProfile {
+            name: branch.name.clone(),
+            branch_code: branch.branch_code.clone(),
+            currency: branch.currency.clone(),
+            tz: branch.timezone.clone(),
+            day_start_min: BOOTSTRAP_DAY_START_MIN,
+            country: branch.country.clone(),
+            gst_registered: tax.gst,
+            gstin: tax.gstin.clone(),
+            tax_mode: tax.tax_mode(),
+        },
+        owner_staff: BootstrapOwner {
+            name: owner.name.clone(),
+            login: owner.phone_e164.clone(),
+            role: OWNER_ROLE.to_owned(),
+            setup_code_hash,
+            setup_expires_at,
+        },
+    };
+    let p = &command.profile;
+    check_bootstrap(
+        &p.branch_code,
+        &p.country,
+        p.gst_registered,
+        &p.gstin,
+        p.tax_mode,
+        &command.owner_staff,
+    )
+    .map_err(|(field, message)| ApiError::internal(format!("bootstrap {field}: {message}")))?;
+    Ok(command)
+}
+
 async fn pair(
     State(st): State<Arc<AuthState>>,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -224,6 +284,29 @@ async fn pair(
     );
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
 
+    let setup_code = new_pairing_code().map_err(ApiError::internal)?;
+    let setup_hash = {
+        let code = setup_code.clone();
+        blocking(move || hash_secret(&code)).await?
+    };
+    let sealed = st
+        .mfa_key
+        .seal(&c.branch.id, setup_code.as_bytes())
+        .map_err(ApiError::internal)?;
+
+    let owner = st
+        .db
+        .owner_of_branch(&c.branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal("branch without an owner"))?;
+    bootstrap_of(
+        &c.branch,
+        &owner,
+        setup_hash.clone(),
+        now + SETUP_CODE_HUB_TTL_MS,
+    )?;
+
     let outcome = st
         .db
         .pair_hub(&NewHub {
@@ -234,6 +317,12 @@ async fn pair(
             version: &body.version,
             token_hash: &token_hash,
             code_hash: &code_hash,
+            setup: NewSetupCode {
+                code_hash: &setup_hash,
+                hub_expires_at: now + SETUP_CODE_HUB_TTL_MS,
+                ciphertext: &sealed.ciphertext,
+                nonce: &sealed.nonce,
+            },
             now,
         })
         .await
@@ -252,6 +341,13 @@ async fn pair(
                 .unwrap_or_else(invalid));
         }
     };
+    let setup = st
+        .db
+        .setup_code(&c.branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal("pairing left no owner setup code"))?;
+    let bootstrap = bootstrap_of(&c.branch, &owner, setup.code_hash, setup.hub_expires_at)?;
     tracing::info!(
         hub_id = %hub_id,
         tenant_id = %c.branch.tenant_id,
@@ -270,6 +366,7 @@ async fn pair(
         tier: claims.tier,
         branch_code: c.branch.branch_code,
         licence,
+        bootstrap,
     }))
 }
 

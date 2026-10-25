@@ -128,6 +128,113 @@ pub struct HubPairResponse {
     pub tier: crate::tier::Tier,
     pub branch_code: String,
     pub licence: String,
+    pub bootstrap: BranchBootstrapCommand,
+}
+
+pub const SETUP_CODE_HUB_TTL_MS: i64 = 72 * 60 * 60 * 1000;
+pub const SETUP_CODE_PLAINTEXT_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+pub const BOOTSTRAP_DAY_START_MIN: u16 = 0;
+pub const OWNER_ROLE: &str = "Owner";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BootstrapProfile {
+    pub name: String,
+    pub branch_code: String,
+    pub currency: String,
+    pub tz: String,
+    pub day_start_min: u16,
+    pub country: String,
+    pub gst_registered: bool,
+    pub gstin: String,
+    pub tax_mode: crate::tax::TaxMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BootstrapOwner {
+    pub name: String,
+    pub login: String,
+    pub role: String,
+    pub setup_code_hash: String,
+    #[ts(type = "number")]
+    pub setup_expires_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BranchBootstrapCommand {
+    pub idempotency_key: String,
+    pub profile: BootstrapProfile,
+    pub owner_staff: BootstrapOwner,
+}
+
+pub fn check_bootstrap(
+    branch_code: &str,
+    country: &str,
+    gst_registered: bool,
+    gstin: &str,
+    tax_mode: crate::tax::TaxMode,
+    owner: &BootstrapOwner,
+) -> Result<(), (&'static str, &'static str)> {
+    if !crate::wizard::valid_branch_code(branch_code) {
+        return Err((
+            "branch_code",
+            "branch_code must be 3–6 upper-case letters or digits",
+        ));
+    }
+    let tax = crate::tax::TaxSettings {
+        country: country.to_owned(),
+        gst: gst_registered,
+        gstin: gstin.to_owned(),
+        ..crate::tax::TaxSettings::parse(crate::tax::DEFAULT_TAX).expect("DEFAULT_TAX parses")
+    };
+    tax.check()?;
+    if tax.tax_mode() != tax_mode {
+        return Err((
+            "tax_mode",
+            "tax_mode must be gst_in only for a GST-registered Indian branch",
+        ));
+    }
+    let phone_ok = owner.login.len() <= 20
+        && owner
+            .login
+            .strip_prefix('+')
+            .is_some_and(|d| (8..=15).contains(&d.len()) && d.bytes().all(|c| c.is_ascii_digit()));
+    if !phone_ok {
+        return Err(("login", "login must be the owner's phone in E.164 form"));
+    }
+    let name = owner.name.trim();
+    if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+        return Err((
+            "display_name",
+            "name must be 1–80 characters with no control characters",
+        ));
+    }
+    if owner.role != OWNER_ROLE {
+        return Err(("role", "the first staff member is the Owner"));
+    }
+    if !owner.setup_code_hash.starts_with("$argon2id$") {
+        return Err((
+            "setup_code_hash",
+            "setup_code_hash must be an Argon2id hash",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SetupCodeReveal {
+    pub code: String,
+}
+
+impl std::fmt::Debug for SetupCodeReveal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupCodeReveal")
+            .field("code", &"[redacted]")
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for HubPairResponse {
@@ -290,6 +397,27 @@ mod tests {
             tier: crate::tier::Tier::Free,
             branch_code: "LVL".into(),
             licence: "jwt".into(),
+            bootstrap: BranchBootstrapCommand {
+                idempotency_key: "k".into(),
+                profile: BootstrapProfile {
+                    name: "n".into(),
+                    branch_code: "LVL".into(),
+                    currency: "INR".into(),
+                    tz: "Asia/Kolkata".into(),
+                    day_start_min: 0,
+                    country: "IN".into(),
+                    gst_registered: false,
+                    gstin: String::new(),
+                    tax_mode: crate::tax::TaxMode::Simple,
+                },
+                owner_staff: BootstrapOwner {
+                    name: "o".into(),
+                    login: "+919876543210".into(),
+                    role: OWNER_ROLE.into(),
+                    setup_code_hash: "h".into(),
+                    setup_expires_at: 1,
+                },
+            },
         };
         assert!(!format!("{res:?}").contains("secret"));
         let hub = PairHubRequest {

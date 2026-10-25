@@ -237,21 +237,41 @@ impl WriterHandle {
         &self,
         identity: arena_store::HubIdentity,
         licence: String,
+        bootstrap: Option<arena_proto::BranchBootstrapCommand>,
     ) -> Result<bool, AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();
-        self.run(move |store| {
-            let ctx = ctx_from(clock.as_ref(), &status);
-            store.write_tx(|tx| {
-                crate::apply::check_epoch(tx, &ctx)?;
-                if !arena_store::insert_hub_identity(tx, &identity)? {
-                    return Ok(false);
-                }
-                arena_store::store_licence(tx, &licence, identity.paired_at)?;
-                Ok(true)
-            })
-        })
-        .await
+        let events = self.events.clone();
+        let paired = self
+            .run_then(
+                move |store| {
+                    let ctx = ctx_from(clock.as_ref(), &status);
+                    store.write_tx_mut(|tx| {
+                        crate::apply::check_epoch(tx, &ctx)?;
+                        if !arena_store::insert_hub_identity(tx, &identity)? {
+                            return Ok(None);
+                        }
+                        arena_store::store_licence(tx, &licence, identity.paired_at)?;
+                        let Some(bootstrap) = bootstrap else {
+                            return Ok(Some(None));
+                        };
+                        let intent =
+                            bootstrap_intent(bootstrap, &identity.tenant_id, clock.now_ms());
+                        validate_frame(&intent)?;
+                        match run(tx, &ctx, &intent)? {
+                            Outcome::Replayed(Err(e)) => Err(e),
+                            out => Ok(Some(Some(out))),
+                        }
+                    })
+                },
+                move |out| {
+                    if let Some(Some(Outcome::Fresh(applied))) = out {
+                        emit(&events, applied);
+                    }
+                },
+            )
+            .await?;
+        Ok(paired.is_some())
     }
 
     pub async fn record_heartbeat(
@@ -545,6 +565,38 @@ impl WriterHandle {
         if self.tx.send(Msg::Close(ack)).await.is_ok() {
             let _ = done.await;
         }
+    }
+}
+
+fn bootstrap_intent(c: arena_proto::BranchBootstrapCommand, tenant_id: &str, now: i64) -> Intent {
+    let p = c.profile;
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: arena_proto::IntentKind::BranchBootstrap,
+        idempotency_key: c.idempotency_key,
+        issued_at: now,
+        base_rev: None,
+        actor: arena_proto::Actor {
+            kind: arena_proto::ActorKind::Owner,
+            id: tenant_id.to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: arena_proto::IntentPayload::BranchBootstrap(arena_proto::BranchBootstrap {
+            name: p.name,
+            branch_code: p.branch_code,
+            currency: p.currency,
+            tz: p.tz,
+            day_start_min: p.day_start_min,
+            fy_start_month: if p.country == "IN" { 4 } else { 1 },
+            onboarding: Some(arena_proto::BootstrapOnboarding {
+                country: p.country,
+                gst_registered: p.gst_registered,
+                gstin: p.gstin,
+                tax_mode: p.tax_mode,
+                owner_staff: c.owner_staff,
+            }),
+        }),
     }
 }
 

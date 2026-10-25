@@ -331,9 +331,12 @@ impl CloudPairer {
             paired_at: self.clock.now_ms(),
         };
         let written = writer
-            .record_pairing(identity, paired.licence)
+            .record_pairing(identity, paired.licence, Some(paired.bootstrap))
             .await
-            .map_err(|e| internal(&format!("{}: {}", e.code.as_str(), e.message)))?;
+            .map_err(|e| match e.code {
+                ErrorCode::AlreadyBootstrapped => ui_error(e.code, &e.message),
+                _ => internal(&format!("{}: {}", e.code.as_str(), e.message)),
+            })?;
         if !written {
             return Err(ui_error(
                 ErrorCode::AlreadySet,

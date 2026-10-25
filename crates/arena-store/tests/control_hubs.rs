@@ -6,8 +6,8 @@ mod sqld;
 use arena_proto::{HubPlatform, Tier};
 use arena_store::control::{
     BranchProfile, CompGrant, ControlDb, IssueOutcome, NewHub, NewOtpChallenge, NewOwner,
-    NewOwnerSession, NewPairingCode, NewTenantBranch, PairOutcome, RateRule, SignupCompletion,
-    SignupOutcome,
+    NewOwnerSession, NewPairingCode, NewSetupCode, NewTenantBranch, PairOutcome, RateRule,
+    SignupCompletion, SignupOutcome,
 };
 
 const MIN15: i64 = 15 * 60 * 1000;
@@ -100,6 +100,12 @@ fn hub<'a>(id: &'a str, code_hash: &'a str, platform: HubPlatform, now: i64) -> 
         version: "0.1.0",
         token_hash: "$argon2id$hash",
         code_hash,
+        setup: NewSetupCode {
+            code_hash: "$argon2id$setup",
+            hub_expires_at: now + 72 * 60 * 60 * 1000,
+            ciphertext: b"ct",
+            nonce: b"nonce",
+        },
         now,
     }
 }

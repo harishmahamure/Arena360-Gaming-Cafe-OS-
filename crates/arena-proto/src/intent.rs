@@ -345,6 +345,22 @@ pub struct BranchBootstrap {
     pub day_start_min: u16,
     /// Month in which the financial year starts (1–12).
     pub fy_start_month: u8,
+    /// The cloud onboarding profile and the owner's staff row; absent for a dev fixture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub onboarding: Option<BootstrapOnboarding>,
+}
+
+/// What a paired branch takes from the cloud profile beyond the locale: tax registration and
+/// the owner's staff row (no credentials; only the setup code's hash).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BootstrapOnboarding {
+    pub country: String,
+    pub gst_registered: bool,
+    pub gstin: String,
+    pub tax_mode: crate::tax::TaxMode,
+    pub owner_staff: crate::pairing::BootstrapOwner,
 }
 
 /// The payload of `branch.seed_defaults` (nothing: the writer works out what is missing).
@@ -708,6 +724,7 @@ mod tests {
                 tz: "Asia/Kolkata".into(),
                 day_start_min: 360,
                 fy_start_month: 4,
+                onboarding: None,
             }),
         }
     }

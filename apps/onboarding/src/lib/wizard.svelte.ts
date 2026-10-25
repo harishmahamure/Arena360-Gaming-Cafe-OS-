@@ -36,7 +36,14 @@ class Wizard {
 
 export const wizard = new Wizard();
 
+export const setupCode = $state<{ asked: boolean; value: string | null }>({
+  asked: false,
+  value: null,
+});
+
 export function clearWizard() {
+  setupCode.asked = false;
+  setupCode.value = null;
   wizard.state = null;
   wizard.announcement = "";
 }

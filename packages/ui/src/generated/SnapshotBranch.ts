@@ -3,4 +3,4 @@
 /**
  * The branch fields the shell shows.
  */
-export type SnapshotBranch = { name: string; branch_code: string };
+export type SnapshotBranch = { name: string; branch_code: string; code_locked?: boolean };

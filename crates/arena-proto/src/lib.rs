@@ -81,11 +81,11 @@ pub use frame::{
     check_envelope, parse_frame, parse_frame_value, parse_json,
 };
 pub use intent::{
-    AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceAssign, DevicePlace,
-    DeviceRegister, DeviceRevoke, DeviceVersionReported, FLOOR_COLS, FLOOR_ROWS, GROUP_COLOURS,
-    GROUP_KINDS, GroupDelete, GroupUpsert, Intent, IntentCategory, IntentKind, IntentPayload,
-    PermEffect, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffUpsert, ZoneDelete, ZoneUpsert,
-    reasons_json,
+    AuditReadGranted, BootstrapOnboarding, BranchBootstrap, BranchSeedDefaults, DeviceAssign,
+    DevicePlace, DeviceRegister, DeviceRevoke, DeviceVersionReported, FLOOR_COLS, FLOOR_ROWS,
+    GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert, Intent, IntentCategory, IntentKind,
+    IntentPayload, PermEffect, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffUpsert,
+    ZoneDelete, ZoneUpsert, reasons_json,
 };
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
@@ -115,12 +115,14 @@ pub use operating::{
     parse_opening_hours,
 };
 pub use pairing::{
-    ActivePairingCode, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S, HEARTBEAT_MIN_GAP_MS,
-    HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest, HeartbeatResponse, HubPairRequest,
-    HubPairResponse, HubPlatform, InstallHubState, IssuePairingCode, PAIR_ATTEMPTS_PER_IP_PER_HOUR,
-    PAIR_FAILURES_PER_CODE, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PAIRING_CODE_TTL_MS,
-    PairHubOk, PairHubRequest, PairingCodeIssued, format_pairing_code, normalize_pairing_code,
-    valid_pairing_code,
+    ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,
+    BranchBootstrapCommand, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S,
+    HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest, HeartbeatResponse,
+    HubPairRequest, HubPairResponse, HubPlatform, InstallHubState, IssuePairingCode, OWNER_ROLE,
+    PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN,
+    PAIRING_CODE_TTL_MS, PairHubOk, PairHubRequest, PairingCodeIssued, SETUP_CODE_HUB_TTL_MS,
+    SETUP_CODE_PLAINTEXT_TTL_MS, SetupCodeReveal, check_bootstrap, format_pairing_code,
+    normalize_pairing_code, valid_pairing_code,
 };
 pub use permission::{Permission, Requirement};
 pub use printer::{
@@ -169,9 +171,9 @@ pub use ui_auth::{
 };
 pub use wizard::{
     BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, COUNTRIES, CafeDetails, ChooseTier, Country,
-    CountryRow, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable, WizardBranch,
-    WizardState, WizardStep, WizardStepInfo, WizardTenant, country, current_step,
-    valid_branch_code,
+    CountryRow, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, SetBranchCode, StepState, TierChoices,
+    TierOption, TierUnavailable, WizardBranch, WizardState, WizardStep, WizardStepInfo,
+    WizardTenant, country, current_step, valid_branch_code,
 };
 
 /// Returns this crate's name.

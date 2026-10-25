@@ -161,6 +161,7 @@ async fn start(version: &str, primary: bool) -> TestHub {
                 tz: "Asia/Kolkata".into(),
                 day_start_min: 360,
                 fy_start_month: 4,
+                onboarding: None,
             }),
             None,
         ))

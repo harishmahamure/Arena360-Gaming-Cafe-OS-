@@ -42,9 +42,9 @@ type Hub = {
   intents: { value: string; base_rev?: number; ticket?: string }[];
 };
 
-function snapshot(): HubSnapshot {
+function snapshot(locked = false): HubSnapshot {
   return {
-    branch: { name: "Dev Branch", branch_code: "DEV01" },
+    branch: { name: "Dev Branch", branch_code: "DEV01", ...(locked ? { code_locked: true } : {}) },
     devices: [],
     groups: [],
     zones: [],
@@ -82,7 +82,7 @@ function json(route: Route, status: number, body: unknown) {
   });
 }
 
-async function open(page: Page, token = "manager-token") {
+async function open(page: Page, token = "manager-token", locked = false) {
   const hub: Hub = { tax: { value: JSON.stringify(DEFAULT), rev: 1 }, intents: [] };
   await page.addInitScript((t) => sessionStorage.setItem("arena.hub.token", t), token);
   await page.route(`${HUB}/**`, async (route) => {
@@ -92,7 +92,7 @@ async function open(page: Page, token = "manager-token") {
     const auth = (req.headers()["authorization"] ?? "").replace(/^Bearer /, "");
     switch (url.pathname) {
       case "/ui/snapshot":
-        return json(route, 200, snapshot());
+        return json(route, 200, snapshot(locked));
       case "/ui/me":
         return json(route, 200, STAFF[auth]);
       case "/ui/settings":
@@ -154,6 +154,22 @@ async function open(page: Page, token = "manager-token") {
   await expect(page.getByTestId("settings-tax")).toBeVisible();
   return hub;
 }
+
+test("the invoice prefix says it is locked once the first invoice has used it", async ({
+  page,
+}) => {
+  await open(page, "manager-token", true);
+  await expect(page.getByTestId("tax-prefix")).toHaveText("DEV01");
+  await expect(page.getByTestId("tax-prefix-locked")).toHaveText(
+    en["hub.settings.tax.prefix_locked"],
+  );
+});
+
+test("the invoice prefix has no lock note before the first invoice", async ({ page }) => {
+  await open(page);
+  await expect(page.getByTestId("tax-prefix")).toHaveText("DEV01");
+  await expect(page.getByTestId("tax-prefix-locked")).toHaveCount(0);
+});
 
 const save = (page: Page) => page.getByRole("button", { name: en["hub.settings.save"] });
 const field = (page: Page, key: keyof typeof en) => page.getByLabel(en[key]);

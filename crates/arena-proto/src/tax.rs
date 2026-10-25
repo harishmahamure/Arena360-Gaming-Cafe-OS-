@@ -7,7 +7,9 @@ pub const SIMPLE_MAX_BP: u16 = 10000;
 pub const GSTIN_INVALID: &str = "GSTIN_INVALID";
 pub const RATE_RANGE: &str = "RATE_RANGE";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
 pub enum TaxMode {
     GstIn,
     Simple,

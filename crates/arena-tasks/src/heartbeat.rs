@@ -392,6 +392,7 @@ mod tests {
                     paired_at: T0,
                 },
                 dev_sign(&paired).unwrap(),
+                None,
             )
             .await
             .unwrap();

@@ -95,6 +95,7 @@ async fn hub() -> Hub {
                 tz: "Asia/Kolkata".into(),
                 day_start_min: 360,
                 fy_start_month: 4,
+                onboarding: None,
             }),
         ))
         .await

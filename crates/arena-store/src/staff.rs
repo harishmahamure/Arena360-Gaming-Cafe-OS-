@@ -180,6 +180,21 @@ fn staff_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<StaffRow> {
     })
 }
 
+pub fn set_staff_setup_code(
+    conn: &Connection,
+    staff_id: &str,
+    hash: &str,
+    expires_at: i64,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE staff SET setup_code_hash = ?2, setup_expires_at = ?3 WHERE staff_id = ?1",
+            params![staff_id, hash, expires_at],
+        )
+        .map_err(db_error)?;
+    expect_one(n, "staff", staff_id)
+}
+
 /// The staff member `staff_id`, if it exists.
 pub fn find_staff(conn: &Connection, staff_id: &str) -> Result<Option<StaffRow>, AppError> {
     conn.query_row(

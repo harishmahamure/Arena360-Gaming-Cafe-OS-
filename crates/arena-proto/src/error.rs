@@ -34,6 +34,8 @@ pub enum ErrorCode {
     ValidationFailed,
     /// The branch has already been bootstrapped.
     AlreadyBootstrapped,
+    /// The branch code can no longer change: an invoice has used it.
+    BranchCodeLocked,
     /// The idempotency key was already used for a different intent body.
     IdempotencyConflict,
     /// Sign-in failed, or the request carries no valid session. Never says which field failed.
@@ -132,6 +134,7 @@ impl ErrorCode {
             Self::Internal => "INTERNAL",
             Self::ValidationFailed => "VALIDATION_FAILED",
             Self::AlreadyBootstrapped => "ALREADY_BOOTSTRAPPED",
+            Self::BranchCodeLocked => "BRANCH_CODE_LOCKED",
             Self::IdempotencyConflict => "IDEMPOTENCY_CONFLICT",
             Self::AuthFailed => "AUTH_FAILED",
             Self::AuthLocked => "AUTH_LOCKED",
@@ -259,6 +262,7 @@ mod tests {
             (ErrorCode::Internal, "INTERNAL"),
             (ErrorCode::ValidationFailed, "VALIDATION_FAILED"),
             (ErrorCode::AlreadyBootstrapped, "ALREADY_BOOTSTRAPPED"),
+            (ErrorCode::BranchCodeLocked, "BRANCH_CODE_LOCKED"),
             (ErrorCode::IdempotencyConflict, "IDEMPOTENCY_CONFLICT"),
             (ErrorCode::AuthFailed, "AUTH_FAILED"),
             (ErrorCode::AuthLocked, "AUTH_LOCKED"),

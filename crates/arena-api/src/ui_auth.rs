@@ -832,6 +832,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         }
         ErrorCode::Stale
         | ErrorCode::AlreadyBootstrapped
+        | ErrorCode::BranchCodeLocked
         | ErrorCode::IdempotencyConflict
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch
@@ -1996,6 +1997,7 @@ pub(crate) mod tests {
                     tz: "Asia/Kolkata".into(),
                     day_start_min: 360,
                     fy_start_month: 4,
+                    onboarding: None,
                 }),
                 None,
             ))

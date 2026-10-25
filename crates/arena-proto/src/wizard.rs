@@ -316,6 +316,8 @@ pub struct ChooseTier {
     pub branch_id: Option<String>,
 }
 
+pub const KEY_BRANCH_CODE: &str = "branch.code";
+pub const KEY_BRANCH_CODE_LOCKED_AT: &str = "branch.code_locked_at";
 pub const BRANCH_CODE_MIN: usize = 3;
 pub const BRANCH_CODE_MAX: usize = 6;
 

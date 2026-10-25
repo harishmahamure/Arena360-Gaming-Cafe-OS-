@@ -76,6 +76,7 @@ fn payload() -> BranchBootstrap {
         tz: "Asia/Kolkata".into(),
         day_start_min: 360,
         fy_start_month: 4,
+        onboarding: None,
     }
 }
 
@@ -105,6 +106,7 @@ fn bootstrap() -> Intent {
 fn bootstrap_changes() -> usize {
     1 + DEFAULT_SETTINGS.len()
         + crate::LOCALE_KEYS.len()
+        + 2
         + crate::rbac::BUILTIN_ROLES
             .iter()
             .map(|r| 1 + crate::rbac::builtin_perms(r).len())
@@ -146,7 +148,7 @@ async fn bootstrap_writes_branch_settings_and_gap_free_changes() {
     let settings = store.rows(Table::Settings).unwrap();
     assert_eq!(
         settings.len(),
-        DEFAULT_SETTINGS.len() + crate::LOCALE_KEYS.len()
+        DEFAULT_SETTINGS.len() + crate::LOCALE_KEYS.len() + 2
     );
     let seeded: Vec<(String, String)> = DEFAULT_SETTINGS
         .iter()
@@ -158,6 +160,8 @@ async fn bootstrap_writes_branch_settings_and_gap_free_changes() {
             ("branch.tz".into(), "Asia/Kolkata".into()),
             ("branch.day_start_min".into(), "360".into()),
             ("branch.fy_start_month".into(), "4".into()),
+            ("branch.code".into(), "DEV01".into()),
+            ("branch.code_locked_at".into(), "".into()),
         ])
         .collect();
     for (key, value) in &seeded {
@@ -3585,7 +3589,7 @@ mod seed_defaults {
         assert_eq!(branch_defaults, 5);
         assert_eq!(
             applied.changes.len(),
-            crate::LOCALE_KEYS.len() + branch_defaults + roles
+            crate::LOCALE_KEYS.len() + 2 + branch_defaults + roles
         );
         let s = reopen(&f);
         let changes = s.changes().unwrap();
@@ -7409,6 +7413,462 @@ mod products {
         assert_eq!(
             (e.code, e.field.as_deref()),
             (ErrorCode::ValidationFailed, Some("id"))
+        );
+    }
+}
+
+mod onboarding {
+    use super::*;
+    use arena_proto::{BootstrapOnboarding, BootstrapOwner, TaxMode};
+
+    const HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNo";
+
+    fn owner() -> BootstrapOwner {
+        BootstrapOwner {
+            name: "Asha Rao".into(),
+            login: "+919876543210".into(),
+            role: "Owner".into(),
+            setup_code_hash: HASH.into(),
+            setup_expires_at: T0 + 72 * 3_600_000,
+        }
+    }
+
+    fn profile(country: &str, gst: bool) -> BranchBootstrap {
+        let india_gst = country == "IN" && gst;
+        BranchBootstrap {
+            name: "Level Up".into(),
+            branch_code: "LVL".into(),
+            currency: "INR".into(),
+            tz: "Asia/Kolkata".into(),
+            day_start_min: 0,
+            fy_start_month: 4,
+            onboarding: Some(BootstrapOnboarding {
+                country: country.into(),
+                gst_registered: gst,
+                gstin: if gst {
+                    "27AAPFU0939F1ZV".into()
+                } else {
+                    String::new()
+                },
+                tax_mode: if india_gst {
+                    TaxMode::GstIn
+                } else {
+                    TaxMode::Simple
+                },
+                owner_staff: owner(),
+            }),
+        }
+    }
+
+    fn by_owner(key: &str, b: BranchBootstrap) -> Intent {
+        let mut i = intent_with(ActorKind::Owner, b);
+        i.idempotency_key = key.into();
+        i.actor.id = "tenant-1".into();
+        i
+    }
+
+    fn key() -> String {
+        ulid::Ulid::generate().to_string()
+    }
+
+    #[tokio::test]
+    async fn the_owner_bootstrap_creates_branch_settings_and_the_owner_staff_in_one_intent() {
+        let f = primary();
+        let intent = by_owner(&key(), profile("IN", true));
+        let applied = f.writer.submit_intent(intent.clone()).await.unwrap();
+        let s = reopen(&f);
+        let tax = arena_proto::TaxSettings::parse(match &setting(&s, "branch.tax")["value"] {
+            RowValue::Text(t) => t,
+            _ => panic!(),
+        })
+        .unwrap();
+        assert_eq!(
+            (
+                tax.country.as_str(),
+                tax.gst,
+                tax.gstin.as_str(),
+                tax.tax_mode()
+            ),
+            ("IN", true, "27AAPFU0939F1ZV", TaxMode::GstIn)
+        );
+        assert_eq!(
+            setting(&s, "branch.code")["value"],
+            RowValue::Text("LVL".into())
+        );
+        assert_eq!(
+            setting(&s, "branch.code_locked_at")["value"],
+            RowValue::Text("".into())
+        );
+        let staff = s.rows(Table::Staff).unwrap();
+        assert_eq!(staff.len(), 1);
+        let o = &staff[0];
+        assert_eq!(o["login"], RowValue::Text("+919876543210".into()));
+        assert_eq!(o["display_name"], RowValue::Text("Asha Rao".into()));
+        assert_eq!(o["password_hash"], RowValue::Null);
+        assert_eq!(o["pin_hash"], RowValue::Null);
+        assert_eq!(o["setup_code_hash"], RowValue::Text(HASH.into()));
+        assert_eq!(
+            o["setup_expires_at"],
+            RowValue::Integer(T0 + 72 * 3_600_000)
+        );
+        let RowValue::Text(role_id) = &o["role_id"] else {
+            panic!()
+        };
+        let role = s
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["role_id"] == RowValue::Text(role_id.clone()))
+            .unwrap();
+        assert_eq!(role["name"], RowValue::Text("Owner".into()));
+        let changes = s.changes().unwrap();
+        assert_eq!(changes.len(), bootstrap_changes() + 1);
+        assert_eq!(applied.changes.len(), changes.len());
+        assert!(changes.iter().all(|c| c.intent_id == intent.intent_id
+            && c.actor_kind == "owner"
+            && c.actor_id == "tenant-1"));
+        assert!(changes.iter().any(|c| c.tbl == "staff"));
+    }
+
+    #[tokio::test]
+    async fn tax_mode_is_gst_in_only_for_a_registered_indian_branch() {
+        for (country, gst, mode) in [
+            ("IN", true, TaxMode::GstIn),
+            ("IN", false, TaxMode::Simple),
+            ("AE", false, TaxMode::Simple),
+        ] {
+            let f = primary();
+            f.writer
+                .submit_intent(by_owner(&key(), profile(country, gst)))
+                .await
+                .unwrap();
+            let RowValue::Text(v) = setting(&reopen(&f), "branch.tax")["value"].clone() else {
+                panic!()
+            };
+            let t = arena_proto::TaxSettings::parse(&v).unwrap();
+            assert_eq!((t.country.as_str(), t.tax_mode()), (country, mode));
+        }
+        let f = primary();
+        let mut bad = profile("AE", true);
+        bad.onboarding.as_mut().unwrap().tax_mode = TaxMode::GstIn;
+        assert_eq!(
+            expect_err(&f, by_owner(&key(), bad)).await.field.as_deref(),
+            Some("branch.tax.gst")
+        );
+        let mut wrong_mode = profile("IN", true);
+        wrong_mode.onboarding.as_mut().unwrap().tax_mode = TaxMode::Simple;
+        let e = expect_err(&f, by_owner(&key(), wrong_mode)).await;
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("tax_mode"))
+        );
+        assert_nothing_written(&reopen(&f));
+    }
+
+    #[tokio::test]
+    async fn the_same_key_applies_once_and_a_different_key_is_already_bootstrapped() {
+        let mut f = primary();
+        let k = key();
+        let first = f
+            .writer
+            .submit_intent(by_owner(&k, profile("IN", false)))
+            .await
+            .unwrap();
+        f.events.try_recv().unwrap();
+        let after_first = snapshot(&f);
+        let again = f
+            .writer
+            .submit_intent(by_owner(&k, profile("IN", false)))
+            .await
+            .unwrap();
+        assert_eq!(again.changes, first.changes);
+        assert!(f.events.try_recv().is_err());
+        assert_eq!(snapshot(&f), after_first);
+        let e = expect_err(&f, by_owner(&key(), profile("IN", false))).await;
+        assert_eq!(e.code, ErrorCode::AlreadyBootstrapped);
+        let now = snapshot(&f);
+        assert_eq!(
+            (&now.0, &now.1, &now.2),
+            (&after_first.0, &after_first.1, &after_first.2)
+        );
+        assert_eq!(reopen(&f).rows(Table::Staff).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn bad_profiles_and_owners_are_refused_with_nothing_written() {
+        let f = primary();
+        type Edit = Box<dyn Fn(&mut BranchBootstrap)>;
+        let cases: Vec<(&str, Edit)> = vec![
+            ("branch_code", Box::new(|b| b.branch_code = "lvl".into())),
+            ("branch_code", Box::new(|b| b.branch_code = "AB".into())),
+            (
+                "branch_code",
+                Box::new(|b| b.branch_code = "ABCDEFG".into()),
+            ),
+            (
+                "login",
+                Box::new(|b| {
+                    b.onboarding.as_mut().unwrap().owner_staff.login = "9876543210".into()
+                }),
+            ),
+            (
+                "login",
+                Box::new(|b| b.onboarding.as_mut().unwrap().owner_staff.login = "+12".into()),
+            ),
+            (
+                "display_name",
+                Box::new(|b| b.onboarding.as_mut().unwrap().owner_staff.name = "  ".into()),
+            ),
+            (
+                "role",
+                Box::new(|b| b.onboarding.as_mut().unwrap().owner_staff.role = "Manager".into()),
+            ),
+            (
+                "setup_code_hash",
+                Box::new(|b| {
+                    b.onboarding.as_mut().unwrap().owner_staff.setup_code_hash = "ABCD1234".into()
+                }),
+            ),
+        ];
+        for (field, edit) in cases {
+            let mut b = profile("IN", false);
+            edit(&mut b);
+            let e = expect_err(&f, by_owner(&key(), b)).await;
+            assert_eq!(
+                (e.code, e.field.as_deref()),
+                (ErrorCode::ValidationFailed, Some(field))
+            );
+        }
+        assert_nothing_written(&reopen(&f));
+    }
+
+    #[tokio::test]
+    async fn an_owner_may_bootstrap_only_with_the_onboarding_profile() {
+        let f = primary();
+        let e = expect_err(&f, by_owner(&key(), payload())).await;
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        let mut staff = by_owner(&key(), profile("IN", false));
+        staff.actor.kind = ActorKind::Staff;
+        assert_eq!(
+            expect_err(&f, staff).await.code,
+            ErrorCode::PermissionDenied
+        );
+        assert_nothing_written(&reopen(&f));
+    }
+
+    async fn onboarded() -> Fixture {
+        let mut f = primary_long_lease();
+        f.writer
+            .submit_intent(by_owner(&key(), profile("IN", false)))
+            .await
+            .unwrap();
+        f.events.try_recv().unwrap();
+        f
+    }
+
+    #[tokio::test]
+    async fn branch_code_is_editable_until_locked_then_rejected() {
+        let f = onboarded().await;
+        let rev = |f: &Fixture| match setting(&reopen(f), "branch.code")["rev"] {
+            RowValue::Integer(n) => n,
+            _ => panic!(),
+        };
+        for bad in ["", "ab", "abc", "AB", "TOOLONG", "AB-1", "AB 1"] {
+            let e = expect_err(&f, set("branch.code", bad, Some(rev(&f)))).await;
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{bad}");
+        }
+        f.writer
+            .submit_intent(set("branch.code", "ARENA9", Some(rev(&f))))
+            .await
+            .unwrap();
+        let summary = reopen(&f).branch_summary().unwrap().unwrap();
+        assert_eq!(
+            (summary.branch_code.as_str(), summary.code_locked),
+            ("ARENA9", false)
+        );
+        let e = expect_err(&f, set("branch.code_locked_at", "1", Some(1))).await;
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+
+        let key_locked = reopen(&f)
+            .write_tx(|tx| lock_branch_code(tx, T0 + 5))
+            .unwrap();
+        assert!(key_locked.is_some());
+        let before = snapshot(&f);
+        let e = expect_err(&f, set("branch.code", "NEW123", Some(rev(&f)))).await;
+        assert_eq!(e.code, ErrorCode::BranchCodeLocked);
+        assert_eq!(snapshot(&f), before);
+        let summary = reopen(&f).branch_summary().unwrap().unwrap();
+        assert_eq!(
+            (summary.branch_code.as_str(), summary.code_locked),
+            ("ARENA9", true)
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_branch_code_sets_the_time_once_and_is_idempotent() {
+        let f = onboarded().await;
+        let mut store = reopen(&f);
+        let first = store.write_tx(|tx| lock_branch_code(tx, 111)).unwrap();
+        let again = store.write_tx(|tx| lock_branch_code(tx, 222)).unwrap();
+        assert!(
+            matches!(first, Some(arena_store::RowKey::Settings { ref key, .. }) if key == "branch.code_locked_at")
+        );
+        assert_eq!(again, None);
+        assert_eq!(
+            setting(&store, "branch.code_locked_at")["value"],
+            RowValue::Text("111".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_branch_code_fails_on_a_database_with_no_branch() {
+        let f = primary();
+        let e = reopen(&f)
+            .write_tx(|tx| lock_branch_code(tx, 1))
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+    }
+    fn identity() -> arena_store::HubIdentity {
+        arena_store::HubIdentity {
+            tenant_id: "tenant-1".into(),
+            branch_id: "cloud-branch".into(),
+            hub_id: "hub-1".into(),
+            tier: arena_proto::Tier::Free,
+            paired_at: T0,
+        }
+    }
+
+    fn command(country: &str, hash: &str) -> arena_proto::BranchBootstrapCommand {
+        let b = profile(country, false);
+        let o = b.onboarding.unwrap();
+        arena_proto::BranchBootstrapCommand {
+            idempotency_key: key(),
+            profile: arena_proto::BootstrapProfile {
+                name: b.name,
+                branch_code: b.branch_code,
+                currency: b.currency,
+                tz: b.tz,
+                day_start_min: 0,
+                country: o.country,
+                gst_registered: false,
+                gstin: String::new(),
+                tax_mode: TaxMode::Simple,
+            },
+            owner_staff: BootstrapOwner {
+                setup_code_hash: hash.into(),
+                ..owner()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn pairing_with_a_bootstrap_is_all_or_nothing() {
+        let mut f = primary_long_lease();
+        let e = f
+            .writer
+            .record_pairing(identity(), "jwt".into(), Some(command("IN", "plain")))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("setup_code_hash"))
+        );
+        let s = reopen(&f);
+        assert!(s.hub_identity().unwrap().is_none() && s.cached_licence().unwrap().is_none());
+        assert_nothing_written(&s);
+
+        f.writer.submit_intent(bootstrap()).await.unwrap();
+        f.events.try_recv().unwrap();
+        let e = f
+            .writer
+            .record_pairing(identity(), "jwt".into(), Some(command("IN", HASH)))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::AlreadyBootstrapped);
+        let s = reopen(&f);
+        assert!(s.hub_identity().unwrap().is_none() && s.cached_licence().unwrap().is_none());
+        assert!(s.rows(Table::Staff).unwrap().is_empty());
+        assert!(f.events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn pairing_applies_the_command_once_with_the_locale_of_its_country() {
+        for (country, fy) in [("IN", 4), ("AE", 1)] {
+            let mut f = primary_long_lease();
+            assert!(
+                f.writer
+                    .record_pairing(identity(), "jwt".into(), Some(command(country, HASH)))
+                    .await
+                    .unwrap()
+            );
+            let applied = f.events.try_recv().unwrap();
+            assert!(f.events.try_recv().is_err());
+            let s = reopen(&f);
+            assert_eq!(s.hub_identity().unwrap().unwrap().tenant_id, "tenant-1");
+            assert_eq!(s.cached_licence().unwrap().unwrap().jwt, "jwt");
+            assert_eq!(
+                s.rows(Table::Branch).unwrap()[0]["fy_start_month"],
+                RowValue::Integer(fy)
+            );
+            assert_eq!(applied.changes.len(), bootstrap_changes() + 1);
+            let again = f
+                .writer
+                .record_pairing(identity(), "jwt".into(), Some(command(country, HASH)))
+                .await
+                .unwrap();
+            assert!(!again);
+            assert!(f.events.try_recv().is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_locked_branch_code_answers_locked_before_any_other_check() {
+        let f = onboarded().await;
+        reopen(&f).write_tx(|tx| lock_branch_code(tx, T0)).unwrap();
+        for (value, base_rev) in [("zz", Some(1)), ("NEW123", Some(99)), ("NEW123", None)] {
+            let e = expect_err(&f, set("branch.code", value, base_rev)).await;
+            assert_eq!(e.code, ErrorCode::BranchCodeLocked, "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_defaults_backfills_the_branch_code_rows_without_touching_existing_ones() {
+        let f = onboarded().await;
+        let mut store = reopen(&f);
+        store
+            .write_tx(|tx| {
+                tx.execute_batch(
+                    "UPDATE settings SET value = 'XYZ' WHERE key = 'branch.code';
+                     DELETE FROM settings WHERE key = 'branch.code_locked_at';",
+                )
+                .map_err(arena_store::db_error)
+            })
+            .unwrap();
+        f.writer.seed_defaults().await.unwrap().unwrap();
+        let s = reopen(&f);
+        assert_eq!(
+            setting(&s, "branch.code")["value"],
+            RowValue::Text("XYZ".into())
+        );
+        assert_eq!(
+            setting(&s, "branch.code_locked_at")["value"],
+            RowValue::Text("".into())
+        );
+        assert!(f.writer.seed_defaults().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_owner_actor_cannot_do_anything_but_the_onboarding_bootstrap() {
+        let f = onboarded().await;
+        let mut seed = intent_with(ActorKind::Owner, payload());
+        seed.kind = IntentKind::BranchSeedDefaults;
+        seed.payload = IntentPayload::BranchSeedDefaults(Default::default());
+        assert_eq!(expect_err(&f, seed).await.code, ErrorCode::PermissionDenied);
+        let mut device = by_owner(&key(), profile("IN", false));
+        device.actor.kind = ActorKind::Device;
+        assert_eq!(
+            expect_err(&f, device).await.code,
+            ErrorCode::PermissionDenied
         );
     }
 }

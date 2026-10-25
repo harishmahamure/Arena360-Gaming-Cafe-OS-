@@ -86,6 +86,7 @@ async fn start_with_lease(expires_at: i64) -> TestHub {
                 tz: "Asia/Kolkata".into(),
                 day_start_min: 360,
                 fy_start_month: 4,
+                onboarding: None,
             }),
         ))
         .await

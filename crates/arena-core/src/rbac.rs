@@ -102,7 +102,14 @@ pub fn is_pairing(intent: &Intent) -> bool {
 pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     let actor = &intent.actor;
     let ok = match intent.payload.kind().requirement() {
-        Requirement::System => actor.kind == ActorKind::System,
+        Requirement::System => {
+            actor.kind == ActorKind::System
+                || (actor.kind == ActorKind::Owner
+                    && matches!(
+                        &intent.payload,
+                        arena_proto::IntentPayload::BranchBootstrap(b) if b.onboarding.is_some()
+                    ))
+        }
         Requirement::Device => actor.kind == ActorKind::Device,
         Requirement::Phone => false,
         Requirement::Perm(p) => match actor.kind {

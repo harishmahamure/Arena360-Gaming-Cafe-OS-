@@ -67,7 +67,7 @@ pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff_with_role, find_role,
     find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
     insert_staff, list_pin_candidates, list_role_perms, list_roles, list_unlock_candidates,
-    role_perm_effect, update_role_name, update_staff,
+    role_perm_effect, set_staff_setup_code, update_role_name, update_staff,
 };
 
 /// The transaction `apply()` and the replayer run in.
@@ -1146,6 +1146,7 @@ mod tests {
                 branch_id: "B".into(),
                 name: "Dev Branch".into(),
                 branch_code: "DEV01".into(),
+                code_locked: false,
             })
         );
     }

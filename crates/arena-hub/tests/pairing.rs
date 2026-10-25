@@ -286,6 +286,11 @@ async fn a_fresh_hub_pairs_with_the_step_3_code_and_a_restart_skips_pairing() {
     assert_eq!(snap["paired"], false, "{snap}");
     assert_eq!(snap["branch"], Value::Null);
     assert_eq!(snap["lan"], Value::Null);
+    {
+        let store = arena_store::Store::open_reader(data.path().join("branch.db")).unwrap();
+        assert!(store.branch_summary().unwrap().is_none());
+        assert!(store.rows(arena_store::Table::Staff).unwrap().is_empty());
+    }
     for path in ["/ui/me", "/ui/settings", "/ui/audit"] {
         let (s, body) = tokio::task::spawn_blocking(move || call(port, "GET", path, None))
             .await
@@ -354,6 +359,54 @@ async fn a_fresh_hub_pairs_with_the_step_3_code_and_a_restart_skips_pairing() {
         ("t1", "b1", cloud_hub.id.as_str(), Tier::Free)
     );
     assert_eq!(cloud_hub.hub_instance_id.len(), 26);
+    let summary = store.branch_summary().unwrap().unwrap();
+    assert_eq!(
+        (
+            summary.name.as_str(),
+            summary.branch_code.as_str(),
+            summary.code_locked
+        ),
+        ("Pixel Arena Gaming", "PAG", false)
+    );
+    let staff = store.rows(arena_store::Table::Staff).unwrap();
+    assert_eq!(staff.len(), 1);
+    use arena_store::RowValue::{Null, Text};
+    assert_eq!(staff[0]["login"], Text("+919876543210".into()));
+    assert_eq!(staff[0]["password_hash"], Null);
+    assert_eq!(staff[0]["pin_hash"], Null);
+    let Text(setup_hash) = &staff[0]["setup_code_hash"] else {
+        panic!("the owner has a setup code hash")
+    };
+    let sealed = cloud
+        .db
+        .peek_setup_code("b1", now_ms())
+        .await
+        .unwrap()
+        .unwrap();
+    let plain = MfaKey::from_bytes([0xa5; 32])
+        .open("b1", &sealed.ciphertext, &sealed.nonce)
+        .unwrap();
+    assert!(arena_cloud::passwords::verify_secret(
+        std::str::from_utf8(&plain).unwrap(),
+        setup_hash
+    ));
+    let tax = store
+        .settings()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.key == "branch.tax")
+        .unwrap();
+    assert!(tax.value.contains(r#""country":"IN""#) && tax.value.contains(r#""gst":false"#));
+    let changes = store.changes().unwrap();
+    let boot: Vec<_> = changes
+        .iter()
+        .filter(|c| c.intent_kind == "branch.bootstrap")
+        .collect();
+    assert!(
+        boot.iter()
+            .all(|c| c.actor_kind == "owner" && c.actor_id == "t1")
+    );
+    assert!(boot.iter().any(|c| c.tbl == "staff"));
     let licence = store.cached_licence().unwrap().unwrap();
     let claims = verify(&licence.jwt, DEV_LICENCE_VERIFY_KEYS, now_ms()).unwrap();
     assert_eq!(

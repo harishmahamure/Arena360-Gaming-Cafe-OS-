@@ -14,6 +14,7 @@ import type {
   InstallHubState,
   PairingCodeIssued,
   SessionInfo,
+  SetupCodeReveal,
   SignupChallenge,
   SignupStart,
   SignupVerified,
@@ -220,5 +221,7 @@ export const chooseTier = (tier: Tier, branchId?: string) =>
   );
 export const getInstallHub = () =>
   withRefresh(() => call<InstallHubState>("GET", "/wizard/install-hub"));
+export const revealSetupCode = () =>
+  withRefresh(() => call<SetupCodeReveal>("POST", "/wizard/setup-code/reveal", {}));
 export const issuePairingCode = () =>
   withRefresh(() => call<PairingCodeIssued>("POST", "/wizard/install-hub/code", {}));

@@ -194,6 +194,9 @@ pub struct AppliedEvent {
 pub struct SnapshotBranch {
     pub name: String,
     pub branch_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub code_locked: Option<bool>,
 }
 
 /// One device group.

@@ -474,6 +474,7 @@ mod tests {
                     tz: "UTC".into(),
                     day_start_min: 0,
                     fy_start_month: 1,
+                    onboarding: None,
                 }),
             })
             .await;

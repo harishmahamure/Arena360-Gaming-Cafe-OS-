@@ -44,6 +44,7 @@ pub fn build_snapshot(
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
+            code_locked: b.code_locked.then_some(true),
         }),
         groups: groups
             .into_iter()
@@ -208,6 +209,7 @@ impl SnapshotReader {
         Ok(store.branch_summary()?.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
+            code_locked: b.code_locked.then_some(true),
         }))
     }
 
@@ -380,6 +382,7 @@ mod tests {
                 branch: Some(SnapshotBranch {
                     name: "Dev Branch".into(),
                     branch_code: "DEV01".into(),
+                    code_locked: None,
                 }),
                 groups: vec![],
                 zones: vec![],

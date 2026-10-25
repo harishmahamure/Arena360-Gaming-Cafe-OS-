@@ -369,6 +369,7 @@ async fn an_android_hub_on_free_pairs_once_and_gets_a_hashed_token_and_a_free_li
     assert_eq!(
         keys,
         [
+            "bootstrap",
             "branch_code",
             "branch_id",
             "hub_id",
@@ -1028,4 +1029,322 @@ async fn a_beat_for_a_revoked_hub_writes_nothing() {
         .unwrap();
     assert_eq!(fences, 0);
     assert_eq!(h.install_step_opt(&branch), None);
+}
+
+#[tokio::test]
+async fn the_pair_response_carries_the_bootstrap_command_without_the_setup_code() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (code, _) = h.issue(&a).await;
+    let r = h.pair(&code, "android").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let b = &r.body["bootstrap"];
+    let key = b["idempotency_key"].as_str().unwrap();
+    assert!(ulid::Ulid::from_string(key).is_ok(), "{key}");
+    let live = h.db.branch(&branch).await.unwrap().unwrap();
+    assert_eq!(
+        b["profile"],
+        json!({
+            "name": "Pixel Arena Gaming",
+            "branch_code": live.branch_code,
+            "currency": "INR",
+            "tz": "Asia/Kolkata",
+            "day_start_min": 0,
+            "country": "IN",
+            "gst_registered": false,
+            "gstin": "",
+            "tax_mode": "simple",
+        })
+    );
+    let o = &b["owner_staff"];
+    assert_eq!(
+        (o["name"].as_str(), o["login"].as_str(), o["role"].as_str()),
+        (Some("Asha Rao"), Some(PHONE_A), Some("Owner"))
+    );
+    assert_eq!(o["setup_expires_at"], T0 + 72 * 3_600_000);
+    let hash = o["setup_code_hash"].as_str().unwrap();
+    assert!(hash.starts_with("$argon2id$"));
+    let row = h.db.setup_code(&branch).await.unwrap().unwrap();
+    assert_eq!((row.code_hash.as_str(), row.has_plaintext), (hash, true));
+}
+
+#[tokio::test]
+async fn a_gst_registered_indian_branch_bootstraps_as_gst_in_and_others_as_simple() {
+    let h = Harness::new().await;
+    let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
+    let c = h
+        .call(
+            "PUT",
+            "/v1/wizard/cafe",
+            Some(json!({
+                "cafe_name": "Pixel Arena Gaming", "city": "Pune", "country": "IN",
+                "currency": "INR", "timezone": "Asia/Kolkata",
+                "gst_registered": true, "gstin": "27AAPFU0939F1ZV",
+            })),
+            &a,
+        )
+        .await;
+    assert_eq!(c.status, 200, "{}", c.body);
+    let t = h
+        .call("PUT", "/v1/wizard/tier", Some(json!({"tier": "free"})), &a)
+        .await;
+    assert_eq!(t.status, 200, "{}", t.body);
+    let (code, _) = h.issue(&a).await;
+    let r = h.pair(&code, "android").await;
+    let p = &r.body["bootstrap"]["profile"];
+    assert_eq!(
+        (
+            p["gst_registered"].clone(),
+            p["gstin"].as_str(),
+            p["tax_mode"].as_str()
+        ),
+        (json!(true), Some("27AAPFU0939F1ZV"), Some("gst_in"))
+    );
+
+    let h2 = Harness::new().await;
+    let a2 = h2.owner(PHONE_A, "Gulf Gaming").await;
+    let c = h2
+        .call(
+            "PUT",
+            "/v1/wizard/cafe",
+            Some(json!({
+                "cafe_name": "Gulf Gaming", "city": "Dubai", "country": "AE",
+                "currency": "AED", "timezone": "Asia/Dubai", "gst_registered": false,
+            })),
+            &a2,
+        )
+        .await;
+    assert_eq!(c.status, 200, "{}", c.body);
+    let t = h2
+        .call("PUT", "/v1/wizard/tier", Some(json!({"tier": "free"})), &a2)
+        .await;
+    assert_eq!(t.status, 200, "{}", t.body);
+    let (code, _) = h2.issue(&a2).await;
+    let r = h2.pair(&code, "android").await;
+    let p = &r.body["bootstrap"]["profile"];
+    assert_eq!(
+        (
+            p["country"].as_str(),
+            p["tax_mode"].as_str(),
+            p["currency"].as_str()
+        ),
+        (Some("AE"), Some("simple"), Some("AED"))
+    );
+}
+
+#[tokio::test]
+async fn re_pairing_sends_the_same_bootstrap_key_and_the_same_owner_code_hash() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (first, _) = h.issue(&a).await;
+    let one = h.pair(&first, "android").await;
+    h.advance(1_000);
+    let (second, _) = h.issue(&a).await;
+    let two = h.pair(&second, "android").await;
+    assert_eq!(two.status, 200, "{}", two.body);
+    assert_eq!(
+        one.body["bootstrap"]["idempotency_key"],
+        two.body["bootstrap"]["idempotency_key"]
+    );
+    assert_eq!(
+        one.body["bootstrap"]["owner_staff"]["setup_code_hash"],
+        two.body["bootstrap"]["owner_staff"]["setup_code_hash"]
+    );
+}
+
+#[tokio::test]
+async fn the_owner_sees_the_setup_code_once_after_step_three_and_it_opens_to_the_stored_hash() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let reveal = |a: String| {
+        let h = &h;
+        async move {
+            h.call("POST", "/v1/wizard/setup-code/reveal", Some(json!({})), &a)
+                .await
+        }
+    };
+    let (code, _) = h.issue(&a).await;
+    let paired = h.pair(&code, "android").await;
+    let hash = paired.body["bootstrap"]["owner_staff"]["setup_code_hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let token = paired.body["token"].as_str().unwrap().to_owned();
+    assert_eq!(reveal(a.clone()).await.code(), "STEP_NOT_READY");
+    assert_eq!(
+        h.call("POST", "/v1/wizard/setup-code/reveal", Some(json!({})), "")
+            .await
+            .status,
+        401
+    );
+    h.advance(1_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    let shown = reveal(a.clone()).await;
+    assert_eq!(shown.status, 200, "{}", shown.body);
+    let plain = shown.body["code"].as_str().unwrap();
+    assert!(arena_proto::valid_pairing_code(plain), "{plain}");
+    assert!(arena_cloud::passwords::verify_secret(plain, &hash));
+    let leaked = paired.body.to_string();
+    assert!(!leaked.contains(plain) && !leaked.contains(&plain[..4]));
+    let again = reveal(a.clone()).await;
+    assert_eq!((again.status, again.code()), (404, "NOT_FOUND"));
+    let row = h.db.setup_code(&branch).await.unwrap().unwrap();
+    assert_eq!((row.has_plaintext, row.shown_at), (false, Some(T0 + 1_000)));
+    assert_eq!(row.code_hash, hash);
+}
+
+#[tokio::test]
+async fn the_setup_code_plaintext_is_gone_after_twenty_four_hours() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.advance(1_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    h.advance(24 * 3_600_000);
+    let r = h
+        .call("POST", "/v1/wizard/setup-code/reveal", Some(json!({})), &a)
+        .await;
+    assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+    let row = h.db.setup_code(&branch).await.unwrap().unwrap();
+    assert!(!row.has_plaintext);
+    assert_eq!(row.shown_at, None);
+}
+
+#[tokio::test]
+async fn a_heartbeat_wipes_an_expired_setup_code_plaintext() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.advance(1_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    assert!(
+        h.db.setup_code(&branch)
+            .await
+            .unwrap()
+            .unwrap()
+            .has_plaintext
+    );
+    h.advance(24 * 3_600_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    assert!(
+        !h.db
+            .setup_code(&branch)
+            .await
+            .unwrap()
+            .unwrap()
+            .has_plaintext
+    );
+}
+
+#[tokio::test]
+async fn another_owner_cannot_reveal_this_branchs_setup_code() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.advance(1_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    let b = h.owner("+919812345678", "Other Cafe").await;
+    let other = h.tier_done(&b).await;
+    let r = h
+        .call(
+            "POST",
+            "/v1/wizard/setup-code/reveal",
+            Some(json!({"branch_id": branch})),
+            &b,
+        )
+        .await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert!(
+        h.db.setup_code(&branch)
+            .await
+            .unwrap()
+            .unwrap()
+            .has_plaintext
+    );
+    let own = h
+        .call(
+            "POST",
+            "/v1/wizard/setup-code/reveal",
+            Some(json!({"branch_id": other})),
+            &b,
+        )
+        .await;
+    assert_eq!(own.code(), "STEP_NOT_READY");
+}
+
+#[tokio::test]
+async fn the_setup_code_plaintext_lasts_until_the_last_millisecond_of_the_twenty_four_hours() {
+    for (offset, shown) in [(24 * 3_600_000 - 1, true), (24 * 3_600_000, false)] {
+        let h = Harness::new().await;
+        let (a, _) = h.ready().await;
+        let (token, _) = h.paired_hub(&a).await;
+        h.advance(1_000);
+        assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+        h.advance(offset - 1_000);
+        let r = h
+            .call("POST", "/v1/wizard/setup-code/reveal", Some(json!({})), &a)
+            .await;
+        assert_eq!(r.status == 200, shown, "{offset}: {}", r.body);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_simultaneous_reveals_show_the_code_to_exactly_one() {
+    let h = Arc::new(Harness::new().await);
+    let (a, _) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.advance(1_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    let go = |h: Arc<Harness>, a: String| async move {
+        h.call("POST", "/v1/wizard/setup-code/reveal", Some(json!({})), &a)
+            .await
+            .status
+    };
+    let (x, y) = tokio::join!(go(Arc::clone(&h), a.clone()), go(Arc::clone(&h), a.clone()));
+    let mut got = [x, y];
+    got.sort_unstable();
+    assert_eq!(got, [200, 404]);
+}
+
+#[tokio::test]
+async fn a_re_pair_after_the_hub_expiry_hands_over_a_fresh_seventy_two_hours() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (first, _) = h.issue(&a).await;
+    let one = h.pair(&first, "android").await;
+    h.advance(5 * 24 * 3_600_000);
+    let (second, _) = h.issue(&a).await;
+    let two = h.pair(&second, "android").await;
+    assert_eq!(two.status, 200, "{}", two.body);
+    assert_eq!(
+        one.body["bootstrap"]["owner_staff"]["setup_code_hash"],
+        two.body["bootstrap"]["owner_staff"]["setup_code_hash"]
+    );
+    assert_eq!(
+        two.body["bootstrap"]["owner_staff"]["setup_expires_at"],
+        T0 + 5 * 24 * 3_600_000 + 72 * 3_600_000
+    );
+}
+
+#[tokio::test]
+async fn a_profile_the_hub_would_refuse_fails_before_the_pairing_code_is_spent() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (code, _) = h.issue(&a).await;
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    c.execute("UPDATE owners SET name = ?1", ["x".repeat(120)])
+        .unwrap();
+    let r = h.pair(&code, "android").await;
+    assert_eq!(r.status, 500, "{}", r.body);
+    assert!(h.hubs().is_empty());
+    assert!(h.db.setup_code(&branch).await.unwrap().is_none());
+    let unused =
+        h.db.pairing_code_by_hash(&h.st.pairing_code_hash(&code))
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(unused.used_at, None);
+    c.execute("UPDATE owners SET name = 'Asha Rao'", [])
+        .unwrap();
+    assert_eq!(h.pair(&code, "android").await.status, 200);
 }

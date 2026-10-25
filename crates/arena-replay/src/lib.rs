@@ -146,6 +146,7 @@ mod tests {
                     tz: "Asia/Kolkata".into(),
                     day_start_min: 360,
                     fy_start_month: 4,
+                    onboarding: None,
                 }),
             })
             .await
@@ -560,6 +561,7 @@ mod tests {
             tz: "Asia/Kolkata".into(),
             day_start_min: 360,
             fy_start_month: 4,
+            onboarding: None,
         });
         writer.submit_intent(boot).await.unwrap();
         writer

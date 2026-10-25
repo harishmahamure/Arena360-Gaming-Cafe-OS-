@@ -31,6 +31,9 @@ fn invalid(field: &str, message: impl Into<String>) -> AppError {
 
 /// Reads the target row (`None` if the branch has no such setting).
 pub(super) fn load(tx: &StoreTx<'_>, s: &SettingsSet) -> Result<Option<SettingRef>, AppError> {
+    if s.key == arena_proto::KEY_BRANCH_CODE {
+        super::branch_code::ensure_unlocked(tx)?;
+    }
     find_setting(tx, &s.key)
 }
 

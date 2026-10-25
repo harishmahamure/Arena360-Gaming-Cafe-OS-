@@ -22,11 +22,11 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 
 | Lane | Scope | Stories | Landed | In progress | Backlog |
 |---|---|---:|---:|---:|---:|
-| CP | Control plane | 63 | 0 | 1 | 62 |
-| HUB-A | Hub floor and sessions | 80 | 0 | 0 | 80 |
+| CP | Control plane | 63 | 1 | 0 | 62 |
+| HUB-A | Hub floor and sessions | 80 | 1 | 0 | 79 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
 | HUB-B | Hub POS and money | 39 | 0 | 0 | 39 |
-| OWNER | Owner app | 30 | 0 | 0 | 30 |
+| OWNER | Owner app | 30 | 1 | 0 | 29 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
 | KITCHEN | Kitchen | 14 | 0 | 0 | 14 |
 | ANDROID | Android Hub | 21 | 0 | 0 | 21 |
@@ -39,9 +39,9 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 Candidates in priority order. Take the top ones until the 4 implementer slots are full.
 
 - **CP** 2.11 Hub checks in by heartbeat and the wizard advances by itself (`2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself`)
-- **HUB-A** 2.20 Device groups with six swatches, held at the Hub (`2-20-device-groups-with-six-swatches-held-at-the-hub`)
+- **HUB-A** 2.21 Register consoles, VR rigs and simulators manually (`2-21-register-consoles-vr-rigs-and-simulators-manually`)
 - **HUB-B** 5.1 Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India (`5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a`)
-- **OWNER** 8.10 The Owner app shell — navigation, themes, install and Free limits (`8-10-the-owner-app-shell-navigation-themes-install-and-free-limit`)
+- **OWNER** 8.11 The Owner app offers a high-contrast theme (`8-11-the-owner-app-offers-a-high-contrast-theme`)
 - **KITCHEN** 7.1 Kitchen settings at the Hub, locked on Free (`7-1-kitchen-settings-at-the-hub-locked-on-free`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
@@ -49,7 +49,6 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 In flight now:
 
 - **KIOSK** 1.19 Automated 30-minute kiosk escape suite on Windows 10 and 11
-- **CP** 2.10 Hub installer pairs with the code and retries in place
 
 ## CP: Control plane
 
@@ -59,7 +58,7 @@ After 2.31 and before 6.1, finish Story 2.3's deferred observability ACs (Sentry
 
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
-| 1 | 2.10 | Hub installer pairs with the code and retries in place | MVP | in-progress |  |
+| 1 | 2.10 | Hub installer pairs with the code and retries in place | MVP | review |  |
 | 2 | 2.11 | Hub checks in by heartbeat and the wizard advances by itself | MVP | backlog |  |
 | 3 | 2.12 | Hub verifies its licence against trusted time and enforces its limits | MVP | backlog |  |
 | 4 | 2.13 | branch.bootstrap applies the onboarding profile at first pairing, with branch code lock | MVP | backlog |  |
@@ -68,7 +67,7 @@ After 2.31 and before 6.1, finish Story 2.3's deferred observability ACs (Sentry
 | 7 | 2.16 | Step 7 — invite staff by phone with a role and a one-time setup code | MVP | backlog |  |
 | 8 | 2.19 | Device cap and pairing rate limits at the Hub | MVP | backlog |  |
 | 9 | 2.22 | Step 4 — owner groups devices in the web wizard as they arrive | MVP | backlog |  |
-| 10 | 2.28 | Wizard steps 5, 6 and 8 follow the Hub's setup progress | MVP | backlog | 2.20, 2.21, 2.23, 2.24, 2.25, 2.22 |
+| 10 | 2.28 | Wizard steps 5, 6 and 8 follow the Hub's setup progress | MVP | backlog | ~~2.20~~, 2.21, 2.23, 2.24, 2.25, 2.22 |
 | 11 | 2.29 | Step 9 — 2-minute test session locks a kiosk at zero | MVP | backlog | 2.28, 3.9 |
 | 12 | 2.30 | Owner manages branches — create, rename, timezone, new Hub pairing code | MVP | backlog |  |
 | 13 | 2.31 | Step 10 — go-live checklist marks the branch live | MVP | backlog | 2.29, 2.30 |
@@ -129,11 +128,11 @@ Windows Hub: devices, floor, players, sessions, wallet, credit, plans, pricing, 
 
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
-| 1 | 2.20 | Device groups with six swatches, held at the Hub | MVP | backlog | ~~2.18~~ |
+| 1 | 2.20 | Device groups with six swatches, held at the Hub | MVP | review | ~~2.18~~ |
 | 2 | 2.21 | Register consoles, VR rigs and simulators manually | MVP | backlog |  |
 | 3 | 2.23 | Floor zones and grid layout per branch | MVP | backlog |  |
 | 4 | 2.24 | Device status and maintenance | MVP | backlog |  |
-| 5 | 2.25 | Hourly postpaid rate per device group | MVP | backlog | 2.20 |
+| 5 | 2.25 | Hourly postpaid rate per device group | MVP | backlog | ~~2.20~~ |
 | 6 | 3.1 | Branch billing rules — rounding, minimum, grace and time-up mode | MVP | backlog |  |
 | 7 | 3.2 | Floor view shows every device as a live tile grouped by zone | MVP | backlog |  |
 | 8 | 3.3 | Floor view performance proven on reference hardware | MVP | backlog |  |
@@ -311,7 +310,7 @@ Owner PWA: shell, dashboards, reports, commands, alerts, audit, live view, subsc
 
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
-| 1 | 8.10 | The Owner app shell — navigation, themes, install and Free limits | MVP | backlog | ~~2.6~~ |
+| 1 | 8.10 | The Owner app shell — navigation, themes, install and Free limits | MVP | review | ~~2.6~~ |
 | 2 | 8.11 | The Owner app offers a high-contrast theme | MVP | backlog |  |
 | 3 | 8.12 | On Free, the Owner app shows only Subscription, pairing and support | MVP | backlog |  |
 | 4 | 8.14 | The Owner app stays in setup mode until a branch goes live, then opens its dashboard | MVP | backlog | 2.31 |
@@ -433,7 +432,7 @@ Tauri mobile Hub, ads, Free limits, Play rollout, migration to Windows.
 |---:|---|---|---|---|---|
 | 1 | 4.1 | Android Hub app builds from the shared Hub code and checks the device spec on first run | MVP | backlog | ~~1.22~~ |
 | 2 | 4.2 | The Android Hub keeps serving while the screen is off, in Doze and after a reboot | MVP | backlog |  |
-| 3 | 4.3 | The Android Hub pairs with the wizard code and keeps its secrets in the Android Keystore | MVP | backlog | 2.10, 2.11 |
+| 3 | 4.3 | The Android Hub pairs with the wizard code and keeps its secrets in the Android Keystore | MVP | backlog | ~~2.10~~, 2.11 |
 | 4 | 4.4 | Kiosks find and pair with an Android Hub on the LAN | MVP | backlog | 4.3 |
 | 5 | 4.5 | The Hub works on an Android phone and tablet by touch | MVP | backlog |  |
 | 6 | 4.6 | The Android Hub prints over Bluetooth or LAN | MVP | backlog | 5.17 |

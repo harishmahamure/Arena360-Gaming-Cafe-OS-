@@ -127,6 +127,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Zone(t) => zones::validate_place(d, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::StaffSetCredentials(c) => match target {
+            Target::Credentials(row) => super::staff_credentials::validate(c, row.as_ref()),
+            _ => Err(internal_target()),
+        },
         IntentPayload::ProductUpsert(u) => match target {
             Target::Product(t) => products::validate_upsert(u, t),
             _ => Err(internal_target()),

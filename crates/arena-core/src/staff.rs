@@ -9,7 +9,10 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use arena_proto::{AppError, ErrorCode, PermEffect, Permission, SessionStaff};
+use arena_proto::{
+    AppError, ErrorCode, MAX_STAFF_PASSWORD_CHARS, MIN_STAFF_PASSWORD_CHARS, PermEffect,
+    Permission, SessionStaff,
+};
 use arena_store::Store;
 use argon2::password_hash::try_generate_salt;
 
@@ -32,6 +35,38 @@ pub const PIN_REJECTED_MESSAGE: &str = "that PIN can't approve this";
 /// A PIN that approves nothing.
 pub fn pin_rejected() -> AppError {
     AppError::new(ErrorCode::PinRejected, PIN_REJECTED_MESSAGE)
+}
+
+/// The one refusal for a wrong, used, expired or unknown setup code. It never says which.
+pub fn setup_code_invalid() -> AppError {
+    AppError::new(ErrorCode::SetupCodeInvalid, "that setup code can't be used")
+}
+
+/// Checks a new password (10–128 characters) and PIN (4–6 digits) before they are hashed.
+pub fn check_new_credentials(password: &str, pin: &str) -> Result<(), AppError> {
+    let n = password.chars().count();
+    if n < MIN_STAFF_PASSWORD_CHARS {
+        return Err(AppError::with_field(
+            ErrorCode::PasswordTooShort,
+            "password",
+            "the password is too short",
+        ));
+    }
+    if n > MAX_STAFF_PASSWORD_CHARS {
+        return Err(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "password",
+            "the password is too long",
+        ));
+    }
+    if !is_pin_shaped(pin) {
+        return Err(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "pin",
+            "the PIN must be 4 to 6 digits",
+        ));
+    }
+    Ok(())
 }
 
 /// Most staff whose PIN one elevation attempt checks.
@@ -253,6 +288,40 @@ impl StaffDirectory {
             .into_iter()
             .find(|c| verify_secret(pin, &c.pin_hash))
             .map(|c| c.staff_id))
+    }
+
+    /// Checks a one-time setup code for `login` against trusted time: `(staff_id, stored hash)`
+    /// when the member is active, has no password yet and the code matches an unexpired hash.
+    /// Every other case, unknown login included, does the same one argon2id check and answers
+    /// `None`. The code is never logged. Blocking.
+    pub fn check_setup_code(
+        &self,
+        login: &str,
+        code: &str,
+        trusted_now_ms: i64,
+    ) -> Result<Option<(String, String)>, AppError> {
+        let found = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+            store.staff_with_role(login.trim())?
+        };
+        let usable = found.and_then(|(s, _)| {
+            let hash = s.setup_code_hash.clone()?;
+            (s.active
+                && s.password_hash.is_none()
+                && s.setup_expires_at.is_some_and(|e| e > trusted_now_ms))
+            .then_some((s.staff_id, hash))
+        });
+        let code = arena_proto::normalize_pairing_code(code);
+        let shaped = arena_proto::valid_pairing_code(&code);
+        let hash = match &usable {
+            Some((_, h)) => h.as_str(),
+            None => dummy_hash(),
+        };
+        let matches = verify_secret(&code, hash);
+        Ok(usable.filter(|_| matches && shaped))
     }
 
     /// Verifies `login` and `password`. The row is read under the lock; the argon2id check

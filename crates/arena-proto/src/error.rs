@@ -104,6 +104,7 @@ pub enum ErrorCode {
     DeviceLimit,
     HsnRequired,
     BarcodeTaken,
+    SetupCodeInvalid,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -161,6 +162,7 @@ impl ErrorCode {
             Self::OneFreeBranch => "ONE_FREE_BRANCH",
             Self::StepNotReady => "STEP_NOT_READY",
             Self::PairCodeInvalid => "PAIR_CODE_INVALID",
+            Self::SetupCodeInvalid => "SETUP_CODE_INVALID",
             Self::PairPinPaused => "PAIR_PIN_PAUSED",
             Self::PairCodeExpired => "PAIR_CODE_EXPIRED",
             Self::FeatureNotEntitled => "FEATURE_NOT_ENTITLED",
@@ -289,6 +291,7 @@ mod tests {
             (ErrorCode::OneFreeBranch, "ONE_FREE_BRANCH"),
             (ErrorCode::StepNotReady, "STEP_NOT_READY"),
             (ErrorCode::PairCodeInvalid, "PAIR_CODE_INVALID"),
+            (ErrorCode::SetupCodeInvalid, "SETUP_CODE_INVALID"),
             (ErrorCode::PairPinPaused, "PAIR_PIN_PAUSED"),
             (ErrorCode::PairCodeExpired, "PAIR_CODE_EXPIRED"),
             (ErrorCode::FeatureNotEntitled, "FEATURE_NOT_ENTITLED"),

@@ -105,11 +105,13 @@ pub enum IntentKind {
     ProductUpsert,
     #[serde(rename = "product.delete")]
     ProductDelete,
+    #[serde(rename = "staff.set_credentials")]
+    StaffSetCredentials,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 26] = [
+    pub const ALL: [IntentKind; 27] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -136,6 +138,7 @@ impl IntentKind {
         Self::DevicePlace,
         Self::ProductUpsert,
         Self::ProductDelete,
+        Self::StaffSetCredentials,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -167,6 +170,7 @@ impl IntentKind {
             Self::DevicePlace => "device.place",
             Self::ProductUpsert => "product.upsert",
             Self::ProductDelete => "product.delete",
+            Self::StaffSetCredentials => "staff.set_credentials",
         }
     }
 
@@ -195,7 +199,9 @@ impl IntentKind {
             | Self::ZoneDelete
             | Self::DevicePlace => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
-            Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
+            Self::StaffUpsert | Self::RoleUpsert | Self::StaffSetCredentials => {
+                IntentCategory::Staff
+            }
             Self::AuditReadGranted => IntentCategory::Audit,
             Self::KioskLog | Self::KioskProcessBlocked => IntentCategory::Kiosk,
             Self::ProductUpsert | Self::ProductDelete => IntentCategory::Catalog,
@@ -218,7 +224,9 @@ impl IntentKind {
             | Self::ZoneDelete
             | Self::DevicePlace => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
-            Self::DeviceVersionReported | Self::LicenceApply => Requirement::System,
+            Self::DeviceVersionReported | Self::LicenceApply | Self::StaffSetCredentials => {
+                Requirement::System
+            }
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
@@ -276,7 +284,8 @@ impl IntentKind {
             | Self::ZoneDelete
             | Self::DevicePlace
             | Self::ProductUpsert
-            | Self::ProductDelete => None,
+            | Self::ProductDelete
+            | Self::StaffSetCredentials => None,
         }
     }
 
@@ -467,6 +476,29 @@ pub struct StaffUpsert {
     pub active: bool,
 }
 
+/// The payload of `staff.set_credentials`: the member's own first password and PIN, argon2id
+/// PHC strings computed outside the transaction. `setup_code_hash` is the stored hash the Hub
+/// verified the typed code against and `trusted_now_ms` the Hub's trusted time at that check;
+/// `apply()` accepts it only while the row still holds that hash, unexpired, and no password.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StaffSetCredentials {
+    pub staff_id: String,
+    pub setup_code_hash: String,
+    #[ts(type = "number")]
+    pub trusted_now_ms: i64,
+    pub password_hash: String,
+    pub pin_hash: String,
+}
+
+impl std::fmt::Debug for StaffSetCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaffSetCredentials")
+            .field("staff_id", &self.staff_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Whether a role row grants or withholds a permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -636,6 +668,8 @@ pub enum IntentPayload {
     ProductUpsert(crate::ProductUpsert),
     #[serde(rename = "product.delete")]
     ProductDelete(crate::ProductDelete),
+    #[serde(rename = "staff.set_credentials")]
+    StaffSetCredentials(StaffSetCredentials),
 }
 
 impl IntentPayload {
@@ -667,6 +701,7 @@ impl IntentPayload {
             Self::DevicePlace(_) => IntentKind::DevicePlace,
             Self::ProductUpsert(_) => IntentKind::ProductUpsert,
             Self::ProductDelete(_) => IntentKind::ProductDelete,
+            Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
         }
     }
 }
@@ -849,6 +884,7 @@ mod tests {
                 }
                 "device.admin_exit" | "device.admin_relock" => Requirement::Device,
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
+                "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" => Requirement::Perm(Permission::CatalogEdit),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" => Requirement::Device,

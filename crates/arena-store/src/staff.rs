@@ -29,6 +29,8 @@ pub struct StaffRow {
     pub pin_verifier_version: i64,
     pub active: bool,
     pub rev: i64,
+    pub setup_code_hash: Option<String>,
+    pub setup_expires_at: Option<i64>,
 }
 
 /// A new or edited staff row (`rev` and timestamps are set by the stamp step).
@@ -163,7 +165,8 @@ pub fn insert_role_perm(
 }
 
 const STAFF_COLUMNS: &str = "staff_id, branch_id, login, display_name, role_id, password_hash, \
-                             pin_hash, pin_verifier_version, active, rev";
+                             pin_hash, pin_verifier_version, active, rev, setup_code_hash, \
+                             setup_expires_at";
 
 fn staff_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<StaffRow> {
     Ok(StaffRow {
@@ -177,6 +180,8 @@ fn staff_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<StaffRow> {
         pin_verifier_version: r.get(7)?,
         active: r.get::<_, i64>(8)? != 0,
         rev: r.get(9)?,
+        setup_code_hash: r.get(10)?,
+        setup_expires_at: r.get(11)?,
     })
 }
 
@@ -190,6 +195,26 @@ pub fn set_staff_setup_code(
         .execute(
             "UPDATE staff SET setup_code_hash = ?2, setup_expires_at = ?3 WHERE staff_id = ?1",
             params![staff_id, hash, expires_at],
+        )
+        .map_err(db_error)?;
+    expect_one(n, "staff", staff_id)
+}
+
+/// Stores a member's first password and PIN hashes, bumps the PIN version and spends the
+/// setup code.
+pub fn set_staff_credentials(
+    conn: &Connection,
+    staff_id: &str,
+    password_hash: &str,
+    pin_hash: &str,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE staff SET password_hash = ?2, pin_hash = ?3,
+                              pin_verifier_version = pin_verifier_version + 1,
+                              setup_code_hash = NULL, setup_expires_at = NULL
+             WHERE staff_id = ?1",
+            params![staff_id, password_hash, pin_hash],
         )
         .map_err(db_error)?;
     expect_one(n, "staff", staff_id)

@@ -21,6 +21,7 @@ import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
+import type { StaffSetCredentials } from "./StaffSetCredentials";
 import type { StaffUpsert } from "./StaffUpsert";
 import type { ZoneDelete } from "./ZoneDelete";
 import type { ZoneUpsert } from "./ZoneUpsert";
@@ -53,4 +54,5 @@ export type IntentPayload =
   | ({ kind: "zone.delete" } & ZoneDelete)
   | ({ kind: "device.place" } & DevicePlace)
   | ({ kind: "product.upsert" } & ProductUpsert)
-  | ({ kind: "product.delete" } & ProductDelete);
+  | ({ kind: "product.delete" } & ProductDelete)
+  | ({ kind: "staff.set_credentials" } & StaffSetCredentials);

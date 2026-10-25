@@ -85,8 +85,8 @@ pub use intent::{
     AuditReadGranted, BootstrapOnboarding, BranchBootstrap, BranchSeedDefaults, DeviceAssign,
     DevicePlace, DeviceRegister, DeviceRevoke, DeviceVersionReported, FLOOR_COLS, FLOOR_ROWS,
     GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert, Intent, IntentCategory, IntentKind,
-    IntentPayload, PermEffect, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffUpsert,
-    ZoneDelete, ZoneUpsert, reasons_json,
+    IntentPayload, PermEffect, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffSetCredentials,
+    StaffUpsert, ZoneDelete, ZoneUpsert, reasons_json,
 };
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
@@ -167,8 +167,9 @@ pub use tax::{
 };
 pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use ui_auth::{
-    ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_TICKET_USES, SessionStaff,
-    SettingEntry, SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk, UnlockRequest,
+    ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_STAFF_PASSWORD_CHARS,
+    MAX_TICKET_USES, MIN_STAFF_PASSWORD_CHARS, SessionStaff, SettingEntry, SetupCodeRequest,
+    SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk, UnlockRequest,
 };
 pub use wizard::{
     BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, COUNTRIES, CafeDetails, ChooseTier, Country,

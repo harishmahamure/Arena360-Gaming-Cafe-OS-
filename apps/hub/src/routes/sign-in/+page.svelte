@@ -4,7 +4,9 @@
   import { onDestroy } from "svelte";
   import { invalidate } from "$app/navigation";
   import { SESSION_DEPENDENCY, signIn } from "../../lib/auth";
+  import SetupCode from "../../lib/SetupCode.svelte";
 
+  let setup = $state(false);
   let login = $state("");
   let password = $state("");
   let busy = $state(false);
@@ -70,44 +72,54 @@
   <title>{t("hub.page_title", { screen: t("hub.sign_in.title") })}</title>
 </svelte:head>
 
-<section class="sign-in" aria-labelledby="sign-in-title">
-  <h1 class="type-hub-numeric" id="sign-in-title">{t("hub.sign_in.title")}</h1>
-  <p class="type-hub-body muted">{t("hub.sign_in.intro")}</p>
+{#if setup}
+  <SetupCode onback={() => (setup = false)} />
+{:else}
+  <section class="sign-in" aria-labelledby="sign-in-title">
+    <h1 class="type-hub-numeric" id="sign-in-title">{t("hub.sign_in.title")}</h1>
+    <p class="type-hub-body muted">{t("hub.sign_in.intro")}</p>
 
-  <form class="form" {onsubmit} novalidate>
-    <TextField label="hub.sign_in.login" name="login" autocomplete="username" bind:value={login} />
-    <TextField
-      label="hub.sign_in.password"
-      name="password"
-      type="password"
-      autocomplete="current-password"
-      bind:value={password}
-    />
+    <form class="form" {onsubmit} novalidate>
+      <TextField
+        label="hub.sign_in.login"
+        name="login"
+        autocomplete="username"
+        bind:value={login}
+      />
+      <TextField
+        label="hub.sign_in.password"
+        name="password"
+        type="password"
+        autocomplete="current-password"
+        bind:value={password}
+      />
 
-    {#if error}
-      <p class="message type-hub-label" data-testid="sign-in-error">
-        <span aria-hidden="true">⚠</span>
-        <span>{t(error)}</span>
-      </p>
-    {/if}
-    {#if locked}
-      <p class="message type-hub-label" role="timer" data-testid="sign-in-locked">
-        <span aria-hidden="true">⚠</span>
-        <span>{t("hub.sign_in.locked", { seconds: lockedFor })}</span>
-      </p>
-    {/if}
+      {#if error}
+        <p class="message type-hub-label" data-testid="sign-in-error">
+          <span aria-hidden="true">⚠</span>
+          <span>{t(error)}</span>
+        </p>
+      {/if}
+      {#if locked}
+        <p class="message type-hub-label" role="timer" data-testid="sign-in-locked">
+          <span aria-hidden="true">⚠</span>
+          <span>{t("hub.sign_in.locked", { seconds: lockedFor })}</span>
+        </p>
+      {/if}
 
-    <Button
-      label="hub.sign_in.submit"
-      type="submit"
-      disabled={busy || locked}
-      disabledReason={locked ? "hub.sign_in.paused" : "hub.sign_in.signing_in"}
-    />
-  </form>
-  <p class="visually-hidden" aria-live="assertive" data-testid="sign-in-announce">
-    {announcement}
-  </p>
-</section>
+      <Button
+        label="hub.sign_in.submit"
+        type="submit"
+        disabled={busy || locked}
+        disabledReason={locked ? "hub.sign_in.paused" : "hub.sign_in.signing_in"}
+      />
+    </form>
+    <Button label="hub.sign_in.setup_link" variant="secondary" onclick={() => (setup = true)} />
+    <p class="visually-hidden" aria-live="assertive" data-testid="sign-in-announce">
+      {announcement}
+    </p>
+  </section>
+{/if}
 
 <style>
   .sign-in {

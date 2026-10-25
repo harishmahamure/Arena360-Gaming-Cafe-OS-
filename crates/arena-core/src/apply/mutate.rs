@@ -219,6 +219,7 @@ pub(super) fn mutate(
         },
         IntentPayload::ZoneDelete(z) => zones::mutate_delete(tx, z, now_ms),
         IntentPayload::DevicePlace(d) => zones::mutate_place(tx, d),
+        IntentPayload::StaffSetCredentials(c) => super::staff_credentials::mutate(tx, c),
         IntentPayload::ProductUpsert(u) => match target {
             Target::Product(t) => products::mutate_upsert(tx, u, t),
             _ => Err(mismatch()),

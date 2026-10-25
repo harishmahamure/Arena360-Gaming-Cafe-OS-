@@ -69,8 +69,8 @@ use arena_core::{Clock, SnapshotReader, StaffDirectory, WriterHandle};
 use arena_proto::{
     ActorKind, AppError, ElevateDrop, ElevateOk, ElevateRequest, ElevatedBy, ElevationItem,
     ElevationKind, ElevationMode, ErrorCode, IntentKind, IntentResult, MAX_TICKET_USES, Permission,
-    Requirement, SessionStaff, SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk,
-    UnlockRequest,
+    Requirement, SessionStaff, SetupCodeRequest, SignInOk, SignInRequest, UiError, UiIntentRequest,
+    UiMe, UnlockOk, UnlockRequest,
 };
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -97,6 +97,7 @@ const MAX_TICKETS_PER_SESSION: usize = 4;
 
 /// PIN checks (each up to 50 argon2id verifications) that may run at once.
 const MAX_CONCURRENT_PIN_CHECKS: usize = 2;
+const MAX_SETUP_FIELD_BYTES: usize = 64;
 
 /// A granted elevation, held only in memory.
 #[derive(Debug, Clone)]
@@ -379,6 +380,8 @@ pub struct UiAuth {
     writer: Option<WriterHandle>,
     clock: Arc<dyn Clock>,
     lockout: Mutex<Lockout>,
+    setup_checks: Arc<tokio::sync::Semaphore>,
+    setup_lockout: Mutex<Lockout>,
     /// PIN elevation failures, keyed by the requesting staff id (so a new session does not
     /// reset them).
     elevate_lockout: Mutex<Lockout>,
@@ -439,6 +442,8 @@ impl UiAuth {
             writer,
             clock,
             lockout: Mutex::new(Lockout::default()),
+            setup_checks: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PIN_CHECKS)),
+            setup_lockout: Mutex::new(Lockout::default()),
             elevate_lockout: Mutex::new(Lockout::exact()),
             unlock_lockout: Mutex::new(UnlockThrottle::default()),
             #[cfg(test)]
@@ -811,7 +816,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::OneFreeBranch
         | ErrorCode::StepNotReady
         | ErrorCode::HubNotPaired => StatusCode::CONFLICT,
-        ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
+        ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
+            StatusCode::UNAUTHORIZED
+        }
         ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked | ErrorCode::DeviceLimit => {
             StatusCode::FORBIDDEN
         }
@@ -851,6 +858,47 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
 
 pub(crate) fn fail(e: UiError) -> Response {
     (status_of(e.code), Json(e)).into_response()
+}
+
+impl UiAuth {
+    fn open_session(&self, me: &SessionStaff) -> Result<String, UiError> {
+        let token = new_session_token().map_err(ui_error)?;
+        let now = self.clock.now_ms();
+        match self.sessions.lock() {
+            Ok(mut s) => {
+                s.retain(|_, v| now - v.created_at < SESSION_TTL_MS);
+                // At most MAX_SESSIONS_PER_STAFF per member: end the oldest.
+                loop {
+                    let mine: Vec<(&String, i64)> = s
+                        .iter()
+                        .filter(|(_, v)| v.staff.staff_id == me.staff_id)
+                        .map(|(k, v)| (k, v.created_at))
+                        .collect();
+                    if mine.len() < MAX_SESSIONS_PER_STAFF {
+                        break;
+                    }
+                    let oldest = mine
+                        .into_iter()
+                        .min_by_key(|(_, at)| *at)
+                        .map(|(k, _)| k.clone());
+                    if let Some(k) = oldest {
+                        s.remove(&k);
+                        self.session_ended();
+                    }
+                }
+                s.insert(
+                    token.clone(),
+                    Session {
+                        staff: me.clone(),
+                        created_at: now,
+                        locked: false,
+                    },
+                );
+            }
+            Err(_) => return Err(internal()),
+        }
+        Ok(token)
+    }
 }
 
 async fn sign_in(State(auth): State<Arc<UiAuth>>, body: axum::body::Bytes) -> Response {
@@ -899,45 +947,166 @@ async fn sign_in(State(auth): State<Arc<UiAuth>>, body: axum::body::Bytes) -> Re
             return fail(internal());
         }
     };
-    let token = match new_session_token() {
+    let token = match auth.open_session(&me) {
         Ok(t) => t,
-        Err(e) => return fail(ui_error(e)),
+        Err(e) => return fail(e),
     };
-    let now = auth.clock.now_ms();
-    match auth.sessions.lock() {
-        Ok(mut s) => {
-            s.retain(|_, v| now - v.created_at < SESSION_TTL_MS);
-            // At most MAX_SESSIONS_PER_STAFF per member: end the oldest.
-            loop {
-                let mine: Vec<(&String, i64)> = s
-                    .iter()
-                    .filter(|(_, v)| v.staff.staff_id == me.staff_id)
-                    .map(|(k, v)| (k, v.created_at))
-                    .collect();
-                if mine.len() < MAX_SESSIONS_PER_STAFF {
-                    break;
-                }
-                let oldest = mine
-                    .into_iter()
-                    .min_by_key(|(_, at)| *at)
-                    .map(|(k, _)| k.clone());
-                if let Some(k) = oldest {
-                    s.remove(&k);
-                    auth.session_ended();
-                }
-            }
-            s.insert(
-                token.clone(),
-                Session {
-                    staff: me.clone(),
-                    created_at: now,
-                    locked: false,
-                },
-            );
-        }
-        Err(_) => return fail(internal()),
-    }
     tracing::info!(staff_id = %me.staff_id, "staff signed in");
+    Json(SignInOk { token, staff: me }).into_response()
+}
+
+fn setup_code_invalid() -> UiError {
+    ui_error(arena_core::staff::setup_code_invalid())
+}
+
+async fn setup_code(State(auth): State<Arc<UiAuth>>, body: axum::body::Bytes) -> Response {
+    let Some(writer) = auth.writer.clone() else {
+        return fail(ui_error(AppError::new(
+            ErrorCode::NotPrimary,
+            "this hub is not the primary writer",
+        )));
+    };
+    let Ok(req) = serde_json::from_slice::<SetupCodeRequest>(&body) else {
+        return fail(bad_frame(
+            "the body must be {\"login\", \"code\", \"password\", \"pin\"}",
+        ));
+    };
+    if req.login.len() > MAX_SETUP_FIELD_BYTES || req.code.len() > MAX_SETUP_FIELD_BYTES {
+        return fail(setup_code_invalid());
+    }
+    let reserved = match auth.setup_lockout.lock() {
+        Ok(mut l) => l.begin(&req.login, auth.clock.now_ms()),
+        Err(_) => return fail(internal()),
+    };
+    if let Err(retry_after_s) = reserved {
+        return fail(UiError {
+            code: ErrorCode::AuthLocked,
+            message: "too many failed setup codes; try again later".into(),
+            field: None,
+            retry_after_s: Some(retry_after_s),
+        });
+    }
+    tokio::spawn(setup_code_run(auth, writer, req))
+        .await
+        .unwrap_or_else(|_| fail(internal()))
+}
+
+enum Spent {
+    Failure,
+    Success,
+    Neither,
+}
+
+async fn setup_code_run(
+    auth: Arc<UiAuth>,
+    writer: WriterHandle,
+    req: SetupCodeRequest,
+) -> Response {
+    let settle = |spent: Spent| {
+        if let Ok(mut l) = auth.setup_lockout.lock() {
+            let now = auth.clock.now_ms();
+            match spent {
+                Spent::Failure => l.finish(&req.login, now, false),
+                Spent::Success => l.finish(&req.login, now, true),
+                Spent::Neither => l.release(&req.login, now),
+            }
+        }
+    };
+    let trusted_now = |auth: &UiAuth| {
+        let wall = auth.clock.now_ms();
+        auth.status
+            .as_ref()
+            .map_or(wall, |s| s.borrow().trusted_now(wall))
+    };
+    let Ok(permit) = Arc::clone(&auth.setup_checks).acquire_owned().await else {
+        settle(Spent::Neither);
+        return fail(internal());
+    };
+    let staff = Arc::clone(&auth.staff);
+    let (login, code, checked_at) = (req.login.clone(), req.code.clone(), trusted_now(&auth));
+    let checked =
+        tokio::task::spawn_blocking(move || staff.check_setup_code(&login, &code, checked_at))
+            .await;
+    drop(permit);
+    let (staff_id, setup_code_hash) = match checked {
+        Ok(Ok(Some(found))) => found,
+        Ok(Ok(None)) => {
+            settle(Spent::Failure);
+            return fail(setup_code_invalid());
+        }
+        Ok(Err(e)) => {
+            settle(Spent::Neither);
+            return fail(ui_error(e));
+        }
+        Err(_) => {
+            settle(Spent::Neither);
+            return fail(internal());
+        }
+    };
+    if let Err(e) = arena_core::staff::check_new_credentials(&req.password, &req.pin) {
+        settle(Spent::Success);
+        return fail(ui_error(e));
+    }
+    let (password, pin) = (req.password.clone(), req.pin.clone());
+    let hashed = tokio::task::spawn_blocking(move || {
+        Ok::<_, AppError>((
+            arena_core::staff::hash_secret(&password)?,
+            arena_core::staff::hash_secret(&pin)?,
+        ))
+    })
+    .await;
+    let (password_hash, pin_hash) = match hashed {
+        Ok(Ok(h)) => h,
+        Ok(Err(e)) => {
+            settle(Spent::Neither);
+            return fail(ui_error(e));
+        }
+        Err(_) => {
+            settle(Spent::Neither);
+            return fail(internal());
+        }
+    };
+    let intent = arena_proto::Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::StaffSetCredentials,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: auth.clock.now_ms(),
+        base_rev: None,
+        actor: arena_proto::Actor {
+            kind: ActorKind::Staff,
+            id: staff_id.clone(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: arena_proto::IntentPayload::StaffSetCredentials(
+            arena_proto::StaffSetCredentials {
+                staff_id: staff_id.clone(),
+                setup_code_hash,
+                trusted_now_ms: trusted_now(&auth),
+                password_hash,
+                pin_hash,
+            },
+        ),
+    };
+    if let Err(e) = writer.submit_intent(intent).await {
+        settle(if e.code == ErrorCode::SetupCodeInvalid {
+            Spent::Failure
+        } else {
+            Spent::Neither
+        });
+        return fail(ui_error(e));
+    }
+    settle(Spent::Success);
+    let me = match auth.current_staff(staff_id.clone()).await {
+        Ok(Some(me)) => me,
+        Ok(None) => return fail(auth_failed()),
+        Err(e) => return fail(e),
+    };
+    let token = match auth.open_session(&me) {
+        Ok(t) => t,
+        Err(e) => return fail(e),
+    };
+    tracing::info!(staff_id = %me.staff_id, "staff set their credentials with a setup code");
     Json(SignInOk { token, staff: me }).into_response()
 }
 
@@ -1703,6 +1872,15 @@ async fn intent(
         id: me.staff_id.clone(),
     };
     intent.elevated_by = None;
+    if matches!(
+        intent.payload,
+        arena_proto::IntentPayload::StaffSetCredentials(_)
+    ) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "credentials are set with a setup code",
+        )));
+    }
     if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) {
         return fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
@@ -1806,6 +1984,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/pairing-code", post(crate::ui_pairing::issue))
         .route("/ui/pairing-code/discard", post(crate::ui_pairing::discard))
         .route("/ui/auth/sign-in", post(sign_in))
+        .route("/ui/auth/setup-code", post(setup_code))
         .route("/ui/auth/sign-out", post(sign_out))
         .route("/ui/me", get(me))
         .route("/ui/lock", post(lock))

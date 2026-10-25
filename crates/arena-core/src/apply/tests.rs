@@ -8203,3 +8203,235 @@ mod onboarding {
         );
     }
 }
+
+mod set_credentials {
+    use super::*;
+    use arena_proto::{BootstrapOnboarding, BootstrapOwner, StaffSetCredentials, TaxMode};
+
+    const CODE_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$Y29kZWhhc2hjb2RlaGFzaA";
+    const PW_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$cGFzc3dvcmRoYXNocGFzcw";
+    const PIN_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$cGluaGFzaHBpbmhhc2g";
+    const LOGIN: &str = "+919876543210";
+
+    async fn onboarded() -> (Fixture, String) {
+        let f = primary_long_lease();
+        let mut i = intent_with(
+            ActorKind::Owner,
+            BranchBootstrap {
+                name: "Level Up".into(),
+                branch_code: "LVL".into(),
+                currency: "INR".into(),
+                tz: "Asia/Kolkata".into(),
+                day_start_min: 0,
+                fy_start_month: 4,
+                onboarding: Some(BootstrapOnboarding {
+                    country: "IN".into(),
+                    gst_registered: false,
+                    gstin: String::new(),
+                    tax_mode: TaxMode::Simple,
+                    owner_staff: BootstrapOwner {
+                        name: "Asha Rao".into(),
+                        login: LOGIN.into(),
+                        role: "Owner".into(),
+                        setup_code_hash: CODE_HASH.into(),
+                        setup_expires_at: T0 + 72 * 3_600_000,
+                    },
+                }),
+            },
+        );
+        i.actor.id = "tenant-1".into();
+        f.writer.submit_intent(i).await.unwrap();
+        let id = reopen(&f)
+            .staff_with_role(LOGIN)
+            .unwrap()
+            .unwrap()
+            .0
+            .staff_id;
+        (f, id)
+    }
+
+    fn set(id: &str, actor: &str, kind: ActorKind, hash: &str, now: i64) -> Intent {
+        Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: IntentKind::StaffSetCredentials,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: T0,
+            base_rev: None,
+            actor: Actor {
+                kind,
+                id: actor.into(),
+            },
+            elevated_by: None,
+            reason: None,
+            payload: IntentPayload::StaffSetCredentials(StaffSetCredentials {
+                staff_id: id.into(),
+                setup_code_hash: hash.into(),
+                trusted_now_ms: now,
+                password_hash: PW_HASH.into(),
+                pin_hash: PIN_HASH.into(),
+            }),
+        }
+    }
+
+    fn own(id: &str, hash: &str, now: i64) -> Intent {
+        set(id, id, ActorKind::Staff, hash, now)
+    }
+
+    #[tokio::test]
+    async fn the_code_sets_the_hashes_once_and_is_spent() {
+        let (f, id) = onboarded().await;
+        let before = reopen(&f).staff_with_role(LOGIN).unwrap().unwrap().0;
+        assert_eq!(
+            (before.pin_hash.clone(), before.pin_verifier_version),
+            (None, 1)
+        );
+        let applied = f
+            .writer
+            .submit_intent(own(&id, CODE_HASH, T0 + 1000))
+            .await
+            .unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        let s = reopen(&f);
+        let row = s.staff_with_role(LOGIN).unwrap().unwrap().0;
+        assert_eq!(row.password_hash.as_deref(), Some(PW_HASH));
+        assert_eq!(row.pin_hash.as_deref(), Some(PIN_HASH));
+        assert_eq!(row.pin_verifier_version, 2);
+        assert_eq!((row.setup_code_hash, row.setup_expires_at), (None, None));
+        let change = s.changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (
+                change.intent_kind.as_str(),
+                change.actor_kind.as_str(),
+                change.actor_id.as_str(),
+                change.tbl.as_str()
+            ),
+            ("staff.set_credentials", "staff", id.as_str(), "staff")
+        );
+        let e = expect_err(&f, own(&id, CODE_HASH, T0 + 2000)).await;
+        assert_eq!(e.code, ErrorCode::SetupCodeInvalid);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_expired_or_unknown_code_is_one_refusal_and_writes_nothing() {
+        let (f, id) = onboarded().await;
+        let expiry = T0 + 72 * 3_600_000;
+        let before = snapshot(&f);
+        for intent in [
+            own(
+                &id,
+                "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$b3RoZXJvdGhlcm90aGVy",
+                T0,
+            ),
+            own(&id, CODE_HASH, expiry),
+            own(&id, CODE_HASH, expiry + 1),
+            own("01JNOSUCHSTAFF0000000000", CODE_HASH, T0),
+        ] {
+            let e = expect_err(&f, intent).await;
+            assert_eq!(e.code, ErrorCode::SetupCodeInvalid);
+            assert_eq!(e.message, "that setup code can't be used");
+        }
+        assert_eq!(snapshot(&f), before);
+        f.writer
+            .submit_intent(own(&id, CODE_HASH, expiry - 1))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_the_member_themself_may_submit_it() {
+        let (f, id) = onboarded().await;
+        for (kind, actor) in [
+            (ActorKind::Owner, "tenant-1"),
+            (ActorKind::Staff, "01JSOMEONEELSE00000000000"),
+            (ActorKind::Device, id.as_str()),
+            (ActorKind::Admin, id.as_str()),
+        ] {
+            let e = expect_err(&f, set(&id, actor, kind, CODE_HASH, T0)).await;
+            assert_eq!(e.code, ErrorCode::PermissionDenied, "{kind:?}");
+        }
+        let mut elevated = own(&id, CODE_HASH, T0);
+        elevated.elevated_by = Some(ElevatedBy {
+            kind: ElevationKind::Pin,
+            id: id.clone(),
+            mode: ElevationMode::Hub,
+            verifier_version: 1,
+        });
+        assert_eq!(
+            expect_err(&f, elevated).await.code,
+            ErrorCode::PermissionDenied
+        );
+    }
+
+    #[tokio::test]
+    async fn a_member_with_credentials_or_inactive_is_refused() {
+        let (f, id) = onboarded().await;
+        reopen(&f)
+            .write_tx(|tx| {
+                tx.execute("UPDATE staff SET active = 0", [])
+                    .map_err(arena_store::db_error)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            expect_err(&f, own(&id, CODE_HASH, T0)).await.code,
+            ErrorCode::SetupCodeInvalid
+        );
+        reopen(&f)
+            .write_tx(|tx| {
+                tx.execute("UPDATE staff SET active = 1, password_hash = ?1", [PW_HASH])
+                    .map_err(arena_store::db_error)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            expect_err(&f, own(&id, CODE_HASH, T0)).await.code,
+            ErrorCode::SetupCodeInvalid
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_text_in_place_of_a_hash_is_a_validation_error() {
+        let (f, id) = onboarded().await;
+        for field in ["password_hash", "pin_hash"] {
+            let mut i = own(&id, CODE_HASH, T0);
+            if let IntentPayload::StaffSetCredentials(c) = &mut i.payload {
+                match field {
+                    "password_hash" => c.password_hash = "hunter2hunter2".into(),
+                    _ => c.pin_hash = "1234".into(),
+                }
+            }
+            let e = expect_err(&f, i).await;
+            assert_eq!(e.code, ErrorCode::ValidationFailed);
+            assert_eq!(e.field.as_deref(), Some(field));
+        }
+        assert!(
+            reopen(&f)
+                .staff_with_role(LOGIN)
+                .unwrap()
+                .unwrap()
+                .0
+                .setup_code_hash
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn setting_the_pin_changes_the_manager_verifier() {
+        let (f, id) = onboarded().await;
+        let verifier = |f: &Fixture| {
+            let v = crate::devices::DeviceDirectory::open(&f.path)
+                .unwrap()
+                .manager_verifier()
+                .unwrap();
+            (v.version, v.entries.len())
+        };
+        assert_eq!(verifier(&f).1, 0);
+        f.writer
+            .submit_intent(own(&id, CODE_HASH, T0))
+            .await
+            .unwrap();
+        let (version, entries) = verifier(&f);
+        assert_eq!(entries, 1);
+        assert!(version > 1);
+    }
+}

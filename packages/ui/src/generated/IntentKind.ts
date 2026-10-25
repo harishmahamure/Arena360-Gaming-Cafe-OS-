@@ -29,4 +29,5 @@ export type IntentKind =
   | "zone.delete"
   | "device.place"
   | "product.upsert"
-  | "product.delete";
+  | "product.delete"
+  | "staff.set_credentials";

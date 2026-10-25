@@ -20,6 +20,7 @@ import type {
 import { ulid } from "./ulid";
 
 export const SIGN_IN_URL = "http://127.0.0.1:7409/ui/auth/sign-in";
+export const SETUP_CODE_URL = "http://127.0.0.1:7409/ui/auth/setup-code";
 export const SIGN_OUT_URL = "http://127.0.0.1:7409/ui/auth/sign-out";
 export const ME_URL = "http://127.0.0.1:7409/ui/me";
 export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
@@ -213,6 +214,56 @@ export async function signIn(login: string, password: string): Promise<SignInRes
     return { kind: "locked", retryAfterS: Number.isFinite(s) ? Math.max(1, Math.ceil(s!)) : 60 };
   }
   if (err?.code === "AUTH_FAILED") return { kind: "failed" };
+  return { kind: "unreachable" };
+}
+
+export type SetupResult =
+  | { kind: "ok"; staff: SessionStaff }
+  | { kind: "invalid" }
+  | { kind: "locked"; retryAfterS: number }
+  | { kind: "weak"; field: "password" | "pin" }
+  | { kind: "unreachable" };
+
+/** `POST /ui/auth/setup-code`: spends a one-time code to set the password and PIN, then signs in. */
+export async function useSetupCode(
+  login: string,
+  code: string,
+  password: string,
+  pin: string,
+): Promise<SetupResult> {
+  let res: Response;
+  try {
+    res = await fetch(SETUP_CODE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ login, code, password, pin }),
+      signal: AbortSignal.timeout(TIMEOUT_MS * 4),
+    });
+  } catch {
+    return { kind: "unreachable" };
+  }
+  if (res.ok) {
+    try {
+      const body = (await res.json()) as Partial<SignInOk>;
+      if (typeof body.token === "string" && isSessionStaff(body.staff)) {
+        setToken(body.token);
+        return { kind: "ok", staff: body.staff };
+      }
+    } catch {
+      // fall through
+    }
+    return { kind: "unreachable" };
+  }
+  const err = await errorOf(res);
+  if (err?.code === "AUTH_LOCKED") {
+    const s = err.retry_after_s;
+    return { kind: "locked", retryAfterS: Number.isFinite(s) ? Math.max(1, Math.ceil(s!)) : 60 };
+  }
+  if (err?.code === "SETUP_CODE_INVALID") return { kind: "invalid" };
+  if (err?.code === "PASSWORD_TOO_SHORT") return { kind: "weak", field: "password" };
+  if (err?.code === "VALIDATION_FAILED" && (err.field === "password" || err.field === "pin")) {
+    return { kind: "weak", field: err.field };
+  }
   return { kind: "unreachable" };
 }
 

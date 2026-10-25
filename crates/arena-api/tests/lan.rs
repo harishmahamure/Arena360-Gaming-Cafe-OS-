@@ -1630,3 +1630,73 @@ async fn a_follower_answers_hub_info_no_hub() {
     assert!(resp.starts_with("HTTP/1.1 503"), "{resp}");
     assert_eq!(http_body(&resp)["code"], "NO_HUB");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn setting_a_managers_pin_with_a_setup_code_pushes_the_new_verifier() {
+    let hub = start("0.1.0", true).await;
+    add_staff(&hub, "manager", "Manager", "2222").await;
+    let newcomer = add_staff(&hub, "newcomer", "Manager", "1111").await;
+    let code_hash = arena_core::staff::hash_secret("ABCD2345").unwrap();
+    Store::open(&hub.path, 0)
+        .unwrap()
+        .write_tx(|tx| {
+            tx.execute_batch(&format!(
+                "UPDATE staff SET password_hash = NULL, pin_hash = NULL,
+                                  setup_code_hash = '{code_hash}',
+                                  setup_expires_at = {}
+                 WHERE staff_id = '{newcomer}'",
+                i64::MAX
+            ))
+            .map_err(arena_store::db_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    macro_rules! next_verifier {
+        () => {
+            loop {
+                match tokio::time::timeout(Duration::from_secs(5), events.next_event())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                {
+                    HubEvent::Verifier { verifier } => break verifier,
+                    _ => continue,
+                }
+            }
+        };
+    }
+    let first = next_verifier!();
+    assert!(first.entries.iter().all(|e| e.staff_id != newcomer));
+    let pin_hash = arena_core::staff::hash_secret("4821").unwrap();
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            Actor {
+                kind: ActorKind::Staff,
+                id: newcomer.clone(),
+            },
+            IntentPayload::StaffSetCredentials(arena_proto::StaffSetCredentials {
+                staff_id: newcomer.clone(),
+                setup_code_hash: code_hash,
+                trusted_now_ms: 0,
+                password_hash: arena_core::staff::hash_secret("a-long-new-password").unwrap(),
+                pin_hash: pin_hash.clone(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let second = next_verifier!();
+    assert!(second.version > first.version);
+    let entry = second
+        .entries
+        .iter()
+        .find(|e| e.staff_id == newcomer)
+        .unwrap();
+    assert_eq!(entry.pin_hash, pin_hash);
+}

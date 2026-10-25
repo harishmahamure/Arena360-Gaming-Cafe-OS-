@@ -106,6 +106,12 @@ pub struct HubStatus {
 }
 
 impl HubStatus {
+    pub fn trusted_now(&self, wall_ms: i64) -> i64 {
+        self.cloud_time.map_or(wall_ms, |c| {
+            c.cloud_ms.saturating_add(c.at.elapsed().as_millis() as i64)
+        })
+    }
+
     /// The status right after the database opened, before the lease is decided.
     pub fn opened(schema_version: u32, self_instance_id: impl Into<String>) -> Self {
         Self {

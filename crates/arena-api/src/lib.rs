@@ -11,6 +11,8 @@ pub mod ui_events;
 pub mod ui_pair;
 mod ui_pairing;
 mod ui_printer;
+#[cfg(test)]
+mod ui_setup_tests;
 
 pub use health::{
     DEFAULT_HEALTH_PORT, UI_ALLOWED_ORIGINS, bind_health, router, serve_health, serve_router,

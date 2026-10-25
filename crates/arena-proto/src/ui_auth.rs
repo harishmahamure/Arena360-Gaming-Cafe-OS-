@@ -15,6 +15,28 @@ pub struct SignInRequest {
     pub password: String,
 }
 
+pub const MIN_STAFF_PASSWORD_CHARS: usize = 10;
+pub const MAX_STAFF_PASSWORD_CHARS: usize = 128;
+
+/// `POST /ui/auth/setup-code`: a first-time member's login, one-time code and the password and
+/// PIN they chose. It goes nowhere else, and `Debug` never prints the secrets.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SetupCodeRequest {
+    pub login: String,
+    pub code: String,
+    pub password: String,
+    pub pin: String,
+}
+
+impl std::fmt::Debug for SetupCodeRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupCodeRequest")
+            .field("login", &self.login)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The signed-in staff member, as `GET /ui/me` and a sign-in return it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]

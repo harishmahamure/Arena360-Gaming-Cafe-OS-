@@ -38,6 +38,7 @@ mod products;
 mod read_grants;
 pub(crate) mod seed_defaults;
 mod settings_set;
+mod staff_credentials;
 mod staff_roles;
 mod ttl_dedupe;
 mod validate;
@@ -131,6 +132,7 @@ pub(crate) enum Target {
     Group(Box<groups::GroupTarget>),
     Zone(Box<zones::ZoneTarget>),
     Product(Box<products::ProductTarget>),
+    Credentials(Option<arena_store::StaffRow>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
@@ -157,6 +159,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
         }
+        P::StaffSetCredentials(c) => Target::Credentials(staff_credentials::load(tx, c)?),
         P::ProductUpsert(_) | P::ProductDelete(_) => {
             Target::Product(Box::new(products::load(tx, &intent.payload)?))
         }
@@ -211,6 +214,7 @@ pub(crate) fn run(
         arena_proto::IntentKind::BranchBootstrap
             | arena_proto::IntentKind::BranchSeedDefaults
             | arena_proto::IntentKind::StaffUpsert
+            | arena_proto::IntentKind::StaffSetCredentials
             | arena_proto::IntentKind::RoleUpsert
     ) {
         verifier::refresh(tx, now)?;

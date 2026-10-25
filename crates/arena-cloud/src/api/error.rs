@@ -53,7 +53,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ZoneNotEmpty
         | ErrorCode::CellTaken
         | ErrorCode::BarcodeTaken => StatusCode::CONFLICT,
-        ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
+        ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
+            StatusCode::UNAUTHORIZED
+        }
         ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked | ErrorCode::DeviceLimit => {
             StatusCode::FORBIDDEN
         }

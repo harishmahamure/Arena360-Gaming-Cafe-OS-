@@ -56,4 +56,5 @@ export type ErrorCode =
   | "TIER_LOCKED"
   | "DEVICE_LIMIT"
   | "HSN_REQUIRED"
-  | "BARCODE_TAKEN";
+  | "BARCODE_TAKEN"
+  | "SETUP_CODE_INVALID";

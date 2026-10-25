@@ -58,6 +58,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::BillingDisabled
         | ErrorCode::OneFreeBranch
         | ErrorCode::StepNotReady
+        | ErrorCode::SetupCodeInvalid
         | ErrorCode::PairCodeInvalid
         | ErrorCode::PairCodeExpired
         | ErrorCode::FeatureNotEntitled

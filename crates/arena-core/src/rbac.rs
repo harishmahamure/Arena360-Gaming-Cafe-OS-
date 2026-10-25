@@ -104,6 +104,11 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     let ok = match intent.payload.kind().requirement() {
         Requirement::System => {
             actor.kind == ActorKind::System
+                || (actor.kind == ActorKind::Staff
+                    && matches!(
+                        &intent.payload,
+                        arena_proto::IntentPayload::StaffSetCredentials(c) if c.staff_id == actor.id
+                    ))
                 || (actor.kind == ActorKind::Owner
                     && matches!(
                         &intent.payload,

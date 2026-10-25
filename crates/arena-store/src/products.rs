@@ -17,12 +17,13 @@ pub struct ProductRow {
     pub kitchen: bool,
     pub favourite: bool,
     pub active: bool,
+    pub bundle: bool,
     pub rev: i64,
     pub deleted_at: Option<i64>,
 }
 
 const COLUMNS: &str = "product_id, name, category, price_minor, tax_rate_bp, hsn, track_stock, \
-                       image, barcode, kitchen, favourite, active, rev, deleted_at";
+                       image, barcode, kitchen, favourite, active, bundle, rev, deleted_at";
 
 fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProductRow> {
     Ok(ProductRow {
@@ -38,8 +39,9 @@ fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProductRow> {
         kitchen: r.get(9)?,
         favourite: r.get(10)?,
         active: r.get(11)?,
-        rev: r.get(12)?,
-        deleted_at: r.get(13)?,
+        bundle: r.get(12)?,
+        rev: r.get(13)?,
+        deleted_at: r.get(14)?,
     })
 }
 
@@ -86,9 +88,9 @@ pub fn count_active_products(conn: &Connection) -> Result<i64, AppError> {
 pub fn insert_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
-                               track_stock, image, barcode, kitchen, favourite, active, rev,
-                               deleted_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, NULL, 0, 0)",
+                               track_stock, image, barcode, kitchen, favourite, active, bundle,
+                               rev, deleted_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, NULL, 0, 0)",
         params![
             p.product_id,
             p.name,
@@ -101,7 +103,8 @@ pub fn insert_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError>
             p.barcode,
             p.kitchen,
             p.favourite,
-            p.active
+            p.active,
+            p.bundle
         ],
     )
     .map_err(db_error)?;
@@ -124,7 +127,7 @@ pub fn update_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError>
         .execute(
             "UPDATE products SET name = ?2, category = ?3, price_minor = ?4, tax_rate_bp = ?5,
                     hsn = ?6, track_stock = ?7, image = ?8, barcode = ?9, kitchen = ?10,
-                    favourite = ?11, active = ?12
+                    favourite = ?11, active = ?12, bundle = ?13
              WHERE product_id = ?1",
             params![
                 p.product_id,
@@ -138,7 +141,8 @@ pub fn update_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError>
                 p.barcode,
                 p.kitchen,
                 p.favourite,
-                p.active
+                p.active,
+                p.bundle
             ],
         )
         .map_err(db_error)?;
@@ -153,6 +157,44 @@ pub fn set_product_deleted(conn: &Connection, id: &str, at_ms: i64) -> Result<()
         )
         .map_err(db_error)?;
     expect_one(n, id)
+}
+
+pub fn list_components(conn: &Connection, bundle_id: &str) -> Result<Vec<(String, i64)>, AppError> {
+    let mut stmt = conn
+        .prepare("SELECT component_id, qty FROM bundle_components WHERE bundle_id = ?1 ORDER BY component_id")
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([bundle_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+pub fn live_bundles_with(conn: &Connection, component_id: &str) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.bundle_id FROM bundle_components c
+             JOIN products b ON b.product_id = c.bundle_id
+             WHERE c.component_id = ?1 AND b.deleted_at IS NULL ORDER BY c.bundle_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([component_id], |r| r.get(0))
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+pub fn insert_component(
+    conn: &Connection,
+    bundle_id: &str,
+    component_id: &str,
+    qty: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO bundle_components (bundle_id, component_id, qty) VALUES (?1, ?2, ?3)",
+        params![bundle_id, component_id, qty],
+    )
+    .map_err(db_error)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -174,6 +216,7 @@ mod tests {
             kitchen: false,
             favourite: false,
             active,
+            bundle: false,
             rev: 0,
             deleted_at: None,
         }

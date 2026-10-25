@@ -52,9 +52,10 @@ pub use audit::{
     AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
 };
 pub use catalog::{
-    CatalogEntry, IMAGE_PREFIX, MAX_BARCODE_CHARS, MAX_CATEGORY_CHARS, MAX_IMAGE_BYTES,
-    MAX_IMAGE_PX, MAX_PRICE_MINOR, MAX_PRODUCT_NAME_CHARS, Product, ProductDelete, ProductUpsert,
-    availability, hsn_valid, image_problem,
+    BundleComponent, CatalogEntry, ComponentView, IMAGE_PREFIX, MAX_BARCODE_CHARS,
+    MAX_BUNDLE_COMPONENTS, MAX_CATEGORY_CHARS, MAX_COMPONENT_QTY, MAX_IMAGE_BYTES, MAX_IMAGE_PX,
+    MAX_PRICE_MINOR, MAX_PRODUCT_NAME_CHARS, Product, ProductDelete, ProductUpsert,
+    REASON_COMPONENT_INACTIVE, availability, bundle_quantity, hsn_valid, image_problem,
 };
 pub use connectivity::{Connectivity, ConnectivityState};
 pub use device_spec::{

@@ -128,7 +128,7 @@ development_status:
   5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a: review
   5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units: review
   5-3-products-with-categories-barcodes-images-and-the-kitchen-fla: review
-  5-4-bundles-priced-on-their-own: backlog
+  5-4-bundles-priced-on-their-own: review
   5-5-stock-in-with-expiry-lots-and-weighted-average-cost: backlog
   5-6-record-waste-with-a-reason: backlog
   5-7-expiry-alerts-and-expired-stock-held-from-sale-until-written: backlog

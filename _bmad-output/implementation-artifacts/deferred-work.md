@@ -266,3 +266,13 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai.md`
   summary: Test gaps. Status-code mappings for `BRANCH_CODE_LOCKED` in the three crates, the `CloudPairer` mapping of `ALREADY_BOOTSTRAPPED`, onboarding Playwright for Copy success and denied-clipboard states and the 409 path, E.164 length boundaries, `branch.seed_defaults` cannot seed the tax country of an upgraded branch.
   evidence: Verification Gap findings.
+
+
+## Story 5.4 (bundles)
+
+- Bundle availability uses the same constant component quantity (0 for tracked components) as products; Story 5.5 replaces `UNRECORDED_STOCK` in `arena_core::catalog` and must never create a `stock` row for a bundle. `quantity` is 0 for a bundle with no tracked component (available, unlimited).
+- Nesting is enforced in `product.upsert` only; a change-log row replayed or synced from elsewhere is not re-checked (no database trigger). Revisit with cloud sync of catalog rows.
+- `ComponentView.active` is false for a deleted component as for an inactive one, so the list says "Component inactive: <name>" for both; a `deleted` flag could tell them apart.
+- `catalog::status` reads each component with its own query (bounded by 30 components per bundle); batch it if catalogs grow.
+- Replay of change-log `products` rows written before migration 0018 (no `bundle` key) is not exercised.
+- Hub UI: no test of the 44 px targets or axe with the components error visible; a fractional quantity such as "1.5" is refused client-side by the same message as 0.

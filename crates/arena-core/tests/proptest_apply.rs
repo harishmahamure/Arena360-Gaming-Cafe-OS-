@@ -91,6 +91,7 @@ enum Op {
     Product {
         name: String,
         barcode: String,
+        bundle: bool,
         who: Index,
     },
     /// Moves the clock forward.
@@ -165,8 +166,14 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|((key, _), which)| Op::MalformedKey { key, which }),
         2 => (valid_setting(), any::<Index>())
             .prop_map(|((key, value), who)| Op::AsStaff { key, value, who }),
-        2 => ("[A-Za-z]{1,12}", "[0-2]{0,2}", any::<Index>())
-            .prop_map(|(name, barcode, who)| Op::Product { name, barcode, who }),
+        2 => ("[A-Za-z]{1,12}", "[0-2]{0,2}", any::<bool>(), any::<Index>()).prop_map(
+            |(name, barcode, bundle, who)| Op::Product {
+                name,
+                barcode,
+                bundle,
+                who,
+            },
+        ),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -588,7 +595,19 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(c.actor_kind.as_str(), "staff");
             }
         }
-        Op::Product { name, barcode, who } => {
+        Op::Product {
+            name,
+            barcode,
+            bundle,
+            who,
+        } => {
+            let component = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .find(|p| !p.bundle)
+                .map(|p| p.product_id);
             let pick = who.index(STAFF_ROLES.len() + 1);
             let mut intent = hub.intent(
                 IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
@@ -604,6 +623,15 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     kitchen: false,
                     favourite: false,
                     active: true,
+                    bundle: *bundle,
+                    components: component
+                        .iter()
+                        .filter(|_| *bundle)
+                        .map(|id| arena_proto::BundleComponent {
+                            product_id: id.clone(),
+                            qty: 1,
+                        })
+                        .collect(),
                 }),
                 None,
             );
@@ -636,9 +664,18 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             } else if taken {
                 prop_assert_eq!(code(&out), Some((ErrorCode::BarcodeTaken, Some("barcode"))));
                 prop_assert_eq!(hub.change_count(), changes_before);
+            } else if *bundle && component.is_none() {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("components")))
+                );
+                prop_assert_eq!(hub.change_count(), changes_before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
-                prop_assert_eq!(hub.change_count(), changes_before + 1);
+                prop_assert_eq!(
+                    hub.change_count(),
+                    changes_before + 1 + usize::from(*bundle)
+                );
             }
         }
         Op::Advance { ms } => hub.clock.advance(*ms),

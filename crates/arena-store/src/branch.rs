@@ -40,11 +40,12 @@ pub enum Table {
     DeviceGroups,
     FloorZones,
     Products,
+    BundleComponents,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 13] = [
+    pub const ALL: [Table; 14] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -58,6 +59,7 @@ impl Table {
         Table::DeviceGroups,
         Table::FloorZones,
         Table::Products,
+        Table::BundleComponents,
     ];
 
     /// The SQL table name.
@@ -76,6 +78,7 @@ impl Table {
             Self::DeviceGroups => "device_groups",
             Self::FloorZones => "floor_zones",
             Self::Products => "products",
+            Self::BundleComponents => "bundle_components",
         }
     }
 
@@ -95,6 +98,7 @@ impl Table {
             Self::DeviceGroups => &["group_id"],
             Self::FloorZones => &["zone_id"],
             Self::Products => &["product_id"],
+            Self::BundleComponents => &["bundle_id", "component_id"],
         }
     }
 
@@ -112,14 +116,14 @@ impl Table {
             | Self::DeviceGroups
             | Self::FloorZones
             | Self::Products => true,
-            Self::Settings | Self::RolePerms => false,
+            Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
 
     /// Whether the table has `rev` and `updated_at` (stamped on every write). `role_perms`
     /// rows are versioned through their role's `rev`.
     pub fn is_versioned(self) -> bool {
-        !matches!(self, Self::RolePerms)
+        !matches!(self, Self::RolePerms | Self::BundleComponents)
     }
 
     /// The table with this SQL name, if it is a change-log table.
@@ -131,19 +135,51 @@ impl Table {
 /// The primary key of one written row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowKey {
-    Branch { branch_id: String },
-    Settings { branch_id: String, key: String },
-    Devices { device_id: String },
-    Roles { role_id: String },
-    RolePerms { role_id: String, permission: String },
-    Staff { staff_id: String },
-    ReadGrants { grant_id: String },
-    DeviceEvents { event_id: String },
-    DeviceAdminExits { exit_id: String },
-    DevicesMeta { device_id: String },
-    DeviceGroups { group_id: String },
-    FloorZones { zone_id: String },
-    Products { product_id: String },
+    Branch {
+        branch_id: String,
+    },
+    Settings {
+        branch_id: String,
+        key: String,
+    },
+    Devices {
+        device_id: String,
+    },
+    Roles {
+        role_id: String,
+    },
+    RolePerms {
+        role_id: String,
+        permission: String,
+    },
+    Staff {
+        staff_id: String,
+    },
+    ReadGrants {
+        grant_id: String,
+    },
+    DeviceEvents {
+        event_id: String,
+    },
+    DeviceAdminExits {
+        exit_id: String,
+    },
+    DevicesMeta {
+        device_id: String,
+    },
+    DeviceGroups {
+        group_id: String,
+    },
+    FloorZones {
+        zone_id: String,
+    },
+    Products {
+        product_id: String,
+    },
+    BundleComponents {
+        bundle_id: String,
+        component_id: String,
+    },
 }
 
 impl RowKey {
@@ -162,6 +198,7 @@ impl RowKey {
             Self::DeviceGroups { .. } => Table::DeviceGroups,
             Self::FloorZones { .. } => Table::FloorZones,
             Self::Products { .. } => Table::Products,
+            Self::BundleComponents { .. } => Table::BundleComponents,
         }
     }
 
@@ -184,6 +221,10 @@ impl RowKey {
             Self::DeviceGroups { group_id } => group_id.clone(),
             Self::FloorZones { zone_id } => zone_id.clone(),
             Self::Products { product_id } => product_id.clone(),
+            Self::BundleComponents {
+                bundle_id,
+                component_id,
+            } => format!("{bundle_id}/{component_id}"),
         }
     }
 
@@ -236,6 +277,10 @@ impl RowKey {
             Table::Products => Self::Products {
                 product_id: text("product_id")?,
             },
+            Table::BundleComponents => Self::BundleComponents {
+                bundle_id: text("bundle_id")?,
+                component_id: text("component_id")?,
+            },
         })
     }
 
@@ -257,6 +302,10 @@ impl RowKey {
             Self::DeviceGroups { group_id } => vec![group_id],
             Self::FloorZones { zone_id } => vec![zone_id],
             Self::Products { product_id } => vec![product_id],
+            Self::BundleComponents {
+                bundle_id,
+                component_id,
+            } => vec![bundle_id, component_id],
         }
     }
 }

@@ -6857,6 +6857,8 @@ mod products {
             kitchen: false,
             favourite: false,
             active: true,
+            bundle: false,
+            components: Vec::new(),
         }
     }
 
@@ -7330,6 +7332,8 @@ mod products {
             kitchen: true,
             favourite: true,
             active: false,
+            bundle: false,
+            components: Vec::new(),
         };
         run(&f, edited.clone(), Some(1)).await.unwrap();
         let r = row(&f, &id);
@@ -7414,6 +7418,333 @@ mod products {
             (e.code, e.field.as_deref()),
             (ErrorCode::ValidationFailed, Some("id"))
         );
+    }
+    fn parts(items: &[(&str, i64)]) -> Vec<arena_proto::BundleComponent> {
+        items
+            .iter()
+            .map(|(id, qty)| arena_proto::BundleComponent {
+                product_id: (*id).into(),
+                qty: *qty,
+            })
+            .collect()
+    }
+
+    fn combo(name: &str, items: &[(&str, i64)]) -> ProductUpsert {
+        let mut u = up(name);
+        u.bundle = true;
+        u.components = parts(items);
+        u
+    }
+
+    fn component_rows(f: &Fixture) -> Vec<(String, String, i64)> {
+        reopen(f)
+            .rows(Table::BundleComponents)
+            .unwrap()
+            .into_iter()
+            .map(|r| {
+                let text = |c: &str| match &r[c] {
+                    arena_store::RowValue::Text(t) => t.clone(),
+                    other => panic!("{other:?}"),
+                };
+                let qty = match r["qty"] {
+                    arena_store::RowValue::Integer(n) => n,
+                    _ => panic!("qty"),
+                };
+                (text("bundle_id"), text("component_id"), qty)
+            })
+            .collect()
+    }
+
+    fn view(f: &Fixture, id: &str) -> arena_proto::Product {
+        crate::SnapshotReader::open(&f.path)
+            .unwrap()
+            .products()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == id)
+            .unwrap()
+    }
+
+    async fn untracked(f: &Fixture, name: &str) -> String {
+        let mut u = up(name);
+        u.track_stock = false;
+        make(f, u).await
+    }
+
+    #[tokio::test]
+    async fn a_bundle_has_its_own_price_tax_and_components() {
+        let f = bootstrapped().await;
+        let cola = make(&f, up("Cola")).await;
+        let burger = untracked(&f, "Burger").await;
+        let mut u = combo("Combo", &[(&cola, 2), (&burger, 1)]);
+        u.price_minor = 5000;
+        u.tax_rate_bp = Some(1200);
+        let applied = run(&f, u, None).await.unwrap();
+        let id = applied.changes[0].row_id.clone();
+        let tables: Vec<_> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+        assert_eq!(
+            tables,
+            ["products", "bundle_components", "bundle_components"]
+        );
+        let r = row(&f, &id);
+        assert_eq!(
+            (r.bundle, r.track_stock, r.price_minor, r.tax_rate_bp),
+            (true, false, 5000, 1200)
+        );
+        assert_eq!(row(&f, &cola).price_minor, 12000);
+        let mut want = vec![(id.clone(), cola, 2), (id.clone(), burger, 1)];
+        want.sort();
+        let mut got = component_rows(&f);
+        got.sort();
+        assert_eq!(got, want);
+        assert_eq!(view(&f, &id).components.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bad_components_are_refused_and_nothing_is_written() {
+        let f = bootstrapped().await;
+        let cola = make(&f, up("Cola")).await;
+        let inner = make(&f, combo("Inner", &[(&cola, 1)])).await;
+        let gone = make(&f, up("Gone")).await;
+        let other = untracked(&f, "Other").await;
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete { id: gone.clone() }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let many: Vec<(String, i64)> = (0..31).map(|i| (format!("p{i}"), 1)).collect();
+        let many: Vec<(&str, i64)> = many.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+        let cases: Vec<(ProductUpsert, &str)> = vec![
+            (combo("A", &[(&inner, 1)]), "components"),
+            (combo("B", &[(&cola, 0)]), "components"),
+            (combo("C", &[(&cola, -1)]), "components"),
+            (combo("D", &[(&cola, 1001)]), "components"),
+            (combo("E", &[(&cola, 1), (&cola, 2)]), "components"),
+            (combo("F", &[("nope", 1)]), "components"),
+            (combo("G", &[(&gone, 1)]), "components"),
+            (combo("H", &[]), "components"),
+            (combo("I", &many), "components"),
+            (
+                {
+                    let mut u = up("J");
+                    u.components = parts(&[(&cola, 1)]);
+                    u
+                },
+                "components",
+            ),
+        ];
+        for (u, field) in cases {
+            let name = u.name.clone();
+            let (code, f_) = refused(&f, u).await;
+            assert_eq!(
+                (code, f_.as_deref()),
+                (ErrorCode::ValidationFailed, Some(field)),
+                "{name}"
+            );
+        }
+        let mut selfish = combo("Inner", &[(&inner, 1)]);
+        selfish.id = Some(inner.clone());
+        let e = run(&f, selfish, Some(1)).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("components"))
+        );
+        let mut nest = up("Cola");
+        nest.id = Some(cola.clone());
+        nest.bundle = true;
+        nest.components = parts(&[(&other, 1)]);
+        let e = run(&f, nest, Some(1)).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("bundle"))
+        );
+        assert_eq!(component_rows(&f).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn editing_replaces_the_components_and_unbundling_clears_them() {
+        let f = bootstrapped().await;
+        let a = make(&f, up("A")).await;
+        let b = make(&f, up("B")).await;
+        let id = make(&f, combo("Combo", &[(&a, 1), (&b, 3)])).await;
+        let mut u = combo("Combo", &[(&b, 2)]);
+        u.id = Some(id.clone());
+        let applied = run(&f, u, Some(1)).await.unwrap();
+        let ops: Vec<_> = applied
+            .changes
+            .iter()
+            .map(|c| (c.tbl.as_str(), c.op.as_str()))
+            .collect();
+        assert_eq!(
+            ops,
+            [
+                ("products", "update"),
+                ("bundle_components", "delete"),
+                ("bundle_components", "delete"),
+                ("bundle_components", "insert"),
+            ]
+        );
+        assert_eq!(component_rows(&f), vec![(id.clone(), b.clone(), 2)]);
+        let mut plain = up("Combo");
+        plain.id = Some(id.clone());
+        run(&f, plain, Some(2)).await.unwrap();
+        assert!(component_rows(&f).is_empty());
+        assert!(!row(&f, &id).bundle);
+        assert!(row(&f, &id).track_stock);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_bundle_frees_its_components() {
+        let f = bootstrapped().await;
+        let a = make(&f, up("A")).await;
+        let id = make(&f, combo("Combo", &[(&a, 1)])).await;
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete { id: id.clone() }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        assert!(component_rows(&f).is_empty());
+        let mut u = up("A");
+        u.id = Some(a.clone());
+        u.bundle = true;
+        u.components = parts(&[]);
+        let e = run(&f, u, Some(1)).await.unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("components"));
+        let b = untracked(&f, "B").await;
+        let mut u = combo("A", &[(&b, 1)]);
+        u.id = Some(a);
+        run(&f, u, Some(1)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bundle_availability_follows_its_components() {
+        let f = bootstrapped().await;
+        let r = || crate::SnapshotReader::open(&f.path).unwrap();
+        let tracked = make(&f, up("Cola")).await;
+        let free = untracked(&f, "Burger").await;
+        let all_free = make(&f, combo("Free", &[(&free, 2)])).await;
+        let mixed = make(&f, combo("Mixed", &[(&tracked, 2), (&free, 1)])).await;
+        let v = view(&f, &all_free);
+        assert_eq!((v.available, v.reason.clone(), v.quantity), (true, None, 0));
+        let v = view(&f, &mixed);
+        assert_eq!(
+            (v.available, v.reason.as_deref(), v.quantity),
+            (false, Some("out_of_stock"), 0)
+        );
+        assert!(!v.track_stock);
+
+        let mut off = up("Burger");
+        off.id = Some(free.clone());
+        off.track_stock = false;
+        off.active = false;
+        run(&f, off, Some(1)).await.unwrap();
+        let v = view(&f, &all_free);
+        assert_eq!(
+            (v.available, v.reason.as_deref()),
+            (false, Some("component_inactive"))
+        );
+        assert_eq!(
+            v.components
+                .iter()
+                .map(|c| (c.name.as_str(), c.active))
+                .collect::<Vec<_>>(),
+            [("Burger", false)]
+        );
+        let ids = r().catalog(std::slice::from_ref(&free)).unwrap();
+        let got: Vec<_> = ids
+            .iter()
+            .map(|e| (e.product_id.clone(), e.reason.clone()))
+            .collect();
+        assert!(
+            got.contains(&(all_free.clone(), Some("component_inactive".into()))),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&(mixed.clone(), Some("component_inactive".into()))),
+            "{got:?}"
+        );
+
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete {
+                    id: tracked.clone(),
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let v = view(&f, &mixed);
+        assert_eq!(v.reason.as_deref(), Some("component_inactive"));
+        assert!(v.components.iter().any(|c| c.name == "Cola" && !c.active));
+        let gone = r().catalog(&[tracked]).unwrap();
+        assert!(gone.iter().any(|e| e.product_id == mixed));
+
+        let mut dead = combo("Mixed", &[(&free, 1)]);
+        dead.id = Some(mixed.clone());
+        dead.active = false;
+        run(&f, dead, Some(1)).await.unwrap();
+        assert_eq!(view(&f, &mixed).reason.as_deref(), Some("inactive"));
+    }
+    #[tokio::test]
+    async fn limits_stale_edits_and_unchanged_components_are_exact() {
+        let f = bootstrapped().await;
+        let many: Vec<String> = {
+            let mut ids = Vec::new();
+            for i in 0..30 {
+                ids.push(untracked(&f, &format!("P{i}")).await);
+            }
+            ids
+        };
+        let all: Vec<(&str, i64)> = many.iter().map(|i| (i.as_str(), 1000)).collect();
+        let id = make(&f, combo("Big", &all)).await;
+        assert_eq!(component_rows(&f).len(), 30);
+        let mut same = combo("Big", &all);
+        same.id = Some(id.clone());
+        same.price_minor = 1;
+        let applied = run(&f, same.clone(), Some(1)).await.unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        let e = run(&f, same, Some(1)).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Stale);
+        assert_eq!(component_rows(&f).len(), 30);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_bundle_is_inactive_and_a_deleted_component_keeps_the_rows() {
+        let f = bootstrapped().await;
+        let a = untracked(&f, "A").await;
+        let id = make(&f, combo("Combo", &[(&a, 1)])).await;
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete { id: a.clone() }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(component_rows(&f).len(), 1);
+        assert_eq!(view(&f, &id).reason.as_deref(), Some("component_inactive"));
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete { id: id.clone() }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let r = crate::SnapshotReader::open(&f.path).unwrap();
+        let e = &r.catalog(std::slice::from_ref(&id)).unwrap()[0];
+        assert_eq!(
+            (e.available, e.reason.as_deref()),
+            (false, Some("inactive"))
+        );
+        assert!(component_rows(&f).is_empty());
     }
 }
 

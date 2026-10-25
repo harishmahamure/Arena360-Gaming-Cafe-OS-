@@ -25,7 +25,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | CP | Control plane | 63 | 4 | 0 | 59 |
 | HUB-A | Hub floor and sessions | 80 | 3 | 0 | 77 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
-| HUB-B | Hub POS and money | 39 | 3 | 0 | 36 |
+| HUB-B | Hub POS and money | 39 | 4 | 0 | 35 |
 | OWNER | Owner app | 30 | 3 | 0 | 27 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
 | KITCHEN | Kitchen | 14 | 1 | 0 | 13 |
@@ -40,7 +40,7 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 
 - **CP** 2.14 Owner and staff set their own PIN and password at the Hub with a one-time setup code (`2-14-owner-and-staff-set-their-own-pin-and-password-at-the-hub-wi`)
 - **HUB-A** 2.24 Device status and maintenance (`2-24-device-status-and-maintenance`)
-- **HUB-B** 5.4 Bundles priced on their own (`5-4-bundles-priced-on-their-own`)
+- **HUB-B** 5.5 Stock-in with expiry lots and weighted average cost (`5-5-stock-in-with-expiry-lots-and-weighted-average-cost`)
 - **ANDROID** 4.2 The Android Hub keeps serving while the screen is off, in Doze and after a reboot (`4-2-the-android-hub-keeps-serving-while-the-screen-is-off-in-doz`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
 
@@ -265,7 +265,7 @@ Windows Hub: tax, products, stock, POS, shifts, receipts, printing, reports, CSV
 | 1 | 5.1 | Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India | MVP | review |  |
 | 2 | 5.2 | Tax is computed once per rate on every bill, in minor units | MVP | review |  |
 | 3 | 5.3 | Products with categories, barcodes, images and the kitchen flag | MVP | review |  |
-| 4 | 5.4 | Bundles priced on their own | MVP | backlog |  |
+| 4 | 5.4 | Bundles priced on their own | MVP | review |  |
 | 5 | 5.5 | Stock-in with expiry lots and weighted average cost | MVP | backlog |  |
 | 6 | 5.6 | Record waste with a reason | MVP | backlog |  |
 | 7 | 5.7 | Expiry alerts, and expired stock held from sale until written off | MVP | backlog |  |
@@ -319,7 +319,7 @@ Owner PWA: shell, dashboards, reports, commands, alerts, audit, live view, subsc
 | 9 | 8.21 | Preview the target branches and follow each command row to Applied | MVP | backlog | 8.18, 8.19 |
 | 10 | 8.22 | Commands queue on the owner's device while it is offline | MVP | backlog | 8.21 |
 | 11 | 8.23 | Manage → Pricing — plans and rates, pricing rules and coupons | MVP | backlog | 8.21, 3.29, 5.21 |
-| 12 | 8.24 | Manage → Products and bundles | MVP | backlog | 8.21, 5.4 |
+| 12 | 8.24 | Manage → Products and bundles | MVP | backlog | 8.21, ~~5.4~~ |
 | 13 | 8.26 | Manage → Staff users and roles by command | MVP | backlog | 8.21, 2.16 |
 | 14 | 8.27 | Manage → Devices and groups, and revoking a device | MVP | backlog | 8.21, 2.24 |
 | 15 | 8.32 | Reports — credit, with a one-tap reminder | MVP | backlog | 8.31, 8.9 |

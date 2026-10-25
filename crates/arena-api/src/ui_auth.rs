@@ -2363,6 +2363,8 @@ pub(crate) mod tests {
                 kitchen: false,
                 favourite: false,
                 active: true,
+                bundle: false,
+                components: Vec::new(),
             }),
             None,
         ) });
@@ -2418,6 +2420,8 @@ pub(crate) mod tests {
                 kitchen: true,
                 favourite: false,
                 active: true,
+                bundle: false,
+                components: Vec::new(),
             }),
             None,
         ) });
@@ -2457,6 +2461,49 @@ pub(crate) mod tests {
             ),
             (Some(false), Some("out_of_stock"), Some(0), Some(1))
         );
+        let cola = p["id"].as_str().unwrap().to_owned();
+        let combo = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: "Combo".into(),
+                category: String::new(),
+                price_minor: 4000,
+                tax_rate_bp: Some(1200),
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+                bundle: true,
+                components: vec![arena_proto::BundleComponent { product_id: cola.clone(), qty: 2 }],
+            }),
+            None,
+        ) });
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&manager), Some(combo)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&counter), None).await;
+        let b = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "Combo")
+            .unwrap();
+        assert_eq!(
+            (
+                b["bundle"].as_bool(),
+                b["track_stock"].as_bool(),
+                b["price_minor"].as_i64()
+            ),
+            (Some(true), Some(false), Some(4000))
+        );
+        assert_eq!(
+            b["components"],
+            json!([{"product_id": cola, "name": "Cola", "qty": 2, "active": true}])
+        );
+        assert_eq!(b["reason"], "out_of_stock");
         let (status, _) = call(&hub, "POST", "/ui/auth/sign-out", Some(&manager), None).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = call(&hub, "GET", "/ui/products", Some(&manager), None).await;

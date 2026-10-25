@@ -1,11 +1,12 @@
 use arena_proto::{
     ActorKind, AppError, ErrorCode, GST_MAX_BP, Intent, IntentPayload, KEY_TAX, MAX_BARCODE_CHARS,
-    MAX_CATEGORY_CHARS, MAX_PRICE_MINOR, ProductDelete, ProductUpsert, SIMPLE_MAX_BP, TaxMode,
-    TaxSettings, hsn_valid, image_problem,
+    MAX_BUNDLE_COMPONENTS, MAX_CATEGORY_CHARS, MAX_COMPONENT_QTY, MAX_PRICE_MINOR, ProductDelete,
+    ProductUpsert, SIMPLE_MAX_BP, TaxMode, TaxSettings, hsn_valid, image_problem,
 };
 use arena_store::{
-    ChangeOp, ProductRow, RowKey, StoreTx, barcode_holder, find_product, find_setting,
-    insert_product, set_product_deleted, update_product,
+    ChangeOp, ProductRow, RowKey, StoreTx, Table, barcode_holder, delete_row, find_product,
+    find_setting, insert_component, insert_product, list_components, live_bundles_with, read_row,
+    set_product_deleted, update_product,
 };
 
 use super::mutate::Written;
@@ -16,6 +17,9 @@ pub(crate) struct ProductTarget {
     product: Option<ProductRow>,
     holder: Option<String>,
     tax: Option<TaxSettings>,
+    parts: Vec<Option<ProductRow>>,
+    old_components: Vec<(String, i64)>,
+    nested: bool,
 }
 
 fn invalid(field: &str, message: &str) -> AppError {
@@ -37,6 +41,12 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<ProductTarget,
                     })
                 })
                 .transpose()?;
+            t.parts = u
+                .components
+                .iter()
+                .take(MAX_BUNDLE_COMPONENTS + 1)
+                .map(|c| find_product(tx, &c.product_id))
+                .collect::<Result<_, _>>()?;
             u.id.as_deref()
         }
         IntentPayload::ProductDelete(d) => Some(d.id.as_str()),
@@ -44,6 +54,10 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<ProductTarget,
     };
     if let Some(id) = id {
         t.product = find_product(tx, id)?.filter(|r| r.deleted_at.is_none());
+        if t.product.is_some() {
+            t.old_components = list_components(tx, id)?;
+            t.nested = !live_bundles_with(tx, id)?.is_empty();
+        }
     }
     Ok(t)
 }
@@ -119,10 +133,47 @@ pub(super) fn validate_upsert(u: &ProductUpsert, t: &ProductTarget) -> Result<()
     if let Some(m) = image_problem(&u.image) {
         return Err(invalid("image", m));
     }
-    match (&u.id, &t.product) {
-        (Some(_), None) => Err(invalid("id", "no such product")),
-        _ => Ok(()),
+    if u.id.is_some() && t.product.is_none() {
+        return Err(invalid("id", "no such product"));
     }
+    validate_components(u, t)
+}
+
+fn validate_components(u: &ProductUpsert, t: &ProductTarget) -> Result<(), AppError> {
+    let bad = |m: &str| invalid("components", m);
+    if !u.bundle {
+        return if u.components.is_empty() {
+            Ok(())
+        } else {
+            Err(bad("only a bundle has components"))
+        };
+    }
+    if t.nested {
+        return Err(invalid("bundle", "this product is a component of a bundle"));
+    }
+    if u.components.is_empty() || u.components.len() > MAX_BUNDLE_COMPONENTS {
+        return Err(bad("a bundle needs 1 to 30 components"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (c, part) in u.components.iter().zip(&t.parts) {
+        if !(1..=MAX_COMPONENT_QTY).contains(&c.qty) {
+            return Err(bad("quantity must be 1 to 1000"));
+        }
+        if Some(&c.product_id) == u.id.as_ref() {
+            return Err(bad("a bundle cannot contain itself"));
+        }
+        if !seen.insert(&c.product_id) {
+            return Err(bad("a component is listed twice"));
+        }
+        match part {
+            Some(p) if p.deleted_at.is_none() && p.bundle => {
+                return Err(bad("a bundle cannot contain a bundle"));
+            }
+            Some(p) if p.deleted_at.is_none() => {}
+            _ => return Err(bad("no such product")),
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn validate_delete(t: &ProductTarget) -> Result<(), AppError> {
@@ -157,12 +208,13 @@ pub(super) fn mutate_upsert(
         price_minor: u.price_minor,
         tax_rate_bp: rate(u, t).into(),
         hsn: u.hsn.trim().to_owned(),
-        track_stock: u.track_stock,
+        track_stock: u.track_stock && !u.bundle,
         image: u.image.clone(),
         barcode: (!barcode.is_empty()).then(|| barcode.to_owned()),
         kitchen: u.kitchen,
         favourite: u.favourite,
         active: u.active,
+        bundle: u.bundle,
         rev: 0,
         deleted_at: None,
     };
@@ -170,14 +222,77 @@ pub(super) fn mutate_upsert(
         ChangeOp::Update => update_product(tx, &row)?,
         _ => insert_product(tx, &row)?,
     }
-    Ok(written(id, op))
+    let mut out = written(id.clone(), op);
+    let kept = |id: &str, qty: i64| {
+        u.components
+            .iter()
+            .any(|c| c.product_id == id && c.qty == qty)
+    };
+    let stale: Vec<_> = t
+        .old_components
+        .iter()
+        .filter(|(c, q)| !kept(c, *q))
+        .cloned()
+        .collect();
+    drop_components(tx, &id, &stale, &mut out)?;
+    for c in u.components.iter().filter(|c| {
+        !t.old_components
+            .iter()
+            .any(|(o, q)| *o == c.product_id && *q == c.qty)
+    }) {
+        insert_component(tx, &id, &c.product_id, c.qty)?;
+        out.push(component_write(&id, &c.product_id, ChangeOp::Insert, None));
+    }
+    Ok(out)
+}
+
+fn component_write(
+    bundle_id: &str,
+    component_id: &str,
+    op: ChangeOp,
+    before: Option<arena_store::Row>,
+) -> Written {
+    Written {
+        key: RowKey::BundleComponents {
+            bundle_id: bundle_id.to_owned(),
+            component_id: component_id.to_owned(),
+        },
+        op,
+        before,
+    }
+}
+
+fn drop_components(
+    tx: &StoreTx<'_>,
+    bundle_id: &str,
+    old: &[(String, i64)],
+    out: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    for (component_id, _) in old {
+        let key = RowKey::BundleComponents {
+            bundle_id: bundle_id.to_owned(),
+            component_id: component_id.clone(),
+        };
+        let before = read_row(tx, &key)?;
+        delete_row(tx, Table::BundleComponents, &before)?;
+        out.push(component_write(
+            bundle_id,
+            component_id,
+            ChangeOp::Delete,
+            Some(before),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn mutate_delete(
     tx: &StoreTx<'_>,
     d: &ProductDelete,
+    t: &ProductTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     set_product_deleted(tx, &d.id, now_ms)?;
-    Ok(written(d.id.clone(), ChangeOp::Update))
+    let mut out = written(d.id.clone(), ChangeOp::Update);
+    drop_components(tx, &d.id, &t.old_components, &mut out)?;
+    Ok(out)
 }

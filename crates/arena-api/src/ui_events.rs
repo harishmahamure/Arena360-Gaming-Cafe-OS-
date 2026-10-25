@@ -847,6 +847,8 @@ mod tests {
                 kitchen: false,
                 favourite: false,
                 active: true,
+                bundle: false,
+                components: Vec::new(),
             })
         };
         let owner = || Actor {
@@ -877,6 +879,88 @@ mod tests {
         assert_eq!(
             seen[1],
             serde_json::json!({"products": [{"product_id": free.changes[0].row_id, "available": true}]})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_component_change_also_reports_the_bundles_that_hold_it() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let product = |id: Option<String>, name: &str, active: bool, parts: &[&str]| {
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id,
+                name: name.into(),
+                category: String::new(),
+                price_minor: 100,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: false,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active,
+                bundle: !parts.is_empty(),
+                components: parts
+                    .iter()
+                    .map(|p| arena_proto::BundleComponent {
+                        product_id: (*p).into(),
+                        qty: 2,
+                    })
+                    .collect(),
+            })
+        };
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let chips = hub
+            .writer
+            .submit_intent(intent_as(owner(), product(None, "Chips", true, &[]), None))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let combo = hub
+            .writer
+            .submit_intent(intent_as(
+                owner(),
+                product(None, "Combo", true, &[chips.as_str()]),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        hub.writer
+            .submit_intent(intent_as(
+                owner(),
+                product(Some(chips.clone()), "Chips", false, &[]),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        while seen.len() < 3 {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            if event == "catalog.changed" {
+                seen.push(data);
+            }
+        }
+        assert_eq!(
+            seen[1],
+            serde_json::json!({"products": [{"product_id": combo, "available": true}]})
+        );
+        assert_eq!(
+            seen[2],
+            serde_json::json!({"products": [
+                {"product_id": chips, "available": false, "reason": "inactive"},
+                {"product_id": combo, "available": false, "reason": "component_inactive"}
+            ]})
         );
     }
 

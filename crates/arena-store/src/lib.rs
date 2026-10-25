@@ -58,8 +58,9 @@ pub use identity::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use products::{
-    ProductRow, barcode_holder, count_active_products, find_product, insert_product, list_products,
-    set_product_deleted, update_product,
+    ProductRow, barcode_holder, count_active_products, find_product, insert_component,
+    insert_product, list_components, list_products, live_bundles_with, set_product_deleted,
+    update_product,
 };
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
@@ -562,6 +563,20 @@ impl Store {
         count_active_products(&self.conn)
     }
 
+    pub fn components(&self, bundle_id: &str) -> Result<Vec<(String, i64)>, AppError> {
+        if !self.table_exists("bundle_components")? {
+            return Ok(Vec::new());
+        }
+        list_components(&self.conn, bundle_id)
+    }
+
+    pub fn bundles_with(&self, component_id: &str) -> Result<Vec<String>, AppError> {
+        if !self.table_exists("bundle_components")? {
+            return Ok(Vec::new());
+        }
+        live_bundles_with(&self.conn, component_id)
+    }
+
     pub fn products(&self) -> Result<Vec<ProductRow>, AppError> {
         if !self.table_exists("products")? {
             return Ok(Vec::new());
@@ -1044,6 +1059,32 @@ mod tests {
             .unwrap();
         assert!(index);
         assert_eq!(count_applied_intents(&store.conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn v18_database_upgrades_to_v19_keeping_products_as_plain_items() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &migrations::MIGRATIONS[..18] {
+                conn.execute_batch(m.sql).unwrap();
+                record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
+                     track_stock, image, barcode, kitchen, favourite, active, rev, created_at, updated_at)
+                 VALUES ('P', 'Cola', '', 100, 0, '', 1, '', NULL, 0, 0, 1, 1, 0, 0)",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        let p = store.product("P").unwrap().unwrap();
+        assert!(!p.bundle);
+        assert!(store.rows(Table::BundleComponents).unwrap().is_empty());
+        assert!(store.components("P").unwrap().is_empty());
+        assert!(store.bundles_with("P").unwrap().is_empty());
     }
 
     #[test]

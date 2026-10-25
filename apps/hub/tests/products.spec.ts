@@ -62,6 +62,8 @@ const product = (over: Partial<Product>): Product => ({
   kitchen: false,
   favourite: false,
   active: true,
+  bundle: false,
+  components: [],
   rev: 3,
   quantity: 0,
   available: false,
@@ -115,6 +117,13 @@ function apply(hub: Hub, p: Payload, route: Route) {
       kitchen: p.kitchen as boolean,
       favourite: p.favourite as boolean,
       active: p.active as boolean,
+      bundle: p.bundle as boolean,
+      components: (p.components as { product_id: string; qty: number }[]).map((c) => ({
+        product_id: c.product_id,
+        qty: c.qty,
+        name: hub.products.find((x) => x.id === c.product_id)?.name ?? c.product_id,
+        active: hub.products.find((x) => x.id === c.product_id)?.active ?? false,
+      })),
     };
     const old = hub.products.find((x) => x.id === p.id);
     if (old) Object.assign(old, row, { rev: old.rev + 1 });
@@ -223,6 +232,8 @@ test("a manager adds a product and the list shows it", async ({ page }) => {
       kitchen: true,
       favourite: false,
       active: true,
+      bundle: false,
+      components: [],
     },
     base_rev: undefined,
     ticket: undefined,
@@ -449,4 +460,182 @@ test("a Counter's edit asks for a manager's PIN in place", async ({ page }) => {
     pin: "2222",
   });
   expect(hub.intents[0].ticket).toBe("T1");
+});
+
+const bundleRow = (id: string, over: Partial<Product> = {}) =>
+  product({
+    id: id.padEnd(26, "0"),
+    name: "Combo",
+    bundle: true,
+    track_stock: false,
+    price_minor: 5000,
+    quantity: 0,
+    available: true,
+    reason: undefined,
+    components: [
+      { product_id: "P1".padEnd(26, "0"), name: "Cola", qty: 2, active: true },
+      { product_id: "P2".padEnd(26, "0"), name: "Burger", qty: 1, active: true },
+    ],
+    ...over,
+  });
+
+test("a manager builds a bundle from components with quantities", async ({ page }) => {
+  const hub = newHub();
+  hub.products = [
+    product({ id: "P1".padEnd(26, "0"), name: "Cola" }),
+    product({ id: "P2".padEnd(26, "0"), name: "Burger" }),
+  ];
+  await open(page, hub);
+  await fill(page, "Combo", "50");
+  await page.getByLabel(en["hub.products.bundle"]).check();
+  await expect(page.getByLabel(en["hub.products.track"])).toHaveCount(0);
+  const add1 = page.getByRole("button", { name: en["hub.products.component_add"] });
+  await add1.click();
+  await add1.click();
+  await page
+    .getByLabel(en["hub.products.component"].replace("{n}", "1"), { exact: true })
+    .selectOption({ label: "Cola" });
+  await page.getByLabel(en["hub.products.component_qty"].replace("{n}", "1")).fill("2");
+  await page
+    .getByLabel(en["hub.products.component"].replace("{n}", "2"), { exact: true })
+    .selectOption({ label: "Burger" });
+  await expectNoSeriousAxe(page);
+  await add(page);
+  await expect(page.getByTestId("product-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents[0].payload).toMatchObject({
+    kind: "product.upsert",
+    price_minor: 5000,
+    track_stock: false,
+    bundle: true,
+    components: [
+      { product_id: "P1".padEnd(26, "0"), qty: 2 },
+      { product_id: "P2".padEnd(26, "0"), qty: 1 },
+    ],
+  });
+  const row = page.getByTestId("product-row").filter({ hasText: "Combo" });
+  await expect(row).toContainText(en["hub.products.badge.bundle"]);
+  await expect(row).toContainText("2 × Cola, 1 × Burger");
+  await expectNoSeriousAxe(page);
+});
+
+test("an empty or non-numeric component is refused before anything is sent", async ({ page }) => {
+  const hub = newHub();
+  hub.products = [product({ id: "P1".padEnd(26, "0"), name: "Cola" })];
+  await open(page, hub);
+  await fill(page, "Combo", "50");
+  await page.getByLabel(en["hub.products.bundle"]).check();
+  await add(page);
+  await page.getByRole("button", { name: en["hub.products.component_add"] }).click();
+  await add(page);
+  await expect(page.getByText(en["hub.products.invalid.components"])).toBeVisible();
+  await page
+    .getByLabel(en["hub.products.component"].replace("{n}", "1"), { exact: true })
+    .selectOption({ label: "Cola" });
+  await page.getByLabel(en["hub.products.component_qty"].replace("{n}", "1")).fill("0");
+  await add(page);
+  await expect(page.getByText(en["hub.products.invalid.components"])).toBeVisible();
+  expect(hub.intents).toEqual([]);
+  hub.fail = { status: 422, code: "VALIDATION_FAILED", field: "components" };
+  await page.getByLabel(en["hub.products.component_qty"].replace("{n}", "1")).fill("1");
+  await add(page);
+  await expect(page.getByText(en["hub.products.invalid.components"])).toBeVisible();
+});
+
+test("a bundle with an inactive component says which and is not available", async ({ page }) => {
+  const hub = newHub();
+  hub.products = [
+    bundleRow("B1", {
+      available: false,
+      reason: "component_inactive",
+      components: [
+        { product_id: "P1".padEnd(26, "0"), name: "Cola", qty: 2, active: false },
+        { product_id: "P2".padEnd(26, "0"), name: "Burger", qty: 1, active: true },
+      ],
+    }),
+  ];
+  await open(page, hub);
+  const row = page.getByTestId("product-row");
+  await expect(row).toContainText(en["hub.products.component_inactive"].replace("{names}", "Cola"));
+  await row
+    .getByRole("button", { name: en["hub.products.edit"].replace("{name}", "Combo") })
+    .click();
+  await expect(page.getByLabel(en["hub.products.bundle"])).toBeChecked();
+  await expect(page.getByLabel(en["hub.products.component_qty"].replace("{n}", "2"))).toHaveValue(
+    "1",
+  );
+  await expectNoSeriousAxe(page);
+});
+
+test("editing a bundle sends the replaced components and its rev", async ({ page }) => {
+  const hub = newHub();
+  hub.products = [
+    product({ id: "P1".padEnd(26, "0"), name: "Cola" }),
+    product({ id: "P2".padEnd(26, "0"), name: "Burger" }),
+    bundleRow("B1", { rev: 7 }),
+  ];
+  await open(page, hub);
+  const row = page.getByTestId("product-row").filter({ hasText: "Combo" });
+  await row
+    .getByRole("button", { name: en["hub.products.edit"].replace("{name}", "Combo") })
+    .click();
+  const options = await page
+    .getByLabel(en["hub.products.component"].replace("{n}", "1"), { exact: true })
+    .locator("option")
+    .allTextContents();
+  expect(options).toEqual([en["hub.products.component_pick"], "Cola", "Burger"]);
+  await page.getByLabel(en["hub.products.component_qty"].replace("{n}", "1")).fill(" 3 ");
+  await page
+    .getByRole("button", { name: en["hub.products.component_remove"].replace("{n}", "2") })
+    .click();
+  await page.getByRole("button", { name: en["hub.products.save"] }).click();
+  await expect(page.getByTestId("product-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents[0].base_rev).toBe(7);
+  expect(hub.intents[0].payload).toMatchObject({
+    bundle: true,
+    track_stock: false,
+    components: [{ product_id: "P1".padEnd(26, "0"), qty: 3 }],
+  });
+});
+
+test("unticking Bundle sends no components and brings Track stock back", async ({ page }) => {
+  const hub = newHub();
+  hub.products = [product({ id: "P1".padEnd(26, "0"), name: "Cola" }), bundleRow("B1")];
+  await open(page, hub);
+  const row = page.getByTestId("product-row").filter({ hasText: "Combo" });
+  await row
+    .getByRole("button", { name: en["hub.products.edit"].replace("{name}", "Combo") })
+    .click();
+  await page.getByLabel(en["hub.products.bundle"]).uncheck();
+  await expect(page.getByLabel(en["hub.products.track"])).toBeVisible();
+  await page.getByRole("button", { name: en["hub.products.save"] }).click();
+  await expect(page.getByTestId("product-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents[0].payload).toMatchObject({ bundle: false, components: [] });
+});
+
+test("a deleted component stays visible by name so it can be removed, and the bundle error maps", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.products = [
+    product({ id: "P1".padEnd(26, "0"), name: "Cola" }),
+    bundleRow("B1", {
+      available: false,
+      reason: "component_inactive",
+      components: [
+        { product_id: "GONE".padEnd(26, "0"), name: "Burger", qty: 1, active: false },
+        { product_id: "P1".padEnd(26, "0"), name: "Cola", qty: 1, active: true },
+      ],
+    }),
+  ];
+  await open(page, hub);
+  const row = page.getByTestId("product-row").filter({ hasText: "Combo" });
+  await row
+    .getByRole("button", { name: en["hub.products.edit"].replace("{name}", "Combo") })
+    .click();
+  await expect(
+    page.getByLabel(en["hub.products.component"].replace("{n}", "1"), { exact: true }),
+  ).toHaveValue("GONE".padEnd(26, "0"));
+  hub.fail = { status: 422, code: "VALIDATION_FAILED", field: "bundle" };
+  await page.getByRole("button", { name: en["hub.products.save"] }).click();
+  await expect(page.getByText(en["hub.products.invalid.bundle"])).toBeVisible();
 });

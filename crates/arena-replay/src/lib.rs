@@ -350,7 +350,7 @@ mod tests {
                 id: kiosk,
             };
             writer.submit_intent(relock).await.unwrap();
-            writer
+            let cola = writer
                 .submit_intent(submit(
                     IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
                         id: None,
@@ -365,8 +365,66 @@ mod tests {
                         kitchen: false,
                         favourite: false,
                         active: true,
+                        bundle: false,
+                        components: Vec::new(),
                     }),
                     None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            let combo = writer
+                .submit_intent(submit(
+                    IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                        id: None,
+                        name: "Combo".into(),
+                        category: "Drinks".into(),
+                        price_minor: 3000,
+                        tax_rate_bp: None,
+                        hsn: String::new(),
+                        track_stock: false,
+                        image: String::new(),
+                        barcode: String::new(),
+                        kitchen: false,
+                        favourite: false,
+                        active: true,
+                        bundle: true,
+                        components: vec![arena_proto::BundleComponent {
+                            product_id: cola.clone(),
+                            qty: 2,
+                        }],
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                        id: Some(combo),
+                        name: "Combo".into(),
+                        category: "Drinks".into(),
+                        price_minor: 3000,
+                        tax_rate_bp: None,
+                        hsn: String::new(),
+                        track_stock: false,
+                        image: String::new(),
+                        barcode: String::new(),
+                        kitchen: false,
+                        favourite: false,
+                        active: true,
+                        bundle: true,
+                        components: vec![arena_proto::BundleComponent {
+                            product_id: cola.clone(),
+                            qty: 3,
+                        }],
+                    }),
+                    Some(1),
                 ))
                 .await
                 .unwrap();

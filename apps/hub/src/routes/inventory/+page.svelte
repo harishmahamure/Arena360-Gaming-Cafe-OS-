@@ -29,6 +29,8 @@
     hsn: "hub.products.invalid.hsn",
     barcode: "hub.products.invalid.barcode",
     image: "hub.products.invalid.image",
+    components: "hub.products.invalid.components",
+    bundle: "hub.products.invalid.bundle",
   };
   const BLANK = {
     name: "",
@@ -42,6 +44,8 @@
     kitchen: false,
     favourite: false,
     active: true,
+    bundle: false,
+    parts: [] as { id: string; qty: string }[],
   };
 
   let products: Product[] = $state([]);
@@ -65,6 +69,13 @@
   const gst = $derived(tax?.country === "IN" && tax.gst);
   const defaultRate = $derived(tax ? (gst ? tax.product_bp : tax.rate_bp) : 0);
   const categories = $derived([...new Set(products.map((p) => p.category).filter(Boolean))]);
+  const pickable = $derived(products.filter((p) => !p.bundle && p.id !== editing?.id));
+  const options = $derived([
+    ...pickable.map((p) => ({ id: p.id, name: p.name })),
+    ...((editing as Product | null)?.components ?? [])
+      .filter((c) => !pickable.some((p) => p.id === c.product_id))
+      .map((c) => ({ id: c.product_id, name: c.name })),
+  ]);
   const shown = $derived(products.filter((p) => !filter || p.category === filter));
 
   let loads = 0;
@@ -110,6 +121,7 @@
     errors = {};
     form = product
       ? {
+          ...BLANK,
           name: product.name,
           category: product.category,
           price: priceText(product.price_minor, exponent),
@@ -121,8 +133,10 @@
           kitchen: product.kitchen,
           favourite: product.favourite,
           active: product.active,
+          bundle: product.bundle,
+          parts: product.components.map((c) => ({ id: c.product_id, qty: String(c.qty) })),
         }
-      : { ...BLANK };
+      : { ...BLANK, parts: [] };
     if (product) void tick().then(() => formEl?.querySelector("input")?.focus());
   }
 
@@ -215,6 +229,15 @@
     const price = parsePrice(form.price, exponent);
     const rate = form.tax.trim() === "" ? undefined : parsePct(form.tax);
     const bad: Record<string, MessageKey> = {};
+    const components = form.bundle
+      ? form.parts.map((c) => ({
+          product_id: c.id,
+          qty: /^\d{1,4}$/.test(c.qty.trim()) ? Number(c.qty.trim()) : 0,
+        }))
+      : [];
+    if (form.bundle && (!components.length || components.some((c) => !c.product_id || c.qty < 1))) {
+      bad.components = INVALID.components;
+    }
     if (price === null) bad.price_minor = INVALID.price_minor;
     if (rate === null) bad.tax_rate_bp = INVALID.tax_rate_bp;
     if (Object.keys(bad).length) {
@@ -231,12 +254,14 @@
       price_minor: price!,
       tax_rate_bp: rate ?? undefined,
       hsn: form.hsn,
-      track_stock: form.track,
+      track_stock: form.track && !form.bundle,
       image: form.image,
       barcode: form.barcode,
       kitchen: form.kitchen,
       favourite: form.favourite,
       active: form.active,
+      bundle: form.bundle,
+      components,
     };
     void run({ payload, rev: editing?.rev, key: keyFor(payload) });
   }
@@ -306,8 +331,49 @@
       {/if}
     </div>
     <label class="check type-hub-label"
-      ><input type="checkbox" bind:checked={form.track} />{t("hub.products.track")}</label
+      ><input type="checkbox" bind:checked={form.bundle} />{t("hub.products.bundle")}</label
     >
+    {#if errors.bundle}<p class="error" role="alert">{t(errors.bundle)}</p>{/if}
+    {#if form.bundle}
+      <fieldset class="field type-hub-label" data-testid="bundle-components">
+        <legend>{t("hub.products.components")}</legend>
+        {#each form.parts as part, i (i)}
+          <div class="part">
+            <select
+              class="ui-interactive select"
+              aria-label={t("hub.products.component", { n: i + 1 })}
+              bind:value={part.id}
+            >
+              <option value="">{t("hub.products.component_pick")}</option>
+              {#each options as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
+            </select>
+            <input
+              class="ui-interactive qty"
+              inputmode="numeric"
+              aria-label={t("hub.products.component_qty", { n: i + 1 })}
+              bind:value={part.qty}
+            />
+            <button
+              type="button"
+              class="ui-interactive btn type-hub-label"
+              onclick={() => (form.parts = form.parts.filter((_, j) => j !== i))}
+              >{t("hub.products.component_remove", { n: i + 1 })}</button
+            >
+          </div>
+        {/each}
+        {#if errors.components}<p class="error" role="alert">{t(errors.components)}</p>{/if}
+        <button
+          type="button"
+          class="ui-interactive btn type-hub-label"
+          onclick={() => (form.parts = [...form.parts, { id: "", qty: "1" }])}
+          >{t("hub.products.component_add")}</button
+        >
+      </fieldset>
+    {:else}
+      <label class="check type-hub-label"
+        ><input type="checkbox" bind:checked={form.track} />{t("hub.products.track")}</label
+      >
+    {/if}
     <label class="check type-hub-label"
       ><input type="checkbox" bind:checked={form.kitchen} />{t("hub.products.kitchen")}</label
     >
@@ -378,6 +444,23 @@
               })}</span
             >
             {#if p.barcode}<span class="type-hub-label">{p.barcode}</span>{/if}
+            {#if p.bundle}<span class="badge type-hub-label">{t("hub.products.badge.bundle")}</span>
+              <span class="type-hub-label"
+                >{t("hub.products.component_list", {
+                  items: p.components
+                    .map((c) => t("hub.products.component_item", { qty: c.qty, name: c.name }))
+                    .join(", "),
+                })}</span
+              >
+              {#if p.reason === "component_inactive"}<span class="badge type-hub-label"
+                  >{t("hub.products.component_inactive", {
+                    names: p.components
+                      .filter((c) => !c.active)
+                      .map((c) => c.name)
+                      .join(", "),
+                  })}</span
+                >{/if}
+            {/if}
             {#if p.kitchen}<span class="badge type-hub-label"
                 >{t("hub.products.badge.kitchen")}</span
               >{/if}
@@ -452,6 +535,22 @@
 
   .select,
   .file {
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background-color: var(--surface-2);
+    color: var(--text);
+  }
+
+  .part {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .qty {
+    inline-size: 6rem;
     min-height: var(--space-touch-min);
     padding: 0 var(--space-3);
     border: 1px solid var(--border-strong);

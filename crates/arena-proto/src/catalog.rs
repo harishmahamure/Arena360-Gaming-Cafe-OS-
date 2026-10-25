@@ -12,9 +12,30 @@ pub const MAX_BARCODE_CHARS: usize = 48;
 pub const MAX_PRICE_MINOR: i64 = 1_000_000_000_000;
 pub const REASON_INACTIVE: &str = "inactive";
 pub const REASON_OUT_OF_STOCK: &str = "out_of_stock";
+pub const REASON_COMPONENT_INACTIVE: &str = "component_inactive";
+pub const MAX_BUNDLE_COMPONENTS: usize = 30;
+pub const MAX_COMPONENT_QTY: i64 = 1000;
 
 fn yes() -> bool {
     true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BundleComponent {
+    pub product_id: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ComponentView {
+    pub product_id: String,
+    pub name: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -39,6 +60,10 @@ pub struct ProductUpsert {
     pub favourite: bool,
     #[serde(default = "yes")]
     pub active: bool,
+    #[serde(default)]
+    pub bundle: bool,
+    #[serde(default)]
+    pub components: Vec<BundleComponent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -63,6 +88,8 @@ pub struct Product {
     pub kitchen: bool,
     pub favourite: bool,
     pub active: bool,
+    pub bundle: bool,
+    pub components: Vec<ComponentView>,
     #[ts(type = "number")]
     pub rev: i64,
     #[ts(type = "number")]
@@ -96,6 +123,13 @@ pub fn availability(
     } else {
         (true, None)
     }
+}
+
+pub fn bundle_quantity(parts: impl IntoIterator<Item = (i64, i64)>) -> Option<i64> {
+    parts
+        .into_iter()
+        .map(|(have, need)| have.max(0) / need.max(1))
+        .min()
 }
 
 pub fn hsn_valid(s: &str) -> bool {
@@ -190,6 +224,15 @@ mod tests {
             availability(true, true, false, 5),
             (false, Some("inactive"))
         );
+    }
+
+    #[test]
+    fn a_bundle_is_the_minimum_of_its_components_floored() {
+        assert_eq!(bundle_quantity([]), None);
+        assert_eq!(bundle_quantity([(10, 2), (7, 3)]), Some(2));
+        assert_eq!(bundle_quantity([(5, 1), (1, 2)]), Some(0));
+        assert_eq!(bundle_quantity([(-4, 1)]), Some(0));
+        assert_eq!(bundle_quantity([(9, 3)]), Some(3));
     }
 
     #[test]

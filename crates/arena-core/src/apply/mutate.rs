@@ -223,7 +223,10 @@ pub(super) fn mutate(
             Target::Product(t) => products::mutate_upsert(tx, u, t),
             _ => Err(mismatch()),
         },
-        IntentPayload::ProductDelete(p) => products::mutate_delete(tx, p, now_ms),
+        IntentPayload::ProductDelete(p) => match target {
+            Target::Product(t) => products::mutate_delete(tx, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
     }
 }
 

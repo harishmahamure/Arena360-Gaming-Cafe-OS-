@@ -710,6 +710,7 @@ mod tests {
             kitchen: false,
             favourite: false,
             active,
+            bundle: false,
             rev: 0,
             deleted_at: None,
         };

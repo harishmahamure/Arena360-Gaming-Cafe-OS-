@@ -169,7 +169,7 @@ async fn seeded_hub_accepts_the_printed_token_and_revocation_closes_it() {
     );
     assert_eq!(
         snapshot["devices"],
-        serde_json::json!([{"device_id": device_id, "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false}])
+        serde_json::json!([{"device_id": device_id, "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false, "kind": "pc", "group_id": null, "meta_rev": 1}])
     );
     // The seeded branch locale (from the `branch.*` settings bootstrap wrote).
     assert_eq!(
@@ -260,4 +260,95 @@ async fn seeded_hub_accepts_the_printed_token_and_revocation_closes_it() {
         .unwrap();
     assert_eq!(again.status.code(), Some(1), "{again:?}");
     assert!(String::from_utf8_lossy(&again.stderr).contains("VALIDATION_FAILED"));
+}
+
+fn post_auth(port: u16, path: &str, token: &str) -> Option<serde_json::Value> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    s.write_all(req.as_bytes()).ok()?;
+    let mut out = String::new();
+    s.read_to_string(&mut out).ok()?;
+    serde_json::from_str(out.split_once("\r\n\r\n")?.1).ok()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_managers_pairing_code_pairs_a_kiosk_that_shows_unassigned_on_the_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let (health, lan, web) = (free_port(), free_port(), free_port());
+    let _hub = Running(Some(
+        hub()
+            .arg("--data-dir")
+            .arg(dir.path())
+            .args(["--health-port", &health.to_string()])
+            .args(["--lan-port", &lan.to_string()])
+            .args(["--web-port", &web.to_string()])
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let body = loop {
+        if let Some(b) = healthz(health).filter(|b| b["role"] == "primary") {
+            break b;
+        }
+        assert!(Instant::now() < deadline, "the hub never became primary");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let fingerprint = body["tls_fingerprint"].as_str().unwrap().to_owned();
+    let signed_in = post_json(
+        health,
+        "/ui/auth/sign-in",
+        &serde_json::json!({"login": "manager", "password": "dev-manager-pass"}),
+    )
+    .unwrap();
+    let ui_token = signed_in["token"].as_str().unwrap().to_owned();
+    let code = post_auth(health, "/ui/pairing-code", &ui_token).unwrap();
+    let code = code["code"].as_str().unwrap().to_owned();
+    let request = arena_proto::PairRequest {
+        code: Some(code),
+        pin: None,
+        pc_name: "PC-11".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+    };
+    let paired = arena_kiosk_core::pair(
+        "127.0.0.1",
+        web,
+        &fingerprint,
+        &request,
+        Duration::from_secs(20),
+    )
+    .await
+    .unwrap();
+    let client = HubClient::connect(
+        &format!("wss://127.0.0.1:{lan}/"),
+        &paired.hub_fingerprint,
+        hello(&paired.token),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        client.hello_ok().device_id.as_deref(),
+        Some(paired.device_id.as_str())
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let snapshot = get_json(health, "/ui/snapshot").unwrap();
+        let found = snapshot["devices"].as_array().unwrap().iter().any(|d| {
+            d["device_id"] == paired.device_id.as_str()
+                && d["label"] == "PC-11"
+                && d["group_id"].is_null()
+                && d["online"] == true
+        });
+        if found {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the kiosk never showed as unassigned"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }

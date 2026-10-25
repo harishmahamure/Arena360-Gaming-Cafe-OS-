@@ -107,8 +107,7 @@
   };
 
   const snapshot = $derived(data.hub.ok ? data.hub.snapshot : null);
-  // No zones exist yet, so every device is unassigned.
-  const unassigned = $derived(snapshot?.devices.filter((d) => d.zone === null) ?? []);
+  const unassigned = $derived(snapshot?.devices.filter((d) => (d.group_id ?? null) === null) ?? []);
 </script>
 
 <svelte:head>
@@ -133,7 +132,7 @@
       {:else}
         <ul class="devices">
           {#each unassigned as device (device.device_id)}
-            <li class="device" data-device-id={device.device_id}>
+            <li class="device" data-device-id={device.device_id} data-testid="unassigned-device">
               <span class="label type-hub-title">{device.label}</span>
               <StatusBadge state="unassigned" />
               <!-- Presence in words (never colour alone): a live paired session or not. -->

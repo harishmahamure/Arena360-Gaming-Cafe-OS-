@@ -578,7 +578,7 @@ mod tests {
                 body,
                 json!({
                     "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
-                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false}],
+                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false, "kind": null, "group_id": null, "meta_rev": null}],
                     "locale": {
                         "currency": "INR",
                         "exponent": 2,

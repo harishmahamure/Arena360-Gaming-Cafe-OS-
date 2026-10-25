@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { InlinePin, t } from "@arena/ui";
+  import { Button, InlinePin, t } from "@arena/ui";
   import type { HubSnapshot, SessionStaff } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, tick, untrack } from "svelte";
@@ -16,6 +16,7 @@
   } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
   import { shortFingerprint } from "../../../lib/snapshot";
+  import PairKioskPanel from "../../../lib/PairKioskPanel.svelte";
 
   // Settings → Devices & display (Story 1.21): high contrast per device, set by a manager.
   // "This Hub" is `display.hc.hub`; each paired device is `display.hc.<device_id>`. Each switch
@@ -37,6 +38,15 @@
     return session?.state === "signed_in" ? (session.staff ?? null) : null;
   });
   const needsApproval = $derived(!hasPermission(staff, "settings.edit"));
+  const canPair = $derived(hasPermission(staff, "device.manage"));
+  let pairOpen = $state(false);
+  let pairButton: HTMLElement | undefined = $state();
+
+  async function closePair() {
+    pairOpen = false;
+    await tick();
+    pairButton?.querySelector("button")?.focus();
+  }
 
   const lan = $derived(snapshot?.lan ?? null);
   type CopyStatus = { address: string; ok: boolean };
@@ -293,6 +303,19 @@
       </p>
     </div>
   {/if}
+  {#if canPair}
+    <div class="pair" bind:this={pairButton}>
+      {#if !pairOpen}
+        <Button
+          label="hub.settings.devices_display.pair"
+          variant="primary"
+          onclick={() => (pairOpen = true)}
+        />
+      {:else}
+        <PairKioskPanel onclose={() => void closePair()} fingerprint={lan?.fingerprint ?? null} />
+      {/if}
+    </div>
+  {/if}
   {#if loadFailed}
     <p class="status refusal type-hub-label" role="status" data-testid="hc-load-failed">
       <span aria-hidden="true">⚠</span>
@@ -492,6 +515,11 @@
   .approval {
     display: grid;
     gap: var(--space-2);
+  }
+
+  .pair {
+    display: grid;
+    justify-items: start;
   }
 
   .addresses {

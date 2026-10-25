@@ -177,7 +177,7 @@ test("picking a found Hub selects it and moves to the pairing step", async ({ pa
   await emit(page, names.events.discoveryFound, { search: await searchId(page), hubs: [desk] });
   await page.getByRole("button", { name: option(desk) }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(en["player.pairing.title"]);
-  await expect(page.getByText(en["player.pairing.placeholder"])).toBeVisible();
+  await expect(page.getByLabel(en["player.pairing.code_label"])).toBeVisible();
   expect(await calls(page, names.commands.selectHub)).toEqual([
     { addr: desk.addr, fingerprint: desk.fingerprint },
   ]);

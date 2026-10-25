@@ -42,8 +42,9 @@ pub use dedupe::{
     insert_applied_intent, prune_applied_intents,
 };
 pub use devices::{
-    DeviceRow, NewDevice, find_device, insert_device, list_devices, set_device_reported_version,
-    set_device_revoked,
+    DeviceMetaRow, DeviceRow, NewDevice, devices_meta_exists, find_device, find_device_meta,
+    insert_device, insert_device_meta, list_device_meta, list_devices, set_device_label,
+    set_device_reported_version, set_device_revoked, update_device_meta,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
@@ -488,6 +489,17 @@ impl Store {
             return Ok(Vec::new());
         }
         list_devices(&self.conn)
+    }
+
+    pub fn devices_meta(&self) -> Result<Vec<DeviceMetaRow>, AppError> {
+        list_device_meta(&self.conn)
+    }
+
+    pub fn device_meta(&self, device_id: &str) -> Result<Option<DeviceMetaRow>, AppError> {
+        if !devices_meta_exists(&self.conn)? {
+            return Ok(None);
+        }
+        find_device_meta(&self.conn, device_id)
     }
 
     /// How many `applied_intents` (dedupe) records exist, outside any write transaction.

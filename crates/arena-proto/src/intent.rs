@@ -304,10 +304,32 @@ pub struct SettingsSet {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct DeviceRegister {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device_id: Option<String>,
     /// `paired` or `kds` (a phone is never registered).
     pub class: ClientClass,
+    #[serde(default)]
+    pub kind: crate::kiosk_pairing::DeviceKind,
     pub label: String,
+    #[serde(default)]
     pub token_hash: String,
+}
+
+impl DeviceRegister {
+    pub fn new(
+        class: ClientClass,
+        label: impl Into<String>,
+        token_hash: impl Into<String>,
+    ) -> Self {
+        Self {
+            device_id: None,
+            class,
+            kind: crate::kiosk_pairing::DeviceKind::Pc,
+            label: label.into(),
+            token_hash: token_hash.into(),
+        }
+    }
 }
 
 /// The payload of `device.revoke`.

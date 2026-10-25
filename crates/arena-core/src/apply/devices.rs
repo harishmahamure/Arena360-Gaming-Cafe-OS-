@@ -6,15 +6,18 @@
 //!   device row's `rev`, else `STALE`. `device.register` creates a row and takes none.
 //! - `device.register` stores the argon2id hash computed by the caller outside the
 //!   transaction; the writer mints the `device_id`. A paired device also gets its
-//!   `display.hc.<device_id>` setting row (`false`) in the same change.
+//!   `devices_meta` row and its `display.hc.<device_id>` setting row (`false`) in the same
+//!   change. With a `device_id` it edits that device's `devices_meta` row instead (and needs
+//!   `base_rev`, checked against that row's `rev`).
 
 use arena_proto::{
     AppError, ClientClass, DeviceRegister, DeviceRevoke, DeviceVersionReported, ErrorCode,
     HC_DEFAULT, Intent, hc_key,
 };
 use arena_store::{
-    ChangeOp, DeviceRow, NewDevice, RowKey, StoreTx, current_branch_id, find_device, insert_device,
-    insert_setting, set_device_reported_version, set_device_revoked,
+    ChangeOp, DeviceMetaRow, DeviceRow, NewDevice, RowKey, StoreTx, current_branch_id, find_device,
+    find_device_meta, insert_device, insert_device_meta, insert_setting, read_row,
+    set_device_label, set_device_reported_version, set_device_revoked, update_device_meta,
 };
 
 use super::Target;
@@ -29,8 +32,91 @@ fn invalid(field: &str, message: impl Into<String>) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
 }
 
-pub(super) fn load_register(tx: &StoreTx<'_>) -> Result<Target, AppError> {
-    Ok(Target::NewDevice(current_branch_id(tx)?))
+pub(super) fn load_register(tx: &StoreTx<'_>, d: &DeviceRegister) -> Result<Target, AppError> {
+    match &d.device_id {
+        None => Ok(Target::NewDevice(current_branch_id(tx)?)),
+        Some(id) => Ok(Target::RegisterEdit(Box::new(RegisterEdit {
+            device: find_device(tx, id)?,
+            meta: find_device_meta(tx, id)?,
+        }))),
+    }
+}
+
+pub(crate) struct RegisterEdit {
+    pub device: Option<DeviceRow>,
+    pub meta: Option<DeviceMetaRow>,
+}
+
+pub(super) fn base_rev_edit(intent: &Intent, t: &RegisterEdit) -> Result<(), AppError> {
+    match (intent.base_rev, t.meta.as_ref()) {
+        (Some(base), Some(meta)) if base != meta.rev => Err(AppError::with_field(
+            ErrorCode::Stale,
+            "base_rev",
+            "the device changed since it was read",
+        )),
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn validate_edit(
+    intent: &Intent,
+    d: &DeviceRegister,
+    t: &RegisterEdit,
+) -> Result<(), AppError> {
+    if intent.base_rev.is_none() {
+        return Err(invalid("base_rev", "editing a device needs base_rev"));
+    }
+    let device = t
+        .device
+        .as_ref()
+        .filter(|r| r.revoked_at.is_none())
+        .ok_or_else(|| invalid("device_id", "no such device"))?;
+    if t.meta.as_ref().is_none_or(|m| m.deleted_at.is_some()) {
+        return Err(invalid("device_id", "no such device"));
+    }
+    if device.class != d.class.as_str() {
+        return Err(invalid("class", "a device's class cannot change"));
+    }
+    if !d.token_hash.is_empty() {
+        return Err(invalid("token_hash", "editing a device keeps its token"));
+    }
+    validate_label(&d.label).map_err(|m| invalid("label", m))?;
+    Ok(())
+}
+
+pub(super) fn mutate_edit(
+    tx: &StoreTx<'_>,
+    d: &DeviceRegister,
+    t: &RegisterEdit,
+) -> Result<Vec<Written>, AppError> {
+    let device = t
+        .device
+        .as_ref()
+        .ok_or_else(|| invalid("device_id", "no such device"))?;
+    let label = d.label.trim();
+    let meta_key = RowKey::DevicesMeta {
+        device_id: device.device_id.clone(),
+    };
+    let meta_before = read_row(tx, &meta_key)?;
+    update_device_meta(tx, &device.device_id, d.kind.as_str(), label)?;
+    let mut written = vec![Written {
+        key: meta_key,
+        op: ChangeOp::Update,
+        before: Some(meta_before),
+    }];
+    if device.label != label {
+        let device_key = RowKey::Devices {
+            device_id: device.device_id.clone(),
+        };
+        let device_before = read_row(tx, &device_key)?;
+        set_device_label(tx, &device.device_id, label)?;
+        written.push(Written {
+            key: device_key,
+            op: ChangeOp::Update,
+            before: Some(device_before),
+        });
+    }
+    Ok(written)
 }
 
 pub(super) fn load_device(tx: &StoreTx<'_>, device_id: &str) -> Result<Target, AppError> {
@@ -72,6 +158,9 @@ pub(super) fn validate_register(
             "class",
             "only paired and kds devices are registered",
         ));
+    }
+    if d.class != ClientClass::Paired && d.kind != arena_proto::DeviceKind::Pc {
+        return Err(invalid("kind", "only a paired device has a kind"));
     }
     validate_label(&d.label).map_err(|m| invalid("label", m))?;
     if !is_argon2id_hash(&d.token_hash) {
@@ -155,6 +244,16 @@ pub(super) fn mutate_register(
         op: ChangeOp::Insert,
         before: None,
     }];
+    if d.class == ClientClass::Paired {
+        insert_device_meta(tx, &device_id, d.kind.as_str(), d.label.trim())?;
+        written.push(Written {
+            key: RowKey::DevicesMeta {
+                device_id: device_id.clone(),
+            },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+    }
     // Story 1.21: a paired device starts with high contrast off, in the same change.
     if d.class == ClientClass::Paired {
         let key = hc_key(&device_id);

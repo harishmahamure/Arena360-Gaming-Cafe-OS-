@@ -11,6 +11,7 @@
 //! `NOT_PRIMARY`. Committed intents are pushed to every session ([`registry`]).
 
 pub mod listener;
+mod pair;
 pub(crate) mod registry;
 mod session;
 mod throttle;
@@ -129,6 +130,7 @@ pub struct LanHub {
     /// Checks admin-exit PINs (`kiosk.verify_admin_pin`); without it they are `UNSUPPORTED`.
     pub staff: Option<Arc<StaffDirectory>>,
     pub info: Option<Arc<HubInfoSource>>,
+    pub pairing: Option<Arc<crate::pairing::Pairing>>,
     registry: Arc<registry::Registry>,
     /// Bounds concurrent argon2id token checks across all connections.
     verify_permits: Arc<tokio::sync::Semaphore>,
@@ -155,6 +157,7 @@ impl LanHub {
             version: version.into(),
             staff: None,
             info: None,
+            pairing: None,
             registry: Arc::new(registry::Registry::default()),
             verify_permits: Arc::new(tokio::sync::Semaphore::new(VERIFY_CONCURRENCY)),
             throttle: throttle::HelloThrottle::default(),
@@ -166,6 +169,11 @@ impl LanHub {
     /// Checks kiosk admin-exit PINs against `staff` (Story 1.20).
     pub fn with_staff(mut self, staff: Arc<StaffDirectory>) -> Self {
         self.staff = Some(staff);
+        self
+    }
+
+    pub fn with_pairing(mut self, pairing: Arc<crate::pairing::Pairing>) -> Self {
+        self.pairing = Some(pairing);
         self
     }
 

@@ -45,6 +45,7 @@ fn main() -> ExitCode {
             player_user,
             data_dir: d,
         } => lockdown(data_dir(d), action, player_user),
+        #[cfg(feature = "dev-fixtures")]
         Command::DevProvision {
             hub,
             fingerprint,
@@ -235,16 +236,4 @@ fn dev_provision(
             ExitCode::from(EXIT_FAILURE)
         }
     }
-}
-
-#[cfg(not(feature = "dev-fixtures"))]
-fn dev_provision(
-    _data: DataDir,
-    _hub: String,
-    _fingerprint: String,
-    _token: String,
-    _player_user: Option<String>,
-) -> ExitCode {
-    eprintln!("arena-kiosk-svc: dev provision needs a dev-fixtures build");
-    ExitCode::from(EXIT_USAGE)
 }

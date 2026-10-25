@@ -34,6 +34,12 @@
 
   /** The Hub link as the Kiosk service reports it (unknown until it says). */
   let hub: KioskHubState | null = $state(null);
+  let justPaired = $state(false);
+  const showDiscovery = $derived(hub === "unpaired" || (justPaired && hub !== "connected"));
+
+  $effect(() => {
+    if (justPaired && hub === "connected") justPaired = false;
+  });
 
   /**
    * The toast on screen: it stays until the player dismisses it, and the same toast again
@@ -140,8 +146,8 @@
 </script>
 
 <div class="kiosk" bind:this={stage} hidden={exitUntil !== null}>
-  {#if hub === "unpaired"}
-    <Discovery />
+  {#if showDiscovery}
+    <Discovery onpaired={() => (justPaired = true)} />
   {:else}
     {@render children()}
   {/if}

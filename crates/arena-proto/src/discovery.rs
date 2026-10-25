@@ -173,6 +173,12 @@ pub struct SelectedHub {
     pub addr: String,
     pub fingerprint: String,
     pub branch_name: String,
+    #[serde(default = "default_web_port")]
+    pub web_port: u16,
+}
+
+fn default_web_port() -> u16 {
+    DEFAULT_WEB_PORT
 }
 
 #[cfg(test)]

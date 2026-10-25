@@ -4,9 +4,11 @@
 
 pub mod health;
 pub mod lan;
+pub mod pairing;
 pub mod ui_audit;
 pub mod ui_auth;
 pub mod ui_events;
+mod ui_pairing;
 mod ui_printer;
 
 pub use health::{

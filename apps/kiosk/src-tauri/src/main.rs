@@ -114,6 +114,29 @@ async fn select_hub(
     Ok(service_request(&bridge, "select_hub", body).await)
 }
 
+#[tauri::command]
+async fn pair(
+    code: Option<String>,
+    pin: Option<String>,
+    pc_name: String,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let mut body = serde_json::Map::new();
+    if let Some(code) = code {
+        body.insert("code".into(), code.into());
+    }
+    if let Some(pin) = pin {
+        body.insert("pin".into(), pin.into());
+    }
+    body.insert("pc_name".into(), pc_name.into());
+    Ok(service_request(&bridge, "pair", serde_json::Value::Object(body)).await)
+}
+
+#[tauri::command]
+async fn pair_info(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "pair_info", serde_json::Value::Null).await)
+}
+
 /// Whether this kiosk is high contrast now (the service's last word, or the first-paint
 /// decision), so a reloaded page re-applies it.
 #[tauri::command]
@@ -203,7 +226,9 @@ fn main() {
             theme,
             discover,
             probe_ip,
-            select_hub
+            select_hub,
+            pair,
+            pair_info
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

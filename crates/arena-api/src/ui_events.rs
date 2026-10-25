@@ -108,6 +108,7 @@ impl EventsHub {
             status: auth.status().cloned(),
             presence: auth.presence().changes(),
             acks: auth.presence().admin_unlock_acks(),
+            pairing: auth.pairing().map(|p| p.subscribe()),
             tick: auth.events_config().tick,
         };
         tokio::spawn(task.run());
@@ -136,6 +137,7 @@ struct HubTask {
     status: Option<watch::Receiver<HubStatus>>,
     presence: Option<watch::Receiver<u64>>,
     acks: Option<broadcast::Receiver<arena_proto::AdminUnlockAckEvent>>,
+    pairing: Option<tokio::sync::mpsc::Receiver<crate::pairing::CodeChanged>>,
     tick: Duration,
 }
 
@@ -247,6 +249,13 @@ impl HubTask {
                             .changes
                             .iter()
                             .any(|c| matches!(c.tbl.as_str(), "staff" | "roles" | "role_perms"));
+                        if applied
+                            .changes
+                            .iter()
+                            .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta"))
+                        {
+                            self.send("devices.changed", "{}".into(), false);
+                        }
                         if keys.is_empty() {
                             let data = serde_json::to_string(&AppliedEvent {
                                 intent_id: applied.intent_id.clone(),
@@ -287,6 +296,22 @@ impl HubTask {
                     } else {
                         self.presence = None;
                     }
+                },
+                changed = async {
+                    match &mut self.pairing {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match changed {
+                    Some(change) => {
+                        let data = change.to_json();
+                        let _ = self.tx.send(Pushed::Session {
+                            token: change.owner,
+                            name: "pairing.code_changed",
+                            data: data.into(),
+                        });
+                    }
+                    None => self.pairing = None,
                 },
                 ack = async {
                     match &mut self.acks {
@@ -358,7 +383,29 @@ pub(crate) struct EventsQuery {
     token: Option<String>,
 }
 
+struct OpenStream {
+    auth: Arc<UiAuth>,
+    token: String,
+}
+
+impl OpenStream {
+    fn new(auth: &Arc<UiAuth>, token: &str) -> Self {
+        auth.stream_opened(token);
+        Self {
+            auth: Arc::clone(auth),
+            token: token.to_owned(),
+        }
+    }
+}
+
+impl Drop for OpenStream {
+    fn drop(&mut self) {
+        self.auth.stream_closed(&self.token);
+    }
+}
+
 struct Stream {
+    _open: OpenStream,
     auth: Arc<UiAuth>,
     token: String,
     events: broadcast::Receiver<Pushed>,
@@ -419,6 +466,7 @@ pub(crate) async fn events(
             .data(serde_json::to_string(&c).unwrap_or_default())
     });
     let state = Stream {
+        _open: OpenStream::new(&auth, &token),
         events: hub.subscribe(),
         ends: Some(auth.session_ends()),
         auth,
@@ -647,6 +695,107 @@ mod tests {
         drop(session);
         let (event, _) = next_event(&mut frames).await.unwrap();
         assert_eq!(event, "devices.changed");
+    }
+
+    #[tokio::test]
+    async fn a_used_pairing_code_is_renewed_on_the_panels_own_stream_only() {
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let other = token_for(&hub, "manager", "m-pass").await;
+        let (status, mut frames) = open(&hub, Some(&manager)).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, mut others) = open(&hub, Some(&other)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (status, body) = call(&hub, "POST", "/ui/pairing-code", Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let first = body["code"].as_str().unwrap().to_owned();
+        hub.pairing.consume(&first).unwrap();
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "pairing.code_changed");
+        let renewed = data["code"].as_str().unwrap().to_owned();
+        assert!(arena_proto::is_pair_code(&renewed));
+        hub.clock.advance(arena_proto::PAIR_CODE_TTL_MS);
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "pairing.code_changed");
+        assert_eq!(
+            data["expires_at"].as_i64().unwrap(),
+            hub.clock.now_ms() + arena_proto::PAIR_CODE_TTL_MS
+        );
+        assert!(hub.pairing.consume(&renewed).is_err());
+        let quiet = tokio::time::timeout(Duration::from_millis(200), others.next()).await;
+        if let Ok(Some(Ok(chunk))) = quiet {
+            assert!(
+                !std::str::from_utf8(&chunk)
+                    .unwrap()
+                    .contains("pairing.code_changed")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_code_is_not_renewed_once_the_panels_stream_is_gone() {
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let (_, frames) = open(&hub, Some(&manager)).await;
+        let (_, body) = call(&hub, "POST", "/ui/pairing-code", Some(&manager), None).await;
+        let first = body["code"].as_str().unwrap().to_owned();
+        drop(frames);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while hub.auth.has_stream(&manager) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the stream never closed"
+            );
+            tokio::task::yield_now().await;
+        }
+        hub.pairing.consume(&first).unwrap();
+        assert!(!hub.pairing.has_live_code());
+    }
+
+    #[tokio::test]
+    async fn a_second_managers_code_tells_the_first_panel_it_was_replaced() {
+        let hub = hub().await;
+        let first = token_for(&hub, "manager", "m-pass").await;
+        let second = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&first)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        call(&hub, "POST", "/ui/pairing-code", Some(&first), None).await;
+        let (status, _) = call(&hub, "POST", "/ui/pairing-code", Some(&second), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "pairing.code_changed");
+        assert_eq!(data, serde_json::json!({ "replaced": true }));
+    }
+
+    #[tokio::test]
+    async fn a_registered_device_pushes_devices_changed_without_any_lan_session() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let register = intent_as(
+            Actor {
+                kind: ActorKind::Owner,
+                id: "owner".into(),
+            },
+            IntentPayload::DeviceRegister(arena_proto::DeviceRegister::new(
+                arena_proto::ClientClass::Paired,
+                "PC-01",
+                arena_core::devices::hash_token_secret("s").unwrap(),
+            )),
+            None,
+        );
+        hub.writer.submit_intent(register).await.unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, _) = next_event(&mut frames).await.unwrap();
+            if event == "devices.changed" {
+                break;
+            }
+            seen.push(event);
+            assert!(seen.len() < 5, "{seen:?}");
+        }
+        assert_eq!(hub.lan.len(), 0);
     }
 
     #[tokio::test]

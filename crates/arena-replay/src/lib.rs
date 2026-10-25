@@ -169,6 +169,8 @@ mod tests {
             let device = writer
                 .submit_intent(submit(
                     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                        device_id: None,
+                        kind: Default::default(),
                         class: arena_proto::ClientClass::Kds,
                         label: "Pass".into(),
                         token_hash: arena_core::devices::hash_token_secret("s").unwrap(),
@@ -257,6 +259,8 @@ mod tests {
             let kiosk = writer
                 .submit_intent(submit(
                     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                        device_id: None,
+                        kind: Default::default(),
                         class: arena_proto::ClientClass::Paired,
                         label: "Kiosk".into(),
                         token_hash: arena_core::devices::hash_token_secret("k").unwrap(),

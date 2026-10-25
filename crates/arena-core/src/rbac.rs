@@ -88,6 +88,15 @@ pub fn staff_builtin_role(tx: &StoreTx<'_>, staff_id: &str) -> Result<Option<Str
         .map(|r| r.name))
 }
 
+pub fn is_pairing(intent: &Intent) -> bool {
+    intent.actor.kind == ActorKind::System
+        && intent.actor.id == arena_proto::PAIR_SYSTEM_ACTOR
+        && matches!(
+            &intent.payload,
+            arena_proto::IntentPayload::DeviceRegister(d) if d.device_id.is_none()
+        )
+}
+
 /// **permission.** Checks the intent's [`Requirement`] against its actor. The kind is taken
 /// from the payload, so a mislabelled envelope cannot borrow another kind's requirement.
 pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
@@ -99,7 +108,8 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
         Requirement::Perm(p) => match actor.kind {
             ActorKind::Owner => true,
             ActorKind::Staff => staff_allows(tx, &actor.id, p)?,
-            ActorKind::Admin | ActorKind::System | ActorKind::Device => false,
+            ActorKind::System => is_pairing(intent),
+            ActorKind::Admin | ActorKind::Device => false,
         },
     };
     if ok { Ok(()) } else { Err(denied()) }

@@ -339,6 +339,8 @@ fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError>
         }
         "hub_status" => Ok(serde_json::json!({ "state": *ctx.hub_state.borrow() })),
         "theme" => Ok(serde_json::json!({ "hc": *ctx.theme.borrow() })),
+        "pair_info" => serde_json::to_value(crate::pairing::info(ctx))
+            .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
         "admin_exit_status" => {
             let mut body = serde_json::Map::new();
             if let arena_kiosk_core::admin_exit::Gate::Paused { seconds } = ctx
@@ -446,6 +448,25 @@ async fn serve(
                         error: None,
                     })
                     .await;
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "pair" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = match crate::pairing::pair(&ctx, body).await {
+                        Ok(body) => IpcMsg::Reply {
+                            rid,
+                            body,
+                            error: None,
+                        },
+                        Err(r) => IpcMsg::Reply {
+                            rid,
+                            body: r.body,
+                            error: Some(r.error),
+                        },
+                    };
+                    let _ = out.send(reply).await;
+                });
             }
             Ok(IpcMsg::Request { rid, kind, body })
                 if kind == "probe_ip" || kind == "select_hub" =>

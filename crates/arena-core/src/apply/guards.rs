@@ -58,11 +58,14 @@ fn elevation(tx: &StoreTx<'_>, intent: &Intent, e: &ElevatedBy) -> Result<(), Ap
     if e.kind != ElevationKind::Pin || e.mode != ElevationMode::Hub {
         return Err(rbac::denied());
     }
-    if intent.actor.kind != ActorKind::Staff || intent.actor.id == e.id {
-        return Err(rbac::denied());
-    }
-    if find_staff(tx, &intent.actor.id)?.is_none_or(|s| !s.active) {
-        return Err(rbac::denied());
+    let system = rbac::is_pairing(intent);
+    if !system {
+        if intent.actor.kind != ActorKind::Staff || intent.actor.id == e.id {
+            return Err(rbac::denied());
+        }
+        if find_staff(tx, &intent.actor.id)?.is_none_or(|s| !s.active) {
+            return Err(rbac::denied());
+        }
     }
     if !rbac::staff_allows(tx, &e.id, p)? {
         return Err(rbac::denied());
@@ -89,6 +92,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             Target::None
             | Target::Setting(_)
             | Target::NewDevice(_)
+            | Target::RegisterEdit(_)
             | Target::Device(_)
             | Target::Branch(_)
             | Target::AdminExit(_)
@@ -140,6 +144,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         | Target::AdminRelock(_)
         | Target::AdminUnlock(_) => Ok(()),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
+        Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),
         Target::Staff(t) => staff_roles::base_rev_staff(intent, t),
         Target::Role(t) => staff_roles::base_rev_role(intent, t),
     }

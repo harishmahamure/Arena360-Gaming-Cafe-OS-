@@ -19,6 +19,8 @@
     "theme": "theme",
     "discover": "discover",
     "probeIp": "probe_ip",
-    "selectHub": "select_hub"
+    "selectHub": "select_hub",
+    "pair": "pair",
+    "pairInfo": "pair_info"
   }
 }

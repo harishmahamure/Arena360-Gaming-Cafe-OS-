@@ -39,6 +39,22 @@ pub fn new_token_secret() -> Result<String, AppError> {
     Ok(out)
 }
 
+pub const TOKEN_SECRET_B64_LEN: usize = 43;
+
+pub fn random_bytes(len: usize) -> Result<Vec<u8>, AppError> {
+    let mut out = Vec::with_capacity(len + 16);
+    while out.len() < len {
+        let salt = try_generate_salt().map_err(|e| internal(format!("os rng: {e}")))?;
+        out.extend_from_slice(salt.as_ref());
+    }
+    out.truncate(len);
+    Ok(out)
+}
+
+pub fn new_paired_token_secret() -> Result<String, AppError> {
+    Ok(crate::staff::base64url(&random_bytes(32)?))
+}
+
 /// The argon2id PHC string of `secret` (random salt, default parameters).
 pub fn hash_token_secret(secret: &str) -> Result<String, AppError> {
     Argon2::default()
@@ -71,10 +87,15 @@ pub fn format_token(device_id: &str, secret: &str) -> String {
 /// Splits a token into its device id and secret (`None` when it is not shaped like one).
 pub fn parse_token(token: &str) -> Option<(&str, &str)> {
     let (device_id, secret) = token.split_once('.')?;
-    let secret_ok = secret.len() == TOKEN_SECRET_HEX_LEN
+    let hex_ok = secret.len() == TOKEN_SECRET_HEX_LEN
         && secret
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let b64_ok = secret.len() == TOKEN_SECRET_B64_LEN
+        && secret
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    let secret_ok = hex_ok || b64_ok;
     (is_ulid(device_id) && secret_ok).then_some((device_id, secret))
 }
 
@@ -272,6 +293,24 @@ mod tests {
         ] {
             assert_eq!(parse_token(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn paired_secrets_are_256_bit_base64url_and_parse() {
+        let secret = new_paired_token_secret().unwrap();
+        assert_eq!(secret.len(), TOKEN_SECRET_B64_LEN);
+        assert_ne!(secret, new_paired_token_secret().unwrap());
+        let id = ulid::Ulid::generate().to_string();
+        let token = format_token(&id, &secret);
+        assert_eq!(parse_token(&token), Some((id.as_str(), secret.as_str())));
+        for bad in [
+            format!("{id}.{}", &secret[..42]),
+            format!("{id}.{}+", &secret[..42]),
+            format!("{id}.{}=", &secret[..42]),
+        ] {
+            assert_eq!(parse_token(&bad), None, "{bad}");
+        }
+        assert_eq!(random_bytes(40).unwrap().len(), 40);
     }
 
     #[test]

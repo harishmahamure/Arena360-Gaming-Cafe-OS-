@@ -7,6 +7,7 @@ import type {
   SettingsChangedEvent,
   UnlockOk,
 } from "@arena/ui/generated";
+import { pairingChangeOf, type PairingChange } from "./pairing";
 import { isConnectivity, isSnapshotLocale, normalizeUi } from "./snapshot";
 
 export const EVENTS_URL = "http://127.0.0.1:7409/ui/events";
@@ -26,6 +27,7 @@ export type EventHandlers = {
   onConnectivityChanged?: (event: Connectivity) => void;
   /** `device.admin_unlock_ack`: a kiosk granted a remote unlock. */
   onAdminUnlockAck?: (event: AdminUnlockAckEvent) => void;
+  onPairingCodeChanged?: (change: PairingChange) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
   /** The Hub closed or refused the stream (signed out, revoked, or the Hub restarted). */
@@ -91,6 +93,15 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
         }
       } catch {
         // A malformed ack is ignored: the floor times out and offers a retry.
+      }
+    });
+    es.addEventListener("pairing.code_changed", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        const change = pairingChangeOf(data);
+        if (change) handlers.onPairingCodeChanged?.(change);
+      } catch {
+        return;
       }
     });
     es.addEventListener("connectivity.changed", (ev) => {

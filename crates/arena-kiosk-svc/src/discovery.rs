@@ -454,6 +454,7 @@ pub async fn select_hub(
         addr: hub.addr,
         fingerprint: hub.fingerprint,
         branch_name: hub.branch_name,
+        web_port: hub.web_port,
     };
     let text = serde_json::to_vec_pretty(&selected)
         .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
@@ -810,6 +811,7 @@ mod tests {
                 addr: "10.0.0.2:7400".into(),
                 fingerprint: fp.clone(),
                 branch_name: "Koramangala".into(),
+                web_port: 7401,
             }
         );
         assert_eq!(load_selected(&data), Some(chosen));

@@ -335,3 +335,78 @@ export async function selectHub(hub: DiscoveredHub): Promise<SelectResult> {
     return "unreachable";
   }
 }
+
+export type PairInput = { code: string } | { pin: string };
+
+export type PairResult =
+  | { kind: "paired"; branchName: string; deviceId: string }
+  | { kind: "code_invalid" }
+  | { kind: "pin_rejected" }
+  | { kind: "pin_paused"; retryAfterS: number }
+  | { kind: "no_hub" }
+  | { kind: "invalid" }
+  | { kind: "not_primary" }
+  | { kind: "hub_slow" }
+  | { kind: "hub_error" }
+  | { kind: "already_paired" }
+  | { kind: "unreachable" };
+
+const text = (body: unknown, name: string): string | null => {
+  const v =
+    typeof body === "object" && body !== null ? (body as Record<string, unknown>)[name] : null;
+  return typeof v === "string" ? v : null;
+};
+
+export async function pairKiosk(input: PairInput, pcName: string): Promise<PairResult> {
+  if (!inTauri()) return { kind: "unreachable" };
+  try {
+    const answer: unknown = await invoke(CMD.pair, { ...input, pcName });
+    if (!isAnswer(answer)) return { kind: "unreachable" };
+    if (answer.ok) {
+      const branchName = text(answer.body, "branch_name");
+      const deviceId = text(answer.body, "device_id");
+      return branchName !== null && deviceId !== null
+        ? { kind: "paired", branchName, deviceId }
+        : { kind: "unreachable" };
+    }
+    switch (answer.code) {
+      case "PAIR_CODE_INVALID":
+        return { kind: "code_invalid" };
+      case "PIN_REJECTED":
+        return { kind: "pin_rejected" };
+      case "PAIR_PIN_PAUSED":
+        return {
+          kind: "pin_paused",
+          retryAfterS: Math.max(1, field(answer.body, "retry_after_s") ?? 60),
+        };
+      case "NO_HUB":
+        return { kind: "no_hub" };
+      case "VALIDATION_FAILED":
+      case "BAD_FRAME":
+        return { kind: "invalid" };
+      case "NOT_PRIMARY":
+        return { kind: "not_primary" };
+      case "HUB_SLOW":
+        return { kind: "hub_slow" };
+      case "INTERNAL":
+        return { kind: "hub_error" };
+      case "ALREADY_SET":
+        return { kind: "already_paired" };
+      default:
+        return { kind: "unreachable" };
+    }
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+export async function pairInfo(): Promise<{ pcName: string | null }> {
+  if (!inTauri()) return { pcName: null };
+  try {
+    const answer: unknown = await invoke(CMD.pairInfo);
+    if (!isAnswer(answer) || !answer.ok) return { pcName: null };
+    return { pcName: text(answer.body, "pc_name") };
+  } catch {
+    return { pcName: null };
+  }
+}

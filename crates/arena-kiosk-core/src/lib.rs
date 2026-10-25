@@ -11,6 +11,7 @@ pub mod ipc;
 pub mod keys;
 pub mod lockdown;
 pub mod monitors;
+pub mod pair;
 pub mod procpolicy;
 pub mod queue;
 pub mod watchdog;
@@ -22,5 +23,6 @@ pub use client::{
     pinned_config,
 };
 pub use ipc::{IpcError, IpcMsg, read_msg, write_msg};
+pub use pair::{PAIR_TIMEOUT, PairError, pair};
 pub use queue::{QUEUE_TTL_MS, ReplayStep};
 pub use watchdog::{Watchdog, WatchdogAction};

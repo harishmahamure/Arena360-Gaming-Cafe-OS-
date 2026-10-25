@@ -273,6 +273,8 @@ mod tests {
             .submit_intent(intent_as(
                 owner.clone(),
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk 3".into(),
                     token_hash: arena_core::devices::hash_token_secret("k").unwrap(),

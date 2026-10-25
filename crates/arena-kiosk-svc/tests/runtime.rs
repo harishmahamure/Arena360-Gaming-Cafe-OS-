@@ -156,6 +156,8 @@ impl Hub {
             .submit_intent(intent(
                 owner(),
                 IntentPayload::DeviceRegister(DeviceRegister {
+                    device_id: None,
+                    kind: Default::default(),
                     class: ClientClass::Paired,
                     label: "Dev Kiosk".into(),
                     token_hash: hash_token_secret(&secret).unwrap(),
@@ -270,6 +272,8 @@ impl Hub {
             .submit_intent(intent(
                 owner(),
                 IntentPayload::DeviceRegister(DeviceRegister {
+                    device_id: None,
+                    kind: Default::default(),
                     class: ClientClass::Paired,
                     label: "Replacement Kiosk".into(),
                     token_hash: hash_token_secret(&secret).unwrap(),

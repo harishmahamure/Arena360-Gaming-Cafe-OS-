@@ -408,6 +408,8 @@ pub struct UiAuth {
     printer: Option<Arc<dyn arena_core::printer::Printer>>,
     printer_find: tokio::sync::Mutex<()>,
     printer_job: tokio::sync::Mutex<()>,
+    pairing: Option<Arc<crate::pairing::Pairing>>,
+    streams: Mutex<HashMap<String, usize>>,
 }
 
 pub type BackupProbe =
@@ -454,6 +456,8 @@ impl UiAuth {
             printer: None,
             printer_find: tokio::sync::Mutex::new(()),
             printer_job: tokio::sync::Mutex::new(()),
+            pairing: None,
+            streams: Mutex::new(HashMap::new()),
         }
     }
 
@@ -472,6 +476,38 @@ impl UiAuth {
 
     pub(crate) fn printer_job_lock(&self) -> &tokio::sync::Mutex<()> {
         &self.printer_job
+    }
+
+    pub fn with_pairing(mut self, pairing: Arc<crate::pairing::Pairing>) -> Self {
+        self.pairing = Some(pairing);
+        self
+    }
+
+    pub(crate) fn pairing(&self) -> Option<&Arc<crate::pairing::Pairing>> {
+        self.pairing.as_ref()
+    }
+
+    pub(crate) fn stream_opened(&self, token: &str) {
+        if let Ok(mut streams) = self.streams.lock() {
+            *streams.entry(token.to_owned()).or_default() += 1;
+        }
+    }
+
+    pub(crate) fn stream_closed(&self, token: &str) {
+        if let Ok(mut streams) = self.streams.lock()
+            && let Some(n) = streams.get_mut(token)
+        {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                streams.remove(token);
+            }
+        }
+    }
+
+    pub(crate) fn has_stream(&self, token: &str) -> bool {
+        self.streams
+            .lock()
+            .is_ok_and(|s| s.get(token).is_some_and(|n| *n > 0))
     }
 
     /// Pushes `devices.changed` to `/ui/events` streams whenever a device comes online or
@@ -786,6 +822,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::SERVICE_UNAVAILABLE
         }
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
+        ErrorCode::PairCodeInvalid => StatusCode::UNAUTHORIZED,
+        ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -1725,7 +1763,16 @@ async fn settings(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
 
 /// The auth routes, behind the same loopback origin guard as `/ui/snapshot`.
 pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
+    if let Some(pairing) = &auth.pairing {
+        let weak = Arc::downgrade(&auth);
+        pairing.set_owner_check(move |token| {
+            weak.upgrade()
+                .is_some_and(|a| a.has_stream(token) && a.session_live(token))
+        });
+    }
     Router::new()
+        .route("/ui/pairing-code", post(crate::ui_pairing::issue))
+        .route("/ui/pairing-code/discard", post(crate::ui_pairing::discard))
         .route("/ui/auth/sign-in", post(sign_in))
         .route("/ui/auth/sign-out", post(sign_out))
         .route("/ui/me", get(me))
@@ -1856,6 +1903,7 @@ pub(crate) mod tests {
         pub(crate) auth: Arc<UiAuth>,
         /// The LAN registry behind the auth's presence (tests register sessions in it).
         pub(crate) lan: Arc<crate::lan::registry::Registry>,
+        pub(crate) pairing: Arc<crate::pairing::Pairing>,
     }
 
     pub(crate) fn intent_as(actor: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
@@ -1958,6 +2006,11 @@ pub(crate) mod tests {
             ids.push(applied.changes[0].row_id.clone());
         }
         let lan = Arc::new(crate::lan::registry::Registry::default());
+        let pairing = Arc::new(
+            crate::pairing::Pairing::new(clock.clone())
+                .unwrap()
+                .with_tick(std::time::Duration::from_millis(10)),
+        );
         let auth = Arc::new(
             UiAuth::new(
                 Arc::new(StaffDirectory::open(&path).unwrap()),
@@ -1967,10 +2020,12 @@ pub(crate) mod tests {
             )
             .with_status(status_tx.subscribe())
             .with_events_config(config)
-            .with_presence(crate::lan::Presence::of(Arc::clone(&lan))),
+            .with_presence(crate::lan::Presence::of(Arc::clone(&lan)))
+            .with_pairing(Arc::clone(&pairing)),
         );
         Hub {
             lan,
+            pairing,
             _status: status_tx,
             _dir: dir,
             path,
@@ -2142,6 +2197,8 @@ pub(crate) mod tests {
                     id: "owner".into(),
                 },
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk".into(),
                     token_hash: arena_core::devices::hash_token_secret(&secret).unwrap(),
@@ -3162,6 +3219,8 @@ pub(crate) mod tests {
                     id: "owner".into(),
                 },
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk 1".into(),
                     token_hash: hash,
@@ -3402,6 +3461,8 @@ pub(crate) mod tests {
             .submit_intent(intent_as(
                 owner.clone(),
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk 1".into(),
                     token_hash: hash,

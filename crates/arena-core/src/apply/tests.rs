@@ -1076,6 +1076,8 @@ fn device_intent(actor: ActorKind, body: IntentPayload) -> Intent {
 
 fn register(hash: &str) -> IntentPayload {
     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+        device_id: None,
+        kind: Default::default(),
         class: arena_proto::ClientClass::Paired,
         label: "Dev Kiosk".into(),
         token_hash: hash.into(),
@@ -1093,11 +1095,13 @@ async fn with_device(f: &mut Fixture) -> (String, String) {
         .await
         .unwrap();
     // The device row, then its `display.hc.<id>` setting (Story 1.21), in one change.
-    assert_eq!(applied.changes.len(), 2);
+    assert_eq!(applied.changes.len(), 3);
     assert_eq!(applied.changes[0].tbl, "devices");
     assert_eq!(applied.changes[0].op, ChangeOp::Insert);
-    assert_eq!(applied.changes[1].tbl, "settings");
+    assert_eq!(applied.changes[1].tbl, "devices_meta");
     assert_eq!(applied.changes[1].op, ChangeOp::Insert);
+    assert_eq!(applied.changes[2].tbl, "settings");
+    assert_eq!(applied.changes[2].op, ChangeOp::Insert);
     while f.events.try_recv().is_ok() {}
     (applied.changes[0].row_id.clone(), secret)
 }
@@ -1121,8 +1125,20 @@ async fn device_register_writes_a_row_and_an_insert_change() {
     assert_eq!(devices[0]["created_at"], RowValue::Integer(T0));
     let mut changes = store.changes().unwrap();
     let hc = changes.pop().unwrap();
+    let meta = changes.pop().unwrap();
     let change = changes.pop().unwrap();
     assert_eq!(change.intent_kind, "device.register");
+    assert_eq!(
+        (meta.tbl.as_str(), meta.row_id.as_str()),
+        ("devices_meta", id.as_str())
+    );
+    let meta_rows = store.rows(Table::DevicesMeta).unwrap();
+    let logged_meta: Row = rmp_serde::from_slice(&meta.row).unwrap();
+    assert_eq!(logged_meta, meta_rows[0]);
+    assert_eq!(meta_rows[0]["kind"], RowValue::Text("pc".into()));
+    assert_eq!(meta_rows[0]["label"], RowValue::Text("Dev Kiosk".into()));
+    assert_eq!(meta_rows[0]["group_id"], RowValue::Null);
+    assert_eq!(meta_rows[0]["rev"], RowValue::Integer(1));
     let logged: Row = rmp_serde::from_slice(&change.row).unwrap();
     assert_eq!(logged, devices[0]);
     // Story 1.21: the device's high-contrast row starts off, in the same intent.
@@ -1142,13 +1158,20 @@ async fn device_register_checks_actor_hash_class_and_branch() {
     let err = expect_err(&f, device_intent(ActorKind::Owner, register(&hash))).await;
     assert_eq!(err.code, ErrorCode::ValidationFailed);
     f.writer.submit_intent(bootstrap()).await.unwrap();
-    for actor in [ActorKind::Device, ActorKind::Staff, ActorKind::System] {
+    for actor in [
+        ActorKind::Device,
+        ActorKind::Staff,
+        ActorKind::Admin,
+        ActorKind::System,
+    ] {
         let err = expect_err(&f, device_intent(actor, register(&hash))).await;
         assert_eq!(err.code, ErrorCode::PermissionDenied, "{actor:?}");
     }
     let err = expect_err(&f, device_intent(ActorKind::Owner, register("plain"))).await;
     assert_eq!(err.field.as_deref(), Some("token_hash"));
     let phone = IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+        device_id: None,
+        kind: Default::default(),
         class: arena_proto::ClientClass::Phone,
         label: "x".into(),
         token_hash: hash.clone(),
@@ -2924,6 +2947,320 @@ mod rbac_matrix {
             let err = expect_err(&c.f, unlock(staff_actor(&c.manager), "01JNOPE")).await;
             assert_eq!(err.field.as_deref(), Some("device_id"));
         }
+    }
+}
+
+mod pairing_register {
+    use super::*;
+    use crate::rbac::{ROLE_COUNTER, ROLE_MANAGER};
+    use crate::staff::hash_secret;
+    use arena_proto::{ClientClass, DeviceKind, DeviceRegister, StaffUpsert};
+
+    fn actor(kind: ActorKind, id: &str) -> Actor {
+        Actor {
+            kind,
+            id: id.into(),
+        }
+    }
+
+    fn intent(actor: Actor, body: DeviceRegister, base_rev: Option<i64>) -> Intent {
+        Intent {
+            kind: IntentKind::DeviceRegister,
+            payload: IntentPayload::DeviceRegister(body),
+            actor,
+            base_rev,
+            ..bootstrap()
+        }
+    }
+
+    fn pc(label: &str) -> DeviceRegister {
+        DeviceRegister::new(
+            ClientClass::Paired,
+            label,
+            crate::devices::hash_token_secret("s").unwrap(),
+        )
+    }
+
+    fn role_id(f: &Fixture, name: &str) -> String {
+        reopen(f)
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == RowValue::Text(name.into()))
+            .map(|r| match &r["role_id"] {
+                RowValue::Text(t) => t.clone(),
+                other => panic!("role_id is {other:?}"),
+            })
+            .unwrap()
+    }
+
+    async fn add_staff(f: &Fixture, login: &str, role: &str, pin: &str) -> String {
+        let applied = f
+            .writer
+            .submit_intent(Intent {
+                kind: IntentKind::StaffUpsert,
+                payload: IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: None,
+                    login: login.into(),
+                    display_name: login.into(),
+                    role_id: role_id(f, role),
+                    password_hash: Some(hash_secret("pw").unwrap()),
+                    pin_hash: Some(hash_secret(pin).unwrap()),
+                    active: true,
+                }),
+                actor: actor(ActorKind::Owner, "owner-1"),
+                ..bootstrap()
+            })
+            .await
+            .unwrap();
+        applied.changes[0].row_id.clone()
+    }
+
+    fn pin_of(id: &str) -> ElevatedBy {
+        ElevatedBy {
+            kind: ElevationKind::Pin,
+            id: id.into(),
+            mode: ElevationMode::Hub,
+            verifier_version: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_system_pairs_a_pc_and_a_manager_pin_is_recorded_as_elevated_by() {
+        let f = bootstrapped().await;
+        let manager = add_staff(&f, "mgr", ROLE_MANAGER, "2222").await;
+        let counter = add_staff(&f, "ctr", ROLE_COUNTER, "3333").await;
+
+        let by_code = f
+            .writer
+            .submit_intent(intent(
+                actor(ActorKind::System, arena_proto::PAIR_SYSTEM_ACTOR),
+                pc("PC-01"),
+                None,
+            ))
+            .await
+            .unwrap();
+        let id = by_code.changes[0].row_id.clone();
+        let store = reopen(&f);
+        let meta = store.device_meta(&id).unwrap().unwrap();
+        assert_eq!(
+            (
+                meta.kind.as_str(),
+                meta.label.as_str(),
+                meta.group_id,
+                meta.rev
+            ),
+            ("pc", "PC-01", None, 1)
+        );
+        let change = store
+            .changes()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.tbl == "devices_meta")
+            .unwrap();
+        assert_eq!(
+            (change.actor_kind.as_str(), change.actor_id.as_str()),
+            ("system", arena_proto::PAIR_SYSTEM_ACTOR)
+        );
+        assert_eq!(change.elevated_by_id, None);
+
+        let mut by_pin = intent(
+            actor(ActorKind::System, arena_proto::PAIR_SYSTEM_ACTOR),
+            pc("PC-02"),
+            None,
+        );
+        by_pin.elevated_by = Some(pin_of(&manager));
+        let applied = f.writer.submit_intent(by_pin).await.unwrap();
+        let change = reopen(&f)
+            .changes()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.tbl == "devices_meta" && c.intent_id == applied.intent_id)
+            .unwrap();
+        assert_eq!(change.elevated_by_kind.as_deref(), Some("pin"));
+        assert_eq!(change.elevated_by_id.as_deref(), Some(manager.as_str()));
+        assert_eq!(change.elevated_by_mode.as_deref(), Some("hub"));
+
+        let mut by_counter = intent(
+            actor(ActorKind::System, arena_proto::PAIR_SYSTEM_ACTOR),
+            pc("PC-03"),
+            None,
+        );
+        by_counter.elevated_by = Some(pin_of(&counter));
+        assert_eq!(
+            expect_err(&f, by_counter).await.code,
+            ErrorCode::PermissionDenied
+        );
+        let mut stale_pin = intent(
+            actor(ActorKind::System, arena_proto::PAIR_SYSTEM_ACTOR),
+            pc("PC-03"),
+            None,
+        );
+        stale_pin.elevated_by = Some(ElevatedBy {
+            verifier_version: 9,
+            ..pin_of(&manager)
+        });
+        assert_eq!(expect_err(&f, stale_pin).await.code, ErrorCode::PinRequired);
+    }
+
+    #[tokio::test]
+    async fn device_manage_is_needed_and_edits_check_base_rev_and_log_a_change() {
+        let f = bootstrapped().await;
+        let manager = add_staff(&f, "mgr", ROLE_MANAGER, "2222").await;
+        let counter = add_staff(&f, "ctr", ROLE_COUNTER, "3333").await;
+        let err = expect_err(
+            &f,
+            intent(actor(ActorKind::Staff, &counter), pc("PC-09"), None),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        let created = f
+            .writer
+            .submit_intent(intent(actor(ActorKind::Staff, &manager), pc("PC-09"), None))
+            .await
+            .unwrap();
+        let id = created.changes[0].row_id.clone();
+
+        let pairing_edit = DeviceRegister {
+            device_id: Some(id.clone()),
+            kind: DeviceKind::Pc,
+            label: "Taken over".into(),
+            token_hash: String::new(),
+            class: ClientClass::Paired,
+        };
+        let err = expect_err(
+            &f,
+            intent(
+                actor(ActorKind::System, arena_proto::PAIR_SYSTEM_ACTOR),
+                pairing_edit,
+                Some(1),
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        let err = expect_err(
+            &f,
+            intent(actor(ActorKind::System, "hub-lan"), pc("PC-10"), None),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+
+        let edit = |label: &str, kind: DeviceKind| DeviceRegister {
+            device_id: Some(id.clone()),
+            kind,
+            label: label.into(),
+            token_hash: String::new(),
+            class: ClientClass::Paired,
+        };
+        let err = expect_err(
+            &f,
+            intent(
+                actor(ActorKind::Staff, &manager),
+                edit("Desk", DeviceKind::Pc),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(err.field.as_deref(), Some("base_rev"));
+        let err = expect_err(
+            &f,
+            intent(
+                actor(ActorKind::Staff, &manager),
+                edit("Desk", DeviceKind::Pc),
+                Some(7),
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::Stale);
+        let err = expect_err(
+            &f,
+            intent(
+                actor(ActorKind::Staff, &counter),
+                edit("Desk", DeviceKind::Pc),
+                Some(1),
+            ),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        let mut with_token = edit("Desk", DeviceKind::Pc);
+        with_token.token_hash = crate::devices::hash_token_secret("x").unwrap();
+        let err = expect_err(
+            &f,
+            intent(actor(ActorKind::Staff, &manager), with_token, Some(1)),
+        )
+        .await;
+        assert_eq!(err.field.as_deref(), Some("token_hash"));
+
+        let stamps = |f: &Fixture| {
+            let row = reopen(f)
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .into_iter()
+                .find(|r| r["device_id"] == RowValue::Text(id.clone()))
+                .unwrap();
+            (
+                row["rev"].clone(),
+                row["created_at"].clone(),
+                row["updated_at"].clone(),
+            )
+        };
+        let now = f.clock.now_ms();
+        assert_eq!(
+            stamps(&f),
+            (
+                RowValue::Integer(1),
+                RowValue::Integer(now),
+                RowValue::Integer(now)
+            )
+        );
+        f.clock.advance(5);
+        let applied = f
+            .writer
+            .submit_intent(intent(
+                actor(ActorKind::Staff, &manager),
+                edit("Desk", DeviceKind::Console),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            stamps(&f),
+            (
+                RowValue::Integer(2),
+                RowValue::Integer(now),
+                RowValue::Integer(now + 5)
+            )
+        );
+        let tables: Vec<(&str, ChangeOp)> = applied
+            .changes
+            .iter()
+            .map(|c| (c.tbl.as_str(), c.op))
+            .collect();
+        assert_eq!(
+            tables,
+            [
+                ("devices_meta", ChangeOp::Update),
+                ("devices", ChangeOp::Update)
+            ]
+        );
+        let store = reopen(&f);
+        let meta = store.device_meta(&id).unwrap().unwrap();
+        assert_eq!(
+            (meta.kind.as_str(), meta.label.as_str(), meta.rev),
+            ("console", "Desk", 2)
+        );
+        assert_eq!(store.device(&id).unwrap().unwrap().label, "Desk");
+        let logged = store
+            .changes()
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|c| c.tbl == "devices_meta")
+            .unwrap();
+        assert_eq!(logged.op, ChangeOp::Update);
+        assert_eq!(logged.actor_id, manager);
+        let row: Row = rmp_serde::from_slice(&logged.row).unwrap();
+        assert_eq!(row["kind"], RowValue::Text("console".into()));
     }
 }
 

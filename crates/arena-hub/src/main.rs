@@ -265,6 +265,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         }),
     );
 
+    let pairing = Arc::new(arena_api::pairing::Pairing::new(Arc::clone(&clock))?);
     let lan_hub = Arc::new(
         LanHub::new(
             writer.clone(),
@@ -275,6 +276,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             env!("CARGO_PKG_VERSION"),
         )
         .with_staff(Arc::clone(&staff))
+        .with_pairing(Arc::clone(&pairing))
         .with_info(HubInfoSource {
             reader: Arc::clone(&snapshots),
             hub_name,
@@ -304,7 +306,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         )
         .with_status(status_rx.clone())
         .with_presence(lan_hub.presence())
-        .with_printer(printer),
+        .with_printer(printer)
+        .with_pairing(pairing),
     );
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
     let setup_job = tokio::spawn(arena_core::setup::publish_setup(

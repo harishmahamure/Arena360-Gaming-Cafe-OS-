@@ -112,13 +112,11 @@ pub(super) fn mutate(
             Target::Setting(row) => super::printer_status::mutate(tx, intent, p, row.as_ref()),
             _ => Err(mismatch()),
         },
-        IntentPayload::DeviceRegister(d) => {
-            let branch = match target {
-                Target::NewDevice(b) => b.as_ref(),
-                _ => None,
-            };
-            devices::mutate_register(tx, d, branch)
-        }
+        IntentPayload::DeviceRegister(d) => match target {
+            Target::RegisterEdit(t) => devices::mutate_edit(tx, d, t),
+            Target::NewDevice(b) => devices::mutate_register(tx, d, b.as_ref()),
+            _ => devices::mutate_register(tx, d, None),
+        },
         IntentPayload::DeviceRevoke(_) => devices::mutate_revoke(tx, device_row(target), now_ms),
         IntentPayload::DeviceVersionReported(d) => {
             devices::mutate_version(tx, d, device_row(target))

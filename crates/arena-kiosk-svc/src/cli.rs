@@ -3,12 +3,20 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+#[cfg(feature = "dev-fixtures")]
 pub const USAGE: &str = "usage:
   arena-kiosk-svc --console [--data-dir <path>] [--app <path>] [--dev-fake-procs]
   arena-kiosk-svc service install|uninstall|run          (Windows)
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>
                   [--player-user <name>] [--data-dir <path>]   (dev-fixtures builds)
+  arena-kiosk-svc --help | --version";
+
+#[cfg(not(feature = "dev-fixtures"))]
+pub const USAGE: &str = "usage:
+  arena-kiosk-svc --console [--data-dir <path>] [--app <path>]
+  arena-kiosk-svc service install|uninstall|run          (Windows)
+  arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc --help | --version";
 
 /// A parsed command line.
@@ -33,6 +41,7 @@ pub enum Command {
         data_dir: Option<PathBuf>,
     },
     /// `dev provision`.
+    #[cfg(feature = "dev-fixtures")]
     DevProvision {
         hub: String,
         fingerprint: String,
@@ -96,6 +105,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 data_dir,
             })
         }
+        #[cfg(feature = "dev-fixtures")]
         "dev" => {
             if args.get(1).and_then(|a| a.to_str()) != Some("provision") {
                 return Err("dev takes provision".into());
@@ -216,26 +226,29 @@ mod tests {
         );
         assert_eq!(p(&["--help"]).unwrap(), Command::Help);
         assert_eq!(p(&["--version"]).unwrap(), Command::Version);
-        assert_eq!(
-            p(&[
-                "dev",
-                "provision",
-                "--hub",
-                "h:7400",
-                "--fingerprint",
-                "f",
-                "--token",
-                "t"
-            ])
-            .unwrap(),
-            Command::DevProvision {
-                hub: "h:7400".into(),
-                fingerprint: "f".into(),
-                token: "t".into(),
-                player_user: None,
-                data_dir: None,
-            }
-        );
+        #[cfg(feature = "dev-fixtures")]
+        {
+            assert_eq!(
+                p(&[
+                    "dev",
+                    "provision",
+                    "--hub",
+                    "h:7400",
+                    "--fingerprint",
+                    "f",
+                    "--token",
+                    "t"
+                ])
+                .unwrap(),
+                Command::DevProvision {
+                    hub: "h:7400".into(),
+                    fingerprint: "f".into(),
+                    token: "t".into(),
+                    player_user: None,
+                    data_dir: None,
+                }
+            );
+        }
         for bad in [
             &[][..],
             &["service"],
@@ -252,5 +265,23 @@ mod tests {
         ] {
             assert!(p(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[cfg(not(feature = "dev-fixtures"))]
+    #[test]
+    fn a_release_build_has_no_dev_provision_command() {
+        let full = [
+            "dev",
+            "provision",
+            "--hub",
+            "h:7400",
+            "--fingerprint",
+            "f",
+            "--token",
+            "t",
+        ];
+        assert_eq!(p(&full).unwrap_err(), "unknown command dev");
+        assert!(!USAGE.contains("dev provision"));
+        assert!(!USAGE.contains("--dev-fake-procs"));
     }
 }

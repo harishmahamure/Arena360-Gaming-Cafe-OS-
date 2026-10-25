@@ -56,6 +56,7 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
         },
         IntentPayload::DeviceRegister(d) => match target {
             Target::NewDevice(branch) => devices::validate_register(intent, d, branch.as_ref()),
+            Target::RegisterEdit(t) => devices::validate_edit(intent, d, t),
             _ => devices::validate_register(intent, d, None),
         },
         IntentPayload::DeviceRevoke(d) => devices::validate_revoke(d, device_row(target)),

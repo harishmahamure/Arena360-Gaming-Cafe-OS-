@@ -113,6 +113,8 @@ async fn register(w: &WriterHandle, class: ClientClass, label: &str) -> (String,
         .submit_intent(intent(
             owner(),
             IntentPayload::DeviceRegister(DeviceRegister {
+                device_id: None,
+                kind: Default::default(),
                 class,
                 label: label.into(),
                 token_hash: hash_token_secret(&secret).unwrap(),

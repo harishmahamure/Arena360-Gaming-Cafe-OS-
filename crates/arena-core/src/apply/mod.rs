@@ -105,6 +105,7 @@ pub(crate) enum Target {
     Setting(Option<arena_store::SettingRef>),
     /// `device.register`: the branch the device joins, if it has been bootstrapped.
     NewDevice(Option<String>),
+    RegisterEdit(Box<devices::RegisterEdit>),
     /// `device.revoke`, `device.version_reported`: the device row, if it exists.
     Device(Option<arena_store::DeviceRow>),
     /// `staff.upsert`: the branch, the edited row, the roles involved and the login's holder.
@@ -129,7 +130,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::SettingsSet(s) => Target::Setting(settings_set::load(tx, s)?),
         P::AdsConsent(_) => Target::Setting(ads_consent::load(tx)?),
         P::PrinterStatus(_) => Target::Setting(printer_status::load(tx)?),
-        P::DeviceRegister(_) => devices::load_register(tx)?,
+        P::DeviceRegister(d) => devices::load_register(tx, d)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,
         P::StaffUpsert(s) => Target::Staff(Box::new(staff_roles::load_staff(tx, intent, s)?)),

@@ -197,7 +197,7 @@ pub fn pinned_config(pinned_fingerprint: &str) -> Result<Arc<ClientConfig>, Clie
     pinned_config_with(pinned_fingerprint, Arc::default())
 }
 
-fn pinned_config_with(
+pub(crate) fn pinned_config_with(
     pinned_fingerprint: &str,
     presented: Arc<Mutex<Option<[u8; 32]>>>,
 ) -> Result<Arc<ClientConfig>, ClientError> {

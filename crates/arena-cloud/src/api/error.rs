@@ -49,6 +49,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::SERVICE_UNAVAILABLE
         }
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
+        ErrorCode::PairCodeInvalid => StatusCode::UNAUTHORIZED,
+        ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

@@ -25,6 +25,7 @@ pub mod launcher;
 pub mod lockdown;
 pub mod logs;
 pub mod operating;
+pub mod pairing;
 pub mod paths;
 pub mod procs;
 pub mod queue;

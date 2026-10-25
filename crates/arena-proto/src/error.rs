@@ -83,6 +83,8 @@ pub enum ErrorCode {
     BillingDisabled,
     OneFreeBranch,
     StepNotReady,
+    PairCodeInvalid,
+    PairPinPaused,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -138,6 +140,8 @@ impl ErrorCode {
             Self::BillingDisabled => "BILLING_DISABLED",
             Self::OneFreeBranch => "ONE_FREE_BRANCH",
             Self::StepNotReady => "STEP_NOT_READY",
+            Self::PairCodeInvalid => "PAIR_CODE_INVALID",
+            Self::PairPinPaused => "PAIR_PIN_PAUSED",
         }
     }
 }
@@ -251,6 +255,8 @@ mod tests {
             (ErrorCode::BillingDisabled, "BILLING_DISABLED"),
             (ErrorCode::OneFreeBranch, "ONE_FREE_BRANCH"),
             (ErrorCode::StepNotReady, "STEP_NOT_READY"),
+            (ErrorCode::PairCodeInvalid, "PAIR_CODE_INVALID"),
+            (ErrorCode::PairPinPaused, "PAIR_PIN_PAUSED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

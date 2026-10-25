@@ -15,6 +15,7 @@ mod error;
 mod frame;
 mod intent;
 mod kiosk;
+mod kiosk_pairing;
 pub mod licence;
 mod operating;
 pub mod pairing;
@@ -70,6 +71,12 @@ pub use intent::{
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
     MAX_KIOSK_LOG_DETAIL_CHARS,
+};
+pub use kiosk_pairing::{
+    DeviceKind, KioskPairInfo, KioskPaired, KioskPairingCode, MAX_PC_NAME_CHARS, PAIR_CODE_DIGITS,
+    PAIR_CODE_TTL_MS, PAIR_PATH, PAIR_PIN_MAX_FAILURES, PAIR_PIN_PAUSE_S, PAIR_PIN_WINDOW_MS,
+    PAIR_SYSTEM_ACTOR, PairRequest, PairResponse, PairSecret, is_pair_code, is_pc_name,
+    sanitize_pc_name,
 };
 pub use licence::{LicenceClaims, LicenceError, VerifyKey};
 pub use operating::{

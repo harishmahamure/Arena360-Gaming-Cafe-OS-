@@ -41,4 +41,6 @@ export type ErrorCode =
   | "HUB_INCOMPATIBLE"
   | "BILLING_DISABLED"
   | "ONE_FREE_BRANCH"
-  | "STEP_NOT_READY";
+  | "STEP_NOT_READY"
+  | "PAIR_CODE_INVALID"
+  | "PAIR_PIN_PAUSED";

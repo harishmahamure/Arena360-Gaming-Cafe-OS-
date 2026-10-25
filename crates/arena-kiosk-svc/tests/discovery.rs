@@ -457,6 +457,7 @@ async fn an_unpaired_kiosk_discovers_probes_and_selects_without_pairing() {
             "addr": "127.0.0.1:7400",
             "fingerprint": hub.fingerprint,
             "branch_name": "Koramangala",
+            "web_port": hub.web.port(),
         })
     );
     assert!(!data.config().exists(), "no config.json");

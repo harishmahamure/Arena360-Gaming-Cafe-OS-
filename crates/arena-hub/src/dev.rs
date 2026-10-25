@@ -187,6 +187,8 @@ pub async fn seed(
                 clock.as_ref(),
                 ActorKind::Owner,
                 IntentPayload::DeviceRegister(DeviceRegister {
+                    device_id: None,
+                    kind: Default::default(),
                     class: ClientClass::Paired,
                     label: DEV_KIOSK_LABEL.into(),
                     token_hash,

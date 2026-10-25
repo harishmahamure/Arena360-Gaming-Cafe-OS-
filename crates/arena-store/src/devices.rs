@@ -116,6 +116,105 @@ pub fn set_device_reported_version(
     expect_one(n, device_id)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceMetaRow {
+    pub device_id: String,
+    pub kind: String,
+    pub label: String,
+    pub group_id: Option<String>,
+    pub rev: i64,
+    pub deleted_at: Option<i64>,
+}
+
+const META_COLUMNS: &str = "device_id, kind, label, group_id, rev, deleted_at";
+
+fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
+    Ok(DeviceMetaRow {
+        device_id: r.get(0)?,
+        kind: r.get(1)?,
+        label: r.get(2)?,
+        group_id: r.get(3)?,
+        rev: r.get(4)?,
+        deleted_at: r.get(5)?,
+    })
+}
+
+pub fn devices_meta_exists(conn: &Connection) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'devices_meta')",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+pub fn find_device_meta(
+    conn: &Connection,
+    device_id: &str,
+) -> Result<Option<DeviceMetaRow>, AppError> {
+    conn.query_row(
+        &format!("SELECT {META_COLUMNS} FROM devices_meta WHERE device_id = ?1"),
+        [device_id],
+        meta_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn list_device_meta(conn: &Connection) -> Result<Vec<DeviceMetaRow>, AppError> {
+    if !devices_meta_exists(conn)? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {META_COLUMNS} FROM devices_meta ORDER BY device_id"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], meta_from).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+pub fn insert_device_meta(
+    conn: &Connection,
+    device_id: &str,
+    kind: &str,
+    label: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO devices_meta (device_id, kind, label, group_id, rev, deleted_at,
+                                   created_at, updated_at)
+         VALUES (?1, ?2, ?3, NULL, 0, NULL, 0, 0)",
+        params![device_id, kind, label],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn update_device_meta(
+    conn: &Connection,
+    device_id: &str,
+    kind: &str,
+    label: &str,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE devices_meta SET kind = ?2, label = ?3 WHERE device_id = ?1",
+            params![device_id, kind, label],
+        )
+        .map_err(db_error)?;
+    expect_one(n, device_id)
+}
+
+pub fn set_device_label(conn: &Connection, device_id: &str, label: &str) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE devices SET label = ?2 WHERE device_id = ?1",
+            params![device_id, label],
+        )
+        .map_err(db_error)?;
+    expect_one(n, device_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +275,74 @@ mod tests {
         assert!(
             store
                 .write_tx(|tx| set_device_revoked(tx, "nope", 1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn migration_0011_backfills_paired_devices_as_pc_and_meta_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            for m in crate::migrations::MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 10)
+            {
+                conn.execute_batch(m.sql).unwrap();
+                crate::record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            insert_branch(
+                &conn,
+                &NewBranch {
+                    branch_id: "B",
+                    name: "N",
+                    branch_code: "C",
+                    currency: "INR",
+                    tz: "UTC",
+                    day_start_min: 0,
+                    fy_start_month: 1,
+                },
+            )
+            .unwrap();
+            for (id, class, label) in [("K", "paired", "Dev Kiosk"), ("S", "kds", "Kitchen")] {
+                insert_device(
+                    &conn,
+                    &NewDevice {
+                        device_id: id,
+                        branch_id: "B",
+                        class,
+                        label,
+                        token_hash: "$argon2id$x",
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let mut store = Store::open(&path, 0).unwrap();
+        assert_eq!(
+            store.schema_version().unwrap(),
+            crate::LATEST_SCHEMA_VERSION
+        );
+        let meta = store.devices_meta().unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].device_id, "K");
+        assert_eq!(meta[0].kind, "pc");
+        assert_eq!(meta[0].label, "Dev Kiosk");
+        assert_eq!(meta[0].group_id, None);
+        store
+            .write_tx(|tx| update_device_meta(tx, "K", "console", "TV 1"))
+            .unwrap();
+        let k = store.device_meta("K").unwrap().unwrap();
+        assert_eq!((k.kind.as_str(), k.label.as_str()), ("console", "TV 1"));
+        let err = store
+            .write_tx(|tx| update_device_meta(tx, "K", "toaster", "x"))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Internal);
+        assert!(
+            store
+                .write_tx(|tx| insert_device_meta(tx, "nope", "pc", "x"))
                 .is_err()
         );
     }

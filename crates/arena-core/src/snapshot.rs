@@ -8,7 +8,7 @@ use arena_proto::{
     AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SetupStatus, SnapshotBranch,
     SnapshotDevice, SnapshotLocale, SnapshotUi,
 };
-use arena_store::{BranchSummary, DeviceRow, Store};
+use arena_store::{BranchSummary, DeviceMetaRow, DeviceRow, Store};
 
 use crate::locale::{locale_rows, next_rollover, snapshot_locale};
 
@@ -18,9 +18,15 @@ use crate::locale::{locale_rows, next_rollover, snapshot_locale};
 pub fn build_snapshot(
     branch: Option<BranchSummary>,
     devices: Vec<DeviceRow>,
+    meta: Vec<DeviceMetaRow>,
     locale: Option<SnapshotLocale>,
     ui: SnapshotUi,
 ) -> HubSnapshot {
+    let meta: std::collections::HashMap<String, DeviceMetaRow> = meta
+        .into_iter()
+        .filter(|m| m.deleted_at.is_none())
+        .map(|m| (m.device_id.clone(), m))
+        .collect();
     HubSnapshot {
         locale,
         ui,
@@ -45,10 +51,14 @@ pub fn build_snapshot(
                     );
                     return None;
                 };
+                let m = meta.get(&d.device_id);
                 Some(SnapshotDevice {
                     class,
+                    label: m.map_or(d.label, |m| m.label.clone()),
+                    kind: m.and_then(|m| arena_proto::DeviceKind::parse(&m.kind)),
+                    group_id: m.and_then(|m| m.group_id.clone()),
+                    meta_rev: m.map(|m| m.rev),
                     device_id: d.device_id,
-                    label: d.label,
                     zone: None,
                     // Presence is the LAN registry's, not the database's: the snapshot
                     // handler fills it in.
@@ -62,16 +72,17 @@ pub fn build_snapshot(
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, locale, ui, setup) = store.read_consistent(|s| {
+    let (branch, devices, meta, locale, ui, setup) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
             s.devices()?,
+            s.devices_meta()?,
             read_locale(s, now_ms)?,
             read_ui(s)?,
             read_setup(s)?,
         ))
     })?;
-    let mut snapshot = build_snapshot(branch, devices, locale, ui);
+    let mut snapshot = build_snapshot(branch, devices, meta, locale, ui);
     snapshot.setup = setup;
     Ok(snapshot)
 }
@@ -259,7 +270,9 @@ impl SnapshotReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arena_store::{NewBranch, NewDevice, insert_branch, insert_device, set_device_revoked};
+    use arena_store::{
+        NewBranch, NewDevice, insert_branch, insert_device, insert_device_meta, set_device_revoked,
+    };
 
     fn seed(path: &Path, with_branch: bool) {
         let mut store = Store::open(path, 0).unwrap();
@@ -292,6 +305,7 @@ mod tests {
                         },
                     )?;
                 }
+                insert_device_meta(tx, "D1", "pc", "Front PC")?;
                 set_device_revoked(tx, "D2", 5)
             })
             .unwrap();
@@ -312,10 +326,13 @@ mod tests {
                 }),
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
-                    label: "Dev Kiosk".into(),
+                    label: "Front PC".into(),
                     class: ClientClass::Paired,
                     zone: None,
                     online: false,
+                    kind: Some(arena_proto::DeviceKind::Pc),
+                    group_id: None,
+                    meta_rev: Some(0),
                 }],
                 locale: Some(SnapshotLocale {
                     currency: "INR".into(),
@@ -374,7 +391,7 @@ mod tests {
             rev: 1,
         };
         assert!(
-            build_snapshot(None, vec![row], None, SnapshotUi::default())
+            build_snapshot(None, vec![row], vec![], None, SnapshotUi::default())
                 .devices
                 .is_empty()
         );

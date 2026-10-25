@@ -167,8 +167,13 @@ async fn serve_tls(
     let Ok(Some(head)) = timeout(HANDSHAKE_TIMEOUT, read_head(&mut tls)).await else {
         return;
     };
-    if route(&request_line(&head)) == Route::HubInfo {
-        return answer_hub_info(&mut tls, &hub).await;
+    match route(&request_line(&head)) {
+        Route::HubInfo => return answer_hub_info(&mut tls, &hub).await,
+        Route::Pair if hub.pairing.is_some() => {
+            return answer_pair(&mut tls, peer, &head, &hub).await;
+        }
+        Route::Pair => return respond(&mut tls, "404 Not Found", "not found").await,
+        _ => {}
     }
     let stream = Prefixed {
         prefix: head,
@@ -213,6 +218,7 @@ pub(crate) enum Route {
     /// `GET /kitchen`, `GET /console/<tv>`: a placeholder page.
     Placeholder,
     HubInfo,
+    Pair,
     NotFound,
 }
 
@@ -222,10 +228,13 @@ pub(crate) fn route(request_line: &str) -> Route {
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return Route::NotFound;
     };
+    let path = target.split(['?', '#']).next().unwrap_or("");
+    if method == "POST" && path == arena_proto::PAIR_PATH {
+        return Route::Pair;
+    }
     if method != "GET" {
         return Route::NotFound;
     }
-    let path = target.split(['?', '#']).next().unwrap_or("");
     match path {
         "/ws" => Route::Ws,
         "/hub-info" => Route::HubInfo,
@@ -311,6 +320,38 @@ async fn answer_hub_info<S: AsyncWrite + Unpin>(stream: &mut S, hub: &LanHub) {
     respond_as(stream, status, "application/json", &body).await;
 }
 
+async fn answer_pair<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    peer: SocketAddr,
+    head: &[u8],
+    hub: &Arc<LanHub>,
+) {
+    let answer = match timeout(HANDSHAKE_TIMEOUT, super::pair::read_body(stream, head)).await {
+        Ok(Ok(body)) => super::pair::handle(hub, peer, &body).await,
+        Ok(Err(e)) => super::pair::Answer {
+            status: "400 Bad Request".into(),
+            body: serde_json::to_string(&e).unwrap_or_default(),
+            retry_after_s: None,
+        },
+        Err(_) => return,
+    };
+    let retry = answer
+        .retry_after_s
+        .map(|s| format!("Retry-After: {s}\r\n"))
+        .unwrap_or_default();
+    let head = format!(
+        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: close\r\n\r\n",
+        answer.status,
+        answer.body.len()
+    );
+    let _ = timeout(HANDSHAKE_TIMEOUT, async {
+        let _ = stream.write_all(head.as_bytes()).await;
+        let _ = stream.write_all(answer.body.as_bytes()).await;
+        let _ = stream.shutdown().await;
+    })
+    .await;
+}
+
 async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
     let Ok(Some(head)) = timeout(HANDSHAKE_TIMEOUT, read_head(&mut tcp)).await else {
         return;
@@ -318,7 +359,7 @@ async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
     match route(&request_line(&head)) {
         Route::HubInfo => answer_hub_info(&mut tcp, &hub).await,
         Route::Placeholder => respond(&mut tcp, "200 OK", PLACEHOLDER).await,
-        Route::NotFound => respond(&mut tcp, "404 Not Found", "not found").await,
+        Route::NotFound | Route::Pair => respond(&mut tcp, "404 Not Found", "not found").await,
         Route::Ws => {
             let stream = Prefixed {
                 prefix: head,
@@ -396,5 +437,8 @@ mod tests {
         assert_eq!(route("POST /hub-info HTTP/1.1"), Route::NotFound);
         assert_eq!(route("GET /hub-info/x HTTP/1.1"), Route::NotFound);
         assert_eq!(route("garbage"), Route::NotFound);
+        assert_eq!(route("POST /pair HTTP/1.1"), Route::Pair);
+        assert_eq!(route("GET /pair HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("POST /pair/x HTTP/1.1"), Route::NotFound);
     }
 }

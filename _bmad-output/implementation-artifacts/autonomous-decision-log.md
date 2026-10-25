@@ -714,3 +714,24 @@ Each entry gives the story, the decision point, the choice taken (the recommende
     - README.
   - Redeem throttling is routed to 2.10, whose spec has the per-code and per-IP limits.
 - **2.9 verification:** green except the known intermittent `arena-api` lan "PIN is never logged" test, which passes on rerun.
+- **2.18 implementation choices, accepted:**
+  - migration renumbered to 0011, with the forward-only runner restored;
+  - only paired kiosks get `devices_meta`;
+  - token format `<device_id>.<base64url>`;
+  - renewal only while the panel's SSE stream is connected.
+- **2.18 review outcome (Sonnet ×3):** 18 fixes, 4 rejections and 2 deferrals.
+  - **Fixes:**
+    - code brute-force invalidation after 10 misses (high);
+    - escalating per-/64 and global PIN pauses with a capped peer map (high);
+    - code consumed last and restored on failure;
+    - strict HTTP framing;
+    - system actor limited to pairing creates;
+    - fingerprints shown on both ends;
+    - fail-closed panel lifecycle with a displaced-manager notice;
+    - edit `before` rows;
+    - panel retry and back-off;
+    - `devices.changed` test;
+    - kiosk refuses re-pair and uses the selected `web_port`, with Content-Length checks, a 30 s connect timeout, mapped errors, name validation and a change-hub lock.
+  - **Accepted disagreements:** the Hub's timeout already covers only the body read; `devices_meta` rev follows the table convention (rev 1 after apply).
+  - **Deferred:** idempotent pairing (orphan rows), and a Tauri handler-registration test.
+- **2.18 landing:** full verification fully green on `91823f6`. Then rebased onto 2.9 by me: both stories had added `arena-proto/src/pairing.rs`, so 2.18's became `kiosk_pairing.rs`, and its TS type `PairingCode` became `KioskPairingCode` (it clashed with 2.9's `PairingCode` component). Post-rebase: clippy, checks, the pair test and the pair-kiosk Playwright spec pass. The known `arena-kiosk-svc` PIN-pause flake was seen once.

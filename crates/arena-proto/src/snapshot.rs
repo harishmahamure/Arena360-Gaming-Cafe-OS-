@@ -187,6 +187,15 @@ pub struct SnapshotDevice {
     /// Whether the device has a live paired session with this Hub right now.
     #[serde(default)]
     pub online: bool,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub kind: Option<crate::kiosk_pairing::DeviceKind>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub meta_rev: Option<i64>,
 }
 
 #[cfg(test)]
@@ -203,6 +212,9 @@ mod tests {
                 class: ClientClass::Paired,
                 zone: None,
                 online: true,
+                kind: Some(crate::kiosk_pairing::DeviceKind::Pc),
+                group_id: None,
+                meta_rev: Some(1),
             }],
             locale: None,
             ui: SnapshotUi::default(),
@@ -214,7 +226,7 @@ mod tests {
             serde_json::to_value(&s).unwrap(),
             serde_json::json!({
                 "branch": null,
-                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true}],
+                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1}],
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5, "hc": false},
                 "connectivity": {"state": "online", "checked_at": null},

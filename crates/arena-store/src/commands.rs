@@ -1,5 +1,3 @@
-//! `applied_commands`: the Hub's record of resolved owner commands (dedupe and result retry).
-
 use arena_proto::AppError;
 use rusqlite::{Connection, OptionalExtension, params};
 

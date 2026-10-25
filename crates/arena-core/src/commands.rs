@@ -1,9 +1,3 @@
-//! Owner commands from the cloud mailbox, turned into intents.
-//!
-//! A command carries a kind, a schema version and the kind's payload fields (with an optional
-//! `base_rev`). It becomes an intent with an `owner` actor, so owner-wins applies: a stale
-//! `base_rev` never refuses it. The cloud's idempotency key is the intent's key.
-
 use arena_proto::{
     Actor, ActorKind, AppError, COMMAND_SCHEMA_VERSION, CommandWire, ErrorCode, Intent,
     IntentPayload, SETTINGS_COMMAND_KEYS,
@@ -92,8 +86,6 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
     })
 }
 
-/// Owner wins: an owner command edits the row as it is now, so a stale or missing `base_rev`
-/// never refuses it. The audit keeps both writes.
 pub(crate) fn owner_wins(tx: &StoreTx<'_>, intent: &mut Intent) -> Result<(), AppError> {
     let rev = match &intent.payload {
         IntentPayload::SettingsSet(s) => find_setting(tx, &s.key)?.map(|r| r.rev),

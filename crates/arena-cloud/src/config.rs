@@ -78,11 +78,9 @@ pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Control,
-    /// The Hub command mailbox (`/v1/commands`).
     Command,
     /// Run one [`Task`] and exit.
     Jobs,
-    /// Every serving role this build has (`control` and `command`).
     All,
 }
 

@@ -316,10 +316,6 @@ impl WriterHandle {
         .await
     }
 
-    /// Applies one owner command from the cloud mailbox exactly once: its changes and its
-    /// `applied_commands` row commit together, and a deterministic rejection is recorded alone.
-    /// A command already recorded (by id or key) returns its stored row without writing.
-    /// `NOT_PRIMARY` and `INTERNAL` record nothing, so the next poll retries the command.
     pub async fn apply_command(&self, cmd: CommandWire) -> Result<AppliedCommand, AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();

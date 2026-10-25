@@ -144,7 +144,8 @@ async fn heartbeat(
         .db
         .pending_commands(&hub.branch_id)
         .await
-        .map_err(ApiError::internal)?;
+        .inspect_err(|e| tracing::warn!(error = %e, "heartbeat: pending commands unavailable"))
+        .unwrap_or(0);
     Ok(Json(HeartbeatResponse {
         licence,
         fence: HeartbeatFence {

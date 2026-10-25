@@ -158,7 +158,6 @@ jobs:
           yq -i '(select(.kind == "Deployment" and .metadata.name == "arena-cloud-control") | .spec.template.spec.containers[] | select(.name == "control") | .image) = strenv(IMAGE)' "$RUNNER_TEMP/rendered.yaml"
           yq -i '(select(.kind == "Deployment" and .metadata.name == "arena-cloud-command") | .spec.template.spec.containers[] | select(.name == "command") | .image) = strenv(IMAGE)' "$RUNNER_TEMP/rendered.yaml"
           yq -i '(select(.kind == "CronJob" and .metadata.name == "arena-cloud-control-backup") | .spec.jobTemplate.spec.template.spec.containers[] | select(.name == "control-backup") | .image) = strenv(IMAGE)' "$RUNNER_TEMP/rendered.yaml"
-          # The control and command Deployments and the backup CronJob all run this image.
           [[ "$(grep -cF "image: ${IMAGE}" "$RUNNER_TEMP/rendered.yaml")" == "3" ]]
 
       - name: Apply and wait for the rollout

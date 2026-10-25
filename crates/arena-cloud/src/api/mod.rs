@@ -112,8 +112,6 @@ pub fn with_envelope_and_auth(base: Router, dev: bool, auth: Option<Arc<AuthStat
     with_envelope_for(base, dev, auth, false)
 }
 
-/// [`with_envelope_and_auth`] for the `command` role: only the Hub's command mailbox routes
-/// under `/v1`.
 pub fn with_envelope_commands(base: Router, dev: bool, auth: Option<Arc<AuthState>>) -> Router {
     with_envelope_for(base, dev, auth, true)
 }

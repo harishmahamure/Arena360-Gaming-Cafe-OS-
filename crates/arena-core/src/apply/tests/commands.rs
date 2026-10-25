@@ -154,3 +154,86 @@ async fn results_are_reported_in_order_until_marked() {
     assert_eq!(ids(f.writer.unreported_commands(10).await.unwrap()), [6]);
     assert_eq!(f.writer.command_cursor().await.unwrap(), 6);
 }
+
+fn text(row: &std::collections::BTreeMap<String, RowValue>, k: &str) -> String {
+    match &row[k] {
+        RowValue::Text(t) => t.clone(),
+        other => panic!("{k} is {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn owner_staff_and_device_edits_win_over_a_stale_base_rev() {
+    let f = bootstrapped().await;
+    let db = reopen(&f);
+    let role = db
+        .rows(Table::Roles)
+        .unwrap()
+        .iter()
+        .map(|r| text(r, "role_id"))
+        .next()
+        .unwrap();
+    let pw = crate::staff::hash_secret("pw").unwrap();
+    let staff = |id: i64, extra: serde_json::Value| {
+        let mut p = json!({"login": "asha", "display_name": "Asha", "role_id": role, "password_hash": pw, "active": true});
+        p.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        cmd(id, "staff.upsert", p)
+    };
+    assert!(
+        f.writer
+            .apply_command(staff(1, json!({})))
+            .await
+            .unwrap()
+            .applied
+    );
+    let staff_id = text(&reopen(&f).rows(Table::Staff).unwrap()[0], "staff_id");
+    let edit = staff(
+        2,
+        json!({"staff_id": staff_id, "display_name": "Asha K", "base_rev": 99}),
+    );
+    let row = f.writer.apply_command(edit).await.unwrap();
+    assert!(row.applied, "{:?}", row.error);
+    assert_eq!(
+        text(&reopen(&f).rows(Table::Staff).unwrap()[0], "display_name"),
+        "Asha K"
+    );
+
+    let secret = crate::devices::new_token_secret().unwrap();
+    let hash = crate::devices::hash_token_secret(&secret).unwrap();
+    let register = |id: i64, extra: serde_json::Value| {
+        let mut p = json!({"class": "paired", "label": "Kiosk 1", "token_hash": hash});
+        p.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        cmd(id, "device.register", p)
+    };
+    let row = f
+        .writer
+        .apply_command(register(3, json!({})))
+        .await
+        .unwrap();
+    assert!(row.applied, "{:?}", row.error);
+    let device_id = text(&reopen(&f).rows(Table::Devices).unwrap()[0], "device_id");
+    let edit = register(
+        4,
+        json!({"device_id": device_id, "label": "Kiosk 2", "token_hash": "", "base_rev": 99}),
+    );
+    let row = f.writer.apply_command(edit).await.unwrap();
+    assert!(row.applied, "{:?}", row.error);
+    assert_eq!(
+        text(&reopen(&f).rows(Table::Devices).unwrap()[0], "label"),
+        "Kiosk 2"
+    );
+
+    let assign = cmd(
+        5,
+        "device.assign",
+        json!({"device_id": device_id, "group_id": null}),
+    );
+    let row = f.writer.apply_command(assign).await.unwrap();
+    assert!(row.applied, "{:?}", row.error);
+    let changes = reopen(&f).changes().unwrap();
+    assert!(changes.iter().filter(|c| c.actor_kind == "owner").count() >= 5);
+}

@@ -288,3 +288,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-15-owner-changes-reach-the-hub-through-the-command-mailbox-with.md`
   summary: Mailbox gaps left for Epic 8 and the wizard stories: `epoch` is required on fetch and result but not fenced; `commands` and `applied_commands` rows are never pruned and a `fetched` row whose Hub never answers stays open; the Hub rejects `setup.test_session` and `branch.go_live` as `UNSUPPORTED` until Stories 2.29 and 2.31; `settings.set` for `branch.name` is accepted by the cloud but refused by the Hub until Story 2.30 gives the name a setting; the "updated by owner" toast covers only groups, zones and device placement and fires on every owner write there, not only an overwrite; the command Deployment copies the control Deployment's secrets because the binary loads one auth configuration for every role; no per-Hub rate limit on the mailbox routes.
   evidence: Own notes while implementing; not yet reviewed.
+
+## Deferred from: code review of spec-2-15 (2026-10-26)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-15-owner-changes-reach-the-hub-through-the-command-mailbox-with.md`
+  summary: A cloud restore can rewind `commands.id` below the Hub's cursor or onto old `applied_commands` ids and keys; a command that always fails `INTERNAL` blocks the queue behind it; a non-`NotFound` 4xx on a result post stalls the mailbox; `check-deploy` ignores the command Deployment, its Ingress path and rollout; missing tests for the 50-row page boundary and an `INTERNAL` failure inside the write transaction.
+  evidence: Review findings from Edge Case Hunter, Blind Hunter and Verification Gap.

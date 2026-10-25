@@ -2,7 +2,7 @@
 title: 'Story 2.15: Owner changes reach the Hub through the command mailbox within one poll'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: '11461a4'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -73,4 +73,16 @@ Known limits: the Hub has no `branch.name` setting yet, so a `settings.set` for 
 
 ## Review Triage Log
 
-Not reviewed yet (status review).
+### Review Findings
+
+- [x] [Review][Patch] Heartbeat failed outright when the pending-commands count failed; it now logs and answers without the hint [crates/arena-cloud/src/api/heartbeat.rs:143]
+- [x] [Review][Patch] Comments added by the story removed (global no-comments rule) [crates/arena-core, arena-cloud, arena-store, deploy]
+- [x] [Review][Patch] No test applied `device.register`, `staff.upsert` or `device.assign` with a stale `base_rev`; added `owner_staff_and_device_edits_win_over_a_stale_base_rev` [crates/arena-core/src/apply/tests/commands.rs]
+- [x] [Review][Defer] A cloud restore that rewinds `commands.id` can collide with `applied_commands` ids or keys and the cursor; the by-key hit returns the old row so the new id is refetched every poll — deferred: needs a decision on cursor survival after a cloud restore
+- [x] [Review][Defer] A command that always fails `INTERNAL` blocks every later command (no retry cap or quarantine) — deferred: design choice, belongs with the Epic 8 sweeper
+- [x] [Review][Defer] A non-`NotFound` 4xx on a result post stalls the mailbox; the Hub only ever sends well-formed results — deferred
+- [x] [Review][Defer] `check-deploy` does not check the command Deployment, the `/v1/commands` Ingress path or its rollout step; the command pod carries secrets it does not use; no smoke or rate limit on the mailbox routes — deferred: deploy tooling
+- [x] [Review][Defer] Missing tests: 50-row page boundary, `INTERNAL` raised inside the write transaction, a restart check that proves the dedupe — deferred
+- [x] [Review][Defer] `submit_command` has no caller yet, so `issued_by` and unknown-branch handling are validated by the later wizard stories; a repeated key with a different payload returns the first row — deferred
+
+Rejected: result body with neither or both of `applied_seq` and `error` (the Hub may legitimately send no seq for a no-op; it never sends both); ULID case normalisation (the Hub dedupes by canonical key); unrelated formatting churn (cargo fmt output); the spec's "through `apply()`" wording (`run()` is what `apply()` wraps).

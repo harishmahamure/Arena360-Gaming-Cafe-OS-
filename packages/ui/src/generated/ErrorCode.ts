@@ -50,4 +50,5 @@ export type ErrorCode =
   | "HUB_NOT_PAIRED"
   | "GROUP_NOT_EMPTY"
   | "GROUP_KIND_MISMATCH"
-  | "TIER_LOCKED";
+  | "TIER_LOCKED"
+  | "DEVICE_LIMIT";

@@ -72,6 +72,8 @@ pub fn build_snapshot(
                     kind: m.and_then(|m| arena_proto::DeviceKind::parse(&m.kind)),
                     group_id: m.and_then(|m| m.group_id.clone()),
                     meta_rev: m.map(|m| m.rev),
+                    tv_number: m.and_then(|m| m.tv_number),
+                    manual: d.token_hash.is_empty(),
                     device_id: d.device_id,
                     zone: None,
                     // Presence is the LAN registry's, not the database's: the snapshot
@@ -328,7 +330,7 @@ mod tests {
                         },
                     )?;
                 }
-                insert_device_meta(tx, "D1", "pc", "Front PC")?;
+                insert_device_meta(tx, "D1", "pc", "Front PC", None, None)?;
                 set_device_revoked(tx, "D2", 5)
             })
             .unwrap();
@@ -357,6 +359,8 @@ mod tests {
                     kind: Some(arena_proto::DeviceKind::Pc),
                     group_id: None,
                     meta_rev: Some(0),
+                    tv_number: None,
+                    manual: false,
                 }],
                 locale: Some(SnapshotLocale {
                     currency: "INR".into(),

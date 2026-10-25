@@ -222,6 +222,12 @@ pub struct SnapshotDevice {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub meta_rev: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub tv_number: Option<i64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, type = "boolean")]
+    pub manual: bool,
 }
 
 #[cfg(test)]
@@ -242,6 +248,8 @@ mod tests {
                 kind: Some(crate::kiosk_pairing::DeviceKind::Pc),
                 group_id: None,
                 meta_rev: Some(1),
+                tv_number: None,
+                manual: false,
             }],
             locale: None,
             ui: SnapshotUi::default(),
@@ -256,7 +264,7 @@ mod tests {
             serde_json::json!({
                 "branch": null,
                 "groups": [],
-                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1}],
+                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null}],
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5, "hc": false},
                 "connectivity": {"state": "online", "checked_at": null},

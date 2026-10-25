@@ -330,10 +330,16 @@ pub struct DeviceRegister {
     /// `paired` or `kds` (a phone is never registered).
     pub class: ClientClass,
     #[serde(default)]
-    pub kind: crate::kiosk_pairing::DeviceKind,
+    pub device_kind: crate::kiosk_pairing::DeviceKind,
     pub label: String,
     #[serde(default)]
     pub token_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub tv_number: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub group_id: Option<String>,
 }
 
 impl DeviceRegister {
@@ -345,9 +351,11 @@ impl DeviceRegister {
         Self {
             device_id: None,
             class,
-            kind: crate::kiosk_pairing::DeviceKind::Pc,
+            device_kind: crate::kiosk_pairing::DeviceKind::Pc,
             label: label.into(),
             token_hash: token_hash.into(),
+            tv_number: None,
+            group_id: None,
         }
     }
 }

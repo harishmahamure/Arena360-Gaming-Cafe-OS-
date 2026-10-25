@@ -1,6 +1,7 @@
 use crate::{IntentPayload, PRINTER_PAPER_WIDTHS_MM};
 
 pub const KEY_LICENCE_FLAGS: &str = "licence.flags";
+pub const KEY_DEVICE_CAP: &str = "licence.device_cap";
 pub const KEY_KITCHEN_KOT_MODE: &str = "kitchen.kot_mode";
 pub const KEY_KITCHEN_KOT_PRINTER: &str = "kitchen.kot_printer";
 pub const KEY_KITCHEN_KOT_PAPER_MM: &str = "kitchen.kot_paper_mm";

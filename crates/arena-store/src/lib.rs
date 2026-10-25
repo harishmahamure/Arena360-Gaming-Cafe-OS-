@@ -43,11 +43,11 @@ pub use dedupe::{
     insert_applied_intent, prune_applied_intents,
 };
 pub use devices::{
-    DeviceMetaRow, DeviceRow, GroupRow, NewDevice, count_group_devices, devices_meta_exists,
-    find_device, find_device_meta, find_group, find_group_by_name, insert_device,
-    insert_device_meta, insert_group, list_device_meta, list_devices, list_groups,
-    set_device_group, set_device_label, set_device_reported_version, set_device_revoked,
-    set_group_deleted, update_device_meta, update_group,
+    DeviceMetaRow, DeviceRow, GroupRow, NewDevice, count_group_devices, count_live_devices,
+    devices_meta_exists, find_device, find_device_meta, find_group, find_group_by_name,
+    insert_device, insert_device_meta, insert_group, list_device_meta, list_devices, list_groups,
+    set_device_group, set_device_label, set_device_meta_deleted, set_device_reported_version,
+    set_device_revoked, set_group_deleted, tv_number_taken, update_device_meta, update_group,
 };
 pub use identity::{
     CachedLicence, HubIdentity, find_cached_licence, find_hub_identity, insert_hub_identity,

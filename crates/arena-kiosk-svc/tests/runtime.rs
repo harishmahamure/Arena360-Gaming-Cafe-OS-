@@ -157,10 +157,12 @@ impl Hub {
                 owner(),
                 IntentPayload::DeviceRegister(DeviceRegister {
                     device_id: None,
-                    kind: Default::default(),
+                    device_kind: Default::default(),
                     class: ClientClass::Paired,
                     label: "Dev Kiosk".into(),
                     token_hash: hash_token_secret(&secret).unwrap(),
+                    tv_number: None,
+                    group_id: None,
                 }),
             ))
             .await
@@ -273,10 +275,12 @@ impl Hub {
                 owner(),
                 IntentPayload::DeviceRegister(DeviceRegister {
                     device_id: None,
-                    kind: Default::default(),
+                    device_kind: Default::default(),
                     class: ClientClass::Paired,
                     label: "Replacement Kiosk".into(),
                     token_hash: hash_token_secret(&secret).unwrap(),
+                    tv_number: None,
+                    group_id: None,
                 }),
             ))
             .await

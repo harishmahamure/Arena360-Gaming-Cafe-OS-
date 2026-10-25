@@ -812,7 +812,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::StepNotReady
         | ErrorCode::HubNotPaired => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
-        ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked => StatusCode::FORBIDDEN,
+        ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked | ErrorCode::DeviceLimit => {
+            StatusCode::FORBIDDEN
+        }
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PasswordRequired | ErrorCode::SetupIncomplete => StatusCode::FORBIDDEN,
         ErrorCode::PermissionDenied
@@ -2215,10 +2217,12 @@ pub(crate) mod tests {
                 },
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                     device_id: None,
-                    kind: Default::default(),
+                    device_kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk".into(),
                     token_hash: arena_core::devices::hash_token_secret(&secret).unwrap(),
+                    tv_number: None,
+                    group_id: None,
                 }),
                 None,
             ))
@@ -3237,10 +3241,12 @@ pub(crate) mod tests {
                 },
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                     device_id: None,
-                    kind: Default::default(),
+                    device_kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk 1".into(),
                     token_hash: hash,
+                    tv_number: None,
+                    group_id: None,
                 }),
                 None,
             ))
@@ -3479,10 +3485,12 @@ pub(crate) mod tests {
                 owner.clone(),
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                     device_id: None,
-                    kind: Default::default(),
+                    device_kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk 1".into(),
                     token_hash: hash,
+                    tv_number: None,
+                    group_id: None,
                 }),
                 None,
             ))

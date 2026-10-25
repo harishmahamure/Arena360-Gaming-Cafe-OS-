@@ -1077,10 +1077,12 @@ fn device_intent(actor: ActorKind, body: IntentPayload) -> Intent {
 fn register(hash: &str) -> IntentPayload {
     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
         device_id: None,
-        kind: Default::default(),
+        device_kind: Default::default(),
         class: arena_proto::ClientClass::Paired,
         label: "Dev Kiosk".into(),
         token_hash: hash.into(),
+        tv_number: None,
+        group_id: None,
     })
 }
 
@@ -1171,10 +1173,12 @@ async fn device_register_checks_actor_hash_class_and_branch() {
     assert_eq!(err.field.as_deref(), Some("token_hash"));
     let phone = IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
         device_id: None,
-        kind: Default::default(),
+        device_kind: Default::default(),
         class: arena_proto::ClientClass::Phone,
         label: "x".into(),
         token_hash: hash.clone(),
+        tv_number: None,
+        group_id: None,
     });
     let err = expect_err(&f, device_intent(ActorKind::Owner, phone)).await;
     assert_eq!(err.field.as_deref(), Some("class"));
@@ -3123,9 +3127,11 @@ mod pairing_register {
 
         let pairing_edit = DeviceRegister {
             device_id: Some(id.clone()),
-            kind: DeviceKind::Pc,
+            device_kind: DeviceKind::Pc,
             label: "Taken over".into(),
             token_hash: String::new(),
+            tv_number: None,
+            group_id: None,
             class: ClientClass::Paired,
         };
         let err = expect_err(
@@ -3147,9 +3153,11 @@ mod pairing_register {
 
         let edit = |label: &str, kind: DeviceKind| DeviceRegister {
             device_id: Some(id.clone()),
-            kind,
+            device_kind: kind,
             label: label.into(),
             token_hash: String::new(),
+            tv_number: None,
+            group_id: None,
             class: ClientClass::Paired,
         };
         let err = expect_err(
@@ -4935,7 +4943,7 @@ mod device_groups {
             "D",
             crate::devices::hash_token_secret("s").unwrap(),
         );
-        d.kind = kind;
+        d.device_kind = kind;
         f.writer
             .submit_intent(as_actor(
                 actor(ActorKind::System, arena_proto::PAIR_SYSTEM_ACTOR),
@@ -5514,5 +5522,523 @@ mod tax {
         intent.issued_at = f.clock.now_ms();
         let e = f.writer.submit_intent(intent).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::Stale);
+    }
+}
+
+mod manual_devices {
+    use super::*;
+    use arena_proto::{
+        ClientClass, DeviceAssign, DeviceKind, DeviceRegister, DeviceRevoke, GroupUpsert,
+    };
+
+    fn reg(kind: DeviceKind, label: &str, tv: Option<i64>) -> DeviceRegister {
+        DeviceRegister {
+            device_id: None,
+            class: ClientClass::Paired,
+            device_kind: kind,
+            label: label.into(),
+            token_hash: String::new(),
+            tv_number: tv,
+            group_id: None,
+        }
+    }
+
+    async fn send(
+        f: &Fixture,
+        kind: ActorKind,
+        payload: IntentPayload,
+        base_rev: Option<i64>,
+    ) -> Result<Applied, AppError> {
+        f.writer
+            .submit_intent(Intent {
+                kind: payload.kind(),
+                reason: payload.kind().reasons().map(|r| r[0]),
+                payload,
+                actor: Actor {
+                    kind,
+                    id: "o".into(),
+                },
+                base_rev,
+                ..bootstrap()
+            })
+            .await
+    }
+
+    async fn add(f: &Fixture, d: DeviceRegister) -> Result<String, AppError> {
+        let applied = send(f, ActorKind::Owner, IntentPayload::DeviceRegister(d), None).await?;
+        Ok(applied.changes[0].row_id.clone())
+    }
+
+    async fn err(f: &Fixture, d: DeviceRegister) -> (ErrorCode, Option<String>) {
+        let e = add(f, d).await.unwrap_err();
+        (e.code, e.field)
+    }
+
+    fn invalid(field: &str) -> (ErrorCode, Option<String>) {
+        (ErrorCode::ValidationFailed, Some(field.into()))
+    }
+
+    async fn group(f: &Fixture, kind: &str) -> String {
+        let p = IntentPayload::GroupUpsert(GroupUpsert {
+            id: None,
+            name: format!("G-{kind}"),
+            group_kind: kind.into(),
+            colour: "teal".into(),
+            sort_order: 1,
+        });
+        send(f, ActorKind::Owner, p, None).await.unwrap().changes[0]
+            .row_id
+            .clone()
+    }
+
+    async fn cap(f: &Fixture, value: &str) {
+        let sql = format!(
+            "INSERT INTO settings (branch_id, key, value, rev, updated_at)
+             SELECT branch_id, 'licence.device_cap', '{value}', 0, 0 FROM branch"
+        );
+        f.writer
+            .submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_manual_console_registers_without_a_token() {
+        let f = bootstrapped().await;
+        let id = add(&f, reg(DeviceKind::Console, "PS5 One", Some(3)))
+            .await
+            .unwrap();
+        let store = reopen(&f);
+        let meta = store.device_meta(&id).unwrap().unwrap();
+        assert_eq!(
+            (meta.kind.as_str(), meta.tv_number, meta.group_id.clone()),
+            ("console", Some(3), None)
+        );
+        let device = store.devices().unwrap().pop().unwrap();
+        assert_eq!(
+            (device.class.as_str(), device.token_hash.as_str()),
+            ("paired", "")
+        );
+        let snap = crate::snapshot::read_snapshot(&store, 0).unwrap();
+        assert!(snap.devices[0].manual && snap.devices[0].tv_number == Some(3));
+        let c = &f
+            .writer
+            .submit_intent(Intent {
+                kind: IntentKind::DeviceRegister,
+                payload: IntentPayload::DeviceRegister(reg(DeviceKind::Vr, "VR 1", None)),
+                actor: Actor {
+                    kind: ActorKind::Owner,
+                    id: "o".into(),
+                },
+                ..bootstrap()
+            })
+            .await
+            .unwrap()
+            .changes[0];
+        assert_eq!(
+            store.change_actor_kind(&c.epoch, c.seq).unwrap().as_deref(),
+            Some("owner")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_manager_registers_by_hand_and_a_counter_cannot() {
+        let f = bootstrapped().await;
+        let role = |name: &str| -> String {
+            match reopen(&f)
+                .rows(Table::Roles)
+                .unwrap()
+                .into_iter()
+                .find(|r| r["name"] == RowValue::Text(name.into()))
+                .unwrap()["role_id"]
+                .clone()
+            {
+                RowValue::Text(t) => t,
+                other => panic!("{other:?}"),
+            }
+        };
+        let mut staff = Vec::new();
+        for (login, name) in [
+            ("mgr", crate::rbac::ROLE_MANAGER),
+            ("ctr", crate::rbac::ROLE_COUNTER),
+        ] {
+            let applied = send(
+                &f,
+                ActorKind::Owner,
+                IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                    staff_id: None,
+                    login: login.into(),
+                    display_name: login.into(),
+                    role_id: role(name),
+                    password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
+                    pin_hash: Some(crate::staff::hash_secret("2222").unwrap()),
+                    active: true,
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+            staff.push(applied.changes[0].row_id.clone());
+        }
+        let by = |id: &str| Intent {
+            kind: IntentKind::DeviceRegister,
+            payload: IntentPayload::DeviceRegister(reg(DeviceKind::Sim, "Sim 1", None)),
+            actor: Actor {
+                kind: ActorKind::Staff,
+                id: id.into(),
+            },
+            ..bootstrap()
+        };
+        let e = f.writer.submit_intent(by(&staff[1])).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        let applied = f.writer.submit_intent(by(&staff[0])).await.unwrap();
+        let c = &applied.changes[0];
+        assert_eq!(
+            reopen(&f)
+                .change_actor_kind(&c.epoch, c.seq)
+                .unwrap()
+                .as_deref(),
+            Some("staff")
+        );
+        let id = applied
+            .changes
+            .iter()
+            .find(|c| c.tbl == "devices")
+            .unwrap()
+            .row_id
+            .clone();
+        let settings = reopen(&f).rows(Table::Settings).unwrap();
+        assert!(
+            !settings
+                .iter()
+                .any(|r| r["key"] == RowValue::Text(arena_proto::hc_key(&id)))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_pairing_actor_cannot_register_by_hand() {
+        let f = bootstrapped().await;
+        let e = send(
+            &f,
+            ActorKind::System,
+            IntentPayload::DeviceRegister(reg(DeviceKind::Vr, "VR", None)),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        let pairing = Intent {
+            kind: IntentKind::DeviceRegister,
+            payload: IntentPayload::DeviceRegister(reg(DeviceKind::Vr, "VR", None)),
+            actor: Actor {
+                kind: ActorKind::System,
+                id: arena_proto::PAIR_SYSTEM_ACTOR.into(),
+            },
+            ..bootstrap()
+        };
+        let e = f.writer.submit_intent(pairing).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("kind"))
+        );
+        let mut d = reg(DeviceKind::Vr, "VR", None);
+        d.class = ClientClass::Kds;
+        assert_eq!(err(&f, d).await, invalid("kind"));
+    }
+
+    #[tokio::test]
+    async fn edit_rules_for_a_manual_device() {
+        let f = bootstrapped().await;
+        let id = add(&f, reg(DeviceKind::Console, "A", Some(1)))
+            .await
+            .unwrap();
+        let edit = |d: DeviceRegister| {
+            let mut d = d;
+            d.device_id = Some(id.clone());
+            IntentPayload::DeviceRegister(d)
+        };
+        send(
+            &f,
+            ActorKind::Owner,
+            edit(reg(DeviceKind::Console, "A2", Some(1))),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let mut grouped = reg(DeviceKind::Console, "A2", Some(1));
+        grouped.group_id = Some("G".into());
+        let e = send(&f, ActorKind::Owner, edit(grouped), Some(2))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("group_id"))
+        );
+        let e = send(
+            &f,
+            ActorKind::Owner,
+            edit(reg(DeviceKind::Pc, "A2", None)),
+            Some(2),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("kind"))
+        );
+        let e = send(
+            &f,
+            ActorKind::Owner,
+            edit(reg(DeviceKind::Console, "A2", None)),
+            Some(2),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("tv_number"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deleted_group_is_refused_and_tv_bounds_hold() {
+        let f = bootstrapped().await;
+        let g = group(&f, "console").await;
+        send(
+            &f,
+            ActorKind::Owner,
+            IntentPayload::GroupDelete(arena_proto::GroupDelete { id: g.clone() }),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let mut d = reg(DeviceKind::Console, "A", Some(1));
+        d.group_id = Some(g);
+        assert_eq!(err(&f, d).await, invalid("group_id"));
+        assert_eq!(
+            err(&f, reg(DeviceKind::Console, "A", Some(1000))).await,
+            invalid("tv_number")
+        );
+        add(&f, reg(DeviceKind::Console, "A", Some(999)))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_cap_does_not_block_a_token_and_a_revoke_leaves_a_change_row() {
+        let f = bootstrapped().await;
+        cap(&f, "0").await;
+        assert_eq!(
+            err(&f, reg(DeviceKind::Vr, "VR", None)).await,
+            (ErrorCode::DeviceLimit, None)
+        );
+        let mut tokened = reg(DeviceKind::Console, "PS5", None);
+        tokened.token_hash = crate::devices::hash_token_secret("s").unwrap();
+        let id = add(&f, tokened).await.unwrap();
+        let applied = send(
+            &f,
+            ActorKind::Owner,
+            IntentPayload::DeviceRevoke(DeviceRevoke {
+                device_id: id.clone(),
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            applied
+                .changes
+                .iter()
+                .any(|c| c.tbl == "devices_meta" && c.row_id == id)
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_of_a_manual_device() {
+        let f = bootstrapped().await;
+        assert_eq!(
+            err(&f, reg(DeviceKind::Pc, "PC", None)).await,
+            invalid("kind")
+        );
+        assert_eq!(
+            err(&f, reg(DeviceKind::Console, "PS5", None)).await,
+            invalid("tv_number")
+        );
+        assert_eq!(
+            err(&f, reg(DeviceKind::Console, "PS5", Some(0))).await,
+            invalid("tv_number")
+        );
+        assert_eq!(
+            err(&f, reg(DeviceKind::Vr, "VR", Some(1))).await,
+            invalid("tv_number")
+        );
+        assert_eq!(
+            err(&f, reg(DeviceKind::Vr, " ", None)).await,
+            invalid("label")
+        );
+        let mut g = reg(DeviceKind::Vr, "VR", None);
+        g.group_id = Some("nope".into());
+        assert_eq!(err(&f, g).await, invalid("group_id"));
+    }
+
+    #[tokio::test]
+    async fn the_tv_number_is_unique_among_live_consoles() {
+        let f = bootstrapped().await;
+        let id = add(&f, reg(DeviceKind::Console, "A", Some(1)))
+            .await
+            .unwrap();
+        assert_eq!(
+            err(&f, reg(DeviceKind::Console, "B", Some(1))).await,
+            invalid("tv_number")
+        );
+        add(&f, reg(DeviceKind::Console, "B", Some(2)))
+            .await
+            .unwrap();
+        send(
+            &f,
+            ActorKind::Owner,
+            IntentPayload::DeviceRevoke(DeviceRevoke { device_id: id }),
+            None,
+        )
+        .await
+        .unwrap();
+        add(&f, reg(DeviceKind::Console, "C", Some(1)))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_group_must_fit_the_kind() {
+        let f = bootstrapped().await;
+        let consoles = group(&f, "console").await;
+        let mut ok = reg(DeviceKind::Console, "A", Some(1));
+        ok.group_id = Some(consoles.clone());
+        let id = add(&f, ok).await.unwrap();
+        assert_eq!(
+            reopen(&f).device_meta(&id).unwrap().unwrap().group_id,
+            Some(consoles.clone())
+        );
+        let mut bad = reg(DeviceKind::Vr, "V", None);
+        bad.group_id = Some(consoles);
+        assert_eq!(
+            err(&f, bad).await,
+            (ErrorCode::GroupKindMismatch, Some("group_id".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_device_cap_refuses_and_a_removal_frees_the_slot() {
+        let f = bootstrapped().await;
+        cap(&f, "2").await;
+        let a = add(&f, reg(DeviceKind::Vr, "A", None)).await.unwrap();
+        add(&f, reg(DeviceKind::Vr, "B", None)).await.unwrap();
+        assert_eq!(
+            err(&f, reg(DeviceKind::Vr, "C", None)).await,
+            (ErrorCode::DeviceLimit, None)
+        );
+        send(
+            &f,
+            ActorKind::Owner,
+            IntentPayload::DeviceRevoke(DeviceRevoke {
+                device_id: a.clone(),
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            reopen(&f)
+                .device_meta(&a)
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_some()
+        );
+        add(&f, reg(DeviceKind::Vr, "C", None)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn edits_need_base_rev_and_go_stale() {
+        let f = bootstrapped().await;
+        let id = add(&f, reg(DeviceKind::Console, "A", Some(1)))
+            .await
+            .unwrap();
+        add(&f, reg(DeviceKind::Console, "B", Some(2)))
+            .await
+            .unwrap();
+        let edit = |label: &str, tv: i64| {
+            let mut d = reg(DeviceKind::Console, label, Some(tv));
+            d.device_id = Some(id.clone());
+            IntentPayload::DeviceRegister(d)
+        };
+        let e = send(&f, ActorKind::Owner, edit("A2", 5), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("base_rev"))
+        );
+        send(&f, ActorKind::Owner, edit("A2", 5), Some(1))
+            .await
+            .unwrap();
+        let meta = reopen(&f).device_meta(&id).unwrap().unwrap();
+        assert_eq!(
+            (meta.label.as_str(), meta.tv_number, meta.rev),
+            ("A2", Some(5), 2)
+        );
+        let e = send(&f, ActorKind::Owner, edit("A3", 5), Some(1))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Stale);
+        let e = send(&f, ActorKind::Owner, edit("A3", 2), Some(2))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("tv_number"))
+        );
+        send(&f, ActorKind::Owner, edit("A3", 1), Some(2))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_grouped_device_keeps_its_kind_on_edit() {
+        let f = bootstrapped().await;
+        let consoles = group(&f, "console").await;
+        let id = add(&f, reg(DeviceKind::Console, "A", Some(1)))
+            .await
+            .unwrap();
+        send(
+            &f,
+            ActorKind::Owner,
+            IntentPayload::DeviceAssign(DeviceAssign {
+                device_id: id.clone(),
+                group_id: Some(consoles),
+            }),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let mut d = reg(DeviceKind::Vr, "A", None);
+        d.device_id = Some(id);
+        let e = send(
+            &f,
+            ActorKind::Owner,
+            IntentPayload::DeviceRegister(d),
+            Some(2),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(e.code, ErrorCode::GroupKindMismatch);
+    }
+
+    #[test]
+    fn the_wire_form_has_one_kind_key() {
+        let p = IntentPayload::DeviceRegister(reg(DeviceKind::Console, "A", Some(1)));
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["kind"], "device.register");
+        assert_eq!(json["device_kind"], "console");
+        assert_eq!(serde_json::from_value::<IntentPayload>(json).unwrap(), p);
     }
 }

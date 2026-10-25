@@ -170,10 +170,12 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                         device_id: None,
-                        kind: Default::default(),
+                        device_kind: Default::default(),
                         class: arena_proto::ClientClass::Kds,
                         label: "Pass".into(),
                         token_hash: arena_core::devices::hash_token_secret("s").unwrap(),
+                        tv_number: None,
+                        group_id: None,
                     }),
                     None,
                 ))
@@ -260,10 +262,12 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                         device_id: None,
-                        kind: Default::default(),
+                        device_kind: Default::default(),
                         class: arena_proto::ClientClass::Paired,
                         label: "Kiosk".into(),
                         token_hash: arena_core::devices::hash_token_secret("k").unwrap(),
+                        tv_number: None,
+                        group_id: None,
                     }),
                     None,
                 ))

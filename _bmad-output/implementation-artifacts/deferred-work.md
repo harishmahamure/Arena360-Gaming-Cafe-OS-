@@ -185,3 +185,10 @@
 - `FEATURE_NOT_ENTITLED` for Free branches on owner read and command endpoints (AC 3): add the gate with each endpoint (8.13 and later), with a test per endpoint.
 - Pass the branch into `Section` children for paid branches when the real section content lands.
 - Empty branch list in `Section` renders unlocked content; decide a message when Branches (2.30) defines the empty tenant.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-21-register-consoles-vr-rigs-and-simulators-manually.md`
+  summary: Story 2.19 must seed `licence.device_cap` with a non-settable rule, treat an unparseable value as an error rather than no cap, and extend the cap to PC pairing and kds registration.
+  evidence: 2.21 reads the key (absent means no cap) and gates only manual devices; `settings.set` cannot write an unseeded key today.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-21-register-consoles-vr-rigs-and-simulators-manually.md`
+  summary: Tests for 2.21: `DEVICE_LIMIT` maps to 403 over HTTP; a Counter removing a manual device gets the PIN prompt for `device.revoke`; the tier-lock tier follows the licence instead of a fixed Basic.
+  evidence: Only the Playwright stub and the Rust apply tests cover them.
+

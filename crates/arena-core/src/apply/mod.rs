@@ -105,7 +105,7 @@ pub(crate) enum Target {
     /// `settings.set`, `ads.consent`: the setting row, if it exists.
     Setting(Option<arena_store::SettingRef>),
     /// `device.register`: the branch the device joins, if it has been bootstrapped.
-    NewDevice(Option<String>),
+    NewDevice(Box<devices::NewDev>),
     RegisterEdit(Box<devices::RegisterEdit>),
     /// `device.revoke`, `device.version_reported`: the device row, if it exists.
     Device(Option<arena_store::DeviceRow>),

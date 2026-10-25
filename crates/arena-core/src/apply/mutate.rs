@@ -114,8 +114,8 @@ pub(super) fn mutate(
         },
         IntentPayload::DeviceRegister(d) => match target {
             Target::RegisterEdit(t) => devices::mutate_edit(tx, d, t),
-            Target::NewDevice(b) => devices::mutate_register(tx, d, b.as_ref()),
-            _ => devices::mutate_register(tx, d, None),
+            Target::NewDevice(t) => devices::mutate_register(tx, d, t),
+            _ => devices::mutate_register(tx, d, &devices::NewDev::default()),
         },
         IntentPayload::DeviceRevoke(_) => devices::mutate_revoke(tx, device_row(target), now_ms),
         IntentPayload::DeviceVersionReported(d) => {

@@ -119,7 +119,7 @@ pub(super) fn validate_delete(t: &GroupTarget) -> Result<(), AppError> {
     Ok(())
 }
 
-fn fits(device: &str, group: &str) -> bool {
+pub(super) fn fits(device: &str, group: &str) -> bool {
     matches!(
         (device, group),
         ("pc", "pc") | ("console", "console") | ("vr", "vr") | ("sim", "other")

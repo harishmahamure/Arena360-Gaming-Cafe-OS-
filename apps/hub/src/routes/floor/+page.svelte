@@ -125,14 +125,19 @@
     data-testid={group ? "group-device" : "unassigned-device"}
   >
     <span class="label type-hub-title">{device.label}</span>
+    {#if device.tv_number}<span class="type-hub-label" data-testid="tv-number"
+        >{t("hub.floor.tv", { n: device.tv_number })}</span
+      >{/if}
     {#if group}<GroupChip name={group.name} colour={group.colour} />{:else}<StatusBadge
         state="unassigned"
       />{/if}
-    <!-- Presence in words (never colour alone): a live paired session or not. -->
-    <span class="presence type-hub-body" data-testid="device-presence"
-      >{device.online ? t("hub.floor.online") : t("hub.floor.offline")}</span
-    >
-    {#if device.class === "paired"}
+    {#if !device.manual}
+      <!-- Presence in words (never colour alone): a live paired session or not. -->
+      <span class="presence type-hub-body" data-testid="device-presence"
+        >{device.online ? t("hub.floor.online") : t("hub.floor.offline")}</span
+      >
+    {/if}
+    {#if device.class === "paired" && !device.manual}
       <span class="unlock" bind:this={wraps[device.device_id]}>
         <Button
           label="hub.floor.remote_unlock"

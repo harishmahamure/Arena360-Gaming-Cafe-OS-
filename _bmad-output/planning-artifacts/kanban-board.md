@@ -23,7 +23,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | Lane | Scope | Stories | Landed | In progress | Backlog |
 |---|---|---:|---:|---:|---:|
 | CP | Control plane | 63 | 2 | 0 | 61 |
-| HUB-A | Hub floor and sessions | 80 | 1 | 0 | 79 |
+| HUB-A | Hub floor and sessions | 80 | 2 | 0 | 78 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
 | HUB-B | Hub POS and money | 39 | 1 | 0 | 38 |
 | OWNER | Owner app | 30 | 3 | 0 | 27 |
@@ -39,7 +39,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 Candidates in priority order. Take the top ones until the 4 implementer slots are full.
 
 - **CP** 2.12 Hub verifies its licence against trusted time and enforces its limits (`2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i`)
-- **HUB-A** 2.21 Register consoles, VR rigs and simulators manually (`2-21-register-consoles-vr-rigs-and-simulators-manually`)
+- **HUB-A** 2.23 Floor zones and grid layout per branch (`2-23-floor-zones-and-grid-layout-per-branch`)
 - **HUB-B** 5.2 Tax is computed once per rate on every bill, in minor units (`5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
@@ -65,7 +65,7 @@ After 2.31 and before 6.1, finish Story 2.3's deferred observability ACs (Sentry
 | 7 | 2.16 | Step 7 — invite staff by phone with a role and a one-time setup code | MVP | backlog |  |
 | 8 | 2.19 | Device cap and pairing rate limits at the Hub | MVP | backlog |  |
 | 9 | 2.22 | Step 4 — owner groups devices in the web wizard as they arrive | MVP | backlog |  |
-| 10 | 2.28 | Wizard steps 5, 6 and 8 follow the Hub's setup progress | MVP | backlog | ~~2.20~~, 2.21, 2.23, 2.24, 2.25, 2.22 |
+| 10 | 2.28 | Wizard steps 5, 6 and 8 follow the Hub's setup progress | MVP | backlog | ~~2.20~~, ~~2.21~~, 2.23, 2.24, 2.25, 2.22 |
 | 11 | 2.29 | Step 9 — 2-minute test session locks a kiosk at zero | MVP | backlog | 2.28, 3.9 |
 | 12 | 2.30 | Owner manages branches — create, rename, timezone, new Hub pairing code | MVP | backlog |  |
 | 13 | 2.31 | Step 10 — go-live checklist marks the branch live | MVP | backlog | 2.29, 2.30 |
@@ -127,7 +127,7 @@ Windows Hub: devices, floor, players, sessions, wallet, credit, plans, pricing, 
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
 | 1 | 2.20 | Device groups with six swatches, held at the Hub | MVP | review | ~~2.18~~ |
-| 2 | 2.21 | Register consoles, VR rigs and simulators manually | MVP | backlog |  |
+| 2 | 2.21 | Register consoles, VR rigs and simulators manually | MVP | review |  |
 | 3 | 2.23 | Floor zones and grid layout per branch | MVP | backlog |  |
 | 4 | 2.24 | Device status and maintenance | MVP | backlog |  |
 | 5 | 2.25 | Hourly postpaid rate per device group | MVP | backlog | ~~2.20~~ |
@@ -167,7 +167,7 @@ Windows Hub: devices, floor, players, sessions, wallet, credit, plans, pricing, 
 | 39 | 3.32 | Transfer a session to another device | MVP | backlog |  |
 | 40 | 3.33 | Group sessions under one bill and one payer | MVP | backlog |  |
 | 41 | 3.34 | Forced end with manager PIN and reason | MVP | backlog |  |
-| 42 | 3.35 | Console sessions timed from the Hub, with warnings on the tile | MVP | backlog | 2.21 |
+| 42 | 3.35 | Console sessions timed from the Hub, with warnings on the tile | MVP | backlog | ~~2.21~~ |
 | 43 | 3.36 | Console time-up alert and controller check | MVP | backlog |  |
 | 44 | 3.37 | Floor invariants, throughput and offline proof | MVP | backlog |  |
 | 45 | 13.1 | Book a device or a group slot for a player | v1.1 | backlog | 3.9 |

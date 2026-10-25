@@ -194,9 +194,11 @@ async fn pair(hub: &Arc<LanHub>, peer: SocketAddr, body: &[u8]) -> Result<PairRe
         payload: IntentPayload::DeviceRegister(DeviceRegister {
             device_id: None,
             class: ClientClass::Paired,
-            kind: DeviceKind::Pc,
+            device_kind: DeviceKind::Pc,
             label: req.pc_name.clone(),
             token_hash: hash,
+            tv_number: None,
+            group_id: None,
         }),
     };
     let method = if elevated_by.is_some() { "pin" } else { "code" };

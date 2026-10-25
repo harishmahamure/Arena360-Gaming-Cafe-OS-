@@ -12,7 +12,9 @@ export type DeviceRegister = {
    * `paired` or `kds` (a phone is never registered).
    */
   class: ClientClass;
-  kind: DeviceKind;
+  device_kind: DeviceKind;
   label: string;
   token_hash: string;
+  tv_number?: number;
+  group_id?: string;
 };

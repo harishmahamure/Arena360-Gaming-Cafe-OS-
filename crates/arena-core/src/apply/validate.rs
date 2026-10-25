@@ -55,9 +55,9 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             _ => Err(internal_target()),
         },
         IntentPayload::DeviceRegister(d) => match target {
-            Target::NewDevice(branch) => devices::validate_register(intent, d, branch.as_ref()),
+            Target::NewDevice(t) => devices::validate_register(intent, d, t),
             Target::RegisterEdit(t) => devices::validate_edit(intent, d, t),
-            _ => devices::validate_register(intent, d, None),
+            _ => devices::validate_register(intent, d, &devices::NewDev::default()),
         },
         IntentPayload::DeviceRevoke(d) => devices::validate_revoke(d, device_row(target)),
         IntentPayload::DeviceVersionReported(d) => devices::validate_version(d, device_row(target)),

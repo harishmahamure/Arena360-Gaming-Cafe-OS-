@@ -124,9 +124,10 @@ pub struct DeviceMetaRow {
     pub group_id: Option<String>,
     pub rev: i64,
     pub deleted_at: Option<i64>,
+    pub tv_number: Option<i64>,
 }
 
-const META_COLUMNS: &str = "device_id, kind, label, group_id, rev, deleted_at";
+const META_COLUMNS: &str = "device_id, kind, label, group_id, rev, deleted_at, tv_number";
 
 fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
     Ok(DeviceMetaRow {
@@ -136,6 +137,7 @@ fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
         group_id: r.get(3)?,
         rev: r.get(4)?,
         deleted_at: r.get(5)?,
+        tv_number: r.get(6)?,
     })
 }
 
@@ -179,12 +181,14 @@ pub fn insert_device_meta(
     device_id: &str,
     kind: &str,
     label: &str,
+    group_id: Option<&str>,
+    tv_number: Option<i64>,
 ) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO devices_meta (device_id, kind, label, group_id, rev, deleted_at,
-                                   created_at, updated_at)
-         VALUES (?1, ?2, ?3, NULL, 0, NULL, 0, 0)",
-        params![device_id, kind, label],
+                                   created_at, updated_at, tv_number)
+         VALUES (?1, ?2, ?3, ?4, 0, NULL, 0, 0, ?5)",
+        params![device_id, kind, label, group_id, tv_number],
     )
     .map_err(db_error)?;
     Ok(())
@@ -195,14 +199,52 @@ pub fn update_device_meta(
     device_id: &str,
     kind: &str,
     label: &str,
+    tv_number: Option<i64>,
 ) -> Result<(), AppError> {
     let n = conn
         .execute(
-            "UPDATE devices_meta SET kind = ?2, label = ?3 WHERE device_id = ?1",
-            params![device_id, kind, label],
+            "UPDATE devices_meta SET kind = ?2, label = ?3, tv_number = ?4 WHERE device_id = ?1",
+            params![device_id, kind, label, tv_number],
         )
         .map_err(db_error)?;
     expect_one(n, device_id)
+}
+
+pub fn set_device_meta_deleted(
+    conn: &Connection,
+    device_id: &str,
+    at_ms: i64,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE devices_meta SET deleted_at = ?2 WHERE device_id = ?1",
+            params![device_id, at_ms],
+        )
+        .map_err(db_error)?;
+    expect_one(n, device_id)
+}
+
+pub fn tv_number_taken(
+    conn: &Connection,
+    tv_number: i64,
+    except: Option<&str>,
+) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM devices_meta WHERE kind = 'console' AND tv_number = ?1
+                        AND deleted_at IS NULL AND device_id IS NOT ?2)",
+        params![tv_number, except],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+pub fn count_live_devices(conn: &Connection) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM devices_meta WHERE deleted_at IS NULL",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
 }
 
 pub fn set_device_label(conn: &Connection, device_id: &str, label: &str) -> Result<(), AppError> {
@@ -474,17 +516,17 @@ mod tests {
         assert_eq!(meta[0].label, "Dev Kiosk");
         assert_eq!(meta[0].group_id, None);
         store
-            .write_tx(|tx| update_device_meta(tx, "K", "console", "TV 1"))
+            .write_tx(|tx| update_device_meta(tx, "K", "console", "TV 1", None))
             .unwrap();
         let k = store.device_meta("K").unwrap().unwrap();
         assert_eq!((k.kind.as_str(), k.label.as_str()), ("console", "TV 1"));
         let err = store
-            .write_tx(|tx| update_device_meta(tx, "K", "toaster", "x"))
+            .write_tx(|tx| update_device_meta(tx, "K", "toaster", "x", None))
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::Internal);
         assert!(
             store
-                .write_tx(|tx| insert_device_meta(tx, "nope", "pc", "x"))
+                .write_tx(|tx| insert_device_meta(tx, "nope", "pc", "x", None, None))
                 .is_err()
         );
     }
@@ -527,7 +569,11 @@ mod tests {
                 },
             )
             .unwrap();
-            insert_device_meta(&conn, "K", "pc", "Dev Kiosk").unwrap();
+            conn.execute(
+                "INSERT INTO devices_meta VALUES ('K', 'pc', 'Dev Kiosk', NULL, 1, NULL, 0, 0)",
+                [],
+            )
+            .unwrap();
         }
         let mut store = Store::open(&path, 0).unwrap();
         assert_eq!(store.device_meta("K").unwrap().unwrap().label, "Dev Kiosk");
@@ -550,5 +596,70 @@ mod tests {
             })
             .unwrap();
         assert_eq!(store.groups().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn migration_0014_adds_a_nullable_tv_number_with_a_unique_live_console_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            for m in crate::migrations::MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 13)
+            {
+                conn.execute_batch(m.sql).unwrap();
+                crate::record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            insert_branch(
+                &conn,
+                &NewBranch {
+                    branch_id: "B",
+                    name: "N",
+                    branch_code: "C",
+                    currency: "INR",
+                    tz: "UTC",
+                    day_start_min: 0,
+                    fy_start_month: 1,
+                },
+            )
+            .unwrap();
+            for id in ["K", "C1", "C2"] {
+                let device = NewDevice {
+                    device_id: id,
+                    branch_id: "B",
+                    class: "paired",
+                    label: id,
+                    token_hash: "",
+                };
+                insert_device(&conn, &device).unwrap();
+                let kind = if id == "K" { "pc" } else { "console" };
+                conn.execute(
+                    "INSERT INTO devices_meta VALUES (?1, ?2, ?1, NULL, 1, NULL, 0, 0)",
+                    params![id, kind],
+                )
+                .unwrap();
+            }
+        }
+        let mut store = Store::open(&path, 0).unwrap();
+        assert_eq!(store.device_meta("K").unwrap().unwrap().tv_number, None);
+        store
+            .write_tx(|tx| {
+                update_device_meta(tx, "C1", "console", "C1", Some(1))?;
+                assert!(update_device_meta(tx, "C2", "console", "C2", Some(1)).is_err());
+                Ok(())
+            })
+            .unwrap();
+        store
+            .write_tx(|tx| {
+                assert!(tv_number_taken(tx, 1, None)?);
+                assert!(!tv_number_taken(tx, 1, Some("C1"))?);
+                set_device_meta_deleted(tx, "C1", 5)?;
+                assert!(!tv_number_taken(tx, 1, None)?);
+                update_device_meta(tx, "C2", "console", "C2", Some(1))
+            })
+            .unwrap();
+        assert_eq!(count_live_devices(&store.conn).unwrap(), 2);
     }
 }

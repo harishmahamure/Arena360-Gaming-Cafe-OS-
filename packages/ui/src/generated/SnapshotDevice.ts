@@ -20,4 +20,6 @@ export type SnapshotDevice = {
   kind?: DeviceKind | null;
   group_id?: string | null;
   meta_rev?: number | null;
+  tv_number?: number | null;
+  manual?: boolean;
 };

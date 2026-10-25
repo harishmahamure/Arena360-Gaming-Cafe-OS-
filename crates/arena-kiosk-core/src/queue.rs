@@ -62,7 +62,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::FeatureNotEntitled
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch
-        | ErrorCode::TierLocked => true,
+        | ErrorCode::TierLocked
+        | ErrorCode::DeviceLimit => true,
         ErrorCode::BadFrame
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary

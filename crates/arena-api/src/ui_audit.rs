@@ -274,10 +274,12 @@ mod tests {
                 owner.clone(),
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                     device_id: None,
-                    kind: Default::default(),
+                    device_kind: Default::default(),
                     class: arena_proto::ClientClass::Paired,
                     label: "Kiosk 3".into(),
                     token_hash: arena_core::devices::hash_token_secret("k").unwrap(),
+                    tv_number: None,
+                    group_id: None,
                 }),
                 None,
             ))

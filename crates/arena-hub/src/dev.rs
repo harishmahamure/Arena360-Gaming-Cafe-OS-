@@ -192,10 +192,12 @@ pub async fn seed(
                 ActorKind::Owner,
                 IntentPayload::DeviceRegister(DeviceRegister {
                     device_id: None,
-                    kind: Default::default(),
+                    device_kind: Default::default(),
                     class: ClientClass::Paired,
                     label: DEV_KIOSK_LABEL.into(),
                     token_hash,
+                    tv_number: None,
+                    group_id: None,
                 }),
             ))
             .await?;

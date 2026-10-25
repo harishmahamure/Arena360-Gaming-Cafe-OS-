@@ -94,6 +94,8 @@ pub enum ErrorCode {
     /// The device's kind does not fit the group's kind.
     GroupKindMismatch,
     TierLocked,
+    /// The branch's device cap is reached.
+    DeviceLimit,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -158,6 +160,7 @@ impl ErrorCode {
             Self::GroupNotEmpty => "GROUP_NOT_EMPTY",
             Self::GroupKindMismatch => "GROUP_KIND_MISMATCH",
             Self::TierLocked => "TIER_LOCKED",
+            Self::DeviceLimit => "DEVICE_LIMIT",
         }
     }
 }
@@ -280,6 +283,7 @@ mod tests {
             (ErrorCode::GroupNotEmpty, "GROUP_NOT_EMPTY"),
             (ErrorCode::GroupKindMismatch, "GROUP_KIND_MISMATCH"),
             (ErrorCode::TierLocked, "TIER_LOCKED"),
+            (ErrorCode::DeviceLimit, "DEVICE_LIMIT"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

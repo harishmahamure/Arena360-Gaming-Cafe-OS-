@@ -49,7 +49,7 @@ development_status:
   2-16-step-7-invite-staff-by-phone-with-a-role-and-a-one-time-setu: done
   2-17-kiosk-finds-the-hub-on-the-lan-or-by-typed-ip: done
   2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi: done
-  2-19-device-cap-and-pairing-rate-limits-at-the-hub: review
+  2-19-device-cap-and-pairing-rate-limits-at-the-hub: done
   2-20-device-groups-with-six-swatches-held-at-the-hub: done
   2-21-register-consoles-vr-rigs-and-simulators-manually: done
   2-22-step-4-owner-groups-devices-in-the-web-wizard-as-they-arrive: backlog

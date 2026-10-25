@@ -25,8 +25,17 @@ log() { echo "$@" | tee -a "$MASTER_LOG"; }
 
 run_claude() {
   perl -e 'alarm shift; exec @ARGV' "$STORY_TIMEOUT" \
-    claude --dangerously-skip-permissions --verbose --model "$MODEL" --effort "$EFFORT" -p "$1" 2>&1 \
-    | tee "$2" | tee -a "$MASTER_LOG"
+    claude --dangerously-skip-permissions --verbose --output-format stream-json --model "$MODEL" --effort "$EFFORT" -p "$1" 2>&1 \
+    | python3 -u -c '
+import sys, json
+for line in sys.stdin:
+    try: e = json.loads(line)
+    except ValueError: print(line, end=""); continue
+    if e.get("type") == "result": print(e.get("result", "")); continue
+    for b in e.get("message", {}).get("content", []) if e.get("type") == "assistant" else []:
+        if b.get("type") == "text": print(b["text"])
+        elif b.get("type") == "tool_use": print("🔧", b["name"], json.dumps(b["input"])[:160])
+' | tee "$2" | tee -a "$MASTER_LOG"
 }
 
 mark_blocked() {

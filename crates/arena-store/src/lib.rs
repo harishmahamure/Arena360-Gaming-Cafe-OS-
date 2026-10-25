@@ -50,8 +50,8 @@ pub use devices::{
     find_group, find_group_by_name, find_zone, find_zone_by_name, insert_device,
     insert_device_meta, insert_group, insert_zone, list_device_meta, list_devices, list_groups,
     list_zones, set_device_group, set_device_label, set_device_meta_deleted, set_device_place,
-    set_device_reported_version, set_device_revoked, set_group_deleted, set_zone_deleted,
-    tv_number_taken, update_device_meta, update_group, update_zone,
+    set_device_reported_version, set_device_revoked, set_device_state, set_group_deleted,
+    set_zone_deleted, tv_number_taken, update_device_meta, update_group, update_zone,
 };
 pub use identity::{
     CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,

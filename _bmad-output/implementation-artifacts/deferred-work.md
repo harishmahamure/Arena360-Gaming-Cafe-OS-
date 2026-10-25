@@ -276,3 +276,12 @@
 - `catalog::status` reads each component with its own query (bounded by 30 components per bundle); batch it if catalogs grow.
 - Replay of change-log `products` rows written before migration 0018 (no `bundle` key) is not exercised.
 - Hub UI: no test of the 44 px targets or axe with the components error visible; a fractional quantity such as "1.5" is refused client-side by the same message as 0.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-24-device-status-and-maintenance.md`
+  summary: Online and offline are derived from the LAN registry and `last_seen_at` is in memory only (null after a Hub restart until the device reconnects); persist `last_seen_at` if the owner app or reports need it. Returning from maintenance restores a stored `in_session` or `reserved` prior state even if that session or reservation ended meanwhile; the sessions and reservations stories must clear or re-derive it. Each disconnect spawns a 15 s timer task that bumps presence even if the device has reconnected (extra snapshot refetches on a flapping link; add a per-device generation if it matters).
+  evidence: Review findings from Blind Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-24-device-status-and-maintenance.md`
+  summary: Settings → Devices status list: focus is lost to the page when Return to service removes the clicked button and is not returned to the opener when the form closes; buttons are not disabled while a write is in flight. `online` (a live socket now) and `status` (15 s grace) differ for up to 15 s by design.
+  evidence: Review findings from Blind Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-24-device-status-and-maintenance.md`
+  summary: Missing tests: kiosk-to-snapshot-to-`devices.changed` end to end within 2 s (needs the LAN harness), `ui_snapshot` with a live registry, Counter permission refusal and elevation scope for `device.maintenance` at the Rust level, change-log row for a maintenance write, all five statuses and their state tokens in Playwright, STALE and rejected-PIN paths of the maintenance form, a 360 px layout check, and a full-string Last seen assertion.
+  evidence: Review findings from Verification Gap.

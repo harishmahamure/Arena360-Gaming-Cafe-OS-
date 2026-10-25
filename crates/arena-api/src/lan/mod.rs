@@ -95,6 +95,14 @@ impl Presence {
         self.0.as_ref().is_some_and(|r| r.is_online(device_id))
     }
 
+    /// The device's shown presence: online while connected and for 15 s after, and when it was
+    /// last seen (epoch ms).
+    pub fn status(&self, device_id: &str) -> (bool, Option<i64>) {
+        self.0
+            .as_ref()
+            .map_or((false, None), |r| r.status(device_id))
+    }
+
     /// A receiver that changes whenever a paired device session opens or closes (`None` for
     /// [`Presence::none`]).
     pub fn changes(&self) -> Option<tokio::sync::watch::Receiver<u64>> {

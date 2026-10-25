@@ -74,6 +74,8 @@
   "hub.floor.no_devices": "No devices are registered yet.",
   "hub.floor.online": "Online",
   "hub.floor.offline": "Offline",
+  "hub.floor.unavailable": "Unavailable for starts",
+  "hub.floor.last_seen": "Last seen {at}",
   "hub.floor.remote_unlock": "Remote unlock",
   "hub.floor.remote_unlock_waiting": "Unlocking…",
   "hub.floor.remote_unlock_done": "Unlocked for 15 minutes",
@@ -1099,5 +1101,14 @@
   "hub.stock.invalid.qty": "Enter a whole quantity from 1 to 1,000,000, within the 100,000,000 limit.",
   "hub.stock.invalid.cost": "Enter a cost such as 20 or 20.50.",
   "hub.stock.invalid.supplier": "Use up to 80 characters.",
-  "hub.stock.invalid.expiry": "Use a date that is today or later."
+  "hub.stock.invalid.expiry": "Use a date that is today or later.",
+  "hub.devices.status_title": "Device status",
+  "hub.devices.status_intro": "A device in maintenance stays in its group and place but cannot start sessions.",
+  "hub.devices.maintenance": "Set {name} to maintenance",
+  "hub.devices.edit_note": "Edit note for {name}",
+  "hub.devices.return_to_service": "Return {name} to service",
+  "hub.devices.note": "Note (optional)",
+  "hub.devices.note_invalid": "Use up to 200 characters.",
+  "hub.devices.maintenance_confirm": "Set to maintenance",
+  "hub.devices.cancel_maintenance": "Cancel"
 }

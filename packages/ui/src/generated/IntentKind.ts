@@ -32,4 +32,5 @@ export type IntentKind =
   | "product.delete"
   | "staff.set_credentials"
   | "stock.in"
-  | "stock.in.reverted";
+  | "stock.in.reverted"
+  | "device.maintenance";

@@ -128,10 +128,12 @@ pub struct DeviceMetaRow {
     pub zone_id: Option<String>,
     pub floor_x: Option<i64>,
     pub floor_y: Option<i64>,
+    pub state: String,
+    pub prior_state: Option<String>,
+    pub maintenance_note: Option<String>,
 }
 
-const META_COLUMNS: &str =
-    "device_id, kind, label, group_id, rev, deleted_at, tv_number, zone_id, floor_x, floor_y";
+const META_COLUMNS: &str = "device_id, kind, label, group_id, rev, deleted_at, tv_number, zone_id, floor_x, floor_y, state, prior_state, maintenance_note";
 
 fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
     Ok(DeviceMetaRow {
@@ -145,6 +147,9 @@ fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
         zone_id: r.get(7)?,
         floor_x: r.get(8)?,
         floor_y: r.get(9)?,
+        state: r.get(10)?,
+        prior_state: r.get(11)?,
+        maintenance_note: r.get(12)?,
     })
 }
 
@@ -193,8 +198,10 @@ pub fn insert_device_meta(
 ) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO devices_meta (device_id, kind, label, group_id, rev, deleted_at,
-                                   created_at, updated_at, tv_number)
-         VALUES (?1, ?2, ?3, ?4, 0, NULL, 0, 0, ?5)",
+                                   created_at, updated_at, tv_number, state)
+         VALUES (?1, ?2, ?3, ?4, 0, NULL, 0, 0, ?5,
+                 CASE WHEN EXISTS (SELECT 1 FROM devices WHERE device_id = ?1 AND token_hash = '')
+                      THEN 'online' ELSE 'offline' END)",
         params![device_id, kind, label, group_id, tv_number],
     )
     .map_err(db_error)?;
@@ -528,6 +535,22 @@ pub fn set_device_place(
     expect_one(n, device_id)
 }
 
+pub fn set_device_state(
+    conn: &Connection,
+    device_id: &str,
+    state: &str,
+    prior_state: Option<&str>,
+    note: Option<&str>,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE devices_meta SET state = ?2, prior_state = ?3, maintenance_note = ?4 WHERE device_id = ?1",
+            params![device_id, state, prior_state, note],
+        )
+        .map_err(db_error)?;
+    expect_one(n, device_id)
+}
+
 pub fn change_actor_kind(
     conn: &Connection,
     epoch: &str,
@@ -804,5 +827,62 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count_live_devices(&store.conn).unwrap(), 2);
+    }
+    #[test]
+    fn migration_0020_backfills_state_and_limits_it_to_the_five_statuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            for m in crate::migrations::MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 19)
+            {
+                conn.execute_batch(m.sql).unwrap();
+                crate::record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            insert_branch(
+                &conn,
+                &NewBranch {
+                    branch_id: "B",
+                    name: "N",
+                    branch_code: "C",
+                    currency: "INR",
+                    tz: "UTC",
+                    day_start_min: 0,
+                    fy_start_month: 1,
+                },
+            )
+            .unwrap();
+            for (id, hash) in [("K", "$argon2id$x"), ("M", "")] {
+                let device = NewDevice {
+                    device_id: id,
+                    branch_id: "B",
+                    class: "paired",
+                    label: id,
+                    token_hash: hash,
+                };
+                insert_device(&conn, &device).unwrap();
+                conn.execute(
+                    "INSERT INTO devices_meta (device_id, kind, label, rev, created_at, updated_at) VALUES (?1, 'pc', ?1, 1, 0, 0)",
+                    params![id],
+                )
+                .unwrap();
+            }
+        }
+        let mut store = Store::open(&path, 0).unwrap();
+        assert_eq!(store.device_meta("K").unwrap().unwrap().state, "offline");
+        assert_eq!(store.device_meta("M").unwrap().unwrap().state, "online");
+        store
+            .write_tx(|tx| {
+                for state in ["online", "offline", "in_session", "reserved", "maintenance"] {
+                    set_device_state(tx, "K", state, None, None)?;
+                }
+                assert!(set_device_state(tx, "K", "busy", None, None).is_err());
+                assert!(set_device_state(tx, "K", "online", Some("maintenance"), None).is_err());
+                Ok(())
+            })
+            .unwrap();
     }
 }

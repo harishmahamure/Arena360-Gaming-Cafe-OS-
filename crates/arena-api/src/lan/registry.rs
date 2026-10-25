@@ -41,6 +41,14 @@ pub(crate) enum Kill {
     Drop,
 }
 
+pub(crate) const OFFLINE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
 struct Entry {
     class: ClientClass,
     device_id: Option<String>,
@@ -57,6 +65,8 @@ pub(crate) struct Registry {
     shutting_down: AtomicBool,
     /// Bumped whenever a paired device session is added or removed (device presence).
     presence: watch::Sender<u64>,
+    /// When each paired device last connected or disconnected.
+    seen: Mutex<HashMap<String, (tokio::time::Instant, i64)>>,
     /// Remote unlocks a kiosk acknowledged (for the Hub UI).
     acks: broadcast::Sender<AdminUnlockAckEvent>,
     /// The manager-verifier version last pushed to every paired session (-1: none yet).
@@ -71,6 +81,7 @@ impl Default for Registry {
             next_event: AtomicU64::default(),
             shutting_down: AtomicBool::default(),
             presence: watch::channel(0).0,
+            seen: Mutex::default(),
             acks: broadcast::channel(64).0,
             verifier_pushed: AtomicI64::new(-1),
         }
@@ -132,8 +143,19 @@ impl Drop for SessionGuard {
             .lock()
             .ok()
             .and_then(|mut map| map.remove(&self.id));
-        if removed.is_some_and(|e| e.class == ClientClass::Paired && e.device_id.is_some()) {
+        if let Some(id) = removed
+            .filter(|e| e.class == ClientClass::Paired)
+            .and_then(|e| e.device_id)
+        {
+            self.registry.mark_seen(&id);
             self.registry.presence.send_modify(|n| *n += 1);
+            if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                let registry = Arc::clone(&self.registry);
+                rt.spawn(async move {
+                    tokio::time::sleep(OFFLINE_GRACE).await;
+                    registry.presence.send_modify(|n| *n += 1);
+                });
+            }
         }
     }
 }
@@ -189,6 +211,7 @@ impl Registry {
         let kill = Arc::new(kill);
         let writer_kill = kill.subscribe();
         let presence = class == ClientClass::Paired && device_id.is_some();
+        let seen_id = device_id.clone();
         if let Ok(mut map) = self.sessions.lock() {
             map.insert(
                 id,
@@ -206,6 +229,9 @@ impl Registry {
             }
         }
         if presence {
+            if let Some(id) = &seen_id {
+                self.mark_seen(id);
+            }
             self.presence.send_modify(|n| *n += 1);
         }
         SessionGuard {
@@ -324,6 +350,40 @@ impl Registry {
                 }
             }
         }
+    }
+
+    fn mark_seen(&self, device_id: &str) {
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.insert(
+                device_id.to_owned(),
+                (tokio::time::Instant::now(), epoch_ms()),
+            );
+        }
+    }
+
+    /// Whether `device_id` shows online (connected, or gone for less than [`OFFLINE_GRACE`])
+    /// and when it was last seen (epoch ms).
+    pub(crate) fn status(&self, device_id: &str) -> (bool, Option<i64>) {
+        if self.has_paired_session(device_id) {
+            return (true, Some(epoch_ms()));
+        }
+        let seen = self
+            .seen
+            .lock()
+            .ok()
+            .and_then(|s| s.get(device_id).copied());
+        match seen {
+            Some((at, ms)) => (at.elapsed() < OFFLINE_GRACE, Some(ms)),
+            None => (false, None),
+        }
+    }
+
+    fn has_paired_session(&self, device_id: &str) -> bool {
+        self.sessions.lock().is_ok_and(|map| {
+            map.values().any(|e| {
+                e.class == ClientClass::Paired && e.device_id.as_deref() == Some(device_id)
+            })
+        })
     }
 
     /// Whether `device_id` has a live (not closing) `paired` session.
@@ -797,6 +857,33 @@ mod tests {
             !changes.has_changed().unwrap(),
             "a kds session is not presence"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_device_shows_offline_after_15_s_disconnected_and_presence_is_pushed() {
+        let reg = Arc::new(Registry::default());
+        assert_eq!(reg.status("P"), (false, None));
+        let (tx, _rx) = mpsc::channel(8);
+        let guard = reg.register(ClientClass::Paired, Some("P".into()), tx);
+        assert!(reg.status("P").0);
+        let mut changes = reg.presence_changes();
+        changes.mark_unchanged();
+        drop(guard);
+        assert!(changes.has_changed().unwrap());
+        changes.mark_unchanged();
+        let (online, seen) = reg.status("P");
+        assert!(online && seen.is_some(), "still online inside the grace");
+        tokio::time::sleep(OFFLINE_GRACE - std::time::Duration::from_secs(1)).await;
+        assert!(reg.status("P").0);
+        assert!(!changes.has_changed().unwrap());
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        assert!(changes.has_changed().unwrap(), "the 15 s mark is pushed");
+        let (online, seen2) = reg.status("P");
+        assert!(!online);
+        assert_eq!(seen2, seen, "last_seen_at stays at the disconnect");
+        let (tx, _rx) = mpsc::channel(8);
+        let _back = reg.register(ClientClass::Paired, Some("P".into()), tx);
+        assert!(reg.status("P").0);
     }
 
     #[tokio::test]

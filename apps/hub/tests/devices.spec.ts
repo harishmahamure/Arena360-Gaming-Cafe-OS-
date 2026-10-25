@@ -96,6 +96,7 @@ function apply(hub: Hub, p: Payload, route: Route) {
         class: "paired",
         zone: null,
         online: false,
+        status: "online",
         manual: true,
         group_id: (p.group_id as string | undefined) ?? null,
         meta_rev: 1,
@@ -205,7 +206,7 @@ test("a manager adds a console with a group and TV number and the floor shows it
   await expect(tile).toContainText("PS5 One");
   await expect(tile.getByTestId("tv-number")).toHaveText(en["hub.floor.tv"].replace("{n}", "3"));
   await expect(tile.locator('[data-component="group-chip"]')).toHaveText("Consoles");
-  await expect(tile.getByTestId("device-presence")).toHaveCount(0);
+  await expect(tile.getByTestId("device-presence")).toHaveText(en["hub.floor.online"]);
   await expect(tile.getByRole("button", { name: en["hub.floor.remote_unlock"] })).toHaveCount(0);
   await expectNoSeriousAxe(page);
   await page.goto("/settings/layout");

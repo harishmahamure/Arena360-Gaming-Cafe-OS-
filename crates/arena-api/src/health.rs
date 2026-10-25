@@ -193,6 +193,8 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
             }
             for d in &mut snapshot.devices {
                 d.online = state.presence.online(&d.device_id);
+                let (shown, seen) = state.presence.status(&d.device_id);
+                d.apply_presence(shown, seen);
             }
             if let Some(status) = &state.status {
                 let status = status.borrow();
@@ -622,7 +624,7 @@ mod tests {
                 json!({
                     "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
                     "groups": [], "zones": [],
-                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false, "kind": null, "group_id": null, "meta_rev": null, "tv_number": null, "floor_x": null, "floor_y": null}],
+                    "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false, "kind": null, "group_id": null, "meta_rev": null, "tv_number": null, "floor_x": null, "floor_y": null, "status": "offline", "last_seen_at": null, "maintenance_note": null}],
                     "locale": {
                         "currency": "INR",
                         "exponent": 2,

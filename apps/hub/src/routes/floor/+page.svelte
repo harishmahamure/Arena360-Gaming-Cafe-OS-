@@ -1,6 +1,11 @@
 <script lang="ts">
-  import { Button, GroupChip, InlinePin, StatusBadge, t } from "@arena/ui";
-  import type { SessionStaff, SnapshotDevice, SnapshotGroup } from "@arena/ui/generated";
+  import { Button, GroupChip, InlinePin, StatusBadge, formatDateTime, t } from "@arena/ui";
+  import type {
+    DeviceStatus,
+    SessionStaff,
+    SnapshotDevice,
+    SnapshotGroup,
+  } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
@@ -106,7 +111,19 @@
     failed: "hub.floor.remote_unlock_failed",
   };
 
+  const BADGE: Record<
+    DeviceStatus,
+    { state: "free" | "offline" | "in-session" | "reserved" | "maintenance"; label: MessageKey }
+  > = {
+    online: { state: "free", label: "hub.floor.online" },
+    offline: { state: "offline", label: "hub.floor.offline" },
+    in_session: { state: "in-session", label: "ui.status.in_session" },
+    reserved: { state: "reserved", label: "ui.status.reserved" },
+    maintenance: { state: "maintenance", label: "ui.status.maintenance" },
+  };
+
   const snapshot = $derived(data.hub.ok ? data.hub.snapshot : null);
+  const tz = $derived(snapshot?.locale?.tz);
   const groups = $derived(snapshot?.groups ?? []);
   const zones = $derived(snapshot?.zones ?? []);
   const placed = (d: SnapshotDevice) => zones.some((z) => z.id === d.zone);
@@ -124,6 +141,7 @@
 </svelte:head>
 
 {#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined, cell = false)}
+  {@const badge = BADGE[device.status ?? "offline"] ?? BADGE.offline}
   <li
     class="device"
     class:assigned={group || cell}
@@ -138,10 +156,18 @@
     {#if group}<GroupChip name={group.name} colour={group.colour} />{:else if !cell}<StatusBadge
         state="unassigned"
       />{/if}
-    {#if !device.manual}
-      <!-- Presence in words (never colour alone): a live paired session or not. -->
-      <span class="presence type-hub-body" data-testid="device-presence"
-        >{device.online ? t("hub.floor.online") : t("hub.floor.offline")}</span
+    <span class="presence type-hub-body" data-testid="device-presence"
+      ><StatusBadge state={badge.state} label={badge.label} /></span
+    >
+    {#if device.status === "maintenance"}
+      <span class="type-hub-label" data-testid="device-unavailable"
+        >{t("hub.floor.unavailable")}{device.maintenance_note
+          ? ` · ${device.maintenance_note}`
+          : ""}</span
+      >
+    {:else if device.status === "offline" && device.last_seen_at}
+      <span class="type-hub-label" data-testid="device-last-seen"
+        >{t("hub.floor.last_seen", { at: formatDateTime(device.last_seen_at, tz) })}</span
       >
     {/if}
     {#if device.class === "paired" && !device.manual}

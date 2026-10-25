@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Button, GroupChip, InlinePin, TextField, TierLock, t } from "@arena/ui";
+  import { Button, GroupChip, InlinePin, StatusBadge, TextField, TierLock, t } from "@arena/ui";
   import type {
+    DeviceStatus,
     HubSnapshot,
     IntentPayload,
     SessionStaff,
@@ -32,6 +33,17 @@
     PERMISSION_DENIED: "hub.refusal.permission",
   };
 
+  const BADGE: Record<
+    DeviceStatus,
+    { state: "free" | "offline" | "in-session" | "reserved" | "maintenance"; label: MessageKey }
+  > = {
+    online: { state: "free", label: "hub.floor.online" },
+    offline: { state: "offline", label: "hub.floor.offline" },
+    in_session: { state: "in-session", label: "ui.status.in_session" },
+    reserved: { state: "reserved", label: "ui.status.reserved" },
+    maintenance: { state: "maintenance", label: "ui.status.maintenance" },
+  };
+
   const snapshot = $derived(
     (page.data as { hub?: { ok: boolean; snapshot?: HubSnapshot } }).hub?.snapshot ?? null,
   );
@@ -43,6 +55,7 @@
     !hasPermission(staff, kind === "device.revoke" ? "device.remote" : "device.manage");
   const groups = $derived(snapshot?.groups ?? []);
   const manual = $derived((snapshot?.devices ?? []).filter((d) => d.manual));
+  const all = $derived(snapshot?.devices ?? []);
   const fits = (kind: string) => (kind === "sim" ? "other" : kind);
 
   let editing: SnapshotDevice | null = $state(null);
@@ -58,6 +71,26 @@
   let limit = $state(false);
   let labelError: MessageKey | null = $state(null);
   let tvError: MessageKey | null = $state(null);
+  let maint: SnapshotDevice | null = $state(null);
+  let note = $state("");
+  let noteError: MessageKey | null = $state(null);
+  let noteField: HTMLElement | undefined = $state();
+
+  function openMaintenance(device: SnapshotDevice | null) {
+    maint = device;
+    note = device?.maintenance_note ?? "";
+    noteError = null;
+    if (device) void tick().then(() => noteField?.querySelector("input")?.focus());
+  }
+
+  function setMaintenance(event: SubmitEvent) {
+    event.preventDefault();
+    if (!maint) return;
+    void run({
+      payload: { kind: "device.maintenance", device_id: maint.device_id, on: true, note },
+      rev: maint.meta_rev ?? undefined,
+    });
+  }
 
   function reset(device: SnapshotDevice | null = null) {
     editing = device;
@@ -79,7 +112,7 @@
     busy = true;
     status = null;
     limit = false;
-    labelError = tvError = null;
+    labelError = tvError = noteError = null;
     const outcome = await submitIntent(job.payload, newIdempotencyKey(), job.rev, {
       elevationTicket: ticket,
       reason: job.reason,
@@ -88,6 +121,8 @@
     if (outcome.kind === "applied") {
       status = { tone: "ok", message: "hub.settings.saved" };
       if (job.payload.kind === "device.register") reset();
+      if (job.payload.kind === "device.maintenance" && maint?.device_id === job.payload.device_id)
+        openMaintenance(null);
       return void (await invalidate(SNAPSHOT_DEPENDENCY));
     }
     const error = outcome.kind === "error" ? outcome.error : null;
@@ -99,6 +134,9 @@
     if (error?.code === "DEVICE_LIMIT") return void (limit = true);
     if (error?.code === "VALIDATION_FAILED" && error.field === "label") {
       return void (labelError = "hub.devices.label_invalid");
+    }
+    if (error?.code === "VALIDATION_FAILED" && error.field === "note") {
+      return void (noteError = "hub.devices.note_invalid");
     }
     if (error?.code === "VALIDATION_FAILED" && error.field === "tv_number") {
       return void (tvError = "hub.devices.tv_invalid");
@@ -220,6 +258,68 @@
       <p class="type-hub-label">{t("hub.devices.approves")}</p>
       <InlinePin message={approvalPrompt} onsubmit={approve} oncancel={() => (approving = null)} />
     </div>
+  {/if}
+
+  <h3 class="type-hub-title">{t("hub.devices.status_title")}</h3>
+  <p class="intro type-hub-body">{t("hub.devices.status_intro")}</p>
+  {#if maint}
+    <form
+      class="form"
+      bind:this={noteField}
+      onsubmit={setMaintenance}
+      data-testid="maintenance-form"
+    >
+      <TextField label="hub.devices.note" bind:value={note} error={noteError} />
+      <div class="actions">
+        <Button label="hub.devices.maintenance_confirm" type="submit" />
+        <Button
+          label="hub.devices.cancel_maintenance"
+          variant="secondary"
+          onclick={() => openMaintenance(null)}
+        />
+      </div>
+    </form>
+  {/if}
+  {#if all.length === 0}
+    <p class="type-hub-body">{t("hub.floor.no_devices")}</p>
+  {:else}
+    <ul class="rows" data-testid="status-list">
+      {#each all as d (d.device_id)}
+        {@const badge = BADGE[d.status ?? "offline"] ?? BADGE.offline}
+        <li class="row" data-testid="status-row" data-device-id={d.device_id}>
+          <span class="type-hub-title">{d.label}</span>
+          <StatusBadge state={badge.state} label={badge.label} />
+          {#if d.status === "maintenance" && d.maintenance_note}<span
+              class="type-hub-label"
+              data-testid="maintenance-note">{d.maintenance_note}</span
+            >{/if}
+          <div class="actions">
+            {#if d.status === "maintenance"}
+              <button
+                type="button"
+                class="ui-interactive btn type-hub-label"
+                onclick={() =>
+                  void run({
+                    payload: { kind: "device.maintenance", device_id: d.device_id, on: false },
+                    rev: d.meta_rev ?? undefined,
+                  })}>{t("hub.devices.return_to_service", { name: d.label })}</button
+              >
+            {/if}
+            <button
+              type="button"
+              class="ui-interactive btn type-hub-label"
+              onclick={() => openMaintenance(d)}
+              >{t(
+                d.status === "maintenance" ? "hub.devices.edit_note" : "hub.devices.maintenance",
+                {
+                  name: d.label,
+                },
+              )}</button
+            >
+          </div>
+        </li>
+      {/each}
+    </ul>
   {/if}
 
   <h3 class="type-hub-title">{t("hub.devices.list")}</h3>

@@ -32,6 +32,7 @@ mod groups;
 mod guards;
 mod kiosk_log;
 mod licence;
+mod maintenance;
 mod mutate;
 mod printer_status;
 mod products;
@@ -137,6 +138,7 @@ pub(crate) enum Target {
     Product(Box<products::ProductTarget>),
     Credentials(Option<arena_store::StaffRow>),
     Stock(Box<stock::StockTarget>),
+    Maintenance(Box<maintenance::MaintenanceTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -159,6 +161,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::DeviceAdminUnlock(p) => admin_exit::load_unlock(tx, p)?,
         P::GroupUpsert(_) | P::GroupDelete(_) | P::DeviceAssign(_) => {
             Target::Group(Box::new(groups::load(tx, &intent.payload)?))
+        }
+        P::DeviceMaintenance(_) => {
+            Target::Maintenance(Box::new(maintenance::load(tx, &intent.payload)?))
         }
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))

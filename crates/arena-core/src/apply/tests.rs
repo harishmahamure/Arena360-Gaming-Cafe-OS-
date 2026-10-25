@@ -5695,6 +5695,209 @@ mod floor_zones {
             (Some(z), Some(5), Some(1))
         );
     }
+
+    fn maint(device: &str, on: bool, note: Option<&str>) -> IntentPayload {
+        IntentPayload::DeviceMaintenance(arena_proto::DeviceMaintenance {
+            device_id: device.into(),
+            on,
+            note: note.map(Into::into),
+        })
+    }
+
+    fn state(f: &Fixture, dev: &str) -> (String, Option<String>, Option<String>, i64) {
+        let m = reopen(f).device_meta(dev).unwrap().unwrap();
+        (m.state, m.prior_state, m.maintenance_note, m.rev)
+    }
+
+    #[tokio::test]
+    async fn maintenance_sets_a_note_keeps_group_and_place_and_returns_to_service() {
+        let f = bootstrapped().await;
+        let z = zone(&f, "Hall", 1).await;
+        let d = device(&f, "A").await;
+        owner(&f, place(&d, Some(&z), Some(2), Some(3)), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(state(&f, &d).0, "offline");
+        owner(&f, maint(&d, true, Some("  fan dead ")), Some(2))
+            .await
+            .unwrap();
+        let (s, prior, note, rev) = state(&f, &d);
+        assert_eq!(
+            (s.as_str(), prior.as_deref(), note.as_deref(), rev),
+            ("maintenance", Some("offline"), Some("fan dead"), 3)
+        );
+        assert_eq!(at(&f, &d), (Some(z.clone()), Some(2), Some(3)));
+        owner(&f, maint(&d, true, None), Some(3)).await.unwrap();
+        let (s, prior, note, _) = state(&f, &d);
+        assert_eq!(
+            (s.as_str(), prior.as_deref(), note),
+            ("maintenance", Some("offline"), None)
+        );
+        let snap = crate::snapshot::read_snapshot(&reopen(&f), 0).unwrap();
+        assert_eq!(
+            snap.devices[0].status,
+            arena_proto::DeviceStatus::Maintenance
+        );
+        owner(&f, maint(&d, false, None), Some(4)).await.unwrap();
+        let (s, prior, note, _) = state(&f, &d);
+        assert_eq!((s.as_str(), prior, note), ("offline", None, None));
+        assert_eq!(at(&f, &d), (Some(z), Some(2), Some(3)));
+        let snap = crate::snapshot::read_snapshot(&reopen(&f), 0).unwrap();
+        assert_eq!(snap.devices[0].status, arena_proto::DeviceStatus::Offline);
+    }
+
+    #[tokio::test]
+    async fn return_to_service_restores_a_held_prior_state() {
+        let f = bootstrapped().await;
+        let d = device(&f, "A").await;
+        f.writer
+            .submit({
+                let d = d.clone();
+                move |tx| arena_store::set_device_state(tx, &d, "reserved", None, None)
+            })
+            .await
+            .unwrap();
+        owner(&f, maint(&d, true, None), None).await.unwrap();
+        assert_eq!(state(&f, &d).1.as_deref(), Some("reserved"));
+        owner(&f, maint(&d, false, None), None).await.unwrap();
+        assert_eq!(state(&f, &d).0, "reserved");
+    }
+
+    #[tokio::test]
+    async fn maintenance_validates_device_note_and_direction() {
+        let f = bootstrapped().await;
+        let d = device(&f, "A").await;
+        assert_eq!(
+            err(&f, maint("nope", true, None), None).await,
+            (ErrorCode::ValidationFailed, Some("device_id".into()))
+        );
+        assert_eq!(
+            err(&f, maint(&d, false, None), None).await,
+            (ErrorCode::ValidationFailed, Some("device_id".into()))
+        );
+        let long = "x".repeat(arena_proto::MAINTENANCE_NOTE_MAX + 1);
+        assert_eq!(
+            err(&f, maint(&d, true, Some(&long)), None).await,
+            (ErrorCode::ValidationFailed, Some("note".into()))
+        );
+        let ok = "x".repeat(arena_proto::MAINTENANCE_NOTE_MAX);
+        owner(&f, maint(&d, true, Some(&ok)), None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_manual_device_shows_online_until_maintenance() {
+        let f = bootstrapped().await;
+        let mut r = DeviceRegister::new(ClientClass::Paired, "TV 1", String::new());
+        r.device_kind = DeviceKind::Console;
+        r.tv_number = Some(1);
+        let d = owner(&f, IntentPayload::DeviceRegister(r), None)
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let status = || {
+            crate::snapshot::read_snapshot(&reopen(&f), 0)
+                .unwrap()
+                .devices[0]
+                .status
+        };
+        assert_eq!(status(), arena_proto::DeviceStatus::Online);
+        assert_eq!(state(&f, &d).0, "online");
+        owner(&f, maint(&d, true, None), None).await.unwrap();
+        assert_eq!(status(), arena_proto::DeviceStatus::Maintenance);
+        owner(&f, maint(&d, false, None), None).await.unwrap();
+        assert_eq!(status(), arena_proto::DeviceStatus::Online);
+    }
+
+    #[tokio::test]
+    async fn maintenance_notes_are_trimmed_counted_in_characters_and_cleared_on_return() {
+        let f = bootstrapped().await;
+        let d = device(&f, "A").await;
+        assert_eq!(
+            err(&f, maint(&d, true, Some("a\nb")), None).await,
+            (ErrorCode::ValidationFailed, Some("note".into()))
+        );
+        owner(&f, maint(&d, true, Some("   ")), None).await.unwrap();
+        assert_eq!(state(&f, &d).2, None);
+        let padded = format!("  {}  ", "é".repeat(arena_proto::MAINTENANCE_NOTE_MAX));
+        owner(&f, maint(&d, true, Some(&padded)), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            state(&f, &d).2.map(|n| n.chars().count()),
+            Some(arena_proto::MAINTENANCE_NOTE_MAX)
+        );
+        owner(&f, maint(&d, true, Some("new")), Some(1))
+            .await
+            .unwrap();
+        let (s, prior, note, _) = state(&f, &d);
+        assert_eq!(
+            (s.as_str(), prior.as_deref(), note.as_deref()),
+            ("maintenance", Some("offline"), Some("new"))
+        );
+        owner(&f, maint(&d, false, Some("ignored")), None)
+            .await
+            .unwrap();
+        assert_eq!(state(&f, &d).2, None);
+    }
+
+    #[tokio::test]
+    async fn held_states_show_in_the_snapshot_and_a_removed_device_is_refused() {
+        let f = bootstrapped().await;
+        let d = device(&f, "A").await;
+        for held in ["in_session", "reserved"] {
+            f.writer
+                .submit({
+                    let d = d.clone();
+                    move |tx| arena_store::set_device_state(tx, &d, held, None, None)
+                })
+                .await
+                .unwrap();
+            let snap = crate::snapshot::read_snapshot(&reopen(&f), 0).unwrap();
+            assert!(snap.devices[0].status.held());
+            assert_eq!(
+                format!("{:?}", snap.devices[0].status).to_lowercase(),
+                held.replace('_', "")
+            );
+        }
+        f.writer
+            .submit({
+                let d = d.clone();
+                move |tx| arena_store::set_device_meta_deleted(tx, &d, 5)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            err(&f, maint(&d, true, None), None).await,
+            (ErrorCode::ValidationFailed, Some("device_id".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn maintenance_needs_a_current_base_rev_from_staff() {
+        let f = bootstrapped().await;
+        let m = manager(&f).await;
+        let d = device(&f, "A").await;
+        let e = staff(&f, &m, maint(&d, true, None), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("base_rev"))
+        );
+        let e = staff(&f, &m, maint(&d, true, None), Some(9))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::Stale, Some("base_rev"))
+        );
+        staff(&f, &m, maint(&d, true, Some("ram")), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(state(&f, &d).0, "maintenance");
+    }
 }
 
 mod kitchen {

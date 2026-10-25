@@ -84,10 +84,11 @@ pub use frame::{
 };
 pub use intent::{
     AuditReadGranted, BootstrapOnboarding, BranchBootstrap, BranchSeedDefaults, DeviceAssign,
-    DevicePlace, DeviceRegister, DeviceRevoke, DeviceVersionReported, FLOOR_COLS, FLOOR_ROWS,
-    GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert, Intent, IntentCategory, IntentKind,
-    IntentPayload, PermEffect, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffSetCredentials,
-    StaffUpsert, ZoneDelete, ZoneUpsert, reasons_json,
+    DeviceMaintenance, DevicePlace, DeviceRegister, DeviceRevoke, DeviceVersionReported,
+    FLOOR_COLS, FLOOR_ROWS, GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert, Intent,
+    IntentCategory, IntentKind, IntentPayload, MAINTENANCE_NOTE_MAX, PermEffect, ReasonCode,
+    RolePerm, RoleUpsert, SettingsSet, StaffSetCredentials, StaffUpsert, ZoneDelete, ZoneUpsert,
+    reasons_json,
 };
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
@@ -158,8 +159,8 @@ pub use signup::{
     SignupVerified, SignupVerify,
 };
 pub use snapshot::{
-    AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
-    SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
+    AppliedEvent, DeviceStatus, HubSnapshot, LocalePending, NumberFormat, PendingNumber,
+    PendingText, SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
     SnapshotLocale, SnapshotUi, SnapshotZone, SymbolPosition,
 };
 pub use stock::{

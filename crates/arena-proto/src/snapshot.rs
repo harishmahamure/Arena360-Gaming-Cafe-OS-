@@ -225,6 +225,36 @@ pub struct SnapshotZone {
     pub rev: i64,
 }
 
+/// The one status a device shows. `InSession` and `Reserved` are set by later features.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum DeviceStatus {
+    Online,
+    #[default]
+    Offline,
+    InSession,
+    Reserved,
+    Maintenance,
+}
+
+impl DeviceStatus {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "online" => Self::Online,
+            "offline" => Self::Offline,
+            "in_session" => Self::InSession,
+            "reserved" => Self::Reserved,
+            "maintenance" => Self::Maintenance,
+            _ => return None,
+        })
+    }
+
+    pub fn held(self) -> bool {
+        !matches!(self, Self::Online | Self::Offline)
+    }
+}
+
 /// One device on the floor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -258,6 +288,29 @@ pub struct SnapshotDevice {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(optional, type = "boolean")]
     pub manual: bool,
+    #[serde(default)]
+    #[ts(optional, as = "Option<DeviceStatus>")]
+    pub status: DeviceStatus,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub last_seen_at: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "string | null")]
+    pub maintenance_note: Option<String>,
+}
+
+impl SnapshotDevice {
+    pub fn apply_presence(&mut self, online: bool, last_seen_at: Option<i64>) {
+        if self.status.held() || self.manual {
+            return;
+        }
+        self.status = if online {
+            DeviceStatus::Online
+        } else {
+            DeviceStatus::Offline
+        };
+        self.last_seen_at = last_seen_at;
+    }
 }
 
 #[cfg(test)]
@@ -283,6 +336,9 @@ mod tests {
                 floor_x: None,
                 floor_y: None,
                 manual: false,
+                status: DeviceStatus::Online,
+                last_seen_at: None,
+                maintenance_note: None,
             }],
             locale: None,
             ui: SnapshotUi::default(),
@@ -300,7 +356,7 @@ mod tests {
                 "branch": null,
                 "groups": [],
                 "zones": [],
-                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null, "floor_x": null, "floor_y": null}],
+                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null, "floor_x": null, "floor_y": null, "status": "online", "last_seen_at": null, "maintenance_note": null}],
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5, "hc": false},
                 "connectivity": {"state": "online", "checked_at": null},
@@ -362,5 +418,45 @@ mod locale_tests {
             v["pending"],
             serde_json::json!({"tz": {"value": "Asia/Dubai", "effective_from": "2027-01-02"}})
         );
+    }
+    #[test]
+    fn presence_moves_only_online_and_offline_paired_devices() {
+        let dev = |manual, status| SnapshotDevice {
+            device_id: "D".into(),
+            label: "L".into(),
+            class: ClientClass::Paired,
+            zone: None,
+            online: false,
+            kind: None,
+            group_id: None,
+            meta_rev: None,
+            tv_number: None,
+            floor_x: None,
+            floor_y: None,
+            manual,
+            status,
+            last_seen_at: None,
+            maintenance_note: None,
+        };
+        let mut d = dev(false, DeviceStatus::Offline);
+        d.apply_presence(true, Some(9));
+        assert_eq!((d.status, d.last_seen_at), (DeviceStatus::Online, Some(9)));
+        d.apply_presence(false, Some(10));
+        assert_eq!(
+            (d.status, d.last_seen_at),
+            (DeviceStatus::Offline, Some(10))
+        );
+        let mut m = dev(true, DeviceStatus::Online);
+        m.apply_presence(false, Some(1));
+        assert_eq!((m.status, m.last_seen_at), (DeviceStatus::Online, None));
+        for held in [
+            DeviceStatus::Maintenance,
+            DeviceStatus::InSession,
+            DeviceStatus::Reserved,
+        ] {
+            let mut h = dev(false, held);
+            h.apply_presence(true, Some(1));
+            assert_eq!((h.status, h.last_seen_at), (held, None));
+        }
     }
 }

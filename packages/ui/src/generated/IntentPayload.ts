@@ -7,6 +7,7 @@ import type { DeviceAdminExit } from "./DeviceAdminExit";
 import type { DeviceAdminRelock } from "./DeviceAdminRelock";
 import type { DeviceAdminUnlock } from "./DeviceAdminUnlock";
 import type { DeviceAssign } from "./DeviceAssign";
+import type { DeviceMaintenance } from "./DeviceMaintenance";
 import type { DevicePlace } from "./DevicePlace";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
@@ -59,4 +60,5 @@ export type IntentPayload =
   | ({ kind: "product.delete" } & ProductDelete)
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
   | ({ kind: "stock.in" } & StockIn)
-  | ({ kind: "stock.in.reverted" } & StockInReverted);
+  | ({ kind: "stock.in.reverted" } & StockInReverted)
+  | ({ kind: "device.maintenance" } & DeviceMaintenance);

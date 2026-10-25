@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use arena_proto::{
-    AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SetupStatus, SnapshotBranch,
-    SnapshotDevice, SnapshotGroup, SnapshotLocale, SnapshotUi, SnapshotZone,
+    AppError, ClientClass, DeviceStatus, ErrorCode, HubSnapshot, SettingEntry, SetupStatus,
+    SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLocale, SnapshotUi, SnapshotZone,
 };
 use arena_store::{BranchSummary, DeviceMetaRow, DeviceRow, GroupRow, Store, ZoneRow};
 
@@ -90,6 +90,16 @@ pub fn build_snapshot(
                     floor_x: m.and_then(|m| m.floor_x),
                     floor_y: m.and_then(|m| m.floor_y),
                     manual: d.token_hash.is_empty(),
+                    status: m
+                        .and_then(|m| DeviceStatus::parse(&m.state))
+                        .filter(|s| s.held())
+                        .unwrap_or(if d.token_hash.is_empty() {
+                            DeviceStatus::Online
+                        } else {
+                            DeviceStatus::Offline
+                        }),
+                    last_seen_at: None,
+                    maintenance_note: m.and_then(|m| m.maintenance_note.clone()),
                     device_id: d.device_id,
                     // Presence is the LAN registry's, not the database's: the snapshot
                     // handler fills it in.
@@ -399,6 +409,9 @@ mod tests {
                     floor_x: None,
                     floor_y: None,
                     manual: false,
+                    status: DeviceStatus::Offline,
+                    last_seen_at: None,
+                    maintenance_note: None,
                 }],
                 locale: Some(SnapshotLocale {
                     currency: "INR".into(),

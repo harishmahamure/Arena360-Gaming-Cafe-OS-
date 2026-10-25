@@ -192,3 +192,10 @@
   summary: Tests for 2.21: `DEVICE_LIMIT` maps to 403 over HTTP; a Counter removing a manual device gets the PIN prompt for `device.revoke`; the tier-lock tier follows the licence instead of a fixed Basic.
   evidence: Only the Playwright stub and the Rust apply tests cover them.
 
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units.md`
+  summary: Settings → Tax still shows the GST product and play rate fields for an unregistered Indian branch, but 5.2 uses `rate_bp` there (default 0); expose "Default rate" when country is IN and GST is off and hide the GST rates.
+  evidence: `TaxSettings::rates()` returns `(rate_bp, rate_bp)` unless `tax_mode` is `gst_in`; the Hub page (5.1) is unchanged.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units.md`
+  summary: Callers (sessions 3.x, plans 3.22, POS 5.x) must pass `gst = tax_mode() == GstIn` and `inclusive = settings.inclusive`, snapshot the play rate when a bill opens, store `subtotal_minor`, `tax_minor`, `total_minor`, `tax_breakup` on `orders` and `plans.tax_rate_bp` (default = play rate), and show "GST 5% (included)" and the branch label lines in bill-breakdown and the settle-bar.
+  evidence: No `orders`, `plans` or bill UI exist yet, so 5.2 ships the pure `invoice::tax::compute` only; `Bill` is not `Serialize` (serialize `breakup` into `tax_breakup`).

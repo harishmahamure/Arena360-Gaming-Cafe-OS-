@@ -5,6 +5,7 @@ mod apply;
 pub mod audit;
 mod clock;
 pub mod devices;
+pub mod invoice;
 pub mod locale;
 pub mod pairing;
 pub mod printer;

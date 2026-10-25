@@ -74,6 +74,13 @@ impl TaxSettings {
         }
     }
 
+    pub fn rates(&self) -> (u16, u16) {
+        match self.tax_mode() {
+            TaxMode::GstIn => (self.product_bp, self.play_bp),
+            TaxMode::Simple => (self.rate_bp, self.rate_bp),
+        }
+    }
+
     pub fn check(&self) -> Result<(), (&'static str, &'static str)> {
         let india = self.country == "IN";
         if self.country.len() != 2 || !self.country.bytes().all(|b| b.is_ascii_uppercase()) {
@@ -187,6 +194,20 @@ mod tests {
             })
             .sum();
         format!("{body}{}", ALPHABET[(36 - sum % 36) % 36] as char)
+    }
+
+    #[test]
+    fn rates_follow_the_mode() {
+        let mut t = TaxSettings::parse(DEFAULT_TAX).unwrap();
+        assert_eq!(t.rates(), (0, 0));
+        t.gst = true;
+        assert_eq!(t.rates(), (500, 1800));
+        t.country = "AE".into();
+        t.rate_bp = 700;
+        assert_eq!(t.rates(), (700, 700));
+        let mut u = TaxSettings::parse(DEFAULT_TAX).unwrap();
+        u.rate_bp = 300;
+        assert_eq!(u.rates(), (300, 300));
     }
 
     #[test]

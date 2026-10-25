@@ -25,7 +25,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | CP | Control plane | 63 | 2 | 0 | 61 |
 | HUB-A | Hub floor and sessions | 80 | 2 | 0 | 78 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
-| HUB-B | Hub POS and money | 39 | 1 | 0 | 38 |
+| HUB-B | Hub POS and money | 39 | 2 | 0 | 37 |
 | OWNER | Owner app | 30 | 3 | 0 | 27 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
 | KITCHEN | Kitchen | 14 | 1 | 0 | 13 |
@@ -40,7 +40,7 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 
 - **CP** 2.12 Hub verifies its licence against trusted time and enforces its limits (`2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i`)
 - **HUB-A** 2.23 Floor zones and grid layout per branch (`2-23-floor-zones-and-grid-layout-per-branch`)
-- **HUB-B** 5.2 Tax is computed once per rate on every bill, in minor units (`5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units`)
+- **HUB-B** 5.3 Products with categories, barcodes, images and the kitchen flag (`5-3-products-with-categories-barcodes-images-and-the-kitchen-fla`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
 
@@ -263,7 +263,7 @@ Windows Hub: tax, products, stock, POS, shifts, receipts, printing, reports, CSV
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
 | 1 | 5.1 | Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India | MVP | review |  |
-| 2 | 5.2 | Tax is computed once per rate on every bill, in minor units | MVP | backlog |  |
+| 2 | 5.2 | Tax is computed once per rate on every bill, in minor units | MVP | review |  |
 | 3 | 5.3 | Products with categories, barcodes, images and the kitchen flag | MVP | backlog |  |
 | 4 | 5.4 | Bundles priced on their own | MVP | backlog |  |
 | 5 | 5.5 | Stock-in with expiry lots and weighted average cost | MVP | backlog |  |
@@ -277,7 +277,7 @@ Windows Hub: tax, products, stock, POS, shifts, receipts, printing, reports, CSV
 | 13 | 5.13 | Take stock at served, mark items served, and cancel unserved lines into waste | MVP | backlog |  |
 | 14 | 5.14 | Invoice numbers in an epoch-segmented series that never repeat | MVP | backlog |  |
 | 15 | 5.15 | Receipt and notification settings | MVP | backlog |  |
-| 16 | 5.16 | Receipt, tax invoice and payment receipt layouts for 58 and 80 mm | MVP | backlog | 5.14, 5.2 |
+| 16 | 5.16 | Receipt, tax invoice and payment receipt layouts for 58 and 80 mm | MVP | backlog | 5.14, ~~5.2~~ |
 | 17 | 5.17 | Choose print or none at settle, and print through the side-effect outbox | MVP | backlog | 5.16, ~~2.27~~ |
 | 18 | 5.18 | Cash drawer kicks on cash sales | MVP | backlog |  |
 | 19 | 5.19 | WhatsApp receipt queued to the outbox | MVP | backlog | 5.15, 8.29 |

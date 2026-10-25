@@ -100,6 +100,8 @@ pub enum ErrorCode {
     TierLocked,
     /// The branch's device cap is reached.
     DeviceLimit,
+    HsnRequired,
+    BarcodeTaken,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -167,6 +169,8 @@ impl ErrorCode {
             Self::CellTaken => "CELL_TAKEN",
             Self::TierLocked => "TIER_LOCKED",
             Self::DeviceLimit => "DEVICE_LIMIT",
+            Self::HsnRequired => "HSN_REQUIRED",
+            Self::BarcodeTaken => "BARCODE_TAKEN",
         }
     }
 }
@@ -292,6 +296,8 @@ mod tests {
             (ErrorCode::CellTaken, "CELL_TAKEN"),
             (ErrorCode::TierLocked, "TIER_LOCKED"),
             (ErrorCode::DeviceLimit, "DEVICE_LIMIT"),
+            (ErrorCode::HsnRequired, "HSN_REQUIRED"),
+            (ErrorCode::BarcodeTaken, "BARCODE_TAKEN"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

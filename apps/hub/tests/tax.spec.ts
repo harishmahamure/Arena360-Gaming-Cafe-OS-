@@ -66,6 +66,7 @@ function snapshot(): HubSnapshot {
       backup_location_set: false,
       ad_consent: "missing",
       printer: "unset",
+      products_count: 0,
     },
     lan: null,
     paired: true,

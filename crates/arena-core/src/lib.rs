@@ -3,6 +3,7 @@
 
 mod apply;
 pub mod audit;
+mod catalog;
 mod clock;
 pub mod devices;
 pub mod entitlement;

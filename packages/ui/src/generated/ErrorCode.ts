@@ -53,4 +53,6 @@ export type ErrorCode =
   | "ZONE_NOT_EMPTY"
   | "CELL_TAKEN"
   | "TIER_LOCKED"
-  | "DEVICE_LIMIT";
+  | "DEVICE_LIMIT"
+  | "HSN_REQUIRED"
+  | "BARCODE_TAKEN";

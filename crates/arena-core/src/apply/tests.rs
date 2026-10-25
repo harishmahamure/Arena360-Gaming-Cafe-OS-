@@ -4351,6 +4351,7 @@ mod operating {
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
+                products_count: 0,
             }
         );
         let manager = staff(&f, "manager", ROLE_MANAGER).await;
@@ -4369,6 +4370,7 @@ mod operating {
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
+                products_count: 0,
             }
         );
         f.writer
@@ -4390,6 +4392,7 @@ mod operating {
                 backup_location_set: true,
                 ad_consent: AdConsentState::Given,
                 printer: arena_proto::PrinterState::Unset,
+                products_count: 0,
             }
         );
         save(&f, "system.backup_dir", "").await.unwrap();
@@ -4429,6 +4432,7 @@ mod operating {
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
+                products_count: 0,
             },
         )
         .await;
@@ -4440,6 +4444,7 @@ mod operating {
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
+                products_count: 0,
             },
         )
         .await;
@@ -4464,6 +4469,7 @@ mod operating {
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Skipped,
+                products_count: 0,
             },
         )
         .await;
@@ -4475,6 +4481,7 @@ mod operating {
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
+                products_count: 0,
             },
         )
         .await;
@@ -6790,5 +6797,618 @@ mod licence {
             let e = send(&f, kind, body("kitchen", 999)).await.unwrap_err();
             assert_eq!(e.code, ErrorCode::PermissionDenied, "{kind:?}");
         }
+    }
+}
+
+mod products {
+    use super::*;
+    use crate::rbac::{ROLE_COUNTER, ROLE_MANAGER};
+    use crate::staff::hash_secret;
+    use arena_proto::{ProductDelete, ProductUpsert, StaffUpsert};
+    use base64::Engine;
+
+    const GSTIN: &str = "27AAPFU0939F1ZV";
+
+    fn jpeg(w: u16, h: u16) -> String {
+        let mut b = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00];
+        b.extend([0xFF, 0xC0, 0x00, 0x0B, 0x08]);
+        b.extend(h.to_be_bytes());
+        b.extend(w.to_be_bytes());
+        b.extend([0x01, 0x01, 0x11, 0x00]);
+        format!(
+            "{}{}",
+            arena_proto::IMAGE_PREFIX,
+            base64::engine::general_purpose::STANDARD.encode(b)
+        )
+    }
+
+    fn owner() -> Actor {
+        Actor {
+            kind: ActorKind::Owner,
+            id: "o".into(),
+        }
+    }
+
+    fn as_actor(a: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
+        Intent {
+            kind: payload.kind(),
+            payload,
+            actor: a,
+            base_rev,
+            ..bootstrap()
+        }
+    }
+
+    fn up(name: &str) -> ProductUpsert {
+        ProductUpsert {
+            id: None,
+            name: name.into(),
+            category: "Drinks".into(),
+            price_minor: 12000,
+            tax_rate_bp: None,
+            hsn: String::new(),
+            track_stock: true,
+            image: String::new(),
+            barcode: String::new(),
+            kitchen: false,
+            favourite: false,
+            active: true,
+        }
+    }
+
+    async fn run(
+        f: &Fixture,
+        u: ProductUpsert,
+        base_rev: Option<i64>,
+    ) -> Result<Applied, AppError> {
+        f.writer
+            .submit_intent(as_actor(owner(), IntentPayload::ProductUpsert(u), base_rev))
+            .await
+    }
+
+    async fn make(f: &Fixture, u: ProductUpsert) -> String {
+        run(f, u, None).await.unwrap().changes[0].row_id.clone()
+    }
+
+    async fn gst(f: &Fixture) {
+        let tax = format!(
+            r#"{{"country":"IN","gst":true,"gstin":"{GSTIN}","inclusive":true,"product_bp":500,"play_bp":1800,"sac":"","label":"Tax","rate_bp":0}}"#
+        );
+        let rev = reopen(f)
+            .settings()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.key == "branch.tax")
+            .unwrap()
+            .rev;
+        f.writer
+            .submit_intent(set("branch.tax", &tax, Some(rev)))
+            .await
+            .unwrap();
+    }
+
+    fn row(f: &Fixture, id: &str) -> arena_store::ProductRow {
+        reopen(f).product(id).unwrap().unwrap()
+    }
+
+    async fn refused(f: &Fixture, u: ProductUpsert) -> (ErrorCode, Option<String>) {
+        let before = (snapshot(f), reopen(f).rows(Table::Products).unwrap());
+        let e = run(f, u, None).await.unwrap_err();
+        let after = (snapshot(f), reopen(f).rows(Table::Products).unwrap());
+        assert_eq!(
+            (&after.0.0, &after.0.1, &after.0.2, &after.1),
+            (&before.0.0, &before.0.1, &before.0.2, &before.1)
+        );
+        (e.code, e.field)
+    }
+
+    #[tokio::test]
+    async fn create_stores_every_field_with_the_tax_default() {
+        let f = bootstrapped().await;
+        let mut u = up("Cola");
+        u.hsn = "2202".into();
+        u.barcode = " 8901234567890 ".into();
+        u.kitchen = true;
+        u.favourite = true;
+        u.image = jpeg(512, 400);
+        let id = make(&f, u.clone()).await;
+        let r = row(&f, &id);
+        assert_eq!(
+            (
+                r.name.as_str(),
+                r.category.as_str(),
+                r.price_minor,
+                r.tax_rate_bp,
+                r.hsn.as_str()
+            ),
+            ("Cola", "Drinks", 12000, 0, "2202")
+        );
+        assert_eq!(r.barcode.as_deref(), Some("8901234567890"));
+        assert!(r.track_stock && r.kitchen && r.favourite && r.active);
+        assert_eq!(r.image, u.image);
+        assert_eq!(r.rev, 1);
+        gst(&f).await;
+        u.barcode = String::new();
+        let id = make(&f, u).await;
+        assert_eq!(row(&f, &id).tax_rate_bp, 500);
+        let mut u = up("Tea");
+        u.hsn = "090240".into();
+        u.tax_rate_bp = Some(1200);
+        let id = make(&f, u).await;
+        assert_eq!(row(&f, &id).tax_rate_bp, 1200);
+    }
+
+    #[tokio::test]
+    async fn gst_branches_need_a_4_6_or_8_digit_hsn() {
+        let f = bootstrapped().await;
+        gst(&f).await;
+        for bad in [
+            "",
+            "   ",
+            "123",
+            "12345",
+            "1234567",
+            "123456789",
+            "12A4",
+            "+123",
+        ] {
+            let mut u = up("Cola");
+            u.hsn = bad.into();
+            assert_eq!(
+                refused(&f, u).await,
+                (ErrorCode::HsnRequired, Some("hsn".into())),
+                "{bad:?}"
+            );
+        }
+        for ok in ["2202", "220210", "22021010", " 2202 "] {
+            let mut u = up("Cola");
+            u.hsn = ok.into();
+            make(&f, u).await;
+        }
+        let mut u = up("Cola");
+        u.hsn = "2202".into();
+        u.tax_rate_bp = Some(2801);
+        assert_eq!(
+            refused(&f, u).await,
+            (ErrorCode::ValidationFailed, Some("tax_rate_bp".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn outside_gst_the_hsn_is_optional_but_checked_when_given() {
+        let f = bootstrapped().await;
+        make(&f, up("Cola")).await;
+        let mut u = up("Tea");
+        u.hsn = "abc".into();
+        assert_eq!(
+            refused(&f, u).await,
+            (ErrorCode::ValidationFailed, Some("hsn".into()))
+        );
+        let mut u = up("Tea");
+        u.tax_rate_bp = Some(10001);
+        assert_eq!(
+            refused(&f, u).await,
+            (ErrorCode::ValidationFailed, Some("tax_rate_bp".into()))
+        );
+        let mut u = up("Tea");
+        u.tax_rate_bp = Some(10000);
+        make(&f, u).await;
+    }
+
+    #[tokio::test]
+    async fn a_barcode_belongs_to_one_active_product() {
+        let f = bootstrapped().await;
+        let mut a = up("Cola");
+        a.barcode = "111".into();
+        let a_id = make(&f, a.clone()).await;
+        let mut b = up("Fanta");
+        b.barcode = " 111 ".into();
+        assert_eq!(
+            refused(&f, b.clone()).await,
+            (ErrorCode::BarcodeTaken, Some("barcode".into()))
+        );
+
+        let mut keep = a.clone();
+        keep.id = Some(a_id.clone());
+        keep.name = "Cola 2".into();
+        run(&f, keep, Some(1)).await.unwrap();
+
+        let mut off = a.clone();
+        off.id = Some(a_id.clone());
+        off.active = false;
+        run(&f, off, Some(2)).await.unwrap();
+        let b_id = make(&f, b.clone()).await;
+
+        let mut on = a.clone();
+        on.id = Some(a_id.clone());
+        let before = snapshot(&f);
+        let e = run(&f, on, Some(3)).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::BarcodeTaken);
+        assert_eq!(snapshot(&f), before);
+
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete { id: b_id }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        let mut on = a;
+        on.id = Some(a_id.clone());
+        run(&f, on, Some(3)).await.unwrap();
+        assert!(row(&f, &a_id).active);
+
+        let mut c = up("Sprite");
+        c.barcode = "bad barcode".into();
+        assert_eq!(
+            refused(&f, c).await,
+            (ErrorCode::ValidationFailed, Some("barcode".into()))
+        );
+        let mut c = up("Sprite");
+        c.barcode = "9".repeat(49);
+        assert_eq!(
+            refused(&f, c).await,
+            (ErrorCode::ValidationFailed, Some("barcode".into()))
+        );
+        let mut d = up("Sprite");
+        d.barcode = "   ".into();
+        let id = make(&f, d.clone()).await;
+        assert_eq!(row(&f, &id).barcode, None);
+        make(&f, d).await;
+    }
+
+    #[tokio::test]
+    async fn images_must_be_small_jpegs() {
+        let f = bootstrapped().await;
+        for (image, _) in [
+            (jpeg(513, 10), "wide"),
+            (jpeg(10, 513), "tall"),
+            ("data:image/png;base64,iVBORw0KGgo=".to_owned(), "png"),
+            ("http://x/y.jpg".to_owned(), "url"),
+            (format!("{}!!", arena_proto::IMAGE_PREFIX), "base64"),
+        ] {
+            let mut u = up("Cola");
+            u.image = image;
+            assert_eq!(
+                refused(&f, u).await,
+                (ErrorCode::ValidationFailed, Some("image".into()))
+            );
+        }
+        let mut u = up("Cola");
+        u.image = jpeg(1, 1);
+        make(&f, u).await;
+    }
+
+    #[tokio::test]
+    async fn field_checks() {
+        let f = bootstrapped().await;
+        for (field, tweak) in [
+            (
+                "name",
+                Box::new(|u: &mut ProductUpsert| u.name = "  ".into())
+                    as Box<dyn Fn(&mut ProductUpsert)>,
+            ),
+            ("name", Box::new(|u| u.name = "x".repeat(81))),
+            ("category", Box::new(|u| u.category = "c".repeat(41))),
+            ("category", Box::new(|u| u.category = "a\nb".into())),
+            ("price_minor", Box::new(|u| u.price_minor = -1)),
+            (
+                "price_minor",
+                Box::new(|u| u.price_minor = arena_proto::MAX_PRICE_MINOR + 1),
+            ),
+            ("id", Box::new(|u| u.id = Some("nope".into()))),
+        ] {
+            let mut u = up("Cola");
+            tweak(&mut u);
+            assert_eq!(
+                refused(&f, u).await,
+                (ErrorCode::ValidationFailed, Some(field.into())),
+                "{field}"
+            );
+        }
+        let mut u = up("Free");
+        u.price_minor = 0;
+        u.category = String::new();
+        make(&f, u).await;
+    }
+
+    #[tokio::test]
+    async fn edits_carry_base_rev_and_delete_is_soft() {
+        let f = bootstrapped().await;
+        let mgr = staff(&f, "mgr", ROLE_MANAGER).await;
+        let by = Actor {
+            kind: ActorKind::Staff,
+            id: mgr,
+        };
+        let id = make(&f, up("Cola")).await;
+        let mut u = up("Cola 2");
+        u.id = Some(id.clone());
+        let edit = |u: &ProductUpsert, rev| {
+            f.writer.submit_intent(as_actor(
+                by.clone(),
+                IntentPayload::ProductUpsert(u.clone()),
+                rev,
+            ))
+        };
+        let e = edit(&u, Some(7)).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::Stale, Some("base_rev"))
+        );
+        let e = edit(&u, None).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("base_rev"))
+        );
+        assert_eq!(row(&f, &id).name, "Cola");
+        edit(&u, Some(1)).await.unwrap();
+        assert_eq!(row(&f, &id).rev, 2);
+        run(&f, u.clone(), None).await.unwrap();
+        let del = |rev| {
+            f.writer.submit_intent(as_actor(
+                by.clone(),
+                IntentPayload::ProductDelete(ProductDelete { id: id.clone() }),
+                rev,
+            ))
+        };
+        assert_eq!(del(Some(1)).await.unwrap_err().code, ErrorCode::Stale);
+        del(Some(3)).await.unwrap();
+        let r = row(&f, &id);
+        assert!(r.deleted_at.is_some() && r.name == "Cola 2");
+        assert!(reopen(&f).products().unwrap().is_empty());
+        assert_eq!(
+            edit(&u, Some(4)).await.unwrap_err().field.as_deref(),
+            Some("id")
+        );
+        assert_eq!(del(Some(4)).await.unwrap_err().field.as_deref(), Some("id"));
+    }
+
+    async fn staff(f: &Fixture, login: &str, role: &str) -> String {
+        let rid = match reopen(f)
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == RowValue::Text(role.into()))
+            .unwrap()["role_id"]
+            .clone()
+        {
+            RowValue::Text(t) => t,
+            other => panic!("{other:?}"),
+        };
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: None,
+                    login: login.into(),
+                    display_name: login.into(),
+                    role_id: rid,
+                    password_hash: Some(hash_secret("pw").unwrap()),
+                    pin_hash: None,
+                    active: true,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn only_catalog_editors_write_products() {
+        let f = bootstrapped().await;
+        let counter = staff(&f, "ctr", ROLE_COUNTER).await;
+        let manager = staff(&f, "mgr", ROLE_MANAGER).await;
+        let by = |id: &str| Actor {
+            kind: ActorKind::Staff,
+            id: id.into(),
+        };
+        let before = snapshot(&f);
+        let e = f
+            .writer
+            .submit_intent(as_actor(
+                by(&counter),
+                IntentPayload::ProductUpsert(up("Cola")),
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        assert_eq!(snapshot(&f), before);
+        let applied = f
+            .writer
+            .submit_intent(as_actor(
+                by(&manager),
+                IntentPayload::ProductUpsert(up("Cola")),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(applied.changes[0].tbl, "products");
+    }
+
+    #[tokio::test]
+    async fn availability_setup_count_and_catalog_entries() {
+        let f = bootstrapped().await;
+        let r = || crate::SnapshotReader::open(&f.path).unwrap();
+        assert_eq!(r().setup().unwrap().unwrap().products_count, 0);
+        let tracked = make(&f, up("Cola")).await;
+        let mut u = up("Chips");
+        u.track_stock = false;
+        let untracked = make(&f, u).await;
+        let mut u = up("Old");
+        u.active = false;
+        let off = make(&f, u).await;
+        assert_eq!(r().setup().unwrap().unwrap().products_count, 2);
+        let by_id = |id: &str| {
+            r().products()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.id == id)
+                .unwrap()
+        };
+        let t = by_id(&tracked);
+        assert_eq!(
+            (t.available, t.reason.as_deref(), t.quantity),
+            (false, Some("out_of_stock"), 0)
+        );
+        assert!(by_id(&untracked).available);
+        assert_eq!(by_id(&off).reason.as_deref(), Some("inactive"));
+        let ids = vec![tracked.clone(), untracked, "gone".into()];
+        let entries = r().catalog(&ids).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| (e.available, e.reason.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                (false, Some("out_of_stock")),
+                (true, None),
+                (false, Some("inactive"))
+            ]
+        );
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete {
+                    id: tracked.clone(),
+                }),
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r().setup().unwrap().unwrap().products_count, 1);
+        assert_eq!(
+            r().catalog(&[tracked]).unwrap()[0].reason.as_deref(),
+            Some("inactive")
+        );
+    }
+
+    #[tokio::test]
+    async fn limits_are_accepted_exactly_at_the_edge() {
+        let f = bootstrapped().await;
+        gst(&f).await;
+        let mut u = up(&"n".repeat(80));
+        u.category = "c".repeat(40);
+        u.barcode = "9".repeat(48);
+        u.price_minor = arena_proto::MAX_PRICE_MINOR;
+        u.tax_rate_bp = Some(2800);
+        u.hsn = "22021010".into();
+        u.image = jpeg(512, 512);
+        make(&f, u).await;
+        let mut u = up("Zero");
+        u.price_minor = 0;
+        u.hsn = "2202".into();
+        u.tax_rate_bp = Some(0);
+        make(&f, u).await;
+    }
+
+    #[tokio::test]
+    async fn an_edit_writes_every_field_and_a_cleared_barcode_is_freed() {
+        let f = bootstrapped().await;
+        let mut a = up("Cola");
+        a.barcode = "111".into();
+        a.tax_rate_bp = Some(1200);
+        let id = make(&f, a).await;
+        let edited = ProductUpsert {
+            id: Some(id.clone()),
+            name: " Fanta ".into(),
+            category: " Soda ".into(),
+            price_minor: 777,
+            tax_rate_bp: None,
+            hsn: " 2202 ".into(),
+            track_stock: false,
+            image: jpeg(8, 8),
+            barcode: String::new(),
+            kitchen: true,
+            favourite: true,
+            active: false,
+        };
+        run(&f, edited.clone(), Some(1)).await.unwrap();
+        let r = row(&f, &id);
+        assert_eq!(
+            (
+                r.name.as_str(),
+                r.category.as_str(),
+                r.price_minor,
+                r.tax_rate_bp,
+                r.hsn.as_str(),
+                r.track_stock,
+                r.barcode.clone(),
+                r.kitchen,
+                r.favourite,
+                r.active,
+                r.rev
+            ),
+            (
+                "Fanta", "Soda", 777, 1200, "2202", false, None, true, true, false, 2
+            )
+        );
+        assert_eq!(r.image, edited.image);
+        let mut b = up("Sprite");
+        b.barcode = "111".into();
+        make(&f, b).await;
+        f.clock.advance(5);
+        f.writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete { id: id.clone() }),
+                Some(2),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(row(&f, &id).deleted_at, Some(T0 + 5));
+    }
+
+    #[tokio::test]
+    async fn an_inactive_product_may_hold_a_barcode_it_cannot_reactivate_with() {
+        let f = bootstrapped().await;
+        let mut a = up("Cola");
+        a.barcode = "111".into();
+        make(&f, a.clone()).await;
+        let mut b = a.clone();
+        b.name = "Fanta".into();
+        b.active = false;
+        let b_id = make(&f, b.clone()).await;
+        b.id = Some(b_id.clone());
+        b.active = true;
+        let before = reopen(&f).rows(Table::Products).unwrap();
+        let e = run(&f, b, Some(1)).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::BarcodeTaken);
+        assert_eq!(reopen(&f).rows(Table::Products).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn the_owner_may_omit_base_rev_but_not_send_a_stale_one() {
+        let f = bootstrapped().await;
+        let id = make(&f, up("Cola")).await;
+        let mut u = up("Cola 2");
+        u.id = Some(id.clone());
+        let e = run(&f, u.clone(), Some(9)).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Stale);
+        assert_eq!(row(&f, &id).name, "Cola");
+        run(&f, u, None).await.unwrap();
+        assert_eq!(row(&f, &id).name, "Cola 2");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_missing_product_is_refused() {
+        let f = bootstrapped().await;
+        let e = f
+            .writer
+            .submit_intent(as_actor(
+                owner(),
+                IntentPayload::ProductDelete(ProductDelete { id: "nope".into() }),
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("id"))
+        );
     }
 }

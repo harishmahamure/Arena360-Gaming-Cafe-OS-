@@ -21,7 +21,11 @@ pub fn hub_tier() -> HubTier {
     HubTier::Free
 }
 
-pub fn setup_status<'a>(value: impl Fn(&str) -> Option<&'a str>, tier: HubTier) -> SetupStatus {
+pub fn setup_status<'a>(
+    value: impl Fn(&str) -> Option<&'a str>,
+    tier: HubTier,
+    products_count: u32,
+) -> SetupStatus {
     let ad_consent = match tier {
         HubTier::Paid => AdConsentState::NotNeeded,
         HubTier::Free => match value(KEY_ADS_CONSENT).and_then(AdsConsent::parse) {
@@ -36,6 +40,7 @@ pub fn setup_status<'a>(value: impl Fn(&str) -> Option<&'a str>, tier: HubTier) 
         printer: value(KEY_PRINTER_STATUS)
             .and_then(PrinterStatus::parse)
             .map_or(PrinterState::Unset, |s| s.state),
+        products_count,
     }
 }
 
@@ -106,7 +111,7 @@ pub async fn publish_setup(
                 if applied
                     .changes
                     .iter()
-                    .any(|c| c.tbl == "settings" || c.tbl == "branch")
+                    .any(|c| matches!(c.tbl.as_str(), "settings" | "branch" | "products"))
                 {
                     refresh(&reader, &status).await;
                 }
@@ -126,6 +131,7 @@ mod tests {
         setup_status(
             |k| rows.iter().find(|(key, _)| *key == k).map(|(_, v)| *v),
             tier,
+            0,
         )
     }
 
@@ -143,6 +149,7 @@ mod tests {
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
                 printer: PrinterState::Unset,
+                products_count: 0,
             }
         );
         let given = r#"{"given":true,"at":1,"staff_id":"S"}"#;
@@ -162,6 +169,7 @@ mod tests {
                 backup_location_set: true,
                 ad_consent: AdConsentState::Given,
                 printer: PrinterState::Skipped,
+                products_count: 0,
             }
         );
         assert_eq!(
@@ -188,6 +196,7 @@ mod tests {
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
                 printer: PrinterState::Unset,
+                products_count: 0,
             }
         );
         for (value, state) in [

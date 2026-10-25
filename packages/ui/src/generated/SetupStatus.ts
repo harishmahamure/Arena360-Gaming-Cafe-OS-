@@ -7,4 +7,5 @@ export type SetupStatus = {
   backup_location_set: boolean;
   ad_consent: AdConsentState;
   printer: PrinterState;
+  products_count: number;
 };

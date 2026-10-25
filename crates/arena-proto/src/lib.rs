@@ -7,6 +7,7 @@ mod account;
 mod actor;
 mod admin;
 mod audit;
+mod catalog;
 mod connectivity;
 pub mod currency;
 mod discovery;
@@ -48,6 +49,11 @@ pub use audit::{
     AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditAdminExit, AuditDetail,
     AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,
     AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
+};
+pub use catalog::{
+    CatalogEntry, IMAGE_PREFIX, MAX_BARCODE_CHARS, MAX_CATEGORY_CHARS, MAX_IMAGE_BYTES,
+    MAX_IMAGE_PX, MAX_PRICE_MINOR, MAX_PRODUCT_NAME_CHARS, Product, ProductDelete, ProductUpsert,
+    availability, hsn_valid, image_problem,
 };
 pub use connectivity::{Connectivity, ConnectivityState};
 pub use discovery::{

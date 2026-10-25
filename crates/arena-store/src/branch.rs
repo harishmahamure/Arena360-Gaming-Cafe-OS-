@@ -39,11 +39,12 @@ pub enum Table {
     DevicesMeta,
     DeviceGroups,
     FloorZones,
+    Products,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 12] = [
+    pub const ALL: [Table; 13] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -56,6 +57,7 @@ impl Table {
         Table::DevicesMeta,
         Table::DeviceGroups,
         Table::FloorZones,
+        Table::Products,
     ];
 
     /// The SQL table name.
@@ -73,6 +75,7 @@ impl Table {
             Self::DevicesMeta => "devices_meta",
             Self::DeviceGroups => "device_groups",
             Self::FloorZones => "floor_zones",
+            Self::Products => "products",
         }
     }
 
@@ -91,6 +94,7 @@ impl Table {
             Self::DevicesMeta => &["device_id"],
             Self::DeviceGroups => &["group_id"],
             Self::FloorZones => &["zone_id"],
+            Self::Products => &["product_id"],
         }
     }
 
@@ -106,7 +110,8 @@ impl Table {
             | Self::DeviceAdminExits
             | Self::DevicesMeta
             | Self::DeviceGroups
-            | Self::FloorZones => true,
+            | Self::FloorZones
+            | Self::Products => true,
             Self::Settings | Self::RolePerms => false,
         }
     }
@@ -138,6 +143,7 @@ pub enum RowKey {
     DevicesMeta { device_id: String },
     DeviceGroups { group_id: String },
     FloorZones { zone_id: String },
+    Products { product_id: String },
 }
 
 impl RowKey {
@@ -155,6 +161,7 @@ impl RowKey {
             Self::DevicesMeta { .. } => Table::DevicesMeta,
             Self::DeviceGroups { .. } => Table::DeviceGroups,
             Self::FloorZones { .. } => Table::FloorZones,
+            Self::Products { .. } => Table::Products,
         }
     }
 
@@ -176,6 +183,7 @@ impl RowKey {
             Self::DevicesMeta { device_id } => device_id.clone(),
             Self::DeviceGroups { group_id } => group_id.clone(),
             Self::FloorZones { zone_id } => zone_id.clone(),
+            Self::Products { product_id } => product_id.clone(),
         }
     }
 
@@ -225,6 +233,9 @@ impl RowKey {
             Table::FloorZones => Self::FloorZones {
                 zone_id: text("zone_id")?,
             },
+            Table::Products => Self::Products {
+                product_id: text("product_id")?,
+            },
         })
     }
 
@@ -245,6 +256,7 @@ impl RowKey {
             Self::DevicesMeta { device_id } => vec![device_id],
             Self::DeviceGroups { group_id } => vec![group_id],
             Self::FloorZones { zone_id } => vec![zone_id],
+            Self::Products { product_id } => vec![product_id],
         }
     }
 }

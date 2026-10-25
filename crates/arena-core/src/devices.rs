@@ -191,6 +191,14 @@ impl DeviceDirectory {
 
     /// The branch settings among `keys` that exist, with their `rev`, in `keys` order (what a
     /// paired device may read: the caller checks the keys against the class scope first).
+    pub fn catalog(&self, ids: &[String]) -> Result<Vec<arena_proto::CatalogEntry>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        store.read_consistent(|s| crate::catalog::entries(s, ids))
+    }
+
     pub fn settings(&self, keys: &[String]) -> Result<Vec<arena_proto::SettingEntry>, AppError> {
         let rows = self
             .reader

@@ -26,6 +26,7 @@
     unlockSession,
     type LockResult,
   } from "../lib/auth";
+  import { catalog } from "../lib/catalog.svelte";
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
   import { notePairingCode } from "../lib/pairing";
@@ -231,6 +232,10 @@
           toast = t("hub.groups.owner_toast");
           clearTimeout(toastTimer);
           toastTimer = setTimeout(() => (toast = ""), 5000);
+        },
+        onCatalogChanged: () => {
+          catalog.version++;
+          void refresh();
         },
         onConnectivityChanged: (e) => takeLink(e),
         onAdminUnlockAck: (e) => noteAck(e.exit_id),

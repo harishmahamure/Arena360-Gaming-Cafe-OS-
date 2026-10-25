@@ -214,6 +214,7 @@ dependencies = [
  "arena-replay",
  "arena-store",
  "argon2",
+ "base64 0.22.1",
  "chrono",
  "chrono-tz",
  "proptest",

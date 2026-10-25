@@ -231,6 +231,8 @@ pub enum HubEvent {
     /// `kiosk.admin_unlock_ack` (to that device's paired sessions only).
     #[serde(rename = "admin_unlock")]
     AdminUnlock { exit_id: String },
+    #[serde(rename = "catalog.changed")]
+    CatalogChanged { products: Vec<crate::CatalogEntry> },
 }
 
 /// The body of an `event` frame.

@@ -88,6 +88,7 @@ function snapshot(hub: Hub): HubSnapshot {
       backup_location_set: hub.settings.get("system.backup_dir")!.value !== "",
       ad_consent: hub.adConsent,
       printer: "unset",
+      products_count: 0,
     },
     lan: null,
     paired: true,

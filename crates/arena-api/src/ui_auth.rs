@@ -827,14 +827,17 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::BAD_REQUEST
         }
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
-        ErrorCode::ValidationFailed | ErrorCode::Expired => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::ValidationFailed | ErrorCode::Expired | ErrorCode::HsnRequired => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         ErrorCode::Stale
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::IdempotencyConflict
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch
         | ErrorCode::ZoneNotEmpty
-        | ErrorCode::CellTaken => StatusCode::CONFLICT,
+        | ErrorCode::CellTaken
+        | ErrorCode::BarcodeTaken => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }
@@ -1765,6 +1768,18 @@ async fn intent(
     }
 }
 
+async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(&auth.reader);
+    match tokio::task::spawn_blocking(move || reader.products()).await {
+        Ok(Ok(list)) => Json(list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 async fn settings(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -1798,6 +1813,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/elevate/drop", post(elevate_drop))
         .route("/ui/intent", post(intent))
         .route("/ui/settings", get(settings))
+        .route("/ui/products", get(products))
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/test", post(crate::ui_printer::test))
         .route("/ui/printer/test-kot", post(crate::ui_printer::test_kot))
@@ -2327,6 +2343,122 @@ pub(crate) mod tests {
             .find(|r| r["key"] == RowValue::Text("receipt.footer".into()))
             .unwrap();
         assert_eq!(footer["rev"], RowValue::Integer(1));
+    }
+
+    fn product_body(name: &str, ticket: Option<&str>) -> Value {
+        let mut body = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: name.into(),
+                category: String::new(),
+                price_minor: 100,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+            }),
+            None,
+        ) });
+        if let Some(t) = ticket {
+            body["elevation_ticket"] = json!(t);
+        }
+        body
+    }
+
+    #[tokio::test]
+    async fn a_counter_saves_a_product_with_a_managers_pin_ticket_once() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let (status, denied) = post_intent(&hub, &token, product_body("Cola", None)).await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let (status, bad) =
+            elevate_items(&hub, &token, vec![item("product.upsert", None)], "9999").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{bad}");
+        let (status, ok) =
+            elevate_items(&hub, &token, vec![item("product.upsert", None)], "2222").await;
+        assert_eq!(status, StatusCode::OK, "{ok}");
+        let ticket = ok["ticket"].as_str().unwrap().to_owned();
+        let (status, reply) = post_intent(&hub, &token, product_body("Cola", Some(&ticket))).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (status, _) = post_intent(&hub, &token, product_body("Fanta", Some(&ticket))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn products_are_listed_for_a_session_and_written_with_catalog_edit() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/products", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let body = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: "Cola".into(),
+                category: "Drinks".into(),
+                price_minor: 2500,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: "890".into(),
+                kitchen: true,
+                favourite: false,
+                active: true,
+            }),
+            None,
+        ) });
+        let (status, denied) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&counter),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let (status, listed) = call(&hub, "GET", "/ui/products", Some(&counter), None).await;
+        assert_eq!((status, listed), (StatusCode::OK, json!([])));
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&manager), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&counter), None).await;
+        let p = &listed[0];
+        assert_eq!(
+            (
+                p["name"].as_str(),
+                p["price_minor"].as_i64(),
+                p["barcode"].as_str(),
+                p["kitchen"].as_bool()
+            ),
+            (Some("Cola"), Some(2500), Some("890"), Some(true))
+        );
+        assert_eq!(
+            (
+                p["available"].as_bool(),
+                p["reason"].as_str(),
+                p["quantity"].as_i64(),
+                p["rev"].as_i64()
+            ),
+            (Some(false), Some("out_of_stock"), Some(0), Some(1))
+        );
+        let (status, _) = call(&hub, "POST", "/ui/auth/sign-out", Some(&manager), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) = call(&hub, "GET", "/ui/products", Some(&manager), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -4034,7 +4166,7 @@ pub(crate) mod tests {
                 panic!("healthz never reported {want}");
             }
         };
-        setup_is(json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset"})).await;
+        setup_is(json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset", "products_count": 0})).await;
         let token = token_for(&hub, "manager", "m-pass").await;
         let consent = json!({ "intent": intent_as(
             Actor { kind: ActorKind::Owner, id: "spoof".into() },
@@ -4069,7 +4201,7 @@ pub(crate) mod tests {
             let (status, body) = post_intent(&hub, &token, set_body(&hub, key, value, None)).await;
             assert_eq!(status, StatusCode::OK, "{key}: {body}");
         }
-        let done = json!({"opening_hours_set": true, "backup_location_set": true, "ad_consent": "given", "printer": "unset"});
+        let done = json!({"opening_hours_set": true, "backup_location_set": true, "ad_consent": "given", "printer": "unset", "products_count": 0});
         setup_is(done.clone()).await;
         let snapshot = SnapshotReader::open(&hub.path)
             .unwrap()
@@ -4082,6 +4214,20 @@ pub(crate) mod tests {
                 .policy_version,
             Some(arena_proto::ADS_POLICY_VERSION)
         );
+        let (status, body) = post_intent(&hub, &token, product_body("Cola", None)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let mut with_product = done.clone();
+        with_product["products_count"] = json!(1);
+        setup_is(with_product).await;
+        let id = last_change(&hub).row_id;
+        let delete = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::ProductDelete(arena_proto::ProductDelete { id }),
+            Some(1),
+        ) });
+        let (status, body) = post_intent(&hub, &token, delete).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        setup_is(done).await;
         job.abort();
     }
 

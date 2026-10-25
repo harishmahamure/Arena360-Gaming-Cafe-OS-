@@ -27,4 +27,6 @@ export type IntentKind =
   | "licence.apply"
   | "zone.upsert"
   | "zone.delete"
-  | "device.place";
+  | "device.place"
+  | "product.upsert"
+  | "product.delete";

@@ -431,6 +431,40 @@ impl Registry {
         }
     }
 
+    /// Pushes `catalog.changed` for the products `applied` wrote to every `paired` session.
+    async fn push_catalog(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
+        let ids = product_ids(applied);
+        if ids.is_empty() {
+            return;
+        }
+        let dir = Arc::clone(devices);
+        match tokio::task::spawn_blocking(move || dir.catalog(&ids)).await {
+            Ok(Ok(products)) => {
+                let n = self.next_event.fetch_add(1, Ordering::Relaxed);
+                let frame = Frame::new(
+                    format!("ev-{n}"),
+                    FrameBody::Event(EventFrame {
+                        event: HubEvent::CatalogChanged { products },
+                    }),
+                );
+                let message = Message::text(frame.to_text());
+                let Ok(map) = self.sessions.lock() else {
+                    return;
+                };
+                for (id, entry) in map.iter().filter(|(_, e)| e.class == ClientClass::Paired) {
+                    if entry.out.try_send(message.clone()).is_err() {
+                        tracing::warn!(session = id, "session queue full or closed; dropping it");
+                        set_kill(&entry.kill, Kill::Drop);
+                    }
+                }
+            }
+            _ => {
+                tracing::warn!("catalog read failed; dropping paired sessions");
+                self.drop_paired();
+            }
+        }
+    }
+
     /// Reads the paired-readable settings `applied` wrote (`kiosk.*` and device
     /// `display.hc.*`) and pushes them (nothing when it wrote none).
     async fn push_kiosk_settings(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
@@ -542,6 +576,7 @@ impl Registry {
                 Ok(applied) => {
                     self.push_applied(&applied);
                     self.push_kiosk_settings(&devices, &applied).await;
+                    self.push_catalog(&devices, &applied).await;
                     if touches_staff(&applied) {
                         self.push_verifier_if_changed(&devices).await;
                     }
@@ -570,6 +605,18 @@ impl Registry {
             }
         }
     }
+}
+
+pub(crate) fn product_ids(applied: &Applied) -> Vec<String> {
+    let mut ids: Vec<String> = applied
+        .changes
+        .iter()
+        .filter(|c| c.tbl == "products")
+        .map(|c| c.row_id.clone())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 /// The setting keys `applied` wrote that some paired session may read: `kiosk.*`,
@@ -643,6 +690,87 @@ mod tests {
         assert_eq!(*fast_kill_rx.borrow(), Some(Kill::Error(revoked_error())));
         drop(slow);
         assert_eq!(reg.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn catalog_changed_reaches_paired_sessions_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        let mut store = arena_store::Store::open(&path, 0).unwrap();
+        let row = |id: &str, active: bool| arena_store::ProductRow {
+            product_id: id.into(),
+            name: id.into(),
+            category: String::new(),
+            price_minor: 1,
+            tax_rate_bp: 0,
+            hsn: String::new(),
+            track_stock: false,
+            image: String::new(),
+            barcode: None,
+            kitchen: false,
+            favourite: false,
+            active,
+            rev: 0,
+            deleted_at: None,
+        };
+        store
+            .write_tx(|tx| {
+                arena_store::insert_product(tx, &row("A", true))?;
+                arena_store::insert_product(tx, &row("B", false))
+            })
+            .unwrap();
+        let dir_ = Arc::new(DeviceDirectory::open(&path).unwrap());
+        let reg = Arc::new(Registry::default());
+        let (tx, mut paired) = mpsc::channel(8);
+        let _p = reg.register(ClientClass::Paired, Some("P".into()), tx);
+        let (tx, mut kds) = mpsc::channel(8);
+        let _k = reg.register(ClientClass::Kds, Some("K".into()), tx);
+        let change = |id: &str| ChangeMeta {
+            epoch: "1:H".into(),
+            seq: 1,
+            tbl: "products".into(),
+            row_id: id.into(),
+            op: ChangeOp::Update,
+        };
+        reg.push_catalog(
+            &dir_,
+            &Applied {
+                intent_id: "I".into(),
+                changes: vec![change("B"), change("A"), change("A"), change("gone")],
+            },
+        )
+        .await;
+        let Some(Message::Text(t)) = paired.recv().await else {
+            panic!("text")
+        };
+        let FrameBody::Event(EventFrame {
+            event: HubEvent::CatalogChanged { products },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("not catalog.changed")
+        };
+        let got: Vec<_> = products
+            .iter()
+            .map(|p| (p.product_id.as_str(), p.available, p.reason.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("A", true, None),
+                ("B", false, Some("inactive")),
+                ("gone", false, Some("inactive"))
+            ]
+        );
+        assert!(kds.try_recv().is_err());
+        reg.push_catalog(
+            &dir_,
+            &Applied {
+                intent_id: "I".into(),
+                changes: vec![],
+            },
+        )
+        .await;
+        assert!(paired.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -967,5 +1095,52 @@ mod tests {
                 Some(Kill::Drop)
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn the_fan_out_pushes_catalog_changed_after_applied() {
+        let (_dir, devices) = directory();
+        let reg = Arc::new(Registry::default());
+        let (tx, mut paired) = mpsc::channel(8);
+        let _p = reg.register(ClientClass::Paired, Some("P".into()), tx);
+        let (events_tx, events_rx) = broadcast::channel(4);
+        events_tx
+            .send(Applied {
+                intent_id: "I".into(),
+                changes: vec![ChangeMeta {
+                    epoch: "1:H".into(),
+                    seq: 1,
+                    tbl: "products".into(),
+                    row_id: "gone".into(),
+                    op: ChangeOp::Update,
+                }],
+            })
+            .unwrap();
+        drop(events_tx);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Arc::clone(&reg).fan_out(events_rx, devices),
+        )
+        .await
+        .unwrap();
+        let mut kinds = Vec::new();
+        while let Ok(Message::Text(t)) = paired.try_recv() {
+            let FrameBody::Event(EventFrame { event }) =
+                arena_proto::parse_frame(t.as_str()).unwrap().body
+            else {
+                panic!("event")
+            };
+            kinds.push(match event {
+                HubEvent::Applied(_) => "applied".to_owned(),
+                HubEvent::CatalogChanged { products } => {
+                    format!(
+                        "catalog:{}:{}",
+                        products[0].product_id, products[0].available
+                    )
+                }
+                other => panic!("{other:?}"),
+            });
+        }
+        assert_eq!(kinds, ["applied", "catalog:gone:false"]);
     }
 }

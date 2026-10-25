@@ -132,6 +132,7 @@ fn read_setup(store: &Store) -> Result<Option<SetupStatus>, AppError> {
                 .map(|s| s.value.as_str())
         },
         crate::setup::hub_tier(),
+        u32::try_from(store.products_count()?).unwrap_or(0),
     )))
 }
 
@@ -257,6 +258,22 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.read_consistent(|s| read_locale(s, now_ms))
+    }
+
+    pub fn products(&self) -> Result<Vec<arena_proto::Product>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(crate::catalog::products)
+    }
+
+    pub fn catalog(&self, ids: &[String]) -> Result<Vec<arena_proto::CatalogEntry>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| crate::catalog::entries(s, ids))
     }
 
     pub fn setup(&self) -> Result<Option<SetupStatus>, AppError> {
@@ -398,6 +415,7 @@ mod tests {
                     backup_location_set: false,
                     ad_consent: arena_proto::AdConsentState::Missing,
                     printer: arena_proto::PrinterState::Unset,
+                    products_count: 0,
                 }),
                 lan: None,
                 paired: true,

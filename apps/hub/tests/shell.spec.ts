@@ -68,9 +68,11 @@ const RAIL = [
   ["settings", en["hub.nav.settings"]],
   ["system", en["hub.nav.system"]],
 ] as const;
-// Settings (settings.spec.ts) and System (audit.spec.ts) have their own sections; every other
-// unbuilt screen is a placeholder.
-const PLACEHOLDERS = RAIL.filter(([id]) => id !== "floor" && id !== "settings" && id !== "system");
+// Settings (settings.spec.ts), System (audit.spec.ts) and Inventory (products.spec.ts) have
+// their own sections; every other unbuilt screen is a placeholder.
+const PLACEHOLDERS = RAIL.filter(
+  ([id]) => id !== "floor" && id !== "settings" && id !== "system" && id !== "inventory",
+);
 const BAR = [
   en["hub.nav.floor_short"],
   en["hub.nav.pos"],

@@ -72,6 +72,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 16,
         sql: include_str!("../migrations/0016_floor_zones.sql"),
     },
+    Migration {
+        version: 17,
+        sql: include_str!("../migrations/0017_products.sql"),
+    },
 ];
 
 /// The schema version this binary writes.

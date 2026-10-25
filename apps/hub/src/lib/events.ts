@@ -25,6 +25,8 @@ export type EventHandlers = {
   onDevicesChanged?: () => void;
   /** `groups.changed`: a group or a device's group changed; `byOwner` for an owner command. */
   onGroupsChanged?: (byOwner: boolean) => void;
+  /** `catalog.changed`: a product was written; reload the product list. */
+  onCatalogChanged?: () => void;
   /** `connectivity.changed`: the WAN probe found a link down or back up. */
   onConnectivityChanged?: (event: Connectivity) => void;
   /** `device.admin_unlock_ack`: a kiosk granted a remote unlock. */
@@ -95,6 +97,7 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
         handlers.onGroupsChanged?.(false);
       }
     });
+    es.addEventListener("catalog.changed", () => handlers.onCatalogChanged?.());
     es.addEventListener("device.admin_unlock_ack", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent<string>).data) as Partial<AdminUnlockAckEvent>;

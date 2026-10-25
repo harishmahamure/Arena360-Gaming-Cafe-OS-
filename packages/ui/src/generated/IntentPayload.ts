@@ -17,6 +17,8 @@ import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { LicenceApply } from "./LicenceApply";
 import type { PrinterStatusSet } from "./PrinterStatusSet";
+import type { ProductDelete } from "./ProductDelete";
+import type { ProductUpsert } from "./ProductUpsert";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffUpsert } from "./StaffUpsert";
@@ -49,4 +51,6 @@ export type IntentPayload =
   | ({ kind: "licence.apply" } & LicenceApply)
   | ({ kind: "zone.upsert" } & ZoneUpsert)
   | ({ kind: "zone.delete" } & ZoneDelete)
-  | ({ kind: "device.place" } & DevicePlace);
+  | ({ kind: "device.place" } & DevicePlace)
+  | ({ kind: "product.upsert" } & ProductUpsert)
+  | ({ kind: "product.delete" } & ProductDelete);

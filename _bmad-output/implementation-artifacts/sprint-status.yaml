@@ -127,7 +127,7 @@ development_status:
   epic-5: in-progress
   5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a: review
   5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units: review
-  5-3-products-with-categories-barcodes-images-and-the-kitchen-fla: backlog
+  5-3-products-with-categories-barcodes-images-and-the-kitchen-fla: review
   5-4-bundles-priced-on-their-own: backlog
   5-5-stock-in-with-expiry-lots-and-weighted-average-cost: backlog
   5-6-record-waste-with-a-reason: backlog

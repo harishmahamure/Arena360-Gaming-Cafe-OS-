@@ -25,7 +25,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | CP | Control plane | 63 | 3 | 0 | 60 |
 | HUB-A | Hub floor and sessions | 80 | 3 | 0 | 77 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
-| HUB-B | Hub POS and money | 39 | 2 | 0 | 37 |
+| HUB-B | Hub POS and money | 39 | 3 | 0 | 36 |
 | OWNER | Owner app | 30 | 3 | 0 | 27 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
 | KITCHEN | Kitchen | 14 | 1 | 0 | 13 |
@@ -40,7 +40,7 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 
 - **CP** 2.13 branch.bootstrap applies the onboarding profile at first pairing, with branch code lock (`2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai`)
 - **HUB-A** 2.24 Device status and maintenance (`2-24-device-status-and-maintenance`)
-- **HUB-B** 5.3 Products with categories, barcodes, images and the kitchen flag (`5-3-products-with-categories-barcodes-images-and-the-kitchen-fla`)
+- **HUB-B** 5.4 Bundles priced on their own (`5-4-bundles-priced-on-their-own`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
 
@@ -191,7 +191,7 @@ Windows Hub: devices, floor, players, sessions, wallet, credit, plans, pricing, 
 | 63 | 13.24 | Import framework — source detection, field mapping and a dry-run report | v1.1 | backlog |  |
 | 64 | 13.25 | Import a ggLeap players export | v1.1 | backlog | 13.24 |
 | 65 | 13.26 | Import a Smartlaunch export through the same mapping and dry-run | v1.1 | backlog | 13.24 |
-| 66 | 13.27 | Migrated time balances and products from ggLeap and Smartlaunch | v1.1 | backlog | 13.25, 13.26, 5.3, 3.21 |
+| 66 | 13.27 | Migrated time balances and products from ggLeap and Smartlaunch | v1.1 | backlog | 13.25, 13.26, ~~5.3~~, 3.21 |
 | 67 | 13.30 | Bookings, tournaments, loyalty and the vault proven against their invariants | v1.1 | backlog |  |
 | 68 | 14.1 | Start a stock count and fill in the count sheet | v1.1 | backlog | 5.5 |
 | 69 | 14.2 | Apply count adjustments with reasons and see variance by value | v1.1 | backlog |  |
@@ -264,13 +264,13 @@ Windows Hub: tax, products, stock, POS, shifts, receipts, printing, reports, CSV
 |---:|---|---|---|---|---|
 | 1 | 5.1 | Tax settings — GST registration, rates, inclusive or exclusive, and simple tax outside India | MVP | review |  |
 | 2 | 5.2 | Tax is computed once per rate on every bill, in minor units | MVP | review |  |
-| 3 | 5.3 | Products with categories, barcodes, images and the kitchen flag | MVP | backlog |  |
+| 3 | 5.3 | Products with categories, barcodes, images and the kitchen flag | MVP | review |  |
 | 4 | 5.4 | Bundles priced on their own | MVP | backlog |  |
 | 5 | 5.5 | Stock-in with expiry lots and weighted average cost | MVP | backlog |  |
 | 6 | 5.6 | Record waste with a reason | MVP | backlog |  |
 | 7 | 5.7 | Expiry alerts, and expired stock held from sale until written off | MVP | backlog |  |
 | 8 | 5.8 | Low-stock thresholds and alerts | MVP | backlog |  |
-| 9 | 5.9 | POS screen — product grid, search or scan, and cart | MVP | backlog | 3.13, 5.3 |
+| 9 | 5.9 | POS screen — product grid, search or scan, and cart | MVP | backlog | 3.13, ~~5.3~~ |
 | 10 | 5.10 | Open a shift with a confirmed float, and cash needs an open shift | MVP | backlog | 3.12 |
 | 11 | 5.11 | Sell at the counter — a walk-up sale settles and takes stock | MVP | backlog | 5.9, 5.10 |
 | 12 | 5.12 | Attach an order to a running session so it settles with the bill | MVP | backlog | 5.11, 3.9 |
@@ -294,7 +294,7 @@ Windows Hub: tax, products, stock, POS, shifts, receipts, printing, reports, CSV
 | 30 | 5.30 | Players and staff reports | MVP | backlog | 3.17 |
 | 31 | 5.31 | Stock reports with waste by reason | MVP | backlog |  |
 | 32 | 5.32 | Export every Hub report to CSV and PDF | MVP | backlog |  |
-| 33 | 5.33 | CSV import with dry-run, starting with products | MVP | backlog | 5.3 |
+| 33 | 5.33 | CSV import with dry-run, starting with products | MVP | backlog | ~~5.3~~ |
 | 34 | 5.34 | Import players and plans by CSV | MVP | backlog | 5.33, 3.21 |
 | 35 | 5.35 | Seed plans and products from a starter template | MVP | backlog |  |
 | 36 | 5.36 | Export and import a branch setup file | MVP | backlog |  |
@@ -409,7 +409,7 @@ Hub kitchen tickets, KOT printing and the kitchen display app.
 |---:|---|---|---|---|---|
 | 1 | 7.1 | Kitchen settings at the Hub, locked on Free | MVP | review | ~~2.26~~ |
 | 2 | 7.2 | Kitchen notes on order lines from the POS and the kiosk cart | MVP | backlog | 5.12, 6.31 |
-| 3 | 7.3 | Every order with kitchen items opens a kitchen ticket that the Hub can move | MVP | backlog | 7.2, 5.3 |
+| 3 | 7.3 | Every order with kitchen items opens a kitchen ticket that the Hub can move | MVP | backlog | 7.2, ~~5.3~~ |
 | 4 | 7.4 | The floor tile shows READY and the Hub chimes when food is ready | MVP | backlog | 7.3, 3.25 |
 | 5 | 7.5 | A KOT prints within 3 s and can be reprinted from the Hub | MVP | backlog | 7.3, 5.17 |
 | 6 | 7.6 | Pair a kitchen tablet by code as a scoped display | MVP | backlog | 7.3 |

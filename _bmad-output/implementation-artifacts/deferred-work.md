@@ -229,3 +229,14 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-23-floor-zones-and-grid-layout-per-branch.md`
   summary: Zone grid: no busy flag against rapid concurrent places (the second gets `STALE`); `free()` is quadratic per render; the PIN approval block sits above the group form, away from the group controls.
   evidence: Review findings from Blind Hunter.
+
+## Story 5.3 (products)
+
+- Images are stored in `products.image` and so in every change-log row and in `GET /ui/products`; move to a thumbnail or side table if catalogs grow large.
+- The Hub reports `SetupStatus.products_count`; forwarding it in the heartbeat `setup` block and completing wizard step 6 by itself is Story 2.28.
+- `catalog.changed` reaches the Hub UI and paired kiosk sessions as pushed; a kiosk that was offline needs a catalog read on connect (Epic 6 Shop).
+- Stock and expiry changes must push `catalog.changed` too (Stories 5.5 and later); `quantity` is a constant 0 until the `stock` table exists.
+- The kitchen flag is stored plain; Epic 7 stories register kitchen-notes and ticket intents with the Story 7.1 gate.
+- Categories are a product attribute; renaming or merging a category is a bulk edit not built yet. CSV import (FR87) is not built.
+- JPEG validation checks signature, size and header dimensions, not a full decode; the Hub UI always re-encodes.
+- No automated test for a malformed `branch.tax` row at apply; 44 px targets and axe on the error and PIN states are not asserted.

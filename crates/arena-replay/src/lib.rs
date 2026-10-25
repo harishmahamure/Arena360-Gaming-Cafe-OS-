@@ -349,6 +349,26 @@ mod tests {
                 id: kiosk,
             };
             writer.submit_intent(relock).await.unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                        id: None,
+                        name: "Cola".into(),
+                        category: "Drinks".into(),
+                        price_minor: 2000,
+                        tax_rate_bp: None,
+                        hsn: String::new(),
+                        track_stock: true,
+                        image: String::new(),
+                        barcode: "123".into(),
+                        kitchen: false,
+                        favourite: false,
+                        active: true,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

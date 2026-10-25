@@ -105,6 +105,7 @@ function snapshot(hub: Hub): HubSnapshot {
       backup_location_set: false,
       ad_consent: "missing",
       printer: printerState(hub),
+      products_count: 0,
     },
   };
 }

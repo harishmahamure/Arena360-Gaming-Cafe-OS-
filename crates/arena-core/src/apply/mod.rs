@@ -33,6 +33,7 @@ mod kiosk_log;
 mod licence;
 mod mutate;
 mod printer_status;
+mod products;
 mod read_grants;
 pub(crate) mod seed_defaults;
 mod settings_set;
@@ -127,6 +128,7 @@ pub(crate) enum Target {
     AdminUnlock(Box<admin_exit::UnlockTarget>),
     Group(Box<groups::GroupTarget>),
     Zone(Box<zones::ZoneTarget>),
+    Product(Box<products::ProductTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
@@ -152,6 +154,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         }
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
+        }
+        P::ProductUpsert(_) | P::ProductDelete(_) => {
+            Target::Product(Box::new(products::load(tx, &intent.payload)?))
         }
     })
 }

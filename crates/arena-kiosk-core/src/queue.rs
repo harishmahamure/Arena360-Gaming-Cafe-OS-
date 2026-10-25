@@ -67,6 +67,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::TierLocked
         | ErrorCode::DeviceLimit => true,
         ErrorCode::BadFrame
+        | ErrorCode::HsnRequired
+        | ErrorCode::BarcodeTaken
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary
         | ErrorCode::SchemaTooNew

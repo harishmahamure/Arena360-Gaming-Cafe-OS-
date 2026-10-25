@@ -27,6 +27,7 @@ pub enum IntentCategory {
     Console,
     Audit,
     Kiosk,
+    Catalog,
 }
 
 /// What an intent asks for, as `domain.verb`.
@@ -100,11 +101,15 @@ pub enum IntentKind {
     ZoneDelete,
     #[serde(rename = "device.place")]
     DevicePlace,
+    #[serde(rename = "product.upsert")]
+    ProductUpsert,
+    #[serde(rename = "product.delete")]
+    ProductDelete,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 24] = [
+    pub const ALL: [IntentKind; 26] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -129,6 +134,8 @@ impl IntentKind {
         Self::ZoneUpsert,
         Self::ZoneDelete,
         Self::DevicePlace,
+        Self::ProductUpsert,
+        Self::ProductDelete,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -158,6 +165,8 @@ impl IntentKind {
             Self::ZoneUpsert => "zone.upsert",
             Self::ZoneDelete => "zone.delete",
             Self::DevicePlace => "device.place",
+            Self::ProductUpsert => "product.upsert",
+            Self::ProductDelete => "product.delete",
         }
     }
 
@@ -189,6 +198,7 @@ impl IntentKind {
             Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
             Self::KioskLog | Self::KioskProcessBlocked => IntentCategory::Kiosk,
+            Self::ProductUpsert | Self::ProductDelete => IntentCategory::Catalog,
         }
     }
 
@@ -217,6 +227,7 @@ impl IntentKind {
             // ([`elevator_permission`](Self::elevator_permission)).
             Self::DeviceAdminExit | Self::DeviceAdminRelock => Requirement::Device,
             Self::DeviceAdminUnlock => Requirement::Perm(Permission::DeviceRemote),
+            Self::ProductUpsert | Self::ProductDelete => Requirement::Perm(Permission::CatalogEdit),
         }
     }
 
@@ -263,7 +274,9 @@ impl IntentKind {
             | Self::LicenceApply
             | Self::ZoneUpsert
             | Self::ZoneDelete
-            | Self::DevicePlace => None,
+            | Self::DevicePlace
+            | Self::ProductUpsert
+            | Self::ProductDelete => None,
         }
     }
 
@@ -603,6 +616,10 @@ pub enum IntentPayload {
     ZoneDelete(ZoneDelete),
     #[serde(rename = "device.place")]
     DevicePlace(DevicePlace),
+    #[serde(rename = "product.upsert")]
+    ProductUpsert(crate::ProductUpsert),
+    #[serde(rename = "product.delete")]
+    ProductDelete(crate::ProductDelete),
 }
 
 impl IntentPayload {
@@ -632,6 +649,8 @@ impl IntentPayload {
             Self::ZoneUpsert(_) => IntentKind::ZoneUpsert,
             Self::ZoneDelete(_) => IntentKind::ZoneDelete,
             Self::DevicePlace(_) => IntentKind::DevicePlace,
+            Self::ProductUpsert(_) => IntentKind::ProductUpsert,
+            Self::ProductDelete(_) => IntentKind::ProductDelete,
         }
     }
 }
@@ -727,7 +746,6 @@ mod tests {
         Permission::StockIn,
         Permission::StockAdjust,
         Permission::StockOverride,
-        Permission::CatalogEdit,
         Permission::ShiftOpen,
         Permission::ShiftClose,
         Permission::CashManage,
@@ -814,6 +832,7 @@ mod tests {
                 }
                 "device.admin_exit" | "device.admin_relock" => Requirement::Device,
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
+                "product.upsert" | "product.delete" => Requirement::Perm(Permission::CatalogEdit),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),

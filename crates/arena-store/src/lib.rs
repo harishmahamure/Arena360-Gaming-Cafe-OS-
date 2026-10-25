@@ -12,6 +12,7 @@ mod dedupe;
 mod devices;
 mod identity;
 mod migrations;
+mod products;
 mod staff;
 
 use std::fs::{File, OpenOptions, TryLockError};
@@ -56,6 +57,10 @@ pub use identity::{
     find_trusted_clock, insert_hub_identity, store_licence, store_trusted_clock,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
+pub use products::{
+    ProductRow, barcode_holder, count_active_products, find_product, insert_product, list_products,
+    set_product_deleted, update_product,
+};
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
 pub use staff::{
@@ -516,6 +521,24 @@ impl Store {
             return Ok(Vec::new());
         }
         list_zones(&self.conn)
+    }
+
+    pub fn product(&self, id: &str) -> Result<Option<ProductRow>, AppError> {
+        find_product(&self.conn, id)
+    }
+
+    pub fn products_count(&self) -> Result<i64, AppError> {
+        if !self.table_exists("products")? {
+            return Ok(0);
+        }
+        count_active_products(&self.conn)
+    }
+
+    pub fn products(&self) -> Result<Vec<ProductRow>, AppError> {
+        if !self.table_exists("products")? {
+            return Ok(Vec::new());
+        }
+        list_products(&self.conn)
     }
 
     pub fn change_actor_kind(&self, epoch: &str, seq: i64) -> Result<Option<String>, AppError> {

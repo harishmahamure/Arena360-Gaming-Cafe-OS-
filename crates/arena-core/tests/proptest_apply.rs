@@ -87,6 +87,12 @@ enum Op {
         value: String,
         who: Index,
     },
+    /// `product.upsert` of a new product by a staff member of a built-in role (or an admin).
+    Product {
+        name: String,
+        barcode: String,
+        who: Index,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -159,6 +165,8 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|((key, _), which)| Op::MalformedKey { key, which }),
         2 => (valid_setting(), any::<Index>())
             .prop_map(|((key, value), who)| Op::AsStaff { key, value, who }),
+        2 => ("[A-Za-z]{1,12}", "[0-2]{0,2}", any::<Index>())
+            .prop_map(|(name, barcode, who)| Op::Product { name, barcode, who }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -577,6 +585,59 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.rev(key), Some(rev + 1));
                 let c = hub.reader.changes().unwrap().pop().unwrap();
                 prop_assert_eq!(c.actor_kind.as_str(), "staff");
+            }
+        }
+        Op::Product { name, barcode, who } => {
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            let mut intent = hub.intent(
+                IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                    id: None,
+                    name: name.clone(),
+                    category: String::new(),
+                    price_minor: 100,
+                    tax_rate_bp: None,
+                    hsn: String::new(),
+                    track_stock: true,
+                    image: String::new(),
+                    barcode: barcode.clone(),
+                    kitchen: false,
+                    favourite: false,
+                    active: true,
+                }),
+                None,
+            );
+            let staff = hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len());
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match staff {
+                    Some(id) => Actor {
+                        kind: ActorKind::Staff,
+                        id: id.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let taken = !barcode.is_empty()
+                && hub
+                    .reader
+                    .products()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p.barcode.as_deref() == Some(barcode.as_str()));
+            let out = hub.submit_new(intent);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), changes_before);
+            } else if taken {
+                prop_assert_eq!(code(&out), Some((ErrorCode::BarcodeTaken, Some("barcode"))));
+                prop_assert_eq!(hub.change_count(), changes_before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), changes_before + 1);
             }
         }
         Op::Advance { ms } => hub.clock.advance(*ms),

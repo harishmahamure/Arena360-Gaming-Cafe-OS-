@@ -21,6 +21,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::ValidationFailed
         | ErrorCode::ReasonRequired
         | ErrorCode::Expired
+        | ErrorCode::HsnRequired
         | ErrorCode::PasswordTooShort
         | ErrorCode::PasswordCommon => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::AuthFailed | ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => {
@@ -49,7 +50,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch
         | ErrorCode::ZoneNotEmpty
-        | ErrorCode::CellTaken => StatusCode::CONFLICT,
+        | ErrorCode::CellTaken
+        | ErrorCode::BarcodeTaken => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
         ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked | ErrorCode::DeviceLimit => {
             StatusCode::FORBIDDEN

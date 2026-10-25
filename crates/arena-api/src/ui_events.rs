@@ -272,6 +272,19 @@ impl HubTask {
                             .unwrap_or(false);
                             self.send("groups.changed", format!(r#"{{"by_owner":{owner}}}"#), false);
                         }
+                        let products = crate::lan::registry::product_ids(&applied);
+                        if !products.is_empty() {
+                            let reader = Arc::clone(&self.reader);
+                            let entries =
+                                tokio::task::spawn_blocking(move || reader.catalog(&products)).await;
+                            match entries {
+                                Ok(Ok(products)) => {
+                                    let data = serde_json::json!({"products": products}).to_string();
+                                    self.send("catalog.changed", data, false);
+                                }
+                                _ => self.send("resync", "{}".into(), false),
+                            }
+                        }
                         if keys.is_empty() {
                             let data = serde_json::to_string(&AppliedEvent {
                                 intent_id: applied.intent_id.clone(),
@@ -812,6 +825,59 @@ mod tests {
             assert!(seen.len() < 5, "{seen:?}");
         }
         assert_eq!(hub.lan.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_product_change_pushes_catalog_changed_with_availability() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let product = |name: &str, track_stock: bool| {
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: name.into(),
+                category: String::new(),
+                price_minor: 100,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+            })
+        };
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let tracked = hub
+            .writer
+            .submit_intent(intent_as(owner(), product("Cola", true), None))
+            .await
+            .unwrap();
+        let free = hub
+            .writer
+            .submit_intent(intent_as(owner(), product("Chips", false), None))
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        while seen.len() < 2 {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            if event == "catalog.changed" {
+                seen.push(data);
+            }
+        }
+        assert_eq!(
+            seen[0],
+            serde_json::json!({"products": [{"product_id": tracked.changes[0].row_id, "available": false, "reason": "out_of_stock"}]})
+        );
+        assert_eq!(
+            seen[1],
+            serde_json::json!({"products": [{"product_id": free.changes[0].row_id, "available": true}]})
+        );
     }
 
     #[tokio::test]

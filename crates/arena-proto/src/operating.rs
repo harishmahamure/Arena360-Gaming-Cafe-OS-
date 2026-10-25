@@ -170,6 +170,8 @@ pub struct SetupStatus {
     pub backup_location_set: bool,
     pub ad_consent: AdConsentState,
     pub printer: crate::PrinterState,
+    #[serde(default)]
+    pub products_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,9 +279,10 @@ mod tests {
                 backup_location_set: true,
                 ad_consent: AdConsentState::NotNeeded,
                 printer: crate::PrinterState::Skipped,
+                products_count: 0,
             })
             .unwrap(),
-            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "printer": "skipped"})
+            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "printer": "skipped", "products_count": 0})
         );
         assert_eq!(BackupDirProblem::NotWritable.as_str(), "not_writable");
         assert_eq!(

@@ -237,8 +237,8 @@ development_status:
   6-38-the-player-journey-proven-on-reference-hardware: backlog
   epic-6-retrospective: optional
 
-  epic-7: backlog
-  7-1-kitchen-settings-at-the-hub-locked-on-free: backlog
+  epic-7: in-progress
+  7-1-kitchen-settings-at-the-hub-locked-on-free: review
   7-2-kitchen-notes-on-order-lines-from-the-pos-and-the-kiosk-cart: backlog
   7-3-every-order-with-kitchen-items-opens-a-kitchen-ticket-that-t: backlog
   7-4-the-floor-tile-shows-ready-and-the-hub-chimes-when-food-is-r: backlog

@@ -12,9 +12,16 @@ export const KEY_PRINTER_SELECTED = "printer.selected";
 export const KEY_PRINTER_PAPER_MM = "printer.paper_mm";
 export const KEY_PRINTER_STATUS = "printer.status";
 export const PRINTER_KEYS = [KEY_PRINTER_SELECTED, KEY_PRINTER_PAPER_MM, KEY_PRINTER_STATUS];
+export const KEY_LICENCE_FLAGS = "licence.flags";
+export const KEY_KOT_MODE = "kitchen.kot_mode";
+export const KEY_KOT_PRINTER = "kitchen.kot_printer";
+export const KEY_KOT_PAPER_MM = "kitchen.kot_paper_mm";
+export const KOT_MODES = ["receipt", "another", "none"] as const;
+export const KITCHEN_KEYS = [KEY_LICENCE_FLAGS, KEY_KOT_MODE, KEY_KOT_PRINTER, KEY_KOT_PAPER_MM];
 export const PAPER_WIDTHS = ["58", "80"] as const;
 export const FIND_URL = "http://127.0.0.1:7409/ui/printer/find";
 export const TEST_URL = "http://127.0.0.1:7409/ui/printer/test";
+export const KOT_TEST_URL = "http://127.0.0.1:7409/ui/printer/test-kot";
 export const SKIP_URL = "http://127.0.0.1:7409/ui/printer/skip";
 const FIND_TIMEOUT_MS = 15_000;
 const PRINT_TIMEOUT_MS = 12_000;
@@ -56,6 +63,7 @@ async function call<T>(url: string, timeoutMs: number): Promise<PrinterCall<T>> 
 
 export const findPrinters = () => call<PrinterFindResult>(FIND_URL, FIND_TIMEOUT_MS);
 export const testPrint = () => call<PrinterStatusReply>(TEST_URL, PRINT_TIMEOUT_MS);
+export const testKotPrint = () => call<PrinterStatusReply>(KOT_TEST_URL, PRINT_TIMEOUT_MS);
 export const skipPrinter = () => call<PrinterStatusReply>(SKIP_URL, PRINT_TIMEOUT_MS);
 
 export function parseSelected(value: string | undefined): PrinterSelected | null {

@@ -251,6 +251,7 @@ test("Settings opens on Branch, first in its sections, with the current values",
     en["hub.settings.nav.devices_display"],
     en["hub.settings.nav.layout"],
     en["hub.settings.nav.printer"],
+    en["hub.settings.nav.kitchen"],
     en["hub.settings.nav.system"],
   ]);
   await expect(sections.getByRole("link").first()).toHaveAttribute("aria-current", "page");

@@ -16,6 +16,7 @@ mod frame;
 mod intent;
 mod kiosk;
 mod kiosk_pairing;
+mod kitchen;
 pub mod licence;
 mod operating;
 pub mod pairing;
@@ -78,6 +79,12 @@ pub use kiosk_pairing::{
     PAIR_CODE_TTL_MS, PAIR_PATH, PAIR_PIN_MAX_FAILURES, PAIR_PIN_PAUSE_S, PAIR_PIN_WINDOW_MS,
     PAIR_SYSTEM_ACTOR, PairRequest, PairResponse, PairSecret, is_pair_code, is_pc_name,
     sanitize_pc_name,
+};
+pub use kitchen::{
+    DEFAULT_KITCHEN_KOT_MODE, DEFAULT_KITCHEN_KOT_PAPER_MM, DEFAULT_KITCHEN_KOT_PRINTER,
+    DEFAULT_LICENCE_FLAGS, FLAG_KITCHEN, KEY_KITCHEN_KOT_MODE, KEY_KITCHEN_KOT_PAPER_MM,
+    KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_FLAGS, KITCHEN_GATED_KEYS, KITCHEN_KOT_MODES, TierGate,
+    has_flag, kitchen_gate,
 };
 pub use licence::{LicenceClaims, LicenceError, VerifyKey};
 pub use operating::{

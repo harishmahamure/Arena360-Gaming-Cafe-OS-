@@ -93,6 +93,7 @@ pub enum ErrorCode {
     GroupNotEmpty,
     /// The device's kind does not fit the group's kind.
     GroupKindMismatch,
+    TierLocked,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -156,6 +157,7 @@ impl ErrorCode {
             Self::HubNotPaired => "HUB_NOT_PAIRED",
             Self::GroupNotEmpty => "GROUP_NOT_EMPTY",
             Self::GroupKindMismatch => "GROUP_KIND_MISMATCH",
+            Self::TierLocked => "TIER_LOCKED",
         }
     }
 }
@@ -277,6 +279,7 @@ mod tests {
             (ErrorCode::HubNotPaired, "HUB_NOT_PAIRED"),
             (ErrorCode::GroupNotEmpty, "GROUP_NOT_EMPTY"),
             (ErrorCode::GroupKindMismatch, "GROUP_KIND_MISMATCH"),
+            (ErrorCode::TierLocked, "TIER_LOCKED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

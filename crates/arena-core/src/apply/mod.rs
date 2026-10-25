@@ -184,6 +184,7 @@ pub(crate) fn run(
     if let Some(stored) = ttl_dedupe::ttl_dedupe(tx, intent, now)? {
         return Ok(Outcome::Replayed(stored));
     }
+    guards::tier(tx, intent, arena_proto::kitchen_gate)?;
     let target = load(tx, intent)?;
     guards::authorize(intent, &target)?;
     guards::base_rev(intent, &target)?;

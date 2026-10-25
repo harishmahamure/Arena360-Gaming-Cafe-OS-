@@ -49,7 +49,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
-        ErrorCode::FeatureNotEntitled => StatusCode::FORBIDDEN,
+        ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE

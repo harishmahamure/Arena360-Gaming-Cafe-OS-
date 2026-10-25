@@ -49,4 +49,5 @@ export type ErrorCode =
   | "CLOUD_UNREACHABLE"
   | "HUB_NOT_PAIRED"
   | "GROUP_NOT_EMPTY"
-  | "GROUP_KIND_MISMATCH";
+  | "GROUP_KIND_MISMATCH"
+  | "TIER_LOCKED";

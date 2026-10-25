@@ -14,6 +14,7 @@
     { href: "/settings/devices-display", label: "hub.settings.nav.devices_display" },
     { href: "/settings/layout", label: "hub.settings.nav.layout" },
     { href: "/settings/printer", label: "hub.settings.nav.printer" },
+    { href: "/settings/kitchen", label: "hub.settings.nav.kitchen" },
     { href: "/settings/system", label: "hub.settings.nav.system" },
   ];
   const section = $derived(SECTIONS.find((s) => page.url.pathname.startsWith(s.href)));

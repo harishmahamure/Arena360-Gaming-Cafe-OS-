@@ -812,7 +812,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::StepNotReady
         | ErrorCode::HubNotPaired => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired => StatusCode::UNAUTHORIZED,
-        ErrorCode::FeatureNotEntitled => StatusCode::FORBIDDEN,
+        ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PasswordRequired | ErrorCode::SetupIncomplete => StatusCode::FORBIDDEN,
         ErrorCode::PermissionDenied
@@ -1796,6 +1796,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/settings", get(settings))
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/test", post(crate::ui_printer::test))
+        .route("/ui/printer/test-kot", post(crate::ui_printer::test_kot))
         .route("/ui/printer/skip", post(crate::ui_printer::skip))
         .route("/ui/audit", get(crate::ui_audit::list))
         .route("/ui/audit/item", get(crate::ui_audit::item))

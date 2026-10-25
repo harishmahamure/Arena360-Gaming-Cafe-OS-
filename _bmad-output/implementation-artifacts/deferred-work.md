@@ -139,3 +139,16 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-20-device-groups-with-six-swatches-held-at-the-hub.md`
   summary: Hub shell Playwright is load-sensitive: under a saturated machine (load 40) different tests fail per run (the phone More-sheet focus test, audit paging, the devices-display copy row) and all pass in isolation.
   evidence: Full `test:shell` at load: 4 and then 3 failures, different each time; reruns with 1–2 workers pass.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-1-kitchen-settings-at-the-hub-locked-on-free.md`
+  summary: Server-side rule that `kitchen.kot_mode = another` needs a saved printer. The later KOT-printing story must fall back to the receipt printer or skip when it is missing.
+  evidence: Review: the UI disables Save, but `settings.set` accepts the pair.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-1-kitchen-settings-at-the-hub-locked-on-free.md`
+  summary: Test that Settings → Kitchen unlocks and re-locks live on a `licence.flags` change. Needs the Story 2.12 licence event path.
+  evidence: The page reloads on `licence.flags`; no test drives it.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-1-kitchen-settings-at-the-hub-locked-on-free.md`
+  summary: Tests for the audit before/after of kitchen keys, the `branch.seed_defaults` backfill of the four new rows, and the kiosk queue treating `TIER_LOCKED` as permanent.
+  evidence: Generic paths; no kitchen-specific test.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-1-kitchen-settings-at-the-hub-locked-on-free.md`
+  summary: Counter and Kitchen roles keep editable fields with a PIN on Save (screen-lock precedent), not read-only. Revisit if the UX review insists.
+  evidence: Story 7.1 AC says read-only fields; spec and decision log choose the precedent.

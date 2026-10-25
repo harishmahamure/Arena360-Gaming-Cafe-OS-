@@ -5222,3 +5222,190 @@ mod device_groups {
         );
     }
 }
+
+mod kitchen {
+    use super::*;
+    use arena_proto::{TierGate, kitchen_gate};
+
+    fn text(f: &Fixture, key: &str) -> String {
+        match &setting(&reopen(f), key)["value"] {
+            RowValue::Text(t) => t.clone(),
+            other => panic!("{key} is {other:?}"),
+        }
+    }
+
+    fn rev(f: &Fixture, key: &str) -> i64 {
+        match setting(&reopen(f), key)["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn flags(f: &Fixture, value: &str) {
+        let sql = format!("UPDATE settings SET value = '{value}' WHERE key = 'licence.flags'");
+        f.writer
+            .submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_the_kitchen_defaults() {
+        let f = bootstrapped().await;
+        assert_eq!(text(&f, "licence.flags"), "");
+        assert_eq!(text(&f, "kitchen.kot_mode"), "receipt");
+        assert_eq!(text(&f, "kitchen.kot_printer"), "");
+        assert_eq!(text(&f, "kitchen.kot_paper_mm"), "80");
+    }
+
+    #[tokio::test]
+    async fn a_free_branch_refuses_the_kitchen_keys_and_writes_nothing() {
+        let f = bootstrapped().await;
+        let before = snapshot(&f);
+        for (key, value) in [
+            ("kitchen.kot_mode", "receipt"),
+            ("kitchen.kot_paper_mm", "58"),
+            (
+                "kitchen.kot_printer",
+                r#"{"kind":"lan","id_or_addr":"10.0.0.9","name":"P"}"#,
+            ),
+        ] {
+            let e = f
+                .writer
+                .submit_intent(set(key, value, Some(rev(&f, key))))
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::TierLocked, "{key}");
+        }
+        assert_eq!(snapshot(&f), before);
+        let r = rev(&f, "receipt.footer");
+        f.writer
+            .submit_intent(set("receipt.footer", "hi", Some(r)))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_kitchen_flag_opens_the_keys_with_base_rev_and_validation() {
+        let f = bootstrapped().await;
+        flags(&f, "kitchen").await;
+        let r = rev(&f, "kitchen.kot_mode");
+        f.writer
+            .submit_intent(set("kitchen.kot_mode", "another", Some(r)))
+            .await
+            .unwrap();
+        assert_eq!(text(&f, "kitchen.kot_mode"), "another");
+        let e = f
+            .writer
+            .submit_intent(set("kitchen.kot_mode", "receipt", Some(r)))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Stale);
+        let e = f
+            .writer
+            .submit_intent(set(
+                "kitchen.kot_paper_mm",
+                "57",
+                Some(rev(&f, "kitchen.kot_paper_mm")),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+        f.writer
+            .submit_intent(set(
+                "kitchen.kot_printer",
+                r#"{"kind":"lan","id_or_addr":"10.0.0.9","name":"P"}"#,
+                Some(rev(&f, "kitchen.kot_printer")),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            text(&f, "kitchen.kot_printer"),
+            r#"{"kind":"lan","id_or_addr":"10.0.0.9:9100","name":"P"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lapse_locks_the_keys_again_and_keeps_their_values() {
+        let f = bootstrapped().await;
+        flags(&f, "kitchen").await;
+        f.writer
+            .submit_intent(set(
+                "kitchen.kot_mode",
+                "none",
+                Some(rev(&f, "kitchen.kot_mode")),
+            ))
+            .await
+            .unwrap();
+        flags(&f, "").await;
+        let e = f
+            .writer
+            .submit_intent(set(
+                "kitchen.kot_mode",
+                "receipt",
+                Some(rev(&f, "kitchen.kot_mode")),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::TierLocked);
+        assert_eq!(text(&f, "kitchen.kot_mode"), "none");
+    }
+
+    #[tokio::test]
+    async fn a_retry_of_an_applied_write_replays_after_a_lapse() {
+        let f = bootstrapped().await;
+        flags(&f, "kitchen").await;
+        let intent = set(
+            "kitchen.kot_mode",
+            "none",
+            Some(rev(&f, "kitchen.kot_mode")),
+        );
+        let first = f.writer.submit_intent(intent.clone()).await.unwrap();
+        flags(&f, "").await;
+        assert_eq!(f.writer.submit_intent(intent).await.unwrap(), first);
+    }
+
+    #[tokio::test]
+    async fn the_flag_list_is_not_settable() {
+        let f = bootstrapped().await;
+        let e = f
+            .writer
+            .submit_intent(set(
+                "licence.flags",
+                "kitchen",
+                Some(rev(&f, "licence.flags")),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+        assert_eq!(text(&f, "licence.flags"), "");
+    }
+
+    #[test]
+    fn a_fixture_registration_gates_new_work_and_lets_existing_work_through() {
+        let f = primary();
+        let revoke = |id: &str| Intent {
+            payload: IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                device_id: id.into(),
+            }),
+            ..set("x", "y", None)
+        };
+        let gate = |p: &IntentPayload| match p {
+            IntentPayload::DeviceRevoke(d) if d.device_id == "new" => Some(TierGate::New),
+            IntentPayload::DeviceRevoke(_) => Some(TierGate::ExistingWork),
+            other => kitchen_gate(other),
+        };
+        let mut store = reopen(&f);
+        store
+            .write_tx(|tx| {
+                assert_eq!(
+                    guards::tier(tx, &revoke("new"), gate).unwrap_err().code,
+                    ErrorCode::TierLocked
+                );
+                assert!(guards::tier(tx, &revoke("old"), gate).is_ok());
+                assert!(guards::tier(tx, &set("receipt.footer", "z", Some(1)), gate).is_ok());
+                Ok(())
+            })
+            .unwrap();
+    }
+}

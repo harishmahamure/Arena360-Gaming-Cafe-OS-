@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use arena_core::printer::{PaperWidth, Printer, PrinterTarget, test_page, test_page_date};
 use arena_proto::{
-    ActorKind, AppError, ErrorCode, HubSnapshot, Intent, IntentPayload, KEY_PRINTER_PAPER_MM,
+    ActorKind, AppError, ErrorCode, FLAG_KITCHEN, HubSnapshot, Intent, IntentPayload,
+    KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_FLAGS, KEY_PRINTER_PAPER_MM,
     KEY_PRINTER_SELECTED, Permission, PrinterErrorKind, PrinterFindResult, PrinterOutcome,
     PrinterSelected, PrinterState, PrinterStatus, PrinterStatusReply, PrinterStatusSet,
-    SessionStaff, SettingEntry, UiError, printer_error_text,
+    SessionStaff, SettingEntry, UiError, has_flag, printer_error_text,
 };
 use axum::Json;
 use axum::extract::State;
@@ -187,6 +188,61 @@ async fn run_test(auth: &UiAuth, headers: &HeaderMap) -> Result<PrinterStatusRep
 
 pub(crate) async fn test(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     reply(run_test(&auth, &headers).await)
+}
+
+async fn run_kot_test(auth: &UiAuth, headers: &HeaderMap) -> Result<PrinterStatusReply, UiError> {
+    editor(auth, headers).await?;
+    let printer = printer_of(auth)?;
+    let _single = auth.printer_job_lock().lock().await;
+    let (settings, snapshot) = read_state(auth).await?;
+    if !has_flag(
+        value(&settings, KEY_LICENCE_FLAGS).unwrap_or(""),
+        FLAG_KITCHEN,
+    ) {
+        return Err(ui_error(AppError::new(
+            ErrorCode::TierLocked,
+            "available on Basic and above",
+        )));
+    }
+    let selected = value(&settings, KEY_KITCHEN_KOT_PRINTER)
+        .and_then(|v| PrinterSelected::parse(v).ok().flatten())
+        .ok_or_else(|| {
+            ui_error(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                KEY_KITCHEN_KOT_PRINTER,
+                "choose a printer before a test print",
+            ))
+        })?;
+    let paper =
+        PaperWidth::from_setting(value(&settings, KEY_KITCHEN_KOT_PAPER_MM).unwrap_or("80"));
+    let name = snapshot.branch.map(|b| b.name).unwrap_or_default();
+    let tz = snapshot.locale.map(|l| l.tz).unwrap_or_default();
+    let page = test_page(&name, &test_page_date(auth.clock().now_ms(), &tz), paper);
+    let sent = match PrinterTarget::from_selected(&selected) {
+        Ok(target) => printer.send(&target, &page).await,
+        Err(e) => Err(e),
+    };
+    let (state, error_kind, error) = match sent {
+        Ok(()) => (PrinterState::Ok, None, None),
+        Err(e) => (
+            PrinterState::Failed,
+            Some(e.kind()),
+            Some(printer_error_text(&e.to_string())),
+        ),
+    };
+    Ok(PrinterStatusReply {
+        outcome: PrinterOutcome::Recorded,
+        status: Some(PrinterStatus {
+            state,
+            error_kind,
+            error,
+            at: Some(auth.clock().now_ms()),
+        }),
+    })
+}
+
+pub(crate) async fn test_kot(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    reply(run_kot_test(&auth, &headers).await)
 }
 
 pub(crate) async fn skip(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
@@ -684,6 +740,60 @@ mod tests {
         assert!(fake.sent().is_empty());
         let (status, _) = call_app(&r.app, "POST", "/ui/printer/find", None, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_kot_printer_is_locked_on_free_and_prints_a_test_page_with_the_flag() {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        let before = change_count(&r);
+        let (status, body) = set(&r, &token, "kitchen.kot_mode", "none").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "TIER_LOCKED");
+        let (status, body) = post(&r, "/ui/printer/test-kot", &token, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "TIER_LOCKED");
+        assert_eq!(change_count(&r), before);
+        assert!(fake.sent().is_empty());
+
+        Store::open(&r.hub.path, T0)
+            .unwrap()
+            .write_tx(|tx| {
+                tx.execute_batch(
+                    "UPDATE settings SET value = 'kitchen' WHERE key = 'licence.flags'",
+                )
+                .map_err(arena_store::db_error)
+            })
+            .unwrap();
+        let (status, body) = post(&r, "/ui/printer/test-kot", &token, None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["field"], "kitchen.kot_printer");
+        let value =
+            json!({"kind": "lan", "id_or_addr": "192.168.1.251", "name": "Pass"}).to_string();
+        let (status, body) = set(&r, &token, "kitchen.kot_printer", &value).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = set(&r, &token, "kitchen.kot_paper_mm", "58").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let after_sets = change_count(&r);
+        let (status, body) = post(&r, "/ui/printer/test-kot", &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"]["state"], "ok");
+        assert_eq!(change_count(&r), after_sets);
+        let sent = fake.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].target,
+            PrinterTarget::Lan("192.168.1.251:9100".parse().unwrap())
+        );
+        let date = test_page_date(T0, "Asia/Kolkata");
+        assert_eq!(
+            sent[0].bytes,
+            test_page("Dev Branch", &date, PaperWidth::Mm58)
+        );
+        let counter = sign_in(&r, "counter", "c-pass").await;
+        let (status, _) = post(&r, "/ui/printer/test-kot", &counter, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

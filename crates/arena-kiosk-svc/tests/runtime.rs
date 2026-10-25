@@ -264,6 +264,7 @@ impl Hub {
     /// The `kiosk.log` codes the Hub stored, in change-log order.
     fn logged_codes(&self) -> Vec<String> {
         let store = Store::open_reader(&self.path).unwrap();
+        let changes = store.changes().unwrap();
         let rows = store.rows(Table::DeviceEvents).unwrap();
         let mut by_id = std::collections::HashMap::new();
         for r in rows {
@@ -274,9 +275,7 @@ impl Hub {
             };
             by_id.insert(id.clone(), code.clone());
         }
-        store
-            .changes()
-            .unwrap()
+        changes
             .into_iter()
             .filter(|c| c.tbl == "device_events")
             .map(|c| by_id[&c.row_id].clone())

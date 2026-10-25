@@ -7,6 +7,8 @@ import {
   checkRepo,
   comparePins,
   parsePinTable,
+  readAndroidApp,
+  readAndroidRoot,
   readCargoWorkspaceDeps,
   readCiWorkflow,
   readDataSource,
@@ -18,6 +20,8 @@ import {
   readPackageJson,
   readPnpmCatalog,
   readRustToolchain,
+  readTauriConf,
+  readWebviewMin,
 } from "./check-pins.mjs";
 
 const README = `# Repo
@@ -254,4 +258,30 @@ test("bundled data: the npm package and exact version on its source line", () =>
   for (const bad of ["# nothing here\n", "# source: pkg@^1.0.0\n", "# source: pkg\n"]) {
     assert.throws(() => readDataSource(bad), /source/, bad);
   }
+});
+
+test("Android readers read the Gradle, Tauri, CI and WebView pins", () => {
+  assert.deepEqual(
+    readAndroidApp(
+      "android {\n    compileSdk = 36\n    defaultConfig {\n        minSdk = 28\n        targetSdk = 36\n    }\n}",
+    ),
+    { "Android compileSdk": "36", "Android minSdk": "28", "Android targetSdk": "36" },
+  );
+  assert.deepEqual(readAndroidApp("nothing"), {});
+  assert.deepEqual(
+    readAndroidRoot('classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.10")'),
+    {
+      Kotlin: "2.2.10",
+    },
+  );
+  assert.deepEqual(readTauriConf('{"bundle":{"android":{"minSdkVersion":28}}}'), {
+    "Android minSdk": "28",
+  });
+  assert.deepEqual(readTauriConf("{}"), {});
+  assert.deepEqual(readWebviewMin("export const MIN_WEBVIEW_MAJOR = 111;"), {
+    "Android System WebView minimum": "111",
+  });
+  assert.deepEqual(readCiWorkflow("env:\n  ANDROID_NDK_VERSION: 28.2.13676358\n"), {
+    "Android NDK": "28.2.13676358",
+  });
 });

@@ -10,8 +10,8 @@ build/
 .env*
 !.env.example
 
-# Tauri-generated schemas
-apps/*/src-tauri/gen/
+# Tauri-generated schemas (the committed Android project is apps/hub/src-tauri/gen/android)
+apps/*/src-tauri/gen/schemas/
 
 # Playwright output
 playwright-report/

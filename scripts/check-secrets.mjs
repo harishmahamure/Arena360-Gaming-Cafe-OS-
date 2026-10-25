@@ -34,6 +34,11 @@ export function isEnvFile(path) {
   return base === ".env" || base.startsWith(".env.") || base.endsWith(".env");
 }
 
+/** Is `path` a signing keystore (the Android upload key must come from SOPS)? */
+export function isKeystoreFile(path) {
+  return /\.(jks|keystore|p12|pfx)$/i.test(path) || /(^|\/)(keystore|key)\.properties$/.test(path);
+}
+
 const ENC = /^ENC\[[\s\S]*\]$/;
 
 /** Every leaf under `node` that is not an `ENC[...]` string, as dotted paths. */
@@ -106,6 +111,7 @@ export function hasSopsMac(text) {
 export function checkFile(path, text) {
   const errors = [];
   if (isEnvFile(path)) errors.push(`${path}: env file committed`);
+  if (isKeystoreFile(path)) errors.push(`${path}: signing keystore committed`);
   if (path.startsWith("deploy/secrets/") && posix.basename(path) !== "README.md") {
     for (const p of sopsProblems(text)) {
       errors.push(

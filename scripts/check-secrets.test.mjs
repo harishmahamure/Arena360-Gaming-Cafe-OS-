@@ -5,7 +5,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkFile, checkRepo, hasSopsMac, isEnvFile, sopsProblems } from "./check-secrets.mjs";
+import {
+  checkFile,
+  checkRepo,
+  hasSopsMac,
+  isEnvFile,
+  isKeystoreFile,
+  sopsProblems,
+} from "./check-secrets.mjs";
 
 // Fixtures are assembled at run time so this file never matches the rules itself.
 const AGE = "AGE-SECRET-" + "KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ";
@@ -152,4 +159,20 @@ test("a hand-edited plaintext value inside an encrypted file fails", () => {
     .replace(/tls\.key: ENC\[.*\]/, "tls.key: c2VjcmV0");
   assert.deepEqual(sopsProblems(data), ["plaintext value at data.tls.key"]);
   assert.deepEqual(sopsProblems("A=plain\nsops_mac=ENC[y]\n"), ["plaintext value at A"]);
+});
+
+test("a signing keystore is refused wherever it is", () => {
+  for (const p of [
+    "upload.jks",
+    "apps/hub/src-tauri/gen/android/release.keystore",
+    "a/B.P12",
+    "k.pfx",
+    "apps/hub/src-tauri/gen/android/keystore.properties",
+  ]) {
+    assert.equal(isKeystoreFile(p), true, p);
+    assert.deepEqual(checkFile(p, ""), [`${p}: signing keystore committed`]);
+  }
+  for (const p of ["tauri.properties", "deploy/secrets/android-upload.enc.yaml", "jks.md"]) {
+    assert.equal(isKeystoreFile(p), false, p);
+  }
 });

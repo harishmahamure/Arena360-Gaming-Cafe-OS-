@@ -1,4 +1,5 @@
 import { SESSION_DEPENDENCY, loadSession } from "../lib/auth";
+import { loadDevice } from "../lib/android";
 import { SNAPSHOT_DEPENDENCY, loadSnapshot } from "../lib/snapshot";
 import { applyTheme } from "../lib/ui-settings.svelte";
 
@@ -14,8 +15,14 @@ export const ssr = false;
 export async function load({ fetch, depends }) {
   depends(SNAPSHOT_DEPENDENCY);
   depends(SESSION_DEPENDENCY);
+  const device = await loadDevice();
+  if (device.kind !== "ok") {
+    const hub = /** @type {import('../lib/snapshot').SnapshotResult} */ ({ ok: false });
+    const session = /** @type {import('../lib/auth').Session} */ ({ state: "unknown" });
+    return { device, hub, session };
+  }
   const [hub, session] = await Promise.all([loadSnapshot(fetch), loadSession(fetch)]);
   // The theme is on <html> before the shell renders (no dark flash on an HC Hub).
   if (hub.ok) applyTheme(hub.snapshot.paired !== false && hub.snapshot.ui.hc);
-  return { hub, session };
+  return { device, hub, session };
 }

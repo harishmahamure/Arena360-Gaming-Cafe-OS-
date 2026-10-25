@@ -267,9 +267,14 @@ dependencies = [
 name = "arena-hub-ui"
 version = "0.1.0"
 dependencies = [
+ "arena-hub",
+ "arena-proto",
+ "libc",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -371,6 +376,7 @@ dependencies = [
  "arena-proto",
  "hyper 0.14.32",
  "hyper-rustls 0.25.0",
+ "libc",
  "libsql",
  "rusqlite",
  "serde",

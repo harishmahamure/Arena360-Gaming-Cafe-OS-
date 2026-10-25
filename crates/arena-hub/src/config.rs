@@ -16,6 +16,11 @@ pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <po
        (dev-fixtures: --cloud-host also takes http://127.0.0.1:<port> for a local arena-cloud --dev)
        arena-hub dev seed [--data-dir <path>] [--kiosk-allow <path_glob>]... [--kiosk-process-mode <enforce|report>]
        arena-hub dev revoke-device <device_id> [--health-port <port>]";
+pub const DEFAULT_PLATFORM: HubPlatform = if cfg!(target_os = "android") {
+    HubPlatform::Android
+} else {
+    HubPlatform::Windows
+};
 pub const DATA_DIR_ENV: &str = "ARENA_HUB_DATA_DIR";
 
 /// Resolved start-up configuration.
@@ -238,7 +243,7 @@ fn parse_flags(
     let mut web_port = DEFAULT_WEB_PORT;
     let mut cloud_host = CloudHost::parse(DEFAULT_CLOUD_HOST).expect("valid default cloud host");
     let mut cloud_plain_http = false;
-    let mut platform = HubPlatform::Windows;
+    let mut platform = DEFAULT_PLATFORM;
     let mut probe_internet = default_internet_endpoints();
     let mut printer = PrinterChoice::default();
     let mut args = args;
@@ -624,10 +629,7 @@ mod tests {
     fn cloud_scheme_and_platform_flags() {
         let env = env_of(&[("HOME", "/h")]);
         let c = run(&[], &env, false).unwrap();
-        assert_eq!(
-            (c.cloud_plain_http, c.platform),
-            (false, HubPlatform::Windows)
-        );
+        assert_eq!((c.cloud_plain_http, c.platform), (false, DEFAULT_PLATFORM));
         let c = run(&["--cloud-host", "https://cloud.example"], &env, false).unwrap();
         assert_eq!(
             (

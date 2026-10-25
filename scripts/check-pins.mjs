@@ -135,7 +135,37 @@ export function readCiWorkflow(text) {
     const m = text.match(new RegExp(`${image.replace(/[./]/g, "\\$&")}:([\\w.+-]+)`));
     if (m) out[image] = m[1];
   }
+  const ndk = text.match(/^\s*ANDROID_NDK_VERSION:\s*"?([\w.]+)"?\s*$/m);
+  if (ndk) out["Android NDK"] = ndk[1];
   return out;
+}
+
+/** The Android app's build.gradle.kts -> { Android minSdk, Android targetSdk, Android compileSdk } */
+export function readAndroidApp(text) {
+  const out = {};
+  for (const key of ["minSdk", "targetSdk", "compileSdk"]) {
+    const m = text.match(new RegExp(`^\\s*${key}\\s*=\\s*(\\d+)\\s*$`, "m"));
+    if (m) out[`Android ${key}`] = m[1];
+  }
+  return out;
+}
+
+/** The Android project's root build.gradle.kts -> { Kotlin } from the Kotlin Gradle plugin */
+export function readAndroidRoot(text) {
+  const m = text.match(/kotlin-gradle-plugin:(\d+\.\d+\.\d+)/);
+  return m ? { Kotlin: m[1] } : {};
+}
+
+/** apps/hub/src-tauri/tauri.conf.json -> { Android minSdk } */
+export function readTauriConf(text) {
+  const v = JSON.parse(text).bundle?.android?.minSdkVersion;
+  return typeof v === "number" ? { "Android minSdk": String(v) } : {};
+}
+
+/** The Hub UI's WebView floor -> { Android System WebView minimum } */
+export function readWebviewMin(text) {
+  const m = text.match(/MIN_WEBVIEW_MAJOR\s*=\s*(\d+)/);
+  return m ? { "Android System WebView minimum": m[1] } : {};
 }
 
 /** deploy/README.md -> { k3s: INSTALL_K3S_VERSION } */
@@ -191,6 +221,10 @@ export const READERS = {
   "deploy/README.md": readDeployReadme,
   "deploy/dev/compose.yaml": readDevCompose,
   "crates/arena-cloud/data/common-passwords.txt": readDataSource,
+  "apps/hub/src-tauri/gen/android/app/build.gradle.kts": readAndroidApp,
+  "apps/hub/src-tauri/gen/android/build.gradle.kts": readAndroidRoot,
+  "apps/hub/src-tauri/tauri.conf.json": readTauriConf,
+  "apps/hub/src/lib/android.ts": readWebviewMin,
 };
 
 /** Manifests whose values must be exact versions (no ranges). */

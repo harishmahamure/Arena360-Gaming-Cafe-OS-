@@ -232,6 +232,90 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  android:
+    name: android (hub)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: 28.2.13676358
+      SOPS_URL: https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+      SOPS_SHA256: PIN-ME
+      UPLOAD_KEY_FILE: deploy/secrets/android-upload.enc.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - name: Install the pinned NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "ndk;${ANDROID_NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-android.mjs manifest
+      - name: Upload key from SOPS
+        id: key
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          if [[ ! -f "$UPLOAD_KEY_FILE" ]]; then
+            echo "::warning::$UPLOAD_KEY_FILE is missing: the release AAB is built unsigned"
+            exit 0
+          fi
+          if [[ ! "$SOPS_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::SOPS_SHA256 is not a sha256. Pin it in ci.yml (deploy/README.md, \"Pin the tool checksums\")."
+            exit 1
+          fi
+          curl -fsSL -o "$RUNNER_TEMP/sops" "$SOPS_URL"
+          echo "${SOPS_SHA256}  $RUNNER_TEMP/sops" | sha256sum -c -
+          install -m 0755 "$RUNNER_TEMP/sops" "$RUNNER_TEMP/sops-bin"
+          get() {
+            local v
+            v=$("$RUNNER_TEMP/sops-bin" --decrypt --extract "[\"$1\"]" "$UPLOAD_KEY_FILE")
+            [[ -n "$v" ]] || { echo "::error::$1 is empty in $UPLOAD_KEY_FILE"; exit 1; }
+            printf '%s' "$v"
+          }
+          key_b64=$(get keystore_b64)
+          store_password=$(get store_password)
+          key_alias=$(get key_alias)
+          key_password=$(get key_password)
+          printf '%s' "$key_b64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$RUNNER_TEMP/upload.jks" "$store_password" "$key_alias" "$key_password" > apps/hub/src-tauri/gen/android/keystore.properties
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+      - name: Debug APK
+        run: pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64 -- --locked
+      - name: Release AAB
+        run: pnpm --filter @arena/hub exec tauri android build --aab --target aarch64 --target x86_64 -- --locked
+      - name: Inspect the AAB
+        run: |
+          aab=$(find apps/hub/src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -n 1)
+          test -n "$aab"
+          mkdir "$RUNNER_TEMP/aab"
+          unzip -q "$aab" -d "$RUNNER_TEMP/aab"
+          node scripts/check-android.mjs aab "$RUNNER_TEMP/aab"
+          if [[ "${{ steps.key.outputs.signed }}" == "true" ]]; then
+            jarsigner -verify "$aab"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hub-android
+          path: |
+            apps/hub/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            apps/hub/src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
+          retention-days: 14
+
   a11y:
     name: a11y (gallery, hub shell, kiosk ui, onboarding)
     runs-on: ubuntu-latest

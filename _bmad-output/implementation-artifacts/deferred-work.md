@@ -240,3 +240,14 @@
 - Categories are a product attribute; renaming or merging a category is a bulk edit not built yet. CSV import (FR87) is not built.
 - JPEG validation checks signature, size and header dimensions, not a full decode; the Hub UI always re-encodes.
 - No automated test for a malformed `branch.tax` row at apply; 44 px targets and axe on the error and PIN states are not asserted.
+## Deferred from Story 4.1 review
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t.md`
+  summary: The Android keystore is the existing stub (`put` is unsupported), so the in-process Hub cannot pair or keep a token until Story 4.3.
+  evidence: Blind Hunter; by design, 4.3 owns it.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t.md`
+  summary: Tighten the generated `file_paths.xml` FileProvider (whole external and cache paths) or drop the provider; add a manifest check on the merged APK manifest (the debug `usesCleartextTraffic` placeholder) and `aapt2 dump badging` plus ABI listing of the debug APK in CI.
+  evidence: Blind Hunter and Verification Gap findings.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t.md`
+  summary: A WebView older than Chrome 87 (the Vite target) may never run the bundle, so the update screen cannot show; a delayed-invoke Playwright test for the "Checking…" state; the first-run PASS path on a device image with 20 GB free and 4 GB RAM; RAM failure on a device; x86_64, NDK 28 and the signed AAB run in CI.
+  evidence: Verification Gap findings; none could run on this machine.

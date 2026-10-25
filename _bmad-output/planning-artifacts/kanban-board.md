@@ -29,7 +29,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 | OWNER | Owner app | 30 | 3 | 0 | 27 |
 | HUB-C | Hub platform | 55 | 0 | 0 | 55 |
 | KITCHEN | Kitchen | 14 | 1 | 0 | 13 |
-| ANDROID | Android Hub | 21 | 0 | 0 | 21 |
+| ANDROID | Android Hub | 21 | 1 | 0 | 20 |
 | WEB | Marketing, admin and partner | 22 | 0 | 0 | 22 |
 | PI | Console TVs | 17 | 0 | 0 | 17 |
 | LANDED | Epic 1 and 2 stories already shipped and not re-listed | 34 | 34 | 0 | 0 |
@@ -41,7 +41,7 @@ Candidates in priority order. Take the top ones until the 4 implementer slots ar
 - **CP** 2.13 branch.bootstrap applies the onboarding profile at first pairing, with branch code lock (`2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai`)
 - **HUB-A** 2.24 Device status and maintenance (`2-24-device-status-and-maintenance`)
 - **HUB-B** 5.4 Bundles priced on their own (`5-4-bundles-priced-on-their-own`)
-- **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
+- **ANDROID** 4.2 The Android Hub keeps serving while the screen is off, in Doze and after a reboot (`4-2-the-android-hub-keeps-serving-while-the-screen-is-off-in-doz`)
 - **WEB** 11.1 Marketing site shell — navigation, footer, light and dark themes and high contrast (`11-1-marketing-site-shell-navigation-footer-light-and-dark-themes`)
 
 In flight now:
@@ -428,7 +428,7 @@ Tauri mobile Hub, ads, Free limits, Play rollout, migration to Windows.
 
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
-| 1 | 4.1 | Android Hub app builds from the shared Hub code and checks the device spec on first run | MVP | backlog | ~~1.22~~ |
+| 1 | 4.1 | Android Hub app builds from the shared Hub code and checks the device spec on first run | MVP | review | ~~1.22~~ |
 | 2 | 4.2 | The Android Hub keeps serving while the screen is off, in Doze and after a reboot | MVP | backlog |  |
 | 3 | 4.3 | The Android Hub pairs with the wizard code and keeps its secrets in the Android Keystore | MVP | backlog | ~~2.10~~, ~~2.11~~ |
 | 4 | 4.4 | Kiosks find and pair with an Android Hub on the LAN | MVP | backlog | 4.3 |

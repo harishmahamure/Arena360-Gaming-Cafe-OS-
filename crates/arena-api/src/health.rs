@@ -37,6 +37,7 @@ struct HealthBody {
     connectivity: arena_proto::Connectivity,
     setup: Option<arena_proto::SetupStatus>,
     tier: Option<&'static str>,
+    platform: &'static str,
     now: i64,
 }
 
@@ -58,6 +59,7 @@ impl HealthBody {
             connectivity: s.connectivity,
             setup,
             tier: s.tier.map(arena_proto::Tier::as_str),
+            platform: s.platform.as_str(),
             now,
         }
     }
@@ -444,9 +446,17 @@ mod tests {
                 "connectivity": {"state": "internet_offline", "checked_at": 900},
                 "setup": null,
                 "tier": null,
+                "platform": "windows",
                 "now": 1000
             })
         );
+    }
+
+    #[tokio::test]
+    async fn reports_the_android_platform() {
+        let (tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
+        tx.send_modify(|s| s.platform = arena_proto::HubPlatform::Android);
+        assert_eq!(get_json(rx).await["platform"], "android");
     }
 
     #[tokio::test]
@@ -461,7 +471,7 @@ mod tests {
         let (_tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
         assert_eq!(
             get_json(rx).await,
-            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "setup": null, "tier": null, "now": 1000})
+            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "setup": null, "tier": null, "platform": "windows", "now": 1000})
         );
     }
 

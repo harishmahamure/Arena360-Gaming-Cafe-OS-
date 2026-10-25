@@ -5,6 +5,7 @@
   import { goto, invalidate } from "$app/navigation";
   import { page } from "$app/state";
   import Clock from "../lib/Clock.svelte";
+  import DeviceGate from "../lib/DeviceGate.svelte";
   import Icon from "../lib/Icon.svelte";
   import MoreSheet from "../lib/MoreSheet.svelte";
   import LockOverlay from "../lib/LockOverlay.svelte";
@@ -381,6 +382,7 @@
   // Every load result: back off while unreachable; on recovery stop retrying and move focus
   // to the screen's heading.
   $effect(() => {
+    if (data.device.kind !== "ok") return;
     // Read `data` itself (not the `reachable` derived): every load result must re-run this,
     // even when it is unreachable again.
     const ok =
@@ -428,7 +430,7 @@
 <svelte:window {onkeydown} />
 
 <svelte:head>
-  {#if !reachable && !unpaired}
+  {#if data.device.kind === "ok" && !reachable && !unpaired}
     <title>{t("hub.page_title", { screen: t("hub.error.unreachable.title") })}</title>
   {/if}
 </svelte:head>
@@ -453,7 +455,13 @@
   </section>
 {/snippet}
 
-{#if unpaired}
+{#if data.device.kind !== "ok"}
+  <div class="pair-screen" data-theme="dark">
+    <main class="hub-main" bind:this={mainEl}>
+      <DeviceGate device={data.device} checking={refreshing} oncheck={refresh} />
+    </main>
+  </div>
+{:else if unpaired}
   <div class="pair-screen" data-theme="dark">
     <main class="hub-main" bind:this={mainEl}>
       {#if onPair}

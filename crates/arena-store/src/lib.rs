@@ -15,7 +15,7 @@ mod migrations;
 mod products;
 mod staff;
 
-use std::fs::{File, OpenOptions, TryLockError};
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -84,6 +84,34 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Maps a SQLite failure to an `INTERNAL` error.
 pub fn db_error(err: rusqlite::Error) -> AppError {
     AppError::new(ErrorCode::Internal, format!("database error: {err}"))
+}
+
+#[cfg(not(target_os = "android"))]
+fn try_lock_file(file: &File) -> std::io::Result<bool> {
+    match file.try_lock() {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+#[cfg(target_os = "android")]
+fn try_lock_file(file: &File) -> std::io::Result<bool> {
+    flock_try(file)
+}
+
+/// std's `File::try_lock` is unsupported on Android: take the same advisory lock with `flock`.
+#[cfg(all(unix, any(test, target_os = "android")))]
+fn flock_try(file: &File) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(true);
+    }
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::WouldBlock {
+        return Ok(false);
+    }
+    Err(err)
 }
 
 fn io_error(err: std::io::Error) -> AppError {
@@ -576,14 +604,11 @@ impl Store {
             .write(true)
             .open(PathBuf::from(lock_path))
             .map_err(io_error)?;
-        match file.try_lock() {
-            Ok(()) => {
-                self.writer_lock = Some(file);
-                Ok(true)
-            }
-            Err(TryLockError::WouldBlock) => Ok(false),
-            Err(TryLockError::Error(e)) => Err(io_error(e)),
+        if !try_lock_file(&file).map_err(io_error)? {
+            return Ok(false);
         }
+        self.writer_lock = Some(file);
+        Ok(true)
     }
 
     /// Whether this store holds the process writer lock (taken by [`Store::open`]).
@@ -878,6 +903,19 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::Stale);
         assert_eq!(store.lease().unwrap(), Some(row));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn flock_excludes_a_second_handle_until_the_first_closes() {
+        let (_dir, path) = temp_db();
+        let lock = path.with_extension("flock");
+        let a = File::create(&lock).unwrap();
+        let b = File::open(&lock).unwrap();
+        assert!(flock_try(&a).unwrap());
+        assert!(!flock_try(&b).unwrap());
+        drop(a);
+        assert!(flock_try(&b).unwrap());
     }
 
     fn hold_lock(path: &Path) -> File {

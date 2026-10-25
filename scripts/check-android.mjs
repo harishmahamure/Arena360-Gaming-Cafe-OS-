@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const ANDROID_DIR = "apps/hub/src-tauri/gen/android/app/src/main";
+export const PAGE_ALIGN = 16384n;
+export const REQUIRED_ABIS = ["arm64-v8a", "x86_64"];
+const PRIVATE_DOMAINS = ["root", "file", "database", "sharedpref", "external"];
+
+const attr = (xml, name) => xml.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1];
+
+function excludes(block, domain) {
+  return [...block.matchAll(/<exclude\b([^>]*)\/?>/g)].some((m) => {
+    const a = (name) => m[1].match(new RegExp(`\\b${name}="([^"]*)"`))?.[1];
+    return a("domain") === domain && a("path") === ".";
+  });
+}
+
+function missingExcludes(label, block) {
+  if (block === undefined) return [`${label}: section is missing`];
+  return PRIVATE_DOMAINS.filter((d) => !excludes(block, d)).map(
+    (d) => `${label}: does not exclude the ${d} domain`,
+  );
+}
+
+const section = (xml, tag) => xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1];
+
+export function checkManifest(manifest, res) {
+  const errors = [];
+  const rule = (name) => {
+    const ref = attr(manifest, name);
+    const file = ref?.replace(/^@xml\//, "");
+    if (!file) errors.push(`manifest: ${name} is not set`);
+    else if (res[file] === undefined)
+      errors.push(`manifest: ${name} points to missing ${file}.xml`);
+    return file ? res[file] : undefined;
+  };
+  if (attr(manifest, "android:allowBackup") !== "false") {
+    errors.push('manifest: android:allowBackup must be "false"');
+  }
+  const extraction = rule("android:dataExtractionRules");
+  if (extraction !== undefined) {
+    for (const tag of ["cloud-backup", "device-transfer"]) {
+      errors.push(...missingExcludes(`dataExtractionRules ${tag}`, section(extraction, tag)));
+    }
+  }
+  const backup = rule("android:fullBackupContent");
+  if (backup !== undefined) {
+    errors.push(...missingExcludes("fullBackupContent", section(backup, "full-backup-content")));
+  }
+  const network = rule("android:networkSecurityConfig");
+  if (network !== undefined) {
+    if (!/<base-config\s+cleartextTrafficPermitted="false"/.test(network)) {
+      errors.push("networkSecurityConfig: base-config must refuse cleartext");
+    }
+    const hosts = [...network.matchAll(/<domain[^>]*>([^<]+)<\/domain>/g)].map((m) => m[1].trim());
+    const bad = hosts.filter((h) => h !== "127.0.0.1" && h !== "localhost");
+    if (bad.length > 0)
+      errors.push(`networkSecurityConfig: cleartext allowed for ${bad.join(", ")}`);
+  }
+  return errors;
+}
+
+export function checkRepoManifest(root) {
+  const main = join(root, ANDROID_DIR);
+  const res = {};
+  const xmlDir = join(main, "res", "xml");
+  if (existsSync(xmlDir)) {
+    for (const f of readdirSync(xmlDir)) {
+      if (f.endsWith(".xml")) res[f.slice(0, -4)] = readFileSync(join(xmlDir, f), "utf8");
+    }
+  }
+  const path = join(main, "AndroidManifest.xml");
+  if (!existsSync(path)) return [`${path} is missing`];
+  return checkManifest(readFileSync(path, "utf8"), res);
+}
+
+export function elfProblem(buf) {
+  if (buf.length < 64 || buf.readUInt32BE(0) !== 0x7f454c46) return "not an ELF file";
+  if (buf[4] !== 2 || buf[5] !== 1) return "not a 64-bit little-endian ELF";
+  const phoff = Number(buf.readBigUInt64LE(0x20));
+  const phentsize = buf.readUInt16LE(0x36);
+  const phnum = buf.readUInt16LE(0x38);
+  if (phentsize < 56 || phoff + phentsize * phnum > buf.length) return "truncated program headers";
+  let loads = 0;
+  for (let i = 0; i < phnum; i++) {
+    const at = phoff + i * phentsize;
+    if (buf.readUInt32LE(at) !== 1) continue;
+    loads++;
+    const align = buf.readBigUInt64LE(at + 0x30);
+    if (align % PAGE_ALIGN !== 0n) return `LOAD segment aligned to ${align}, not 16 KB`;
+  }
+  return loads === 0 ? "no LOAD segments" : null;
+}
+
+function* walk(dir) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) yield* walk(p);
+    else yield p;
+  }
+}
+
+export function checkAab(dir) {
+  const lib = join(dir, "base", "lib");
+  if (!existsSync(lib)) return ["base/lib is missing: the AAB has no native libraries"];
+  const errors = [];
+  const found = new Set();
+  for (const abi of readdirSync(lib)) {
+    for (const file of walk(join(lib, abi))) {
+      if (!file.endsWith(".so")) continue;
+      found.add(abi);
+      const problem = elfProblem(readFileSync(file));
+      if (problem) errors.push(`base/lib/${abi}/${file.split(/[\\/]/).pop()}: ${problem}`);
+    }
+  }
+  for (const abi of REQUIRED_ABIS) {
+    if (!found.has(abi)) errors.push(`ABI ${abi} has no native library`);
+  }
+  return errors;
+}
+
+function main() {
+  const [mode, dir] = process.argv.slice(2);
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  let errors;
+  if (mode === "manifest") errors = checkRepoManifest(root);
+  else if (mode === "aab" && dir) errors = checkAab(dir);
+  else {
+    console.error("usage: check-android.mjs manifest | aab <extracted-aab-dir>");
+    process.exit(64);
+  }
+  if (errors.length > 0) {
+    for (const e of errors) console.error(e);
+    process.exit(1);
+  }
+  console.log(`android ${mode} check: ok`);
+}
+
+const isMain = (() => {
+  try {
+    return (
+      Boolean(process.argv[1]) &&
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+    );
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  main();
+}

@@ -110,7 +110,8 @@ async fn start_hub(data: &Path, cloud: &str, platform: &str) -> (Running, u16) {
         let up = tokio::task::spawn_blocking(move || call(health, "GET", "/healthz", None))
             .await
             .unwrap();
-        if up.is_some_and(|(_, b)| b["role"] == "primary") {
+        if let Some((_, b)) = up.filter(|(_, b)| b["role"] == "primary") {
+            assert_eq!(b["platform"], platform);
             break;
         }
         assert!(Instant::now() < deadline, "the hub never became primary");

@@ -102,6 +102,7 @@ pub struct HubStatus {
     pub live: bool,
     pub licence: Option<arena_proto::LicenceStanding>,
     pub clock_wrong: bool,
+    pub platform: arena_proto::HubPlatform,
 }
 
 impl HubStatus {
@@ -124,6 +125,7 @@ impl HubStatus {
             live: false,
             licence: None,
             clock_wrong: false,
+            platform: arena_proto::HubPlatform::Windows,
         }
     }
 }

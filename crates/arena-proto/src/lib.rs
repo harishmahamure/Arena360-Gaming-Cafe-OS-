@@ -10,6 +10,7 @@ mod audit;
 mod catalog;
 mod connectivity;
 pub mod currency;
+mod device_spec;
 mod discovery;
 mod display;
 mod entitlement;
@@ -56,6 +57,10 @@ pub use catalog::{
     availability, hsn_valid, image_problem,
 };
 pub use connectivity::{Connectivity, ConnectivityState};
+pub use device_spec::{
+    DeviceSpec, MIN_FREE_BYTES, MIN_FREE_GB, MIN_RAM_BYTES, MIN_RAM_GB, SpecFailure,
+    SpecRequirement, check_device, meminfo_total_bytes,
+};
 pub use discovery::{
     DEFAULT_WEB_PORT, DISCOVERY_WINDOW_MS, DiscoveredHub, DiscoveryFound, HUB_PRODUCT, HubInfo,
     MAX_BRANCH_NAME_BYTES, MAX_HUB_NAME_BYTES, MDNS_SERVICE, PROBE_TIMEOUT_MS, ProbeOk,

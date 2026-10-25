@@ -105,6 +105,8 @@ pub enum ErrorCode {
     HsnRequired,
     BarcodeTaken,
     SetupCodeInvalid,
+    LoginTaken,
+    UserLimit,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -176,6 +178,8 @@ impl ErrorCode {
             Self::DeviceLimit => "DEVICE_LIMIT",
             Self::HsnRequired => "HSN_REQUIRED",
             Self::BarcodeTaken => "BARCODE_TAKEN",
+            Self::LoginTaken => "LOGIN_TAKEN",
+            Self::UserLimit => "USER_LIMIT",
         }
     }
 }
@@ -305,6 +309,8 @@ mod tests {
             (ErrorCode::DeviceLimit, "DEVICE_LIMIT"),
             (ErrorCode::HsnRequired, "HSN_REQUIRED"),
             (ErrorCode::BarcodeTaken, "BARCODE_TAKEN"),
+            (ErrorCode::LoginTaken, "LOGIN_TAKEN"),
+            (ErrorCode::UserLimit, "USER_LIMIT"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

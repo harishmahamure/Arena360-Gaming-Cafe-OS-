@@ -31,6 +31,7 @@ mod scope;
 mod signin;
 mod signup;
 mod snapshot;
+mod staff_invite;
 mod stock;
 mod tax;
 pub mod tier;
@@ -168,6 +169,9 @@ pub use snapshot::{
     AppliedEvent, DeviceStatus, HubSnapshot, LocalePending, NumberFormat, PendingNumber,
     PendingText, SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
     SnapshotLocale, SnapshotUi, SnapshotZone, SymbolPosition,
+};
+pub use staff_invite::{
+    InviteRole, InviteStatus, StaffInvite, StaffInviteView, StaffInvited, StaffInvites,
 };
 pub use stock::{
     LotView, MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_STOCK_IN,

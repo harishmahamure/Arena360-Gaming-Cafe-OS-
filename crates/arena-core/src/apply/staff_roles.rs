@@ -20,14 +20,15 @@ use arena_proto::{
     ActorKind, AppError, ErrorCode, Intent, PermEffect, Permission, RoleUpsert, StaffUpsert,
 };
 use arena_store::{
-    ChangeOp, RoleRow, RowKey, StaffRow, StaffWrite, StoreTx, Table, count_active_staff_with_role,
-    current_branch_id, delete_row, find_role, find_role_by_name, find_staff, find_staff_by_login,
-    insert_role, insert_role_perm, insert_staff, list_role_perms, read_row, update_role_name,
-    update_staff,
+    ChangeOp, RoleRow, RowKey, StaffRow, StaffWrite, StoreTx, Table, count_active_staff,
+    count_active_staff_with_role, current_branch_id, delete_row, find_role, find_role_by_name,
+    find_staff, find_staff_by_login, insert_role, insert_role_perm, insert_staff, list_role_perms,
+    read_row, set_staff_setup_code, update_role_name, update_staff,
 };
 
 use super::mutate::Written;
 use super::validate::validate_label;
+use crate::apply::is_ulid;
 use crate::devices::is_argon2id_hash;
 use crate::rbac::{
     BUILTIN_ROLES, ROLE_COUNTER, ROLE_KIOSK_DEVICE, ROLE_KITCHEN, ROLE_OWNER, denied,
@@ -105,6 +106,8 @@ pub(crate) struct StaffTarget {
     restricted: bool,
     /// The staff member already holding the requested login, if any.
     login_owner: Option<String>,
+    /// A new member would exceed the licence's `users` limit.
+    full: bool,
     /// When the edited member is an active holder of the built-in Owner role: how many active
     /// staff hold it.
     active_owners: Option<i64>,
@@ -130,13 +133,22 @@ pub(super) fn load_staff(
         }
         _ => None,
     };
+    let full = match (&row, crate::entitlement::limit(tx, "users")?) {
+        (None, Some(cap)) => count_active_staff(tx)? >= cap,
+        _ => false,
+    };
+    let role = match find_role(tx, &s.role_id)? {
+        Some(r) => Some(r),
+        None => find_role_by_name(tx, &s.role_id)?,
+    };
     Ok(StaffTarget {
         branch: current_branch_id(tx)?,
         row,
-        role: find_role(tx, &s.role_id)?,
+        role,
         current_role,
         restricted,
         login_owner: find_staff_by_login(tx, s.login.trim())?.map(|r| r.staff_id),
+        full,
         active_owners,
     })
 }
@@ -165,13 +177,17 @@ pub(super) fn base_rev_staff(intent: &Intent, t: &StaffTarget) -> Result<(), App
     check_base_rev(intent, t.row.as_ref().map(|r| r.rev), "staff member")
 }
 
-/// A login: 2–32 ASCII letters, digits, `.`, `_` or `-`, so the database's `NOCASE` and the
+/// A login: an E.164 phone, or 2–32 ASCII letters, digits, `.`, `_` or `-`, so the database's `NOCASE` and the
 /// sign-in lockout's lower-casing agree.
 fn validate_login(login: &str) -> Result<(), AppError> {
-    let ok = (MIN_LOGIN_CHARS..=MAX_LOGIN_CHARS).contains(&login.len())
-        && login
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    let phone = login
+        .strip_prefix('+')
+        .is_some_and(|d| (8..=15).contains(&d.len()) && d.bytes().all(|c| c.is_ascii_digit()));
+    let ok = phone
+        || ((MIN_LOGIN_CHARS..=MAX_LOGIN_CHARS).contains(&login.len())
+            && login
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')));
     if !ok {
         return Err(invalid(
             "login",
@@ -188,7 +204,10 @@ pub(super) fn validate_staff(
     s: &StaffUpsert,
     t: &StaffTarget,
 ) -> Result<(), AppError> {
-    if s.staff_id.is_some() && t.row.is_none() {
+    if let Some(id) = &s.staff_id
+        && t.row.is_none()
+        && !(s.setup_code_hash.is_some() && is_ulid(id))
+    {
         return Err(invalid("staff_id", "no such staff member"));
     }
     if s.staff_id.is_none() && intent.base_rev.is_some() {
@@ -234,13 +253,30 @@ pub(super) fn validate_staff(
                 "password_hash must be an argon2id PHC string",
             ));
         }
-        None if t.row.is_none() => {
+        None if t.row.is_none() && s.setup_code_hash.is_none() => {
             return Err(invalid(
                 "password_hash",
                 "a new staff member needs a password",
             ));
         }
         _ => {}
+    }
+    match (&s.setup_code_hash, s.setup_expires_at) {
+        (None, None) => {}
+        (Some(h), Some(at)) if is_argon2id_hash(h) && at > 0 => {
+            if t.row.as_ref().is_some_and(|r| r.password_hash.is_some()) {
+                return Err(invalid(
+                    "setup_code_hash",
+                    "that member has already chosen a password",
+                ));
+            }
+        }
+        _ => {
+            return Err(invalid(
+                "setup_code_hash",
+                "a setup code needs an argon2id hash and an expiry",
+            ));
+        }
     }
     if s.pin_hash.as_deref().is_some_and(|h| !is_argon2id_hash(h)) {
         return Err(invalid(
@@ -252,7 +288,17 @@ pub(super) fn validate_staff(
         .as_ref()
         .is_some_and(|owner| Some(owner) != s.staff_id.as_ref())
     {
-        return Err(invalid("login", "that login is already in use"));
+        return Err(AppError::with_field(
+            ErrorCode::LoginTaken,
+            "login",
+            "that login is already in use",
+        ));
+    }
+    if t.full {
+        return Err(AppError::new(
+            ErrorCode::UserLimit,
+            "the staff limit for this branch is reached",
+        ));
     }
     Ok(())
 }
@@ -265,9 +311,16 @@ pub(super) fn mutate_staff(
     let branch_id = t.branch.as_deref().ok_or_else(not_bootstrapped)?;
     let login = s.login.trim();
     let display_name = s.display_name.trim();
+    let role_id = t
+        .role
+        .as_ref()
+        .map_or_else(|| s.role_id.clone(), |r| r.role_id.clone());
     match &t.row {
         None => {
-            let staff_id = ulid::Ulid::generate().to_string();
+            let staff_id = s
+                .staff_id
+                .clone()
+                .unwrap_or_else(|| ulid::Ulid::generate().to_string());
             insert_staff(
                 tx,
                 &StaffWrite {
@@ -275,13 +328,14 @@ pub(super) fn mutate_staff(
                     branch_id,
                     login,
                     display_name,
-                    role_id: &s.role_id,
+                    role_id: &role_id,
                     password_hash: s.password_hash.as_deref(),
                     pin_hash: s.pin_hash.as_deref(),
                     pin_verifier_version: 1,
                     active: s.active,
                 },
             )?;
+            set_code(tx, &staff_id, s)?;
             Ok(vec![Written {
                 key: RowKey::Staff { staff_id },
                 op: ChangeOp::Insert,
@@ -300,13 +354,14 @@ pub(super) fn mutate_staff(
                     branch_id: &row.branch_id,
                     login,
                     display_name,
-                    role_id: &s.role_id,
+                    role_id: &role_id,
                     password_hash: s.password_hash.as_deref().or(row.password_hash.as_deref()),
                     pin_hash,
                     pin_verifier_version,
                     active: s.active,
                 },
             )?;
+            set_code(tx, &row.staff_id, s)?;
             Ok(vec![Written {
                 key: RowKey::Staff {
                     staff_id: row.staff_id.clone(),
@@ -315,6 +370,13 @@ pub(super) fn mutate_staff(
                 before: None,
             }])
         }
+    }
+}
+
+fn set_code(tx: &StoreTx<'_>, staff_id: &str, s: &StaffUpsert) -> Result<(), AppError> {
+    match (&s.setup_code_hash, s.setup_expires_at) {
+        (Some(h), Some(at)) => set_staff_setup_code(tx, staff_id, h, at),
+        _ => Ok(()),
     }
 }
 

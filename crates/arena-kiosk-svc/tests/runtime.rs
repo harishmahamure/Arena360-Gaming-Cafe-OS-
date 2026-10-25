@@ -152,6 +152,22 @@ impl Hub {
             ))
             .await
             .unwrap();
+        writer
+            .submit_intent(intent(
+                Actor {
+                    kind: ActorKind::System,
+                    id: "test".into(),
+                },
+                IntentPayload::LicenceApply(arena_proto::LicenceApply {
+                    standing: arena_proto::LicenceStanding::Verified,
+                    clock_wrong: false,
+                    flags: String::new(),
+                    device_cap: 20,
+                    user_cap: 10,
+                }),
+            ))
+            .await
+            .unwrap();
         let secret = new_token_secret().unwrap();
         let applied = writer
             .submit_intent(intent(
@@ -1146,6 +1162,8 @@ impl Hub {
                     password_hash: Some(hash_token_secret("pw").unwrap()),
                     pin_hash: Some(hash_token_secret(pin).unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
             ))
             .await

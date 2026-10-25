@@ -67,6 +67,7 @@ impl WizardStep {
 pub enum StepState {
     Pending,
     Done,
+    Skipped,
 }
 
 impl StepState {
@@ -74,6 +75,7 @@ impl StepState {
         match self {
             Self::Pending => "pending",
             Self::Done => "done",
+            Self::Skipped => "skipped",
         }
     }
 
@@ -81,6 +83,7 @@ impl StepState {
         match s {
             "pending" => Some(Self::Pending),
             "done" => Some(Self::Done),
+            "skipped" => Some(Self::Skipped),
             _ => None,
         }
     }
@@ -92,7 +95,7 @@ pub fn current_step(states: &[(WizardStep, StepState)]) -> WizardStep {
         .find(|step| {
             !states
                 .iter()
-                .any(|(s, state)| s == step && *state == StepState::Done)
+                .any(|(s, state)| s == step && *state != StepState::Pending)
         })
         .unwrap_or(WizardStep::GoLive)
 }
@@ -389,6 +392,13 @@ mod tests {
             .map(|s| (s, StepState::Done))
             .collect();
         assert_eq!(current_step(&all), WizardStep::GoLive);
+        assert_eq!(
+            current_step(&[
+                (WizardStep::Cafe, StepState::Done),
+                (WizardStep::Tier, StepState::Skipped),
+            ]),
+            WizardStep::InstallHub
+        );
     }
 
     #[test]

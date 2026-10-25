@@ -67,6 +67,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
             u64::from(arena_store::control::LATEST_CONTROL_VERSION),
         ),
         ("signin_challenges", 0),
+        ("staff_invites", 0),
         ("tenants", 0),
     ]
     .into_iter()
@@ -745,6 +746,7 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "rate_limits",
             "schema_migrations",
             "signin_challenges",
+            "staff_invites",
             "tenants"
         ]
     );

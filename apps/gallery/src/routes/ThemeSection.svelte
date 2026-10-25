@@ -9,6 +9,7 @@
     StatusBadge,
     TabControl,
     TextField,
+    TierLock,
     focusFirstInvalid,
     reasonOptions,
     reasonsFor,
@@ -223,6 +224,11 @@
       <AlertBadge tag="time-up" />
       <AlertBadge tag="request" />
       <Button variant="secondary" label="gallery.alert.add" onclick={() => alerts++} />
+    </div>
+    <h4>{t("gallery.section.tier_lock")}</h4>
+    <div class="row">
+      <TierLock tier="Basic" />
+      <TierLock tier="Premium" billing />
     </div>
   </section>
 

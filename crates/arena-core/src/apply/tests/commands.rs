@@ -237,3 +237,124 @@ async fn owner_staff_and_device_edits_win_over_a_stale_base_rev() {
     let changes = reopen(&f).changes().unwrap();
     assert!(changes.iter().filter(|c| c.actor_kind == "owner").count() >= 5);
 }
+
+fn invite(id: i64, staff_id: &str, phone: &str, hash: &str) -> CommandWire {
+    cmd(
+        id,
+        "staff.upsert",
+        json!({
+            "staff_id": staff_id, "login": phone, "display_name": "Neha", "role_id": "Manager",
+            "active": true, "setup_code_hash": hash, "setup_expires_at": 99,
+        }),
+    )
+}
+
+fn code(r: &arena_store::AppliedCommand) -> ErrorCode {
+    serde_json::from_str::<AppError>(r.error.as_deref().unwrap())
+        .unwrap()
+        .code
+}
+
+fn staff_rows(f: &Fixture) -> Vec<std::collections::BTreeMap<String, RowValue>> {
+    reopen(f).rows(Table::Staff).unwrap()
+}
+
+#[tokio::test]
+async fn an_invite_creates_a_member_without_a_password_and_a_new_code_replaces_the_old() {
+    let f = bootstrapped().await;
+    let id = ulid::Ulid::generate().to_string();
+    let one = crate::staff::hash_secret("K7Q49MZD").unwrap();
+    let r = f
+        .writer
+        .apply_command(invite(1, &id, "+919876543210", &one))
+        .await
+        .unwrap();
+    assert!(r.applied, "{:?}", r.error);
+    let row = &staff_rows(&f)[0];
+    assert_eq!(text(row, "staff_id"), id);
+    assert_eq!(row["setup_code_hash"], RowValue::Text(one));
+    assert_eq!(row["password_hash"], RowValue::Null);
+    let role = text(row, "role_id");
+    let manager = reopen(&f)
+        .rows(Table::Roles)
+        .unwrap()
+        .into_iter()
+        .find(|r| text(r, "name") == "Manager")
+        .unwrap();
+    assert_eq!(role, text(&manager, "role_id"));
+
+    let two = crate::staff::hash_secret("Q4K79MZD").unwrap();
+    let r = f
+        .writer
+        .apply_command(invite(2, &id, "+919876543210", &two))
+        .await
+        .unwrap();
+    assert!(r.applied, "{:?}", r.error);
+    assert_eq!(staff_rows(&f).len(), 1);
+    assert_eq!(staff_rows(&f)[0]["setup_code_hash"], RowValue::Text(two));
+}
+
+#[tokio::test]
+async fn an_invite_for_a_taken_login_is_refused_login_taken() {
+    let f = bootstrapped().await;
+    let hash = crate::staff::hash_secret("K7Q49MZD").unwrap();
+    let a = ulid::Ulid::generate().to_string();
+    let b = ulid::Ulid::generate().to_string();
+    assert!(
+        f.writer
+            .apply_command(invite(1, &a, "+919876543210", &hash))
+            .await
+            .unwrap()
+            .applied
+    );
+    let r = f
+        .writer
+        .apply_command(invite(2, &b, "+919876543210", &hash))
+        .await
+        .unwrap();
+    assert!(!r.applied);
+    assert_eq!(code(&r), ErrorCode::LoginTaken);
+    assert_eq!(staff_rows(&f).len(), 1);
+}
+
+#[tokio::test]
+async fn invites_beyond_the_users_limit_are_refused_user_limit() {
+    let f = bootstrapped().await;
+    user_cap(&f, 3).await;
+    let hash = crate::staff::hash_secret("K7Q49MZD").unwrap();
+    for n in 0..3 {
+        let id = ulid::Ulid::generate().to_string();
+        let r = f
+            .writer
+            .apply_command(invite(n + 1, &id, &format!("+9198765432{n:02}"), &hash))
+            .await
+            .unwrap();
+        assert!(r.applied, "{:?}", r.error);
+    }
+    let id = ulid::Ulid::generate().to_string();
+    let r = f
+        .writer
+        .apply_command(invite(9, &id, "+919876543299", &hash))
+        .await
+        .unwrap();
+    assert!(!r.applied);
+    assert_eq!(code(&r), ErrorCode::UserLimit);
+    assert_eq!(staff_rows(&f).len(), 3);
+}
+
+#[tokio::test]
+async fn a_new_code_for_a_member_who_has_a_password_is_refused() {
+    let f = bootstrapped().await;
+    let id = ulid::Ulid::generate().to_string();
+    let pw = crate::staff::hash_secret("pw").unwrap();
+    let mut with_pw = invite(1, &id, "+919876543210", &pw);
+    with_pw.payload["password_hash"] = json!(pw);
+    assert!(f.writer.apply_command(with_pw).await.unwrap().applied);
+    let r = f
+        .writer
+        .apply_command(invite(2, &id, "+919876543210", &pw))
+        .await
+        .unwrap();
+    assert!(!r.applied);
+    assert_eq!(code(&r), ErrorCode::ValidationFailed);
+}

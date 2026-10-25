@@ -341,6 +341,14 @@ pub fn count_active_staff_with_role(conn: &Connection, role_id: &str) -> Result<
     .map_err(db_error)
 }
 
+/// How many staff members are active.
+pub fn count_active_staff(conn: &Connection) -> Result<i64, AppError> {
+    conn.query_row("SELECT COUNT(*) FROM staff WHERE active = 1", [], |r| {
+        r.get(0)
+    })
+    .map_err(db_error)
+}
+
 /// Inserts a staff member with `rev = 0` and zero timestamps, for the stamp step to set.
 pub fn insert_staff(conn: &Connection, s: &StaffWrite<'_>) -> Result<(), AppError> {
     conn.execute(

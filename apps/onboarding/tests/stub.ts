@@ -5,6 +5,8 @@ import type {
   Country,
   SessionOwner,
   SignupChallenge,
+  StaffInvite,
+  StaffInviteView,
   Tier,
   TierChoices,
   TotpStarted,
@@ -136,7 +138,11 @@ export type WizardStart = {
   otherFree?: boolean;
   hubPaired?: boolean;
   setupCode?: string;
+  skipped?: WizardStep[];
+  invites?: StaffInviteView[];
 };
+
+export const STAFF_CODES = ["K7Q49MZD", "Q4K79MZD", "M3XT8PRW"];
 
 export const PAIR_CODES = ["7K2M9PQR", "HX4TW8NB", "3FJD6YZC", "QW5RS2KV"];
 export const PAIR_TTL_MS = 15 * 60 * 1000;
@@ -212,6 +218,10 @@ export type Cloud = {
   pairGets: number;
   pairCodes: { code: string; expires_at: number }[];
   clockMs: number | null;
+  skipped: Set<WizardStep>;
+  invites: StaffInviteView[];
+  invitePosts: StaffInvite[];
+  reissued: string[];
 };
 
 async function fulfil(route: Route, r: Reply) {
@@ -290,6 +300,10 @@ export async function stubCloud(
     pairGets: 0,
     pairCodes: [],
     clockMs: null,
+    skipped: new Set(start.wizard?.skipped ?? []),
+    invites: start.wizard?.invites ?? [],
+    invitePosts: [],
+    reissued: [],
   };
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -401,12 +415,12 @@ export async function stubCloud(
 }
 
 export function wizardBody(cloud: Cloud): WizardState {
-  const current = STEPS.find((s) => !cloud.done.has(s)) ?? "go_live";
+  const current = STEPS.find((s) => !cloud.done.has(s) && !cloud.skipped.has(s)) ?? "go_live";
   return {
     current,
     steps: STEPS.map((key) => ({
       key,
-      state: cloud.done.has(key) ? "done" : "pending",
+      state: cloud.done.has(key) ? "done" : cloud.skipped.has(key) ? "skipped" : "pending",
       can_skip: key === "products" || key === "staff" || key === "printer_payments",
     })),
     ...(cloud.tenant ? { tenant: cloud.tenant } : {}),
@@ -532,6 +546,40 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
       cloud.pairCodes.push(issued);
       return { status: 200, body: issued };
     }
+  }
+  if (path.startsWith("/v1/wizard/staff")) {
+    if (!cloud.hubPaired) return { status: 409, body: err("STEP_NOT_READY") };
+    if (path === "/v1/wizard/staff" && method === "GET") {
+      return { status: 200, body: { invites: cloud.invites } };
+    }
+    if (path === "/v1/wizard/staff" && method === "POST") {
+      const b = body as StaffInvite;
+      cloud.invitePosts.push(b);
+      const invite: StaffInviteView = {
+        id: `01JINVITE${String(cloud.invites.length).padStart(16, "0")}`,
+        name: b.name,
+        phone: b.phone,
+        role: b.role,
+        status: "waiting",
+        error: null,
+        setup_expires_at: Date.now() + 72 * 3_600_000,
+      };
+      cloud.invites.push(invite);
+      return { status: 200, body: { invite, code: STAFF_CODES[(cloud.invites.length - 1) % 3] } };
+    }
+    if (path === "/v1/wizard/staff/skip" && method === "POST") {
+      cloud.skipped.add("staff");
+      return { status: 200, body: wizardBody(cloud) };
+    }
+    const reissue = /^\/v1\/wizard\/staff\/([^/]+)\/code$/.exec(path);
+    const invite = cloud.invites.find((i) => i.id === reissue?.[1]);
+    if (reissue && method === "POST" && invite) {
+      cloud.reissued.push(invite.id);
+      invite.status = "waiting";
+      invite.error = null;
+      return { status: 200, body: { invite, code: STAFF_CODES[(cloud.reissued.length + 1) % 3] } };
+    }
+    return { status: 404, body: err("NOT_FOUND") };
   }
   if (path === "/v1/wizard/setup-code/reveal" && method === "POST") {
     cloud.setupReveals += 1;

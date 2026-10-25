@@ -494,6 +494,12 @@ pub struct StaffUpsert {
     #[ts(optional)]
     pub pin_hash: Option<String>,
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub setup_code_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub setup_expires_at: Option<i64>,
 }
 
 /// The payload of `staff.set_credentials`: the member's own first password and PIN, argon2id

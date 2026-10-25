@@ -109,7 +109,7 @@ enum Op {
 }
 
 /// The seeded staff roles (index 4 is an admin actor).
-const STAFF_ROLES: [&str; 4] = ["Owner", "Manager", "Counter", "Kitchen"];
+const STAFF_ROLES: [&str; 3] = ["Owner", "Manager", "Counter"];
 
 const MALFORMED: &[&str] = &[
     "",
@@ -451,6 +451,8 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                             password_hash: Some(password_hash().into()),
                             pin_hash: None,
                             active: true,
+                            setup_code_hash: None,
+                            setup_expires_at: None,
                         }),
                         None,
                     );

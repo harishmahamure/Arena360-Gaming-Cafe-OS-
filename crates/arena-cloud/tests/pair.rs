@@ -1714,3 +1714,188 @@ async fn the_command_role_serves_the_mailbox_and_nothing_else() {
     let r = reply(app.oneshot(beat).await.unwrap()).await;
     assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
 }
+
+impl Harness {
+    async fn invite(&self, a: &str, name: &str, phone: &str, role: &str) -> Reply {
+        let body = json!({"name": name, "phone": phone, "role": role});
+        self.call("POST", "/v1/wizard/staff", Some(body), a).await
+    }
+
+    async fn step(&self, a: &str, step: &str) -> String {
+        let wizard = self.call("GET", "/v1/wizard", None, a).await;
+        wizard.body["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["key"] == step)
+            .unwrap()["state"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn paired_and_seen(&self, a: &str) -> String {
+        let (token, _) = self.paired_hub(a).await;
+        self.advance(1_000);
+        assert_eq!(self.beat(&token, "1:HUBA").await.status, 200);
+        token
+    }
+}
+
+#[tokio::test]
+async fn an_invite_queues_a_hash_only_staff_command_and_shows_the_code_once() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let early = h.invite(&a, "Neha", "+919876543211", "manager").await;
+    assert_eq!((early.status, early.code()), (409, "STEP_NOT_READY"));
+    let token = h.paired_and_seen(&a).await;
+
+    let made = h.invite(&a, "Neha", "+919876543211", "manager").await;
+    assert_eq!(made.status, 200, "{}", made.body);
+    let code = made.body["code"].as_str().unwrap().to_owned();
+    assert_eq!(code.len(), 8);
+    assert_eq!(made.body["invite"]["status"], "waiting");
+    assert_eq!(made.body["invite"]["phone"], "+919876543211");
+    assert_eq!(
+        made.body["invite"]["setup_expires_at"],
+        h.now.load(Ordering::SeqCst) + 72 * 3_600_000
+    );
+
+    let page = h.fetch_commands(&token, 0).await;
+    let cmds = page.body["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 1);
+    let (kind, payload) = (&cmds[0]["kind"], &cmds[0]["payload"]);
+    assert_eq!(kind, "staff.upsert");
+    assert_eq!(payload["staff_id"], made.body["invite"]["id"]);
+    assert_eq!(payload["login"], "+919876543211");
+    assert_eq!(payload["role_id"], "Manager");
+    assert!(
+        payload["setup_code_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("$argon2id$")
+    );
+    assert!(!payload.to_string().contains(&code));
+    assert!(
+        !h.call("GET", "/v1/wizard/staff", None, &a)
+            .await
+            .body
+            .to_string()
+            .contains(&code)
+    );
+}
+
+#[tokio::test]
+async fn invite_details_are_checked() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    h.paired_and_seen(&a).await;
+    for (name, phone, field) in [
+        ("", "+919876543211", "name"),
+        ("Neha", "9876543211", "phone"),
+        ("Neha", "+911234567890", "phone"),
+    ] {
+        let r = h.invite(&a, name, phone, "counter").await;
+        assert_eq!((r.status, r.body["field"].as_str()), (422, Some(field)));
+    }
+    let bad_role = h.invite(&a, "Neha", "+919876543211", "owner").await;
+    assert!(bad_role.status >= 400);
+}
+
+#[tokio::test]
+async fn an_applied_manager_invite_finishes_step_seven_and_a_counter_one_does_not() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let counter = h.invite(&a, "Ravi", "+919876543212", "counter").await;
+    let manager = h.invite(&a, "Neha", "+919876543211", "manager").await;
+    let page = h.fetch_commands(&token, 0).await;
+    let ids: Vec<i64> = page.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect();
+    let applied = json!({"epoch": "1:HUBA", "applied_seq": 5});
+    h.command_result(&token, ids[0], applied.clone()).await;
+    assert_eq!(h.step(&a, "staff").await, "pending");
+    h.command_result(&token, ids[1], applied).await;
+    assert_eq!(h.step(&a, "staff").await, "done");
+    let list = h.call("GET", "/v1/wizard/staff", None, &a).await;
+    let statuses: Vec<&str> = list.body["invites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["applied", "applied"]);
+    assert_ne!(counter.body["invite"]["id"], manager.body["invite"]["id"]);
+}
+
+#[tokio::test]
+async fn a_refused_invite_shows_the_hub_s_reason_and_a_new_code_goes_out_by_a_new_command() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let made = h.invite(&a, "Neha", "+919876543211", "manager").await;
+    let id = made.body["invite"]["id"].as_str().unwrap().to_owned();
+    let first = h.fetch_commands(&token, 0).await.body["commands"][0].clone();
+    let refusal = json!({"epoch": "1:HUBA", "error": {"code": "LOGIN_TAKEN", "message": "that login is already in use", "field": "login"}});
+    h.command_result(&token, first["id"].as_i64().unwrap(), refusal)
+        .await;
+    let list = h.call("GET", "/v1/wizard/staff", None, &a).await;
+    assert_eq!(list.body["invites"][0]["status"], "failed");
+    assert_eq!(list.body["invites"][0]["error"]["code"], "LOGIN_TAKEN");
+    assert_eq!(h.step(&a, "staff").await, "pending");
+
+    let fresh = h
+        .call(
+            "POST",
+            &format!("/v1/wizard/staff/{id}/code"),
+            Some(json!({})),
+            &a,
+        )
+        .await;
+    assert_eq!(fresh.status, 200, "{}", fresh.body);
+    assert_ne!(fresh.body["code"], made.body["code"]);
+    assert_eq!(fresh.body["invite"]["status"], "waiting");
+    let page = h.fetch_commands(&token, 0).await;
+    let next = &page.body["commands"][0];
+    assert_ne!(next["id"], first["id"]);
+    assert_eq!(next["payload"]["staff_id"], id.as_str());
+    assert_ne!(
+        next["payload"]["setup_code_hash"],
+        first["payload"]["setup_code_hash"]
+    );
+    let missing = h
+        .call(
+            "POST",
+            "/v1/wizard/staff/01JMISSING000000000000000/code",
+            Some(json!({})),
+            &a,
+        )
+        .await;
+    assert_eq!(missing.status, 404);
+}
+
+#[tokio::test]
+async fn skipping_marks_step_seven_skipped_and_a_manager_invite_can_still_finish_it() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let skipped = h
+        .call("POST", "/v1/wizard/staff/skip", Some(json!({})), &a)
+        .await;
+    assert_eq!(skipped.status, 200, "{}", skipped.body);
+    assert_eq!(h.step(&a, "staff").await, "skipped");
+    h.invite(&a, "Neha", "+919876543211", "manager").await;
+    let id = h.fetch_commands(&token, 0).await.body["commands"][0]["id"]
+        .as_i64()
+        .unwrap();
+    h.command_result(&token, id, json!({"epoch": "1:HUBA", "applied_seq": 5}))
+        .await;
+    assert_eq!(h.step(&a, "staff").await, "done");
+    h.call("POST", "/v1/wizard/staff/skip", Some(json!({})), &a)
+        .await;
+    assert_eq!(h.step(&a, "staff").await, "done");
+}

@@ -639,10 +639,28 @@ fn primary_long_lease() -> Fixture {
 
 /// A bootstrapped branch (its bootstrap event already drained).
 async fn bootstrapped() -> Fixture {
+    let f = bootstrapped_free().await;
+    user_cap(&f, 50).await;
+    f
+}
+
+async fn bootstrapped_free() -> Fixture {
     let mut f = primary_long_lease();
     f.writer.submit_intent(bootstrap()).await.unwrap();
     f.events.try_recv().unwrap();
     f
+}
+
+async fn user_cap(f: &Fixture, n: i64) {
+    let sql = format!(
+        "INSERT INTO settings (branch_id, key, value, rev, updated_at)
+         SELECT branch_id, 'licence.user_cap', '{n}', 0, 0 FROM branch WHERE true
+         ON CONFLICT (branch_id, key) DO UPDATE SET value = excluded.value"
+    );
+    f.writer
+        .submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+        .await
+        .unwrap();
 }
 
 fn set(key: &str, value: &str, base_rev: Option<i64>) -> Intent {
@@ -1472,6 +1490,8 @@ mod rbac_matrix {
             password_hash: password.map(|p| hash_secret(p).unwrap()),
             pin_hash: None,
             active: true,
+            setup_code_hash: None,
+            setup_expires_at: None,
         }
     }
 
@@ -1924,11 +1944,14 @@ mod rbac_matrix {
                 "base_rev",
             ),
         ] {
+            let taken = body.login == "counter";
             let err = expect_err(&f, fail(body, rev)).await;
-            assert_eq!(
-                (err.code, err.field.as_deref()),
-                (ErrorCode::ValidationFailed, Some(field))
-            );
+            let code = if taken {
+                ErrorCode::LoginTaken
+            } else {
+                ErrorCode::ValidationFailed
+            };
+            assert_eq!((err.code, err.field.as_deref()), (code, Some(field)));
         }
         let stale = expect_err(
             &f,
@@ -2620,6 +2643,8 @@ mod rbac_matrix {
                     password_hash: None,
                     pin_hash: Some(hash_secret(pin).unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 Some(rev),
             );
@@ -3018,6 +3043,8 @@ mod pairing_register {
                     password_hash: Some(hash_secret("pw").unwrap()),
                     pin_hash: Some(hash_secret(pin).unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 actor: actor(ActorKind::Owner, "owner-1"),
                 ..bootstrap()
@@ -4061,6 +4088,8 @@ mod operating {
                     password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
                     pin_hash: None,
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 None,
                 f.clock.now_ms(),
@@ -4559,6 +4588,8 @@ mod printer {
                     password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
                     pin_hash: None,
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 None,
                 f.clock.now_ms(),
@@ -5166,6 +5197,8 @@ mod device_groups {
                     password_hash: Some(hash_secret("pw").unwrap()),
                     pin_hash: Some(hash_secret("2222").unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 None,
             )
@@ -5521,6 +5554,8 @@ mod floor_zones {
                 password_hash: Some(hash_secret("pw").unwrap()),
                 pin_hash: Some(hash_secret("2222").unwrap()),
                 active: true,
+                setup_code_hash: None,
+                setup_expires_at: None,
             }),
             None,
         )
@@ -6343,6 +6378,8 @@ mod manual_devices {
                     password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
                     pin_hash: Some(crate::staff::hash_secret("2222").unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 None,
             )
@@ -6983,7 +7020,7 @@ mod licence {
 
     #[tokio::test]
     async fn with_no_licence_rows_the_free_limits_apply() {
-        let f = bootstrapped().await;
+        let f = bootstrapped_free().await;
         let mut store = reopen(&f);
         store
             .write_tx(|tx| {
@@ -7399,6 +7436,8 @@ mod products {
                     password_hash: Some(hash_secret("pw").unwrap()),
                     pin_hash: None,
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 None,
             ))

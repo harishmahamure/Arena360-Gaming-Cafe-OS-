@@ -57,4 +57,6 @@ export type ErrorCode =
   | "DEVICE_LIMIT"
   | "HSN_REQUIRED"
   | "BARCODE_TAKEN"
-  | "SETUP_CODE_INVALID";
+  | "SETUP_CODE_INVALID"
+  | "LOGIN_TAKEN"
+  | "USER_LIMIT";

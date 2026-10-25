@@ -33,6 +33,7 @@ const ALL_TABLES: &[&str] = &[
     "rate_limits",
     "schema_migrations",
     "signin_challenges",
+    "staff_invites",
     "tenants",
 ];
 

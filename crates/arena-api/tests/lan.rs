@@ -1279,6 +1279,8 @@ async fn add_staff(hub: &TestHub, login: &str, role: &str, pin: &str) -> String 
                 password_hash: Some(arena_core::staff::hash_secret("pw").unwrap()),
                 pin_hash: Some(arena_core::staff::hash_secret(pin).unwrap()),
                 active: true,
+                setup_code_hash: None,
+                setup_expires_at: None,
             }),
             None,
         ))

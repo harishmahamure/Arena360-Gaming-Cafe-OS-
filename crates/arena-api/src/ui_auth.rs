@@ -819,9 +819,10 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
         }
-        ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked | ErrorCode::DeviceLimit => {
-            StatusCode::FORBIDDEN
-        }
+        ErrorCode::FeatureNotEntitled
+        | ErrorCode::TierLocked
+        | ErrorCode::DeviceLimit
+        | ErrorCode::UserLimit => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PasswordRequired | ErrorCode::SetupIncomplete => StatusCode::FORBIDDEN,
         ErrorCode::PermissionDenied
@@ -845,7 +846,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::GroupKindMismatch
         | ErrorCode::ZoneNotEmpty
         | ErrorCode::CellTaken
-        | ErrorCode::BarcodeTaken => StatusCode::CONFLICT,
+        | ErrorCode::BarcodeTaken
+        | ErrorCode::LoginTaken => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }
@@ -2199,6 +2201,23 @@ pub(crate) mod tests {
             kind: ActorKind::Owner,
             id: "owner".into(),
         };
+        writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::System,
+                    id: "hub-licence".into(),
+                },
+                IntentPayload::LicenceApply(arena_proto::LicenceApply {
+                    standing: arena_proto::LicenceStanding::Verified,
+                    clock_wrong: false,
+                    flags: String::new(),
+                    device_cap: 20,
+                    user_cap: 10,
+                }),
+                None,
+            ))
+            .await
+            .unwrap();
         let mut ids = Vec::new();
         for (login, display, role_name, pw, pin) in [
             ("manager", "Manager", ROLE_MANAGER, "m-pass", "2222"),
@@ -2216,6 +2235,8 @@ pub(crate) mod tests {
                         password_hash: Some(hash_secret(pw).unwrap()),
                         pin_hash: Some(hash_secret(pin).unwrap()),
                         active: true,
+                        setup_code_hash: None,
+                        setup_expires_at: None,
                     }),
                     None,
                 ))
@@ -2875,6 +2896,8 @@ pub(crate) mod tests {
                     password_hash: None,
                     pin_hash: None,
                     active,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 Some(rev),
             )
@@ -3463,6 +3486,8 @@ pub(crate) mod tests {
                     password_hash: None,
                     pin_hash: Some(hash_secret(pin).unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 Some(rev),
             ))
@@ -4160,6 +4185,8 @@ pub(crate) mod tests {
                     password_hash: None,
                     pin_hash: None,
                     active: false,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 Some(1),
             ))

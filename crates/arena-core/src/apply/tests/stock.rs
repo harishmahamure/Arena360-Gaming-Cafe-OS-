@@ -72,6 +72,8 @@ async fn staff(f: &Fixture, login: &str, role: &str) -> Actor {
                 password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
                 pin_hash: None,
                 active: true,
+                setup_code_hash: None,
+                setup_expires_at: None,
             }),
         ))
         .await

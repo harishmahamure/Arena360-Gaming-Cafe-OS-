@@ -52,13 +52,15 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::GroupKindMismatch
         | ErrorCode::ZoneNotEmpty
         | ErrorCode::CellTaken
-        | ErrorCode::BarcodeTaken => StatusCode::CONFLICT,
+        | ErrorCode::BarcodeTaken
+        | ErrorCode::LoginTaken => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
         }
-        ErrorCode::FeatureNotEntitled | ErrorCode::TierLocked | ErrorCode::DeviceLimit => {
-            StatusCode::FORBIDDEN
-        }
+        ErrorCode::FeatureNotEntitled
+        | ErrorCode::TierLocked
+        | ErrorCode::DeviceLimit
+        | ErrorCode::UserLimit => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE

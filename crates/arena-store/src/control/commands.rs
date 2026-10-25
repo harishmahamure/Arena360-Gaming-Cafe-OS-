@@ -63,24 +63,28 @@ fn command_from(row: &[SqlValue]) -> Result<CommandRow, ControlError> {
     })
 }
 
+pub(super) fn insert_command(c: &NewCommand<'_>) -> Stmt {
+    Stmt::new(
+        "INSERT INTO commands (branch_id, idempotency_key, kind, schema_version, \
+         payload, issued_by, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) \
+         ON CONFLICT (branch_id, idempotency_key) DO NOTHING",
+        vec![
+            text(c.branch_id),
+            text(c.idempotency_key),
+            text(c.kind),
+            SqlValue::Integer(i64::from(c.schema_version)),
+            text(c.payload),
+            text(c.issued_by),
+            SqlValue::Integer(c.now),
+        ],
+    )
+}
+
 impl ControlDb {
     pub async fn submit_command(&self, c: &NewCommand<'_>) -> Result<CommandRow, ControlError> {
         let rows = self
             .transact_rows(vec![
-                Stmt::new(
-                    "INSERT INTO commands (branch_id, idempotency_key, kind, schema_version, \
-                     payload, issued_by, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) \
-                     ON CONFLICT (branch_id, idempotency_key) DO NOTHING",
-                    vec![
-                        text(c.branch_id),
-                        text(c.idempotency_key),
-                        text(c.kind),
-                        SqlValue::Integer(i64::from(c.schema_version)),
-                        text(c.payload),
-                        text(c.issued_by),
-                        SqlValue::Integer(c.now),
-                    ],
-                ),
+                insert_command(c),
                 Stmt::new(
                     SELECT_BY_KEY,
                     vec![text(c.branch_id), text(c.idempotency_key)],

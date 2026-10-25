@@ -117,6 +117,8 @@ async fn start_with_lease(expires_at: i64) -> TestHub {
                     password_hash: Some(hash_secret("pw").unwrap()),
                     pin_hash: Some(hash_secret(pin).unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
             ))
             .await

@@ -694,6 +694,8 @@ mod tests {
                 password_hash: None,
                 pin_hash: None,
                 active: true,
+                setup_code_hash: None,
+                setup_expires_at: None,
             }),
             Some(1),
         );
@@ -1067,6 +1069,8 @@ mod tests {
                     password_hash: None,
                     pin_hash: None,
                     active: false,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 Some(1),
             ))

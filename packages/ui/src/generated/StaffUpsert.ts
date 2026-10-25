@@ -14,4 +14,6 @@ export type StaffUpsert = {
   password_hash?: string;
   pin_hash?: string;
   active: boolean;
+  setup_code_hash?: string;
+  setup_expires_at?: number;
 };

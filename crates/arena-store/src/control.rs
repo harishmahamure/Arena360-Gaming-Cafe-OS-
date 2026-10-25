@@ -28,6 +28,7 @@ mod rate_limit;
 mod session;
 mod setup_codes;
 mod signin;
+mod staff_invites;
 mod tenant;
 
 pub use commands::{CommandRow, NewCommand};
@@ -52,6 +53,7 @@ pub use signin::{
     NewOwnerDevice, NewSigninChallenge, OwnerDevice, SigninChallenge, SigninCompletion,
     SigninFactor, SigninFailure,
 };
+pub use staff_invites::{NewStaffInvite, StaffInviteRow};
 pub use tenant::{Branch, BranchCodeOutcome, BranchProfile, NewTenantBranch, ProgressRow, Tenant};
 
 use std::fmt;
@@ -115,6 +117,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 11,
         sql: include_str!("../control-migrations/0011_commands.sql"),
+    },
+    ControlMigration {
+        version: 12,
+        sql: include_str!("../control-migrations/0012_staff_invites.sql"),
     },
 ];
 

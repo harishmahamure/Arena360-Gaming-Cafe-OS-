@@ -224,6 +224,8 @@ pub async fn seed(
                         password_hash: Some(password_hash),
                         pin_hash: Some(pin_hash),
                         active: true,
+                        setup_code_hash: None,
+                        setup_expires_at: None,
                     }),
                 ))
                 .await?;

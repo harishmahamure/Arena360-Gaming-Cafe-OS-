@@ -48,6 +48,23 @@ test("page has landmarks, one h1 and three theme sections", async ({ page }) => 
   await expect(page.locator('[data-theme="light"] [data-component="status-badge"]')).toHaveCount(0);
 });
 
+test("tier-lock reads in text in every theme and its Upgrade link is a 44 px target", async ({
+  page,
+}) => {
+  for (const theme of THEMES) {
+    const locks = page.locator(`[data-theme="${theme}"] [data-component="tier-lock"]`);
+    await expect(locks).toHaveCount(2);
+    await expect(locks.first()).toContainText("Available on Basic");
+    await expect(locks.first()).toContainText("Available soon");
+    await expect(locks.first().getByRole("link")).toHaveCount(0);
+    const upgrade = locks.last().getByRole("link", { name: "Upgrade" });
+    const box = await upgrade.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await upgrade.focus();
+    await expect(upgrade).toBeFocused();
+  }
+});
+
 test("keyboard focus: every tab stop shows a visible indicator", async ({ page }) => {
   const indicator = (el: Element) => {
     const s = getComputedStyle(el);

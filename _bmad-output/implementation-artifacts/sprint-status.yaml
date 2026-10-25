@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-26-2026 03:00
+last_updated: 10-26-2026 04:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -46,7 +46,7 @@ development_status:
   2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai: done
   2-14-owner-and-staff-set-their-own-pin-and-password-at-the-hub-wi: done
   2-15-owner-changes-reach-the-hub-through-the-command-mailbox-with: done
-  2-16-step-7-invite-staff-by-phone-with-a-role-and-a-one-time-setu: backlog
+  2-16-step-7-invite-staff-by-phone-with-a-role-and-a-one-time-setu: review
   2-17-kiosk-finds-the-hub-on-the-lan-or-by-typed-ip: done
   2-18-kiosk-pairs-with-a-6-digit-code-from-the-hub-or-a-manager-pi: done
   2-19-device-cap-and-pairing-rate-limits-at-the-hub: backlog

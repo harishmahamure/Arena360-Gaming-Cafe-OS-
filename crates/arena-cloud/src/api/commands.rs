@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arena_proto::{
     AppError, COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION, COMMANDS_PAGE, CommandResult,
-    CommandResultAck, CommandWire, CommandsPage, ErrorCode, SETTINGS_COMMAND_KEYS,
+    CommandResultAck, CommandStatus, CommandWire, CommandsPage, ErrorCode, SETTINGS_COMMAND_KEYS,
     is_setup_command,
 };
 use arena_store::control::{CommandRow, NewCommand};
@@ -131,6 +131,12 @@ async fn result(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
+    if status == CommandStatus::Applied {
+        st.db
+            .finish_staff_step(&hub.branch_id, id, now)
+            .await
+            .map_err(ApiError::internal)?;
+    }
     Ok(Json(CommandResultAck { status }))
 }
 

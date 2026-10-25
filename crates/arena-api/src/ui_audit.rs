@@ -302,6 +302,8 @@ mod tests {
                 password_hash: Some(arena_core::staff::hash_secret("pw").unwrap()),
                 pin_hash: Some(arena_core::staff::hash_secret("6666").unwrap()),
                 active: true,
+                setup_code_hash: None,
+                setup_expires_at: None,
             }),
             None,
         );
@@ -573,6 +575,8 @@ mod tests {
                     password_hash: None,
                     pin_hash: pin.map(|p| arena_core::staff::hash_secret(p).unwrap()),
                     active,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 Some(rev),
             ))
@@ -684,6 +688,8 @@ mod tests {
                     password_hash: None,
                     pin_hash: Some(arena_core::staff::hash_secret("5555").unwrap()),
                     active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
                 }),
                 Some(rev),
             ))

@@ -15,6 +15,9 @@ import type {
   PairingCodeIssued,
   SessionInfo,
   SetupCodeReveal,
+  StaffInvite,
+  StaffInvited,
+  StaffInvites,
   SignupChallenge,
   SignupStart,
   SignupVerified,
@@ -225,3 +228,10 @@ export const revealSetupCode = () =>
   withRefresh(() => call<SetupCodeReveal>("POST", "/wizard/setup-code/reveal", {}));
 export const issuePairingCode = () =>
   withRefresh(() => call<PairingCodeIssued>("POST", "/wizard/install-hub/code", {}));
+export const getStaff = () => withRefresh(() => call<StaffInvites>("GET", "/wizard/staff"));
+export const inviteStaff = (invite: StaffInvite) =>
+  withRefresh(() => call<StaffInvited>("POST", "/wizard/staff", invite));
+export const newStaffCode = (id: string) =>
+  withRefresh(() => call<StaffInvited>("POST", `/wizard/staff/${encodeURIComponent(id)}/code`, {}));
+export const skipStaff = () =>
+  withRefresh(() => call<WizardState>("POST", "/wizard/staff/skip", {}));

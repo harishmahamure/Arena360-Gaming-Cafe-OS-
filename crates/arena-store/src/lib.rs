@@ -50,8 +50,8 @@ pub use devices::{
     set_device_revoked, set_group_deleted, tv_number_taken, update_device_meta, update_group,
 };
 pub use identity::{
-    CachedLicence, HubIdentity, find_cached_licence, find_hub_identity, insert_hub_identity,
-    store_licence,
+    CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
+    find_trusted_clock, insert_hub_identity, store_licence, store_trusted_clock,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
@@ -572,6 +572,13 @@ impl Store {
             return Ok(None);
         }
         find_hub_identity(&self.conn)
+    }
+
+    pub fn trusted_clock(&self) -> Result<Option<TrustedClockRow>, AppError> {
+        if self.schema_version()? == 0 {
+            return Ok(None);
+        }
+        find_trusted_clock(&self.conn)
     }
 
     pub fn cached_licence(&self) -> Result<Option<CachedLicence>, AppError> {

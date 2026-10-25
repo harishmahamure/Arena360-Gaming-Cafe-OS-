@@ -98,7 +98,7 @@ pub const TIERS: &[TierDefaults] = &[
     },
     TierDefaults {
         tier: Tier::Basic,
-        flags: &["uploads", "owner_reports"],
+        flags: &["uploads", "owner_reports", "kitchen"],
         features: &[],
         upload_interval_s: 300,
         summary_interval_s: 900,
@@ -116,6 +116,7 @@ pub const TIERS: &[TierDefaults] = &[
             "uploads",
             "owner_reports",
             "kiosk_orders",
+            "kitchen",
             "kitchen_display",
             "standby",
         ],
@@ -162,7 +163,7 @@ mod tests {
             }
         );
         let basic = Tier::Basic.defaults();
-        assert_eq!(basic.flags, ["uploads", "owner_reports"]);
+        assert_eq!(basic.flags, ["uploads", "owner_reports", "kitchen"]);
         assert!(basic.features.is_empty());
         assert_eq!(
             (
@@ -188,6 +189,7 @@ mod tests {
                 "uploads",
                 "owner_reports",
                 "kiosk_orders",
+                "kitchen",
                 "kitchen_display",
                 "standby"
             ]

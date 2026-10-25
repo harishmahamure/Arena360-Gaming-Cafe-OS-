@@ -34,6 +34,12 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pairing_revoked: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub licence_unverified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub clock_wrong: Option<bool>,
 }
 
 fn paired_default() -> bool {
@@ -258,6 +264,8 @@ mod tests {
             lan: None,
             paired: true,
             pairing_revoked: None,
+            licence_unverified: None,
+            clock_wrong: None,
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),

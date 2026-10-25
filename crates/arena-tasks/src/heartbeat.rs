@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 
 use arena_core::{CloudTime, HubStatus, PairGate, PairingState, Role, WriterHandle};
 use arena_proto::{
-    ErrorCode, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S, HeartbeatRequest,
-    HeartbeatResponse, VerifyKey, licence,
+    Entitlement, ErrorCode, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S, HeartbeatRequest,
+    HeartbeatResponse, LicenceStanding, VerifyKey,
 };
+use arena_store::TrustedClockRow;
 use tokio::sync::watch;
 
 use crate::cloud::{CloudClient, CloudFailure};
@@ -19,6 +20,11 @@ pub fn backoff(fails: u32, interval: Duration, unit: f64) -> Duration {
         .saturating_mul(1 << fails.min(16))
         .min(interval);
     ceil.mul_f64(0.5 + 0.5 * unit.clamp(0.0, 1.0))
+}
+
+fn mono_ms() -> i64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as i64
 }
 
 fn unit() -> f64 {
@@ -35,6 +41,7 @@ pub struct HeartbeatTask {
     keys: Vec<VerifyKey<'static>>,
     version: String,
     fails: u32,
+    rejected: bool,
 }
 
 impl HeartbeatTask {
@@ -56,6 +63,7 @@ impl HeartbeatTask {
             keys,
             version,
             fails: 0,
+            rejected: false,
         }
     }
 
@@ -64,13 +72,80 @@ impl HeartbeatTask {
         if paired.wait_for(|p| *p).await.is_err() {
             return;
         }
+        self.restore().await;
         loop {
             let wait = self.beat().await;
             tokio::time::sleep(wait).await;
         }
     }
 
+    async fn restore(&mut self) {
+        if let Some(writer) = &self.writer
+            && let Ok(state) = writer.licence_state().await
+        {
+            self.rejected = state.status.as_deref() == Some(LicenceStanding::Unverified.as_str());
+            if let Some(t) = state.trusted {
+                let base = t
+                    .cloud_ms
+                    .max(writer.now_ms().saturating_sub(t.wall_delta_ms));
+                self.status.send_modify(|s| {
+                    s.cloud_time.get_or_insert(CloudTime {
+                        cloud_ms: base,
+                        at: Instant::now(),
+                    });
+                });
+            }
+        }
+        self.settle().await;
+    }
+
+    fn trusted_now(&self) -> Option<i64> {
+        self.status
+            .borrow()
+            .cloud_time
+            .map(|c| c.cloud_ms.saturating_add(c.at.elapsed().as_millis() as i64))
+    }
+
     pub async fn beat(&mut self) -> Duration {
+        let wait = self.exchange().await;
+        self.settle().await;
+        wait
+    }
+
+    async fn settle(&self) {
+        let Some(writer) = &self.writer else { return };
+        let Ok(state) = writer.licence_state().await else {
+            return;
+        };
+        let Some(id) = state.identity else { return };
+        let wall = writer.now_ms();
+        let cloud = self.trusted_now();
+        let trusted = cloud.unwrap_or(wall);
+        let mut e = Entitlement::evaluate(
+            state.jwt.as_deref(),
+            &self.keys,
+            &id.tenant_id,
+            &id.branch_id,
+            trusted,
+        );
+        if self.rejected {
+            e = Entitlement::free(LicenceStanding::Unverified);
+        }
+        let clock_wrong = cloud.is_some() && arena_proto::clock_wrong(wall, trusted);
+        self.status.send_modify(|s| {
+            s.tier = Some(e.tier);
+            s.licence = Some(e.standing);
+            s.clock_wrong = clock_wrong;
+        });
+        if let Err(err) = writer.apply_licence(e.apply_payload(clock_wrong)).await {
+            tracing::warn!(
+                code = err.code.as_str(),
+                "heartbeat: could not apply the licence"
+            );
+        }
+    }
+
+    async fn exchange(&mut self) -> Duration {
         let (live, schema_version, role, lease) = {
             let s = self.status.borrow();
             (s.live, s.schema_version, s.role, s.lease.clone())
@@ -128,38 +203,52 @@ impl HeartbeatTask {
     }
 
     async fn accept(
-        &self,
+        &mut self,
         writer: &WriterHandle,
         lease: &arena_core::LeaseInfo,
         res: HeartbeatResponse,
         at: Instant,
     ) {
-        let claims = match licence::verify(&res.licence, &self.keys, res.cloud_time) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                tracing::warn!(code = e.code(), "heartbeat: licence not trusted; ignored");
-                None
-            }
+        let Ok(state) = writer.licence_state().await else {
+            return;
         };
+        let cloud_ms = self
+            .trusted_now()
+            .map_or(res.cloud_time, |p| res.cloud_time.max(p));
+        let genuine = state.identity.is_some_and(|id| {
+            Entitlement::evaluate(
+                Some(&res.licence),
+                &self.keys,
+                &id.tenant_id,
+                &id.branch_id,
+                cloud_ms,
+            )
+            .standing
+                != LicenceStanding::Unverified
+        });
+        if !genuine {
+            tracing::warn!("heartbeat: licence not trusted; ignored");
+        }
         let confirm = res.fence.confirmed;
         let sent = confirm.then(|| (lease.counter, lease.hub_instance_id.clone()));
-        let stored = claims.is_some().then(|| res.licence.clone());
-        if let Err(e) = writer.record_heartbeat(stored, sent).await {
+        let stored = genuine.then(|| res.licence.clone());
+        let trusted_ms = cloud_ms.saturating_add(at.elapsed().as_millis() as i64);
+        let row = TrustedClockRow {
+            cloud_ms: trusted_ms,
+            mono_ms: mono_ms(),
+            wall_delta_ms: writer.now_ms().saturating_sub(trusted_ms),
+        };
+        if let Err(e) = writer.record_heartbeat(stored, sent, Some(row)).await {
             tracing::warn!(
                 code = e.code.as_str(),
                 "heartbeat: could not record the answer"
             );
             return;
         }
-        if let Some(claims) = &claims {
-            self.status.send_modify(|s| s.tier = Some(claims.tier));
-        }
+        self.rejected = !genuine;
         self.status.send_modify(|s| {
             s.pairing = PairingState::Active;
-            s.cloud_time = Some(CloudTime {
-                cloud_ms: res.cloud_time,
-                at,
-            });
+            s.cloud_time = Some(CloudTime { cloud_ms, at });
             if let (true, Some(l)) = (confirm, s.lease.as_mut())
                 && l.counter == lease.counter
                 && l.hub_instance_id == lease.hub_instance_id
@@ -199,11 +288,25 @@ mod tests {
     }
 
     fn answer(confirmed: bool, tier: Tier) -> (u16, String) {
-        let claims = LicenceClaims::for_tier("T", "B", tier, T0 / 1000);
+        answer_for("T", "B", confirmed, tier)
+    }
+
+    fn answer_for(tenant: &str, branch: &str, confirmed: bool, tier: Tier) -> (u16, String) {
+        answer_at(tenant, branch, confirmed, tier, T0 + 7)
+    }
+
+    fn answer_at(
+        tenant: &str,
+        branch: &str,
+        confirmed: bool,
+        tier: Tier,
+        cloud_ms: i64,
+    ) -> (u16, String) {
+        let claims = LicenceClaims::for_tier(tenant, branch, tier, T0 / 1000);
         let body = serde_json::json!({
             "licence": dev_sign(&claims).unwrap(),
             "fence": {"epoch": format!("1:{OWN}"), "confirmed": confirmed},
-            "cloud_time": T0 + 7,
+            "cloud_time": cloud_ms,
         });
         (200, body.to_string())
     }
@@ -259,19 +362,42 @@ mod tests {
         status: watch::Sender<HubStatus>,
         task: HeartbeatTask,
         writer: WriterHandle,
+        wall: Arc<ManualClock>,
     }
 
     async fn fx(port: u16) -> Fx {
+        fx_with(port, true).await
+    }
+
+    async fn fx_with(port: u16, with_branch: bool) -> Fx {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("branch.db");
         let store = Store::open(&path, T0).unwrap();
         let (status, _rx) = status_channel(HubStatus::opened(12, OWN));
-        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(T0));
+        let wall = Arc::new(ManualClock::new(T0));
+        let clock: Arc<dyn Clock> = wall.clone();
         let lease = LeaseTask::start(store, OWN.into(), Arc::clone(&clock), status.clone())
             .await
             .unwrap();
         let writer = lease.writer().unwrap();
         std::mem::forget(lease);
+        let paired = LicenceClaims::for_tier("T", "B", Tier::Free, T0 / 1000);
+        writer
+            .record_pairing(
+                arena_store::HubIdentity {
+                    tenant_id: "T".into(),
+                    branch_id: "B".into(),
+                    hub_id: "H".into(),
+                    tier: Tier::Free,
+                    paired_at: T0,
+                },
+                dev_sign(&paired).unwrap(),
+            )
+            .await
+            .unwrap();
+        if with_branch {
+            add_branch(&writer).await;
+        }
         let cloud = CloudClient::new(
             &CloudEndpoint::parse(&format!("http://127.0.0.1:{port}"), true).unwrap(),
         )
@@ -292,7 +418,51 @@ mod tests {
             status,
             task,
             writer,
+            wall,
         }
+    }
+
+    async fn add_branch(writer: &WriterHandle) {
+        writer
+            .submit(|tx| {
+                arena_store::insert_branch(
+                    tx,
+                    &arena_store::NewBranch {
+                        branch_id: "B",
+                        name: "Arena",
+                        branch_code: "ARN",
+                        currency: "INR",
+                        tz: "Asia/Kolkata",
+                        day_start_min: 0,
+                        fy_start_month: 4,
+                    },
+                )
+            })
+            .await
+            .unwrap();
+    }
+
+    fn setting(path: &std::path::Path, key: &str) -> Option<String> {
+        Store::open(path, T0)
+            .unwrap()
+            .settings()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.key == key)
+            .map(|s| s.value)
+    }
+
+    fn audit_kinds(path: &std::path::Path) -> Vec<String> {
+        let mut kinds: Vec<_> = Store::open(path, T0)
+            .unwrap()
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.intent_kind == "licence.apply")
+            .map(|c| c.row_id)
+            .collect();
+        kinds.sort();
+        kinds
     }
 
     fn row(path: &std::path::Path) -> arena_store::LeaseRow {
@@ -407,10 +577,12 @@ mod tests {
         let port = serve(vec![(200, body)], false).await;
         let mut f = fx(port).await;
         f.task.beat().await;
-        assert_eq!(f.status.borrow().tier, None);
+        assert_eq!(f.status.borrow().tier, Some(Tier::Free));
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Unverified));
         assert!(!f.status.borrow().lease.as_ref().unwrap().provisional);
         let cached = Store::open(&f.path, T0).unwrap().cached_licence().unwrap();
-        assert!(cached.is_none());
+        let paired = LicenceClaims::for_tier("T", "B", Tier::Free, T0 / 1000);
+        assert_eq!(cached.unwrap().jwt, dev_sign(&paired).unwrap());
     }
 
     #[tokio::test]
@@ -457,5 +629,390 @@ mod tests {
         let done = tokio::time::timeout(Duration::from_secs(2), f.writer.submit(|_tx| Ok(7))).await;
         assert_eq!(done.unwrap().unwrap(), 7);
         hung.abort();
+    }
+
+    #[tokio::test]
+    async fn a_genuine_paid_licence_writes_its_limits_and_flags_once() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("60")
+        );
+        assert_eq!(setting(&f.path, "licence.user_cap").as_deref(), Some("10"));
+        assert_eq!(
+            setting(&f.path, "licence.status").as_deref(),
+            Some("verified")
+        );
+        assert_eq!(setting(&f.path, "licence.clock").as_deref(), Some("ok"));
+        let rows = audit_kinds(&f.path);
+        assert_eq!(rows.len(), 5, "{rows:?}");
+        assert!(rows.contains(&"B/licence.status".to_owned()));
+        f.task.beat().await;
+        assert_eq!(audit_kinds(&f.path), rows);
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+    }
+
+    #[tokio::test]
+    async fn another_branchs_licence_means_free_limits_a_warning_and_an_audit_row() {
+        let port = serve(vec![answer_for("T", "OTHER", true, Tier::Premium)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        let s = f.status.borrow().clone();
+        assert_eq!(s.licence, Some(LicenceStanding::Unverified));
+        assert_eq!(s.tier, Some(Tier::Free));
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("20")
+        );
+        assert_eq!(
+            setting(&f.path, "licence.status").as_deref(),
+            Some("unverified")
+        );
+        let rows = audit_kinds(&f.path);
+        assert!(rows.contains(&"B/licence.status".to_owned()), "{rows:?}");
+        assert!(
+            rows.contains(&"B/licence.device_cap".to_owned()),
+            "{rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_later_genuine_licence_clears_the_warning() {
+        let port = serve(
+            vec![
+                answer_for("T", "OTHER", true, Tier::Premium),
+                answer(true, Tier::Basic),
+            ],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Unverified));
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        assert_eq!(
+            setting(&f.path, "licence.status").as_deref(),
+            Some("verified")
+        );
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("60")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wall_clock_far_from_trusted_time_warns_until_the_clocks_agree() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert!(!f.status.borrow().clock_wrong);
+        f.wall.set(T0 - 7 * 86_400_000);
+        f.task.beat().await;
+        assert!(f.status.borrow().clock_wrong);
+        assert_eq!(setting(&f.path, "licence.clock").as_deref(), Some("wrong"));
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        f.wall.set(T0 + 5_000);
+        f.task.beat().await;
+        assert!(!f.status.borrow().clock_wrong);
+        assert_eq!(setting(&f.path, "licence.clock").as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn a_skew_inside_five_minutes_is_not_a_warning() {
+        let port = serve(vec![answer(true, Tier::Free)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        f.wall.set(T0 + 4 * 60_000);
+        f.task.beat().await;
+        assert!(!f.status.borrow().clock_wrong);
+    }
+
+    #[tokio::test]
+    async fn expiry_follows_trusted_time_not_the_wall_clock() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        f.wall.set(T0 + 30 * 86_400_000);
+        f.task.settle().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        assert_eq!(f.status.borrow().tier, Some(Tier::Basic));
+        f.wall.set(T0 - 30 * 86_400_000);
+        f.task.settle().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        let past = T0 + 8 * 86_400_000;
+        f.status.send_modify(|s| {
+            s.cloud_time = Some(CloudTime {
+                cloud_ms: past,
+                at: Instant::now(),
+            })
+        });
+        f.task.settle().await;
+        let s = f.status.borrow().clone();
+        assert_eq!(
+            (s.licence, s.tier),
+            (Some(LicenceStanding::Expired), Some(Tier::Free))
+        );
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("20")
+        );
+        assert_eq!(
+            setting(&f.path, "licence.status").as_deref(),
+            Some("expired")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_trusted_clock_survives_a_restart_and_never_runs_behind_the_last_cloud_time() {
+        let port = serve(vec![answer(true, Tier::Free)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        let saved = Store::open(&f.path, T0)
+            .unwrap()
+            .trusted_clock()
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.cloud_ms / 1000, (T0 + 7) / 1000);
+        assert!((saved.wall_delta_ms + 7).abs() < 1000, "{saved:?}");
+        f.status.send_modify(|s| s.cloud_time = None);
+        f.wall.set(T0 - 7 * 86_400_000);
+        f.task.restore().await;
+        let c = f.status.borrow().cloud_time.unwrap();
+        assert_eq!(c.cloud_ms, saved.cloud_ms);
+        f.status.send_modify(|s| s.cloud_time = None);
+        f.wall.set(T0 + 3_600_000);
+        f.task.restore().await;
+        let c = f.status.borrow().cloud_time.unwrap();
+        assert_eq!(c.cloud_ms, T0 + 3_600_000 - saved.wall_delta_ms);
+    }
+
+    fn cached(path: &std::path::Path) -> String {
+        Store::open(path, T0)
+            .unwrap()
+            .cached_licence()
+            .unwrap()
+            .unwrap()
+            .jwt
+    }
+
+    fn free_jwt() -> String {
+        dev_sign(&LicenceClaims::for_tier("T", "B", Tier::Free, T0 / 1000)).unwrap()
+    }
+
+    fn basic_jwt() -> String {
+        dev_sign(&LicenceClaims::for_tier("T", "B", Tier::Basic, T0 / 1000)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_rejected_licence_is_never_cached_but_the_clock_still_is() {
+        let tampered = answer(true, Tier::Basic).1.replacen("eyJ", "xyz", 1);
+        let port = serve(
+            vec![
+                answer_for("T", "OTHER", true, Tier::Premium),
+                (200, tampered),
+            ],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        for _ in 0..2 {
+            f.task.beat().await;
+            assert_eq!(cached(&f.path), free_jwt());
+            assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Unverified));
+        }
+        assert!(
+            Store::open(&f.path, T0)
+                .unwrap()
+                .trusted_clock()
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_follower_publishes_the_standing_and_writes_nothing() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.status.send_modify(|s| s.role = Role::Follower);
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        assert_eq!(setting(&f.path, "licence.device_cap"), None);
+        assert!(audit_kinds(&f.path).is_empty());
+    }
+
+    #[tokio::test]
+    async fn before_the_branch_exists_the_standing_is_published_and_the_rows_follow() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx_with(port, false).await;
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        assert_eq!(setting(&f.path, "licence.device_cap"), None);
+        add_branch(&f.writer).await;
+        f.task.beat().await;
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("60")
+        );
+    }
+
+    #[tokio::test]
+    async fn trusted_time_is_cloud_time_plus_monotonic_elapsed() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        let long_ago = Instant::now()
+            .checked_sub(Duration::from_secs(8 * 86_400))
+            .unwrap();
+        f.status.send_modify(|s| {
+            s.cloud_time = Some(CloudTime {
+                cloud_ms: T0,
+                at: long_ago,
+            })
+        });
+        f.task.settle().await;
+        let s = f.status.borrow().clone();
+        assert_eq!(s.licence, Some(LicenceStanding::Expired));
+        assert!(s.clock_wrong);
+    }
+
+    #[tokio::test]
+    async fn without_a_cloud_time_expiry_uses_the_wall_clock_and_nothing_warns() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        f.status.send_modify(|s| s.cloud_time = None);
+        f.wall.set(T0 + 30 * 86_400_000);
+        f.task.settle().await;
+        let s = f.status.borrow().clone();
+        assert_eq!(
+            (s.licence, s.clock_wrong),
+            (Some(LicenceStanding::Expired), false)
+        );
+        f.wall.set(T0);
+        f.task.settle().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+    }
+
+    #[tokio::test]
+    async fn start_up_publishes_the_tier_and_writes_the_rows_before_any_beat() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        f.status.send_modify(|s| {
+            s.tier = None;
+            s.licence = None;
+            s.cloud_time = None;
+        });
+        f.task.restore().await;
+        let s = f.status.borrow().clone();
+        assert_eq!(
+            (s.tier, s.licence),
+            (Some(Tier::Basic), Some(LicenceStanding::Verified))
+        );
+        assert!(s.cloud_time.is_some());
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("60")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_beat_still_settles_and_keeps_the_rejection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut f = fx(port).await;
+        f.writer
+            .record_heartbeat(Some(basic_jwt()), None, None)
+            .await
+            .unwrap();
+        f.status.send_modify(|s| {
+            s.cloud_time = Some(CloudTime {
+                cloud_ms: T0 + 8 * 86_400_000,
+                at: Instant::now(),
+            })
+        });
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Expired));
+        assert_eq!(
+            setting(&f.path, "licence.status").as_deref(),
+            Some("expired")
+        );
+        f.task.rejected = true;
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Unverified));
+    }
+
+    #[tokio::test]
+    async fn the_warning_survives_a_restart_until_a_licence_verifies() {
+        let port = serve(
+            vec![
+                answer_for("T", "OTHER", true, Tier::Premium),
+                answer(true, Tier::Basic),
+            ],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(
+            setting(&f.path, "licence.status").as_deref(),
+            Some("unverified")
+        );
+        f.task.rejected = false;
+        f.task.restore().await;
+        assert!(f.task.rejected);
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Unverified));
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        assert!(!f.task.rejected);
+    }
+
+    #[tokio::test]
+    async fn an_expired_paid_licence_from_the_cloud_is_kept_and_does_not_warn() {
+        let port = serve(
+            vec![answer_at("T", "B", true, Tier::Basic, T0 + 8 * 86_400_000)],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        let s = f.status.borrow().clone();
+        assert_eq!(
+            (s.licence, s.tier),
+            (Some(LicenceStanding::Expired), Some(Tier::Free))
+        );
+        assert_eq!(cached(&f.path), basic_jwt());
+        assert_eq!(
+            setting(&f.path, "licence.status").as_deref(),
+            Some("expired")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cloud_time_that_goes_backwards_never_moves_trusted_time_back() {
+        let port = serve(
+            vec![
+                answer_at("T", "B", true, Tier::Basic, T0 + 1_000),
+                answer_at("T", "B", true, Tier::Basic, T0 - 9 * 86_400_000),
+            ],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        f.task.beat().await;
+        let c = f.status.borrow().cloud_time.unwrap();
+        assert!(c.cloud_ms >= T0 + 1_000, "{}", c.cloud_ms);
+        assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
+        let saved = Store::open(&f.path, T0)
+            .unwrap()
+            .trusted_clock()
+            .unwrap()
+            .unwrap();
+        assert!(saved.cloud_ms >= T0 + 1_000);
     }
 }

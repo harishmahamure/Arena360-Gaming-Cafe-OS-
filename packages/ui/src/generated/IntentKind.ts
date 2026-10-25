@@ -23,4 +23,5 @@ export type IntentKind =
   | "printer.status"
   | "group.upsert"
   | "group.delete"
-  | "device.assign";
+  | "device.assign"
+  | "licence.apply";

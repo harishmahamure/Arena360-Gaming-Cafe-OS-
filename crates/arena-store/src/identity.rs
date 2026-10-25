@@ -94,3 +94,37 @@ pub fn store_licence(conn: &Connection, jwt: &str, received_at: i64) -> Result<(
     .map_err(db_error)?;
     Ok(())
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustedClockRow {
+    pub cloud_ms: i64,
+    pub mono_ms: i64,
+    pub wall_delta_ms: i64,
+}
+
+pub fn find_trusted_clock(conn: &Connection) -> Result<Option<TrustedClockRow>, AppError> {
+    conn.query_row(
+        "SELECT cloud_ms, mono_ms, wall_delta_ms FROM trusted_clock WHERE id = 1",
+        [],
+        |r| {
+            Ok(TrustedClockRow {
+                cloud_ms: r.get(0)?,
+                mono_ms: r.get(1)?,
+                wall_delta_ms: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn store_trusted_clock(conn: &Connection, c: &TrustedClockRow) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO trusted_clock (id, cloud_ms, mono_ms, wall_delta_ms) VALUES (1, ?1, ?2, ?3)
+         ON CONFLICT (id) DO UPDATE SET cloud_ms = excluded.cloud_ms, mono_ms = excluded.mono_ms,
+                                        wall_delta_ms = excluded.wall_delta_ms",
+        params![c.cloud_ms, c.mono_ms, c.wall_delta_ms],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}

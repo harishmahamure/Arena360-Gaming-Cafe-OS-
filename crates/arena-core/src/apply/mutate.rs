@@ -129,6 +129,10 @@ pub(super) fn mutate(
             Target::Role(t) => staff_roles::mutate_role(tx, r, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::LicenceApply(p) => match target {
+            Target::Branch(b) => super::licence::mutate(tx, p, b.as_ref()),
+            _ => Err(mismatch()),
+        },
         IntentPayload::AuditReadGranted(g) => match target {
             Target::Branch(b) => super::read_grants::mutate(tx, g, b.as_ref()),
             _ => Err(mismatch()),

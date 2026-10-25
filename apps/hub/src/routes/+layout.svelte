@@ -1,6 +1,6 @@
 <script lang="ts">
   import "@arena/ui/base.css";
-  import { Button, t } from "@arena/ui";
+  import { Button, StatusBadge, t } from "@arena/ui";
   import { onMount, tick, untrack, type Snippet } from "svelte";
   import { goto, invalidate } from "$app/navigation";
   import { page } from "$app/state";
@@ -497,6 +497,16 @@
             {t("hub.pairing.revoked")}
           </p>
         {/if}
+        {#if data.hub.ok && (data.hub.snapshot.licence_unverified || data.hub.snapshot.clock_wrong)}
+          <div class="status-slot" role="status" data-testid="hub-status-slot">
+            {#if data.hub.snapshot.licence_unverified}
+              <StatusBadge state="warning" label="hub.licence.unverified" />
+            {/if}
+            {#if data.hub.snapshot.clock_wrong}
+              <StatusBadge state="warning" label="hub.clock.wrong" />
+            {/if}
+          </div>
+        {/if}
         <Clock />
       </div>
     </header>
@@ -646,6 +656,11 @@
     background-color: var(--chip-offline-background);
     color: var(--chip-offline-foreground);
     white-space: nowrap;
+  }
+
+  .status-slot {
+    display: inline-flex;
+    gap: var(--space-2);
   }
 
   .staff {

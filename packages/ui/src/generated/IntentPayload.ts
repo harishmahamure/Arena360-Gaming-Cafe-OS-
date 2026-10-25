@@ -14,6 +14,7 @@ import type { GroupDelete } from "./GroupDelete";
 import type { GroupUpsert } from "./GroupUpsert";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
+import type { LicenceApply } from "./LicenceApply";
 import type { PrinterStatusSet } from "./PrinterStatusSet";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
@@ -41,4 +42,5 @@ export type IntentPayload =
   | ({ kind: "printer.status" } & PrinterStatusSet)
   | ({ kind: "group.upsert" } & GroupUpsert)
   | ({ kind: "group.delete" } & GroupDelete)
-  | ({ kind: "device.assign" } & DeviceAssign);
+  | ({ kind: "device.assign" } & DeviceAssign)
+  | ({ kind: "licence.apply" } & LicenceApply);

@@ -135,6 +135,14 @@ impl Writer {
 }
 
 /// A cloneable handle for submitting write jobs.
+#[derive(Debug, Clone)]
+pub struct LicenceState {
+    pub identity: Option<arena_store::HubIdentity>,
+    pub jwt: Option<String>,
+    pub trusted: Option<arena_store::TrustedClockRow>,
+    pub status: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct WriterHandle {
     tx: mpsc::Sender<Msg>,
@@ -250,6 +258,7 @@ impl WriterHandle {
         &self,
         licence: Option<String>,
         confirm: Option<(i64, String)>,
+        trusted: Option<arena_store::TrustedClockRow>,
     ) -> Result<(), AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();
@@ -259,6 +268,9 @@ impl WriterHandle {
                 crate::apply::check_epoch(tx, &ctx)?;
                 if let Some(licence) = &licence {
                     arena_store::store_licence(tx, licence, clock.now_ms())?;
+                }
+                if let Some(trusted) = &trusted {
+                    arena_store::store_trusted_clock(tx, trusted)?;
                 }
                 if let (Some((counter, id)), Some(row)) = (confirm, read_lease(tx)?)
                     && row.counter == counter
@@ -276,6 +288,72 @@ impl WriterHandle {
                 Ok(())
             })
         })
+        .await
+    }
+
+    pub fn now_ms(&self) -> i64 {
+        self.clock.now_ms()
+    }
+
+    pub async fn licence_state(&self) -> Result<LicenceState, AppError> {
+        self.run(|store| {
+            Ok(LicenceState {
+                identity: store.hub_identity()?,
+                jwt: store.cached_licence()?.map(|l| l.jwt),
+                trusted: store.trusted_clock()?,
+                status: store
+                    .settings()?
+                    .into_iter()
+                    .find(|s| s.key == arena_proto::KEY_LICENCE_STATUS)
+                    .map(|s| s.value),
+            })
+        })
+        .await
+    }
+
+    pub async fn apply_licence(
+        &self,
+        payload: arena_proto::LicenceApply,
+    ) -> Result<Option<Applied>, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        let events = self.events.clone();
+        self.run_then(
+            move |store| {
+                let ctx = ctx_from(clock.as_ref(), &status);
+                store.write_tx_mut(|tx| {
+                    if arena_store::current_branch_id(tx)?.is_none()
+                        || crate::apply::check_epoch(tx, &ctx).is_err()
+                        || !crate::apply::licence_pending(tx, &payload)?
+                    {
+                        return Ok(None);
+                    }
+                    let intent = Intent {
+                        intent_id: ulid::Ulid::generate().to_string(),
+                        kind: arena_proto::IntentKind::LicenceApply,
+                        idempotency_key: ulid::Ulid::generate().to_string(),
+                        issued_at: clock.now_ms(),
+                        base_rev: None,
+                        actor: arena_proto::Actor {
+                            kind: arena_proto::ActorKind::System,
+                            id: "hub-licence".into(),
+                        },
+                        elevated_by: None,
+                        reason: None,
+                        payload: arena_proto::IntentPayload::LicenceApply(payload),
+                    };
+                    match run(tx, &ctx, &intent)? {
+                        Outcome::Fresh(applied) => Ok(Some(applied)),
+                        Outcome::Replayed(_) => Ok(None),
+                    }
+                })
+            },
+            move |out| {
+                if let Some(applied) = out {
+                    emit(&events, applied);
+                }
+            },
+        )
         .await
     }
 

@@ -3,9 +3,9 @@
 
 use arena_proto::{
     ActorKind, AppError, ElevatedBy, ElevationKind, ElevationMode, ErrorCode, FLAG_KITCHEN, Intent,
-    IntentPayload, KEY_LICENCE_FLAGS, Requirement, TierGate, has_flag,
+    IntentPayload, Requirement, TierGate,
 };
-use arena_store::{StoreTx, find_device, find_setting, find_staff, read_lease};
+use arena_store::{StoreTx, find_device, find_staff, read_lease};
 
 use super::{ApplyCtx, Target, admin_exit, devices, groups, settings_set, staff_roles};
 use crate::rbac;
@@ -51,8 +51,7 @@ pub(super) fn tier(
     if gate(&intent.payload) != Some(TierGate::New) {
         return Ok(());
     }
-    let flags = find_setting(tx, KEY_LICENCE_FLAGS)?.map(|s| s.value);
-    if flags.is_some_and(|f| has_flag(&f, FLAG_KITCHEN)) {
+    if crate::entitlement::has_flag(tx, FLAG_KITCHEN)? {
         return Ok(());
     }
     Err(AppError::new(

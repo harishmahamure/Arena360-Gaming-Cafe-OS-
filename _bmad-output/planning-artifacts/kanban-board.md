@@ -22,7 +22,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 
 | Lane | Scope | Stories | Landed | In progress | Backlog |
 |---|---|---:|---:|---:|---:|
-| CP | Control plane | 63 | 2 | 0 | 61 |
+| CP | Control plane | 63 | 3 | 0 | 60 |
 | HUB-A | Hub floor and sessions | 80 | 2 | 0 | 78 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
 | HUB-B | Hub POS and money | 39 | 2 | 0 | 37 |
@@ -38,7 +38,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 
 Candidates in priority order. Take the top ones until the 4 implementer slots are full.
 
-- **CP** 2.12 Hub verifies its licence against trusted time and enforces its limits (`2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i`)
+- **CP** 2.13 branch.bootstrap applies the onboarding profile at first pairing, with branch code lock (`2-13-branch-bootstrap-applies-the-onboarding-profile-at-first-pai`)
 - **HUB-A** 2.23 Floor zones and grid layout per branch (`2-23-floor-zones-and-grid-layout-per-branch`)
 - **HUB-B** 5.3 Products with categories, barcodes, images and the kitchen flag (`5-3-products-with-categories-barcodes-images-and-the-kitchen-fla`)
 - **ANDROID** 4.1 Android Hub app builds from the shared Hub code and checks the device spec on first run (`4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t`)
@@ -58,7 +58,7 @@ After 2.31 and before 6.1, finish Story 2.3's deferred observability ACs (Sentry
 |---:|---|---|---|---|---|
 | 1 | 2.10 | Hub installer pairs with the code and retries in place | MVP | review |  |
 | 2 | 2.11 | Hub checks in by heartbeat and the wizard advances by itself | MVP | review |  |
-| 3 | 2.12 | Hub verifies its licence against trusted time and enforces its limits | MVP | backlog |  |
+| 3 | 2.12 | Hub verifies its licence against trusted time and enforces its limits | MVP | review |  |
 | 4 | 2.13 | branch.bootstrap applies the onboarding profile at first pairing, with branch code lock | MVP | backlog |  |
 | 5 | 2.14 | Owner and staff set their own PIN and password at the Hub with a one-time setup code | MVP | backlog |  |
 | 6 | 2.15 | Owner changes reach the Hub through the command mailbox within one poll | MVP | backlog |  |
@@ -89,7 +89,7 @@ After 2.31 and before 6.1, finish Story 2.3's deferred observability ACs (Sentry
 | 31 | 10.3 | Razorpay webhooks are verified, applied once, and issue the entitlement | MVP | backlog |  |
 | 32 | 10.4 | Wizard step 2 takes payment through Razorpay Checkout | MVP | backlog | 10.3 |
 | 33 | 10.5 | Upgrade links and Add branch reuse the same checkout | MVP | backlog |  |
-| 34 | 10.6 | A paid licence reaches the Hub within one heartbeat and staff see the plan | MVP | backlog | 10.3, 2.12 |
+| 34 | 10.6 | A paid licence reaches the Hub within one heartbeat and staff see the plan | MVP | backlog | 10.3, ~~2.12~~ |
 | 35 | 10.7 | Every subscription charge gets a GST tax invoice from Arena 360 | MVP | backlog | 10.3 |
 | 36 | 10.9 | Change tier and add-ons mid-cycle with proration | MVP | backlog | 10.3 |
 | 37 | 10.10 | Switch billing cycle and payment method, with card or eNACH for renewals over ₹15,000 | MVP | backlog | 10.3 |
@@ -354,7 +354,7 @@ Windows Hub: cloud sync, outbox, alerts, Tunnel, backups, restore, standby and p
 | 7 | 8.30 | Low-balance, session-ending and console 5-minute messages | MVP | backlog | 8.29, 3.23 |
 | 8 | 8.31 | Credit reminders go out on cycle days, and Free shows an overdue list | MVP | backlog | 8.29, 3.20 |
 | 9 | 8.34 | The Hub raises owner alerts for cash variance, low stock, overdue credit and large refunds or discounts | MVP | backlog | 8.29, 5.26, 5.8, 5.24 |
-| 10 | 8.39 | A Cloudflare Tunnel for entitled branches, run by the Windows Hub | MVP | backlog | 2.12 |
+| 10 | 8.39 | A Cloudflare Tunnel for entitled branches, run by the Windows Hub | MVP | backlog | ~~2.12~~ |
 | 11 | 8.41 | Remote kiosks connect through the Tunnel with their device token | MVP | backlog | 8.39 |
 | 12 | 9.1 | Erase a player's personal data by crypto-shredding | MVP | backlog | 3.6 |
 | 13 | 9.2 | Player keys are backed up and the branch key is escrowed | MVP | backlog | 9.1, 8.1 |
@@ -435,7 +435,7 @@ Tauri mobile Hub, ads, Free limits, Play rollout, migration to Windows.
 | 5 | 4.5 | The Hub works on an Android phone and tablet by touch | MVP | backlog |  |
 | 6 | 4.6 | The Android Hub prints over Bluetooth or LAN | MVP | backlog | 5.17 |
 | 7 | 4.7 | The Android Hub saves backups to a folder the owner chooses | MVP | backlog | 9.5 |
-| 8 | 4.9 | Free limits — 3 users, 20 devices and one branch — enforced and explained at the Hub | MVP | backlog | 2.12, 2.19 |
+| 8 | 4.9 | Free limits — 3 users, 20 devices and one branch — enforced and explained at the Hub | MVP | backlog | ~~2.12~~, 2.19 |
 | 9 | 4.8 | A Free café goes from sign-up to go-live on Android with no help | MVP | backlog | 2.31, 4.4, 4.9 |
 | 10 | 4.10 | In-house AdMob plugin and the ads gate, with no ad code in Rust or on Windows | MVP | backlog |  |
 | 11 | 4.11 | An always-visible banner in a permanent slot that nothing covers | MVP | backlog |  |

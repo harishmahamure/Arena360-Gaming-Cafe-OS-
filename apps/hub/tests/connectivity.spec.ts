@@ -32,6 +32,8 @@ type Hub = {
   /** Serve this as the snapshot's `connectivity` instead (`"omit"`: leave the field out). */
   snapshotConnectivity?: unknown;
   revoked?: boolean;
+  licenceUnverified?: boolean;
+  clockWrong?: boolean;
 };
 
 function snapshot(hub: Hub): HubSnapshot {
@@ -43,6 +45,8 @@ function snapshot(hub: Hub): HubSnapshot {
     connectivity: { state: hub.link, checked_at: hub.at },
   };
   if (hub.revoked) s.pairing_revoked = true;
+  if (hub.licenceUnverified) s.licence_unverified = true;
+  if (hub.clockWrong) s.clock_wrong = true;
   if (hub.snapshotConnectivity === "omit") delete s.connectivity;
   else if (hub.snapshotConnectivity !== undefined) s.connectivity = hub.snapshotConnectivity;
   return s as HubSnapshot;
@@ -259,5 +263,27 @@ test("a revoked Hub shows a status banner and still shows the screen", async ({ 
   hub.revoked = true;
   await expect(banner).toHaveText(`⚠ ${en["hub.pairing.revoked"]}`);
   await expect(banner).toHaveAttribute("role", "status");
+  await expect(page.locator("h1")).toHaveCount(1);
+});
+
+test("licence and clock warnings share one header status-badge slot until they clear", async ({
+  page,
+}) => {
+  const hub = await open(page);
+  const slot = page.getByTestId("hub-status-slot");
+  await expect(slot).toHaveCount(0);
+  hub.licenceUnverified = true;
+  await expect(slot).toHaveAttribute("role", "status");
+  await expect(slot.locator('[data-component="status-badge"]')).toHaveText([
+    en["hub.licence.unverified"],
+  ]);
+  hub.clockWrong = true;
+  await expect(slot.locator('[data-component="status-badge"]')).toHaveText([
+    en["hub.licence.unverified"],
+    en["hub.clock.wrong"],
+  ]);
+  hub.licenceUnverified = false;
+  hub.clockWrong = false;
+  await expect(slot).toHaveCount(0);
   await expect(page.locator("h1")).toHaveCount(1);
 });

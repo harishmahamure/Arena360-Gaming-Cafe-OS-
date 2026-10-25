@@ -30,6 +30,7 @@ mod frame;
 mod groups;
 mod guards;
 mod kiosk_log;
+mod licence;
 mod mutate;
 mod printer_status;
 mod read_grants;
@@ -53,6 +54,7 @@ use crate::status::{Epoch, Role};
 pub use devices::MAX_VERSION_LEN;
 pub use frame::{is_ulid, validate_frame};
 pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE};
+pub(crate) use licence::pending as licence_pending;
 pub use settings_set::MAX_SETTING_VALUE_CHARS;
 pub(crate) use ttl_dedupe::record_rejection;
 pub use ttl_dedupe::{INTENT_TTL_MS, MAX_CLOCK_SKEW_MS, fingerprint};
@@ -138,6 +140,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::StaffUpsert(s) => Target::Staff(Box::new(staff_roles::load_staff(tx, intent, s)?)),
         P::RoleUpsert(r) => Target::Role(Box::new(staff_roles::load_role(tx, intent, r)?)),
         P::AuditReadGranted(_) => read_grants::load(tx)?,
+        P::LicenceApply(_) => kiosk_log::load(tx)?,
         P::KioskLog(_) | P::KioskProcessBlocked(_) => kiosk_log::load(tx)?,
         P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
         P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,

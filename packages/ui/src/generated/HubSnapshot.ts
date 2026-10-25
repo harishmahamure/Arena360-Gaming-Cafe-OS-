@@ -40,4 +40,6 @@ export type HubSnapshot = {
   lan: SnapshotLan | null;
   paired: boolean;
   pairing_revoked?: boolean;
+  licence_unverified?: boolean;
+  clock_wrong?: boolean;
 };

@@ -5,6 +5,7 @@ mod apply;
 pub mod audit;
 mod clock;
 pub mod devices;
+pub mod entitlement;
 pub mod invoice;
 pub mod locale;
 pub mod pairing;
@@ -38,7 +39,7 @@ pub use settings_defaults::{
 pub use snapshot::{SnapshotReader, build_snapshot, read_snapshot};
 pub use staff::StaffDirectory;
 pub use status::{CloudTime, Epoch, HubStatus, LeaseInfo, PairingState, Role, status_channel};
-pub use writer::{LeaseRenewal, Writer, WriterHandle};
+pub use writer::{LeaseRenewal, LicenceState, Writer, WriterHandle};
 
 /// Returns this Hub's instance id, minting and persisting a ULID on first start.
 ///

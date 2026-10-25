@@ -100,6 +100,8 @@ pub struct HubStatus {
     pub pairing: PairingState,
     pub cloud_time: Option<CloudTime>,
     pub live: bool,
+    pub licence: Option<arena_proto::LicenceStanding>,
+    pub clock_wrong: bool,
 }
 
 impl HubStatus {
@@ -120,6 +122,8 @@ impl HubStatus {
             pairing: PairingState::Active,
             cloud_time: None,
             live: false,
+            licence: None,
+            clock_wrong: false,
         }
     }
 }

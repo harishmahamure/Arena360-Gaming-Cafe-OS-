@@ -144,11 +144,7 @@ pub fn encode_public_key(bytes: &[u8; 32]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-pub fn verify(
-    token: &str,
-    keys: &[VerifyKey<'_>],
-    now_ms: i64,
-) -> Result<LicenceClaims, LicenceError> {
+pub fn verify_claims(token: &str, keys: &[VerifyKey<'_>]) -> Result<LicenceClaims, LicenceError> {
     if keys.is_empty() {
         return Err(LicenceError::NoKeys);
     }
@@ -175,9 +171,12 @@ pub fn verify(
             })?;
     let claims = data.claims;
     match claims.exp.checked_sub(claims.iat) {
-        Some(life) if life > 0 && life <= LICENCE_TTL_S => {}
-        _ => return Err(LicenceError::Malformed),
+        Some(life) if life > 0 && life <= LICENCE_TTL_S => Ok(claims),
+        _ => Err(LicenceError::Malformed),
     }
+}
+
+pub fn check_time(claims: &LicenceClaims, now_ms: i64) -> Result<(), LicenceError> {
     let now_s = now_ms.div_euclid(1000);
     if claims.iat > now_s.saturating_add(LICENCE_CLOCK_SKEW_S) {
         return Err(LicenceError::NotYetValid);
@@ -185,6 +184,16 @@ pub fn verify(
     if now_s >= claims.exp {
         return Err(LicenceError::Expired);
     }
+    Ok(())
+}
+
+pub fn verify(
+    token: &str,
+    keys: &[VerifyKey<'_>],
+    now_ms: i64,
+) -> Result<LicenceClaims, LicenceError> {
+    let claims = verify_claims(token, keys)?;
+    check_time(&claims, now_ms)?;
     Ok(claims)
 }
 

@@ -199,3 +199,21 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units.md`
   summary: Callers (sessions 3.x, plans 3.22, POS 5.x) must pass `gst = tax_mode() == GstIn` and `inclusive = settings.inclusive`, snapshot the play rate when a bill opens, store `subtotal_minor`, `tax_minor`, `total_minor`, `tax_breakup` on `orders` and `plans.tax_rate_bp` (default = play rate), and show "GST 5% (included)" and the branch label lines in bill-breakdown and the settle-bar.
   evidence: No `orders`, `plans` or bill UI exist yet, so 5.2 ships the pure `invoice::tax::compute` only; `Bill` is not `Serialize` (serialize `breakup` into `tax_breakup`).
+
+## Deferred from Story 2.12 review
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i.md`
+  summary: Replay and time authority. `cloud_time` is unsigned and the Hub accepts a validly signed older licence (no `iat` floor against the cached one); plain HTTP to the cloud is allowed outside release. Sign `cloud_time` or add an `iat` floor, and require HTTPS in release.
+  evidence: Review findings from Blind Hunter (also deferred from Story 2.11).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i.md`
+  summary: Trusted clock after a restart is wall minus the saved delta, so a wall change made while the Hub was off shifts it once; `mono_ms` is stored but unused; no warning before the first cloud time (persist the last-seen wall time to catch an offline rollback); `Instant` may pause during suspend.
+  evidence: Review findings from Blind Hunter and Edge Case Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i.md`
+  summary: A follower Hub (no writer handle) publishes no licence standing or clock warning; settle only runs where the heartbeat task has a writer. Settle with the standby story.
+  evidence: Review finding from Edge Case Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i.md`
+  summary: `USER_LIMIT` is not enforced: `licence.user_cap` is written and `entitlement::limit("users")` answers it, but no `staff.upsert` check or error code exists. The staff story that counts active staff rows adds both. Pairing registrations (token set) stay exempt from `DEVICE_LIMIT` until Story 2.19. `ui_printer.rs` still reads `licence.flags` directly.
+  evidence: Story AC wording; review findings.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i.md`
+  summary: Test that Settings → Kitchen unlocks and re-locks live on a `licence.flags` change in the Hub UI (the 7.1 deferral): the Hub now writes the flag, but no Playwright test drives the live reload.
+  evidence: Story 7.1 deferral; this story covers the server side only.

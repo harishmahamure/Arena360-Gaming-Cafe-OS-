@@ -11,6 +11,7 @@ mod connectivity;
 pub mod currency;
 mod discovery;
 mod display;
+mod entitlement;
 mod error;
 mod frame;
 mod intent;
@@ -58,6 +59,9 @@ pub use discovery::{
 pub use display::{
     HC_DEFAULT, HC_PREFIX, HcTarget, KEY_HC_HUB, hc_key, parse_hc_key, parse_hc_value,
 };
+pub use entitlement::{
+    CLOCK_SKEW_LIMIT_MS, Entitlement, LicenceApply, LicenceStanding, clock_wrong,
+};
 pub use error::{AppError, ErrorCode};
 pub use frame::{
     AppliedSummary, ChangeOpKind, ChangeSummary, Envelope, ErrorFrame, EventFrame, FRAME_KINDS,
@@ -84,8 +88,9 @@ pub use kiosk_pairing::{
 pub use kitchen::{
     DEFAULT_KITCHEN_KOT_MODE, DEFAULT_KITCHEN_KOT_PAPER_MM, DEFAULT_KITCHEN_KOT_PRINTER,
     DEFAULT_LICENCE_FLAGS, FLAG_KITCHEN, KEY_DEVICE_CAP, KEY_KITCHEN_KOT_MODE,
-    KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_FLAGS, KITCHEN_GATED_KEYS,
-    KITCHEN_KOT_MODES, TierGate, has_flag, kitchen_gate,
+    KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_CLOCK, KEY_LICENCE_FLAGS,
+    KEY_LICENCE_STATUS, KEY_USER_CAP, KITCHEN_GATED_KEYS, KITCHEN_KOT_MODES, TierGate, has_flag,
+    kitchen_gate,
 };
 pub use licence::{LicenceClaims, LicenceError, VerifyKey};
 pub use operating::{

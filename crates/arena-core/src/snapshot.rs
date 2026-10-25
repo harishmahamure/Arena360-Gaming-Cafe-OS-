@@ -38,6 +38,8 @@ pub fn build_snapshot(
         lan: None,
         paired: true,
         pairing_revoked: None,
+        licence_unverified: None,
+        clock_wrong: None,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -384,6 +386,8 @@ mod tests {
                 lan: None,
                 paired: true,
                 pairing_revoked: None,
+                licence_unverified: None,
+                clock_wrong: None,
             }
         );
     }
@@ -407,6 +411,8 @@ mod tests {
                 lan: None,
                 paired: true,
                 pairing_revoked: None,
+                licence_unverified: None,
+                clock_wrong: None,
             }
         );
     }

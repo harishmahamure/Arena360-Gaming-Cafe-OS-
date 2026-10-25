@@ -17,11 +17,11 @@
 
 use arena_proto::{
     ActorKind, AppError, ClientClass, DeviceKind, DeviceRegister, DeviceRevoke,
-    DeviceVersionReported, ErrorCode, HC_DEFAULT, Intent, KEY_DEVICE_CAP, hc_key,
+    DeviceVersionReported, ErrorCode, HC_DEFAULT, Intent, hc_key,
 };
 use arena_store::{
     ChangeOp, DeviceMetaRow, DeviceRow, GroupRow, NewDevice, RowKey, StoreTx, count_live_devices,
-    current_branch_id, find_device, find_device_meta, find_group, find_setting, insert_device,
+    current_branch_id, find_device, find_device_meta, find_group, insert_device,
     insert_device_meta, insert_setting, read_row, set_device_label, set_device_meta_deleted,
     set_device_reported_version, set_device_revoked, tv_number_taken, update_device_meta,
 };
@@ -49,7 +49,7 @@ fn tv_taken(tx: &StoreTx<'_>, d: &DeviceRegister, except: Option<&str>) -> Resul
 pub(super) fn load_register(tx: &StoreTx<'_>, d: &DeviceRegister) -> Result<Target, AppError> {
     match &d.device_id {
         None => {
-            let cap = find_setting(tx, KEY_DEVICE_CAP)?.and_then(|s| s.value.parse::<i64>().ok());
+            let cap = crate::entitlement::limit(tx, "devices")?;
             Ok(Target::NewDevice(Box::new(NewDev {
                 branch: current_branch_id(tx)?,
                 full: match cap {

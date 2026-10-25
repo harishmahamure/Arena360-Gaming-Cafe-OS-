@@ -6042,3 +6042,300 @@ mod manual_devices {
         assert_eq!(serde_json::from_value::<IntentPayload>(json).unwrap(), p);
     }
 }
+
+mod licence {
+    use super::*;
+    use arena_proto::{
+        ClientClass, DeviceKind, DeviceRegister, FLAG_KITCHEN, LicenceApply, LicenceStanding,
+    };
+
+    fn body(flags: &str, devices: u32) -> LicenceApply {
+        LicenceApply {
+            standing: LicenceStanding::Verified,
+            clock_wrong: false,
+            flags: flags.into(),
+            device_cap: devices,
+            user_cap: 10,
+        }
+    }
+
+    fn text(f: &Fixture, key: &str) -> Option<String> {
+        reopen(f)
+            .rows(Table::Settings)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["key"] == RowValue::Text(key.into()))
+            .map(|r| match &r["value"] {
+                RowValue::Text(t) => t.clone(),
+                other => panic!("{other:?}"),
+            })
+    }
+
+    async fn send(f: &Fixture, actor: ActorKind, p: LicenceApply) -> Result<Applied, AppError> {
+        f.writer
+            .submit_intent(Intent {
+                kind: IntentKind::LicenceApply,
+                payload: IntentPayload::LicenceApply(p),
+                actor: Actor {
+                    kind: actor,
+                    id: "hub-licence".into(),
+                },
+                base_rev: None,
+                ..bootstrap()
+            })
+            .await
+    }
+
+    fn reg(label: &str) -> IntentPayload {
+        IntentPayload::DeviceRegister(DeviceRegister {
+            device_id: None,
+            class: ClientClass::Paired,
+            device_kind: DeviceKind::Vr,
+            label: label.into(),
+            token_hash: String::new(),
+            tv_number: None,
+            group_id: None,
+        })
+    }
+
+    async fn add(f: &Fixture, label: &str) -> Result<Applied, AppError> {
+        f.writer
+            .submit_intent(Intent {
+                kind: IntentKind::DeviceRegister,
+                payload: reg(label),
+                actor: Actor {
+                    kind: ActorKind::Owner,
+                    id: "o".into(),
+                },
+                base_rev: None,
+                ..bootstrap()
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn the_system_writes_the_five_licence_rows_as_change_rows() {
+        let f = bootstrapped().await;
+        let applied = send(&f, ActorKind::System, body("kitchen,tunnel", 60))
+            .await
+            .unwrap();
+        assert_eq!(applied.changes.len(), 5);
+        assert_eq!(text(&f, "licence.flags").as_deref(), Some("kitchen,tunnel"));
+        assert_eq!(text(&f, "licence.device_cap").as_deref(), Some("60"));
+        assert_eq!(text(&f, "licence.user_cap").as_deref(), Some("10"));
+        assert_eq!(text(&f, "licence.status").as_deref(), Some("verified"));
+        assert_eq!(text(&f, "licence.clock").as_deref(), Some("ok"));
+        let again = send(&f, ActorKind::System, body("kitchen", 20))
+            .await
+            .unwrap();
+        assert_eq!(again.changes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn only_the_system_may_apply_a_licence() {
+        let f = bootstrapped().await;
+        for kind in [ActorKind::Owner, ActorKind::Staff, ActorKind::Device] {
+            let e = send(&f, kind, body("kitchen", 999)).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::PermissionDenied, "{kind:?}");
+        }
+        assert_eq!(text(&f, "licence.device_cap"), None);
+    }
+
+    #[tokio::test]
+    async fn a_licence_needs_a_branch_and_clean_flags() {
+        let f = primary_long_lease();
+        let e = send(&f, ActorKind::System, body("", 20)).await.unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("branch"));
+        let f = bootstrapped().await;
+        let e = send(&f, ActorKind::System, body("Kitchen", 20))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("flags"))
+        );
+        let mut with_rev = body("", 20);
+        with_rev.flags = "a,b".into();
+        let mut i = Intent {
+            kind: IntentKind::LicenceApply,
+            payload: IntentPayload::LicenceApply(with_rev),
+            actor: Actor {
+                kind: ActorKind::System,
+                id: "s".into(),
+            },
+            base_rev: Some(1),
+            ..bootstrap()
+        };
+        i.idempotency_key = ulid::Ulid::generate().to_string();
+        let e = f.writer.submit_intent(i).await.unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("base_rev"));
+    }
+
+    #[tokio::test]
+    async fn the_entitlement_api_drives_the_device_cap_and_the_kitchen_gate() {
+        let f = bootstrapped().await;
+        send(&f, ActorKind::System, body("", 1)).await.unwrap();
+        add(&f, "A").await.unwrap();
+        assert_eq!(add(&f, "B").await.unwrap_err().code, ErrorCode::DeviceLimit);
+        send(&f, ActorKind::System, body(FLAG_KITCHEN, 2))
+            .await
+            .unwrap();
+        add(&f, "B").await.unwrap();
+        let mut store = reopen(&f);
+        store
+            .write_tx(|tx| {
+                assert_eq!(crate::entitlement::limit(tx, "devices")?, Some(2));
+                assert_eq!(crate::entitlement::limit(tx, "users")?, Some(10));
+                assert_eq!(crate::entitlement::limit(tx, "branches")?, None);
+                assert!(crate::entitlement::has_flag(tx, FLAG_KITCHEN)?);
+                assert!(!crate::entitlement::has_flag(tx, "tunnel")?);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_writer_applies_only_what_changed() {
+        let f = bootstrapped().await;
+        let first = f.writer.apply_licence(body("kitchen", 60)).await.unwrap();
+        assert_eq!(first.unwrap().changes.len(), 5);
+        assert!(
+            f.writer
+                .apply_licence(body("kitchen", 60))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let before = reopen(&f).changes().unwrap().len();
+        let skewed = LicenceApply {
+            clock_wrong: true,
+            ..body("kitchen", 60)
+        };
+        assert_eq!(
+            f.writer
+                .apply_licence(skewed)
+                .await
+                .unwrap()
+                .unwrap()
+                .changes
+                .len(),
+            1
+        );
+        assert_eq!(reopen(&f).changes().unwrap().len(), before + 1);
+    }
+
+    fn kitchen_rev(f: &Fixture) -> i64 {
+        match setting(&reopen(f), "kitchen.kot_mode")["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn kot(f: &Fixture, value: &str) -> Result<Applied, AppError> {
+        let mut i = set("kitchen.kot_mode", value, Some(kitchen_rev(f)));
+        i.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(i).await
+    }
+
+    #[tokio::test]
+    async fn an_applied_licence_opens_then_closes_the_kitchen_gate() {
+        let f = bootstrapped().await;
+        assert_eq!(
+            kot(&f, "none").await.unwrap_err().code,
+            ErrorCode::TierLocked
+        );
+        let premium = arena_proto::Entitlement {
+            standing: LicenceStanding::Verified,
+            tier: arena_proto::Tier::Premium,
+            flags: arena_proto::Tier::Premium
+                .defaults()
+                .flags
+                .iter()
+                .map(|f| (*f).to_owned())
+                .collect(),
+            limits: arena_proto::Tier::Premium.defaults().limits,
+        };
+        send(&f, ActorKind::System, premium.apply_payload(false))
+            .await
+            .unwrap();
+        kot(&f, "none").await.unwrap();
+        let lapsed = arena_proto::Entitlement::free(LicenceStanding::Expired);
+        send(&f, ActorKind::System, lapsed.apply_payload(false))
+            .await
+            .unwrap();
+        assert_eq!(
+            kot(&f, "receipt").await.unwrap_err().code,
+            ErrorCode::TierLocked
+        );
+    }
+
+    #[tokio::test]
+    async fn a_downgrade_blocks_new_devices_and_ends_nothing_running() {
+        let f = bootstrapped().await;
+        send(&f, ActorKind::System, body("", 5)).await.unwrap();
+        let mut ids = Vec::new();
+        for l in ["A", "B", "C"] {
+            ids.push(add(&f, l).await.unwrap().changes[0].row_id.clone());
+        }
+        send(
+            &f,
+            ActorKind::System,
+            LicenceApply {
+                standing: LicenceStanding::Expired,
+                ..body("", 1)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(add(&f, "D").await.unwrap_err().code, ErrorCode::DeviceLimit);
+        let store = reopen(&f);
+        for id in &ids {
+            assert!(store.device(id).unwrap().unwrap().revoked_at.is_none());
+        }
+        let revoke = f
+            .writer
+            .submit_intent(Intent {
+                kind: IntentKind::DeviceRevoke,
+                reason: IntentKind::DeviceRevoke.reasons().map(|r| r[0]),
+                payload: IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                    device_id: ids[0].clone(),
+                }),
+                actor: Actor {
+                    kind: ActorKind::Owner,
+                    id: "o".into(),
+                },
+                base_rev: Some(1),
+                ..bootstrap()
+            })
+            .await;
+        assert!(revoke.is_ok(), "{revoke:?}");
+    }
+
+    #[tokio::test]
+    async fn with_no_licence_rows_the_free_limits_apply() {
+        let f = bootstrapped().await;
+        let mut store = reopen(&f);
+        store
+            .write_tx(|tx| {
+                assert_eq!(crate::entitlement::limit(tx, "devices")?, Some(20));
+                assert_eq!(crate::entitlement::limit(tx, "users")?, Some(3));
+                assert!(!crate::entitlement::has_flag(tx, FLAG_KITCHEN)?);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn every_non_system_actor_kind_is_refused() {
+        let f = bootstrapped().await;
+        for kind in [
+            ActorKind::Owner,
+            ActorKind::Staff,
+            ActorKind::Device,
+            ActorKind::Admin,
+        ] {
+            let e = send(&f, kind, body("kitchen", 999)).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::PermissionDenied, "{kind:?}");
+        }
+    }
+}

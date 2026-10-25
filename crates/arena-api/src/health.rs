@@ -202,6 +202,10 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                     snapshot.lan = snapshot_lan(&status);
                     snapshot.pairing_revoked =
                         (status.pairing == arena_core::PairingState::Revoked).then_some(true);
+                    snapshot.licence_unverified = (status.licence
+                        == Some(arena_proto::LicenceStanding::Unverified))
+                    .then_some(true);
+                    snapshot.clock_wrong = status.clock_wrong.then_some(true);
                 }
             }
             Json(snapshot).into_response()
@@ -656,6 +660,29 @@ mod tests {
             let (_dir, r) = reader(false);
             let (_, _, body) = send(r, get(None)).await;
             assert!(body.get("pairing_revoked").is_none());
+        }
+
+        #[tokio::test]
+        async fn licence_and_clock_warnings_are_flagged_in_the_snapshot() {
+            let (_dir, r) = reader(false);
+            let (_, _, body) = send_with(r, get(None), |s| {
+                s.licence = Some(arena_proto::LicenceStanding::Unverified);
+                s.clock_wrong = true;
+            })
+            .await;
+            assert_eq!(body["licence_unverified"], true);
+            assert_eq!(body["clock_wrong"], true);
+            let tweaks: [fn(&mut HubStatus); 3] = [
+                |s| s.licence = Some(arena_proto::LicenceStanding::Verified),
+                |s| s.licence = Some(arena_proto::LicenceStanding::Expired),
+                |s| s.licence = None,
+            ];
+            for tweak in tweaks {
+                let (_dir, r) = reader(false);
+                let (_, _, body) = send_with(r, get(None), tweak).await;
+                assert!(body.get("licence_unverified").is_none());
+                assert!(body.get("clock_wrong").is_none());
+            }
         }
 
         #[tokio::test]

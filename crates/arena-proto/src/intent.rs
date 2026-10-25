@@ -92,11 +92,13 @@ pub enum IntentKind {
     GroupDelete,
     #[serde(rename = "device.assign")]
     DeviceAssign,
+    #[serde(rename = "licence.apply")]
+    LicenceApply,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 20] = [
+    pub const ALL: [IntentKind; 21] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -117,6 +119,7 @@ impl IntentKind {
         Self::GroupUpsert,
         Self::GroupDelete,
         Self::DeviceAssign,
+        Self::LicenceApply,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -142,6 +145,7 @@ impl IntentKind {
             Self::GroupUpsert => "group.upsert",
             Self::GroupDelete => "group.delete",
             Self::DeviceAssign => "device.assign",
+            Self::LicenceApply => "licence.apply",
         }
     }
 
@@ -154,7 +158,9 @@ impl IntentKind {
     pub fn category(self) -> IntentCategory {
         match self {
             Self::BranchBootstrap | Self::BranchSeedDefaults => IntentCategory::Branch,
-            Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => IntentCategory::Settings,
+            Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus | Self::LicenceApply => {
+                IntentCategory::Settings
+            }
             Self::DeviceRegister
             | Self::DeviceRevoke
             | Self::DeviceVersionReported
@@ -183,7 +189,7 @@ impl IntentKind {
                 Requirement::Perm(Permission::DeviceManage)
             }
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
-            Self::DeviceVersionReported => Requirement::System,
+            Self::DeviceVersionReported | Self::LicenceApply => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
@@ -234,7 +240,8 @@ impl IntentKind {
             | Self::PrinterStatus
             | Self::GroupUpsert
             | Self::GroupDelete
-            | Self::DeviceAssign => None,
+            | Self::DeviceAssign
+            | Self::LicenceApply => None,
         }
     }
 
@@ -528,6 +535,8 @@ pub enum IntentPayload {
     GroupDelete(GroupDelete),
     #[serde(rename = "device.assign")]
     DeviceAssign(DeviceAssign),
+    #[serde(rename = "licence.apply")]
+    LicenceApply(crate::LicenceApply),
 }
 
 impl IntentPayload {
@@ -553,6 +562,7 @@ impl IntentPayload {
             Self::GroupUpsert(_) => IntentKind::GroupUpsert,
             Self::GroupDelete(_) => IntentKind::GroupDelete,
             Self::DeviceAssign(_) => IntentKind::DeviceAssign,
+            Self::LicenceApply(_) => IntentKind::LicenceApply,
         }
     }
 }
@@ -696,6 +706,7 @@ mod tests {
                 "branch.bootstrap"
                 | "branch.seed_defaults"
                 | "device.version_reported"
+                | "licence.apply"
                 | "audit.read_granted" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)

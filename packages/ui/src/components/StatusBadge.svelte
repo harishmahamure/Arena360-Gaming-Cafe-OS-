@@ -10,7 +10,8 @@
     | "order-pending"
     | "maintenance"
     | "offline"
-    | "unassigned";
+    | "unassigned"
+    | "warning";
 
   const LABELS: Record<State, MessageKey> = {
     free: "ui.status.free",
@@ -21,6 +22,7 @@
     maintenance: "ui.status.maintenance",
     offline: "ui.status.offline",
     unassigned: "ui.status.unassigned",
+    warning: "ui.status.warning",
   };
 
   let { state, label }: { state: State; label?: MessageKey } = $props();
@@ -63,6 +65,9 @@
   }
   .state-offline {
     color: var(--state-offline);
+  }
+  .state-warning {
+    color: var(--state-order-pending);
   }
   .state-unassigned {
     color: var(--state-unassigned);

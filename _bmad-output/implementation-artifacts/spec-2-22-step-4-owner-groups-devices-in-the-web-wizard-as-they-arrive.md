@@ -72,4 +72,4 @@ Decisions: the cloud overlay is stateless (the page derives "waiting" and refusa
 
 ## Review Triage Log
 
-Not reviewed yet.
+No open review findings. Verify gate re-run: pnpm run check, cargo tests for cloud, core, proto, store and tasks, onboarding svelte-check and Playwright (172 passed, 2 skipped).

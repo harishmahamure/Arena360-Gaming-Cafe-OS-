@@ -290,6 +290,8 @@ export async function stubCloud(
     const url = new URL(route.request().url());
     const body = route.request().postDataJSON();
     switch (url.pathname) {
+      case "/v1/wizard/events":
+        return route.abort("failed");
       case "/v1/signup/start":
         cloud.starts.push(body);
         return fulfil(route, cloud.nextStart.shift() ?? { status: 202, body: CHALLENGE });

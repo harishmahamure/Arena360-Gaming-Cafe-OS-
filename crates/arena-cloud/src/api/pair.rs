@@ -72,7 +72,7 @@ fn not_entitled() -> ApiError {
     .into()
 }
 
-fn check_field(field: &str, v: &str) -> Result<(), ApiError> {
+pub(super) fn check_field(field: &str, v: &str) -> Result<(), ApiError> {
     let n = v.chars().count();
     if n == 0 || n > MAX_FIELD_CHARS || v.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err(ApiError::validation(

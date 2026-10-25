@@ -31,6 +31,7 @@ type Hub = {
   snapshots: number;
   /** Serve this as the snapshot's `connectivity` instead (`"omit"`: leave the field out). */
   snapshotConnectivity?: unknown;
+  revoked?: boolean;
 };
 
 function snapshot(hub: Hub): HubSnapshot {
@@ -41,6 +42,7 @@ function snapshot(hub: Hub): HubSnapshot {
     ui: { idle_lock_minutes: 5, hc: hub.hc },
     connectivity: { state: hub.link, checked_at: hub.at },
   };
+  if (hub.revoked) s.pairing_revoked = true;
   if (hub.snapshotConnectivity === "omit") delete s.connectivity;
   else if (hub.snapshotConnectivity !== undefined) s.connectivity = hub.snapshotConnectivity;
   return s as HubSnapshot;
@@ -249,3 +251,13 @@ for (const theme of ["dark", "hc"] as const) {
     );
   });
 }
+
+test("a revoked Hub shows a status banner and still shows the screen", async ({ page }) => {
+  const hub = await open(page);
+  const banner = page.getByTestId("hub-revoked");
+  await expect(banner).toHaveCount(0);
+  hub.revoked = true;
+  await expect(banner).toHaveText(`⚠ ${en["hub.pairing.revoked"]}`);
+  await expect(banner).toHaveAttribute("role", "status");
+  await expect(page.locator("h1")).toHaveCount(1);
+});

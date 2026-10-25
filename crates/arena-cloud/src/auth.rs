@@ -37,6 +37,8 @@ pub struct AuthState {
     pub dummy_verifies: std::sync::atomic::AtomicU64,
     pub licence: crate::licence::LicenceSigner,
     pub billing_enabled: bool,
+    pub hub_tokens: std::sync::Mutex<std::collections::HashMap<[u8; 32], i64>>,
+    pub wizard_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 impl AuthState {
@@ -52,6 +54,8 @@ impl AuthState {
             dummy_verifies: std::sync::atomic::AtomicU64::new(0),
             licence: cfg.licence.clone(),
             billing_enabled: cfg.billing_enabled,
+            hub_tokens: std::sync::Mutex::default(),
+            wizard_tx: tokio::sync::broadcast::channel(64).0,
         }
     }
 

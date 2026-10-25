@@ -116,6 +116,16 @@ version}` (reqwest, rustls + ring, webpki roots, 15 s timeout). Answers: 200
   `/v1/pair` again. `dev seed` writes a dev identity (`dev-tenant`, the seeded branch,
   `dev-hub`, tier free) with a licence signed by the committed dev key, so dev flows stay
   paired. The token is never logged.
+- **Heartbeat** (Story 2.11). Once paired, the Hub posts `POST /v1/heartbeat` (bearer = the
+  keystore token) `{epoch, version, schema_version, last_seq_uploaded: 0}` every 10 s, every
+  60 s once `HubStatus.live` is set (the `go_live` step, wired by Story 2.31). The cloud
+  answers `{licence, fence: {epoch, confirmed}, cloud_time}`; the Hub verifies the licence
+  against its key set before it replaces `licence_cache`, shows its tier on `/healthz` (`tier`),
+  keeps `cloud_time` in `HubStatus` for the trusted clock and clears the lease's `provisional`
+  flag when the fence is confirmed. `TOKEN_INVALID` or `TOKEN_REVOKED` sets the snapshot's
+  `pairing_revoked` (the header shows "This Hub is no longer paired"), trading continues and the
+  task retries every 5 minutes; a network failure backs off from 2 s with jitter. The task has
+  its own loop and never waits on the writer or the other way round.
 - **Data dir:** `--data-dir`, else `ARENA_HUB_DATA_DIR`, else `%PROGRAMDATA%\Arena360\Hub` on
   Windows and `$XDG_DATA_HOME/arena360/hub` (falling back to `~/.local/share/arena360/hub`)
   elsewhere. The database is `<data>/branch.db`; `<data>/branch.db.lock` is the process writer

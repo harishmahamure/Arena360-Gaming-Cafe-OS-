@@ -310,3 +310,55 @@ test("a lost regenerate response drops the shown code and reloads the step", asy
   expect(cloud.pairGets).toBe(2);
   expect(cloud.pairCodes.map((c) => c.code)).toEqual([PAIR_CODES[0], PAIR_CODES[1]]);
 });
+
+const nextHeading = (page: Page) => h1(page, "ui.wizard.step.devices");
+
+async function fakeEventSource(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { sources: FakeSource[] };
+    class FakeSource {
+      listeners: Record<string, () => void> = {};
+      onopen: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        w.sources.push(this);
+        setTimeout(() => this.onopen?.());
+      }
+      addEventListener(type: string, fn: () => void) {
+        this.listeners[type] = fn;
+      }
+      close() {}
+    }
+    w.sources = [];
+    (window as unknown as { EventSource: unknown }).EventSource = FakeSource;
+  });
+}
+
+test("the first heartbeat moves step 3 to step 4 through the event stream", async ({ page }) => {
+  await fakeEventSource(page);
+  const cloud = await stubCloud(page, ready);
+  await page.goto("/setup/install_hub");
+  await expect(value(page)).toBeVisible();
+  cloud.done.add("install_hub");
+  await page.evaluate(() =>
+    (
+      window as unknown as { sources: { listeners: Record<string, () => void> }[] }
+    ).sources[0].listeners["wizard.changed"](),
+  );
+  await expect(nextHeading(page)).toBeFocused();
+  await expect(page).toHaveURL(/\/setup\/devices$/);
+  await expect(page.getByTestId("wizard-announcement")).toHaveText(
+    t("onboarding.setup.announce", { n: 4, total: 10, name: t("ui.wizard.step.devices") }),
+  );
+});
+
+test("without the event stream, polling moves step 3 to step 4 within 5 s", async ({ page }) => {
+  await page.clock.install({ time: START });
+  const cloud = await stubCloud(page, ready);
+  await page.goto("/setup/install_hub");
+  await expect(value(page)).toBeVisible();
+  cloud.done.add("install_hub");
+  await page.clock.runFor(5000);
+  await expect(nextHeading(page)).toBeFocused();
+  await expect(page).toHaveURL(/\/setup\/devices$/);
+});

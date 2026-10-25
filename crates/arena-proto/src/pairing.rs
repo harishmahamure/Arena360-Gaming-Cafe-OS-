@@ -163,6 +163,45 @@ pub struct PairHubOk {
     pub paired: bool,
 }
 
+pub const HEARTBEAT_BOOT_INTERVAL_S: u64 = 10;
+pub const HEARTBEAT_LIVE_INTERVAL_S: u64 = 60;
+pub const HEARTBEAT_MIN_GAP_MS: i64 = 5_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HeartbeatRequest {
+    pub epoch: String,
+    pub version: String,
+    pub schema_version: u32,
+    #[ts(type = "number")]
+    pub last_seq_uploaded: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HeartbeatFence {
+    pub epoch: String,
+    pub confirmed: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HeartbeatResponse {
+    pub licence: String,
+    pub fence: HeartbeatFence,
+    #[ts(type = "number")]
+    pub cloud_time: i64,
+}
+
+impl std::fmt::Debug for HeartbeatResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeartbeatResponse")
+            .field("fence", &self.fence)
+            .field("cloud_time", &self.cloud_time)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

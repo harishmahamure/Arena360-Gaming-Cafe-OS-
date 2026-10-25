@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
-    AppError, ErrorCode, HubPairRequest, HubPairResponse, HubPlatform, UiError,
-    normalize_pairing_code, valid_pairing_code,
+    AppError, ErrorCode, HeartbeatRequest, HeartbeatResponse, HubPairRequest, HubPairResponse,
+    HubPlatform, UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 
@@ -118,13 +118,34 @@ impl CloudClient {
     }
 
     pub async fn pair(&self, req: &HubPairRequest) -> Result<HubPairResponse, CloudFailure> {
+        self.post("/v1/pair", None, req).await
+    }
+
+    pub async fn heartbeat(
+        &self,
+        token: &str,
+        req: &HeartbeatRequest,
+    ) -> Result<HeartbeatResponse, CloudFailure> {
+        self.post("/v1/heartbeat", Some(token), req).await
+    }
+
+    async fn post<Q: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        bearer: Option<&str>,
+        req: &Q,
+    ) -> Result<R, CloudFailure> {
         let body = serde_json::to_vec(req)
             .map_err(|e| CloudFailure::Unreachable(format!("encode: {e}")))?;
-        let res = self
+        let mut call = self
             .http
-            .post(format!("{}/v1/pair", self.base))
+            .post(format!("{}{path}", self.base))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body)
+            .body(body);
+        if let Some(token) = bearer {
+            call = call.bearer_auth(token);
+        }
+        let res = call
             .send()
             .await
             .map_err(|e| CloudFailure::Unreachable(e.without_url().to_string()))?;
@@ -139,7 +160,7 @@ impl CloudClient {
             .await
             .map_err(|e| CloudFailure::Unreachable(e.without_url().to_string()))?;
         if status == 200 {
-            return serde_json::from_slice::<HubPairResponse>(&bytes)
+            return serde_json::from_slice(&bytes)
                 .map_err(|e| CloudFailure::Unreachable(format!("unreadable answer: {e}")));
         }
         match serde_json::from_slice::<AppError>(&bytes) {

@@ -98,10 +98,12 @@ pub use operating::{
     parse_opening_hours,
 };
 pub use pairing::{
-    ActivePairingCode, HUB_TOKEN_PREFIX, HubPairRequest, HubPairResponse, HubPlatform,
-    InstallHubState, IssuePairingCode, PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE,
-    PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PAIRING_CODE_TTL_MS, PairHubOk, PairHubRequest,
-    PairingCodeIssued, format_pairing_code, normalize_pairing_code, valid_pairing_code,
+    ActivePairingCode, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S, HEARTBEAT_MIN_GAP_MS,
+    HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest, HeartbeatResponse, HubPairRequest,
+    HubPairResponse, HubPlatform, InstallHubState, IssuePairingCode, PAIR_ATTEMPTS_PER_IP_PER_HOUR,
+    PAIR_FAILURES_PER_CODE, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PAIRING_CODE_TTL_MS,
+    PairHubOk, PairHubRequest, PairingCodeIssued, format_pairing_code, normalize_pairing_code,
+    valid_pairing_code,
 };
 pub use permission::{Permission, Requirement};
 pub use printer::{

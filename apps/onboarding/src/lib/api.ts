@@ -203,6 +203,7 @@ export const signOutEverywhere = async () => {
   return res;
 };
 
+export const eventsUrl = () => base() + "/v1" + "/wizard/events";
 export const getWizard = () => withRefresh(() => call<WizardState>("GET", "/wizard"));
 export const saveCafe = (details: CafeDetails) =>
   withRefresh(() => call<WizardState>("PUT", "/wizard/cafe", details));

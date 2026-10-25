@@ -97,6 +97,7 @@
   "hub.connectivity.internet_offline": "Internet offline",
   "hub.connectivity.cloud_unreachable": "Cloud unreachable",
   "hub.connectivity.restored": "Internet and cloud back online",
+  "hub.pairing.revoked": "This Hub is no longer paired",
   "hub.lock.title": "Locked",
   "hub.lock.signed_in": "Signed in: {name}",
   "hub.lock.prompt": "Enter your PIN to unlock. Another staff member's PIN switches the screen to them.",

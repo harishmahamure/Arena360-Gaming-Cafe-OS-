@@ -165,3 +165,18 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-1-tax-settings-gst-registration-rates-inclusive-or-exclusive-a.md`
   summary: When Story 2.13 lands, seed `branch.tax.country` from the cloud profile (bootstrap and `branch.seed_defaults`) instead of defaulting to `IN`, and show "Locked after the first invoice" beside the invoice prefix once `branch.code_locked_at` exists.
   evidence: Spec decisions; the profile and the column do not exist yet.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself.md`
+  summary: Heartbeat abuse and licence checks. An unauthenticated `/v1/heartbeat` costs an Argon2 verify with no per-IP limit; the Hub should also reject a licence whose tenant or branch differs from `hub_identity`, or that is older than the cached one.
+  evidence: Review findings from Blind Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself.md`
+  summary: Trusted time and fencing. `cloud_time` is unsigned plain JSON; a same-Hub restart bumps the epoch counter so `confirmed` turns false; `live` has no setter until 2.31 (the 60 s interval is unreachable).
+  evidence: Review findings; the spec defers fencing to 2.12.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself.md`
+  summary: Revoked Hub recovery. The 5-minute backoff cannot be interrupted by a re-pair, and a paired Hub with no keystore token shows nothing. Settle with the Hub unpair and re-pair flow.
+  evidence: Review findings from Blind Hunter and Edge Case Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself.md`
+  summary: Wizard event stream hardening: per-owner connection cap, end the stream at session expiry, `X-Accel-Buffering: no`, and a client watchdog when the stream goes silent.
+  evidence: Review findings.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself.md`
+  summary: Heartbeat test gaps: Hub end-to-end (`/healthz.tier` against a stub cloud), validation and per-Hub limit edges, SSE scoping to the branch, Playwright poll suppression while streaming, control migration 8 to 9 upgrade with existing hubs, `record_heartbeat` guards, and an intent submitted while an answer is being applied.
+  evidence: Verification Gap findings.

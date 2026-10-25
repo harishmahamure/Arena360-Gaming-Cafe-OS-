@@ -30,7 +30,7 @@ mod tenant;
 
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
-pub use hubs::{HubRow, NewHub, PairOutcome};
+pub use hubs::{Beat, HubRow, NewHub, PairOutcome};
 pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
 pub use otp::{
     NewOtpChallenge, OTP_PURPOSE_SIGNUP, OTP_RETENTION_MS, OtpChallenge, SignupCompletion,
@@ -99,6 +99,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 8,
         sql: include_str!("../control-migrations/0008_hubs.sql"),
+    },
+    ControlMigration {
+        version: 9,
+        sql: include_str!("../control-migrations/0009_branch_fence.sql"),
     },
 ];
 

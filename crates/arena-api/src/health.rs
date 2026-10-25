@@ -36,6 +36,7 @@ struct HealthBody {
     tls_fingerprint: Option<String>,
     connectivity: arena_proto::Connectivity,
     setup: Option<arena_proto::SetupStatus>,
+    tier: Option<&'static str>,
     now: i64,
 }
 
@@ -56,6 +57,7 @@ impl HealthBody {
             tls_fingerprint: s.tls_fingerprint.clone(),
             connectivity: s.connectivity,
             setup,
+            tier: s.tier.map(arena_proto::Tier::as_str),
             now,
         }
     }
@@ -198,6 +200,8 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                         snapshot.setup = status.setup;
                     }
                     snapshot.lan = snapshot_lan(&status);
+                    snapshot.pairing_revoked =
+                        (status.pairing == arena_core::PairingState::Revoked).then_some(true);
                 }
             }
             Json(snapshot).into_response()
@@ -435,9 +439,17 @@ mod tests {
                 "tls_fingerprint": "ab".repeat(32),
                 "connectivity": {"state": "internet_offline", "checked_at": 900},
                 "setup": null,
+                "tier": null,
                 "now": 1000
             })
         );
+    }
+
+    #[tokio::test]
+    async fn reports_the_licence_tier() {
+        let (tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
+        tx.send_modify(|s| s.tier = Some(arena_proto::Tier::Basic));
+        assert_eq!(get_json(rx).await["tier"], "basic");
     }
 
     #[tokio::test]
@@ -445,7 +457,7 @@ mod tests {
         let (_tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
         assert_eq!(
             get_json(rx).await,
-            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "setup": null, "now": 1000})
+            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "setup": null, "tier": null, "now": 1000})
         );
     }
 
@@ -547,6 +559,14 @@ mod tests {
             reader: Arc<SnapshotReader>,
             req: Request<Body>,
         ) -> (StatusCode, axum::http::HeaderMap, Value) {
+            send_with(reader, req, |_| {}).await
+        }
+
+        async fn send_with(
+            reader: Arc<SnapshotReader>,
+            req: Request<Body>,
+            tweak: fn(&mut HubStatus),
+        ) -> (StatusCode, axum::http::HeaderMap, Value) {
             let clock = Arc::new(ManualClock::new(1_800_000_000_000));
             let (tx, rx) = status_channel(HubStatus::opened(1, "H"));
             tx.send_modify(|s| {
@@ -557,6 +577,7 @@ mod tests {
                 s.tls_fingerprint = Some("ab".repeat(32));
                 s.lan_ports = Some((7400, 7401));
                 s.lan_addresses = vec![std::net::Ipv4Addr::new(192, 168, 1, 20)];
+                tweak(s);
             });
             let res = ui_router(reader, clock, crate::lan::Presence::none(), Some(rx), None)
                 .oneshot(req)
@@ -622,6 +643,19 @@ mod tests {
                 body,
                 json!({"branch": null, "groups": [], "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32)}, "paired": true})
             );
+        }
+
+        #[tokio::test]
+        async fn a_revoked_pairing_is_flagged_in_the_snapshot() {
+            let (_dir, r) = reader(false);
+            let (_, _, body) = send_with(r, get(None), |s| {
+                s.pairing = arena_core::PairingState::Revoked;
+            })
+            .await;
+            assert_eq!(body["pairing_revoked"], true);
+            let (_dir, r) = reader(false);
+            let (_, _, body) = send(r, get(None)).await;
+            assert!(body.get("pairing_revoked").is_none());
         }
 
         #[tokio::test]

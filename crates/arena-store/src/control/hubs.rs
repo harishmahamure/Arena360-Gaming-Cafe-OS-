@@ -22,6 +22,16 @@ pub enum PairOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Beat<'a> {
+    pub hub_id: &'a str,
+    pub branch_id: &'a str,
+    pub epoch: &'a str,
+    pub version: &'a str,
+    pub schema_version: u32,
+    pub now: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HubRow {
     pub id: String,
     pub branch_id: String,
@@ -77,6 +87,10 @@ impl ControlDb {
                 .expect(1),
                 Stmt::new(LOCK_BRANCH_CODE, vec![now.clone(), text(h.branch_id)]),
                 Stmt::new(
+                    "DELETE FROM branch_fence WHERE branch_id = ?",
+                    vec![text(h.branch_id)],
+                ),
+                Stmt::new(
                     "UPDATE hubs SET revoked_at = ? WHERE branch_id = ? AND revoked_at IS NULL \
                      RETURNING id",
                     vec![now.clone(), text(h.branch_id)],
@@ -103,11 +117,55 @@ impl ControlDb {
             return Ok(PairOutcome::CodeRefused);
         };
         let revoked = rows
-            .get(2)
+            .get(3)
             .map(|r| r.iter().map(|row| col_text(row, 0)).collect())
             .transpose()?
             .unwrap_or_default();
         Ok(PairOutcome::Paired { revoked })
+    }
+
+    pub async fn heartbeat(&self, b: &Beat<'_>) -> Result<Option<String>, ControlError> {
+        let now = SqlValue::Integer(b.now);
+        let rows = self
+            .transact_rows(vec![
+                Stmt::new(
+                    "UPDATE hubs SET last_seen_at = ?, version = ?, schema_version = ? \
+                     WHERE id = ? AND revoked_at IS NULL",
+                    vec![
+                        now.clone(),
+                        text(b.version),
+                        SqlValue::Integer(i64::from(b.schema_version)),
+                        text(b.hub_id),
+                    ],
+                )
+                .expect(1),
+                Stmt::new(
+                    "INSERT INTO branch_fence (branch_id, epoch, hub_id, created_at) \
+                     VALUES (?, ?, ?, ?) ON CONFLICT (branch_id) DO NOTHING",
+                    vec![
+                        text(b.branch_id),
+                        text(b.epoch),
+                        text(b.hub_id),
+                        now.clone(),
+                    ],
+                ),
+                Stmt::new(
+                    "INSERT INTO onboarding_progress (branch_id, step, state, completed_at) \
+                     VALUES (?, 'install_hub', 'done', ?) ON CONFLICT (branch_id, step) \
+                     DO UPDATE SET state = 'done', completed_at = COALESCE(\
+                     onboarding_progress.completed_at, excluded.completed_at) \
+                     WHERE onboarding_progress.state <> 'done'",
+                    vec![text(b.branch_id), now],
+                ),
+                Stmt::new(
+                    "SELECT epoch FROM branch_fence WHERE branch_id = ?",
+                    vec![text(b.branch_id)],
+                )
+                .fetch(),
+            ])
+            .await?;
+        rows.and_then(|r| r.get(3).and_then(|x| x.first().map(|row| col_text(row, 0))))
+            .transpose()
     }
 
     pub async fn hub(&self, hub_id: &str) -> Result<Option<HubRow>, ControlError> {

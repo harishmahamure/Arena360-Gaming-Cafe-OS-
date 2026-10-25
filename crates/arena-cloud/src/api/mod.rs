@@ -18,6 +18,7 @@ mod cors;
 mod dev;
 mod error;
 pub mod gate;
+mod heartbeat;
 mod json;
 mod meta;
 pub mod mfa;
@@ -29,6 +30,7 @@ pub mod session;
 pub mod signin;
 pub mod signup;
 pub mod wizard;
+mod wizard_events;
 pub mod wizard_install;
 pub mod wizard_tier;
 
@@ -62,6 +64,8 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>) -> Router {
             .merge(wizard_install::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
+            .merge(heartbeat::router(Arc::clone(st)))
+            .merge(wizard_events::router(Arc::clone(st)))
             .merge(meta::router());
     }
     if dev {

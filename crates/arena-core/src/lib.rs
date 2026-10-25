@@ -36,7 +36,7 @@ pub use settings_defaults::{
 };
 pub use snapshot::{SnapshotReader, build_snapshot, read_snapshot};
 pub use staff::StaffDirectory;
-pub use status::{Epoch, HubStatus, LeaseInfo, Role, status_channel};
+pub use status::{CloudTime, Epoch, HubStatus, LeaseInfo, PairingState, Role, status_channel};
 pub use writer::{LeaseRenewal, Writer, WriterHandle};
 
 /// Returns this Hub's instance id, minting and persisting a ULID on first start.

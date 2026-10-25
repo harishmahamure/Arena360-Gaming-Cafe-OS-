@@ -39,4 +39,5 @@ export type HubSnapshot = {
   setup?: SetupStatus | null;
   lan: SnapshotLan | null;
   paired: boolean;
+  pairing_revoked?: boolean;
 };

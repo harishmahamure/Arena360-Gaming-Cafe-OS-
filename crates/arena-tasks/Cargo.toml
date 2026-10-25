@@ -18,12 +18,14 @@ webpki-roots.workspace = true
 mdns-sd.workspace = true
 if-addrs.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
 [dev-dependencies]
+arena-proto = { workspace = true, features = ["dev-keys"] }
 arena-core = { workspace = true, features = ["test-jobs"] }
 tempfile.workspace = true
 rcgen.workspace = true

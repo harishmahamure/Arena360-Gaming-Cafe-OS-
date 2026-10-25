@@ -22,7 +22,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 
 | Lane | Scope | Stories | Landed | In progress | Backlog |
 |---|---|---:|---:|---:|---:|
-| CP | Control plane | 63 | 1 | 0 | 62 |
+| CP | Control plane | 63 | 2 | 0 | 61 |
 | HUB-A | Hub floor and sessions | 80 | 1 | 0 | 79 |
 | KIOSK | Kiosk | 42 | 0 | 1 | 41 |
 | HUB-B | Hub POS and money | 39 | 1 | 0 | 38 |
@@ -38,7 +38,7 @@ Every story below is one of the 417 stories in `epics.md`, unchanged. This file 
 
 Candidates in priority order. Take the top ones until the 4 implementer slots are full.
 
-- **CP** 2.11 Hub checks in by heartbeat and the wizard advances by itself (`2-11-hub-checks-in-by-heartbeat-and-the-wizard-advances-by-itself`)
+- **CP** 2.12 Hub verifies its licence against trusted time and enforces its limits (`2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i`)
 - **HUB-A** 2.21 Register consoles, VR rigs and simulators manually (`2-21-register-consoles-vr-rigs-and-simulators-manually`)
 - **HUB-B** 5.2 Tax is computed once per rate on every bill, in minor units (`5-2-tax-is-computed-once-per-rate-on-every-bill-in-minor-units`)
 - **OWNER** 8.12 On Free, the Owner app shows only Subscription, pairing and support (`8-12-on-free-the-owner-app-shows-only-subscription-pairing-and-su`)
@@ -58,7 +58,7 @@ After 2.31 and before 6.1, finish Story 2.3's deferred observability ACs (Sentry
 | # | Story | Title | Phase | Status | Waits on |
 |---:|---|---|---|---|---|
 | 1 | 2.10 | Hub installer pairs with the code and retries in place | MVP | review |  |
-| 2 | 2.11 | Hub checks in by heartbeat and the wizard advances by itself | MVP | backlog |  |
+| 2 | 2.11 | Hub checks in by heartbeat and the wizard advances by itself | MVP | review |  |
 | 3 | 2.12 | Hub verifies its licence against trusted time and enforces its limits | MVP | backlog |  |
 | 4 | 2.13 | branch.bootstrap applies the onboarding profile at first pairing, with branch code lock | MVP | backlog |  |
 | 5 | 2.14 | Owner and staff set their own PIN and password at the Hub with a one-time setup code | MVP | backlog |  |
@@ -381,7 +381,7 @@ Windows Hub: cloud sync, outbox, alerts, Tunnel, backups, restore, standby and p
 | 33 | 9.27 | Restore drill and privacy proof | MVP | backlog | 9.13, 9.1 |
 | 34 | 10.12 | A lapse or downgrade never ends a running session, and over-cap devices go read-only | MVP | backlog | 10.11, 2.19 |
 | 35 | 10.13 | A lapse or downgrade keeps open orders, signed-in staff and the main Hub working | MVP | backlog | 10.12 |
-| 36 | 11.28 | The Hub builds a diagnostics bundle with no personal data and sends it only when staff press Send | MVP | backlog | 2.11 |
+| 36 | 11.28 | The Hub builds a diagnostics bundle with no personal data and sends it only when staff press Send | MVP | backlog | ~~2.11~~ |
 | 37 | 11.29 | Kiosk logs are collected over the LAN into the diagnostics bundle | MVP | backlog | 11.28 |
 | 38 | 14.13 | Kiosks and Pis report device health to the Hub | v1.1 | backlog | 12.2 |
 | 39 | 14.14 | The Hub shows device health and records device outages | v1.1 | backlog | 14.13 |
@@ -431,7 +431,7 @@ Tauri mobile Hub, ads, Free limits, Play rollout, migration to Windows.
 |---:|---|---|---|---|---|
 | 1 | 4.1 | Android Hub app builds from the shared Hub code and checks the device spec on first run | MVP | backlog | ~~1.22~~ |
 | 2 | 4.2 | The Android Hub keeps serving while the screen is off, in Doze and after a reboot | MVP | backlog |  |
-| 3 | 4.3 | The Android Hub pairs with the wizard code and keeps its secrets in the Android Keystore | MVP | backlog | ~~2.10~~, 2.11 |
+| 3 | 4.3 | The Android Hub pairs with the wizard code and keeps its secrets in the Android Keystore | MVP | backlog | ~~2.10~~, ~~2.11~~ |
 | 4 | 4.4 | Kiosks find and pair with an Android Hub on the LAN | MVP | backlog | 4.3 |
 | 5 | 4.5 | The Hub works on an Android phone and tablet by touch | MVP | backlog |  |
 | 6 | 4.6 | The Android Hub prints over Bluetooth or LAN | MVP | backlog | 5.17 |

@@ -44,6 +44,7 @@ const FIXTURE: &str = "
 fn expected_counts() -> BTreeMap<String, u64> {
     // The fixture's tables, plus every migration's (empty) tables.
     [
+        ("branch_fence", 0),
         ("branches", 0),
         ("entitlements", 0),
         ("hubs", 0),
@@ -722,6 +723,7 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
     assert_eq!(
         local_tables(&target),
         vec![
+            "branch_fence",
             "branches",
             "entitlements",
             "hubs",

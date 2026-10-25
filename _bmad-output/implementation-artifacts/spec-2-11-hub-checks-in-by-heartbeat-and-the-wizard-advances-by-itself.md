@@ -2,7 +2,8 @@
 title: 'Story 2.11: Hub checks in by heartbeat and the wizard advances by itself'
 type: 'feature'
 created: '2026-10-25'
-status: 'draft'
+status: 'done'
+baseline_commit: 'dd6d04b14adce64c76170f7d7eb75db6aba1ecea'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -97,3 +98,31 @@ Investigate from 2.10 (`hubs`, Hub keystore, cloud client, `hub_identity`, `lice
 **Commands:**
 - `cargo test --locked --workspace --no-fail-fast` (`ARENA_REQUIRE_SQLD=1`); dev-fixtures runs; clippy incl. control + dev-fixtures; fmt; linkage script.
 - onboarding and hub `check` + Playwright with unique `ARENA_PW_PORT` and `--workers=2`; every `pnpm run check:*`; `pnpm run test:scripts`.
+
+## Review Triage Log
+
+Pass 1 (Blind Hunter, Edge Case Hunter, Verification Gap; on Sonnet). P = patch, D = defer, R = reject.
+
+| # | Finding | Verdict | Route | Evidence |
+|---|---------|---------|-------|----------|
+| 1 | BH/ECH: duplicate `pairing_revoked` field in two `arena-core` test literals | high | P | would not compile; removed |
+| 2 | BH/ECH: `branch_fence` never resets, so a re-paired Hub is `confirmed: false` forever | high | P | `pair_hub` deletes the branch's fence in its transaction; test `re_pairing_resets_the_fence_so_the_new_hub_confirms` |
+| 3 | BH/ECH: `wizard.changed` lost if a later step fails, or if the stream (re)opens after the first beat; polling off while streaming | high | P | event sent right after the beat commits; the layout syncs on `onopen` |
+| 4 | BH/ECH: progress upsert and licence checked against a skewed local clock | medium | P | upsert only writes when not already done; licence verified at `cloud_time` |
+| 5 | ECH: `CloudTime.at` taken after the round trip | medium | P | stored at the midpoint of the request |
+| 6 | BH/ECH: jitter from sub-second nanos has about 10 distinct values on Windows | low | P | `RandomState` hash |
+| 7 | VG: `/healthz.tier`, `pairing_revoked` mapping, `TOKEN_INVALID`, 429/500/garbage, request contents, cache keyed by full token, revoked-race write, fence count, `schema_version` and `completed_at` had no failing test | high | P | tests added in `health.rs`, `heartbeat.rs`, `tests/pair.rs` |
+| 8 | BH: verified-token cache not tied to the stored hash, unbounded until the next insert | medium | R | a hub id's hash never changes; entries exist only for verified tokens; revoked rows are rechecked each beat |
+| 9 | BH: 2 s retry after a lost answer meets the 5 s gap and counts as a failure | low | R | self-heals on the next backoff step |
+| 10 | BH: `tier` on `/healthz` leaks | low | R | `/healthz` binds loopback only |
+| 11 | BH: SSE ignores `branch_id` | low | R | `GET /v1/wizard` uses the same default branch |
+| 12 | ECH: `hub_paired` false until the first beat | low | R | by spec |
+| 13 | BH: unauthenticated heartbeat requests cost an Argon2 verify with no per-IP limit | medium | D | shares the 2.5 semaphore with pairing; needs an IP limiter |
+| 14 | BH: Hub accepts a validly signed licence for another branch or an older one | medium | D | compare with `hub_identity` and the cached licence |
+| 15 | BH: `cloud_time` is unsigned | medium | D | 2.12 trusted time |
+| 16 | BH/ECH: revoked 5-minute backoff not interruptible, no signal when the keystore token is missing | medium | D | belongs with the Hub re-pair and unpair flow |
+| 17 | BH/ECH: SSE has no connection cap, no auth expiry, no `X-Accel-Buffering`, no silent-stream watchdog | medium | D | |
+| 18 | ECH: a same-Hub restart bumps the epoch counter, so `confirmed` goes false | medium | D | spec matrix defers fencing to 2.12 |
+| 19 | VG: no Hub end-to-end heartbeat test, validation and per-Hub limit edges, SSE scoping, Playwright poll suppression, 8 to 9 upgrade test, `record_heartbeat` guards, slow-answer intent test | medium | D | |
+| 20 | VG: nothing sets `HubStatus.live`, so the 60 s interval is unreachable | medium | D | Story 2.31 wires the `go_live` step |
+

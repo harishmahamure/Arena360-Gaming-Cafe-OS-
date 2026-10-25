@@ -64,6 +64,19 @@ impl From<&LeaseRow> for LeaseInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PairingState {
+    #[default]
+    Active,
+    Revoked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloudTime {
+    pub cloud_ms: i64,
+    pub at: std::time::Instant,
+}
+
 /// What `/healthz` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HubStatus {
@@ -83,6 +96,10 @@ pub struct HubStatus {
     pub setup: Option<arena_proto::SetupStatus>,
     pub lan_addresses: Vec<std::net::Ipv4Addr>,
     pub lan_ports: Option<(u16, u16)>,
+    pub tier: Option<arena_proto::Tier>,
+    pub pairing: PairingState,
+    pub cloud_time: Option<CloudTime>,
+    pub live: bool,
 }
 
 impl HubStatus {
@@ -99,6 +116,10 @@ impl HubStatus {
             setup: None,
             lan_addresses: Vec::new(),
             lan_ports: None,
+            tier: None,
+            pairing: PairingState::Active,
+            cloud_time: None,
+            live: false,
         }
     }
 }

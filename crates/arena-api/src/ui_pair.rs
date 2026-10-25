@@ -42,6 +42,7 @@ pub fn unpaired_snapshot(full: HubSnapshot) -> HubSnapshot {
         setup: None,
         lan: None,
         paired: false,
+        pairing_revoked: None,
     }
 }
 
@@ -232,6 +233,7 @@ mod tests {
             setup: None,
             lan: None,
             paired: true,
+            pairing_revoked: None,
         };
         let min = unpaired_snapshot(full);
         assert!(!min.paired);

@@ -129,6 +129,30 @@ impl Harness {
         self.pair_from(code, platform, PEER, None).await
     }
 
+    async fn beat(&self, token: &str, epoch: &str) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/heartbeat")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(
+                json!({"epoch": epoch, "version": "0.2.0", "schema_version": 12, "last_seq_uploaded": 0})
+                    .to_string(),
+            ))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn paired_hub(&self, access: &str) -> (String, String) {
+        let (code, _) = self.issue(access).await;
+        let r = self.pair(&code, "android").await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        (
+            r.body["token"].as_str().unwrap().to_owned(),
+            r.body["hub_id"].as_str().unwrap().to_owned(),
+        )
+    }
+
     async fn sign_up(&self, phone: &str, cafe_name: &str) -> String {
         let s = self
             .call(
@@ -255,6 +279,16 @@ impl Harness {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+    fn install_step_opt(&self, branch: &str) -> Option<String> {
+        rusqlite::Connection::open(self.dir.path().join("gz_control.db"))
+            .unwrap()
+            .query_row(
+                "SELECT state FROM onboarding_progress WHERE branch_id = ? AND step = 'install_hub' AND state = 'done'",
+                [branch],
+                |r| r.get(0),
+            )
+            .ok()
     }
     fn hubs(&self) -> Vec<Vec<String>> {
         let c = rusqlite::Connection::open(self.dir.path().join("gz_control.db")).unwrap();
@@ -414,7 +448,7 @@ async fn an_android_hub_on_free_pairs_once_and_gets_a_hashed_token_and_a_free_li
             .unwrap();
     assert_eq!(used.used_at, Some(T0));
     let state = h.call("GET", "/v1/wizard/install-hub", None, &a).await;
-    assert_eq!(state.body["hub_paired"], true);
+    assert_eq!(state.body["hub_paired"], false);
     assert_eq!(h.install_step(&branch), "pending");
 
     let again = h.pair(&code, "android").await;
@@ -713,4 +747,285 @@ async fn logs_never_carry_the_code_or_the_token() {
     ] {
         assert!(!text.contains(needle), "{needle} in {text}");
     }
+}
+
+#[tokio::test]
+async fn the_first_beat_creates_the_fence_marks_step_three_and_answers_a_licence() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, hub_id) = h.paired_hub(&a).await;
+    assert_eq!(h.install_step_opt(&branch), None);
+    let before = h.call("GET", "/v1/wizard/install-hub", None, &a).await;
+    assert_eq!(before.body["hub_paired"], false);
+    h.advance(1_000);
+    let r = h.beat(&token, "1:HUBA").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        r.body["fence"],
+        json!({"epoch": "1:HUBA", "confirmed": true})
+    );
+    assert_eq!(r.body["cloud_time"], T0 + 1_000);
+    let claims = verify(
+        r.body["licence"].as_str().unwrap(),
+        DEV_LICENCE_VERIFY_KEYS,
+        T0 + 1_000,
+    )
+    .unwrap();
+    assert_eq!(
+        (claims.tier, claims.branch_id.as_str()),
+        (Tier::Free, branch.as_str())
+    );
+    assert_eq!(h.install_step(&branch), "done");
+    let hub = &h.hubs()[0];
+    assert_eq!(
+        (hub[0].as_str(), hub[4].as_str()),
+        (hub_id.as_str(), "0.2.0")
+    );
+    assert_eq!(hub[7], (T0 + 1_000).to_string());
+    let after = h.call("GET", "/v1/wizard/install-hub", None, &a).await;
+    assert_eq!(after.body["hub_paired"], true);
+    let wizard = h.call("GET", "/v1/wizard", None, &a).await;
+    assert_eq!(wizard.body["current"], "devices");
+    h.advance(5_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    let (fences, schema): (i64, i64) = c
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM branch_fence), schema_version FROM hubs",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((fences, schema), (1, 12));
+    let done_at: i64 = c
+        .query_row(
+            "SELECT completed_at FROM onboarding_progress WHERE branch_id = ? AND step = 'install_hub'",
+            [&branch],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(done_at, T0 + 1_000);
+}
+
+#[tokio::test]
+async fn a_later_beat_with_another_epoch_is_not_confirmed() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    assert_eq!(
+        h.beat(&token, "1:HUBA").await.body["fence"]["confirmed"],
+        true
+    );
+    h.advance(5_000);
+    let same = h.beat(&token, "1:HUBA").await;
+    assert_eq!(same.body["fence"]["confirmed"], true);
+    h.advance(5_000);
+    let other = h.beat(&token, "2:HUBB").await;
+    assert_eq!(
+        other.body["fence"],
+        json!({"epoch": "1:HUBA", "confirmed": false})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_first_beats_with_different_epochs_leave_one_fence() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (_, hub_id) = h.paired_hub(&a).await;
+    let beat = |epoch: &'static str| {
+        let db = Arc::clone(&h.db);
+        let (branch, hub_id) = (branch.clone(), hub_id.clone());
+        async move {
+            db.heartbeat(&arena_store::control::Beat {
+                hub_id: &hub_id,
+                branch_id: &branch,
+                epoch,
+                version: "0.2.0",
+                schema_version: 12,
+                now: T0,
+            })
+            .await
+            .unwrap()
+            .unwrap()
+        }
+    };
+    let (x, y) = tokio::join!(beat("1:HUBA"), beat("1:HUBB"));
+    assert_eq!(x, y);
+    assert!(x == "1:HUBA" || x == "1:HUBB");
+}
+
+#[tokio::test]
+async fn a_comp_grant_shows_up_on_the_next_beat() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    let free = h.beat(&token, "1:HUBA").await;
+    let tier = |r: &Reply| {
+        verify(
+            r.body["licence"].as_str().unwrap(),
+            DEV_LICENCE_VERIFY_KEYS,
+            T0,
+        )
+        .unwrap()
+        .tier
+    };
+    assert_eq!(tier(&free), Tier::Free);
+    h.db.grant_comp(&CompGrant {
+        branch_id: &branch,
+        tier: Tier::Basic,
+        until: T0 + 30 * 24 * 60 * 60 * 1000,
+        audit_id: "audit-1",
+        operator: "ops",
+        reason: "beta cafe",
+        details_json: "{}",
+        now: T0,
+    })
+    .await
+    .unwrap();
+    h.advance(5_000);
+    assert_eq!(tier(&h.beat(&token, "1:HUBA").await), Tier::Basic);
+}
+
+#[tokio::test]
+async fn bad_missing_and_revoked_tokens_are_refused() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (token, hub_id) = h.paired_hub(&a).await;
+    for bad in [
+        "nope",
+        "hub_x.y",
+        &format!("hub_{hub_id}.wrong"),
+        "hub_01NOSUCH.secret",
+    ] {
+        let r = h.beat(bad, "1:HUBA").await;
+        assert_eq!((r.status, r.code()), (401, "TOKEN_INVALID"), "{bad}");
+    }
+    let bare = Request::builder()
+        .method("POST")
+        .uri("/v1/heartbeat")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"epoch": "1:HUBA", "version": "0.2.0", "schema_version": 12, "last_seq_uploaded": 0})
+                .to_string(),
+        ))
+        .unwrap();
+    let r = reply(h.app.clone().oneshot(bare).await.unwrap()).await;
+    assert_eq!(r.status, 401);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    h.advance(1_000);
+    let (second, _) = h.issue(&a).await;
+    assert_eq!(h.pair(&second, "android").await.status, 200);
+    h.advance(5_000);
+    let r = h.beat(&token, "1:HUBA").await;
+    assert_eq!((r.status, r.code()), (401, "TOKEN_REVOKED"));
+}
+
+#[tokio::test]
+async fn beats_closer_than_five_seconds_are_rate_limited() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    h.advance(4_000);
+    let r = h.beat(&token, "1:HUBA").await;
+    assert_eq!((r.status, r.code()), (429, "RATE_LIMITED"));
+    assert!(r.retry_after.is_some());
+    h.advance(1_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+}
+
+#[tokio::test]
+async fn a_verified_token_is_cached_for_five_minutes() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    assert_eq!(h.st.hub_tokens.lock().unwrap().len(), 1);
+    let (id, _) = token.split_once('.').unwrap();
+    let forged = h.beat(&format!("{id}.wrong"), "1:HUBA").await;
+    assert_eq!((forged.status, forged.code()), (401, "TOKEN_INVALID"));
+    assert_eq!(h.st.hub_tokens.lock().unwrap().len(), 1);
+    rusqlite::Connection::open(h.dir.path().join("gz_control.db"))
+        .unwrap()
+        .execute("UPDATE hubs SET token_hash = 'garbage'", [])
+        .unwrap();
+    h.advance(5_000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    h.advance(5 * 60 * 1000);
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 401);
+}
+
+#[tokio::test]
+async fn the_wizard_event_stream_delivers_the_first_beat() {
+    use futures_util::StreamExt;
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    let req = Request::builder()
+        .uri("/v1/wizard/events")
+        .header("cookie", format!("arena_access={a}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "text/event-stream");
+    let mut stream = res.into_body().into_data_stream();
+    assert_eq!(h.beat(&token, "1:HUBA").await.status, 200);
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&frame).contains("event: wizard.changed"));
+}
+
+#[tokio::test]
+async fn the_wizard_event_stream_needs_a_signed_in_owner() {
+    let h = Harness::new().await;
+    let r = h.call("GET", "/v1/wizard/events", None, "").await;
+    assert_eq!(r.status, 401);
+}
+
+#[tokio::test]
+async fn re_pairing_resets_the_fence_so_the_new_hub_confirms() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let (old, _) = h.paired_hub(&a).await;
+    assert_eq!(
+        h.beat(&old, "1:HUBA").await.body["fence"]["confirmed"],
+        true
+    );
+    h.advance(5_000);
+    let (new, _) = h.paired_hub(&a).await;
+    let r = h.beat(&new, "1:HUBB").await;
+    assert_eq!(
+        r.body["fence"],
+        json!({"epoch": "1:HUBB", "confirmed": true})
+    );
+}
+
+#[tokio::test]
+async fn a_beat_for_a_revoked_hub_writes_nothing() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (_, hub_id) = h.paired_hub(&a).await;
+    let (_, _) = h.paired_hub(&a).await;
+    let out =
+        h.db.heartbeat(&arena_store::control::Beat {
+            hub_id: &hub_id,
+            branch_id: &branch,
+            epoch: "1:HUBA",
+            version: "0.2.0",
+            schema_version: 12,
+            now: T0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, None);
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    let fences: i64 = c
+        .query_row("SELECT COUNT(*) FROM branch_fence", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fences, 0);
+    assert_eq!(h.install_step_opt(&branch), None);
 }

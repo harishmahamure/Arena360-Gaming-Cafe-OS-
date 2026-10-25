@@ -2,6 +2,7 @@
 
 pub mod cloud;
 pub mod connectivity;
+pub mod heartbeat;
 pub mod housekeeping;
 pub mod keystore;
 pub mod lease;
@@ -14,6 +15,7 @@ pub use connectivity::{
     PROBE_INTERVAL, PROBE_TIMEOUT, Prober, decide, default_internet_endpoints,
     parse_internet_endpoints,
 };
+pub use heartbeat::HeartbeatTask;
 pub use housekeeping::{
     DEDUPE_RETENTION_MS, HOUSEKEEPING_INTERVAL, Housekeeping, HousekeepingTask,
 };

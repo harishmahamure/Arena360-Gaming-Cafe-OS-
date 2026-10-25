@@ -73,7 +73,7 @@ async fn get_install_hub(
         .active_hub(&branch.id)
         .await
         .map_err(ApiError::internal)?
-        .is_some();
+        .is_some_and(|h| h.last_seen_at.is_some());
     Ok(Json(InstallHubState {
         active,
         hub_paired,

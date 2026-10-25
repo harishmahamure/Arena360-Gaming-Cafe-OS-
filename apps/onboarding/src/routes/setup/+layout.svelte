@@ -1,9 +1,10 @@
 <script lang="ts">
   import { Button, WizardProgress, t } from "@arena/ui";
   import { goto } from "$app/navigation";
+  import { page } from "$app/state";
   import { onMount, type Snippet } from "svelte";
-  import { getWizard } from "../../lib/api";
-  import { clearWizard, setWizard, stepPath, wizard } from "../../lib/wizard.svelte";
+  import { eventsUrl, getWizard } from "../../lib/api";
+  import { advance, clearWizard, setWizard, stepPath, wizard } from "../../lib/wizard.svelte";
 
   let { children }: { children: Snippet } = $props();
 
@@ -25,6 +26,19 @@
     }
   }
 
+  const POLL_MS = 5000;
+  let streaming = false;
+
+  async function sync() {
+    const res = await getWizard();
+    if (!res.ok) return;
+    if (page.params.step === "install_hub" && res.data.current !== "install_hub") {
+      await advance(res.data);
+    } else {
+      setWizard(res.data);
+    }
+  }
+
   function refresh() {
     if (document.visibilityState === "visible" && wizard.state) load();
   }
@@ -32,6 +46,20 @@
   onMount(() => {
     clearWizard();
     load();
+    const source = new EventSource(eventsUrl(), { withCredentials: true });
+    source.onopen = () => {
+      streaming = true;
+      void sync();
+    };
+    source.onerror = () => (streaming = false);
+    source.addEventListener("wizard.changed", () => void sync());
+    const poll = setInterval(() => {
+      if (!streaming && wizard.state?.current === "install_hub") void sync();
+    }, POLL_MS);
+    return () => {
+      source.close();
+      clearInterval(poll);
+    };
   });
 </script>
 

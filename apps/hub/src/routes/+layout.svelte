@@ -491,6 +491,12 @@
             {t(LINK_LABELS[shownLink])}
           </p>
         {/if}
+        {#if data.hub.ok && data.hub.snapshot.pairing_revoked}
+          <p class="chip-offline type-hub-label" role="status" data-testid="hub-revoked">
+            <span class="chip-glyph" aria-hidden="true">⚠</span>
+            {t("hub.pairing.revoked")}
+          </p>
+        {/if}
         <Clock />
       </div>
     </header>

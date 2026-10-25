@@ -246,6 +246,39 @@ impl WriterHandle {
         .await
     }
 
+    pub async fn record_heartbeat(
+        &self,
+        licence: Option<String>,
+        confirm: Option<(i64, String)>,
+    ) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                if let Some(licence) = &licence {
+                    arena_store::store_licence(tx, licence, clock.now_ms())?;
+                }
+                if let (Some((counter, id)), Some(row)) = (confirm, read_lease(tx)?)
+                    && row.counter == counter
+                    && row.hub_instance_id == id
+                    && row.provisional
+                {
+                    write_lease(
+                        tx,
+                        &LeaseRow {
+                            provisional: false,
+                            ..row
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     /// Brings an upgraded branch up to the current defaults (and the manager verifier's history
     /// up to date with the staff rows): when the branch exists and lacks
     /// default settings, built-in roles or their permission rows, submits `branch.seed_defaults`
@@ -326,17 +359,20 @@ impl WriterHandle {
     ) -> Result<LeaseRenewal, AppError> {
         self.run(move |store| {
             store.write_tx(|tx| {
-                match read_lease(tx)? {
+                let row = match read_lease(tx)? {
                     Some(row)
                         if row.counter == held.counter
-                            && row.hub_instance_id == held.hub_instance_id => {}
+                            && row.hub_instance_id == held.hub_instance_id =>
+                    {
+                        row
+                    }
                     other => return Ok(LeaseRenewal::Superseded(other)),
-                }
+                };
                 let now = clock.now_ms();
                 let renewed = LeaseRow {
                     renewed_at: now,
                     expires_at: now + ttl_ms,
-                    ..held
+                    ..row
                 };
                 write_lease(tx, &renewed)?;
                 Ok(LeaseRenewal::Renewed(renewed))

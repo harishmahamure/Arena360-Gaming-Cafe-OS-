@@ -408,10 +408,15 @@ async fn paired_hello_records_the_version_and_pushes_applies() {
         ))
         .await
         .unwrap();
-    let pushed = tokio::time::timeout(Duration::from_secs(5), events.next())
-        .await
-        .unwrap()
-        .unwrap();
+    let pushed = loop {
+        let ev = tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap()
+            .unwrap();
+        if !matches!(ev, HubEvent::Verifier { .. }) {
+            break ev;
+        }
+    };
     let HubEvent::Applied(s) = pushed else {
         panic!("{:?}", pushed)
     };

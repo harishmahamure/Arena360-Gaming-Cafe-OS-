@@ -25,8 +25,8 @@ use arena_core::{
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
 use arena_tasks::{
-    CloudClient, CloudEndpoint, CloudPairer, ConnectivityTask, HousekeepingTask, Keystore,
-    LeaseTask, MdnsAdvertiser, MdnsTask, NetProber, SystemInterfaces, platform_keystore,
+    CloudClient, CloudEndpoint, CloudPairer, ConnectivityTask, HeartbeatTask, HousekeepingTask,
+    Keystore, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber, SystemInterfaces, platform_keystore,
 };
 use tokio::sync::oneshot;
 use tracing_subscriber::EnvFilter;
@@ -201,7 +201,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         writer_lock = store.holds_writer_lock(),
         "store open"
     );
-    let pair_gate = PairGate::new(store.hub_identity()?.is_some());
+    let identity = store.hub_identity()?;
+    let pair_gate = PairGate::new(identity.is_some());
     if pair_gate.is_paired() {
         tracing::info!("hub paired; pairing screen skipped");
     } else {
@@ -227,6 +228,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let mut initial = HubStatus::opened(schema_version, instance_id.clone());
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
+    initial.tier = identity.map(|i| i.tier);
     let (status_tx, status_rx) = status_channel(initial);
     let listener = bind_health(cfg.health_port)
         .await
@@ -335,6 +337,24 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     })
     .map_err(|e| internal(format!("cloud client: {e}")))?;
     let keystore: Arc<dyn Keystore> = Arc::from(platform_keystore(&cfg.data_dir));
+    let verify_keys = [
+        arena_proto::licence::LICENCE_VERIFY_KEYS,
+        #[cfg(feature = "dev-fixtures")]
+        arena_proto::licence::DEV_LICENCE_VERIFY_KEYS,
+    ]
+    .concat();
+    let heartbeat_job = tokio::spawn(
+        HeartbeatTask::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            writer.clone(),
+            pair_gate.clone(),
+            status_tx.clone(),
+            verify_keys,
+            env!("CARGO_PKG_VERSION").to_owned(),
+        )
+        .run(),
+    );
     let pairer: Arc<dyn arena_core::HubPairer> = Arc::new(CloudPairer::new(
         cloud,
         writer.clone(),
@@ -452,6 +472,8 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     }
     probe_job.abort();
     let _ = probe_job.await;
+    heartbeat_job.abort();
+    let _ = heartbeat_job.await;
     setup_job.abort();
     let _ = setup_job.await;
     let _ = mdns_stop_tx.send(());

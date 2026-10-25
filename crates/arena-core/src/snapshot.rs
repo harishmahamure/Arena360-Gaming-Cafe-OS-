@@ -37,6 +37,7 @@ pub fn build_snapshot(
         setup: None,
         lan: None,
         paired: true,
+        pairing_revoked: None,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -378,6 +379,7 @@ mod tests {
                 }),
                 lan: None,
                 paired: true,
+                pairing_revoked: None,
             }
         );
     }
@@ -400,6 +402,7 @@ mod tests {
                 setup: None,
                 lan: None,
                 paired: true,
+                pairing_revoked: None,
             }
         );
     }

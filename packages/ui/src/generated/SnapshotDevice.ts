@@ -10,7 +10,7 @@ export type SnapshotDevice = {
   label: string;
   class: ClientClass;
   /**
-   * The floor zone; always `null` until zones exist, so every device is unassigned.
+   * The id of the floor zone the device sits in, or `null` when it is Unassigned.
    */
   zone: string | null;
   /**
@@ -21,5 +21,7 @@ export type SnapshotDevice = {
   group_id?: string | null;
   meta_rev?: number | null;
   tv_number?: number | null;
+  floor_x?: number | null;
+  floor_y?: number | null;
   manual?: boolean;
 };

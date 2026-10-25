@@ -175,6 +175,7 @@ function snapshot(): HubSnapshot {
   return {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     groups: [],
+    zones: [],
     devices: [],
     locale: {
       currency: "INR",

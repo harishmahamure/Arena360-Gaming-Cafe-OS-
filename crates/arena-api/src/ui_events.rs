@@ -12,8 +12,8 @@
 //! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN, or
 //!   the Hub's LAN addresses changed; the view reloads the snapshot (which carries each
 //!   device's `online` and the `lan` block).
-//! - `event: groups.changed`, data `{"by_owner": bool}`: a device group or a device's group
-//!   changed (`by_owner`: an owner setup command wrote it); sent with `devices.changed`.
+//! - `event: groups.changed`, data `{"by_owner": bool}`: a device group, floor zone or a device's
+//!   group or place changed (`by_owner`: an owner setup command wrote it); sent with `devices.changed`.
 //! - `event: device.admin_unlock_ack`, data
 //!   [`AdminUnlockAckEvent`](arena_proto::AdminUnlockAckEvent): a kiosk granted a remote unlock
 //!   (the floor waits up to 5 s for it).
@@ -261,7 +261,7 @@ impl HubTask {
                         if let Some(c) = applied
                             .changes
                             .iter()
-                            .find(|c| matches!(c.tbl.as_str(), "device_groups" | "devices_meta"))
+                            .find(|c| matches!(c.tbl.as_str(), "device_groups" | "floor_zones" | "devices_meta"))
                         {
                             let (reader, epoch, seq) =
                                 (Arc::clone(&self.reader), c.epoch.clone(), c.seq);

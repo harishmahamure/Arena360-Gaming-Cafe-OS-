@@ -50,5 +50,7 @@ export type ErrorCode =
   | "HUB_NOT_PAIRED"
   | "GROUP_NOT_EMPTY"
   | "GROUP_KIND_MISMATCH"
+  | "ZONE_NOT_EMPTY"
+  | "CELL_TAKEN"
   | "TIER_LOCKED"
   | "DEVICE_LIMIT";

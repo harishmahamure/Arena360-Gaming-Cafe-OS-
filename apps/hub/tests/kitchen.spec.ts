@@ -47,6 +47,7 @@ const json = (route: Route, status: number, body: unknown) =>
 const SNAPSHOT: HubSnapshot = {
   branch: { name: "Dev Branch", branch_code: "DEV01" },
   groups: [],
+  zones: [],
   devices: [],
   locale: null,
   ui: { idle_lock_minutes: 5, hc: false },

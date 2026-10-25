@@ -19,6 +19,7 @@ const CORS = {
 const SEEDED: HubSnapshot = {
   branch: { name: "Dev Branch", branch_code: "DEV01" },
   groups: [],
+  zones: [],
   devices: [
     {
       device_id: "01JDEVKIOSK0000000000000000",
@@ -47,6 +48,7 @@ const SEEDED: HubSnapshot = {
 const NOT_SEEDED: HubSnapshot = {
   branch: null,
   groups: [],
+  zones: [],
   devices: [],
   locale: null,
   ui: { idle_lock_minutes: 5, hc: false },

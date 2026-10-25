@@ -6,7 +6,7 @@ use arena_store::{
     insert_role_perm, insert_setting, stamp_row,
 };
 
-use super::{Target, devices, groups, settings_set, staff_roles};
+use super::{Target, devices, groups, settings_set, staff_roles, zones};
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
 
@@ -167,6 +167,12 @@ pub(super) fn mutate(
         },
         IntentPayload::GroupDelete(g) => groups::mutate_delete(tx, g, now_ms),
         IntentPayload::DeviceAssign(a) => groups::mutate_assign(tx, a),
+        IntentPayload::ZoneUpsert(z) => match target {
+            Target::Zone(t) => zones::mutate_upsert(tx, z, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::ZoneDelete(z) => zones::mutate_delete(tx, z, now_ms),
+        IntentPayload::DevicePlace(d) => zones::mutate_place(tx, d),
     }
 }
 

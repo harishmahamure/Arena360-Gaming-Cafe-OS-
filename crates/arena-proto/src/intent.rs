@@ -94,11 +94,17 @@ pub enum IntentKind {
     DeviceAssign,
     #[serde(rename = "licence.apply")]
     LicenceApply,
+    #[serde(rename = "zone.upsert")]
+    ZoneUpsert,
+    #[serde(rename = "zone.delete")]
+    ZoneDelete,
+    #[serde(rename = "device.place")]
+    DevicePlace,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 21] = [
+    pub const ALL: [IntentKind; 24] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -120,6 +126,9 @@ impl IntentKind {
         Self::GroupDelete,
         Self::DeviceAssign,
         Self::LicenceApply,
+        Self::ZoneUpsert,
+        Self::ZoneDelete,
+        Self::DevicePlace,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -146,6 +155,9 @@ impl IntentKind {
             Self::GroupDelete => "group.delete",
             Self::DeviceAssign => "device.assign",
             Self::LicenceApply => "licence.apply",
+            Self::ZoneUpsert => "zone.upsert",
+            Self::ZoneDelete => "zone.delete",
+            Self::DevicePlace => "device.place",
         }
     }
 
@@ -169,7 +181,10 @@ impl IntentKind {
             | Self::DeviceAdminUnlock
             | Self::GroupUpsert
             | Self::GroupDelete
-            | Self::DeviceAssign => IntentCategory::Device,
+            | Self::DeviceAssign
+            | Self::ZoneUpsert
+            | Self::ZoneDelete
+            | Self::DevicePlace => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
@@ -185,9 +200,13 @@ impl IntentKind {
             Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => {
                 Requirement::Perm(Permission::SettingsEdit)
             }
-            Self::DeviceRegister | Self::GroupUpsert | Self::GroupDelete | Self::DeviceAssign => {
-                Requirement::Perm(Permission::DeviceManage)
-            }
+            Self::DeviceRegister
+            | Self::GroupUpsert
+            | Self::GroupDelete
+            | Self::DeviceAssign
+            | Self::ZoneUpsert
+            | Self::ZoneDelete
+            | Self::DevicePlace => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
             Self::DeviceVersionReported | Self::LicenceApply => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
@@ -241,7 +260,10 @@ impl IntentKind {
             | Self::GroupUpsert
             | Self::GroupDelete
             | Self::DeviceAssign
-            | Self::LicenceApply => None,
+            | Self::LicenceApply
+            | Self::ZoneUpsert
+            | Self::ZoneDelete
+            | Self::DevicePlace => None,
         }
     }
 
@@ -489,6 +511,44 @@ pub struct DeviceAssign {
     pub group_id: Option<String>,
 }
 
+/// The payload of `zone.upsert`. Without `id` it creates a zone (the writer mints the id);
+/// with one it renames or reorders that zone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZoneUpsert {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    pub name: String,
+    #[ts(type = "number")]
+    pub sort_order: i64,
+}
+
+/// The payload of `zone.delete`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZoneDelete {
+    pub id: String,
+}
+
+/// The payload of `device.place`: a zone with a cell (`floor_x` below [`FLOOR_COLS`], `floor_y`
+/// below [`FLOOR_ROWS`]), or all three `null` to make the device Unassigned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct DevicePlace {
+    pub device_id: String,
+    #[serde(default)]
+    pub zone_id: Option<String>,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub floor_x: Option<i64>,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub floor_y: Option<i64>,
+}
+
+pub const FLOOR_COLS: i64 = 12;
+pub const FLOOR_ROWS: i64 = 8;
 pub const GROUP_KINDS: [&str; 4] = ["pc", "console", "vr", "other"];
 pub const GROUP_COLOURS: [&str; 6] = ["teal", "orange", "lime", "sand", "coral", "silver"];
 
@@ -537,6 +597,12 @@ pub enum IntentPayload {
     DeviceAssign(DeviceAssign),
     #[serde(rename = "licence.apply")]
     LicenceApply(crate::LicenceApply),
+    #[serde(rename = "zone.upsert")]
+    ZoneUpsert(ZoneUpsert),
+    #[serde(rename = "zone.delete")]
+    ZoneDelete(ZoneDelete),
+    #[serde(rename = "device.place")]
+    DevicePlace(DevicePlace),
 }
 
 impl IntentPayload {
@@ -563,6 +629,9 @@ impl IntentPayload {
             Self::GroupDelete(_) => IntentKind::GroupDelete,
             Self::DeviceAssign(_) => IntentKind::DeviceAssign,
             Self::LicenceApply(_) => IntentKind::LicenceApply,
+            Self::ZoneUpsert(_) => IntentKind::ZoneUpsert,
+            Self::ZoneDelete(_) => IntentKind::ZoneDelete,
+            Self::DevicePlace(_) => IntentKind::DevicePlace,
         }
     }
 }
@@ -697,6 +766,31 @@ mod tests {
     }
 
     #[test]
+    fn zone_payloads_round_trip() {
+        let up = IntentPayload::ZoneUpsert(ZoneUpsert {
+            id: None,
+            name: "PC hall".into(),
+            sort_order: 1,
+        });
+        let json = serde_json::to_value(&up).unwrap();
+        assert_eq!(json["kind"], "zone.upsert");
+        assert_eq!(serde_json::from_value::<IntentPayload>(json).unwrap(), up);
+        let place: IntentPayload = serde_json::from_value(
+            serde_json::json!({"kind": "device.place", "device_id": "D", "zone_id": "Z", "floor_x": 2, "floor_y": 3}),
+        )
+        .unwrap();
+        assert_eq!(
+            place,
+            IntentPayload::DevicePlace(DevicePlace {
+                device_id: "D".into(),
+                zone_id: Some("Z".into()),
+                floor_x: Some(2),
+                floor_y: Some(3)
+            })
+        );
+    }
+
+    #[test]
     fn every_kind_has_exactly_one_requirement() {
         let mut seen = std::collections::HashSet::new();
         for kind in IntentKind::ALL {
@@ -711,7 +805,8 @@ mod tests {
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }
-                "device.register" | "group.upsert" | "group.delete" | "device.assign" => {
+                "device.register" | "group.upsert" | "group.delete" | "device.assign"
+                | "zone.upsert" | "zone.delete" | "device.place" => {
                     Requirement::Perm(Permission::DeviceManage)
                 }
                 "device.revoke" | "device.admin_unlock" => {

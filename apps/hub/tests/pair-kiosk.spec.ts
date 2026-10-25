@@ -88,6 +88,7 @@ function snapshot(hub: Hub): HubSnapshot {
   return {
     paired: true,
     branch: { name: "Koramangala", branch_code: "KOR01" },
+    zones: [],
     groups: [
       {
         id: "01JGROUP00000000000000000A",

@@ -5231,6 +5231,459 @@ mod device_groups {
     }
 }
 
+mod floor_zones {
+    use super::*;
+    use arena_proto::{
+        ClientClass, DeviceKind, DevicePlace, DeviceRegister, FLOOR_COLS, FLOOR_ROWS, ZoneDelete,
+        ZoneUpsert,
+    };
+
+    fn by(kind: ActorKind, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
+        Intent {
+            kind: payload.kind(),
+            payload,
+            actor: Actor {
+                kind,
+                id: if kind == ActorKind::System {
+                    arena_proto::PAIR_SYSTEM_ACTOR.into()
+                } else {
+                    "o".into()
+                },
+            },
+            base_rev,
+            ..bootstrap()
+        }
+    }
+
+    async fn owner(
+        f: &Fixture,
+        payload: IntentPayload,
+        base_rev: Option<i64>,
+    ) -> Result<Applied, AppError> {
+        f.writer
+            .submit_intent(by(ActorKind::Owner, payload, base_rev))
+            .await
+    }
+
+    fn upsert(id: Option<&str>, name: &str, sort: i64) -> IntentPayload {
+        IntentPayload::ZoneUpsert(ZoneUpsert {
+            id: id.map(Into::into),
+            name: name.into(),
+            sort_order: sort,
+        })
+    }
+
+    fn place(device: &str, zone: Option<&str>, x: Option<i64>, y: Option<i64>) -> IntentPayload {
+        IntentPayload::DevicePlace(DevicePlace {
+            device_id: device.into(),
+            zone_id: zone.map(Into::into),
+            floor_x: x,
+            floor_y: y,
+        })
+    }
+
+    async fn zone(f: &Fixture, name: &str, sort: i64) -> String {
+        owner(f, upsert(None, name, sort), None)
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone()
+    }
+
+    async fn device(f: &Fixture, label: &str) -> String {
+        let mut d = DeviceRegister::new(
+            ClientClass::Paired,
+            label,
+            crate::devices::hash_token_secret("s").unwrap(),
+        );
+        d.device_kind = DeviceKind::Pc;
+        f.writer
+            .submit_intent(by(
+                ActorKind::System,
+                IntentPayload::DeviceRegister(d),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone()
+    }
+
+    async fn err(
+        f: &Fixture,
+        payload: IntentPayload,
+        rev: Option<i64>,
+    ) -> (ErrorCode, Option<String>) {
+        let e = owner(f, payload, rev).await.unwrap_err();
+        (e.code, e.field)
+    }
+
+    fn at(f: &Fixture, dev: &str) -> (Option<String>, Option<i64>, Option<i64>) {
+        let m = reopen(f).device_meta(dev).unwrap().unwrap();
+        (m.zone_id, m.floor_x, m.floor_y)
+    }
+
+    #[tokio::test]
+    async fn zones_are_added_renamed_reordered_and_named_uniquely() {
+        let f = bootstrapped().await;
+        let a = zone(&f, "PC hall", 2).await;
+        let b = zone(&f, "Console room", 1).await;
+        let names = || {
+            reopen(&f)
+                .zones()
+                .unwrap()
+                .into_iter()
+                .map(|z| z.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(), ["Console room", "PC hall"]);
+        owner(&f, upsert(Some(&a), "PC hall", 0), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(names(), ["PC hall", "Console room"]);
+        owner(&f, upsert(Some(&b), "Lounge", 1), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(names(), ["PC hall", "Lounge"]);
+        assert_eq!(
+            err(&f, upsert(None, "pc HALL", 3), None).await,
+            (ErrorCode::ValidationFailed, Some("name".into()))
+        );
+        assert_eq!(
+            err(&f, upsert(None, " ", 3), None).await.0,
+            ErrorCode::ValidationFailed
+        );
+        assert_eq!(
+            err(&f, upsert(Some("nope"), "X", 3), Some(1)).await,
+            (ErrorCode::ValidationFailed, Some("id".into()))
+        );
+        let e = f
+            .writer
+            .submit_intent(by(
+                ActorKind::Staff,
+                upsert(Some(&a), "PC hall", 5),
+                Some(1),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn a_zone_with_devices_cannot_be_deleted_until_they_move() {
+        let f = bootstrapped().await;
+        let z = zone(&f, "PC hall", 1).await;
+        let d = device(&f, "PC 1").await;
+        owner(&f, place(&d, Some(&z), Some(0), Some(0)), Some(1))
+            .await
+            .unwrap();
+        let del = || IntentPayload::ZoneDelete(ZoneDelete { id: z.clone() });
+        let e = owner(&f, del(), Some(1)).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::ZoneNotEmpty);
+        owner(&f, place(&d, None, None, None), Some(2))
+            .await
+            .unwrap();
+        assert_eq!(at(&f, &d), (None, None, None));
+        owner(&f, del(), Some(1)).await.unwrap();
+        assert!(reopen(&f).zones().unwrap().is_empty());
+        assert_eq!(err(&f, del(), Some(2)).await.0, ErrorCode::ValidationFailed);
+        zone(&f, "pc hall", 1).await;
+    }
+
+    #[tokio::test]
+    async fn placing_stores_the_cell_and_two_devices_cannot_share_one() {
+        let f = bootstrapped().await;
+        let z = zone(&f, "PC hall", 1).await;
+        let z2 = zone(&f, "Console room", 2).await;
+        let (a, b) = (device(&f, "A").await, device(&f, "B").await);
+        owner(&f, place(&a, Some(&z), Some(3), Some(2)), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(at(&f, &a), (Some(z.clone()), Some(3), Some(2)));
+        assert_eq!(
+            err(&f, place(&b, Some(&z), Some(3), Some(2)), Some(1)).await,
+            (ErrorCode::CellTaken, Some("floor_x".into()))
+        );
+        owner(&f, place(&b, Some(&z2), Some(3), Some(2)), Some(1))
+            .await
+            .unwrap();
+        owner(&f, place(&a, Some(&z), Some(3), Some(2)), Some(2))
+            .await
+            .unwrap();
+        owner(&f, place(&a, Some(&z), Some(4), Some(2)), Some(3))
+            .await
+            .unwrap();
+        owner(&f, place(&b, Some(&z), Some(3), Some(2)), Some(2))
+            .await
+            .unwrap();
+        assert_eq!(at(&f, &a), (Some(z), Some(4), Some(2)));
+    }
+
+    #[tokio::test]
+    async fn place_validates_zone_cell_bounds_and_device() {
+        let f = bootstrapped().await;
+        let z = zone(&f, "PC hall", 1).await;
+        let d = device(&f, "A").await;
+        let bad = |field: &str| (ErrorCode::ValidationFailed, Some(field.to_owned()));
+        assert_eq!(
+            err(&f, place("nope", None, None, None), Some(1)).await,
+            bad("device_id")
+        );
+        assert_eq!(
+            err(&f, place(&d, None, Some(1), Some(1)), Some(1)).await,
+            bad("zone_id")
+        );
+        assert_eq!(
+            err(&f, place(&d, Some("nope"), Some(1), Some(1)), Some(1)).await,
+            bad("zone_id")
+        );
+        assert_eq!(
+            err(&f, place(&d, Some(&z), None, Some(1)), Some(1)).await,
+            bad("floor_x")
+        );
+        assert_eq!(
+            err(&f, place(&d, Some(&z), Some(1), None), Some(1)).await,
+            bad("floor_y")
+        );
+        assert_eq!(
+            err(&f, place(&d, Some(&z), Some(-1), Some(0)), Some(1)).await,
+            bad("floor_x")
+        );
+        assert_eq!(
+            err(&f, place(&d, Some(&z), Some(FLOOR_COLS), Some(0)), Some(1)).await,
+            bad("floor_x")
+        );
+        assert_eq!(
+            err(&f, place(&d, Some(&z), Some(0), Some(FLOOR_ROWS)), Some(1)).await,
+            bad("floor_y")
+        );
+        owner(
+            &f,
+            place(&d, Some(&z), Some(FLOOR_COLS - 1), Some(FLOOR_ROWS - 1)),
+            Some(1),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_unknown_staff_member_cannot_place() {
+        let f = bootstrapped().await;
+        let z = zone(&f, "PC hall", 1).await;
+        let d = device(&f, "A").await;
+        owner(&f, place(&d, Some(&z), Some(0), Some(0)), Some(1))
+            .await
+            .unwrap();
+        let e = f
+            .writer
+            .submit_intent(by(ActorKind::Staff, place(&d, None, None, None), Some(1)))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+    }
+
+    async fn manager(f: &Fixture) -> String {
+        use crate::rbac::ROLE_MANAGER;
+        use crate::staff::hash_secret;
+        let role = reopen(f)
+            .rows(Table::Roles)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["name"] == RowValue::Text(ROLE_MANAGER.into()))
+            .unwrap()["role_id"]
+            .clone();
+        let RowValue::Text(role_id) = role else {
+            panic!("role id")
+        };
+        owner(
+            f,
+            IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                staff_id: None,
+                login: "mgr".into(),
+                display_name: "mgr".into(),
+                role_id,
+                password_hash: Some(hash_secret("pw").unwrap()),
+                pin_hash: Some(hash_secret("2222").unwrap()),
+                active: true,
+            }),
+            None,
+        )
+        .await
+        .unwrap()
+        .changes[0]
+            .row_id
+            .clone()
+    }
+
+    async fn staff(
+        f: &Fixture,
+        id: &str,
+        payload: IntentPayload,
+        rev: Option<i64>,
+    ) -> Result<Applied, AppError> {
+        let mut i = by(ActorKind::Staff, payload, rev);
+        i.actor.id = id.into();
+        f.writer.submit_intent(i).await
+    }
+
+    #[tokio::test]
+    async fn staff_edits_need_a_current_base_rev_and_owner_edits_do_not() {
+        let f = bootstrapped().await;
+        let m = manager(&f).await;
+        let id = staff(&f, &m, upsert(None, "PC hall", 1), None)
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let d = device(&f, "A").await;
+        let want = |e: AppError, code, field: &str| {
+            assert_eq!((e.code, e.field.as_deref()), (code, Some(field)));
+        };
+        let up = || upsert(Some(&id), "Hall", 1);
+        want(
+            staff(&f, &m, up(), None).await.unwrap_err(),
+            ErrorCode::ValidationFailed,
+            "base_rev",
+        );
+        want(
+            staff(&f, &m, up(), Some(9)).await.unwrap_err(),
+            ErrorCode::Stale,
+            "base_rev",
+        );
+        staff(&f, &m, up(), Some(1)).await.unwrap();
+        let pl = || place(&d, Some(&id), Some(0), Some(0));
+        want(
+            staff(&f, &m, pl(), None).await.unwrap_err(),
+            ErrorCode::ValidationFailed,
+            "base_rev",
+        );
+        want(
+            staff(&f, &m, pl(), Some(9)).await.unwrap_err(),
+            ErrorCode::Stale,
+            "base_rev",
+        );
+        staff(&f, &m, pl(), Some(1)).await.unwrap();
+        let del = || IntentPayload::ZoneDelete(ZoneDelete { id: id.clone() });
+        want(
+            staff(&f, &m, del(), Some(1)).await.unwrap_err(),
+            ErrorCode::Stale,
+            "base_rev",
+        );
+        owner(&f, place(&d, None, None, None), None).await.unwrap();
+        owner(&f, del(), None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn deleted_zones_and_devices_free_their_names_and_cells() {
+        let f = bootstrapped().await;
+        let z = zone(&f, "PC hall", 1).await;
+        let (a, b) = (device(&f, "A").await, device(&f, "B").await);
+        owner(&f, place(&a, Some(&z), Some(1), Some(1)), Some(1))
+            .await
+            .unwrap();
+        let mut revoke = by(
+            ActorKind::Owner,
+            IntentPayload::DeviceRevoke(arena_proto::DeviceRevoke {
+                device_id: a.clone(),
+            }),
+            None,
+        );
+        revoke.reason = Some(arena_proto::ReasonCode::Other);
+        f.writer.submit_intent(revoke).await.unwrap();
+        let gone = zone(&f, "Gone", 5).await;
+        owner(
+            &f,
+            IntentPayload::ZoneDelete(ZoneDelete { id: gone.clone() }),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            err(&f, place(&b, Some(&gone), Some(0), Some(0)), Some(1)).await,
+            (ErrorCode::ValidationFailed, Some("zone_id".into()))
+        );
+        assert_eq!(
+            err(&f, upsert(Some(&gone), "Gone", 5), Some(1)).await,
+            (ErrorCode::ValidationFailed, Some("id".into()))
+        );
+        assert_eq!(
+            err(&f, upsert(None, " PC hall ", 7), None).await,
+            (ErrorCode::ValidationFailed, Some("name".into()))
+        );
+        owner(&f, place(&b, Some(&z), Some(1), Some(1)), Some(1))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn zones_with_equal_sort_order_fall_back_to_name_and_placing_keeps_the_group() {
+        let f = bootstrapped().await;
+        zone(&f, "Beta", 1).await;
+        zone(&f, "alpha", 1).await;
+        let names: Vec<_> = reopen(&f)
+            .zones()
+            .unwrap()
+            .into_iter()
+            .map(|z| z.name)
+            .collect();
+        assert_eq!(names, ["alpha", "Beta"]);
+        let z = zone(&f, "Third", 2).await;
+        let g = owner(
+            &f,
+            IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                id: None,
+                name: "PCs".into(),
+                group_kind: "pc".into(),
+                colour: "teal".into(),
+                sort_order: 1,
+            }),
+            None,
+        )
+        .await
+        .unwrap()
+        .changes[0]
+            .row_id
+            .clone();
+        let d = device(&f, "A").await;
+        owner(
+            &f,
+            IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                device_id: d.clone(),
+                group_id: Some(g.clone()),
+            }),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        owner(&f, place(&d, Some(&z), Some(0), Some(0)), Some(2))
+            .await
+            .unwrap();
+        let m = reopen(&f).device_meta(&d).unwrap().unwrap();
+        assert_eq!(m.group_id, Some(g));
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_carries_zones_and_places() {
+        let f = bootstrapped().await;
+        let z = zone(&f, "PC hall", 1).await;
+        let d = device(&f, "A").await;
+        owner(&f, place(&d, Some(&z), Some(5), Some(1)), Some(1))
+            .await
+            .unwrap();
+        let snap = crate::snapshot::read_snapshot(&reopen(&f), 0).unwrap();
+        assert_eq!(snap.zones.len(), 1);
+        assert_eq!(snap.zones[0].name, "PC hall");
+        let sd = &snap.devices[0];
+        assert_eq!(
+            (sd.zone.clone(), sd.floor_x, sd.floor_y),
+            (Some(z), Some(5), Some(1))
+        );
+    }
+}
+
 mod kitchen {
     use super::*;
     use arena_proto::{TierGate, kitchen_gate};

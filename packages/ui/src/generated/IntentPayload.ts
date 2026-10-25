@@ -7,6 +7,7 @@ import type { DeviceAdminExit } from "./DeviceAdminExit";
 import type { DeviceAdminRelock } from "./DeviceAdminRelock";
 import type { DeviceAdminUnlock } from "./DeviceAdminUnlock";
 import type { DeviceAssign } from "./DeviceAssign";
+import type { DevicePlace } from "./DevicePlace";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
@@ -19,6 +20,8 @@ import type { PrinterStatusSet } from "./PrinterStatusSet";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffUpsert } from "./StaffUpsert";
+import type { ZoneDelete } from "./ZoneDelete";
+import type { ZoneUpsert } from "./ZoneUpsert";
 
 /**
  * The intent's payload, tagged by its kind.
@@ -43,4 +46,7 @@ export type IntentPayload =
   | ({ kind: "group.upsert" } & GroupUpsert)
   | ({ kind: "group.delete" } & GroupDelete)
   | ({ kind: "device.assign" } & DeviceAssign)
-  | ({ kind: "licence.apply" } & LicenceApply);
+  | ({ kind: "licence.apply" } & LicenceApply)
+  | ({ kind: "zone.upsert" } & ZoneUpsert)
+  | ({ kind: "zone.delete" } & ZoneDelete)
+  | ({ kind: "device.place" } & DevicePlace);

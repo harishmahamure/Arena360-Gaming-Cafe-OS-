@@ -108,8 +108,14 @@
 
   const snapshot = $derived(data.hub.ok ? data.hub.snapshot : null);
   const groups = $derived(snapshot?.groups ?? []);
+  const zones = $derived(snapshot?.zones ?? []);
+  const placed = (d: SnapshotDevice) => zones.some((z) => z.id === d.zone);
+  const inZone = (id: string) =>
+    (snapshot?.devices ?? [])
+      .filter((d) => d.zone === id)
+      .sort((a, b) => (a.floor_y ?? 0) - (b.floor_y ?? 0) || (a.floor_x ?? 0) - (b.floor_x ?? 0));
   const unassigned = $derived(
-    snapshot?.devices.filter((d) => !groups.some((g) => g.id === d.group_id)) ?? [],
+    snapshot?.devices.filter((d) => !placed(d) && !groups.some((g) => g.id === d.group_id)) ?? [],
   );
 </script>
 
@@ -117,18 +123,19 @@
   <title>{t("hub.page_title", { screen: t("hub.nav.floor") })}</title>
 </svelte:head>
 
-{#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined)}
+{#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined, cell = false)}
   <li
     class="device"
-    class:assigned={group}
+    class:assigned={group || cell}
+    style={cell ? `--x:${(device.floor_x ?? 0) + 1};--y:${(device.floor_y ?? 0) + 1}` : undefined}
     data-device-id={device.device_id}
-    data-testid={group ? "group-device" : "unassigned-device"}
+    data-testid={cell ? "zone-device" : group ? "group-device" : "unassigned-device"}
   >
     <span class="label type-hub-title">{device.label}</span>
     {#if device.tv_number}<span class="type-hub-label" data-testid="tv-number"
         >{t("hub.floor.tv", { n: device.tv_number })}</span
       >{/if}
-    {#if group}<GroupChip name={group.name} colour={group.colour} />{:else}<StatusBadge
+    {#if group}<GroupChip name={group.name} colour={group.colour} />{:else if !cell}<StatusBadge
         state="unassigned"
       />{/if}
     {#if !device.manual}
@@ -181,10 +188,38 @@
       <p class="type-hub-body muted">{t("hub.floor.not_set_up_body")}</p>
     </section>
   {:else if snapshot}
-    <p class="type-hub-body muted" data-testid="floor-no-zones">{t("hub.floor.no_zones")}</p>
+    {#if zones.length === 0}
+      <p class="type-hub-body muted" data-testid="floor-no-zones">{t("hub.floor.no_zones")}</p>
+    {/if}
+
+    {#each zones as zone (zone.id)}
+      {@const members = inZone(zone.id)}
+      <section
+        class="unassigned zone"
+        aria-labelledby="floor-zone-{zone.id}"
+        data-testid="floor-zone"
+      >
+        <h2 class="type-hub-title" id="floor-zone-{zone.id}">{zone.name}</h2>
+        <ul
+          class="devices cells"
+          style="--cols:{Math.max(1, ...members.map((d) => (d.floor_x ?? 0) + 1))};--rows:{Math.max(
+            1,
+            ...members.map((d) => (d.floor_y ?? 0) + 1),
+          )}"
+        >
+          {#each members as device (device.device_id)}
+            {@render tile(
+              device,
+              groups.find((g) => g.id === device.group_id),
+              true,
+            )}
+          {/each}
+        </ul>
+      </section>
+    {/each}
 
     {#each groups as group (group.id)}
-      {@const members = snapshot.devices.filter((d) => d.group_id === group.id)}
+      {@const members = snapshot.devices.filter((d) => d.group_id === group.id && !placed(d))}
       {#if members.length > 0}
         <section class="unassigned" aria-labelledby="floor-group-{group.id}">
           <h2 class="type-hub-title" id="floor-group-{group.id}">{group.name}</h2>
@@ -272,5 +307,21 @@
 
   .device.assigned {
     border: 1px solid var(--line);
+  }
+
+  .zone {
+    overflow-x: auto;
+  }
+
+  @media (min-width: 840px) {
+    .cells {
+      grid-template-columns: repeat(var(--cols), minmax(10rem, 1fr));
+      grid-template-rows: repeat(var(--rows), minmax(4rem, auto));
+    }
+
+    .cells > .device {
+      grid-column: var(--x);
+      grid-row: var(--y);
+    }
   }
 </style>

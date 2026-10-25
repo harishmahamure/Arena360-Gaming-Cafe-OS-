@@ -61,6 +61,7 @@ function newHub(): Hub {
 const snapshot = (hub: Hub): HubSnapshot => ({
   branch: { name: "Dev Branch", branch_code: "DEV01" },
   groups: hub.groups,
+  zones: [],
   devices: hub.devices,
   locale: {
     currency: "INR",

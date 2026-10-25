@@ -17,6 +17,9 @@ pub struct HubSnapshot {
     /// The live device groups, in `sort_order` then name order.
     #[serde(default)]
     pub groups: Vec<SnapshotGroup>,
+    /// The live floor zones, in `sort_order` then name order.
+    #[serde(default)]
+    pub zones: Vec<SnapshotZone>,
     /// The branch locale in effect now, or `null` before the branch is set up.
     pub locale: Option<SnapshotLocale>,
     /// Hub UI behaviour settings.
@@ -207,6 +210,18 @@ pub struct SnapshotGroup {
     pub rev: i64,
 }
 
+/// One floor zone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotZone {
+    pub id: String,
+    pub name: String,
+    #[ts(type = "number")]
+    pub sort_order: i64,
+    #[ts(type = "number")]
+    pub rev: i64,
+}
+
 /// One device on the floor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -214,7 +229,7 @@ pub struct SnapshotDevice {
     pub device_id: String,
     pub label: String,
     pub class: ClientClass,
-    /// The floor zone; always `null` until zones exist, so every device is unassigned.
+    /// The id of the floor zone the device sits in, or `null` when it is Unassigned.
     pub zone: Option<String>,
     /// Whether the device has a live paired session with this Hub right now.
     #[serde(default)]
@@ -231,6 +246,12 @@ pub struct SnapshotDevice {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub tv_number: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub floor_x: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub floor_y: Option<i64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(optional, type = "boolean")]
     pub manual: bool,
@@ -245,6 +266,7 @@ mod tests {
         let s = HubSnapshot {
             branch: None,
             groups: vec![],
+            zones: vec![],
             devices: vec![SnapshotDevice {
                 device_id: "D".into(),
                 label: "Dev Kiosk".into(),
@@ -255,6 +277,8 @@ mod tests {
                 group_id: None,
                 meta_rev: Some(1),
                 tv_number: None,
+                floor_x: None,
+                floor_y: None,
                 manual: false,
             }],
             locale: None,
@@ -272,7 +296,8 @@ mod tests {
             serde_json::json!({
                 "branch": null,
                 "groups": [],
-                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null}],
+                "zones": [],
+                "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null, "floor_x": null, "floor_y": null}],
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5, "hc": false},
                 "connectivity": {"state": "online", "checked_at": null},

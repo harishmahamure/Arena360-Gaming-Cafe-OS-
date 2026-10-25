@@ -62,6 +62,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::FeatureNotEntitled
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch
+        | ErrorCode::ZoneNotEmpty
+        | ErrorCode::CellTaken
         | ErrorCode::TierLocked
         | ErrorCode::DeviceLimit => true,
         ErrorCode::BadFrame

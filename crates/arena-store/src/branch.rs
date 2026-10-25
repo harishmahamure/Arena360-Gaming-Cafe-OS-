@@ -38,11 +38,12 @@ pub enum Table {
     DeviceAdminExits,
     DevicesMeta,
     DeviceGroups,
+    FloorZones,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 11] = [
+    pub const ALL: [Table; 12] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -54,6 +55,7 @@ impl Table {
         Table::DeviceAdminExits,
         Table::DevicesMeta,
         Table::DeviceGroups,
+        Table::FloorZones,
     ];
 
     /// The SQL table name.
@@ -70,6 +72,7 @@ impl Table {
             Self::DeviceAdminExits => "device_admin_exits",
             Self::DevicesMeta => "devices_meta",
             Self::DeviceGroups => "device_groups",
+            Self::FloorZones => "floor_zones",
         }
     }
 
@@ -87,6 +90,7 @@ impl Table {
             Self::DeviceAdminExits => &["exit_id"],
             Self::DevicesMeta => &["device_id"],
             Self::DeviceGroups => &["group_id"],
+            Self::FloorZones => &["zone_id"],
         }
     }
 
@@ -101,7 +105,8 @@ impl Table {
             | Self::DeviceEvents
             | Self::DeviceAdminExits
             | Self::DevicesMeta
-            | Self::DeviceGroups => true,
+            | Self::DeviceGroups
+            | Self::FloorZones => true,
             Self::Settings | Self::RolePerms => false,
         }
     }
@@ -132,6 +137,7 @@ pub enum RowKey {
     DeviceAdminExits { exit_id: String },
     DevicesMeta { device_id: String },
     DeviceGroups { group_id: String },
+    FloorZones { zone_id: String },
 }
 
 impl RowKey {
@@ -148,6 +154,7 @@ impl RowKey {
             Self::DeviceAdminExits { .. } => Table::DeviceAdminExits,
             Self::DevicesMeta { .. } => Table::DevicesMeta,
             Self::DeviceGroups { .. } => Table::DeviceGroups,
+            Self::FloorZones { .. } => Table::FloorZones,
         }
     }
 
@@ -168,6 +175,7 @@ impl RowKey {
             Self::DeviceAdminExits { exit_id } => exit_id.clone(),
             Self::DevicesMeta { device_id } => device_id.clone(),
             Self::DeviceGroups { group_id } => group_id.clone(),
+            Self::FloorZones { zone_id } => zone_id.clone(),
         }
     }
 
@@ -214,6 +222,9 @@ impl RowKey {
             Table::DeviceGroups => Self::DeviceGroups {
                 group_id: text("group_id")?,
             },
+            Table::FloorZones => Self::FloorZones {
+                zone_id: text("zone_id")?,
+            },
         })
     }
 
@@ -233,6 +244,7 @@ impl RowKey {
             Self::DeviceAdminExits { exit_id } => vec![exit_id],
             Self::DevicesMeta { device_id } => vec![device_id],
             Self::DeviceGroups { group_id } => vec![group_id],
+            Self::FloorZones { zone_id } => vec![zone_id],
         }
     }
 }

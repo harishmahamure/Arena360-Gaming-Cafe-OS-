@@ -35,6 +35,7 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
         // A Hub from before device presence sends no `online`: offline.
         devices: snapshot.devices.map((d) => ({ ...d, online: d.online === true })),
         groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
+        zones: Array.isArray(snapshot.zones) ? snapshot.zones : [],
         locale: snapshot.locale ?? null,
         // A missing or malformed `ui` block falls back to the defaults.
         ui: normalizeUi(snapshot.ui),

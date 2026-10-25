@@ -34,6 +34,7 @@ const LOCALE: HubSnapshot["locale"] = {
 const snapshot = (online: boolean): HubSnapshot => ({
   branch: { name: "Dev Branch", branch_code: "DEV01" },
   groups: [],
+  zones: [],
   devices: [
     {
       device_id: "01JDEVKIOSK0000000000000000",

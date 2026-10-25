@@ -5,6 +5,7 @@
     IntentPayload,
     SessionStaff,
     SnapshotGroup,
+    SnapshotZone,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
@@ -17,6 +18,7 @@
     submitIntent,
   } from "../../../lib/auth";
   import { SNAPSHOT_DEPENDENCY } from "../../../lib/snapshot";
+  import ZoneGrid from "./ZoneGrid.svelte";
 
   type Job = { payload: IntentPayload; rev?: number };
 
@@ -38,6 +40,8 @@
     STALE: "hub.settings.branch.stale",
     GROUP_NOT_EMPTY: "hub.groups.not_empty",
     GROUP_KIND_MISMATCH: "hub.groups.kind_mismatch",
+    ZONE_NOT_EMPTY: "hub.zones.not_empty",
+    CELL_TAKEN: "hub.zones.cell_taken",
     PERMISSION_DENIED: "hub.refusal.permission",
   };
 
@@ -50,6 +54,7 @@
   });
   const needsApproval = $derived(!hasPermission(staff, "device.manage"));
   const groups = $derived(snapshot?.groups ?? []);
+  const zones = $derived(snapshot?.zones ?? []);
   const devices = $derived((snapshot?.devices ?? []).filter((d) => d.class === "paired" && d.kind));
 
   let editing: SnapshotGroup | null = $state(null);
@@ -61,6 +66,10 @@
   let approvalPrompt: MessageKey = $state("ui.pin.prompt");
   let status: { tone: "ok" | "refusal"; message: MessageKey } | null = $state(null);
   let nameError: MessageKey | null = $state(null);
+  let editingZone: SnapshotZone | null = $state(null);
+  let zoneName = $state("");
+  let zoneOrder = $state("");
+  let zoneNameError: MessageKey | null = $state(null);
 
   function reset(group: SnapshotGroup | null = null) {
     editing = group;
@@ -71,6 +80,13 @@
     nameError = null;
   }
 
+  function resetZone(zone: SnapshotZone | null = null) {
+    editingZone = zone;
+    zoneName = zone?.name ?? "";
+    zoneOrder = zone ? String(zone.sort_order) : "";
+    zoneNameError = null;
+  }
+
   async function run(job: Job, ticket?: string) {
     if (!ticket && needsApproval) {
       approvalPrompt = "ui.pin.prompt";
@@ -79,6 +95,7 @@
     }
     status = null;
     nameError = null;
+    zoneNameError = null;
     const outcome = await submitIntent(job.payload, newIdempotencyKey(), job.rev, {
       elevationTicket: ticket,
     });
@@ -86,7 +103,10 @@
     if (outcome.kind === "applied") {
       status = { tone: "ok", message: "hub.settings.saved" };
       if (job.payload.kind === "group.upsert") reset();
-      return void (await invalidate(SNAPSHOT_DEPENDENCY));
+      await invalidate(SNAPSHOT_DEPENDENCY);
+      if (job.payload.kind === "zone.upsert") resetZone();
+      if (job.payload.kind === "zone.delete" && editingZone?.id === job.payload.id) resetZone();
+      return;
     }
     const error = outcome.kind === "error" ? outcome.error : null;
     if (error?.code === "PIN_REQUIRED") {
@@ -95,7 +115,8 @@
       return;
     }
     if (error?.code === "VALIDATION_FAILED" && error.field === "name") {
-      nameError = "hub.groups.name_invalid";
+      if (job.payload.kind === "zone.upsert") zoneNameError = "hub.zones.name_invalid";
+      else nameError = "hub.groups.name_invalid";
       return;
     }
     const gone =
@@ -136,6 +157,17 @@
     void run({ payload, rev: editing?.rev });
   }
 
+  function saveZone(event: SubmitEvent) {
+    event.preventDefault();
+    const typed = /^-?\d{1,9}$/.test(zoneOrder.trim()) ? Number.parseInt(zoneOrder, 10) : null;
+    const next =
+      typed ?? editingZone?.sort_order ?? Math.max(0, ...zones.map((z) => z.sort_order)) + 1;
+    const payload: IntentPayload = editingZone
+      ? { kind: "zone.upsert", id: editingZone.id, name: zoneName, sort_order: next }
+      : { kind: "zone.upsert", name: zoneName, sort_order: next };
+    void run({ payload, rev: editingZone?.rev });
+  }
+
   async function move(deviceId: string, groupId: string | null) {
     const d = devices.find((x) => x.device_id === deviceId);
     const g = groups.find((x) => x.id === groupId);
@@ -152,7 +184,75 @@
     t(KINDS.find((k) => k.id === id)?.label ?? "hub.groups.kind.other");
 </script>
 
-<section class="layout" aria-labelledby="settings-layout-title">
+<section class="layout" aria-labelledby="settings-zones-title">
+  <h2 class="type-hub-title" id="settings-zones-title">{t("hub.zones.title")}</h2>
+  <p class="intro type-hub-body">{t("hub.zones.intro")}</p>
+
+  <p
+    class="status type-hub-label"
+    class:refusal={status?.tone === "refusal"}
+    role="status"
+    data-testid="group-status"
+  >
+    {#if status}
+      {#if status.tone === "refusal"}<span aria-hidden="true">⚠</span>{/if}
+      <span>{t(status.message)}</span>
+    {/if}
+  </p>
+
+  {#if approving}
+    <div class="approval" data-testid="group-approval">
+      <p class="type-hub-label">
+        {t(
+          approving.payload.kind.startsWith("zone") || approving.payload.kind === "device.place"
+            ? "hub.zones.approves"
+            : "hub.groups.approves",
+        )}
+      </p>
+      <InlinePin message={approvalPrompt} onsubmit={approve} oncancel={() => (approving = null)} />
+    </div>
+  {/if}
+
+  <form class="form" onsubmit={saveZone} data-testid="zone-form">
+    <TextField label="hub.zones.name" bind:value={zoneName} error={zoneNameError} required />
+    <TextField label="hub.zones.order" bind:value={zoneOrder} inputmode="numeric" />
+    <div class="actions">
+      <Button label={editingZone ? "hub.zones.save" : "hub.zones.add"} type="submit" />
+      {#if editingZone}<Button
+          label="hub.zones.cancel"
+          variant="secondary"
+          onclick={() => resetZone()}
+        />{/if}
+    </div>
+  </form>
+
+  {#if zones.length === 0}
+    <p class="type-hub-body">{t("hub.zones.empty")}</p>
+  {:else}
+    <ul class="rows" data-testid="zone-list">
+      {#each zones as z (z.id)}
+        <li class="row" data-testid="zone-row" data-zone-id={z.id}>
+          <span class="type-hub-title">{z.name}</span>
+          <div class="actions">
+            <button
+              type="button"
+              class="ui-interactive btn type-hub-label"
+              onclick={() => resetZone(z)}>{t("hub.zones.edit", { name: z.name })}</button
+            >
+            <button
+              type="button"
+              class="ui-interactive btn type-hub-label"
+              onclick={() => void run({ payload: { kind: "zone.delete", id: z.id }, rev: z.rev })}
+              >{t("hub.zones.delete", { name: z.name })}</button
+            >
+          </div>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  <ZoneGrid {zones} {devices} {run} />
+
   <h2 class="type-hub-title" id="settings-layout-title">{t("hub.groups.title")}</h2>
   <p class="intro type-hub-body">{t("hub.groups.intro")}</p>
 
@@ -183,25 +283,6 @@
         />{/if}
     </div>
   </form>
-
-  <p
-    class="status type-hub-label"
-    class:refusal={status?.tone === "refusal"}
-    role="status"
-    data-testid="group-status"
-  >
-    {#if status}
-      {#if status.tone === "refusal"}<span aria-hidden="true">⚠</span>{/if}
-      <span>{t(status.message)}</span>
-    {/if}
-  </p>
-
-  {#if approving}
-    <div class="approval" data-testid="group-approval">
-      <p class="type-hub-label">{t("hub.groups.approves")}</p>
-      <InlinePin message={approvalPrompt} onsubmit={approve} oncancel={() => (approving = null)} />
-    </div>
-  {/if}
 
   <p class="hint type-hub-label">{t("hub.groups.drag_hint")}</p>
   {#if groups.length === 0}

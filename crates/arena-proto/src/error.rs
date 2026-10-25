@@ -93,6 +93,10 @@ pub enum ErrorCode {
     GroupNotEmpty,
     /// The device's kind does not fit the group's kind.
     GroupKindMismatch,
+    /// The zone still has devices; move them out first.
+    ZoneNotEmpty,
+    /// Another device already holds that cell.
+    CellTaken,
     TierLocked,
     /// The branch's device cap is reached.
     DeviceLimit,
@@ -159,6 +163,8 @@ impl ErrorCode {
             Self::HubNotPaired => "HUB_NOT_PAIRED",
             Self::GroupNotEmpty => "GROUP_NOT_EMPTY",
             Self::GroupKindMismatch => "GROUP_KIND_MISMATCH",
+            Self::ZoneNotEmpty => "ZONE_NOT_EMPTY",
+            Self::CellTaken => "CELL_TAKEN",
             Self::TierLocked => "TIER_LOCKED",
             Self::DeviceLimit => "DEVICE_LIMIT",
         }
@@ -282,6 +288,8 @@ mod tests {
             (ErrorCode::HubNotPaired, "HUB_NOT_PAIRED"),
             (ErrorCode::GroupNotEmpty, "GROUP_NOT_EMPTY"),
             (ErrorCode::GroupKindMismatch, "GROUP_KIND_MISMATCH"),
+            (ErrorCode::ZoneNotEmpty, "ZONE_NOT_EMPTY"),
+            (ErrorCode::CellTaken, "CELL_TAKEN"),
             (ErrorCode::TierLocked, "TIER_LOCKED"),
             (ErrorCode::DeviceLimit, "DEVICE_LIMIT"),
         ];

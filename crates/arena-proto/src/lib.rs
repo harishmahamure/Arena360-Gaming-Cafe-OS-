@@ -70,10 +70,11 @@ pub use frame::{
     check_envelope, parse_frame, parse_frame_value, parse_json,
 };
 pub use intent::{
-    AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceAssign, DeviceRegister,
-    DeviceRevoke, DeviceVersionReported, GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert,
-    Intent, IntentCategory, IntentKind, IntentPayload, PermEffect, ReasonCode, RolePerm,
-    RoleUpsert, SettingsSet, StaffUpsert, reasons_json,
+    AuditReadGranted, BranchBootstrap, BranchSeedDefaults, DeviceAssign, DevicePlace,
+    DeviceRegister, DeviceRevoke, DeviceVersionReported, FLOOR_COLS, FLOOR_ROWS, GROUP_COLOURS,
+    GROUP_KINDS, GroupDelete, GroupUpsert, Intent, IntentCategory, IntentKind, IntentPayload,
+    PermEffect, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffUpsert, ZoneDelete, ZoneUpsert,
+    reasons_json,
 };
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
@@ -144,7 +145,7 @@ pub use signup::{
 pub use snapshot::{
     AppliedEvent, HubSnapshot, LocalePending, NumberFormat, PendingNumber, PendingText,
     SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
-    SnapshotLocale, SnapshotUi, SymbolPosition,
+    SnapshotLocale, SnapshotUi, SnapshotZone, SymbolPosition,
 };
 pub use tax::{
     DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,

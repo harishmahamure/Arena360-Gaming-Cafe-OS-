@@ -7,6 +7,7 @@ import type { SnapshotGroup } from "./SnapshotGroup";
 import type { SnapshotLan } from "./SnapshotLan";
 import type { SnapshotLocale } from "./SnapshotLocale";
 import type { SnapshotUi } from "./SnapshotUi";
+import type { SnapshotZone } from "./SnapshotZone";
 
 /**
  * What the Hub UI needs to draw its shell and the floor placeholder.
@@ -24,6 +25,10 @@ export type HubSnapshot = {
    * The live device groups, in `sort_order` then name order.
    */
   groups: Array<SnapshotGroup>;
+  /**
+   * The live floor zones, in `sort_order` then name order.
+   */
+  zones: Array<SnapshotZone>;
   /**
    * The branch locale in effect now, or `null` before the branch is set up.
    */

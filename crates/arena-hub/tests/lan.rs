@@ -169,7 +169,7 @@ async fn seeded_hub_accepts_the_printed_token_and_revocation_closes_it() {
     );
     assert_eq!(
         snapshot["devices"],
-        serde_json::json!([{"device_id": device_id, "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null}])
+        serde_json::json!([{"device_id": device_id, "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null, "floor_x": null, "floor_y": null}])
     );
     // The seeded branch locale (from the `branch.*` settings bootstrap wrote).
     assert_eq!(

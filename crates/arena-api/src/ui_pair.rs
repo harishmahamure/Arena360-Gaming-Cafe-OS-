@@ -35,6 +35,7 @@ pub fn unpaired_snapshot(full: HubSnapshot) -> HubSnapshot {
     HubSnapshot {
         branch: None,
         groups: Vec::new(),
+        zones: Vec::new(),
         devices: Vec::new(),
         locale: None,
         ui: full.ui,
@@ -228,6 +229,7 @@ mod tests {
                 branch_code: "B1".into(),
             }),
             groups: vec![],
+            zones: vec![],
             devices: vec![],
             locale: None,
             ui: arena_proto::SnapshotUi::default(),

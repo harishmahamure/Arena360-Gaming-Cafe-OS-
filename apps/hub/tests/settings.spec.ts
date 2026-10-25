@@ -115,6 +115,7 @@ function snapshot(hub: Hub): HubSnapshot {
   return {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     groups: [],
+    zones: [],
     devices: [],
     locale: locale(hub),
     ui: { idle_lock_minutes: Number(hub.settings.get("idle_lock_minutes")?.value ?? 5), hc: false },

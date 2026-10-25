@@ -125,9 +125,13 @@ pub struct DeviceMetaRow {
     pub rev: i64,
     pub deleted_at: Option<i64>,
     pub tv_number: Option<i64>,
+    pub zone_id: Option<String>,
+    pub floor_x: Option<i64>,
+    pub floor_y: Option<i64>,
 }
 
-const META_COLUMNS: &str = "device_id, kind, label, group_id, rev, deleted_at, tv_number";
+const META_COLUMNS: &str =
+    "device_id, kind, label, group_id, rev, deleted_at, tv_number, zone_id, floor_x, floor_y";
 
 fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
     Ok(DeviceMetaRow {
@@ -138,6 +142,9 @@ fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
         rev: r.get(4)?,
         deleted_at: r.get(5)?,
         tv_number: r.get(6)?,
+        zone_id: r.get(7)?,
+        floor_x: r.get(8)?,
+        floor_y: r.get(9)?,
     })
 }
 
@@ -380,6 +387,142 @@ pub fn set_device_group(
         .execute(
             "UPDATE devices_meta SET group_id = ?2 WHERE device_id = ?1",
             params![device_id, group_id],
+        )
+        .map_err(db_error)?;
+    expect_one(n, device_id)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneRow {
+    pub zone_id: String,
+    pub name: String,
+    pub sort_order: i64,
+    pub rev: i64,
+    pub deleted_at: Option<i64>,
+}
+
+const ZONE_COLUMNS: &str = "zone_id, name, sort_order, rev, deleted_at";
+
+fn zone_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ZoneRow> {
+    Ok(ZoneRow {
+        zone_id: r.get(0)?,
+        name: r.get(1)?,
+        sort_order: r.get(2)?,
+        rev: r.get(3)?,
+        deleted_at: r.get(4)?,
+    })
+}
+
+pub fn find_zone(conn: &Connection, zone_id: &str) -> Result<Option<ZoneRow>, AppError> {
+    conn.query_row(
+        &format!("SELECT {ZONE_COLUMNS} FROM floor_zones WHERE zone_id = ?1"),
+        [zone_id],
+        zone_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn find_zone_by_name(conn: &Connection, name: &str) -> Result<Option<ZoneRow>, AppError> {
+    conn.query_row(
+        &format!(
+            "SELECT {ZONE_COLUMNS} FROM floor_zones
+             WHERE name = ?1 COLLATE NOCASE AND deleted_at IS NULL"
+        ),
+        [name],
+        zone_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn list_zones(conn: &Connection) -> Result<Vec<ZoneRow>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {ZONE_COLUMNS} FROM floor_zones WHERE deleted_at IS NULL
+             ORDER BY sort_order, name COLLATE NOCASE, zone_id"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], zone_from).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+pub fn count_zone_devices(conn: &Connection, zone_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM devices_meta WHERE zone_id = ?1 AND deleted_at IS NULL",
+        [zone_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+pub fn insert_zone(
+    conn: &Connection,
+    zone_id: &str,
+    name: &str,
+    sort_order: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO floor_zones (zone_id, name, sort_order, rev, deleted_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 0, NULL, 0, 0)",
+        params![zone_id, name, sort_order],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn update_zone(
+    conn: &Connection,
+    zone_id: &str,
+    name: &str,
+    sort_order: i64,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE floor_zones SET name = ?2, sort_order = ?3 WHERE zone_id = ?1",
+            params![zone_id, name, sort_order],
+        )
+        .map_err(db_error)?;
+    expect_one(n, zone_id)
+}
+
+pub fn set_zone_deleted(conn: &Connection, zone_id: &str, at_ms: i64) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE floor_zones SET deleted_at = ?2 WHERE zone_id = ?1",
+            params![zone_id, at_ms],
+        )
+        .map_err(db_error)?;
+    expect_one(n, zone_id)
+}
+
+pub fn cell_taken(
+    conn: &Connection,
+    zone_id: &str,
+    x: i64,
+    y: i64,
+    except: &str,
+) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM devices_meta WHERE zone_id = ?1 AND floor_x = ?2
+                        AND floor_y = ?3 AND deleted_at IS NULL AND device_id != ?4)",
+        params![zone_id, x, y, except],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+pub fn set_device_place(
+    conn: &Connection,
+    device_id: &str,
+    zone_id: Option<&str>,
+    x: Option<i64>,
+    y: Option<i64>,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE devices_meta SET zone_id = ?2, floor_x = ?3, floor_y = ?4 WHERE device_id = ?1",
+            params![device_id, zone_id, x, y],
         )
         .map_err(db_error)?;
     expect_one(n, device_id)

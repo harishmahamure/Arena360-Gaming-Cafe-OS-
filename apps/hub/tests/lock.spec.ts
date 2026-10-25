@@ -102,6 +102,7 @@ function snapshot(hub: Hub): HubSnapshot {
   return {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     groups: [],
+    zones: [],
     devices: hub.devices,
     locale: {
       currency: "INR",

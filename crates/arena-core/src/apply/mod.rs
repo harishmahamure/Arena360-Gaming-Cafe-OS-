@@ -40,6 +40,7 @@ mod staff_roles;
 mod ttl_dedupe;
 mod validate;
 pub(crate) mod verifier;
+mod zones;
 
 #[cfg(test)]
 mod tests;
@@ -125,6 +126,7 @@ pub(crate) enum Target {
     /// `device.admin_unlock`: the branch and the device.
     AdminUnlock(Box<admin_exit::UnlockTarget>),
     Group(Box<groups::GroupTarget>),
+    Zone(Box<zones::ZoneTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
@@ -147,6 +149,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<Target, AppError> {
         P::DeviceAdminUnlock(p) => admin_exit::load_unlock(tx, p)?,
         P::GroupUpsert(_) | P::GroupDelete(_) | P::DeviceAssign(_) => {
             Target::Group(Box::new(groups::load(tx, &intent.payload)?))
+        }
+        P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
+            Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
         }
     })
 }

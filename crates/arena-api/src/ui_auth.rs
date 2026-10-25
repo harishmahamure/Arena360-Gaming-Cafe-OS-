@@ -832,7 +832,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::IdempotencyConflict
         | ErrorCode::GroupNotEmpty
-        | ErrorCode::GroupKindMismatch => StatusCode::CONFLICT,
+        | ErrorCode::GroupKindMismatch
+        | ErrorCode::ZoneNotEmpty
+        | ErrorCode::CellTaken => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }

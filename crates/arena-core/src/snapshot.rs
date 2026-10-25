@@ -6,9 +6,9 @@ use std::sync::Mutex;
 
 use arena_proto::{
     AppError, ClientClass, ErrorCode, HubSnapshot, SettingEntry, SetupStatus, SnapshotBranch,
-    SnapshotDevice, SnapshotGroup, SnapshotLocale, SnapshotUi,
+    SnapshotDevice, SnapshotGroup, SnapshotLocale, SnapshotUi, SnapshotZone,
 };
-use arena_store::{BranchSummary, DeviceMetaRow, DeviceRow, GroupRow, Store};
+use arena_store::{BranchSummary, DeviceMetaRow, DeviceRow, GroupRow, Store, ZoneRow};
 
 use crate::locale::{locale_rows, next_rollover, snapshot_locale};
 
@@ -20,6 +20,7 @@ pub fn build_snapshot(
     devices: Vec<DeviceRow>,
     meta: Vec<DeviceMetaRow>,
     groups: Vec<GroupRow>,
+    zones: Vec<ZoneRow>,
     locale: Option<SnapshotLocale>,
     ui: SnapshotUi,
 ) -> HubSnapshot {
@@ -55,6 +56,15 @@ pub fn build_snapshot(
                 rev: g.rev,
             })
             .collect(),
+        zones: zones
+            .into_iter()
+            .map(|z| SnapshotZone {
+                id: z.zone_id,
+                name: z.name,
+                sort_order: z.sort_order,
+                rev: z.rev,
+            })
+            .collect(),
         devices: devices
             .into_iter()
             .filter(|d| d.revoked_at.is_none())
@@ -75,9 +85,11 @@ pub fn build_snapshot(
                     group_id: m.and_then(|m| m.group_id.clone()),
                     meta_rev: m.map(|m| m.rev),
                     tv_number: m.and_then(|m| m.tv_number),
+                    zone: m.and_then(|m| m.zone_id.clone()),
+                    floor_x: m.and_then(|m| m.floor_x),
+                    floor_y: m.and_then(|m| m.floor_y),
                     manual: d.token_hash.is_empty(),
                     device_id: d.device_id,
-                    zone: None,
                     // Presence is the LAN registry's, not the database's: the snapshot
                     // handler fills it in.
                     online: false,
@@ -90,18 +102,19 @@ pub fn build_snapshot(
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, meta, groups, locale, ui, setup) = store.read_consistent(|s| {
+    let (branch, devices, meta, groups, zones, locale, ui, setup) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
             s.devices()?,
             s.devices_meta()?,
             s.groups()?,
+            s.zones()?,
             read_locale(s, now_ms)?,
             read_ui(s)?,
             read_setup(s)?,
         ))
     })?;
-    let mut snapshot = build_snapshot(branch, devices, meta, groups, locale, ui);
+    let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
     Ok(snapshot)
 }
@@ -352,6 +365,7 @@ mod tests {
                     branch_code: "DEV01".into(),
                 }),
                 groups: vec![],
+                zones: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
                     label: "Front PC".into(),
@@ -362,6 +376,8 @@ mod tests {
                     group_id: None,
                     meta_rev: Some(0),
                     tv_number: None,
+                    floor_x: None,
+                    floor_y: None,
                     manual: false,
                 }],
                 locale: Some(SnapshotLocale {
@@ -403,6 +419,7 @@ mod tests {
             HubSnapshot {
                 branch: None,
                 groups: vec![],
+                zones: vec![],
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),
@@ -430,9 +447,17 @@ mod tests {
             rev: 1,
         };
         assert!(
-            build_snapshot(None, vec![row], vec![], vec![], None, SnapshotUi::default())
-                .devices
-                .is_empty()
+            build_snapshot(
+                None,
+                vec![row],
+                vec![],
+                vec![],
+                vec![],
+                None,
+                SnapshotUi::default()
+            )
+            .devices
+            .is_empty()
         );
     }
 }

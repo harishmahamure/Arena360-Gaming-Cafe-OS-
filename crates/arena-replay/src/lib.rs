@@ -302,6 +302,32 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            let zone = writer
+                .submit_intent(submit(
+                    IntentPayload::ZoneUpsert(arena_proto::ZoneUpsert {
+                        id: None,
+                        name: "PC hall".into(),
+                        sort_order: 1,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::DevicePlace(arena_proto::DevicePlace {
+                        device_id: kiosk.clone(),
+                        zone_id: Some(zone),
+                        floor_x: Some(1),
+                        floor_y: Some(2),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
             let exit = writer
                 .submit_intent(submit(
                     IntentPayload::DeviceAdminUnlock(arena_proto::DeviceAdminUnlock {

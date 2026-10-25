@@ -47,6 +47,7 @@ function snapshot(): HubSnapshot {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     devices: [],
     groups: [],
+    zones: [],
     locale: {
       currency: "INR",
       exponent: 2,

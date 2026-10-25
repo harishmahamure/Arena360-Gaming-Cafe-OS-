@@ -217,3 +217,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-12-hub-verifies-its-licence-against-trusted-time-and-enforces-i.md`
   summary: Test that Settings → Kitchen unlocks and re-locks live on a `licence.flags` change in the Hub UI (the 7.1 deferral): the Hub now writes the flag, but no Playwright test drives the live reload.
   evidence: Story 7.1 deferral; this story covers the server side only.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-23-floor-zones-and-grid-layout-per-branch.md`
+  summary: `devices_meta` place columns have no all-or-none CHECK (SQLite cannot add a table CHECK by ALTER); only `validate_place` enforces it. Add with the next `devices_meta` rebuild.
+  evidence: Review finding from Blind Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-23-floor-zones-and-grid-layout-per-branch.md`
+  summary: `device.revoke` keeps `zone_id`, `floor_x`, `floor_y` on the soft-deleted `devices_meta` row; clear them if a restore or re-register path for the same device id is added. `zone.upsert` `sort_order` has no server-side range (the UI caps input at nine digits).
+  evidence: Review findings from Blind Hunter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-23-floor-zones-and-grid-layout-per-branch.md`
+  summary: Missing tests: `groups.changed` raised for `floor_zones` (Rust and Playwright), HTTP 409 mapping of `ZONE_NOT_EMPTY` and `CELL_TAKEN`, store-level checks of the 0016 indexes, the Counter PIN prompt on Settings → Layout, the floor list order below 840 px; the new intents are not in the Story 1.8 `proptest` generator (as for the group intents).
+  evidence: Review findings from Verification Gap.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-23-floor-zones-and-grid-layout-per-branch.md`
+  summary: Zone grid: no busy flag against rapid concurrent places (the second gets `STALE`); `free()` is quadratic per render; the PIN approval block sits above the group form, away from the group controls.
+  evidence: Review findings from Blind Hunter.

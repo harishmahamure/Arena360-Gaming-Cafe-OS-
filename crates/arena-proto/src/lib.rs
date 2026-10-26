@@ -120,11 +120,11 @@ pub use licence::{LicenceClaims, LicenceError, VerifyKey};
 pub use operating::{
     ADS_POLICY_VERSION, AdConsentState, AdsConsent, AdsConsentSet, BACKUP_PROBE_PREFIX,
     BackupDirProblem, DAYS_PER_WEEK, DEFAULT_ADS_CONSENT, DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT,
-    DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET, FULFILMENT_MODES,
-    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS,
-    KEY_OPENING_HOURS_SET, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, LAST_MINUTE, OpeningDay,
-    OpeningHoursError, SetupStatus, TestSessionState, has_open_day, is_absolute_path,
-    opening_hours_json, parse_opening_hours,
+    DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET, DEFAULT_SETUP_LIVE,
+    FULFILMENT_MODES, KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT,
+    KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_SETUP_LIVE, KIOSK_OPERATING_KEYS,
+    KIOSK_VOLUME_MAX, LAST_MINUTE, OpeningDay, OpeningHoursError, SetupStatus, TestSessionState,
+    has_open_day, is_absolute_path, opening_hours_json, parse_opening_hours,
 };
 pub use pairing::{
     ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,
@@ -200,10 +200,10 @@ pub use ui_auth::{
 };
 pub use wizard::{
     AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, COUNTRIES, CafeDetails,
-    ChooseTier, Country, CountryRow, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME,
-    OwnerBranch, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable, UpdateBranch,
-    WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant, country, current_step,
-    valid_branch_code,
+    ChooseTier, Country, CountryRow, GoLiveBlocker, GoLiveItem, GoLiveItemView, GoLiveView,
+    KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME, OwnerBranch, SetBranchCode,
+    StepState, TierChoices, TierOption, TierUnavailable, UpdateBranch, WizardBranch, WizardState,
+    WizardStep, WizardStepInfo, WizardTenant, country, current_step, valid_branch_code,
 };
 
 /// Returns this crate's name.

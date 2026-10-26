@@ -1,19 +1,20 @@
 use arena_proto::{
     Actor, ActorKind, AppError, COMMAND_SCHEMA_VERSION, CommandWire, ErrorCode, Intent,
-    IntentPayload, SETTINGS_COMMAND_KEYS,
+    IntentPayload, KEY_SETUP_LIVE, SETTINGS_COMMAND_KEYS,
 };
 
 use arena_store::{StoreTx, find_device_meta, find_setting, find_staff};
 
 use crate::apply::is_ulid;
 
-const HANDLED: [&str; 6] = [
+const HANDLED: [&str; 7] = [
     "group.upsert",
     "device.assign",
     "device.register",
     "staff.upsert",
     "settings.set",
     "setup.test_session",
+    "branch.go_live",
 ];
 
 fn refused(code: ErrorCode, field: &str, message: &str) -> AppError {
@@ -55,9 +56,14 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
     };
     let kind = match cmd.kind.as_str() {
         "setup.test_session" => "device.test_session.start",
+        "branch.go_live" => "settings.set",
         other => other,
     };
     fields.insert("kind".into(), kind.into());
+    if cmd.kind == "branch.go_live" {
+        fields.insert("key".into(), KEY_SETUP_LIVE.into());
+        fields.insert("value".into(), "true".into());
+    }
     let payload: IntentPayload = serde_json::from_value(serde_json::Value::Object(fields))
         .map_err(|_| {
             refused(
@@ -67,6 +73,7 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
             )
         })?;
     if let IntentPayload::SettingsSet(s) = &payload
+        && cmd.kind != "branch.go_live"
         && !SETTINGS_COMMAND_KEYS.contains(&s.key.as_str())
     {
         return Err(refused(
@@ -142,7 +149,7 @@ mod tests {
 
     #[test]
     fn kinds_without_a_handler_or_outside_the_catalogue_are_unsupported() {
-        for kind in ["branch.go_live", "pricing.set", "branch.bootstrap"] {
+        for kind in ["pricing.set", "branch.bootstrap"] {
             let e = command_intent(&cmd(kind, json!({})), 1).unwrap_err();
             assert_eq!(e.code, ErrorCode::Unsupported, "{kind}");
         }
@@ -182,6 +189,16 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn go_live_becomes_a_settings_set_of_the_live_flag() {
+        let i = command_intent(&cmd("branch.go_live", json!({"key": "branch.name"})), 7).unwrap();
+        assert_eq!(i.kind, arena_proto::IntentKind::SettingsSet);
+        let IntentPayload::SettingsSet(s) = i.payload else {
+            panic!("not a settings.set")
+        };
+        assert_eq!((s.key.as_str(), s.value.as_str()), ("setup.live", "true"));
     }
 
     #[test]

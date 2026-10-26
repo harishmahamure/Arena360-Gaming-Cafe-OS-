@@ -78,7 +78,7 @@ async fn a_rejected_command_writes_nothing_but_its_record_and_is_not_retried() {
 #[tokio::test]
 async fn commands_the_hub_cannot_run_are_recorded_as_unsupported() {
     let f = bootstrapped().await;
-    for (id, kind) in [(1, "branch.go_live"), (3, "pricing.set")] {
+    for (id, kind) in [(1, "pricing.set"), (3, "branch.bootstrap")] {
         let row = f
             .writer
             .apply_command(cmd(id, kind, json!({})))
@@ -91,6 +91,21 @@ async fn commands_the_hub_cannot_run_are_recorded_as_unsupported() {
             "{kind}"
         );
     }
+}
+
+#[tokio::test]
+async fn go_live_sets_the_live_flag() {
+    let f = bootstrapped().await;
+    let row = f
+        .writer
+        .apply_command(cmd(1, "branch.go_live", json!({})))
+        .await
+        .unwrap();
+    assert!(row.applied, "{:?}", row.error);
+    assert_eq!(
+        setting(&reopen(&f), "setup.live")["value"],
+        RowValue::Text("true".into())
+    );
 }
 
 #[tokio::test]

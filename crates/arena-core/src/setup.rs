@@ -7,8 +7,8 @@ use crate::{Applied, HubStatus, SnapshotReader};
 
 use arena_proto::{
     AdConsentState, AdsConsent, AppError, BACKUP_PROBE_PREFIX, BackupDirProblem, ErrorCode,
-    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET, KEY_PRINTER_STATUS, KEY_TEST_SESSION,
-    PrinterState, PrinterStatus, SetupStatus, TestSessionStatus,
+    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET, KEY_PRINTER_STATUS, KEY_SETUP_LIVE,
+    KEY_TEST_SESSION, PrinterState, PrinterStatus, SetupStatus, TestSessionStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +48,7 @@ pub fn setup_status<'a>(
         test_session: value(KEY_TEST_SESSION)
             .and_then(TestSessionStatus::parse)
             .map_or_else(Default::default, |s| s.state),
+        live: value(KEY_SETUP_LIVE) == Some("true"),
     }
 }
 
@@ -92,6 +93,7 @@ async fn refresh(reader: &Arc<SnapshotReader>, status: &watch::Sender<HubStatus>
                 if s.setup == setup {
                     return false;
                 }
+                s.live = setup.is_some_and(|x| x.live);
                 s.setup = setup;
                 true
             });
@@ -145,6 +147,13 @@ mod tests {
     }
 
     #[test]
+    fn the_live_flag_follows_the_setting() {
+        assert!(!status(&[], HubTier::Free).live);
+        assert!(status(&[(KEY_SETUP_LIVE, "true")], HubTier::Free).live);
+        assert!(!status(&[(KEY_SETUP_LIVE, "false")], HubTier::Free).live);
+    }
+
+    #[test]
     fn setup_status_matrix() {
         let defaults = [
             (KEY_OPENING_HOURS_SET, "false"),
@@ -162,6 +171,7 @@ mod tests {
                 groups_without_rate: 0,
                 manager_exists: false,
                 test_session: Default::default(),
+                live: false,
             }
         );
         let given = r#"{"given":true,"at":1,"staff_id":"S"}"#;
@@ -185,6 +195,7 @@ mod tests {
                 groups_without_rate: 0,
                 manager_exists: false,
                 test_session: Default::default(),
+                live: false,
             }
         );
         assert_eq!(
@@ -215,6 +226,7 @@ mod tests {
                 groups_without_rate: 0,
                 manager_exists: false,
                 test_session: Default::default(),
+                live: false,
             }
         );
         for (value, state) in [

@@ -5,6 +5,7 @@ import type {
   Country,
   SessionOwner,
   SetupCommandView,
+  GoLiveView,
   SetupDevicesView,
   SignupChallenge,
   StaffInvite,
@@ -143,6 +144,7 @@ export type WizardStart = {
   skipped?: WizardStep[];
   invites?: StaffInviteView[];
   devices?: Partial<SetupDevicesView>;
+  goLive?: Partial<GoLiveView>;
 };
 
 export const STAFF_CODES = ["K7Q49MZD", "Q4K79MZD", "M3XT8PRW"];
@@ -226,6 +228,8 @@ export type Cloud = {
   invitePosts: StaffInvite[];
   deviceView: SetupDevicesView;
   devicePosts: { kind: string; payload: unknown }[];
+  goLive: GoLiveView;
+  goLivePosts: number;
   reissued: string[];
 };
 
@@ -317,6 +321,18 @@ export async function stubCloud(
       ...start.wizard?.devices,
     },
     devicePosts: [],
+    goLive: {
+      items: [
+        { key: "opening_hours", done: true },
+        { key: "backup_location", done: true },
+        { key: "standby", done: false },
+        { key: "ad_consent", done: true },
+      ],
+      free: true,
+      live: false,
+      ...start.wizard?.goLive,
+    },
+    goLivePosts: 0,
     reissued: [],
   };
   await page.route("**/v1/**", async (route) => {
@@ -575,6 +591,13 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
     };
     cloud.deviceView.commands.push(command);
     return { status: 200, body: command };
+  }
+  if (path === "/v1/wizard/go-live") {
+    if (method === "GET") return { status: 200, body: cloud.goLive };
+    cloud.goLivePosts += 1;
+    cloud.goLive.live = true;
+    cloud.done.add("go_live");
+    return { status: 200, body: wizardBody(cloud) };
   }
   const skipping = /^\/v1\/wizard\/(products|printer-payments)\/skip$/.exec(path);
   if (skipping && method === "POST") {

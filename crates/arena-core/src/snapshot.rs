@@ -493,6 +493,7 @@ mod tests {
                     groups_without_rate: 0,
                     manager_exists: false,
                     test_session: Default::default(),
+                    live: false,
                 }),
                 lan: None,
                 paired: true,

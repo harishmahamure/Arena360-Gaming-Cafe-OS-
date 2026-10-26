@@ -12,4 +12,5 @@ export type SetupStatus = {
   groups_without_rate: number;
   manager_exists: boolean;
   test_session: TestSessionState;
+  live: boolean;
 };

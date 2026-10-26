@@ -86,7 +86,7 @@ test.describe("routes", () => {
     await expect(page.getByTestId("plan-free")).toBeVisible();
   });
 
-  test("a step without its story yet says it is coming soon", async ({ page }) => {
+  test("a finished owner reaches the go-live step", async ({ page }) => {
     await stubCloud(page, {
       ...ready,
       wizard: {
@@ -106,7 +106,7 @@ test.describe("routes", () => {
     });
     await page.goto("/setup");
     await expect(page).toHaveURL(/\/setup\/go_live$/);
-    await expect(page.getByText(t("onboarding.setup.coming_soon"))).toBeVisible();
+    await expect(h1(page, "ui.wizard.step.go_live")).toBeVisible();
   });
 
   test("the owner sees the Hub sign-in code once, with Copy, after step 3", async ({ page }) => {

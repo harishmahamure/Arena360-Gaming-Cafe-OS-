@@ -7,9 +7,11 @@ pub const KEY_FULFILMENT: &str = "branch.fulfilment";
 pub const KEY_KIOSK_VOLUME_DEFAULT: &str = "kiosk.volume_default";
 pub const KEY_BACKUP_DIR: &str = "system.backup_dir";
 pub const KEY_ADS_CONSENT: &str = "branch.ads_consent";
+pub const KEY_SETUP_LIVE: &str = "setup.live";
 
 pub const DEFAULT_OPENING_HOURS: &str = r#"[{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true}]"#;
 pub const DEFAULT_OPENING_HOURS_SET: &str = "false";
+pub const DEFAULT_SETUP_LIVE: &str = "false";
 pub const DEFAULT_FULFILMENT: &str = "counter";
 pub const FULFILMENT_MODES: &[&str] = &["seat", "counter"];
 pub const DEFAULT_KIOSK_VOLUME: &str = "50";
@@ -178,6 +180,8 @@ pub struct SetupStatus {
     pub manager_exists: bool,
     #[serde(default)]
     pub test_session: TestSessionState,
+    #[serde(default)]
+    pub live: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
@@ -300,9 +304,10 @@ mod tests {
                 groups_without_rate: 2,
                 manager_exists: true,
                 test_session: TestSessionState::Passed,
+                live: false,
             })
             .unwrap(),
-            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "printer": "skipped", "products_count": 0, "groups_without_rate": 2, "manager_exists": true, "test_session": "passed"})
+            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "printer": "skipped", "products_count": 0, "groups_without_rate": 2, "manager_exists": true, "test_session": "passed", "live": false})
         );
         assert_eq!(BackupDirProblem::NotWritable.as_str(), "not_writable");
         assert_eq!(

@@ -57,6 +57,22 @@ impl ControlDb {
         Ok(())
     }
 
+    pub async fn go_live(&self, branch_id: &str, now: i64) -> Result<(), ControlError> {
+        self.transact(vec![
+            Stmt::new(
+                "UPDATE branches SET live_at = COALESCE(live_at, ?), updated_at = ? WHERE id = ?",
+                vec![
+                    SqlValue::Integer(now),
+                    SqlValue::Integer(now),
+                    text(branch_id),
+                ],
+            ),
+            finish("go_live", branch_id, now),
+        ])
+        .await?;
+        Ok(())
+    }
+
     pub async fn branch_setup(
         &self,
         branch_id: &str,

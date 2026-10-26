@@ -4405,6 +4405,7 @@ mod operating {
                 groups_without_rate: 0,
                 manager_exists: false,
                 test_session: Default::default(),
+                live: false,
             }
         );
         let manager = staff(&f, "manager", ROLE_MANAGER).await;
@@ -4427,6 +4428,7 @@ mod operating {
                 groups_without_rate: 0,
                 manager_exists: true,
                 test_session: Default::default(),
+                live: false,
             }
         );
         f.writer
@@ -4452,6 +4454,7 @@ mod operating {
                 groups_without_rate: 0,
                 manager_exists: true,
                 test_session: Default::default(),
+                live: false,
             }
         );
         save(&f, "system.backup_dir", "").await.unwrap();
@@ -4495,6 +4498,7 @@ mod operating {
                 groups_without_rate: 0,
                 manager_exists: false,
                 test_session: Default::default(),
+                live: false,
             },
         )
         .await;
@@ -4510,6 +4514,7 @@ mod operating {
                 groups_without_rate: 0,
                 manager_exists: false,
                 test_session: Default::default(),
+                live: false,
             },
         )
         .await;
@@ -4538,6 +4543,7 @@ mod operating {
                 groups_without_rate: 0,
                 manager_exists: true,
                 test_session: Default::default(),
+                live: false,
             },
         )
         .await;
@@ -4553,6 +4559,7 @@ mod operating {
                 groups_without_rate: 0,
                 manager_exists: true,
                 test_session: Default::default(),
+                live: false,
             },
         )
         .await;

@@ -1,9 +1,13 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
+  import { PUBLIC_OWNER_URL } from "$app/env/public";
   import { stepPath, wizard } from "../../lib/wizard.svelte";
 
   $effect(() => {
-    const current = wizard.state?.current;
-    if (current) goto(stepPath(current), { replaceState: true });
+    const state = wizard.state;
+    if (!state) return;
+    if (state.steps.some((s) => s.key === "go_live" && s.state === "done")) {
+      location.replace(PUBLIC_OWNER_URL.replace(/\/$/, "") + "/account/branches");
+    } else goto(stepPath(state.current), { replaceState: true });
   });
 </script>

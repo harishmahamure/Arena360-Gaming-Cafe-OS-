@@ -606,7 +606,8 @@ mod tests {
                     "products_count": 0,
                     "groups_without_rate": 0,
                     "manager_exists": false,
-                    "test_session": "unset"
+                    "test_session": "unset",
+                    "live": false
                 }}
             })
         );

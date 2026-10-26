@@ -375,6 +375,42 @@ pub fn valid_branch_code(code: &str) -> bool {
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum GoLiveItem {
+    OpeningHours,
+    BackupLocation,
+    Standby,
+    AdConsent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum GoLiveBlocker {
+    Step(WizardStep),
+    Item(GoLiveItem),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct GoLiveItemView {
+    pub key: GoLiveItem,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct GoLiveView {
+    pub items: Vec<GoLiveItemView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub blocker: Option<GoLiveBlocker>,
+    pub free: bool,
+    pub live: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

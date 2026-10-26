@@ -3,6 +3,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import type { Snippet } from "svelte";
   import { page } from "$app/state";
+  import { snapshotOf } from "../../lib/operating";
 
   let { children }: { children: Snippet } = $props();
 
@@ -19,7 +20,9 @@
     { href: "/settings/system", label: "hub.settings.nav.system" },
     { href: "/settings/setup", label: "hub.settings.nav.setup" },
   ];
-  const section = $derived(SECTIONS.find((s) => page.url.pathname.startsWith(s.href)));
+  const live = $derived(snapshotOf(page.data)?.setup?.live);
+  const sections = $derived(live ? SECTIONS.filter((s) => s.href !== "/settings/setup") : SECTIONS);
+  const section = $derived(sections.find((s) => page.url.pathname.startsWith(s.href)));
 </script>
 
 <svelte:head>
@@ -36,7 +39,7 @@
   <h1 class="type-hub-numeric">{t("hub.nav.settings")}</h1>
   <nav class="sections" aria-label={t("hub.settings.sections")}>
     <ul>
-      {#each SECTIONS as s (s.href)}
+      {#each sections as s (s.href)}
         <li>
           <a
             class="section ui-interactive type-hub-label"

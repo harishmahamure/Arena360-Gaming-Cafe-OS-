@@ -8,6 +8,10 @@ export const variables = defineEnvVars({
     public: true,
     schema: (value) => value ?? "",
   },
+  PUBLIC_OWNER_URL: {
+    public: true,
+    schema: (value) => value || "https://app.arena360.cloud",
+  },
   PUBLIC_HUB_DOWNLOAD_URL: {
     public: true,
     schema: (value) => value || "/download/hub",

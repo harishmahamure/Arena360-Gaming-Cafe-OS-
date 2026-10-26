@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { t } from "@arena/ui";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import DevicesStep from "../../../lib/DevicesStep.svelte";
   import CafeStep from "../../../lib/CafeStep.svelte";
+  import GoLiveStep from "../../../lib/GoLiveStep.svelte";
   import InstallHubStep from "../../../lib/InstallHubStep.svelte";
   import PrinterStep from "../../../lib/PrinterStep.svelte";
   import ProductsStep from "../../../lib/ProductsStep.svelte";
@@ -11,7 +11,7 @@
   import StaffStep from "../../../lib/StaffStep.svelte";
   import TestSessionStep from "../../../lib/TestSessionStep.svelte";
   import TierStep from "../../../lib/TierStep.svelte";
-  import { STEP_NAMES, isStep, stepIndex, stepPath, wizard } from "../../../lib/wizard.svelte";
+  import { isStep, stepIndex, stepPath, wizard } from "../../../lib/wizard.svelte";
 
   const requested = $derived(page.params.step);
   const open = $derived.by(() => {
@@ -45,14 +45,6 @@
   <PrinterStep />
 {:else if open === "test_session"}
   <TestSessionStep />
-{:else if open}
-  <h1 tabindex="-1">{t(STEP_NAMES[open])}</h1>
-  <p class="soon">{t("onboarding.setup.coming_soon")}</p>
+{:else if open === "go_live"}
+  <GoLiveStep />
 {/if}
-
-<style>
-  .soon {
-    margin: 0;
-    line-height: var(--type-hub-label-line-height);
-  }
-</style>

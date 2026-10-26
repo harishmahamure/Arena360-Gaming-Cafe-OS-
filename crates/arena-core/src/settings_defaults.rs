@@ -17,10 +17,10 @@ use arena_proto::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
 };
+use arena_proto::{DEFAULT_SETUP_LIVE, DEFAULT_TEST_SESSION, KEY_SETUP_LIVE, KEY_TEST_SESSION};
 use arena_proto::{
     DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME, KEY_TAX, TaxSettings,
 };
-use arena_proto::{DEFAULT_TEST_SESSION, KEY_TEST_SESSION};
 
 /// When staff last stopped the Android Hub service (epoch ms as text, empty until then). Staff
 /// set it through `settings.set`, so the audit log records the stop with both actors.
@@ -97,6 +97,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_KITCHEN_KOT_PAPER_MM, DEFAULT_KITCHEN_KOT_PAPER_MM),
     (KEY_TAX, DEFAULT_TAX),
     (KEY_TEST_SESSION, DEFAULT_TEST_SESSION),
+    (KEY_SETUP_LIVE, DEFAULT_SETUP_LIVE),
 ];
 
 pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
@@ -230,6 +231,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     ),
     (KEY_TAX, SettingRule::Tax),
     (KEY_TEST_SESSION, SettingRule::TestSession),
+    (KEY_SETUP_LIVE, SettingRule::Bool),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
     (KEY_BRANCH_NAME, SettingRule::BranchName),
     (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),

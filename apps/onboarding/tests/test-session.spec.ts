@@ -22,6 +22,7 @@ const status = (test_session: SetupStatus["test_session"]): SetupStatus => ({
   groups_without_rate: 0,
   manager_exists: false,
   test_session,
+  live: false,
 });
 const block = (test_session: SetupStatus["test_session"] = "unset", devices = [pc("D1")]) =>
   ({

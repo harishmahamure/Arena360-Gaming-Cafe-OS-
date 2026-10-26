@@ -2168,3 +2168,79 @@ async fn a_device_command_waits_until_the_hub_reports_and_a_refusal_shows_its_re
     let view = h.call("GET", "/v1/wizard/devices", None, &a).await;
     assert!(view.body["commands"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn go_live_needs_every_required_item_then_queues_one_command() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let status = |hours: bool, backup: bool, ads: &str| {
+        let mut s = setup_status("ok");
+        s["opening_hours_set"] = hours.into();
+        s["backup_location_set"] = backup.into();
+        s["ad_consent"] = ads.into();
+        s["test_session"] = "passed".into();
+        s
+    };
+    let beat = |s: Value| {
+        h.advance(6_000);
+        h.beat_with(
+            &token,
+            json!({"devices": [pc(json!("G1"))], "groups": [rated_group(true)], "status": s}),
+        )
+    };
+    beat(status(false, false, "missing")).await;
+    let early = h
+        .call("POST", "/v1/wizard/go-live", Some(json!({})), &a)
+        .await;
+    assert_eq!((early.status, early.code()), (422, "VALIDATION_FAILED"));
+    for kind in ["products", "staff"] {
+        let path = format!("/v1/wizard/{kind}/skip");
+        let r = h.call("POST", &path, Some(json!({})), &a).await;
+        assert_eq!(r.status, 200, "{kind}: {}", r.body);
+    }
+    for (s, first) in [
+        (status(false, true, "given"), "opening_hours"),
+        (status(true, false, "given"), "backup_location"),
+        (status(true, true, "missing"), "ad_consent"),
+    ] {
+        beat(s).await;
+        let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
+        assert_eq!(view.body["blocker"], json!({"item": first}), "{first}");
+        let r = h
+            .call("POST", "/v1/wizard/go-live", Some(json!({})), &a)
+            .await;
+        assert_eq!(r.status, 422, "{first}");
+    }
+    beat(status(true, true, "given")).await;
+    let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
+    assert_eq!(
+        (view.body["blocker"].clone(), view.body["live"].clone()),
+        (Value::Null, json!(false))
+    );
+    let standby = view.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["key"] == "standby")
+        .unwrap();
+    assert_eq!(standby["done"], false);
+    for _ in 0..2 {
+        let r = h
+            .call("POST", "/v1/wizard/go-live", Some(json!({})), &a)
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    assert_eq!(h.step(&a, "go_live").await, "done");
+    let page = h.fetch_commands(&token, 0).await;
+    let kinds: Vec<_> = page.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["kind"].as_str().unwrap().to_owned())
+        .filter(|k| k == "branch.go_live")
+        .collect();
+    assert_eq!(kinds.len(), 1);
+    let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
+    assert_eq!(view.body["live"], true);
+}

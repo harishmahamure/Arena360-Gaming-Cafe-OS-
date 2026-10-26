@@ -16,6 +16,7 @@ import type {
   SessionInfo,
   SetupCodeReveal,
   SetupCommandView,
+  GoLiveView,
   SetupDevicesView,
   StaffInvite,
   StaffInvited,
@@ -248,6 +249,8 @@ export const skipProducts = () =>
   withRefresh(() => call<WizardState>("POST", "/wizard/products/skip", {}));
 export const skipPrinter = () =>
   withRefresh(() => call<WizardState>("POST", "/wizard/printer-payments/skip", {}));
+export const getGoLive = () => withRefresh(() => call<GoLiveView>("GET", "/wizard/go-live"));
+export const goLive = () => withRefresh(() => call<WizardState>("POST", "/wizard/go-live", {}));
 export const getDevices = () => withRefresh(() => call<SetupDevicesView>("GET", "/wizard/devices"));
 export const sendDeviceCommand = (kind: string, payload: unknown) =>
   withRefresh(() => call<SetupCommandView>("POST", "/wizard/devices", { kind, payload }));

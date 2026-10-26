@@ -42,6 +42,7 @@ const STATUS: SetupStatus = {
   groups_without_rate: 0,
   manager_exists: false,
   test_session: "unset",
+  live: false,
 };
 
 function snapshot(
@@ -180,6 +181,13 @@ test("the Setup section is in the Settings navigation and passes axe", async ({ 
   const results = await new AxeBuilder({ page }).analyze();
   const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(bad.map((v) => v.id)).toEqual([]);
+});
+
+test("a live branch no longer lists Setup in the Settings navigation", async ({ page }) => {
+  await open(page, snapshot({ ...STATUS, live: true }, 1, true));
+  const nav = page.getByRole("navigation", { name: en["hub.settings.sections"] });
+  await expect(nav.getByRole("link", { name: en["hub.settings.nav.branch"] })).toBeVisible();
+  await expect(nav.getByRole("link", { name: en["hub.settings.nav.setup"] })).toHaveCount(0);
 });
 
 const pick = (page: Page) => page.getByLabel(en["hub.settings.setup.test_session.pick"]);

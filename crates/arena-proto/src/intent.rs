@@ -7,6 +7,7 @@ use crate::actor::{Actor, ElevatedBy};
 use crate::admin::{DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock};
 use crate::kiosk::KioskLog;
 use crate::operating::AdsConsentSet;
+use crate::pc_command::{DevicePower, DeviceScreen};
 use crate::permission::{Permission, Requirement};
 use crate::printer::PrinterStatusSet;
 use crate::process::KioskProcessBlocked;
@@ -120,11 +121,15 @@ pub enum IntentKind {
     DeviceTestSessionStart,
     #[serde(rename = "device.test_session.completed")]
     DeviceTestSessionCompleted,
+    #[serde(rename = "device.screen")]
+    DeviceScreen,
+    #[serde(rename = "device.power")]
+    DevicePower,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 33] = [
+    pub const ALL: [IntentKind; 35] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -158,6 +163,8 @@ impl IntentKind {
         Self::RateUpsert,
         Self::DeviceTestSessionStart,
         Self::DeviceTestSessionCompleted,
+        Self::DeviceScreen,
+        Self::DevicePower,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -196,6 +203,8 @@ impl IntentKind {
             Self::RateUpsert => "rate.upsert",
             Self::DeviceTestSessionStart => "device.test_session.start",
             Self::DeviceTestSessionCompleted => "device.test_session.completed",
+            Self::DeviceScreen => "device.screen",
+            Self::DevicePower => "device.power",
         }
     }
 
@@ -226,6 +235,8 @@ impl IntentKind {
             | Self::DeviceMaintenance
             | Self::DeviceTestSessionStart
             | Self::DeviceTestSessionCompleted
+            | Self::DeviceScreen
+            | Self::DevicePower
             | Self::RateUpsert => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert | Self::StaffSetCredentials => {
@@ -257,7 +268,8 @@ impl IntentKind {
             | Self::DeviceMaintenance
             | Self::DeviceTestSessionStart
             | Self::RateUpsert => Requirement::Perm(Permission::DeviceManage),
-            Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
+            Self::DeviceRevoke | Self::DevicePower => Requirement::Perm(Permission::DeviceRemote),
+            Self::DeviceScreen => Requirement::Perm(Permission::DeviceScreen),
             Self::DeviceVersionReported | Self::LicenceApply | Self::StaffSetCredentials => {
                 Requirement::System
             }
@@ -328,7 +340,9 @@ impl IntentKind {
             Self::DeviceMaintenance
             | Self::RateUpsert
             | Self::DeviceTestSessionStart
-            | Self::DeviceTestSessionCompleted => None,
+            | Self::DeviceTestSessionCompleted
+            | Self::DeviceScreen
+            | Self::DevicePower => None,
         }
     }
 
@@ -756,6 +770,10 @@ pub enum IntentPayload {
     DeviceTestSessionStart(DeviceTestSessionStart),
     #[serde(rename = "device.test_session.completed")]
     DeviceTestSessionCompleted(DeviceTestSessionCompleted),
+    #[serde(rename = "device.screen")]
+    DeviceScreen(DeviceScreen),
+    #[serde(rename = "device.power")]
+    DevicePower(DevicePower),
 }
 
 impl IntentPayload {
@@ -794,6 +812,8 @@ impl IntentPayload {
             Self::RateUpsert(_) => IntentKind::RateUpsert,
             Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
             Self::DeviceTestSessionCompleted(_) => IntentKind::DeviceTestSessionCompleted,
+            Self::DeviceScreen(_) => IntentKind::DeviceScreen,
+            Self::DevicePower(_) => IntentKind::DevicePower,
         }
     }
 }
@@ -1029,9 +1049,10 @@ mod tests {
                 | "device.maintenance"
                 | "rate.upsert"
                 | "device.test_session.start" => Requirement::Perm(Permission::DeviceManage),
-                "device.revoke" | "device.admin_unlock" => {
+                "device.revoke" | "device.admin_unlock" | "device.power" => {
                     Requirement::Perm(Permission::DeviceRemote)
                 }
+                "device.screen" => Requirement::Perm(Permission::DeviceScreen),
                 "device.admin_exit" | "device.admin_relock" => Requirement::Device,
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
                 "staff.set_credentials" => Requirement::System,

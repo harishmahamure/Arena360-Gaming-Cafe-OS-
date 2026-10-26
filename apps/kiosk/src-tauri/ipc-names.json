@@ -8,6 +8,7 @@
     "testSession": "test-session",
     "testSessionEnded": "test-session-ended",
     "theme": "theme",
+    "pcScreen": "pc-screen",
     "discoveryFound": "discovery-found",
     "discoveryDone": "discovery-done"
   },
@@ -24,6 +25,8 @@
     "probeIp": "probe_ip",
     "selectHub": "select_hub",
     "pair": "pair",
-    "pairInfo": "pair_info"
+    "pairInfo": "pair_info",
+    "pcScreen": "pc_screen",
+    "pcDismiss": "pc_dismiss"
   }
 }

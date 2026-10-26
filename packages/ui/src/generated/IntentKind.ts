@@ -36,4 +36,6 @@ export type IntentKind =
   | "device.maintenance"
   | "rate.upsert"
   | "device.test_session.start"
-  | "device.test_session.completed";
+  | "device.test_session.completed"
+  | "device.screen"
+  | "device.power";

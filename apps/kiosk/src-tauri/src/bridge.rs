@@ -46,6 +46,7 @@ pub const ADMIN_EXIT_ENDED_EVENT: &str = "admin-exit-ended";
 pub const THEME_EVENT: &str = "theme";
 pub const TEST_SESSION_EVENT: &str = "test-session";
 pub const TEST_SESSION_ENDED_EVENT: &str = "test-session-ended";
+pub const PC_SCREEN_EVENT: &str = "pc-screen";
 pub const DISCOVERY_FOUND_EVENT: &str = "discovery-found";
 pub const DISCOVERY_DONE_EVENT: &str = "discovery-done";
 /// How long the shell waits for the service's answer to a PIN.
@@ -53,7 +54,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 13] = [
+const COMMANDS: [&str; 15] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -67,6 +68,8 @@ const COMMANDS: [&str; 13] = [
     "select_hub",
     "pair",
     "pair_info",
+    "pc_screen",
+    "pc_dismiss",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -90,6 +93,13 @@ pub enum Emit {
     DiscoveryDone(u64, Vec<DiscoveredHub>),
     TestSession(u64),
     TestSessionEnded,
+    PcScreen(PcScreen),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PcScreen {
+    pub locked: bool,
+    pub message: Option<String>,
 }
 
 /// What the service answered to a request: the body, or the error code (and the body that came
@@ -124,6 +134,7 @@ pub struct Bridge {
     /// This kiosk's high contrast, once the service has said (or `main.rs` has decided).
     theme: watch::Sender<Option<bool>>,
     test_deadline: Mutex<Option<Instant>>,
+    screen: Mutex<PcScreen>,
 }
 
 impl Default for Bridge {
@@ -141,6 +152,7 @@ impl Default for Bridge {
             exit_running: AtomicBool::new(false),
             theme: watch::channel(None).0,
             test_deadline: Mutex::default(),
+            screen: Mutex::default(),
         }
     }
 }
@@ -240,6 +252,10 @@ impl Bridge {
         }
     }
 
+    pub fn pc_screen(&self) -> PcScreen {
+        lock(&self.screen).clone()
+    }
+
     pub fn test_remaining_ms(&self) -> Option<u64> {
         let deadline = (*lock(&self.test_deadline))?;
         Some(
@@ -311,6 +327,11 @@ impl Bridge {
             IpcMsg::TestSessionEnded => {
                 let ran = lock(&self.test_deadline).take().is_some();
                 (None, ran.then_some(Emit::TestSessionEnded))
+            }
+            IpcMsg::PcScreen { locked, message } => {
+                let screen = PcScreen { locked, message };
+                *lock(&self.screen) = screen.clone();
+                (None, Some(Emit::PcScreen(screen)))
             }
             IpcMsg::DiscoveryFound { search, hubs } => {
                 (None, Some(Emit::DiscoveryFound(search, hubs)))
@@ -535,6 +556,7 @@ mod tests {
             names["events"]["testSessionEnded"],
             TEST_SESSION_ENDED_EVENT
         );
+        assert_eq!(names["events"]["pcScreen"], PC_SCREEN_EVENT);
         assert_eq!(names["events"]["discoveryFound"], DISCOVERY_FOUND_EVENT);
         assert_eq!(names["events"]["discoveryDone"], DISCOVERY_DONE_EVENT);
         let mut listed: Vec<&str> = names["commands"]
@@ -709,6 +731,24 @@ mod tests {
         );
         assert_eq!(b.test_remaining_ms(), None);
         assert_eq!(b.on_message(IpcMsg::TestSessionEnded), (None, None));
+    }
+
+    #[test]
+    fn the_staff_lock_and_message_are_kept_and_forwarded() {
+        let b = Bridge::default();
+        assert_eq!(b.pc_screen(), PcScreen::default());
+        let shown = PcScreen {
+            locked: true,
+            message: Some("hi".into()),
+        };
+        assert_eq!(
+            b.on_message(IpcMsg::PcScreen {
+                locked: true,
+                message: Some("hi".into())
+            }),
+            (None, Some(Emit::PcScreen(shown.clone())))
+        );
+        assert_eq!(b.pc_screen(), shown);
     }
 
     #[test]

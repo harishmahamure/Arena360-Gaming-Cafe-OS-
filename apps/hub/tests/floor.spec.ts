@@ -100,6 +100,7 @@ test("arrows move focus in grid order and Enter activates the tile", async ({ pa
   await page.keyboard.press("ArrowLeft");
   await expect(faces.nth(1)).toBeFocused();
   await page.keyboard.press("Enter");
+  await expect(page.getByRole("complementary")).toHaveAccessibleName("PC 2");
   await expect(tile(page, "PC 2")).toHaveAttribute("aria-current", "true");
   await expect(faces.nth(1)).toHaveAttribute("tabindex", "0");
   await expect(faces.nth(0)).toHaveAttribute("tabindex", "-1");

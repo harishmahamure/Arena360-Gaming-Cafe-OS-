@@ -27,8 +27,8 @@ use arena_core::{Applied, DeviceDirectory};
 use arena_proto::{
     AdminExitMode, AdminUnlockAckEvent, AppError, AppliedSummary, ChangeOpKind, ChangeSummary,
     ClientClass, ErrorCode, EventFrame, Frame, FrameBody, HcTarget, HubEvent, ManagerVerifier,
-    PAIRED_SETTINGS_PREFIX, SettingEntry, SettingsValues, TEST_SESSION_MS, TestSessionState,
-    TestSessionStatus, may_read_setting, parse_hc_key,
+    PAIRED_SETTINGS_PREFIX, PcAckEvent, PcAction, SettingEntry, SettingsValues, TEST_SESSION_MS,
+    TestSessionState, TestSessionStatus, may_read_setting, parse_hc_key,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -41,6 +41,8 @@ pub(crate) enum Kill {
     /// Close without a frame (queue overflow, shutdown).
     Drop,
 }
+
+const PENDING_CMD_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
 pub(crate) const OFFLINE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -70,6 +72,8 @@ pub(crate) struct Registry {
     seen: Mutex<HashMap<String, (tokio::time::Instant, i64)>>,
     /// Remote unlocks a kiosk acknowledged (for the Hub UI).
     acks: broadcast::Sender<AdminUnlockAckEvent>,
+    pending_cmds: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    pc_acks: broadcast::Sender<PcAckEvent>,
     /// The manager-verifier version last pushed to every paired session (-1: none yet).
     verifier_pushed: AtomicI64,
 }
@@ -84,6 +88,8 @@ impl Default for Registry {
             presence: watch::channel(0).0,
             seen: Mutex::default(),
             acks: broadcast::channel(64).0,
+            pending_cmds: Mutex::default(),
+            pc_acks: broadcast::channel(64).0,
             verifier_pushed: AtomicI64::new(-1),
         }
     }
@@ -257,6 +263,50 @@ impl Registry {
     /// Publishes a kiosk's acknowledgement of a remote unlock (no subscriber is fine).
     pub(crate) fn ack_admin_unlock(&self, ack: AdminUnlockAckEvent) {
         let _ = self.acks.send(ack);
+    }
+
+    pub(crate) fn pc_acks(&self) -> broadcast::Receiver<PcAckEvent> {
+        self.pc_acks.subscribe()
+    }
+
+    pub(crate) fn ack_pc(&self, device_id: &str, cmd_id: &str) -> bool {
+        let Ok(mut pending) = self.pending_cmds.lock() else {
+            return false;
+        };
+        if pending.get(cmd_id).is_none_or(|(d, _)| d != device_id) {
+            return false;
+        }
+        pending.remove(cmd_id);
+        let _ = self.pc_acks.send(PcAckEvent {
+            cmd_id: cmd_id.to_owned(),
+            device_id: device_id.to_owned(),
+        });
+        true
+    }
+
+    pub(crate) fn push_pc_command(
+        &self,
+        device_id: &str,
+        cmd_id: &str,
+        action: PcAction,
+        text: Option<String>,
+    ) -> usize {
+        if let Ok(mut pending) = self.pending_cmds.lock() {
+            pending.retain(|_, (_, at)| at.elapsed() < PENDING_CMD_TTL);
+            pending.insert(
+                cmd_id.to_owned(),
+                (device_id.to_owned(), std::time::Instant::now()),
+            );
+        }
+        let msg = event_frame(
+            self.next_rid(),
+            HubEvent::PcCommand {
+                cmd_id: cmd_id.to_owned(),
+                action,
+                text,
+            },
+        );
+        self.push_paired(&msg, Some(device_id))
     }
 
     fn next_rid(&self) -> String {
@@ -1120,6 +1170,44 @@ mod tests {
             device_id: "A".into(),
         });
         assert_eq!(acks.recv().await.unwrap().exit_id, "E1");
+    }
+
+    #[tokio::test]
+    async fn a_pc_command_reaches_one_device_and_only_its_own_ack_counts() {
+        let reg = Arc::new(Registry::default());
+        let (a_tx, mut a_rx) = mpsc::channel(8);
+        let _a = reg.register(ClientClass::Paired, Some("A".into()), a_tx);
+        let (b_tx, mut b_rx) = mpsc::channel(8);
+        let _b = reg.register(ClientClass::Paired, Some("B".into()), b_tx);
+        let (k_tx, mut k_rx) = mpsc::channel(8);
+        let _k = reg.register(ClientClass::Kds, Some("K".into()), k_tx);
+        assert_eq!(
+            reg.push_pc_command("A", "C1", PcAction::Message, Some("hi".into())),
+            1
+        );
+        let Some(Message::Text(t)) = a_rx.recv().await else {
+            panic!("text")
+        };
+        assert_eq!(
+            arena_proto::parse_frame(t.as_str()).unwrap().body,
+            FrameBody::Event(EventFrame {
+                event: HubEvent::PcCommand {
+                    cmd_id: "C1".into(),
+                    action: PcAction::Message,
+                    text: Some("hi".into())
+                }
+            })
+        );
+        assert!(b_rx.try_recv().is_err() && k_rx.try_recv().is_err());
+        assert_eq!(reg.push_pc_command("K", "C2", PcAction::Lock, None), 0);
+        let mut acks = reg.pc_acks();
+        assert!(!reg.ack_pc("B", "C1"), "another device's ack");
+        assert!(!reg.ack_pc("A", "nope"), "no such command");
+        assert!(reg.ack_pc("A", "C1"));
+        assert!(!reg.ack_pc("A", "C1"), "acked once per push");
+        assert_eq!(acks.recv().await.unwrap().device_id, "A");
+        assert_eq!(reg.push_pc_command("A", "C1", PcAction::Message, None), 1);
+        assert!(reg.ack_pc("A", "C1"), "a retry's push is pending again");
     }
 
     #[tokio::test]

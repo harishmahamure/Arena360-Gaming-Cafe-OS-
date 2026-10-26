@@ -1008,12 +1008,16 @@ start and the re-lock time, and a "Flagged for review" marker when flagged.
   scope, on Windows) and checks the PIN against it off the async threads. The version is
   `max(pin_verifier_version) + hub_meta.verifier_counter`, bumped on any change to that list, and
   `verifier_history(version, valid_from)` records when each took effect.
-- **Remotely (`remote`).** The floor's "Remote unlock" on a paired device submits
+- **Remotely (`remote`).** The tile sheet's "Admin unlock" on a paired device submits
   `device.admin_unlock{device_id}` (`device.remote`; a Counter gets the manager PIN in place).
   An offline device is refused at once. The Hub pushes `event{kind:"admin_unlock", exit_id}` to
   that device; the kiosk grants it and answers `kiosk.admin_unlock_ack{exit_id}`, which reaches
-  the Hub UI as `event: device.admin_unlock_ack` on `/ui/events`. Without it within 5 s the floor
-  says "Failed — retry".
+  the Hub UI as `event: device.admin_unlock_ack` on `/ui/events`. Without it within 5 s the tile
+  says "Failed — retry". The sheet's other PC actions work the same way: `device.screen` (lock, unlock,
+  message; `device.screen`, held by Counter) and `device.power` (restart, shut down; `device.remote`)
+  push `event{kind:"pc_command", cmd_id, action, text?}` (`cmd_id` is the intent's idempotency key,
+  pushed again on a retry) and the kiosk acts once per `cmd_id` and answers `kiosk.pc_ack{cmd_id}`,
+  relayed as `event: device.pc_ack`.
 
 The kiosk records each exit as `device.admin_exit{exit_id, mode}` (device actor, `elevated_by`
 `{pin, staff_id, hub|cached_verifier, verifier_version}`; the only intent that accepts a

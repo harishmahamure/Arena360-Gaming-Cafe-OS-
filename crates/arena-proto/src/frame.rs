@@ -14,6 +14,7 @@ use ts_rs::TS;
 use crate::admin::{AdminPinOk, AdminUnlockAck, ManagerVerifier, VerifyAdminPin};
 use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
+use crate::pc_command::{PcAck, PcAction};
 use crate::scope::ClientClass;
 use crate::ui_auth::SettingEntry;
 
@@ -68,13 +69,15 @@ pub enum FrameBody {
     AdminPinOk(AdminPinOk),
     #[serde(rename = "kiosk.admin_unlock_ack")]
     AdminUnlockAck(AdminUnlockAck),
+    #[serde(rename = "kiosk.pc_ack")]
+    PcAck(PcAck),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 14] = [
+pub const FRAME_KINDS: [&str; 15] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -88,6 +91,7 @@ pub const FRAME_KINDS: [&str; 14] = [
     "kiosk.verify_admin_pin",
     "kiosk.admin_pin_ok",
     "kiosk.admin_unlock_ack",
+    "kiosk.pc_ack",
     "ack",
 ];
 
@@ -108,6 +112,7 @@ impl FrameBody {
             Self::VerifyAdminPin(_) => "kiosk.verify_admin_pin",
             Self::AdminPinOk(_) => "kiosk.admin_pin_ok",
             Self::AdminUnlockAck(_) => "kiosk.admin_unlock_ack",
+            Self::PcAck(_) => "kiosk.pc_ack",
             Self::Ack => "ack",
         }
     }
@@ -231,6 +236,14 @@ pub enum HubEvent {
     /// `kiosk.admin_unlock_ack` (to that device's paired sessions only).
     #[serde(rename = "admin_unlock")]
     AdminUnlock { exit_id: String },
+    #[serde(rename = "pc_command")]
+    PcCommand {
+        cmd_id: String,
+        action: PcAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        text: Option<String>,
+    },
     #[serde(rename = "catalog.changed")]
     CatalogChanged { products: Vec<crate::CatalogEntry> },
     #[serde(rename = "test_session")]
@@ -536,6 +549,27 @@ mod tests {
             v["event"],
             serde_json::json!({"kind": "admin_unlock", "exit_id": "X"})
         );
+    }
+
+    #[test]
+    fn pc_command_event_and_ack_round_trip() {
+        let ev = Frame::new(
+            "e",
+            FrameBody::Event(EventFrame {
+                event: HubEvent::PcCommand {
+                    cmd_id: "C".into(),
+                    action: PcAction::Message,
+                    text: Some("hi".into()),
+                },
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(&ev).unwrap()["event"],
+            json!({"kind": "pc_command", "cmd_id": "C", "action": "message", "text": "hi"})
+        );
+        assert_eq!(parse_frame(&ev.to_text()).unwrap(), ev);
+        let ack = Frame::new("r", FrameBody::PcAck(PcAck { cmd_id: "C".into() }));
+        assert_eq!(parse_frame(&ack.to_text()).unwrap(), ack);
     }
 
     #[test]

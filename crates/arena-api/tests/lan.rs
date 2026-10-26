@@ -1498,6 +1498,65 @@ async fn a_remote_unlock_reaches_the_kiosk_and_its_ack_reaches_the_hub_ui() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pc_command_reaches_the_kiosk_and_only_a_pending_ack_reaches_the_hub_ui() {
+    let hub = start("0.1.0", true).await;
+    let mut acks = hub.presence.pc_acks().unwrap();
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    let cmd_id = "01JCMDAAAAAAAAAAAAAAAAAAAA";
+    let bad = client
+        .request("kiosk.pc_ack", serde_json::json!({ "cmd_id": cmd_id }))
+        .await;
+    assert!(matches!(bad, Err(ClientError::Hub(e)) if e.code == ErrorCode::ValidationFailed));
+    assert_eq!(
+        hub.presence.push_pc_command(
+            &hub.paired_id,
+            cmd_id,
+            arena_proto::PcAction::Message,
+            Some("hello".into())
+        ),
+        1
+    );
+    let pushed = loop {
+        match tokio::time::timeout(Duration::from_secs(5), events.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            HubEvent::PcCommand {
+                cmd_id,
+                action,
+                text,
+            } => break (cmd_id, action, text),
+            _ => continue,
+        }
+    };
+    assert_eq!(
+        pushed,
+        (
+            cmd_id.to_owned(),
+            arena_proto::PcAction::Message,
+            Some("hello".to_owned())
+        )
+    );
+    let frame = client
+        .request("kiosk.pc_ack", serde_json::json!({ "cmd_id": cmd_id }))
+        .await
+        .unwrap();
+    assert_eq!(frame.body, FrameBody::Ack);
+    let ack = tokio::time::timeout(Duration::from_secs(5), acks.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (ack.cmd_id.as_str(), ack.device_id),
+        (cmd_id, hub.paired_id.clone())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_test_session_reaches_the_kiosk_and_only_it_completes_it() {
     let hub = start("0.1.0", true).await;
     let w = hub.writer.as_ref().unwrap();

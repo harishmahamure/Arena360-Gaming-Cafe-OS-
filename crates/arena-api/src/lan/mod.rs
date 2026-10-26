@@ -115,6 +115,22 @@ impl Presence {
     ) -> Option<tokio::sync::broadcast::Receiver<arena_proto::AdminUnlockAckEvent>> {
         self.0.as_ref().map(|r| r.admin_unlock_acks())
     }
+
+    pub fn pc_acks(&self) -> Option<tokio::sync::broadcast::Receiver<arena_proto::PcAckEvent>> {
+        self.0.as_ref().map(|r| r.pc_acks())
+    }
+
+    pub fn push_pc_command(
+        &self,
+        device_id: &str,
+        cmd_id: &str,
+        action: arena_proto::PcAction,
+        text: Option<String>,
+    ) -> usize {
+        self.0
+            .as_ref()
+            .map_or(0, |r| r.push_pc_command(device_id, cmd_id, action, text))
+    }
 }
 
 pub struct HubInfoSource {

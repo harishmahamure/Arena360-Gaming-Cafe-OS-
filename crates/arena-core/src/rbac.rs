@@ -26,7 +26,7 @@ pub const BUILTIN_ROLES: [&str; 5] = [
     ROLE_KIOSK_DEVICE,
 ];
 
-const COUNTER_PERMS: [Permission; 13] = [
+const COUNTER_PERMS: [Permission; 14] = [
     Permission::SessionStart,
     Permission::SessionPause,
     Permission::SessionExtend,
@@ -40,6 +40,7 @@ const COUNTER_PERMS: [Permission; 13] = [
     Permission::StockIn,
     Permission::PlayerManage,
     Permission::PlayerView,
+    Permission::DeviceScreen,
 ];
 
 /// The permissions a built-in role allows (every row is an `allow`). Kiosk-device has none:
@@ -144,7 +145,7 @@ mod tests {
         let manager = builtin_perms(ROLE_MANAGER);
         assert_eq!(manager.len(), Permission::ALL.len() - 1);
         assert!(!manager.contains(&Permission::OpsRestore));
-        assert_eq!(builtin_perms(ROLE_COUNTER).len(), 13);
+        assert_eq!(builtin_perms(ROLE_COUNTER).len(), 14);
         assert!(!builtin_perms(ROLE_COUNTER).contains(&Permission::SettingsEdit));
         assert_eq!(builtin_perms(ROLE_KITCHEN), vec![Permission::KitchenUse]);
         assert!(builtin_perms(ROLE_KIOSK_DEVICE).is_empty());

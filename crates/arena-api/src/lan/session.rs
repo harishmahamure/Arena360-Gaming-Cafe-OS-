@@ -583,6 +583,13 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "kiosk.pc_ack" => {
+                let reply = match self.check_pc_ack(value) {
+                    Ok(()) => Frame::new(rid, FrameBody::Ack),
+                    Err(e) => Frame::error(rid, e),
+                };
+                self.reply(reply).await;
+            }
             other => {
                 let e = app(
                     ErrorCode::Unsupported,
@@ -763,6 +770,22 @@ impl Ctx<'_> {
             return Err(app(ErrorCode::BadFrame, "malformed kiosk.admin_unlock_ack"));
         };
         Ok((device, a.exit_id))
+    }
+
+    fn check_pc_ack(&self, value: Value) -> Result<(), AppError> {
+        let device = self.paired_device("kiosk.pc_ack")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PcAck(a) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed kiosk.pc_ack"));
+        };
+        if self.hub.registry.ack_pc(&device, &a.cmd_id) {
+            return Ok(());
+        }
+        Err(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "cmd_id",
+            "no pending command of this device has that id",
+        ))
     }
 
     async fn spawn_verify_pin(

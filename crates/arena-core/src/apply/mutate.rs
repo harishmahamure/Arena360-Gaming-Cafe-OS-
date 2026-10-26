@@ -239,6 +239,10 @@ pub(super) fn mutate(
             Target::Stock(t) => stock::mutate_revert(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::DeviceScreen(_) | IntentPayload::DevicePower(_) => match target {
+            Target::Pc(t) => super::pc_command::mutate(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::RateUpsert(r) => match target {
             Target::Rate(t) => rates::mutate(tx, r, t),
             _ => Err(mismatch()),

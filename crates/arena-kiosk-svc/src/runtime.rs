@@ -85,6 +85,7 @@ pub struct Ctx {
     pub discovery: crate::discovery::Discovery,
     pub provisioned: Notify,
     pub test_session: watch::Sender<Option<tokio::time::Instant>>,
+    pub pc: crate::pc::PcState,
 }
 
 impl Ctx {
@@ -189,6 +190,7 @@ impl Runtime {
             .flatten()
             .map(|c| c.device_id);
         let (theme, _) = watch::channel(crate::theme::load(&queue, device_id.as_deref()));
+        let pc = crate::pc::PcState::load(&queue);
         let (toasts, _) = broadcast::channel(16);
         let (hub_state, _) = watch::channel(KioskHubState::Reconnecting);
         let ctx = Arc::new(Ctx {
@@ -211,6 +213,7 @@ impl Runtime {
             discovery,
             provisioned: Notify::new(),
             test_session: watch::channel(None).0,
+            pc,
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![

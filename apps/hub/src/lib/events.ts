@@ -4,6 +4,7 @@
 import type {
   AdminUnlockAckEvent,
   Connectivity,
+  PcAckEvent,
   SettingsChangedEvent,
   UnlockOk,
 } from "@arena/ui/generated";
@@ -31,6 +32,7 @@ export type EventHandlers = {
   onConnectivityChanged?: (event: Connectivity) => void;
   /** `device.admin_unlock_ack`: a kiosk granted a remote unlock. */
   onAdminUnlockAck?: (event: AdminUnlockAckEvent) => void;
+  onPcAck?: (event: PcAckEvent) => void;
   onPairingCodeChanged?: (change: PairingChange) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
@@ -106,6 +108,16 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
         }
       } catch {
         // A malformed ack is ignored: the floor times out and offers a retry.
+      }
+    });
+    es.addEventListener("device.pc_ack", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent<string>).data) as Partial<PcAckEvent>;
+        if (typeof data?.cmd_id === "string" && typeof data.device_id === "string") {
+          handlers.onPcAck?.(data as PcAckEvent);
+        }
+      } catch {
+        return;
       }
     });
     es.addEventListener("pairing.code_changed", (ev) => {

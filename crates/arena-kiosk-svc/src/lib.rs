@@ -27,6 +27,8 @@ pub mod logs;
 pub mod operating;
 pub mod pairing;
 pub mod paths;
+pub mod pc;
+pub mod power;
 pub mod procs;
 pub mod queue;
 pub mod runtime;

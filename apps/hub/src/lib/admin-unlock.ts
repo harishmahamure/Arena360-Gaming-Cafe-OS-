@@ -1,5 +1,6 @@
-// Remote unlock acknowledgements (Story 1.20). The layout's event stream records every
-// `device.admin_unlock_ack`; the floor waits here for the one its unlock minted. An ack can arrive
+// Kiosk acknowledgements (Stories 1.20 and 3.5). The layout's event stream records every
+// `device.admin_unlock_ack` (by exit id) and `device.pc_ack` (by cmd id); the tile sheet waits here
+// for the one its action minted. An ack can arrive
 // before the intent's HTTP answer, so recent acks are kept for a while.
 
 /** How long the floor waits for a kiosk to acknowledge a remote unlock. */

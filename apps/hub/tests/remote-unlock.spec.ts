@@ -4,10 +4,10 @@ import type { AuditDetail, AuditItem, HubSnapshot, SessionStaff } from "@arena/u
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
-// Story 1.20 on the Hub: the floor's "Remote unlock" (an online paired kiosk, the kiosk's ack
-// over `/ui/events` within 5 s, "Failed — retry" otherwise and at once for an offline one, a
-// Counter approved by a manager's PIN in place), and the audit viewer's admin-exit summary with
-// its "Flagged for review" marker. The Hub's loopback API is stubbed with `page.route`.
+// Story 1.20 on the Hub, launched from the tile sheet since Story 3.5: "Admin unlock" (an online
+// paired kiosk, the kiosk's ack over `/ui/events` within 5 s, "Failed — retry" otherwise and at
+// once for an offline one, a Counter approved by a manager's PIN in place), and the audit
+// viewer's admin-exit summary with its "Flagged for review" marker. The Hub's loopback API is stubbed with `page.route`.
 
 const HUB = "http://127.0.0.1:7409";
 const CORS = {
@@ -34,9 +34,22 @@ const STAFF: Record<string, SessionStaff> = {
 
 const snapshot = (online: boolean): HubSnapshot => ({
   branch: { name: "Dev Branch", branch_code: "DEV01" },
-  groups: [],
-  zones: [],
-  devices: [{ device_id: KIOSK, label: "Kiosk 3", class: "paired", zone: null, online }],
+  groups: [{ id: "G1", name: "Gaming", kind: "pc", colour: "teal", sort_order: 0, rev: 1 }],
+  zones: [{ id: "Z1", name: "Main hall", sort_order: 0, rev: 1 }],
+  devices: [
+    {
+      device_id: KIOSK,
+      label: "Kiosk 3",
+      class: "paired",
+      zone: "Z1",
+      online,
+      kind: "pc",
+      group_id: "G1",
+      floor_x: 0,
+      floor_y: 0,
+      status: online ? "online" : "maintenance",
+    },
+  ],
   locale: {
     currency: "INR",
     exponent: 2,
@@ -171,8 +184,12 @@ const newStub = (over: Partial<Stub> = {}): Stub => ({
 });
 
 const unlockButton = (page: Page) =>
-  page.getByRole("button", { name: en["hub.floor.remote_unlock"] });
+  page.getByRole("complementary").getByRole("button", { name: en["hub.sheet.admin_unlock"] });
 const status = (page: Page) => page.getByTestId("unlock-status");
+const openSheet = async (page: Page) => {
+  await page.locator("[data-tile-face]").focus();
+  await page.keyboard.press("Enter");
+};
 
 test("a manager's remote unlock is acknowledged by the kiosk and shows success", async ({
   page,
@@ -180,6 +197,7 @@ test("a manager's remote unlock is acknowledged by the kiosk and shows success",
   const s = newStub();
   await stub(page, "manager-token", s);
   await page.goto("/floor");
+  await openSheet(page);
   await unlockButton(page).click();
   await expect(status(page)).toHaveText(en["hub.floor.remote_unlock_done"]);
   expect(s.intents).toHaveLength(1);
@@ -196,6 +214,7 @@ test("no ack within 5 s shows Failed — retry", async ({ page }) => {
   const s = newStub({ ack: false });
   await stub(page, "manager-token", s);
   await page.goto("/floor");
+  await openSheet(page);
   await unlockButton(page).click();
   await expect(status(page)).toHaveText(en["hub.floor.remote_unlock_waiting"]);
   await expect(status(page)).toContainText(en["hub.floor.remote_unlock_failed"], {
@@ -203,10 +222,11 @@ test("no ack within 5 s shows Failed — retry", async ({ page }) => {
   });
 });
 
-test("an offline kiosk fails at once without asking the Hub", async ({ page }) => {
+test("an offline kiosk in maintenance fails at once without asking the Hub", async ({ page }) => {
   const s = newStub({ online: false });
   await stub(page, "manager-token", s);
   await page.goto("/floor");
+  await openSheet(page);
   await unlockButton(page).click();
   await expect(status(page)).toContainText(en["hub.floor.remote_unlock_failed"]);
   expect(s.intents).toHaveLength(0);
@@ -218,6 +238,7 @@ test("a Counter's remote unlock opens the manager PIN in place and carries its t
   const s = newStub();
   await stub(page, "counter-token", s);
   await page.goto("/floor");
+  await openSheet(page);
   await expect(page.getByTestId("unlock-needs-approval")).toHaveText(
     en["hub.floor.remote_unlock_needs_approval"],
   );

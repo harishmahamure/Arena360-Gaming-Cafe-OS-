@@ -8,7 +8,10 @@
   import {
     adminExit,
     applyTheme,
+    currentPcScreen,
     currentTheme,
+    dismissPcMessage,
+    onPcScreen,
     onTheme,
     adminExitStatus,
     isAdminExitCombo,
@@ -52,6 +55,8 @@
    * screen says it exists). While an exit runs the window is the small corner badge and shows
    * only the countdown.
    */
+  let locked = $state(false);
+  let message: string | null = $state(null);
   let adminPanel = $state(false);
   let exitUntil: number | null = $state(null);
   let now = $state(Date.now());
@@ -105,6 +110,7 @@
       const add = (stop: () => void) => (gone ? stop() : stops.push(stop));
       // A `theme` event is newer than the reply to the `theme` command asked below.
       let themed = false;
+      let screened = false;
       add(
         await onTheme((hc) => {
           themed = true;
@@ -112,6 +118,13 @@
         }),
       );
       add(await onHubStatus((s) => (hub = s.state)));
+      add(
+        await onPcScreen((s) => {
+          screened = true;
+          locked = s.locked;
+          message = s.message;
+        }),
+      );
       add(await onToast((key) => (toast = key)));
       add(
         await onAdminExit((until) => {
@@ -129,6 +142,11 @@
           void takeRestoreState();
         }),
       );
+      const screen = await currentPcScreen();
+      if (screen && !screened) {
+        locked = screen.locked;
+        message = screen.message;
+      }
       const hc = await currentTheme();
       if (hc !== null && !themed) applyTheme(hc);
       const known = await currentHubStatus();
@@ -146,10 +164,17 @@
 </script>
 
 <div class="kiosk" bind:this={stage} hidden={exitUntil !== null}>
-  {#if showDiscovery}
-    <Discovery onpaired={() => (justPaired = true)} />
-  {:else}
-    {@render children()}
+  <div class="app" inert={locked}>
+    {#if showDiscovery}
+      <Discovery onpaired={() => (justPaired = true)} />
+    {:else}
+      {@render children()}
+    {/if}
+  </div>
+  {#if locked}
+    <div class="cover" role="status" data-testid="pc-locked">
+      <h1 class="type-kiosk-headline">{t("player.pc.locked")}</h1>
+    </div>
   {/if}
   {#if adminPanel}
     <div class="admin-exit" data-testid="admin-exit-panel">
@@ -185,6 +210,24 @@
   it was, and only its button dismisses it. The region itself lets clicks through.
 -->
 <div class="toasts" aria-live="polite" data-testid="toasts">
+  {#if message}
+    <div class="toast" data-testid="pc-message">
+      <div>
+        <p class="type-kiosk-label">{t("player.pc.message_title")}</p>
+        <p class="type-kiosk-body">{message}</p>
+      </div>
+      <button
+        type="button"
+        class="dismiss type-kiosk-label"
+        onclick={() => {
+          message = null;
+          dismissPcMessage();
+        }}
+      >
+        {t("common.dismiss")}
+      </button>
+    </div>
+  {/if}
   {#if toast}
     <div class="toast" data-testid="toast">
       <p class="type-kiosk-body">{t(toast)}</p>
@@ -204,9 +247,30 @@
     background-color: var(--bg);
   }
 
+  .app {
+    min-height: 100%;
+  }
+
+  .cover {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-content: center;
+    padding: var(--space-kiosk-margin);
+    background-color: var(--bg);
+    color: var(--text);
+    text-align: center;
+  }
+
+  .cover h1 {
+    margin: 0;
+  }
+
   .admin-exit {
     position: fixed;
     inset: 0;
+    z-index: 20;
     display: grid;
     place-content: center;
     padding: var(--space-kiosk-margin);
@@ -260,6 +324,7 @@
 
   .toast p {
     margin: 0;
+    overflow-wrap: anywhere;
   }
 
   .dismiss {

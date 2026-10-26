@@ -241,6 +241,7 @@
         },
         onConnectivityChanged: (e) => takeLink(e),
         onAdminUnlockAck: (e) => noteAck(e.exit_id),
+        onPcAck: (e) => noteAck(e.cmd_id),
         onPairingCodeChanged: (c) => notePairingCode(c),
         onResync: () => void refresh(),
         // Refused: find out whether the session is still there (sign-in otherwise).

@@ -110,6 +110,7 @@ impl EventsHub {
             status: auth.status().cloned(),
             presence: auth.presence().changes(),
             acks: auth.presence().admin_unlock_acks(),
+            pc_acks: auth.presence().pc_acks(),
             pairing: auth.pairing().map(|p| p.subscribe()),
             tick: auth.events_config().tick,
         };
@@ -139,6 +140,7 @@ struct HubTask {
     status: Option<watch::Receiver<HubStatus>>,
     presence: Option<watch::Receiver<u64>>,
     acks: Option<broadcast::Receiver<arena_proto::AdminUnlockAckEvent>>,
+    pc_acks: Option<broadcast::Receiver<arena_proto::PcAckEvent>>,
     pairing: Option<tokio::sync::mpsc::Receiver<crate::pairing::CodeChanged>>,
     tick: Duration,
 }
@@ -354,6 +356,19 @@ impl HubTask {
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => self.acks = None,
+                },
+                ack = async {
+                    match &mut self.pc_acks {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match ack {
+                    Ok(ack) => {
+                        let data = serde_json::to_string(&ack).unwrap_or_default();
+                        self.send("device.pc_ack", data, false);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => self.pc_acks = None,
                 },
                 changed = async {
                     match &mut self.status {
@@ -984,6 +999,35 @@ mod tests {
             (
                 "device.admin_unlock_ack",
                 serde_json::json!({"exit_id": "E1", "device_id": "D1"})
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kiosks_pc_ack_is_pushed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (status, mut frames) = open(&hub, Some(&token)).await;
+        assert_eq!(status, StatusCode::OK);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some("D1".into()), tx);
+        hub.lan
+            .push_pc_command("D1", "C1", arena_proto::PcAction::Lock, None);
+        assert!(hub.lan.ack_pc("D1", "C1"));
+        let (event, data) = loop {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            if event != "devices.changed" {
+                break (event, data);
+            }
+        };
+        assert_eq!(
+            (event.as_str(), data),
+            (
+                "device.pc_ack",
+                serde_json::json!({"cmd_id": "C1", "device_id": "D1"})
             )
         );
     }

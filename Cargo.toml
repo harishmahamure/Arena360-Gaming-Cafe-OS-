@@ -102,6 +102,7 @@ windows = { version = "=0.62.2", features = [
   "Win32_System_Pipes",
   "Win32_System_Registry",
   "Win32_System_RemoteDesktop",
+  "Win32_System_Shutdown",
   "Win32_System_Threading",
   "Win32_System_Variant",
   "Win32_System_Wmi",

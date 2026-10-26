@@ -7,6 +7,7 @@ import type { Hello } from "./Hello";
 import type { HelloOk } from "./HelloOk";
 import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
+import type { PcAck } from "./PcAck";
 import type { SettingsGet } from "./SettingsGet";
 import type { SettingsValues } from "./SettingsValues";
 import type { VerifyAdminPin } from "./VerifyAdminPin";
@@ -28,4 +29,5 @@ export type FrameBody =
   | ({ kind: "kiosk.verify_admin_pin" } & VerifyAdminPin)
   | ({ kind: "kiosk.admin_pin_ok" } & AdminPinOk)
   | ({ kind: "kiosk.admin_unlock_ack" } & AdminUnlockAck)
+  | ({ kind: "kiosk.pc_ack" } & PcAck)
   | { kind: "ack" };

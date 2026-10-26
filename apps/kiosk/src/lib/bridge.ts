@@ -16,6 +16,7 @@ export const TOAST_EVENT = names.events.toast;
 export const ADMIN_EXIT_EVENT = names.events.adminExit;
 export const ADMIN_EXIT_ENDED_EVENT = names.events.adminExitEnded;
 export const THEME_EVENT = names.events.theme;
+export const PC_SCREEN_EVENT = names.events.pcScreen;
 export const TEST_SESSION_EVENT = names.events.testSession;
 export const TEST_SESSION_ENDED_EVENT = names.events.testSessionEnded;
 export const DISCOVERY_FOUND_EVENT = names.events.discoveryFound;
@@ -216,6 +217,38 @@ export async function onTestSession(cb: (remainingMs: number) => void): Promise<
 export async function onTestSessionEnded(cb: () => void): Promise<() => void> {
   if (!inTauri()) return () => {};
   return listen<unknown>(TEST_SESSION_ENDED_EVENT, () => cb());
+}
+
+export type PcScreen = { locked: boolean; message: string | null };
+
+const screenOf = (v: unknown): PcScreen | null => {
+  if (typeof v !== "object" || v === null) return null;
+  const { locked, message } = v as { locked?: unknown; message?: unknown };
+  if (typeof locked !== "boolean") return null;
+  if (message != null && typeof message !== "string") return null;
+  return { locked, message: message ?? null };
+};
+
+export async function currentPcScreen(): Promise<PcScreen | null> {
+  if (!inTauri()) return null;
+  try {
+    return screenOf(await invoke(CMD.pcScreen));
+  } catch {
+    return null;
+  }
+}
+
+export async function onPcScreen(cb: (s: PcScreen) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(PC_SCREEN_EVENT, (e) => {
+    const s = screenOf(e.payload);
+    if (s) cb(s);
+  });
+}
+
+export function dismissPcMessage(): void {
+  if (!inTauri()) return;
+  void invoke(CMD.pcDismiss).catch(() => {});
 }
 
 /** Whether `e` is the hidden admin-exit combination, Ctrl+Alt+Shift+A. */

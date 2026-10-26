@@ -1901,6 +1901,8 @@ async fn intent(
     let target = match &intent.payload {
         arena_proto::IntentPayload::DeviceAdminUnlock(u) => Some(&u.device_id),
         arena_proto::IntentPayload::DeviceTestSessionStart(s) => Some(&s.device_id),
+        arena_proto::IntentPayload::DeviceScreen(s) => Some(&s.device_id),
+        arena_proto::IntentPayload::DevicePower(p) => Some(&p.device_id),
         _ => None,
     };
     if target.is_some_and(|id| !auth.presence.online(id)) {
@@ -1933,11 +1935,29 @@ async fn intent(
         }
         return fail(e);
     }
+    let command = match &intent.payload {
+        arena_proto::IntentPayload::DeviceScreen(s) => Some((
+            s.device_id.clone(),
+            s.action,
+            s.text.as_deref().map(|t| t.trim().to_owned()),
+        )),
+        arena_proto::IntentPayload::DevicePower(p) => Some((p.device_id.clone(), p.action, None)),
+        _ => None,
+    };
+    let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
-        Ok(applied) => Json(IntentResult {
-            applied: crate::lan::registry::summary(&applied),
-        })
-        .into_response(),
+        Ok(applied) => {
+            if let Some((device_id, action, text)) = command {
+                let sent = auth
+                    .presence
+                    .push_pc_command(&device_id, &cmd_id, action, text);
+                tracing::info!(device_id = %device_id, cmd_id = %cmd_id, action = action.as_str(), sessions = sent, "pc command pushed");
+            }
+            Json(IntentResult {
+                applied: crate::lan::registry::summary(&applied),
+            })
+            .into_response()
+        }
         Err(e) => {
             // apply() is one transaction: a refusal applied nothing, so the approval is given
             // back (the UI fixes the cause and retries). HUB_SLOW is the exception: the intent
@@ -2489,6 +2509,151 @@ pub(crate) mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{reply}");
         assert_eq!(reply["applied"]["changes"][0]["tbl"], "device_admin_exits");
+    }
+
+    async fn registered_pc(hub: &Hub) -> String {
+        let secret = arena_core::devices::new_token_secret().unwrap();
+        hub.writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "owner".into(),
+                },
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    device_kind: Default::default(),
+                    class: arena_proto::ClientClass::Paired,
+                    label: "PC 1".into(),
+                    token_hash: arena_core::devices::hash_token_secret(&secret).unwrap(),
+                    tv_number: None,
+                    group_id: None,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone()
+    }
+
+    fn screen_body(device: &str, action: arena_proto::PcAction, text: Option<&str>) -> Value {
+        json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::DeviceScreen(arena_proto::DeviceScreen {
+                device_id: device.into(),
+                action,
+                text: text.map(Into::into),
+            }),
+            None,
+        )).unwrap()})
+    }
+
+    #[tokio::test]
+    async fn a_counter_screen_command_is_refused_offline_then_pushed_on_every_accept() {
+        use arena_proto::{EventFrame, FrameBody, HubEvent, PcAction};
+        let hub = hub().await;
+        let device = registered_pc(&hub).await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let lock = screen_body(&device, PcAction::Lock, None);
+        let (status, reply) =
+            call(&hub, "POST", "/ui/intent", Some(&token), Some(lock.clone())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["message"], "the device is offline");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let key = lock["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut acks = hub.lan.pc_acks();
+        for _ in 0..2 {
+            let (status, reply) =
+                call(&hub, "POST", "/ui/intent", Some(&token), Some(lock.clone())).await;
+            assert_eq!(status, StatusCode::OK, "{reply}");
+            let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+                panic!("a pushed command")
+            };
+            assert_eq!(
+                arena_proto::parse_frame(t.as_str()).unwrap().body,
+                FrameBody::Event(EventFrame {
+                    event: HubEvent::PcCommand {
+                        cmd_id: key.clone(),
+                        action: PcAction::Lock,
+                        text: None
+                    }
+                })
+            );
+            assert!(hub.lan.ack_pc(&device, &key));
+            assert_eq!(acks.recv().await.unwrap().cmd_id, key);
+        }
+        let store = Store::open_reader(&hub.path).unwrap();
+        let events = store
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.intent_kind == "device.screen")
+            .count();
+        assert_eq!(events, 1, "the replay wrote nothing");
+        let long = screen_body(&device, PcAction::Message, Some(&"x".repeat(141)));
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(long)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "text");
+        assert!(rx.try_recv().is_err(), "a refused command is never pushed");
+    }
+
+    #[tokio::test]
+    async fn a_counter_restart_needs_an_approval_and_is_pushed_once_approved() {
+        let hub = hub().await;
+        let device = registered_pc(&hub).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let body = json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::DevicePower(arena_proto::DevicePower {
+                device_id: device.clone(),
+                action: arena_proto::PcAction::Restart,
+            }),
+            None,
+        )).unwrap()});
+        let (status, reply) =
+            call(&hub, "POST", "/ui/intent", Some(&token), Some(body.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        assert!(rx.try_recv().is_err());
+        let (status, elevated) = call(
+            &hub,
+            "POST",
+            "/ui/elevate",
+            Some(&token),
+            Some(json!({"items": [{"intent_kind": "device.power"}], "pin": "2222"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{elevated}");
+        let mut with_ticket = body;
+        with_ticket["elevation_ticket"] = elevated["ticket"].clone();
+        let (status, reply) =
+            call(&hub, "POST", "/ui/intent", Some(&token), Some(with_ticket)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert!(rx.try_recv().is_ok());
+        let store = Store::open_reader(&hub.path).unwrap();
+        let c = store.changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (
+                c.intent_kind.as_str(),
+                c.actor_id.as_str(),
+                c.elevated_by_id.as_deref()
+            ),
+            (
+                "device.power",
+                hub.counter_id.as_str(),
+                Some(hub.manager_id.as_str())
+            )
+        );
     }
 
     #[tokio::test]

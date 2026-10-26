@@ -2,6 +2,7 @@
 import type { AppliedSummary } from "./AppliedSummary";
 import type { CatalogEntry } from "./CatalogEntry";
 import type { ManagerVerifier } from "./ManagerVerifier";
+import type { PcAction } from "./PcAction";
 import type { SettingsValues } from "./SettingsValues";
 
 /**
@@ -12,5 +13,6 @@ export type HubEvent =
   | ({ kind: "settings.changed" } & SettingsValues)
   | { kind: "verifier"; verifier: ManagerVerifier }
   | { kind: "admin_unlock"; exit_id: string }
+  | { kind: "pc_command"; cmd_id: string; action: PcAction; text?: string }
   | { kind: "catalog.changed"; products: Array<CatalogEntry> }
   | { kind: "test_session"; lock_after_ms: number };

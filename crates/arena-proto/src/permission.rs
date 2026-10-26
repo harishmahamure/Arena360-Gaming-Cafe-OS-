@@ -68,6 +68,8 @@ pub enum Permission {
     /// Pair a new device with the branch.
     #[serde(rename = "device.pair")]
     DevicePair,
+    #[serde(rename = "device.screen")]
+    DeviceScreen,
     #[serde(rename = "user.manage")]
     UserManage,
     #[serde(rename = "settings.edit")]
@@ -86,7 +88,7 @@ pub enum Permission {
 
 impl Permission {
     /// Every catalogue permission, grouped by module.
-    pub const ALL: [Permission; 34] = [
+    pub const ALL: [Permission; 35] = [
         Self::PlayerManage,
         Self::PlayerView,
         Self::WalletTopup,
@@ -114,6 +116,7 @@ impl Permission {
         Self::DeviceManage,
         Self::DeviceRemote,
         Self::DevicePair,
+        Self::DeviceScreen,
         Self::UserManage,
         Self::SettingsEdit,
         Self::BackupExport,
@@ -153,6 +156,7 @@ impl Permission {
             Self::DeviceManage => "device.manage",
             Self::DeviceRemote => "device.remote",
             Self::DevicePair => "device.pair",
+            Self::DeviceScreen => "device.screen",
             Self::UserManage => "user.manage",
             Self::SettingsEdit => "settings.edit",
             Self::BackupExport => "backup.export",
@@ -195,7 +199,9 @@ impl Permission {
             Self::StockIn | Self::StockAdjust | Self::StockOverride => "stock",
             Self::CatalogEdit => "catalog",
             Self::ShiftOpen | Self::ShiftClose | Self::CashManage => "shift",
-            Self::DeviceManage | Self::DeviceRemote | Self::DevicePair => "device",
+            Self::DeviceManage | Self::DeviceRemote | Self::DevicePair | Self::DeviceScreen => {
+                "device"
+            }
             Self::UserManage => "users",
             Self::SettingsEdit => "settings",
             Self::BackupExport | Self::OpsPromote | Self::OpsRestore => "ops",

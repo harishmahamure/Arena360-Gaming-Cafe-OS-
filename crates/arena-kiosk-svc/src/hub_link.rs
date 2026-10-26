@@ -260,6 +260,13 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                     Some(HubEvent::AdminUnlock { exit_id }) => {
                         crate::admin_exit::grant_remote(ctx, client, exit_id).await;
                     }
+                    Some(HubEvent::PcCommand {
+                        cmd_id,
+                        action,
+                        text,
+                    }) => {
+                        pc_command(ctx, client, cmd_id, action, text).await;
+                    }
                     Some(HubEvent::TestSession { lock_after_ms }) => {
                         crate::test_session::begin(ctx, lock_after_ms);
                     }
@@ -269,6 +276,28 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
             }
             _ = stop.changed() => return Ended::Shutdown,
         }
+    }
+}
+
+async fn pc_command(
+    ctx: &Ctx,
+    client: &HubClient,
+    cmd_id: String,
+    action: arena_proto::PcAction,
+    text: Option<String>,
+) {
+    let step = crate::pc::apply(ctx, &cmd_id, action, text);
+    if step == crate::pc::Step::Refused {
+        return;
+    }
+    let body = serde_json::json!({ "cmd_id": cmd_id });
+    if let Err(e) = client.request("kiosk.pc_ack", body).await {
+        tracing::warn!(error = %e, "could not acknowledge the pc command");
+    }
+    if let crate::pc::Step::AckThenPower(action) = step
+        && let Err(e) = crate::power::run(action)
+    {
+        tracing::error!(error = %e, action = action.as_str(), "the power command failed");
     }
 }
 

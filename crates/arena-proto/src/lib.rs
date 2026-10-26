@@ -25,6 +25,7 @@ mod kitchen;
 pub mod licence;
 mod operating;
 pub mod pairing;
+mod pc_command;
 mod permission;
 mod printer;
 mod process;
@@ -144,6 +145,7 @@ pub use pairing::{
     SETUP_CODE_PLAINTEXT_TTL_MS, SetupCodeReveal, check_bootstrap, format_pairing_code,
     normalize_pairing_code, valid_pairing_code,
 };
+pub use pc_command::{DevicePower, DeviceScreen, PC_MESSAGE_MAX, PcAck, PcAckEvent, PcAction};
 pub use permission::{Permission, Requirement};
 pub use printer::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_PORT, DEFAULT_PRINTER_SELECTED,

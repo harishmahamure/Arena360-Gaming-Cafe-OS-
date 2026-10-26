@@ -31,6 +31,7 @@ export type Permission =
   | "device.manage"
   | "device.remote"
   | "device.pair"
+  | "device.screen"
   | "user.manage"
   | "settings.edit"
   | "backup.export"

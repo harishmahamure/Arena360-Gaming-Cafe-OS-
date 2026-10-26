@@ -34,6 +34,7 @@ mod kiosk_log;
 mod licence;
 mod maintenance;
 mod mutate;
+mod pc_command;
 mod printer_status;
 mod products;
 mod rates;
@@ -143,6 +144,7 @@ pub(crate) enum Target {
     Maintenance(Box<maintenance::MaintenanceTarget>),
     Rate(Box<rates::RateTarget>),
     TestSession(Box<test_session::SessionTarget>),
+    Pc(Box<pc_command::PcTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -175,6 +177,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         }
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
+        }
+        P::DeviceScreen(_) | P::DevicePower(_) => {
+            Target::Pc(Box::new(pc_command::load(tx, &intent.payload)?))
         }
         P::StaffSetCredentials(c) => Target::Credentials(staff_credentials::load(tx, c)?),
         P::ProductUpsert(_) | P::ProductDelete(_) => {

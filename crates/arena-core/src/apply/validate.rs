@@ -125,6 +125,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Zone(t) => zones::validate_delete(t),
             _ => Err(internal_target()),
         },
+        IntentPayload::DeviceScreen(_) | IntentPayload::DevicePower(_) => match target {
+            Target::Pc(t) => super::pc_command::validate(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::RateUpsert(r) => match target {
             Target::Rate(t) => rates::validate(r, t),
             _ => Err(internal_target()),

@@ -1,13 +1,5 @@
 <script lang="ts">
-  import {
-    Button,
-    FloorTile,
-    InlinePin,
-    STATUS_LABELS,
-    formatDateTime,
-    formatMoney,
-    t,
-  } from "@arena/ui";
+  import { FloorTile, STATUS_LABELS, formatDateTime, formatMoney, t } from "@arena/ui";
   import type {
     DeviceStatus,
     SessionStaff,
@@ -15,110 +7,19 @@
     SnapshotGroup,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
-  import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
   import { tick } from "svelte";
-  import { waitForAck } from "../../lib/admin-unlock";
-  import {
-    SESSION_DEPENDENCY,
-    dropElevation,
-    elevate,
-    hasPermission,
-    newIdempotencyKey,
-    submitIntent,
-  } from "../../lib/auth";
   import { nextTile } from "../../lib/floor-nav";
+  import TileSheet from "../../lib/TileSheet.svelte";
+  import { cmds } from "../../lib/tile-actions.svelte";
   import type { PageData } from "./$types";
 
   let { data }: { data: PageData } = $props();
-
-  /**
-   * Remote unlock (Story 1.20): `device.admin_unlock` for an online paired kiosk, approved by a
-   * manager's PIN in place when the member lacks `device.remote`. The Hub pushes it to the kiosk;
-   * the floor waits up to 5 s for the kiosk's acknowledgement, and says "Failed — retry"
-   * otherwise (at once for an offline device).
-   */
-  type UnlockState = "waiting" | "done" | "failed";
-  let unlocks: Record<string, UnlockState> = $state({});
-  /** The device whose unlock waits for a manager's PIN. */
-  let approving: string | null = $state(null);
-  let approvalPrompt: MessageKey = $state("ui.pin.prompt");
-  const wraps: Record<string, HTMLElement | undefined> = {};
 
   const staff = $derived.by(() => {
     const session = (page.data as { session?: { state: string; staff?: SessionStaff } }).session;
     return session?.state === "signed_in" ? (session.staff ?? null) : null;
   });
-  const needsApproval = $derived(!hasPermission(staff, "device.remote"));
-
-  const buttonOf = (id: string) => wraps[id]?.querySelector("button") ?? null;
-
-  async function unlock(deviceId: string, online: boolean, ticket?: string) {
-    if (!online) {
-      if (ticket) void dropElevation(ticket);
-      unlocks[deviceId] = "failed";
-      return;
-    }
-    if (needsApproval && !ticket) {
-      approvalPrompt = "ui.pin.prompt";
-      approving = deviceId;
-      return;
-    }
-    unlocks[deviceId] = "waiting";
-    const outcome = await submitIntent(
-      { kind: "device.admin_unlock", device_id: deviceId },
-      newIdempotencyKey(),
-      undefined,
-      { elevationTicket: ticket },
-    );
-    if (outcome.kind === "signed_out") {
-      delete unlocks[deviceId];
-      return void (await invalidate(SESSION_DEPENDENCY));
-    }
-    if (outcome.kind === "error" && outcome.error.code === "PIN_REQUIRED") {
-      delete unlocks[deviceId];
-      approvalPrompt = "ui.pin.again";
-      approving = deviceId;
-      return;
-    }
-    const exitId =
-      outcome.kind === "applied"
-        ? outcome.result.applied.changes.find((c) => c.tbl === "device_admin_exits")?.row_id
-        : undefined;
-    unlocks[deviceId] = exitId && (await waitForAck(exitId)) ? "done" : "failed";
-  }
-
-  async function approve(pin: string) {
-    const deviceId = approving;
-    const outcome = await elevate([{ intent_kind: "device.admin_unlock" }], pin);
-    if (outcome.kind === "signed_out") {
-      await invalidate(SESSION_DEPENDENCY);
-      return { ok: false, message: "ui.pin.unreachable" } as const;
-    }
-    if (outcome.kind === "rejected") return { ok: false, message: "ui.pin.rejected" } as const;
-    if (outcome.kind === "locked") {
-      return { ok: false, message: "ui.pin.locked", retryAfterS: outcome.retryAfterS } as const;
-    }
-    if (outcome.kind === "unreachable")
-      return { ok: false, message: "ui.pin.unreachable" } as const;
-    if (outcome.kind === "error") return { ok: false, message: "ui.pin.failed" } as const;
-    if (approving !== deviceId || deviceId === null) {
-      void dropElevation(outcome.ticket);
-      return { ok: true } as const;
-    }
-    approving = null;
-    const device = snapshot?.devices.find((d) => d.device_id === deviceId);
-    void unlock(deviceId, device?.online === true, outcome.ticket);
-    await tick();
-    buttonOf(deviceId)?.focus();
-    return { ok: true } as const;
-  }
-
-  const STATUS: Record<UnlockState, MessageKey> = {
-    waiting: "hub.floor.remote_unlock_waiting",
-    done: "hub.floor.remote_unlock_done",
-    failed: "hub.floor.remote_unlock_failed",
-  };
 
   const BADGE: Record<
     DeviceStatus,
@@ -189,6 +90,16 @@
   ]);
   let focusId: string | null = $state(null);
   let activeId: string | null = $state(null);
+  const active = $derived(snapshot?.devices.find((d) => d.device_id === activeId));
+  $effect(() => {
+    if (activeId && !active) activeId = null;
+  });
+  async function closeSheet() {
+    const id = activeId;
+    activeId = null;
+    await tick();
+    document.querySelector<HTMLElement>(`[data-device-id="${id}"] [data-tile-face]`)?.focus();
+  }
   const tabStop = $derived(
     order.find((d) => d.device_id === focusId)?.device_id ?? order[0]?.device_id,
   );
@@ -238,7 +149,11 @@
   >
     {#snippet secondary()}
       {#if !group}<span data-testid="device-presence">{t(badge.label)}</span>{/if}
-      {#if device.status === "maintenance"}
+      {#if cmds[device.device_id]?.state === "failed"}
+        <span data-testid="tile-failed"
+          ><span aria-hidden="true">⚠</span> {t("hub.floor.remote_unlock_failed")}</span
+        >
+      {:else if device.status === "maintenance"}
         <span data-testid="device-unavailable"
           >{t("hub.floor.unavailable")}{device.maintenance_note
             ? ` · ${device.maintenance_note}`
@@ -255,135 +170,155 @@
     {#if device.tv_number}<span class="type-hub-label" data-testid="tv-number"
         >{t("hub.floor.tv", { n: device.tv_number })}</span
       >{/if}
-    {#if device.class === "paired" && !device.manual}
-      <span class="unlock" bind:this={wraps[device.device_id]}>
-        <Button
-          label="hub.floor.remote_unlock"
-          variant="secondary"
-          disabled={unlocks[device.device_id] === "waiting" || approving === device.device_id}
-          disabledReason={approving === device.device_id
-            ? "hub.floor.remote_unlock_needs_approval"
-            : "hub.floor.remote_unlock_waiting"}
-          onclick={() => void unlock(device.device_id, device.online)}
-        />
-      </span>
-      {#if needsApproval && approving !== device.device_id}
-        <span class="note type-hub-label" data-testid="unlock-needs-approval"
-          >{t("hub.floor.remote_unlock_needs_approval")}</span
-        >
-      {/if}
-      <span class="status type-hub-label" role="status" data-testid="unlock-status">
-        {#if unlocks[device.device_id]}
-          {#if unlocks[device.device_id] === "failed"}<span aria-hidden="true">⚠</span>{/if}
-          <span>{t(STATUS[unlocks[device.device_id]])}</span>
-        {/if}
-      </span>
-      {#if approving === device.device_id}
-        <InlinePin
-          message={approvalPrompt}
-          onsubmit={approve}
-          oncancel={() => (approving = null)}
-          returnFocusTo={buttonOf(device.device_id)}
-        />
-      {/if}
-    {/if}
   </FloorTile>
 {/snippet}
 
-<div class="floor">
-  <h1 class="type-hub-numeric">{t("hub.nav.floor")}</h1>
+<div class="stage" class:open={active !== undefined}>
+  <div class="floor">
+    <h1 class="type-hub-numeric">{t("hub.nav.floor")}</h1>
 
-  {#if snapshot && !snapshot.branch}
-    <section class="note" data-testid="floor-not-set-up">
-      <p class="type-hub-title">{t("hub.floor.not_set_up")}</p>
-      <p class="type-hub-body muted">{t("hub.floor.not_set_up_body")}</p>
-    </section>
-  {:else if snapshot}
-    {#if zones.length === 0}
-      <p class="type-hub-body muted" data-testid="floor-no-zones">{t("hub.floor.no_zones")}</p>
-    {/if}
+    {#if snapshot && !snapshot.branch}
+      <section class="note" data-testid="floor-not-set-up">
+        <p class="type-hub-title">{t("hub.floor.not_set_up")}</p>
+        <p class="type-hub-body muted">{t("hub.floor.not_set_up_body")}</p>
+      </section>
+    {:else if snapshot}
+      {#if zones.length === 0}
+        <p class="type-hub-body muted" data-testid="floor-no-zones">{t("hub.floor.no_zones")}</p>
+      {/if}
 
-    {#each zones as zone (zone.id)}
-      {@const members = inZone(zone.id)}
-      {@const folded = collapsed.includes(zone.id)}
-      <section
-        class="unassigned zone"
-        aria-labelledby="floor-zone-{zone.id}"
-        data-testid="floor-zone"
-      >
-        <div class="head">
-          <h2 class="type-hub-title" id="floor-zone-{zone.id}">
-            <button
-              type="button"
-              class="fold"
-              aria-expanded={!folded}
-              title={t("hub.floor.collapse_hint")}
-              onclick={() => toggle(zone.id)}
+      {#each zones as zone (zone.id)}
+        {@const members = inZone(zone.id)}
+        {@const folded = collapsed.includes(zone.id)}
+        <section
+          class="unassigned zone"
+          aria-labelledby="floor-zone-{zone.id}"
+          data-testid="floor-zone"
+        >
+          <div class="head">
+            <h2 class="type-hub-title" id="floor-zone-{zone.id}">
+              <button
+                type="button"
+                class="fold"
+                aria-expanded={!folded}
+                title={t("hub.floor.collapse_hint")}
+                onclick={() => toggle(zone.id)}
+              >
+                {zone.name}
+              </button>
+            </h2>
+            <span class="muted type-hub-label">{count(members.length)}</span>
+            {#if folded}
+              <span class="type-hub-label" data-testid="zone-counts">{counts(members)}</span>
+            {/if}
+          </div>
+          {#if !folded}
+            <ul
+              class="devices cells"
+              style="--cols:{Math.max(
+                6,
+                ...members.map((d) => (d.floor_x ?? 0) + 1),
+              )};--rows:{Math.max(1, ...members.map((d) => (d.floor_y ?? 0) + 1))}"
             >
-              {zone.name}
-            </button>
-          </h2>
-          <span class="muted type-hub-label">{count(members.length)}</span>
-          {#if folded}
-            <span class="type-hub-label" data-testid="zone-counts">{counts(members)}</span>
+              {#each members as device (device.device_id)}
+                {@render tile(
+                  device,
+                  groups.find((g) => g.id === device.group_id),
+                  true,
+                )}
+              {/each}
+            </ul>
           {/if}
+        </section>
+      {/each}
+
+      {#each groups as group (group.id)}
+        {@const members = loose(group.id)}
+        {#if members.length > 0}
+          <section class="unassigned" aria-labelledby="floor-group-{group.id}">
+            <div class="head">
+              <h2 class="type-hub-title" id="floor-group-{group.id}">{group.name}</h2>
+              <span class="muted type-hub-label">{count(members.length)}</span>
+            </div>
+            <ul class="devices">
+              {#each members as device (device.device_id)}
+                {@render tile(device, group)}
+              {/each}
+            </ul>
+          </section>
+        {/if}
+      {/each}
+
+      <section class="unassigned" aria-labelledby="floor-unassigned-title">
+        <div class="head">
+          <h2 class="type-hub-title" id="floor-unassigned-title">{t("hub.floor.unassigned")}</h2>
+          <span class="muted type-hub-label">{count(unassigned.length)}</span>
         </div>
-        {#if !folded}
-          <ul
-            class="devices cells"
-            style="--cols:{Math.max(
-              6,
-              ...members.map((d) => (d.floor_x ?? 0) + 1),
-            )};--rows:{Math.max(1, ...members.map((d) => (d.floor_y ?? 0) + 1))}"
-          >
-            {#each members as device (device.device_id)}
-              {@render tile(
-                device,
-                groups.find((g) => g.id === device.group_id),
-                true,
-              )}
+        {#if unassigned.length === 0}
+          <p class="type-hub-body muted">{t("hub.floor.no_devices")}</p>
+        {:else}
+          <ul class="devices">
+            {#each unassigned as device (device.device_id)}
+              {@render tile(device, undefined)}
             {/each}
           </ul>
         {/if}
       </section>
-    {/each}
-
-    {#each groups as group (group.id)}
-      {@const members = loose(group.id)}
-      {#if members.length > 0}
-        <section class="unassigned" aria-labelledby="floor-group-{group.id}">
-          <div class="head">
-            <h2 class="type-hub-title" id="floor-group-{group.id}">{group.name}</h2>
-            <span class="muted type-hub-label">{count(members.length)}</span>
-          </div>
-          <ul class="devices">
-            {#each members as device (device.device_id)}
-              {@render tile(device, group)}
-            {/each}
-          </ul>
-        </section>
-      {/if}
-    {/each}
-
-    <section class="unassigned" aria-labelledby="floor-unassigned-title">
-      <div class="head">
-        <h2 class="type-hub-title" id="floor-unassigned-title">{t("hub.floor.unassigned")}</h2>
-        <span class="muted type-hub-label">{count(unassigned.length)}</span>
-      </div>
-      {#if unassigned.length === 0}
-        <p class="type-hub-body muted">{t("hub.floor.no_devices")}</p>
-      {:else}
-        <ul class="devices">
-          {#each unassigned as device (device.device_id)}
-            {@render tile(device, undefined)}
-          {/each}
-        </ul>
-      {/if}
-    </section>
+    {/if}
+  </div>
+  {#if active}
+    {@const group = groups.find((g) => g.id === active.group_id)}
+    {#key active.device_id}
+      <TileSheet
+        device={active}
+        {group}
+        {groups}
+        zone={zones.find((z) => z.id === active.zone)?.name}
+        rate={group?.rate_minor != null && snapshot?.locale
+          ? formatMoney(group.rate_minor, snapshot.locale)
+          : null}
+        badge={BADGE[active.status ?? "offline"] ?? BADGE.offline}
+        {staff}
+        {tz}
+        onclose={closeSheet}
+      />
+    {/key}
   {/if}
 </div>
 
 <style>
+  .stage {
+    display: grid;
+    gap: var(--space-5);
+    align-items: start;
+  }
+
+  .stage.open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stage > :global([data-component="tile-sheet"]) {
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100dvh - 2 * var(--space-4));
+    overflow-y: auto;
+  }
+
+  @media (min-width: 840px) {
+    .stage.open {
+      grid-template-columns: minmax(0, 1fr) 24rem;
+    }
+  }
+
+  @media (max-width: 839px) {
+    .stage > :global([data-component="tile-sheet"]) {
+      position: fixed;
+      inset: auto var(--space-3) var(--space-3);
+      z-index: 5;
+      max-height: 60dvh;
+    }
+  }
+
   .floor {
     display: grid;
     gap: var(--space-5);
@@ -398,13 +333,6 @@
   .muted,
   .note {
     color: var(--text-muted);
-  }
-
-  .status {
-    display: inline-flex;
-    gap: var(--space-2);
-    min-height: 1lh;
-    color: var(--text);
   }
 
   .note {
@@ -458,6 +386,10 @@
     .devices:not(.cells) {
       grid-template-columns: repeat(6, 1fr);
     }
+
+    .stage.open .devices:not(.cells) {
+      grid-template-columns: repeat(4, 1fr);
+    }
   }
 
   @media (max-width: 839px) {
@@ -480,6 +412,18 @@
     .cells > :global([data-component="floor-tile"]) {
       grid-column: var(--x);
       grid-row: var(--y);
+    }
+  }
+
+  @media (min-width: 1600px) {
+    .stage.open .cells {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-rows: none;
+    }
+
+    .stage.open .cells > :global([data-component="floor-tile"]) {
+      grid-column: auto;
+      grid-row: auto;
     }
   }
 </style>

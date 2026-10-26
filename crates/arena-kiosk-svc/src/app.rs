@@ -13,7 +13,7 @@
 //! - A toast the process enforcer raises (`player.app.blocked`) is forwarded to the current app
 //!   as IPC `toast`; with no app connected it is dropped (the kill is still reported).
 //! - Requests: `log{level, code, detail}` queues a `kiosk.log`; `hub_status` answers the link
-//!   state; `theme` answers `{hc}`; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
+//!   state; `theme` answers `{hc}`; `pc_dismiss` clears the staff message banner; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
 //!   running exit); `discover`, `probe_ip{ip}` and `select_hub{addr, fingerprint}` find and
 //!   choose the Hub ([`crate::discovery`]). Anything else is `UNSUPPORTED`. The app gets
 //!   nothing else: no Hub socket, no token.
@@ -123,6 +123,7 @@ pub(crate) async fn run<S: IpcServer>(
     let mut exits = ctx.admin.active.subscribe();
     let mut tests = ctx.test_session.subscribe();
     let mut theme = ctx.theme.subscribe();
+    let mut screen = ctx.pc.screen.subscribe();
     let mut current: Option<Current> = None;
     let mut held = false;
     loop {
@@ -149,6 +150,10 @@ pub(crate) async fn run<S: IpcServer>(
                             None => IpcMsg::AdminExitEnded,
                         });
                         let _ = out.try_send(crate::test_session::message(*tests.borrow_and_update()));
+                        let shown = screen.borrow_and_update().clone();
+                        if shown != crate::pc::Screen::default() {
+                            let _ = out.try_send(screen_message(shown));
+                        }
                         dog.on_connected(now_ms());
                         tracing::info!(conn = id, "app connected");
                         current = Some(Current { id, out, kill });
@@ -239,6 +244,13 @@ pub(crate) async fn run<S: IpcServer>(
                     let _ = c.out.try_send(msg);
                 }
             }
+            changed = screen.changed() => {
+                if changed.is_err() { break; }
+                let msg = screen_message(screen.borrow_and_update().clone());
+                if let Some(c) = &current {
+                    let _ = c.out.try_send(msg);
+                }
+            }
             toast = toasts.recv() => match toast {
                 Ok(key) => {
                     if let Some(c) = &current {
@@ -255,6 +267,13 @@ pub(crate) async fn run<S: IpcServer>(
         let _ = c.kill.send(());
     }
     acceptor.abort();
+}
+
+fn screen_message(s: crate::pc::Screen) -> IpcMsg {
+    IpcMsg::PcScreen {
+        locked: s.locked,
+        message: s.message,
+    }
 }
 
 #[derive(Deserialize)]
@@ -347,6 +366,10 @@ fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError>
             Ok(Value::Object(Default::default()))
         }
         "hub_status" => Ok(serde_json::json!({ "state": *ctx.hub_state.borrow() })),
+        "pc_dismiss" => {
+            crate::pc::dismiss(ctx);
+            Ok(Value::Object(Default::default()))
+        }
         "theme" => Ok(serde_json::json!({ "hc": *ctx.theme.borrow() })),
         "pair_info" => serde_json::to_value(crate::pairing::info(ctx))
             .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),

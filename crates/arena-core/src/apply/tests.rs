@@ -2561,6 +2561,131 @@ mod rbac_matrix {
         assert_eq!(change.elevated_by_id.as_deref(), Some(c.manager.as_str()));
     }
 
+    async fn pc(c: &Crew) -> String {
+        let hash = crate::devices::hash_token_secret("s").unwrap();
+        c.f.writer
+            .submit_intent(device_intent(ActorKind::Owner, register(&hash)))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone()
+    }
+
+    fn pc_cmd(c: &Crew, body: IntentPayload, by: Option<ElevatedBy>) -> Intent {
+        Intent {
+            elevated_by: by,
+            ..as_actor(staff_actor(&c.counter), body, None)
+        }
+    }
+
+    fn screen(device: &str, action: arena_proto::PcAction, text: Option<&str>) -> IntentPayload {
+        IntentPayload::DeviceScreen(arena_proto::DeviceScreen {
+            device_id: device.into(),
+            action,
+            text: text.map(Into::into),
+        })
+    }
+
+    fn power(device: &str, action: arena_proto::PcAction) -> IntentPayload {
+        IntentPayload::DevicePower(arena_proto::DevicePower {
+            device_id: device.into(),
+            action,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_counter_locks_and_messages_a_pc_and_the_audit_row_names_the_command() {
+        use arena_proto::PcAction::{Lock, Message};
+        let c = crew().await;
+        let d = pc(&c).await;
+        let lock =
+            c.f.writer
+                .submit_intent(pc_cmd(&c, screen(&d, Lock, None), None))
+                .await
+                .unwrap();
+        assert_eq!(lock.changes[0].tbl, "device_events");
+        c.f.writer
+            .submit_intent(pc_cmd(
+                &c,
+                screen(&d, Message, Some(&"é".repeat(140))),
+                None,
+            ))
+            .await
+            .unwrap();
+        let events = reopen(&c.f).rows(Table::DeviceEvents).unwrap();
+        let codes: Vec<_> = events.iter().map(|e| e["code"].clone()).collect();
+        assert_eq!(
+            codes,
+            [
+                RowValue::Text("pc.lock".into()),
+                RowValue::Text("pc.message".into())
+            ]
+        );
+        let change = reopen(&c.f).changes().unwrap().pop().unwrap();
+        assert_eq!(change.intent_kind, "device.screen");
+        assert_eq!(change.actor_id, c.counter);
+    }
+
+    #[tokio::test]
+    async fn a_message_is_one_to_140_characters_and_a_pc_is_required() {
+        use arena_proto::PcAction::{Lock, Message, Restart};
+        let c = crew().await;
+        let d = pc(&c).await;
+        for (body, field) in [
+            (screen(&d, Message, None), "text"),
+            (screen(&d, Message, Some("  ")), "text"),
+            (screen(&d, Message, Some(&"x".repeat(141))), "text"),
+            (screen(&d, Lock, Some("hi")), "text"),
+            (screen(&d, Restart, None), "action"),
+            (screen("nope", Lock, None), "device_id"),
+        ] {
+            let e = expect_err(&c.f, pc_cmd(&c, body, None)).await;
+            assert_eq!(
+                (e.code, e.field.as_deref()),
+                (ErrorCode::ValidationFailed, Some(field))
+            );
+        }
+        let mut with_rev = pc_cmd(&c, screen(&d, Lock, None), None);
+        with_rev.base_rev = Some(1);
+        let e = expect_err(&c.f, with_rev).await;
+        assert_eq!(e.field.as_deref(), Some("base_rev"));
+        assert!(reopen(&c.f).rows(Table::DeviceEvents).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn restart_needs_device_remote_so_a_counter_elevates_and_both_actors_are_recorded() {
+        use arena_proto::PcAction::{Lock, Restart};
+        let c = crew().await;
+        let d = pc(&c).await;
+        let e = expect_err(&c.f, pc_cmd(&c, power(&d, Restart), None)).await;
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        let e = expect_err(
+            &c.f,
+            pc_cmd(&c, power(&d, Lock), Some(pin_by(&c.manager, 1))),
+        )
+        .await;
+        assert_eq!(e.field.as_deref(), Some("action"));
+        let e = expect_err(
+            &c.f,
+            pc_cmd(&c, power(&d, Restart), Some(pin_by(&c.kitchen, 1))),
+        )
+        .await;
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        let mut ok = pc_cmd(&c, power(&d, Restart), Some(pin_by(&c.manager, 1)));
+        c.f.writer.submit_intent(ok.clone()).await.unwrap();
+        let change = reopen(&c.f).changes().unwrap().pop().unwrap();
+        assert_eq!(change.intent_kind, "device.power");
+        assert_eq!(change.actor_id, c.counter);
+        assert_eq!(change.elevated_by_id.as_deref(), Some(c.manager.as_str()));
+        let again = c.f.writer.submit_intent(ok.clone()).await.unwrap();
+        assert_eq!(again.changes.len(), 1);
+        assert_eq!(reopen(&c.f).rows(Table::DeviceEvents).unwrap().len(), 1);
+        ok.elevated_by = None;
+        let e = expect_err(&c.f, ok).await;
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+    }
+
     #[tokio::test]
     async fn match_pin_finds_only_other_staff_holding_the_permission() {
         let c = crew().await;

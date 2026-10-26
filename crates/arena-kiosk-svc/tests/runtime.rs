@@ -1482,6 +1482,95 @@ async fn a_reconnecting_app_learns_whether_an_exit_runs() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_acknowledged() {
+    use arena_proto::PcAction;
+    let (hub, kiosk, _) = admin_setup().await;
+    let presence = hub.presence.as_ref().unwrap();
+    let mut acks = presence.pc_acks().unwrap();
+    let mut app = kiosk.app().await;
+    let send = |cmd: &str, action, text: Option<&str>| {
+        assert_eq!(
+            presence.push_pc_command(&hub.device_id, cmd, action, text.map(Into::into)),
+            1
+        );
+    };
+    async fn acked(
+        cmd: &str,
+        acks: &mut tokio::sync::broadcast::Receiver<arena_proto::PcAckEvent>,
+    ) {
+        let ack = tokio::time::timeout(Duration::from_secs(5), acks.recv())
+            .await
+            .expect("an ack within 5 s")
+            .unwrap();
+        assert_eq!(ack.cmd_id, cmd);
+    }
+    send("L1", PcAction::Lock, None);
+    acked("L1", &mut acks).await;
+    let locked = |m: &IpcMsg| matches!(m, IpcMsg::PcScreen { locked: true, .. });
+    app.until(locked).await;
+    send("M1", PcAction::Message, Some("  Closing in 10  "));
+    acked("M1", &mut acks).await;
+    let shown = app
+        .until(|m| {
+            matches!(
+                m,
+                IpcMsg::PcScreen {
+                    message: Some(_),
+                    ..
+                }
+            )
+        })
+        .await;
+    assert_eq!(
+        shown,
+        IpcMsg::PcScreen {
+            locked: true,
+            message: Some("Closing in 10".into())
+        }
+    );
+    app.send(&IpcMsg::Request {
+        rid: "d".into(),
+        kind: "pc_dismiss".into(),
+        body: serde_json::Value::Null,
+    })
+    .await;
+    app.until(|m| {
+        matches!(
+            m,
+            IpcMsg::PcScreen {
+                message: None,
+                locked: true
+            }
+        )
+    })
+    .await;
+    send("M1", PcAction::Message, Some("Closing in 10"));
+    acked("M1", &mut acks).await;
+    let mut again = kiosk.app().await;
+    let first = again.until(|m| matches!(m, IpcMsg::PcScreen { .. })).await;
+    assert_eq!(
+        first,
+        IpcMsg::PcScreen {
+            locked: true,
+            message: None
+        },
+        "a repeated command is acknowledged but not shown again; the lock survives a new app"
+    );
+    send("U1", PcAction::Unlock, None);
+    acked("U1", &mut acks).await;
+    again
+        .until(|m| matches!(m, IpcMsg::PcScreen { locked: false, .. }))
+        .await;
+    send("R1", PcAction::Restart, None);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), acks.recv())
+            .await
+            .is_err(),
+        "a power command this OS cannot run is refused, not acknowledged"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_started_test_session_reaches_the_app_with_two_minutes_on_the_clock() {
     let mut hub = Hub::seeded().await;
     hub.up().await;

@@ -2,7 +2,7 @@
 //! app (`arena-kiosk-ui`, the unprivileged player session): one JSON object per line.
 //!
 //! The service sends `ping`, `hub_status`, `restore_state`, `toast`, `admin_exit_started`,
-//! `admin_exit_ended`, `test_session_started`, `test_session_ended` and `reply`; the app sends `pong`, `app_state`, `request` and
+//! `admin_exit_ended`, `test_session_started`, `test_session_ended`, `pc_screen` and `reply`; the app sends `pong`, `app_state`, `request` and
 //! `admin_exit` (a manager PIN, answered with `reply`; the [`SecretPin`] never prints). The app never talks to the Hub: everything it needs from the Hub
 //! goes through a `request` the service answers. A line longer than [`MAX_LINE_BYTES`] or that
 //! does not parse is an error the reader skips (the connection stays up).
@@ -140,6 +140,11 @@ pub enum IpcMsg {
         remaining_ms: u64,
     },
     TestSessionEnded,
+    PcScreen {
+        locked: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     #[serde(rename = "discovery.found")]
     DiscoveryFound {
         search: u64,
@@ -331,6 +336,23 @@ mod tests {
             IpcMsg::parse("{\"type\":\"test_session_ended\"}").unwrap(),
             IpcMsg::TestSessionEnded
         );
+    }
+
+    #[test]
+    fn the_pc_screen_omits_an_absent_message() {
+        assert_eq!(
+            IpcMsg::PcScreen {
+                locked: true,
+                message: None
+            }
+            .to_line(),
+            "{\"type\":\"pc_screen\",\"locked\":true}\n"
+        );
+        let shown = IpcMsg::PcScreen {
+            locked: false,
+            message: Some("hi".into()),
+        };
+        assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);
     }
 
     #[test]

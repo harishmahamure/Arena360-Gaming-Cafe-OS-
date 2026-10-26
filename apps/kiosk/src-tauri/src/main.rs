@@ -15,8 +15,8 @@ use std::sync::Arc;
 use arena_proto::KioskHubStatus;
 use bridge::{
     ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, Answer, Bridge, DISCOVERY_DONE_EVENT,
-    DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT, TEST_SESSION_ENDED_EVENT,
-    TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
+    DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, PC_SCREEN_EVENT, PcScreen, RESTORE_STATE_EVENT,
+    TEST_SESSION_ENDED_EVENT, TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
 };
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -61,6 +61,16 @@ fn heartbeat(bridge: tauri::State<'_, Arc<Bridge>>) {
 #[tauri::command]
 fn take_restore_state(bridge: tauri::State<'_, Arc<Bridge>>) -> Option<serde_json::Value> {
     bridge.take_restore()
+}
+
+#[tauri::command]
+fn pc_screen(bridge: tauri::State<'_, Arc<Bridge>>) -> PcScreen {
+    bridge.pc_screen()
+}
+
+#[tauri::command]
+async fn pc_dismiss(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "pc_dismiss", serde_json::Value::Null).await)
 }
 
 #[tauri::command]
@@ -235,7 +245,9 @@ fn main() {
             probe_ip,
             select_hub,
             pair,
-            pair_info
+            pair_info,
+            pc_screen,
+            pc_dismiss
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).
@@ -268,6 +280,7 @@ fn main() {
                             serde_json::json!({ "remaining_ms": remaining_ms }),
                         ),
                         Emit::TestSessionEnded => handle.emit(TEST_SESSION_ENDED_EVENT, ()),
+                        Emit::PcScreen(screen) => handle.emit(PC_SCREEN_EVENT, screen),
                         Emit::Theme(hc) => {
                             if let Some(path) = theme_file(&handle)
                                 && let Err(e) = theme::write(&path, hc)

@@ -9,8 +9,10 @@ import type { DeviceAdminUnlock } from "./DeviceAdminUnlock";
 import type { DeviceAssign } from "./DeviceAssign";
 import type { DeviceMaintenance } from "./DeviceMaintenance";
 import type { DevicePlace } from "./DevicePlace";
+import type { DevicePower } from "./DevicePower";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
+import type { DeviceScreen } from "./DeviceScreen";
 import type { DeviceTestSessionCompleted } from "./DeviceTestSessionCompleted";
 import type { DeviceTestSessionStart } from "./DeviceTestSessionStart";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
@@ -67,4 +69,6 @@ export type IntentPayload =
   | ({ kind: "device.maintenance" } & DeviceMaintenance)
   | ({ kind: "rate.upsert" } & RateUpsert)
   | ({ kind: "device.test_session.start" } & DeviceTestSessionStart)
-  | ({ kind: "device.test_session.completed" } & DeviceTestSessionCompleted);
+  | ({ kind: "device.test_session.completed" } & DeviceTestSessionCompleted)
+  | ({ kind: "device.screen" } & DeviceScreen)
+  | ({ kind: "device.power" } & DevicePower);

@@ -69,7 +69,7 @@ development_status:
   3-2-floor-view-shows-every-device-as-a-live-tile-grouped-by-zone: done
   3-3-floor-view-performance-proven-on-reference-hardware: done
   3-4-collapsible-zones-with-per-state-counts: done
-  3-5-non-modal-tile-sheet-with-remote-pc-actions: review
+  3-5-non-modal-tile-sheet-with-remote-pc-actions: done
   3-6-create-a-player-profile-with-protected-personal-data-and-con: backlog
   3-7-player-lookup-by-phone-guest-and-the-players-screen: backlog
   3-8-edit-a-player-profile-and-reset-their-password: backlog

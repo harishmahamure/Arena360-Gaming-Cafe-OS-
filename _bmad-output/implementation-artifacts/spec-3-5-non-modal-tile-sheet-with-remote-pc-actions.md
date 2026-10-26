@@ -2,7 +2,7 @@
 title: 'Story 3.5: Non-modal tile sheet with remote PC actions'
 type: 'feature'
 created: '2026-10-26'
-status: 'in-review'
+status: 'done'
 baseline_commit: '53512afb97855e47710f11919415407d9e1e1d64'
 review_loop_iteration: 0
 followup_review_recommended: false

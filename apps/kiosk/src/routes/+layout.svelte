@@ -300,6 +300,7 @@
 
   .toasts {
     position: fixed;
+    z-index: 15;
     right: 0;
     bottom: var(--space-kiosk-margin);
     left: 0;

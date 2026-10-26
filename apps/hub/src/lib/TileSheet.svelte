@@ -4,7 +4,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
-  import { SESSION_DEPENDENCY, elevate, hasPermission } from "./auth";
+  import { SESSION_DEPENDENCY, dropElevation, elevate, hasPermission } from "./auth";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
   import {
     MESSAGE_MAX,
@@ -66,7 +66,10 @@
   const fitting = $derived(groups.filter((g) => g.kind === "pc"));
   const needsRemote = $derived(!hasPermission(staff, "device.remote"));
 
-  onMount(() => heading?.focus());
+  onMount(() => {
+    heading?.focus();
+    return () => (approving = null);
+  });
 
   async function go(job: Job, ticket?: string) {
     if (!ticket && !hasPermission(staff, permissionFor(job.payload.kind))) {
@@ -99,10 +102,14 @@
     if (outcome.kind === "unreachable")
       return { ok: false, message: "ui.pin.unreachable" } as const;
     if (outcome.kind === "error") return { ok: false, message: "ui.pin.failed" } as const;
+    if (approving !== job) {
+      void dropElevation(outcome.ticket);
+      return { ok: true } as const;
+    }
     approving = null;
     void go(job, outcome.ticket);
     await tick();
-    root?.querySelector<HTMLElement>("button")?.focus();
+    heading?.focus();
     return { ok: true } as const;
   }
 
@@ -199,7 +206,12 @@
   </p>
   {#if cmd?.state === "failed"}
     <div>
-      <Button label="hub.sheet.retry" variant="secondary" onclick={() => void go(cmd.job)} />
+      <Button
+        label="hub.sheet.retry"
+        variant="secondary"
+        onclick={() =>
+          void go(cmd.job.track === "exit" ? adminUnlockJob(device.device_id) : cmd.job)}
+      />
     </div>
   {/if}
 

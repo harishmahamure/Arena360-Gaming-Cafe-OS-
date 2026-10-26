@@ -66,7 +66,7 @@ development_status:
 
   epic-3: in-progress
   3-1-branch-billing-rules-rounding-minimum-grace-and-time-up-mode: done
-  3-2-floor-view-shows-every-device-as-a-live-tile-grouped-by-zone: review
+  3-2-floor-view-shows-every-device-as-a-live-tile-grouped-by-zone: done
   3-3-floor-view-performance-proven-on-reference-hardware: backlog
   3-4-collapsible-zones-with-per-state-counts: backlog
   3-5-non-modal-tile-sheet-with-remote-pc-actions: backlog

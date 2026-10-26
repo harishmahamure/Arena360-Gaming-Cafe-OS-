@@ -2,7 +2,7 @@
 title: 'Story 3.2: Floor view shows every device as a live tile grouped by zone'
 type: 'feature'
 created: '2026-10-26'
-status: 'in-review'
+status: 'done'
 baseline_commit: '362e1f7098a03702e232a64383a06ef0ccc50ff6'
 route: 'dispatch'
 review_loop_iteration: 0

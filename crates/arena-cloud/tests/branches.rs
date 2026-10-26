@@ -319,6 +319,10 @@ async fn a_paired_branch_queues_one_settings_command_per_change_and_waits() {
         serde_json::from_str::<Value>(&got[0].2).unwrap(),
         json!({"key": "branch.tz", "value": "Asia/Dubai"})
     );
+    assert_eq!(
+        serde_json::from_str::<Value>(&got[1].2).unwrap(),
+        json!({"key": "branch.name", "value": "Renamed"})
+    );
 }
 
 #[tokio::test]

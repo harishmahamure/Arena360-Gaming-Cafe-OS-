@@ -13,12 +13,13 @@
   async function add(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
+    error = null;
     const res = await send<OwnerBranch>("POST", "/branches", { name });
-    busy = false;
     if (res.ok) {
       location.assign(setupUrl(res.data.id));
       return;
     }
+    busy = false;
     error =
       res.code === "VALIDATION_FAILED"
         ? "owner.branches.error.name"

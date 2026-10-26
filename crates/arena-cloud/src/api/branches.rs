@@ -113,14 +113,6 @@ async fn update(
     if changes.iter().all(|c| !c.2) {
         return Ok(Json(row(&st, b).await?));
     }
-    if !st
-        .db
-        .rename_branch(&b.tenant_id, &b.id, name, timezone, st.now())
-        .await
-        .map_err(ApiError::internal)?
-    {
-        return Err(not_your_branch());
-    }
     if st
         .db
         .active_hub(&b.id)
@@ -139,6 +131,14 @@ async fn update(
             )
             .await?;
         }
+    }
+    if !st
+        .db
+        .rename_branch(&b.tenant_id, &b.id, name, timezone, st.now())
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(not_your_branch());
     }
     tracing::info!(owner_id = %owned.signed.owner.id, branch_id = %b.id, "branch details changed");
     let fresh = st

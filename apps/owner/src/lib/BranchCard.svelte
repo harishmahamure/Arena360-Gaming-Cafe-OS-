@@ -53,7 +53,7 @@
     } else {
       error =
         res.code === "VALIDATION_FAILED"
-          ? name.trim() && name.trim().length <= 80
+          ? res.field === "timezone"
             ? "owner.branches.error.timezone"
             : "owner.branches.error.name"
           : "owner.branches.error.generic";

@@ -55,7 +55,7 @@ export async function load<T>(path: string): Promise<Loaded<T> | "signed-out" | 
   return hit ? { data: hit.payload, asOf: hit.as_of, live: false } : null;
 }
 
-export type Sent<T> = { ok: true; data: T } | { ok: false; code: string };
+export type Sent<T> = { ok: true; data: T } | { ok: false; code: string; field?: string };
 
 export async function send<T>(
   method: "POST" | "PATCH",
@@ -66,7 +66,9 @@ export async function send<T>(
   if (res?.status === 401 && (await rotate())?.ok) res = await fetchJson(path, method, body);
   if (!res) return { ok: false, code: "OFFLINE" };
   const data = await res.json().catch(() => null);
-  return res.ok ? { ok: true, data } : { ok: false, code: data?.code ?? "INTERNAL" };
+  return res.ok
+    ? { ok: true, data }
+    : { ok: false, code: data?.code ?? "INTERNAL", field: data?.field };
 }
 
 export const dropCache = () => (epoch++, clearCache());

@@ -2,7 +2,7 @@
 title: 'Story 2.30: Owner manages branches — create, rename, timezone, new Hub pairing code'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: '0bd54f96c70677bd944eda09254087adbcca2fc6'
 review_loop_iteration: 0
 followup_review_recommended: false

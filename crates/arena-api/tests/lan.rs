@@ -1391,7 +1391,11 @@ async fn the_hub_checks_admin_exit_pins_and_pauses_after_five_wrong() {
         Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::AuthLocked),
         other => panic!("{other:?}"),
     }
-    assert!(!log_text().contains("\"9999\""), "the PIN is never logged");
+    let log = log_text();
+    assert!(
+        !log.contains("\"9999\"") && !log.contains("=9999"),
+        "the PIN is never logged"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

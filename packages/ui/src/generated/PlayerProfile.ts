@@ -2,4 +2,11 @@
 import type { PlayerConsent } from "./PlayerConsent";
 import type { PlayerHit } from "./PlayerHit";
 
-export type PlayerProfile = { player: PlayerHit; consent: PlayerConsent | null };
+export type PlayerProfile = {
+  player: PlayerHit;
+  consent: PlayerConsent | null;
+  rev: number;
+  email: string;
+  dob: string;
+  notes: string;
+};

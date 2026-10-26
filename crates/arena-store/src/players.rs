@@ -26,12 +26,13 @@ pub fn username_taken(conn: &Connection, username: &str) -> Result<bool, AppErro
     .map_err(db_error)
 }
 
-pub fn phone_taken(conn: &Connection, phone_lookup: &str) -> Result<bool, AppError> {
+pub fn phone_holder(conn: &Connection, phone_lookup: &str) -> Result<Option<String>, AppError> {
     conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM players WHERE phone_lookup = ?1 AND deleted_at IS NULL)",
+        "SELECT player_id FROM players WHERE phone_lookup = ?1 AND deleted_at IS NULL",
         [phone_lookup],
         |r| r.get(0),
     )
+    .optional()
     .map_err(db_error)
 }
 
@@ -100,38 +101,75 @@ pub fn find_player_key(conn: &Connection, player_id: &str) -> Result<Option<Stri
     .map_err(db_error)
 }
 
-pub fn list_players_after(
-    conn: &Connection,
-    after: i64,
-) -> Result<Vec<(i64, PlayerRow, String)>, AppError> {
+pub fn update_player(conn: &Connection, p: &PlayerRow) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE players SET phone_lookup = ?2, name_enc = ?3, phone_enc = ?4, email_enc = ?5,
+                            dob_enc = ?6, notes_enc = ?7, tags = ?8
+         WHERE player_id = ?1",
+        params![
+            p.player_id,
+            p.phone_lookup,
+            p.name_enc,
+            p.phone_enc,
+            p.email_enc,
+            p.dob_enc,
+            p.notes_enc,
+            p.tags
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn set_player_password(conn: &Connection, player_id: &str, hash: &str) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE players SET password_hash = ?2 WHERE player_id = ?1",
+        params![player_id, hash],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn list_player_revs(conn: &Connection) -> Result<Vec<(String, i64)>, AppError> {
     let mut stmt = conn
-        .prepare(
-            "SELECT p.rowid, p.player_id, p.username, p.password_hash, p.phone_lookup, p.name_enc,
-                    p.phone_enc, p.email_enc, p.dob_enc, p.notes_enc, p.tags, k.dek_wrapped
-             FROM players p JOIN player_keys k ON k.player_id = p.player_id
-             WHERE p.rowid > ?1 AND p.deleted_at IS NULL ORDER BY p.rowid",
-        )
+        .prepare("SELECT player_id, rev FROM players WHERE deleted_at IS NULL")
         .map_err(db_error)?;
-    stmt.query_map([after], |r| {
-        Ok((
-            r.get(0)?,
-            PlayerRow {
-                player_id: r.get(1)?,
-                username: r.get(2)?,
-                password_hash: r.get(3)?,
-                phone_lookup: r.get(4)?,
-                name_enc: r.get(5)?,
-                phone_enc: r.get(6)?,
-                email_enc: r.get(7)?,
-                dob_enc: r.get(8)?,
-                notes_enc: r.get(9)?,
-                tags: r.get(10)?,
-            },
-            r.get(11)?,
-        ))
-    })
-    .map_err(db_error)?
-    .collect::<Result<_, _>>()
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)
+}
+
+pub fn find_player(
+    conn: &Connection,
+    player_id: &str,
+) -> Result<Option<(PlayerRow, i64, String)>, AppError> {
+    conn.query_row(
+        "SELECT p.player_id, p.username, p.password_hash, p.phone_lookup, p.name_enc, p.phone_enc,
+                p.email_enc, p.dob_enc, p.notes_enc, p.tags, p.rev, k.dek_wrapped
+         FROM players p JOIN player_keys k ON k.player_id = p.player_id
+         WHERE p.player_id = ?1 AND p.deleted_at IS NULL",
+        [player_id],
+        |r| {
+            Ok((
+                PlayerRow {
+                    player_id: r.get(0)?,
+                    username: r.get(1)?,
+                    password_hash: r.get(2)?,
+                    phone_lookup: r.get(3)?,
+                    name_enc: r.get(4)?,
+                    phone_enc: r.get(5)?,
+                    email_enc: r.get(6)?,
+                    dob_enc: r.get(7)?,
+                    notes_enc: r.get(8)?,
+                    tags: r.get(9)?,
+                },
+                r.get(10)?,
+                r.get(11)?,
+            ))
+        },
+    )
+    .optional()
     .map_err(db_error)
 }
 

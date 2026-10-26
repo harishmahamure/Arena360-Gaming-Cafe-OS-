@@ -469,6 +469,7 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            let player_id = ulid::Ulid::generate().to_string();
             let player = arena_core::players::seal(
                 &[5; 32],
                 &arena_proto::PlayerForm {
@@ -483,12 +484,44 @@ mod tests {
                     consent: true,
                     policy_version: "1".into(),
                 },
-                &ulid::Ulid::generate().to_string(),
+                &player_id,
                 arena_core::staff::hash_secret("pw").unwrap(),
             )
             .unwrap();
+            let wrapped = player.wrapped_key.clone();
             writer
                 .submit_intent(submit(IntentPayload::PlayerCreate(player), None))
+                .await
+                .unwrap();
+            let edit = arena_core::players::reseal(
+                &[5; 32],
+                &arena_proto::PlayerEditForm {
+                    player_id: player_id.clone(),
+                    base_rev: 1,
+                    phone: "+919000000000".into(),
+                    name: "Asha Rao".into(),
+                    email: String::new(),
+                    dob: String::new(),
+                    notes: String::new(),
+                    tags: Vec::new(),
+                    consent: false,
+                    policy_version: "1".into(),
+                },
+                &wrapped,
+            )
+            .unwrap();
+            writer
+                .submit_intent(submit(IntentPayload::PlayerUpdate(edit), Some(1)))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::PlayerPasswordReset(arena_proto::PlayerPasswordReset {
+                        player_id,
+                        password_hash: arena_core::staff::hash_secret("pw2").unwrap(),
+                    }),
+                    None,
+                ))
                 .await
                 .unwrap();
         }

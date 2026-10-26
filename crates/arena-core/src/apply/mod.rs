@@ -187,7 +187,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::ProductUpsert(_) | P::ProductDelete(_) => {
             Target::Product(Box::new(products::load(tx, &intent.payload)?))
         }
-        P::PlayerCreate(_) => Target::Player(Box::new(players::load(tx, &intent.payload)?)),
+        P::PlayerCreate(_) | P::PlayerUpdate(_) | P::PlayerPasswordReset(_) => {
+            Target::Player(Box::new(players::load(tx, &intent.payload)?))
+        }
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

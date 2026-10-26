@@ -1894,10 +1894,15 @@ async fn intent(
             "credentials are set with a setup code",
         )));
     }
-    if matches!(intent.payload, arena_proto::IntentPayload::PlayerCreate(_)) {
+    if matches!(
+        intent.payload,
+        arena_proto::IntentPayload::PlayerCreate(_)
+            | arena_proto::IntentPayload::PlayerUpdate(_)
+            | arena_proto::IntentPayload::PlayerPasswordReset(_)
+    ) {
         return fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
-            "profiles are created from the profile form",
+            "profiles are changed from the profile forms",
         )));
     }
     if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) {
@@ -1999,45 +2004,97 @@ async fn run_intent(
     }
 }
 
+async fn player_write<T: serde::de::DeserializeOwned>(
+    auth: &Arc<UiAuth>,
+    headers: &HeaderMap,
+    body: &[u8],
+    shape: &str,
+) -> Result<(String, SessionStaff, T), Response> {
+    let Some(token) = bearer(headers).map(str::to_owned) else {
+        return Err(fail(auth_failed()));
+    };
+    let me = auth.acting_session(&token).await.map_err(fail)?;
+    let Ok(request) = serde_json::from_slice::<T>(body) else {
+        return Err(fail(bad_frame(shape)));
+    };
+    if auth.writer.is_none() {
+        return Err(fail(ui_error(AppError::new(
+            ErrorCode::NotPrimary,
+            "this hub is not the primary writer",
+        ))));
+    }
+    Ok((token, me, request))
+}
+
+fn player_kek(auth: &UiAuth) -> Result<Arc<dyn arena_core::players::Kek>, UiError> {
+    auth.kek.clone().ok_or_else(|| {
+        ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "this hub has no key store for profiles",
+        ))
+    })
+}
+
+fn require_manage(me: &SessionStaff, ticket: &Option<String>, what: &str) -> Result<(), UiError> {
+    if ticket.is_none() && !me.permissions.contains(&Permission::PlayerManage) {
+        return Err(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            format!("{what} needs a manager's PIN"),
+        )));
+    }
+    Ok(())
+}
+
+fn player_intent(
+    me: &SessionStaff,
+    now: i64,
+    idempotency_key: String,
+    base_rev: Option<i64>,
+    payload: arena_proto::IntentPayload,
+) -> arena_proto::Intent {
+    arena_proto::Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: payload.kind(),
+        idempotency_key,
+        issued_at: now,
+        base_rev,
+        actor: arena_proto::Actor {
+            kind: ActorKind::Staff,
+            id: me.staff_id.clone(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload,
+    }
+}
+
 async fn players(
     State(auth): State<Arc<UiAuth>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let Some(token) = bearer(&headers).map(str::to_owned) else {
-        return fail(auth_failed());
+    let (token, me, request) = match player_write::<UiPlayerRequest>(
+        &auth,
+        &headers,
+        &body,
+        "the body must be {\"form\": PlayerForm, \"idempotency_key\", \"elevation_ticket\"?}",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(r) => return r,
     };
-    let me = match auth.acting_session(&token).await {
-        Ok(me) => me,
-        Err(e) => return fail(e),
-    };
-    let Ok(UiPlayerRequest {
+    let UiPlayerRequest {
         form,
         idempotency_key,
         elevation_ticket,
-    }) = serde_json::from_slice::<UiPlayerRequest>(&body)
-    else {
-        return fail(bad_frame(
-            "the body must be {\"form\": PlayerForm, \"idempotency_key\", \"elevation_ticket\"?}",
-        ));
+    } = request;
+    let kek = match player_kek(&auth) {
+        Ok(k) => k,
+        Err(e) => return fail(e),
     };
-    if auth.writer.is_none() {
-        return fail(ui_error(AppError::new(
-            ErrorCode::NotPrimary,
-            "this hub is not the primary writer",
-        )));
-    }
-    let Some(kek) = auth.kek.clone() else {
-        return fail(ui_error(AppError::new(
-            ErrorCode::Unsupported,
-            "this hub has no key store for profiles",
-        )));
-    };
-    if elevation_ticket.is_none() && !me.permissions.contains(&Permission::PlayerManage) {
-        return fail(ui_error(AppError::new(
-            ErrorCode::PermissionDenied,
-            "creating a profile needs a manager's PIN",
-        )));
+    if let Err(e) = require_manage(&me, &elevation_ticket, "creating a profile") {
+        return fail(e);
     }
     let now = auth.clock.now_ms();
     if let Err(e) = form.check(&arena_core::players::utc_day(now)) {
@@ -2059,20 +2116,122 @@ async fn players(
         Ok(Err(e)) => return fail(ui_error(e)),
         Err(_) => return fail(internal()),
     };
-    let intent = arena_proto::Intent {
-        intent_id: ulid::Ulid::generate().to_string(),
-        kind: IntentKind::PlayerCreate,
+    let intent = player_intent(
+        &me,
+        now,
         idempotency_key,
-        issued_at: now,
-        base_rev: None,
-        actor: arena_proto::Actor {
-            kind: ActorKind::Staff,
-            id: me.staff_id.clone(),
-        },
-        elevated_by: None,
-        reason: None,
-        payload: arena_proto::IntentPayload::PlayerCreate(payload),
+        None,
+        arena_proto::IntentPayload::PlayerCreate(payload),
+    );
+    run_intent(&auth, &token, &me, intent, elevation_ticket).await
+}
+
+async fn player_update(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let (token, me, request) = match player_write::<arena_proto::UiPlayerEditRequest>(
+        &auth,
+        &headers,
+        &body,
+        "the body must be {\"form\": PlayerEditForm, \"idempotency_key\", \"elevation_ticket\"?}",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(r) => return r,
     };
+    let arena_proto::UiPlayerEditRequest {
+        form,
+        idempotency_key,
+        elevation_ticket,
+    } = request;
+    let kek = match player_kek(&auth) {
+        Ok(k) => k,
+        Err(e) => return fail(e),
+    };
+    if let Err(e) = require_manage(&me, &elevation_ticket, "editing a profile") {
+        return fail(e);
+    }
+    let now = auth.clock.now_ms();
+    if let Err(e) = form.check(&arena_core::players::utc_day(now)) {
+        return fail(ui_error(e));
+    }
+    let reader = Arc::clone(&auth.reader);
+    let base_rev = form.base_rev;
+    let sealed = tokio::task::spawn_blocking(move || {
+        let (_, _, wrapped) = reader
+            .player(&form.player_id)?
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no such player"))?;
+        arena_core::players::reseal(&kek.kek()?, &form, &wrapped)
+    })
+    .await;
+    let payload = match sealed {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => return fail(ui_error(e)),
+        Err(_) => return fail(internal()),
+    };
+    let intent = player_intent(
+        &me,
+        now,
+        idempotency_key,
+        Some(base_rev),
+        arena_proto::IntentPayload::PlayerUpdate(payload),
+    );
+    run_intent(&auth, &token, &me, intent, elevation_ticket).await
+}
+
+async fn player_password(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let (token, me, request) = match player_write::<arena_proto::UiPasswordResetRequest>(
+        &auth,
+        &headers,
+        &body,
+        "the body must be {\"form\": PlayerPasswordForm, \"idempotency_key\", \"elevation_ticket\"?}",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let arena_proto::UiPasswordResetRequest {
+        form,
+        idempotency_key,
+        elevation_ticket,
+    } = request;
+    if let Err(e) = require_manage(&me, &elevation_ticket, "resetting a password") {
+        return fail(e);
+    }
+    if let Err(e) = form.check() {
+        return fail(ui_error(e));
+    }
+    let Ok(permit) = Arc::clone(&auth.pin_checks).acquire_owned().await else {
+        return fail(internal());
+    };
+    let hashed = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        arena_core::staff::hash_secret(&form.password).map(|h| (form.player_id, h))
+    })
+    .await;
+    let (player_id, password_hash) = match hashed {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return fail(ui_error(e)),
+        Err(_) => return fail(internal()),
+    };
+    let intent = player_intent(
+        &me,
+        auth.clock.now_ms(),
+        idempotency_key,
+        None,
+        arena_proto::IntentPayload::PlayerPasswordReset(arena_proto::PlayerPasswordReset {
+            player_id,
+            password_hash,
+        }),
+    );
     run_intent(&auth, &token, &me, intent, elevation_ticket).await
 }
 
@@ -2137,7 +2296,10 @@ async fn player_profile(
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
     let id = q.get("id").cloned().unwrap_or_default();
-    player_read(auth, headers, move |i, r, k| i.profile(r, k, &id)).await
+    player_read(auth, headers, move |_, r, k| {
+        arena_core::players::profile(r, k, &id)
+    })
+    .await
 }
 
 async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
@@ -2187,6 +2349,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/intent", post(intent))
         .route("/ui/players", post(players).get(player_search))
         .route("/ui/players/profile", get(player_profile))
+        .route("/ui/players/update", post(player_update))
+        .route("/ui/players/password", post(player_password))
         .route("/ui/settings", get(settings))
         .route("/ui/products", get(products))
         .route("/ui/printer/find", post(crate::ui_printer::find))

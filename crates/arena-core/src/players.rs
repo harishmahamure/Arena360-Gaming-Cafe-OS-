@@ -1,7 +1,10 @@
+use std::collections::{BTreeMap, HashMap};
+
 use arena_proto::{
-    AppError, CONSENT_TRANSACTIONAL, ErrorCode, PlayerConsent, PlayerCreate, PlayerForm, PlayerHit,
-    PlayerProfile, normalize_phone, normalize_username,
+    AppError, CONSENT_TRANSACTIONAL, ErrorCode, PlayerConsent, PlayerCreate, PlayerEditForm,
+    PlayerForm, PlayerHit, PlayerProfile, PlayerUpdate, normalize_phone, normalize_username,
 };
+use arena_store::PlayerRow;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -78,6 +81,49 @@ fn field_aad(player_id: &str, field: &str) -> String {
     format!("{player_id}:{field}")
 }
 
+struct Plain<'a> {
+    phone: &'a str,
+    name: &'a str,
+    email: &'a str,
+    dob: &'a str,
+    notes: &'a str,
+    tags: &'a [String],
+    consent: bool,
+    policy_version: &'a str,
+}
+
+fn seal_details(
+    kek: &[u8; KEK_LEN],
+    dek: &[u8],
+    player_id: &str,
+    d: &Plain,
+) -> Result<PlayerUpdate, AppError> {
+    let field =
+        |name: &str, value: &str| encrypt(dek, &field_aad(player_id, name), value.as_bytes());
+    let optional = |name: &str, value: &str| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| field(name, value)).transpose()
+    };
+    let phone = normalize_phone(d.phone);
+    Ok(PlayerUpdate {
+        player_id: player_id.to_owned(),
+        phone_lookup: phone_lookup(kek, &phone),
+        name_enc: field("name", d.name.trim())?,
+        phone_enc: field("phone", &phone)?,
+        email_enc: optional("email", d.email)?,
+        dob_enc: optional("dob", d.dob)?,
+        notes_enc: optional("notes", d.notes)?,
+        tags: d
+            .tags
+            .iter()
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+            .collect(),
+        consent: d.consent,
+        policy_version: d.policy_version.to_owned(),
+    })
+}
+
 pub fn seal(
     kek: &[u8; KEK_LEN],
     form: &PlayerForm,
@@ -88,33 +134,59 @@ pub fn seal(
     SystemRandom::new()
         .fill(&mut dek)
         .map_err(|_| internal("the system random source failed"))?;
-    let field =
-        |name: &str, value: &str| encrypt(&dek, &field_aad(player_id, name), value.as_bytes());
-    let optional = |name: &str, value: &str| {
-        let value = value.trim();
-        (!value.is_empty()).then(|| field(name, value)).transpose()
-    };
-    let phone = normalize_phone(&form.phone);
+    let u = seal_details(
+        kek,
+        &dek,
+        player_id,
+        &Plain {
+            phone: &form.phone,
+            name: &form.name,
+            email: &form.email,
+            dob: &form.dob,
+            notes: &form.notes,
+            tags: &form.tags,
+            consent: form.consent,
+            policy_version: &form.policy_version,
+        },
+    )?;
     Ok(PlayerCreate {
-        player_id: player_id.to_owned(),
+        player_id: u.player_id,
         username: normalize_username(&form.username),
         password_hash,
-        phone_lookup: phone_lookup(kek, &phone),
-        name_enc: field("name", form.name.trim())?,
-        phone_enc: field("phone", &phone)?,
-        email_enc: optional("email", &form.email)?,
-        dob_enc: optional("dob", &form.dob)?,
-        notes_enc: optional("notes", &form.notes)?,
-        tags: form
-            .tags
-            .iter()
-            .map(|t| t.trim().to_owned())
-            .filter(|t| !t.is_empty())
-            .collect(),
+        phone_lookup: u.phone_lookup,
+        name_enc: u.name_enc,
+        phone_enc: u.phone_enc,
+        email_enc: u.email_enc,
+        dob_enc: u.dob_enc,
+        notes_enc: u.notes_enc,
+        tags: u.tags,
         wrapped_key: encrypt(kek, &dek_aad(player_id), &dek)?,
-        consent: form.consent,
-        policy_version: form.policy_version.clone(),
+        consent: u.consent,
+        policy_version: u.policy_version,
     })
+}
+
+pub fn reseal(
+    kek: &[u8; KEK_LEN],
+    form: &PlayerEditForm,
+    wrapped_key: &str,
+) -> Result<PlayerUpdate, AppError> {
+    let dek = decrypt(kek, &dek_aad(&form.player_id), wrapped_key)?;
+    seal_details(
+        kek,
+        &dek,
+        &form.player_id,
+        &Plain {
+            phone: &form.phone,
+            name: &form.name,
+            email: &form.email,
+            dob: &form.dob,
+            notes: &form.notes,
+            tags: &form.tags,
+            consent: form.consent,
+            policy_version: &form.policy_version,
+        },
+    )
 }
 
 pub fn open_field(
@@ -139,32 +211,44 @@ struct Entry {
 
 #[derive(Default)]
 pub struct PlayerIndex {
-    last: i64,
-    entries: Vec<Entry>,
+    seen: HashMap<String, i64>,
+    entries: BTreeMap<String, Entry>,
+}
+
+fn hit(kek: &[u8; KEK_LEN], row: PlayerRow, wrapped: &str) -> Result<PlayerHit, AppError> {
+    let open = |field, enc: &str| open_field(kek, &row.player_id, wrapped, field, enc);
+    Ok(PlayerHit {
+        name: open("name", &row.name_enc)?,
+        phone: open("phone", &row.phone_enc)?,
+        tags: serde_json::from_str(&row.tags).unwrap_or_default(),
+        player_id: row.player_id,
+        username: row.username,
+    })
 }
 
 impl PlayerIndex {
     fn sync(&mut self, reader: &SnapshotReader, kek: &[u8; KEK_LEN]) -> Result<(), AppError> {
-        for (rowid, row, wrapped) in reader.player_rows_after(self.last)? {
-            self.last = rowid;
-            let open = |field, enc: &str| open_field(kek, &row.player_id, &wrapped, field, enc);
-            let (Ok(name), Ok(phone)) =
-                (open("name", &row.name_enc), open("phone", &row.phone_enc))
-            else {
-                tracing::warn!(player_id = %row.player_id, "player index: skipping an unreadable row");
+        for (id, rev) in reader.player_revs()? {
+            if self.seen.get(&id) == Some(&rev) {
+                continue;
+            }
+            let Some((row, rev, wrapped)) = reader.player(&id)? else {
                 continue;
             };
-            self.entries.push(Entry {
-                digits: phone.chars().filter(char::is_ascii_digit).collect(),
-                folded: name.to_lowercase(),
-                hit: PlayerHit {
-                    tags: serde_json::from_str(&row.tags).unwrap_or_default(),
-                    player_id: row.player_id,
-                    name,
-                    username: row.username,
-                    phone,
+            self.seen.insert(id.clone(), rev);
+            self.entries.remove(&id);
+            let Ok(hit) = hit(kek, row, &wrapped) else {
+                tracing::warn!(player_id = %id, "player index: skipping an unreadable row");
+                continue;
+            };
+            self.entries.insert(
+                id,
+                Entry {
+                    digits: hit.phone.chars().filter(char::is_ascii_digit).collect(),
+                    folded: hit.name.to_lowercase(),
+                    hit,
                 },
-            });
+            );
         }
         Ok(())
     }
@@ -182,7 +266,7 @@ impl PlayerIndex {
         }
         let mut found: Vec<_> = self
             .entries
-            .iter()
+            .values()
             .filter_map(|e| e.digits.find(&q).map(|at| (at, &e.folded, &e.hit)))
             .collect();
         found.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
@@ -192,32 +276,40 @@ impl PlayerIndex {
             .map(|(_, _, h)| h.clone())
             .collect())
     }
+}
 
-    pub fn profile(
-        &mut self,
-        reader: &SnapshotReader,
-        kek: &[u8; KEK_LEN],
-        player_id: &str,
-    ) -> Result<PlayerProfile, AppError> {
-        self.sync(reader, kek)?;
-        let hit = self
-            .entries
-            .iter()
-            .find(|e| e.hit.player_id == player_id)
-            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no such player"))?
-            .hit
-            .clone();
-        let consent = reader
-            .latest_consent(player_id, CONSENT_TRANSACTIONAL)?
-            .map(|(granted, policy_version)| PlayerConsent {
-                granted,
-                policy_version,
-            });
-        Ok(PlayerProfile {
-            player: hit,
-            consent,
+pub fn profile(
+    reader: &SnapshotReader,
+    kek: &[u8; KEK_LEN],
+    player_id: &str,
+) -> Result<PlayerProfile, AppError> {
+    let (row, rev, wrapped) = reader
+        .player(player_id)?
+        .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no such player"))?;
+    let optional = |field, enc: &Option<String>| {
+        enc.as_deref().map_or(Ok(String::new()), |e| {
+            open_field(kek, player_id, &wrapped, field, e)
         })
-    }
+    };
+    let (email, dob, notes) = (
+        optional("email", &row.email_enc)?,
+        optional("dob", &row.dob_enc)?,
+        optional("notes", &row.notes_enc)?,
+    );
+    let consent = reader
+        .latest_consent(player_id, CONSENT_TRANSACTIONAL)?
+        .map(|(granted, policy_version)| PlayerConsent {
+            granted,
+            policy_version,
+        });
+    Ok(PlayerProfile {
+        player: hit(kek, row, &wrapped)?,
+        consent,
+        rev,
+        email,
+        dob,
+        notes,
+    })
 }
 
 pub fn utc_day(ms: i64) -> String {
@@ -348,12 +440,64 @@ mod tests {
         assert!(all.iter().all(|h| h.phone.starts_with("+919")));
         let one = idx.search(&reader, &KEK, "91-9").unwrap();
         assert_eq!(one[0].tags, ["vip"]);
-        let p = idx.profile(&reader, &KEK, "P00003").unwrap();
+        let p = profile(&reader, &KEK, "P00003").unwrap();
         assert_eq!((p.player.username.as_str(), p.consent), ("user3", None));
+        assert_eq!((p.rev, p.email.as_str()), (0, ""));
         assert_eq!(
-            idx.profile(&reader, &KEK, "nope").unwrap_err().code,
+            profile(&reader, &KEK, "nope").unwrap_err().code,
             ErrorCode::NotFound
         );
+    }
+
+    #[test]
+    fn an_edit_replaces_the_entry_and_the_old_phone_stops_matching() {
+        let (dir, reader) = seeded(3);
+        let mut idx = PlayerIndex::default();
+        assert_eq!(idx.search(&reader, &KEK, "9000007919").unwrap().len(), 1);
+        let (_, _, wrapped) = reader.player("P00001").unwrap().unwrap();
+        let edit = PlayerEditForm {
+            player_id: "P00001".into(),
+            base_rev: 0,
+            phone: "+91 91111-11111".into(),
+            name: "Zed".into(),
+            email: "z@example.com".into(),
+            dob: String::new(),
+            notes: String::new(),
+            tags: vec!["new".into()],
+            consent: true,
+            policy_version: "1".into(),
+        };
+        let u = reseal(&KEK, &edit, &wrapped).unwrap();
+        assert!(!serde_json::to_string(&u).unwrap().contains("Zed"));
+        let mut store = arena_store::Store::open(dir.path().join("branch.db"), 0).unwrap();
+        store
+            .write_tx(|tx| {
+                arena_store::update_player(
+                    tx,
+                    &PlayerRow {
+                        player_id: u.player_id.clone(),
+                        username: String::new(),
+                        password_hash: String::new(),
+                        phone_lookup: u.phone_lookup,
+                        name_enc: u.name_enc,
+                        phone_enc: u.phone_enc,
+                        email_enc: u.email_enc,
+                        dob_enc: None,
+                        notes_enc: None,
+                        tags: "[\"new\"]".into(),
+                    },
+                )?;
+                tx.execute("UPDATE players SET rev = rev + 1", [])
+                    .map_err(arena_store::db_error)?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(idx.search(&reader, &KEK, "9000007919").unwrap().is_empty());
+        let found = idx.search(&reader, &KEK, "91111-11111").unwrap();
+        assert_eq!((found.len(), found[0].name.as_str()), (1, "Zed"));
+        assert_eq!(found[0].tags, ["new"]);
+        let p = profile(&reader, &KEK, "P00001").unwrap();
+        assert_eq!((p.rev, p.email.as_str()), (1, "z@example.com"));
     }
 
     #[test]

@@ -67,6 +67,94 @@ pub struct PlayerCreate {
     pub policy_version: String,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerEditForm {
+    pub player_id: String,
+    #[ts(type = "number")]
+    pub base_rev: i64,
+    pub phone: String,
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub dob: String,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub consent: bool,
+    pub policy_version: String,
+}
+
+impl std::fmt::Debug for PlayerEditForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerEditForm").finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerPasswordForm {
+    pub player_id: String,
+    pub password: String,
+    pub confirm: String,
+}
+
+impl std::fmt::Debug for PlayerPasswordForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerPasswordForm").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerUpdate {
+    pub player_id: String,
+    pub phone_lookup: String,
+    pub name_enc: String,
+    pub phone_enc: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub email_enc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dob_enc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notes_enc: Option<String>,
+    pub tags: Vec<String>,
+    pub consent: bool,
+    pub policy_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerPasswordReset {
+    pub player_id: String,
+    pub password_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UiPlayerEditRequest {
+    pub form: PlayerEditForm,
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub elevation_ticket: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UiPasswordResetRequest {
+    pub form: PlayerPasswordForm,
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub elevation_ticket: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct UiPlayerRequest {
@@ -99,6 +187,11 @@ pub struct PlayerConsent {
 pub struct PlayerProfile {
     pub player: PlayerHit,
     pub consent: Option<PlayerConsent>,
+    #[ts(type = "number")]
+    pub rev: i64,
+    pub email: String,
+    pub dob: String,
+    pub notes: String,
 }
 
 fn invalid(field: &str, message: &str) -> AppError {
@@ -144,20 +237,27 @@ fn clean(s: &str, max: usize) -> bool {
     s.chars().count() <= max && !s.chars().any(char::is_control)
 }
 
-impl PlayerForm {
-    pub fn check(&self, today: &str) -> Result<(), AppError> {
-        if !valid_username(&normalize_username(&self.username)) {
-            return Err(invalid(
-                "username",
-                "username must be 3-32 characters: letters, digits, dot, dash or underscore",
-            ));
-        }
-        if !(PLAYER_PASSWORD_MIN_CHARS..=PLAYER_PASSWORD_MAX_CHARS)
-            .contains(&self.password.chars().count())
-        {
-            return Err(invalid("password", "password must be 6 to 128 characters"));
-        }
-        if !valid_phone(&normalize_phone(&self.phone)) {
+fn check_password(password: &str) -> Result<(), AppError> {
+    if !(PLAYER_PASSWORD_MIN_CHARS..=PLAYER_PASSWORD_MAX_CHARS).contains(&password.chars().count())
+    {
+        return Err(invalid("password", "password must be 6 to 128 characters"));
+    }
+    Ok(())
+}
+
+struct Details<'a> {
+    phone: &'a str,
+    name: &'a str,
+    email: &'a str,
+    dob: &'a str,
+    notes: &'a str,
+    tags: &'a [String],
+    policy_version: &'a str,
+}
+
+impl Details<'_> {
+    fn check(&self, today: &str) -> Result<(), AppError> {
+        if !valid_phone(&normalize_phone(self.phone)) {
             return Err(invalid(
                 "phone",
                 "phone must start with + and have 8 to 15 digits",
@@ -180,11 +280,58 @@ impl PlayerForm {
         if self.notes.chars().count() > PLAYER_NOTES_MAX_CHARS {
             return Err(invalid("notes", "notes must be up to 500 characters"));
         }
-        if !valid_tags(&self.tags) {
+        if !valid_tags(self.tags) {
             return Err(invalid("tags", "up to 10 tags of up to 24 characters each"));
         }
-        if !valid_policy_version(&self.policy_version) {
+        if !valid_policy_version(self.policy_version) {
             return Err(invalid("policy_version", "policy version is not valid"));
+        }
+        Ok(())
+    }
+}
+
+impl PlayerForm {
+    pub fn check(&self, today: &str) -> Result<(), AppError> {
+        if !valid_username(&normalize_username(&self.username)) {
+            return Err(invalid(
+                "username",
+                "username must be 3-32 characters: letters, digits, dot, dash or underscore",
+            ));
+        }
+        check_password(&self.password)?;
+        Details {
+            phone: &self.phone,
+            name: &self.name,
+            email: &self.email,
+            dob: &self.dob,
+            notes: &self.notes,
+            tags: &self.tags,
+            policy_version: &self.policy_version,
+        }
+        .check(today)
+    }
+}
+
+impl PlayerEditForm {
+    pub fn check(&self, today: &str) -> Result<(), AppError> {
+        Details {
+            phone: &self.phone,
+            name: &self.name,
+            email: &self.email,
+            dob: &self.dob,
+            notes: &self.notes,
+            tags: &self.tags,
+            policy_version: &self.policy_version,
+        }
+        .check(today)
+    }
+}
+
+impl PlayerPasswordForm {
+    pub fn check(&self) -> Result<(), AppError> {
+        check_password(&self.password)?;
+        if self.password != self.confirm {
+            return Err(invalid("confirm", "the two passwords differ"));
         }
         Ok(())
     }
@@ -250,6 +397,39 @@ mod tests {
         assert_eq!(field(&f), None);
         assert_eq!(normalize_phone(&f.phone), "+919876543210");
         assert_eq!(normalize_username(" Asha_9 "), "asha_9");
+    }
+
+    #[test]
+    fn an_edit_form_and_a_password_form_follow_the_same_rules() {
+        let edit = |phone: &str, name: &str| PlayerEditForm {
+            player_id: "P".into(),
+            base_rev: 1,
+            phone: phone.into(),
+            name: name.into(),
+            email: String::new(),
+            dob: String::new(),
+            notes: String::new(),
+            tags: Vec::new(),
+            consent: false,
+            policy_version: "1".into(),
+        };
+        let field = |f: &PlayerEditForm| f.check("2026-10-27").err().and_then(|e| e.field);
+        assert_eq!(field(&edit("+91 98765-43210", "Asha")), None);
+        assert_eq!(field(&edit("12", "Asha")).as_deref(), Some("phone"));
+        assert_eq!(field(&edit("+919876543210", " ")).as_deref(), Some("name"));
+        let pw = |a: &str, b: &str| {
+            PlayerPasswordForm {
+                player_id: "P".into(),
+                password: a.into(),
+                confirm: b.into(),
+            }
+            .check()
+            .err()
+            .and_then(|e| e.field)
+        };
+        assert_eq!(pw("secret1", "secret1"), None);
+        assert_eq!(pw("secret1", "secret2").as_deref(), Some("confirm"));
+        assert_eq!(pw("12345", "12345").as_deref(), Some("password"));
     }
 
     #[test]

@@ -22,6 +22,8 @@ import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { LicenceApply } from "./LicenceApply";
 import type { PlayerCreate } from "./PlayerCreate";
+import type { PlayerPasswordReset } from "./PlayerPasswordReset";
+import type { PlayerUpdate } from "./PlayerUpdate";
 import type { PrinterStatusSet } from "./PrinterStatusSet";
 import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
@@ -73,4 +75,6 @@ export type IntentPayload =
   | ({ kind: "device.test_session.completed" } & DeviceTestSessionCompleted)
   | ({ kind: "device.screen" } & DeviceScreen)
   | ({ kind: "device.power" } & DevicePower)
-  | ({ kind: "player.create" } & PlayerCreate);
+  | ({ kind: "player.create" } & PlayerCreate)
+  | ({ kind: "player.update" } & PlayerUpdate)
+  | ({ kind: "player.password_reset" } & PlayerPasswordReset);

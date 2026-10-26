@@ -10,8 +10,10 @@ import type {
   IntentPayload,
   IntentResult,
   Permission,
+  PlayerEditForm,
   PlayerForm,
   PlayerHit,
+  PlayerPasswordForm,
   PlayerProfile,
   ReasonCode,
   SessionStaff,
@@ -29,6 +31,8 @@ export const ME_URL = "http://127.0.0.1:7409/ui/me";
 export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
 export const PLAYERS_URL = "http://127.0.0.1:7409/ui/players";
 export const PLAYER_PROFILE_URL = "http://127.0.0.1:7409/ui/players/profile";
+export const PLAYER_UPDATE_URL = "http://127.0.0.1:7409/ui/players/update";
+export const PLAYER_PASSWORD_URL = "http://127.0.0.1:7409/ui/players/password";
 export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
 export const ELEVATE_DROP_URL = "http://127.0.0.1:7409/ui/elevate/drop";
 export const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
@@ -340,6 +344,26 @@ export async function createPlayer(
     elevation_ticket: elevationTicket,
   });
 }
+
+async function sendPlayerForm(
+  url: string,
+  form: PlayerEditForm | PlayerPasswordForm,
+  elevationTicket?: string,
+): Promise<IntentOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  return postIntent(url, token, TIMEOUT_MS * 3, {
+    form,
+    idempotency_key: newIdempotencyKey(),
+    elevation_ticket: elevationTicket,
+  });
+}
+
+export const editPlayer = (form: PlayerEditForm, ticket?: string) =>
+  sendPlayerForm(PLAYER_UPDATE_URL, form, ticket);
+
+export const resetPlayerPassword = (form: PlayerPasswordForm, ticket?: string) =>
+  sendPlayerForm(PLAYER_PASSWORD_URL, form, ticket);
 
 export type ReadOutcome<T> =
   | { kind: "ok"; value: T }

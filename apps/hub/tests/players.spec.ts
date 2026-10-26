@@ -1,6 +1,13 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { HubSnapshot, PlayerForm, PlayerHit, SessionStaff } from "@arena/ui/generated";
+import type {
+  HubSnapshot,
+  PlayerEditForm,
+  PlayerForm,
+  PlayerHit,
+  PlayerPasswordForm,
+  SessionStaff,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -17,6 +24,12 @@ const STAFF: Record<string, SessionStaff> = {
     role_name: "Counter",
     permissions: ["player.manage", "player.view"],
   },
+  "viewer-token": {
+    staff_id: "01JVIEWER00000000000000000",
+    display_name: "Viewer",
+    role_name: "Viewer",
+    permissions: ["player.view"],
+  },
   "kitchen-token": {
     staff_id: "01JKITCHEN0000000000000000",
     display_name: "Kitchen",
@@ -25,13 +38,17 @@ const STAFF: Record<string, SessionStaff> = {
   },
 };
 
-type Sent = { form: PlayerForm; idempotency_key: string; elevation_ticket?: string };
+type Sent<F = PlayerForm> = { form: F; idempotency_key: string; elevation_ticket?: string };
 type Hub = {
   sent: Sent[];
   elevations: { items: { intent_kind: string }[]; pin: string }[];
   fail: { status: number; code: string; field?: string } | null;
   players: PlayerHit[];
   queries: string[];
+  rev: number;
+  staleNext: boolean;
+  edits: Sent<PlayerEditForm>[];
+  resets: Sent<PlayerPasswordForm>[];
 };
 
 const ASHA: PlayerHit = {
@@ -47,10 +64,14 @@ const newHub = (): Hub => ({
   elevations: [],
   fail: null,
   players: [
-    ASHA,
+    { ...ASHA },
     { ...ASHA, player_id: "P2", name: "Ravi", username: "ravi", phone: "+919876500000", tags: [] },
   ],
   queries: [],
+  rev: 3,
+  staleNext: false,
+  edits: [],
+  resets: [],
 });
 
 const snapshot = (): HubSnapshot => ({
@@ -136,7 +157,47 @@ async function open(page: Page, hub: Hub, token = "counter-token") {
         const id = new URL(req.url()).searchParams.get("id");
         const player = hub.players.find((p) => p.player_id === id);
         if (!player) return json(route, 404, { code: "NOT_FOUND", message: "no" });
-        return json(route, 200, { player, consent: { granted: true, policy_version: "1" } });
+        return json(route, 200, {
+          player,
+          consent: { granted: true, policy_version: "1" },
+          rev: hub.rev,
+          email: "asha@example.com",
+          dob: "2000-01-02",
+          notes: "corner seat",
+        });
+      }
+      case "/ui/players/update":
+      case "/ui/players/password": {
+        const body = req.postDataJSON() as Sent<PlayerEditForm & PlayerPasswordForm>;
+        const allowed = STAFF[auth].permissions.includes("player.manage");
+        if (!allowed && !body.elevation_ticket) {
+          return json(route, 403, { code: "PERMISSION_DENIED", message: "denied" });
+        }
+        const applied = {
+          applied: { intent_id: "I", changes: [{ tbl: "players", row_id: "P1" }] },
+        };
+        if (new URL(req.url()).pathname.endsWith("/password")) {
+          hub.resets.push(body);
+          return json(route, 200, applied);
+        }
+        hub.edits.push(body);
+        const player = hub.players.find((p) => p.player_id === body.form.player_id)!;
+        if (hub.staleNext) {
+          hub.staleNext = false;
+          hub.rev += 1;
+          player.name = "Asha Changed";
+          return json(route, 409, { code: "STALE", message: "stale", field: "base_rev" });
+        }
+        if (body.form.base_rev !== hub.rev) {
+          return json(route, 409, { code: "STALE", message: "stale", field: "base_rev" });
+        }
+        hub.rev += 1;
+        Object.assign(player, {
+          name: body.form.name,
+          phone: body.form.phone,
+          tags: body.form.tags,
+        });
+        return json(route, 200, applied);
       }
       default:
         return route.fulfill({ status: 404, headers: CORS });
@@ -405,4 +466,128 @@ test("Ctrl+K from another screen opens Players with the lookup focused", async (
   await page.keyboard.press("Control+k");
   await expect(page).toHaveURL(/\/players\?lookup/);
   await expect(lookupField(page)).toBeFocused();
+});
+
+const pickAsha = async (page: Page) => {
+  await lookupField(page).fill("98765");
+  await lookupField(page).press("Enter");
+  await expect(page.getByTestId("player-profile")).toContainText("Asha Rao");
+};
+
+const openEdit = async (page: Page) => {
+  await pickAsha(page);
+  await page.getByRole("button", { name: en["hub.players.edit"] }).click();
+  await expect(page.getByTestId("player-edit-form")).toBeVisible();
+};
+
+test("Edit profile shows the current details and sends only the edit with base_rev", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  await openEdit(page);
+  const form = page.getByTestId("player-edit-form");
+  await expect(form.getByLabel(en["hub.players.phone"])).toHaveValue("+919876543210");
+  await expect(form.getByLabel(en["hub.players.email"])).toHaveValue("asha@example.com");
+  await expect(form.getByLabel(en["hub.players.notes"])).toHaveValue("corner seat");
+  await expect(form.getByLabel(en["hub.players.tags"])).toHaveValue("vip");
+  await expect(form.getByLabel(en["player.signup.consent"])).toBeChecked();
+  await expectNoSeriousAxe(page);
+  await form.getByLabel(en["hub.players.name"], { exact: true }).fill("Asha Verma");
+  await form.getByLabel(en["hub.players.phone"]).fill("+91 91111 11111");
+  await form.getByLabel(en["player.signup.consent"]).uncheck();
+  await form.getByRole("button", { name: en["hub.players.edit.save"] }).click();
+  await expect(page.getByTestId("player-status")).toContainText(en["hub.players.edit.done"]);
+  expect(hub.edits).toHaveLength(1);
+  expect(hub.edits[0].form).toMatchObject({
+    player_id: "P1",
+    base_rev: 3,
+    name: "Asha Verma",
+    phone: "+91 91111 11111",
+    tags: ["vip"],
+    consent: false,
+  });
+  await expect(page.getByTestId("player-profile")).toContainText("Asha Verma");
+  await expect(page.getByTestId("player-edit-form")).toHaveCount(0);
+});
+
+test("a stale edit shows the current values and a notice", async ({ page }) => {
+  const hub = newHub();
+  hub.staleNext = true;
+  await open(page, hub);
+  await openEdit(page);
+  const form = page.getByTestId("player-edit-form");
+  await form.getByLabel(en["hub.players.name"], { exact: true }).fill("Mine");
+  await form.getByRole("button", { name: en["hub.players.edit.save"] }).click();
+  await expect(page.getByText(en["hub.players.edit.stale"])).toBeVisible();
+  await expect(
+    page.getByTestId("player-edit-form").getByLabel(en["hub.players.name"], { exact: true }),
+  ).toHaveValue("Asha Changed");
+  expect(hub.edits).toHaveLength(1);
+});
+
+test("an invalid edit is refused before anything is sent", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  await openEdit(page);
+  const form = page.getByTestId("player-edit-form");
+  await form.getByLabel(en["hub.players.phone"]).fill("+91 12");
+  await form.getByRole("button", { name: en["hub.players.edit.save"] }).click();
+  await expect(page.getByText(en["hub.players.invalid.phone"])).toBeVisible();
+  await expect(form.getByLabel(en["hub.players.phone"])).toBeFocused();
+  expect(hub.edits).toEqual([]);
+});
+
+test("a differing or short new password shows an inline error and sends nothing", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  await openEdit(page);
+  const form = page.getByTestId("player-reset-form");
+  const set = form.getByRole("button", { name: en["hub.players.reset.save"] });
+  await form.getByLabel(en["hub.players.reset.new"], { exact: true }).fill("12345");
+  await form.getByLabel(en["hub.players.reset.confirm"], { exact: true }).fill("12345");
+  await set.click();
+  await expect(page.getByText(en["hub.players.invalid.password"])).toBeVisible();
+  await form.getByLabel(en["hub.players.reset.new"], { exact: true }).fill("newpass1");
+  await set.click();
+  await expect(page.getByText(en["hub.players.invalid.confirm"])).toBeVisible();
+  await expect(form.getByLabel(en["hub.players.reset.confirm"], { exact: true })).toBeFocused();
+  expect(hub.resets).toEqual([]);
+});
+
+test("typing the new password twice resets it", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  await openEdit(page);
+  const form = page.getByTestId("player-reset-form");
+  await form.getByLabel(en["hub.players.reset.new"], { exact: true }).fill("newpass1");
+  await form.getByLabel(en["hub.players.reset.confirm"], { exact: true }).fill("newpass1");
+  await form.getByRole("button", { name: en["hub.players.reset.save"] }).click();
+  await expect(page.getByTestId("player-status")).toContainText(en["hub.players.reset.done"]);
+  expect(hub.resets).toHaveLength(1);
+  expect(hub.resets[0].form).toEqual({
+    player_id: "P1",
+    password: "newpass1",
+    confirm: "newpass1",
+  });
+});
+
+test("a member without player.manage asks for a manager's PIN in place to edit", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "viewer-token");
+  await openEdit(page);
+  const form = page.getByTestId("player-edit-form");
+  await form.getByLabel(en["hub.players.name"], { exact: true }).fill("Asha Verma");
+  await form.getByRole("button", { name: en["hub.players.edit.save"] }).click();
+  await expect(page.getByTestId("player-approval")).toBeVisible();
+  expect(hub.edits).toEqual([]);
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("player-status")).toContainText(en["hub.players.edit.done"]);
+  expect(hub.elevations.at(-1)).toEqual({ items: [{ intent_kind: "player.update" }], pin: "2222" });
+  expect(hub.edits[0].elevation_ticket).toBe("T1");
 });

@@ -67,8 +67,9 @@ pub use identity::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use players::{
-    PlayerRow, find_player_key, insert_consent, insert_player, insert_player_key, latest_consent,
-    list_players_after, phone_taken, username_taken,
+    PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
+    latest_consent, list_player_revs, phone_holder, set_player_password, update_player,
+    username_taken,
 };
 pub use products::{
     ProductRow, barcode_holder, count_active_products, find_product, insert_component,
@@ -636,11 +637,18 @@ impl Store {
         find_player_key(&self.conn, player_id)
     }
 
-    pub fn player_rows_after(&self, after: i64) -> Result<Vec<(i64, PlayerRow, String)>, AppError> {
-        if !self.table_exists("players")? || !self.table_exists("player_keys")? {
+    pub fn player_revs(&self) -> Result<Vec<(String, i64)>, AppError> {
+        if !self.table_exists("players")? {
             return Ok(Vec::new());
         }
-        list_players_after(&self.conn, after)
+        list_player_revs(&self.conn)
+    }
+
+    pub fn player(&self, player_id: &str) -> Result<Option<(PlayerRow, i64, String)>, AppError> {
+        if !self.table_exists("players")? || !self.table_exists("player_keys")? {
+            return Ok(None);
+        }
+        find_player(&self.conn, player_id)
     }
 
     pub fn latest_consent(
@@ -1181,7 +1189,7 @@ mod tests {
                 insert_consent(tx, "C", "A", "transactional", "1", true, 5)?;
                 insert_player_key(tx, "A", "k")?;
                 assert!(username_taken(tx, "asha")? && !username_taken(tx, "ravi")?);
-                assert!(phone_taken(tx, "L1")? && !phone_taken(tx, "L2")?);
+                assert!(phone_holder(tx, "L1")?.is_some() && phone_holder(tx, "L2")?.is_none());
                 assert_eq!(find_player_key(tx, "A")?.as_deref(), Some("k"));
                 assert!(insert_player(tx, &player("B", "asha", "L2")).is_err());
                 assert!(insert_player(tx, &player("B", "ravi", "L1")).is_err());

@@ -319,3 +319,206 @@ async fn lookup_needs_a_session_that_may_view_players() {
     let (status, err) = call(&hub, "GET", "/ui/players?q=9", Some(&counter), None).await;
     assert_eq!(err["code"], "SESSION_LOCKED", "{status} {err}");
 }
+
+async fn profile_of(hub: &Hub, token: &str, phone_digits: &str) -> Value {
+    let (_, hits) = call(
+        hub,
+        "GET",
+        &format!("/ui/players?q={phone_digits}"),
+        Some(token),
+        None,
+    )
+    .await;
+    let id = hits[0]["player_id"].as_str().unwrap();
+    call(
+        hub,
+        "GET",
+        &format!("/ui/players/profile?id={id}"),
+        Some(token),
+        None,
+    )
+    .await
+    .1
+}
+
+fn edit_body(profile: &Value, phone: &str, consent: bool, ticket: Option<&str>) -> Value {
+    let form = json!({
+        "player_id": profile["player"]["player_id"],
+        "base_rev": profile["rev"],
+        "phone": phone,
+        "name": "Asha Verma",
+        "email": "",
+        "dob": "",
+        "notes": "new note",
+        "tags": ["regular"],
+        "consent": consent,
+        "policy_version": "2",
+    });
+    body(form, ticket)
+}
+
+#[tokio::test]
+async fn an_edit_updates_the_profile_and_the_lookup_follows_it() {
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    create(&hub, &token, body(form("asha", "+919876543210"), None)).await;
+    let before = profile_of(&hub, &token, "98765").await;
+    assert_eq!(before["email"], "asha@example.com");
+    assert_eq!(before["dob"], "2000-01-02");
+    assert_eq!(before["notes"], "corner seat");
+    let (status, reply) = call(
+        &hub,
+        "POST",
+        "/ui/players/update",
+        Some(&token),
+        Some(edit_body(&before, "+91 91111-11111", false, None)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let (_, old) = call(&hub, "GET", "/ui/players?q=9876543210", Some(&token), None).await;
+    assert_eq!(old, json!([]));
+    let after = profile_of(&hub, &token, "91111").await;
+    assert_eq!(after["player"]["name"], "Asha Verma");
+    assert_eq!(after["player"]["phone"], "+919111111111");
+    assert_eq!(after["player"]["tags"], json!(["regular"]));
+    assert_eq!(after["email"], "");
+    assert_eq!(after["rev"], before["rev"].as_i64().unwrap() + 1);
+    assert_eq!(
+        after["consent"],
+        json!({"granted": false, "policy_version": "2"})
+    );
+    let log: Vec<u8> = store(&hub)
+        .changes()
+        .unwrap()
+        .into_iter()
+        .flat_map(|c| c.row)
+        .collect();
+    let log = String::from_utf8_lossy(&log).into_owned();
+    for plain in ["Asha Verma", "9111111111", "new note"] {
+        assert!(!log.contains(plain), "{plain}");
+    }
+}
+
+#[tokio::test]
+async fn a_stale_or_invalid_edit_changes_nothing() {
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    create(&hub, &token, body(form("asha", "+919876543210"), None)).await;
+    let profile = profile_of(&hub, &token, "98765").await;
+    let go = |b: Value| {
+        let (hub, token) = (&hub, &token);
+        async move { call(hub, "POST", "/ui/players/update", Some(token), Some(b)).await }
+    };
+    let (status, _) = go(edit_body(&profile, "+919876543210", true, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    let before = written(&hub);
+    let (_, stale) = go(edit_body(&profile, "+919876543210", true, None)).await;
+    assert_eq!(stale["code"], "STALE", "{stale}");
+    let fresh = profile_of(&hub, &token, "98765").await;
+    let (_, bad) = go(edit_body(&fresh, "+91 12", true, None)).await;
+    assert_eq!(
+        (bad["code"].as_str(), bad["field"].as_str()),
+        (Some("VALIDATION_FAILED"), Some("phone"))
+    );
+    assert_eq!(written(&hub), before);
+}
+
+#[tokio::test]
+async fn a_password_reset_stores_a_new_hash_and_refuses_mismatches() {
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    create(&hub, &token, body(form("asha", "+919876543210"), None)).await;
+    let id = profile_of(&hub, &token, "98765").await["player"]["player_id"].clone();
+    let reset = |password: &str, confirm: &str| {
+        body(
+            json!({"player_id": id, "password": password, "confirm": confirm}),
+            None,
+        )
+    };
+    let go = |b: Value| {
+        let (hub, token) = (&hub, &token);
+        async move { call(hub, "POST", "/ui/players/password", Some(token), Some(b)).await }
+    };
+    let hash_of = || match &store(&hub).rows(Table::Players).unwrap()[0]["password_hash"] {
+        arena_store::RowValue::Text(t) => t.clone(),
+        other => panic!("{other:?}"),
+    };
+    let old = hash_of();
+    let before = written(&hub);
+    let (status, err) = go(reset("newpass1", "newpass2")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    assert_eq!(err["field"], "confirm");
+    let (_, err) = go(reset("12345", "12345")).await;
+    assert_eq!(err["field"], "password");
+    assert_eq!((hash_of(), written(&hub)), (old.clone(), before));
+    let (status, ok) = go(reset("newpass1", "newpass1")).await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+    let new = hash_of();
+    assert!(new.starts_with("$argon2id$") && new != old);
+    let log: Vec<u8> = store(&hub)
+        .changes()
+        .unwrap()
+        .into_iter()
+        .flat_map(|c| c.row)
+        .collect();
+    assert!(!String::from_utf8_lossy(&log).contains("newpass1"));
+}
+
+#[tokio::test]
+async fn edit_and_reset_need_the_permission_or_a_managers_pin() {
+    let hub = hub().await;
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    create(&hub, &counter, body(form("asha", "+919876543210"), None)).await;
+    let profile = profile_of(&hub, &counter, "98765").await;
+    let kitchen = token_for(&hub, "kitchen", "k-pass").await;
+    let (status, denied) = call(
+        &hub,
+        "POST",
+        "/ui/players/update",
+        Some(&kitchen),
+        Some(edit_body(&profile, "+919876543210", true, None)),
+    )
+    .await;
+    assert_eq!(
+        (status, denied["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+    );
+    let (_, ok) = call(
+        &hub,
+        "POST",
+        "/ui/elevate",
+        Some(&kitchen),
+        Some(json!({"items": [{"intent_kind": "player.update"}], "pin": "2222"})),
+    )
+    .await;
+    let ticket = ok["ticket"].as_str().unwrap().to_owned();
+    let (status, reply) = call(
+        &hub,
+        "POST",
+        "/ui/players/update",
+        Some(&kitchen),
+        Some(edit_body(&profile, "+919876543210", true, Some(&ticket))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let last = store(&hub).changes().unwrap().pop().unwrap();
+    assert_eq!(
+        last.elevated_by_id.as_deref(),
+        Some(hub.manager_id.as_str())
+    );
+    let (status, denied) = call(
+        &hub,
+        "POST",
+        "/ui/players/password",
+        Some(&kitchen),
+        Some(body(
+            json!({"player_id": profile["player"]["player_id"], "password": "newpass1", "confirm": "newpass1"}),
+            None,
+        )),
+    )
+    .await;
+    assert_eq!(
+        (status, denied["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+    );
+}

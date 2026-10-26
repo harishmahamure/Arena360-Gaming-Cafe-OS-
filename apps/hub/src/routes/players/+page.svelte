@@ -5,7 +5,9 @@
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
   import { SESSION_DEPENDENCY, hasPermission, loadPlayer } from "../../lib/auth";
+  import type { MessageKey } from "@arena/ui/messages";
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
+  import EditProfile from "../../lib/players/EditProfile.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
   import { sessionStaff } from "../../lib/operating";
 
@@ -16,6 +18,9 @@
   let failed = $state(false);
   let lookup: PlayerLookup | undefined = $state();
   let created: string | null = $state(null);
+  let editing = $state(false);
+  let edited: MessageKey | null = $state(null);
+  let stale = $state(false);
   let trigger: HTMLElement | undefined = $state();
 
   const staff = $derived(sessionStaff(page.data));
@@ -25,6 +30,9 @@
   async function pick(id: string) {
     guest = false;
     failed = false;
+    editing = false;
+    edited = null;
+    stale = false;
     const mine = ++turn;
     const outcome = await loadPlayer(id);
     if (mine !== turn) return;
@@ -36,6 +44,18 @@
   onMount(() => {
     if (page.url.searchParams.has("lookup")) lookup?.focus();
   });
+
+  async function refresh(done: MessageKey | null) {
+    const id = profile?.player.player_id;
+    if (!id) return;
+    const outcome = await loadPlayer(id);
+    if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    if (outcome.kind === "ok") profile = outcome.value;
+    failed = outcome.kind !== "ok";
+    editing = done === null;
+    edited = done;
+    stale = done === null;
+  }
 
   async function close(username: string | null) {
     open = false;
@@ -100,7 +120,27 @@
           {/if}
         </dd>
       </dl>
+      {#if !editing}
+        <div class="actions" data-testid="player-edit">
+          <Button label="hub.players.edit" onclick={() => (editing = true)} />
+        </div>
+      {/if}
     </section>
+    {#if editing}
+      {#key profile.rev}
+        {#if stale}<p class="type-hub-label" role="alert">
+            <span aria-hidden="true">⚠</span>
+            {t("hub.players.edit.stale")}
+          </p>{/if}
+        <EditProfile
+          {staff}
+          {profile}
+          ondone={(message) => void refresh(message)}
+          onstale={() => void refresh(null)}
+          oncancel={() => (editing = false)}
+        />
+      {/key}
+    {/if}
   {/if}
 
   {#if !open}
@@ -118,6 +158,7 @@
 
   <p class="status type-hub-label" role="status" data-testid="player-status">
     {#if created}{t("hub.players.created", { username: created })}{/if}
+    {#if edited}{t(edited)}{/if}
   </p>
 
   {#if open}

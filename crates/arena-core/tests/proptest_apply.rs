@@ -107,6 +107,14 @@ enum Op {
         phone: u8,
         consent: bool,
     },
+    PlayerEdit {
+        phone: u8,
+        consent: bool,
+        stale: bool,
+    },
+    PlayerReset {
+        known: bool,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -215,6 +223,14 @@ fn op() -> impl Strategy<Value = Op> {
             phone,
             consent,
         }),
+        2 => (0..4u8, any::<bool>(), prop::bool::weighted(0.2)).prop_map(
+            |(phone, consent, stale)| Op::PlayerEdit {
+                phone,
+                consent,
+                stale,
+            }
+        ),
+        1 => prop::bool::weighted(0.8).prop_map(|known| Op::PlayerReset { known }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -868,6 +884,92 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 let consents = hub.reader.rows(Table::Consents).unwrap();
                 let last = consents.last().unwrap();
                 prop_assert_eq!(&last["granted"], &RowValue::Integer(i64::from(*consent)));
+            }
+        }
+        Op::PlayerEdit {
+            phone,
+            consent,
+            stale,
+        } => {
+            const KEK: [u8; 32] = [3; 32];
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let Some(first) = players.first() else {
+                return Ok(());
+            };
+            let (RowValue::Text(id), RowValue::Integer(rev)) = (&first["player_id"], &first["rev"])
+            else {
+                unreachable!()
+            };
+            let phone = format!("+9190000000{phone}");
+            let lookup = arena_core::players::phone_lookup(&KEK, &phone);
+            let other_holds = players.iter().any(|r| {
+                r["phone_lookup"] == RowValue::Text(lookup.clone())
+                    && r["player_id"] != first["player_id"]
+            });
+            let consents_before = hub.reader.rows(Table::Consents).unwrap().len();
+            let was = hub
+                .reader
+                .latest_consent(id, "transactional")
+                .unwrap()
+                .map(|c| c.0);
+            let wrapped = hub.reader.player_key(id).unwrap().unwrap();
+            let form = arena_proto::PlayerEditForm {
+                player_id: id.clone(),
+                base_rev: *rev,
+                phone,
+                name: "Asha".into(),
+                email: String::new(),
+                dob: String::new(),
+                notes: String::new(),
+                tags: Vec::new(),
+                consent: *consent,
+                policy_version: "1".into(),
+            };
+            let update = arena_core::players::reseal(&KEK, &form, &wrapped).unwrap();
+            let base = if *stale { rev + 1 } else { *rev };
+            let out = hub.submit_new(hub.intent(IntentPayload::PlayerUpdate(update), Some(base)));
+            if *stale {
+                prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
+                prop_assert_eq!(hub.change_count(), changes_before);
+            } else if other_holds {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PhoneTaken, Some("phone"))));
+                prop_assert_eq!(hub.change_count(), changes_before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                let appended = usize::from(was != Some(*consent));
+                prop_assert_eq!(hub.change_count(), changes_before + 1 + appended);
+                prop_assert_eq!(
+                    hub.reader.rows(Table::Consents).unwrap().len(),
+                    consents_before + appended
+                );
+            }
+        }
+        Op::PlayerReset { known } => {
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let Some(first) = players.first() else {
+                return Ok(());
+            };
+            let RowValue::Text(id) = &first["player_id"] else {
+                unreachable!()
+            };
+            let player_id = if *known {
+                id.clone()
+            } else {
+                "missing".to_owned()
+            };
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::PlayerPasswordReset(arena_proto::PlayerPasswordReset {
+                    player_id,
+                    password_hash: password_hash().to_owned(),
+                }),
+                None,
+            ));
+            if *known {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), changes_before + 1);
+            } else {
+                prop_assert_eq!(code(&out), Some((ErrorCode::NotFound, None)));
+                prop_assert_eq!(hub.change_count(), changes_before);
             }
         }
         Op::Advance { ms } => hub.clock.advance(*ms),

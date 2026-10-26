@@ -164,6 +164,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Player(t) => players::validate(p, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::PlayerUpdate(p) => match target {
+            Target::Player(t) => players::validate_update(p, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::PlayerPasswordReset(p) => match target {
+            Target::Player(t) => players::validate_reset(p, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::StockIn(u) => match target {
             Target::Stock(t) => stock::validate_in(u, t),
             _ => Err(internal_target()),

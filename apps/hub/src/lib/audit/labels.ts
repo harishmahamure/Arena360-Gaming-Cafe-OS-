@@ -39,6 +39,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "device.admin_unlock": "hub.audit.intent.device.admin_unlock",
   "device.screen": "hub.audit.intent.device.screen",
   "device.power": "hub.audit.intent.device.power",
+  "player.update": "hub.audit.intent.player.update",
+  "player.password_reset": "hub.audit.intent.player.password_reset",
   "ads.consent": "hub.audit.intent.ads.consent",
   "printer.status": "hub.audit.intent.printer.status",
 };

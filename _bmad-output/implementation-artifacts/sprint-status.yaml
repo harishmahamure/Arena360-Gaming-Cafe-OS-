@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-27-2026 12:00
+last_updated: 10-27-2026 14:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -72,7 +72,7 @@ development_status:
   3-5-non-modal-tile-sheet-with-remote-pc-actions: done
   3-6-create-a-player-profile-with-protected-personal-data-and-con: done
   3-7-player-lookup-by-phone-guest-and-the-players-screen: done
-  3-8-edit-a-player-profile-and-reset-their-password: backlog
+  3-8-edit-a-player-profile-and-reset-their-password: review
   3-9-start-a-postpaid-session-for-a-player-or-a-guest: backlog
   3-10-the-pc-unlocks-to-a-session-screen-when-a-session-starts: backlog
   3-11-end-a-postpaid-session-and-see-the-bill-to-the-minute: backlog

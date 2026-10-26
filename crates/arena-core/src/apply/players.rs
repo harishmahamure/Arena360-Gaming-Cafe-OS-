@@ -274,7 +274,7 @@ pub(super) fn mutate_update(
         op: ChangeOp::Update,
         before: None,
     }];
-    if e.consent != Some(p.consent) {
+    if e.consent.unwrap_or(false) != p.consent {
         let consent_id = format!("{}:{CONSENT_TRANSACTIONAL}:{}", p.player_id, e.rev + 1);
         insert_consent(
             tx,

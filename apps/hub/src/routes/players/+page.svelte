@@ -122,7 +122,11 @@
       </dl>
       {#if !editing}
         <div class="actions" data-testid="player-edit">
-          <Button label="hub.players.edit" onclick={() => (editing = true)} />
+          <Button label="hub.players.edit" onclick={() => {
+              edited = null;
+              stale = false;
+              editing = true;
+            }} />
         </div>
       {/if}
     </section>
@@ -137,7 +141,10 @@
           {profile}
           ondone={(message) => void refresh(message)}
           onstale={() => void refresh(null)}
-          oncancel={() => (editing = false)}
+          oncancel={() => {
+            editing = false;
+            stale = false;
+          }}
         />
       {/key}
     {/if}

@@ -182,7 +182,7 @@ pub struct PlayerConsent {
     pub policy_version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct PlayerProfile {
     pub player: PlayerHit,
@@ -192,6 +192,12 @@ pub struct PlayerProfile {
     pub email: String,
     pub dob: String,
     pub notes: String,
+}
+
+impl std::fmt::Debug for PlayerProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerProfile").finish_non_exhaustive()
+    }
 }
 
 fn invalid(field: &str, message: &str) -> AppError {

@@ -936,7 +936,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), changes_before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
-                let appended = usize::from(was != Some(*consent));
+                let appended = usize::from(was.unwrap_or(false) != *consent);
                 prop_assert_eq!(hub.change_count(), changes_before + 1 + appended);
                 prop_assert_eq!(
                     hub.reader.rows(Table::Consents).unwrap().len(),

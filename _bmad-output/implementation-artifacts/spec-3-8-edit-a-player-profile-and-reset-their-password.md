@@ -2,7 +2,7 @@
 title: 'Story 3.8: Edit a player profile and reset their password'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_commit: '96d116b570e81b2c5cd479f9bac9bba2274d9426'
 baseline_revision: '96d116b570e81b2c5cd479f9bac9bba2274d9426'
 review_loop_iteration: 0

@@ -158,26 +158,48 @@ async fn the_raw_intent_route_refuses_player_create() {
         "$argon2id$stub".into(),
     )
     .unwrap();
-    let intent = crate::ui_auth::tests::intent_as(
-        arena_proto::Actor {
-            kind: arena_proto::ActorKind::Staff,
-            id: "x".into(),
-        },
+    let update = arena_proto::PlayerUpdate {
+        player_id: "p".into(),
+        phone_lookup: String::new(),
+        name_enc: String::new(),
+        phone_enc: String::new(),
+        email_enc: None,
+        dob_enc: None,
+        notes_enc: None,
+        tags: vec![],
+        consent: false,
+        policy_version: "1".into(),
+    };
+    let reset = arena_proto::PlayerPasswordReset {
+        player_id: "p".into(),
+        password_hash: "$argon2id$stub".into(),
+    };
+    for payload in [
         arena_proto::IntentPayload::PlayerCreate(sealed),
-        None,
-    );
-    let before = written(&hub);
-    let (status, err) = call(
-        &hub,
-        "POST",
-        "/ui/intent",
-        Some(&token),
-        Some(json!({"intent": intent})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
-    assert_eq!(err["code"], "UNSUPPORTED");
-    assert_eq!(written(&hub), before);
+        arena_proto::IntentPayload::PlayerUpdate(update),
+        arena_proto::IntentPayload::PlayerPasswordReset(reset),
+    ] {
+        let intent = crate::ui_auth::tests::intent_as(
+            arena_proto::Actor {
+                kind: arena_proto::ActorKind::Staff,
+                id: "x".into(),
+            },
+            payload,
+            None,
+        );
+        let before = written(&hub);
+        let (status, err) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(json!({"intent": intent})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+        assert_eq!(err["code"], "UNSUPPORTED");
+        assert_eq!(written(&hub), before);
+    }
 }
 
 #[tokio::test]
@@ -520,5 +542,31 @@ async fn edit_and_reset_need_the_permission_or_a_managers_pin() {
     assert_eq!(
         (status, denied["code"].as_str()),
         (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+    );
+    let (_, ok) = call(
+        &hub,
+        "POST",
+        "/ui/elevate",
+        Some(&kitchen),
+        Some(json!({"items": [{"intent_kind": "player.password_reset"}], "pin": "2222"})),
+    )
+    .await;
+    let ticket = ok["ticket"].as_str().unwrap().to_owned();
+    let (status, reply) = call(
+        &hub,
+        "POST",
+        "/ui/players/password",
+        Some(&kitchen),
+        Some(body(
+            json!({"player_id": profile["player"]["player_id"], "password": "newpass1", "confirm": "newpass1"}),
+            Some(&ticket),
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let last = store(&hub).changes().unwrap().pop().unwrap();
+    assert_eq!(
+        last.elevated_by_id.as_deref(),
+        Some(hub.manager_id.as_str())
     );
 }

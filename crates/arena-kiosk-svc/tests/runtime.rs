@@ -1742,7 +1742,10 @@ async fn the_kiosk_stores_the_pushed_fulfilment_and_default_volume() {
     let ctx = Arc::clone(kiosk.rt().ctx());
     let cached = |key: &str| ctx.queue.lock().unwrap().kv_get(key).unwrap();
     eventually("the operating settings read after hello", || {
-        cached("kiosk.volume_default").is_some() && cached("branch.fulfilment").is_some()
+        cached("kiosk.volume_default").is_some()
+            && cached("branch.fulfilment").is_some()
+            && cached("billing.grace_min").is_some()
+            && cached("billing.time_up_mode").is_some()
     })
     .await;
     assert_eq!(
@@ -1753,12 +1756,24 @@ async fn the_kiosk_stores_the_pushed_fulfilment_and_default_volume() {
         cached("branch.fulfilment").unwrap(),
         ("counter".to_owned(), 1)
     );
+    assert_eq!(cached("billing.grace_min").unwrap(), ("2".to_owned(), 1));
+    assert_eq!(
+        cached("billing.time_up_mode").unwrap(),
+        ("clean_up".to_owned(), 1)
+    );
+    assert_eq!(cached("billing.rounding_min"), None);
 
     hub.set_setting("kiosk.volume_default", "35").await;
     hub.set_setting("branch.fulfilment", "seat").await;
+    hub.set_setting("billing.grace_min", "5").await;
+    hub.set_setting("billing.time_up_mode", "staff_handles")
+        .await;
+    hub.set_setting("billing.rounding_min", "10").await;
     eventually("the pushed values", || {
         cached("kiosk.volume_default") == Some(("35".to_owned(), 2))
             && cached("branch.fulfilment") == Some(("seat".to_owned(), 2))
+            && cached("billing.grace_min") == Some(("5".to_owned(), 2))
+            && cached("billing.time_up_mode") == Some(("staff_handles".to_owned(), 2))
     })
     .await;
     let stored = arena_kiosk_svc::operating::load(&ctx.queue.lock().unwrap());
@@ -1767,8 +1782,11 @@ async fn the_kiosk_stores_the_pushed_fulfilment_and_default_volume() {
         arena_kiosk_svc::operating::KioskOperating {
             volume_default: Some(35),
             fulfilment: Some(arena_kiosk_svc::operating::Fulfilment::Seat),
+            grace_min: Some(5),
+            time_up_mode: Some(arena_proto::TimeUpMode::StaffHandles),
         }
     );
+    assert_eq!(cached("billing.rounding_min"), None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

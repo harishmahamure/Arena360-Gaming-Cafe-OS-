@@ -720,7 +720,7 @@ pub(crate) fn product_ids(applied: &Applied) -> Vec<String> {
 }
 
 /// The setting keys `applied` wrote that some paired session may read: `kiosk.*`,
-/// `branch.fulfilment` and every device's `display.hc.<device_id>` (`settings` row ids are
+/// `branch.fulfilment`, the kiosk billing keys and every device's `display.hc.<device_id>` (`settings` row ids are
 /// `branch_id/key`). Which session gets which is decided per session in
 /// [`Registry::push_settings`].
 pub(crate) fn paired_setting_keys(applied: &Applied) -> Vec<String> {
@@ -732,6 +732,7 @@ pub(crate) fn paired_setting_keys(applied: &Applied) -> Vec<String> {
         .filter(|k| {
             k.starts_with(PAIRED_SETTINGS_PREFIX)
                 || k == arena_proto::KEY_FULFILMENT
+                || arena_proto::KIOSK_BILLING_KEYS.contains(&k.as_str())
                 || matches!(parse_hc_key(k), Some(HcTarget::Device(_)))
         })
         .collect();
@@ -961,6 +962,9 @@ mod tests {
                 change("settings", "B/display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0"),
                 change("settings", "B/branch.fulfilment"),
                 change("settings", "B/kiosk.volume_default"),
+                change("settings", "B/billing.grace_min"),
+                change("settings", "B/billing.time_up_mode"),
+                change("settings", "B/billing.rounding_min"),
                 change("settings", "B/branch.opening_hours"),
                 change("settings", "B/system.backup_dir"),
             ],
@@ -968,6 +972,8 @@ mod tests {
         assert_eq!(
             paired_setting_keys(&applied),
             [
+                "billing.grace_min",
+                "billing.time_up_mode",
                 "branch.fulfilment",
                 "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
                 "kiosk.process_allow",

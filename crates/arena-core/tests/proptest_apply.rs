@@ -130,6 +130,11 @@ fn valid_setting() -> impl Strategy<Value = (&'static str, String)> {
         prop::sample::select(vec!["Asia/Kolkata", "Asia/Dubai", "UTC"])
             .prop_map(|v| ("branch.tz", v.to_owned())),
         (0..=1439i64).prop_map(|n| ("branch.day_start_min", n.to_string())),
+        (1..=60i64).prop_map(|n| ("billing.rounding_min", n.to_string())),
+        (0..=240i64).prop_map(|n| ("billing.minimum_min", n.to_string())),
+        (0..=10i64).prop_map(|n| ("billing.grace_min", n.to_string())),
+        prop::sample::select(vec!["clean_up", "staff_handles"])
+            .prop_map(|v| ("billing.time_up_mode", v.to_owned())),
     ]
 }
 
@@ -156,6 +161,17 @@ fn invalid_setting() -> impl Strategy<Value = (&'static str, String)> {
         Just(("branch.currency", "XYZ".to_owned())),
         Just(("branch.tz", "Mars/Base".to_owned())),
         Just(("branch.day_start_min", "1440".to_owned())),
+        prop_oneof![
+            Just("0".to_owned()),
+            Just("61".to_owned()),
+            Just("+5".to_owned()),
+            Just("1e1".to_owned()),
+            "[a-z]{1,4}",
+        ]
+        .prop_map(|v| ("billing.rounding_min", v)),
+        Just(("billing.minimum_min", "241".to_owned())),
+        Just(("billing.grace_min", "11".to_owned())),
+        Just(("billing.time_up_mode", "Clean up".to_owned())),
     ]
 }
 
@@ -490,7 +506,11 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let rev = hub.rev(key);
             let intent = hub.intent(set_payload(key, value), Some(rev.unwrap_or(1)));
             let out = hub.submit_new(intent);
-            let field = if rev.is_some() { "value" } else { "key" };
+            let field = match rev {
+                None => "key",
+                Some(_) if key.starts_with("billing.") => key,
+                Some(_) => "value",
+            };
             prop_assert_eq!(code(&out), Some((ErrorCode::ValidationFailed, Some(field))));
             prop_assert_eq!(hub.settings(), settings_before);
             prop_assert_eq!(hub.change_count(), changes_before);

@@ -7,6 +7,7 @@ mod account;
 mod actor;
 mod admin;
 mod audit;
+mod billing;
 mod catalog;
 mod commands;
 mod connectivity;
@@ -55,6 +56,13 @@ pub use audit::{
     AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditAdminExit, AuditDetail,
     AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,
     AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
+};
+pub use billing::{
+    BILLING_GRACE_RANGE, BILLING_MINIMUM_RANGE, BILLING_ROUNDING_RANGE, BillingRules,
+    DEFAULT_BILLING_GRACE_MIN, DEFAULT_BILLING_MINIMUM_MIN, DEFAULT_BILLING_ROUNDING_MIN,
+    DEFAULT_BILLING_TIME_UP_MODE, KEY_BILLING_GRACE_MIN, KEY_BILLING_MINIMUM_MIN,
+    KEY_BILLING_ROUNDING_MIN, KEY_BILLING_TIME_UP_MODE, KIOSK_BILLING_KEYS, TIME_UP_MODES,
+    TimeUpMode,
 };
 pub use catalog::{
     BundleComponent, CatalogEntry, ComponentView, IMAGE_PREFIX, MAX_BARCODE_CHARS,

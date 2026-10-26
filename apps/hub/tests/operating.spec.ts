@@ -239,6 +239,7 @@ test("Hours lists the seven days closed, saves a week with a past-midnight day, 
     en["hub.settings.branch.nav.locale"],
     en["hub.settings.branch.nav.hours"],
     en["hub.settings.branch.nav.service"],
+    en["hub.settings.branch.nav.billing"],
     en["hub.settings.branch.nav.tax"],
     en["hub.settings.branch.nav.ads"],
   ]);

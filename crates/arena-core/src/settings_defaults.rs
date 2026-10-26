@@ -9,6 +9,12 @@ use arena_proto::{
     KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
 };
 use arena_proto::{
+    BILLING_GRACE_RANGE, BILLING_MINIMUM_RANGE, BILLING_ROUNDING_RANGE, DEFAULT_BILLING_GRACE_MIN,
+    DEFAULT_BILLING_MINIMUM_MIN, DEFAULT_BILLING_ROUNDING_MIN, DEFAULT_BILLING_TIME_UP_MODE,
+    KEY_BILLING_GRACE_MIN, KEY_BILLING_MINIMUM_MIN, KEY_BILLING_ROUNDING_MIN,
+    KEY_BILLING_TIME_UP_MODE, TIME_UP_MODES,
+};
+use arena_proto::{
     DEFAULT_KITCHEN_KOT_MODE, DEFAULT_KITCHEN_KOT_PAPER_MM, DEFAULT_KITCHEN_KOT_PRINTER,
     DEFAULT_LICENCE_FLAGS, KEY_KITCHEN_KOT_MODE, KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER,
     KEY_LICENCE_FLAGS, KITCHEN_KOT_MODES,
@@ -98,6 +104,10 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_TAX, DEFAULT_TAX),
     (KEY_TEST_SESSION, DEFAULT_TEST_SESSION),
     (KEY_SETUP_LIVE, DEFAULT_SETUP_LIVE),
+    (KEY_BILLING_ROUNDING_MIN, DEFAULT_BILLING_ROUNDING_MIN),
+    (KEY_BILLING_MINIMUM_MIN, DEFAULT_BILLING_MINIMUM_MIN),
+    (KEY_BILLING_GRACE_MIN, DEFAULT_BILLING_GRACE_MIN),
+    (KEY_BILLING_TIME_UP_MODE, DEFAULT_BILLING_TIME_UP_MODE),
 ];
 
 pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
@@ -109,7 +119,7 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 13] = [
+pub const KEYED_FIELD_KEYS: [&str; 17] = [
     KEY_KITCHEN_KOT_MODE,
     KEY_KITCHEN_KOT_PRINTER,
     KEY_KITCHEN_KOT_PAPER_MM,
@@ -123,6 +133,10 @@ pub const KEYED_FIELD_KEYS: [&str; 13] = [
     KEY_PRINTER_SELECTED,
     KEY_PRINTER_PAPER_MM,
     KEY_PRINTER_STATUS,
+    KEY_BILLING_ROUNDING_MIN,
+    KEY_BILLING_MINIMUM_MIN,
+    KEY_BILLING_GRACE_MIN,
+    KEY_BILLING_TIME_UP_MODE,
 ];
 
 /// The value `branch.seed_defaults` inserts for a default setting an existing branch lacks:
@@ -232,6 +246,28 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     (KEY_TAX, SettingRule::Tax),
     (KEY_TEST_SESSION, SettingRule::TestSession),
     (KEY_SETUP_LIVE, SettingRule::Bool),
+    (
+        KEY_BILLING_ROUNDING_MIN,
+        SettingRule::Integer {
+            min: BILLING_ROUNDING_RANGE.0,
+            max: BILLING_ROUNDING_RANGE.1,
+        },
+    ),
+    (
+        KEY_BILLING_MINIMUM_MIN,
+        SettingRule::Integer {
+            min: BILLING_MINIMUM_RANGE.0,
+            max: BILLING_MINIMUM_RANGE.1,
+        },
+    ),
+    (
+        KEY_BILLING_GRACE_MIN,
+        SettingRule::Integer {
+            min: BILLING_GRACE_RANGE.0,
+            max: BILLING_GRACE_RANGE.1,
+        },
+    ),
+    (KEY_BILLING_TIME_UP_MODE, SettingRule::OneOf(TIME_UP_MODES)),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
     (KEY_BRANCH_NAME, SettingRule::BranchName),
     (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),
@@ -488,6 +524,40 @@ mod tests {
     }
 
     #[test]
+    fn billing_rules() {
+        let rule = |k| setting_rule(k).unwrap();
+        for (key, ok, bad) in [
+            (
+                KEY_BILLING_ROUNDING_MIN,
+                &["1", "60"][..],
+                &["", "0", "61", "abc", "1e1", "+5", "-1", "12.5"][..],
+            ),
+            (
+                KEY_BILLING_MINIMUM_MIN,
+                &["0", "240"][..],
+                &["", "241", "abc", "1e1", "+5", "-1", "12.5"][..],
+            ),
+            (
+                KEY_BILLING_GRACE_MIN,
+                &["0", "10"][..],
+                &["", "11", "abc", "1e1", "+5", "-1", "12.5"][..],
+            ),
+            (
+                KEY_BILLING_TIME_UP_MODE,
+                &["clean_up", "staff_handles"][..],
+                &["", "Clean up", "Clean_up", " clean_up"][..],
+            ),
+        ] {
+            for v in ok {
+                assert!(rule(key).accepts(v), "{key}={v}");
+            }
+            for v in bad {
+                assert!(!rule(key).accepts(v), "{key}={v:?}");
+            }
+        }
+    }
+
+    #[test]
     fn printer_rules() {
         let rule = |k| setting_rule(k).unwrap();
         let paper = rule("printer.paper_mm");
@@ -547,6 +617,10 @@ mod tests {
             ("printer.status", DEFAULT_PRINTER_STATUS),
             ("branch.tax", DEFAULT_TAX),
             ("setup.test_session", DEFAULT_TEST_SESSION),
+            ("billing.rounding_min", "15"),
+            ("billing.minimum_min", "30"),
+            ("billing.grace_min", "2"),
+            ("billing.time_up_mode", "clean_up"),
         ] {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
         }

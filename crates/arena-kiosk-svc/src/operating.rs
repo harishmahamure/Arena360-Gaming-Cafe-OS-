@@ -1,6 +1,7 @@
 use arena_proto::{
-    FULFILMENT_MODES, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT, KIOSK_OPERATING_KEYS,
-    KIOSK_VOLUME_MAX, SettingEntry,
+    BILLING_GRACE_RANGE, FULFILMENT_MODES, KEY_BILLING_GRACE_MIN, KEY_BILLING_TIME_UP_MODE,
+    KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT, KIOSK_BILLING_KEYS, KIOSK_OPERATING_KEYS,
+    KIOSK_VOLUME_MAX, SettingEntry, TimeUpMode,
 };
 
 use crate::procs::AppliedRevs;
@@ -17,14 +18,23 @@ pub enum Fulfilment {
 pub struct KioskOperating {
     pub volume_default: Option<u8>,
     pub fulfilment: Option<Fulfilment>,
+    pub grace_min: Option<u8>,
+    pub time_up_mode: Option<TimeUpMode>,
 }
 
-pub const KEYS: [&str; 2] = KIOSK_OPERATING_KEYS;
+pub const KEYS: [&str; 4] = [
+    KIOSK_OPERATING_KEYS[0],
+    KIOSK_OPERATING_KEYS[1],
+    KIOSK_BILLING_KEYS[0],
+    KIOSK_BILLING_KEYS[1],
+];
 
 fn valid(key: &str, value: &str) -> bool {
     match key {
         KEY_KIOSK_VOLUME_DEFAULT => parse_volume(value).is_some(),
         KEY_FULFILMENT => FULFILMENT_MODES.contains(&value),
+        KEY_BILLING_GRACE_MIN => parse_grace(value).is_some(),
+        KEY_BILLING_TIME_UP_MODE => TimeUpMode::parse(value).is_some(),
         _ => false,
     }
 }
@@ -34,6 +44,13 @@ fn parse_volume(value: &str) -> Option<u8> {
         .parse::<u8>()
         .ok()
         .filter(|v| i64::from(*v) <= KIOSK_VOLUME_MAX && !value.starts_with('+'))
+}
+
+fn parse_grace(value: &str) -> Option<u8> {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|v| i64::from(*v) <= BILLING_GRACE_RANGE.1 && !value.starts_with('+'))
 }
 
 fn parse_fulfilment(value: &str) -> Option<Fulfilment> {
@@ -56,6 +73,8 @@ pub fn load(queue: &QueueDb) -> KioskOperating {
     KioskOperating {
         volume_default: read(KEY_KIOSK_VOLUME_DEFAULT).and_then(|v| parse_volume(&v)),
         fulfilment: read(KEY_FULFILMENT).and_then(|v| parse_fulfilment(&v)),
+        grace_min: read(KEY_BILLING_GRACE_MIN).and_then(|v| parse_grace(&v)),
+        time_up_mode: read(KEY_BILLING_TIME_UP_MODE).and_then(|v| TimeUpMode::parse(&v)),
     }
 }
 
@@ -104,6 +123,14 @@ mod tests {
         assert_eq!(parse_fulfilment("Seat"), None);
         assert!(valid(KEY_FULFILMENT, "seat"));
         assert!(!valid("kiosk.process_mode", "seat"));
+        assert_eq!(parse_grace("0"), Some(0));
+        assert_eq!(parse_grace("10"), Some(10));
+        for bad in ["11", "-1", "+5", "", "x", "1e1"] {
+            assert_eq!(parse_grace(bad), None, "{bad}");
+        }
+        assert!(valid(KEY_BILLING_TIME_UP_MODE, "staff_handles"));
+        assert!(!valid(KEY_BILLING_TIME_UP_MODE, "Clean up"));
+        assert!(!valid(KEY_BILLING_GRACE_MIN, "11"));
     }
 
     #[test]
@@ -118,9 +145,20 @@ mod tests {
             KioskOperating {
                 volume_default: Some(30),
                 fulfilment: Some(Fulfilment::Seat),
+                ..Default::default()
             }
         );
         q.kv_set(KEY_FULFILMENT, "junk", 4).unwrap();
         assert_eq!(load(&q).fulfilment, None);
+        q.kv_set(KEY_BILLING_GRACE_MIN, "5", 5).unwrap();
+        q.kv_set(KEY_BILLING_TIME_UP_MODE, "staff_handles", 5)
+            .unwrap();
+        let l = load(&q);
+        assert_eq!(
+            (l.grace_min, l.time_up_mode),
+            (Some(5), Some(TimeUpMode::StaffHandles))
+        );
+        q.kv_set(KEY_BILLING_GRACE_MIN, "99", 6).unwrap();
+        assert_eq!(load(&q).grace_min, None);
     }
 }

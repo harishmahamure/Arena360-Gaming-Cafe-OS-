@@ -3,6 +3,7 @@
 
 mod apply;
 pub mod audit;
+pub mod billing;
 mod catalog;
 mod clock;
 mod commands;

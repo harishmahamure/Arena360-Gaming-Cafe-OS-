@@ -2292,6 +2292,63 @@ mod rbac_matrix {
     }
 
     #[tokio::test]
+    async fn a_counter_saves_billing_rules_only_with_a_managers_pin() {
+        let c = crew().await;
+        let rule = |key: &str| {
+            let r = match setting(&reopen(&c.f), key)["rev"] {
+                RowValue::Integer(n) => n,
+                _ => unreachable!(),
+            };
+            (key.to_owned(), r)
+        };
+        let edit = |key: &str, value: &str, by: Option<ElevatedBy>| {
+            let (key, r) = rule(key);
+            Intent {
+                elevated_by: by,
+                ..as_actor(
+                    staff_actor(&c.counter),
+                    IntentPayload::SettingsSet(SettingsSet {
+                        key,
+                        value: value.into(),
+                    }),
+                    Some(r),
+                )
+            }
+        };
+        let values = [
+            ("billing.rounding_min", "10"),
+            ("billing.minimum_min", "0"),
+            ("billing.grace_min", "10"),
+            ("billing.time_up_mode", "staff_handles"),
+        ];
+        let before = snapshot(&c.f);
+        for (key, value) in values {
+            let e = expect_err(&c.f, edit(key, value, None)).await;
+            assert_eq!(e.code, ErrorCode::PermissionDenied, "{key}");
+        }
+        assert_eq!(snapshot(&c.f), before);
+        for (key, value) in values {
+            c.f.writer
+                .submit_intent(edit(key, value, Some(pin_by(&c.manager, 1))))
+                .await
+                .unwrap();
+        }
+        let s = reopen(&c.f);
+        let changes = s.changes().unwrap();
+        for (key, value) in values {
+            assert_eq!(setting(&s, key)["value"], RowValue::Text(value.into()));
+        }
+        for change in &changes[changes.len() - values.len()..] {
+            assert_eq!(change.intent_kind, "settings.set");
+            assert_eq!(
+                (change.actor_kind.as_str(), change.actor_id.as_str()),
+                ("staff", c.counter.as_str())
+            );
+            assert_eq!(change.elevated_by_id.as_deref(), Some(c.manager.as_str()));
+        }
+    }
+
+    #[tokio::test]
     async fn without_elevation_the_counter_is_denied() {
         let c = crew().await;
         let before = snapshot(&c.f);
@@ -6274,6 +6331,138 @@ mod tax {
         intent.issued_at = f.clock.now_ms();
         let e = f.writer.submit_intent(intent).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::Stale);
+    }
+}
+
+mod billing {
+    use super::*;
+    use arena_proto::{BillingRules, TimeUpMode};
+
+    const KEYS: [&str; 4] = [
+        "billing.rounding_min",
+        "billing.minimum_min",
+        "billing.grace_min",
+        "billing.time_up_mode",
+    ];
+
+    fn rev(f: &Fixture, key: &str) -> i64 {
+        match setting(&reopen(f), key)["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn save(f: &Fixture, key: &str, value: &str) -> Result<Applied, AppError> {
+        let mut intent = set(key, value, Some(rev(f, key)));
+        intent.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(intent).await
+    }
+
+    async fn read(f: &Fixture) -> BillingRules {
+        f.writer.submit(crate::billing::read).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn defaults_are_seeded_for_a_new_branch() {
+        let f = bootstrapped().await;
+        assert_eq!(read(&f).await, BillingRules::defaults());
+        for (key, value) in KEYS.into_iter().zip(["15", "30", "2", "clean_up"]) {
+            assert_eq!(
+                setting(&reopen(&f), key)["value"],
+                RowValue::Text(value.into())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_upgraded_branch_gets_the_billing_rows_from_seed_defaults() {
+        let mut f = bootstrapped().await;
+        f.writer
+            .submit(|tx| {
+                tx.execute_batch("DELETE FROM settings WHERE key LIKE 'billing.%'")
+                    .map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+        assert_eq!(read(&f).await, BillingRules::defaults());
+        while f.events.try_recv().is_ok() {}
+        let applied = f.writer.seed_defaults().await.unwrap().unwrap();
+        assert_eq!(applied.changes.len(), 4);
+        for (key, value) in KEYS.into_iter().zip(["15", "30", "2", "clean_up"]) {
+            assert_eq!(
+                setting(&reopen(&f), key)["value"],
+                RowValue::Text(value.into())
+            );
+        }
+        assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn bounds_are_accepted_and_the_rest_name_their_key() {
+        let f = bootstrapped().await;
+        for (key, ok) in [
+            ("billing.rounding_min", ["1", "60"]),
+            ("billing.minimum_min", ["0", "240"]),
+            ("billing.grace_min", ["0", "10"]),
+            ("billing.time_up_mode", ["staff_handles", "clean_up"]),
+        ] {
+            for v in ok {
+                save(&f, key, v).await.unwrap();
+            }
+        }
+        let before = snapshot(&f);
+        for (key, bad) in [
+            ("billing.rounding_min", "0"),
+            ("billing.rounding_min", "61"),
+            ("billing.rounding_min", ""),
+            ("billing.rounding_min", "1e1"),
+            ("billing.rounding_min", "+5"),
+            ("billing.rounding_min", "-1"),
+            ("billing.rounding_min", "12.5"),
+            ("billing.rounding_min", "abc"),
+            ("billing.minimum_min", "241"),
+            ("billing.minimum_min", ""),
+            ("billing.grace_min", "11"),
+            ("billing.grace_min", "+5"),
+            ("billing.time_up_mode", "Clean up"),
+            ("billing.time_up_mode", ""),
+        ] {
+            let e = save(&f, key, bad).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{key}={bad:?}");
+            assert_eq!(e.field.as_deref(), Some(key), "{key}={bad:?}");
+        }
+        assert_eq!(snapshot(&f), before);
+    }
+
+    #[tokio::test]
+    async fn a_stale_billing_save_is_refused() {
+        let f = bootstrapped().await;
+        save(&f, "billing.grace_min", "5").await.unwrap();
+        let mut stale = set("billing.grace_min", "6", Some(1));
+        stale.issued_at = f.clock.now_ms();
+        let e = f.writer.submit_intent(stale).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Stale);
+    }
+
+    #[tokio::test]
+    async fn a_value_read_earlier_never_changes() {
+        let f = bootstrapped().await;
+        let earlier = read(&f).await;
+        for (key, value) in KEYS.into_iter().zip(["10", "0", "10", "staff_handles"]) {
+            save(&f, key, value).await.unwrap();
+        }
+        assert_eq!(earlier, BillingRules::defaults());
+        let later = read(&f).await;
+        assert_eq!(
+            (
+                later.rounding_min,
+                later.minimum_min,
+                later.grace_min,
+                later.time_up_mode
+            ),
+            (10, 0, 10, TimeUpMode::StaffHandles)
+        );
+        assert_ne!(earlier, later);
     }
 }
 

@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::billing::KIOSK_BILLING_KEYS;
 use crate::display::{HcTarget, parse_hc_key};
 use crate::intent::IntentKind;
 use crate::operating::KEY_FULFILMENT;
@@ -77,13 +78,16 @@ pub fn in_scope(class: ClientClass, kind: IntentKind) -> bool {
 pub const PAIRED_SETTINGS_PREFIX: &str = "kiosk.";
 
 /// Whether a session of `class`, signed in as `device_id`, may read the branch setting `key`:
-/// only paired apps, and only `kiosk.*` keys, `branch.fulfilment` and the device's own
+/// only paired apps, and only `kiosk.*` keys, `branch.fulfilment`, the kiosk billing keys and the device's own
 /// `display.hc.<device_id>` (never another device's, never the Hub's).
 pub fn may_read_setting(class: ClientClass, key: &str, device_id: Option<&str>) -> bool {
     if class != ClientClass::Paired {
         return false;
     }
-    if key.starts_with(PAIRED_SETTINGS_PREFIX) || key == KEY_FULFILMENT {
+    if key.starts_with(PAIRED_SETTINGS_PREFIX)
+        || key == KEY_FULFILMENT
+        || KIOSK_BILLING_KEYS.contains(&key)
+    {
         return true;
     }
     match (parse_hc_key(key), device_id) {
@@ -156,6 +160,8 @@ mod tests {
         assert!(!paired("branch.currency"));
         assert!(paired("kiosk.volume_default"));
         assert!(paired("branch.fulfilment"));
+        assert!(paired("billing.grace_min") && paired("billing.time_up_mode"));
+        assert!(!paired("billing.rounding_min") && !paired("billing.minimum_min"));
         assert!(!paired("branch.opening_hours"));
         assert!(!paired("system.backup_dir"));
         assert!(!paired("branch.ads_consent") && !paired("branch.tax"));

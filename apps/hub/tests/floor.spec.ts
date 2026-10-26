@@ -138,3 +138,86 @@ test("axe: the floor has no serious violations", async ({ page }) => {
     results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
   ).toEqual([]);
 });
+
+const zoneBtn = (page: Page) => page.getByRole("button", { name: "Main hall" });
+
+test("a zone collapses to a row with per-state counts, and live counts follow devices.changed", async ({
+  page,
+}) => {
+  let offline = false;
+  let release = false;
+  await open(
+    page,
+    () =>
+      snapshot([
+        device(1, { status: "in_session" }),
+        device(2, { status: "in_session" }),
+        device(3, {}),
+        device(4, offline ? { online: false, status: "offline" } : {}),
+      ]),
+    () => {
+      if (release) offline = true;
+      return release;
+    },
+  );
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "true");
+  await zoneBtn(page).click();
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("[data-component=floor-tile]")).toHaveCount(0);
+  const zone = page.getByTestId("floor-zone");
+  await expect(zone).toContainText("4 devices");
+  await expect(page.getByTestId("zone-counts")).toHaveText("2 in session · 2 free");
+  release = true;
+  await expect(page.getByTestId("zone-counts")).toHaveText("2 in session · 1 free · 1 offline");
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "false");
+});
+
+test("collapsed zones persist across reload, and a fresh install has none collapsed", async ({
+  page,
+}) => {
+  const snap = () => snapshot(Array.from({ length: 80 }, (_, i) => device(i + 1, {})));
+  await open(page, snap);
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "true");
+  await zoneBtn(page).click();
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "false");
+  await page.reload();
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("[data-component=floor-tile]")).toHaveCount(0);
+  await zoneBtn(page).click();
+  await expect(tile(page, "PC 1").first()).toBeVisible();
+  await page.reload();
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "true");
+});
+
+test("unreadable storage leaves every zone expanded", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("arena.hub.floor.collapsed", "{oops"));
+  await open(page, () => snapshot([device(1, {})]));
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "true");
+  await expect(tile(page, "PC 1")).toBeVisible();
+});
+
+test("the zone button is keyboard operable, 44px, and collapsed zones leave arrow navigation", async ({
+  page,
+}) => {
+  await open(page, () => snapshot([device(1, {}), device(2, {})]));
+  const box = await zoneBtn(page).boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await zoneBtn(page).focus();
+  await page.keyboard.press("Enter");
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("Space");
+  await expect(zoneBtn(page)).toHaveAttribute("aria-expanded", "true");
+  await expect(tile(page, "PC 1")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-tile-face]")).toHaveCount(0);
+});
+
+test("axe: a collapsed zone has no serious violations", async ({ page }) => {
+  await open(page, () => snapshot([device(1, {}), device(2, { status: "in_session" })]));
+  await zoneBtn(page).click();
+  await expect(page.getByTestId("zone-counts")).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
+  ).toEqual([]);
+});

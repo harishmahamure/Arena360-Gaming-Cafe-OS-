@@ -13,6 +13,7 @@ export { default as InlinePin } from "./components/InlinePin.svelte";
 export { default as ReasonPicker } from "./components/ReasonPicker.svelte";
 export { focusFirstInvalid } from "./forms.js";
 export { reasonOptions, reasonsFor } from "./reasons.js";
+export { STATUS_LABELS } from "./status.js";
 export { t, setPseudo } from "./messages/index.js";
 export {
   CURRENCIES,

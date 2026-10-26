@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Button, FloorTile, InlinePin, formatDateTime, formatMoney, t } from "@arena/ui";
+  import {
+    Button,
+    FloorTile,
+    InlinePin,
+    STATUS_LABELS,
+    formatDateTime,
+    formatMoney,
+    t,
+  } from "@arena/ui";
   import type {
     DeviceStatus,
     SessionStaff,
@@ -137,8 +145,43 @@
   );
   const loose = (id: string) =>
     snapshot?.devices.filter((d) => d.group_id === id && !placed(d)) ?? [];
+  const COLLAPSED_KEY = "arena.hub.floor.collapsed";
+  const stored = (): string[] => {
+    try {
+      const ids = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+      return Array.isArray(ids) ? ids : [];
+    } catch {
+      return [];
+    }
+  };
+  let collapsed: string[] = $state(stored());
+  function toggle(id: string) {
+    collapsed = collapsed.includes(id) ? collapsed.filter((c) => c !== id) : [...collapsed, id];
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
+    } catch {
+      return;
+    }
+  }
+  const STATES = [
+    "in-session",
+    "free",
+    "reserved",
+    "maintenance",
+    "offline",
+    "unassigned",
+  ] as const;
+  const stateOf = (d: SnapshotDevice) =>
+    groups.some((g) => g.id === d.group_id) ? BADGE[d.status ?? "offline"].state : "unassigned";
+  const counts = (members: SnapshotDevice[]) =>
+    STATES.map((s) => [s, members.filter((d) => stateOf(d) === s).length] as const)
+      .filter(([, n]) => n > 0)
+      .map(([s, n]) =>
+        t("hub.floor.state_count", { count: n, state: t(STATUS_LABELS[s]).toLowerCase() }),
+      )
+      .join(" · ");
   const order = $derived([
-    ...zones.flatMap((z) => inZone(z.id)),
+    ...zones.filter((z) => !collapsed.includes(z.id)).flatMap((z) => inZone(z.id)),
     ...groups.flatMap((g) => loose(g.id)),
     ...unassigned,
   ]);
@@ -260,30 +303,46 @@
 
     {#each zones as zone (zone.id)}
       {@const members = inZone(zone.id)}
+      {@const folded = collapsed.includes(zone.id)}
       <section
         class="unassigned zone"
         aria-labelledby="floor-zone-{zone.id}"
         data-testid="floor-zone"
       >
         <div class="head">
-          <h2 class="type-hub-title" id="floor-zone-{zone.id}">{zone.name}</h2>
+          <h2 class="type-hub-title" id="floor-zone-{zone.id}">
+            <button
+              type="button"
+              class="fold"
+              aria-expanded={!folded}
+              title={t("hub.floor.collapse_hint")}
+              onclick={() => toggle(zone.id)}
+            >
+              {zone.name}
+            </button>
+          </h2>
           <span class="muted type-hub-label">{count(members.length)}</span>
+          {#if folded}
+            <span class="type-hub-label" data-testid="zone-counts">{counts(members)}</span>
+          {/if}
         </div>
-        <ul
-          class="devices cells"
-          style="--cols:{Math.max(6, ...members.map((d) => (d.floor_x ?? 0) + 1))};--rows:{Math.max(
-            1,
-            ...members.map((d) => (d.floor_y ?? 0) + 1),
-          )}"
-        >
-          {#each members as device (device.device_id)}
-            {@render tile(
-              device,
-              groups.find((g) => g.id === device.group_id),
-              true,
-            )}
-          {/each}
-        </ul>
+        {#if !folded}
+          <ul
+            class="devices cells"
+            style="--cols:{Math.max(
+              6,
+              ...members.map((d) => (d.floor_x ?? 0) + 1),
+            )};--rows:{Math.max(1, ...members.map((d) => (d.floor_y ?? 0) + 1))}"
+          >
+            {#each members as device (device.device_id)}
+              {@render tile(
+                device,
+                groups.find((g) => g.id === device.group_id),
+                true,
+              )}
+            {/each}
+          </ul>
+        {/if}
       </section>
     {/each}
 
@@ -361,6 +420,27 @@
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
+  }
+
+  .fold {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 44px;
+    padding: 0 var(--space-2);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .fold::before {
+    content: "▾";
+  }
+
+  .fold[aria-expanded="false"]::before {
+    content: "▸";
   }
 
   .devices {

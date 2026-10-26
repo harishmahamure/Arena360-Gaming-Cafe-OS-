@@ -267,3 +267,55 @@ async fn the_audit_viewer_shows_the_consent_and_hides_personal_data() {
     assert_eq!(consent["after"]["policy_version"], "1");
     assert_eq!(consent["after"]["granted"], 1);
 }
+
+#[tokio::test]
+async fn lookup_finds_by_digits_opens_a_profile_and_follows_new_players() {
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    let get = |uri: String| {
+        let (hub, token) = (&hub, &token);
+        async move { call(hub, "GET", &uri, Some(token), None).await }
+    };
+    let (status, none) = get("/ui/players?q=98765".into()).await;
+    assert_eq!((status, none), (StatusCode::OK, json!([])));
+    let (status, _) = create(&hub, &token, body(form("asha", "+919876543210"), None)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, hits) = get("/ui/players?q=%2B91%2098765-4".into()).await;
+    assert_eq!(hits.as_array().unwrap().len(), 1, "{hits}");
+    assert_eq!(hits[0]["name"], "Asha Rao");
+    assert_eq!(hits[0]["phone"], "+919876543210");
+    let (status, _) = create(&hub, &token, body(form("ravi", "+919876500000"), None)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, hits) = get("/ui/players?q=98765".into()).await;
+    assert_eq!(hits.as_array().unwrap().len(), 2, "{hits}");
+    let (_, empty) = get("/ui/players?q=abc".into()).await;
+    assert_eq!(empty, json!([]));
+
+    let id = hits[0]["player_id"].as_str().unwrap();
+    let (status, profile) = get(format!("/ui/players/profile?id={id}")).await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["player"]["tags"], json!(["vip"]));
+    assert_eq!(
+        profile["consent"],
+        json!({"granted": true, "policy_version": "1"})
+    );
+    let (status, err) = get("/ui/players/profile?id=missing".into()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{err}");
+    assert_eq!(err["code"], "NOT_FOUND");
+}
+
+#[tokio::test]
+async fn lookup_needs_a_session_that_may_view_players() {
+    let hub = hub().await;
+    let (status, err) = call(&hub, "GET", "/ui/players?q=9", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{err}");
+    let kitchen = token_for(&hub, "kitchen", "k-pass").await;
+    let (status, err) = call(&hub, "GET", "/ui/players?q=9", Some(&kitchen), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+    assert_eq!(err["code"], "PERMISSION_DENIED");
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let (status, _) = call(&hub, "POST", "/ui/lock", Some(&counter), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, err) = call(&hub, "GET", "/ui/players?q=9", Some(&counter), None).await;
+    assert_eq!(err["code"], "SESSION_LOCKED", "{status} {err}");
+}

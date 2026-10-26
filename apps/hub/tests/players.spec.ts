@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { HubSnapshot, PlayerForm, SessionStaff } from "@arena/ui/generated";
+import type { HubSnapshot, PlayerForm, PlayerHit, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -15,7 +15,7 @@ const STAFF: Record<string, SessionStaff> = {
     staff_id: "01JCOUNTER0000000000000000",
     display_name: "Counter",
     role_name: "Counter",
-    permissions: ["player.manage"],
+    permissions: ["player.manage", "player.view"],
   },
   "kitchen-token": {
     staff_id: "01JKITCHEN0000000000000000",
@@ -30,9 +30,28 @@ type Hub = {
   sent: Sent[];
   elevations: { items: { intent_kind: string }[]; pin: string }[];
   fail: { status: number; code: string; field?: string } | null;
+  players: PlayerHit[];
+  queries: string[];
 };
 
-const newHub = (): Hub => ({ sent: [], elevations: [], fail: null });
+const ASHA: PlayerHit = {
+  player_id: "P1",
+  name: "Asha Rao",
+  username: "asha_9",
+  phone: "+919876543210",
+  tags: ["vip"],
+};
+
+const newHub = (): Hub => ({
+  sent: [],
+  elevations: [],
+  fail: null,
+  players: [
+    ASHA,
+    { ...ASHA, player_id: "P2", name: "Ravi", username: "ravi", phone: "+919876500000", tags: [] },
+  ],
+  queries: [],
+});
 
 const snapshot = (): HubSnapshot => ({
   branch: { name: "Dev Branch", branch_code: "DEV01" },
@@ -89,6 +108,13 @@ async function open(page: Page, hub: Hub, token = "counter-token") {
         return json(route, 200, { ticket: "T1", items: body.items, expires_in_s: 60 });
       }
       case "/ui/players": {
+        if (req.method() === "GET") {
+          const q = new URL(req.url()).searchParams.get("q") ?? "";
+          hub.queries.push(q);
+          const digits = q.replace(/\D/g, "");
+          const hits = digits ? hub.players.filter((p) => p.phone.includes(digits)) : [];
+          return json(route, 200, hits);
+        }
         const body = req.postDataJSON() as Sent;
         hub.sent.push(body);
         if (hub.fail) return json(route, hub.fail.status, { message: "no", ...hub.fail });
@@ -105,6 +131,12 @@ async function open(page: Page, hub: Hub, token = "counter-token") {
             ],
           },
         });
+      }
+      case "/ui/players/profile": {
+        const id = new URL(req.url()).searchParams.get("id");
+        const player = hub.players.find((p) => p.player_id === id);
+        if (!player) return json(route, 404, { code: "NOT_FOUND", message: "no" });
+        return json(route, 200, { player, consent: { granted: true, policy_version: "1" } });
       }
       default:
         return route.fulfill({ status: 404, headers: CORS });
@@ -283,4 +315,84 @@ test("cancel closes the form without sending", async ({ page }) => {
   await expect(page.getByTestId("player-form")).toHaveCount(0);
   await expect(page.getByRole("button", { name: en["hub.players.create"] })).toBeFocused();
   expect(hub.sent).toEqual([]);
+});
+
+const lookupField = (page: Page) => page.getByLabel(en["hub.players.lookup.label"]);
+
+test("typing digits lists matches, Enter picks the top one and shows its profile", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  await expect(
+    page.getByTestId("player-lookup").getByRole("button", { name: en["hub.players.lookup.guest"] }),
+  ).toBeVisible();
+  await lookupField(page).fill("+91 98765");
+  const hits = page.getByTestId("player-hits").getByRole("button");
+  await expect(hits).toHaveCount(2);
+  await expect(hits.first()).toContainText("Asha Rao");
+  await expect(hits.first()).toContainText("+919876543210");
+  expect(hub.queries.at(-1)).toBe("9198765");
+  await expectNoSeriousAxe(page);
+  await lookupField(page).press("Enter");
+  const profile = page.getByTestId("player-profile");
+  await expect(profile).toContainText("Asha Rao");
+  await expect(profile).toContainText("asha_9");
+  await expect(profile).toContainText("+919876543210");
+  await expect(profile).toContainText("vip");
+  await expect(profile).toContainText(en["hub.players.profile.granted"].replace("{version}", "1"));
+  await expectNoSeriousAxe(page);
+});
+
+test("clicking a match opens that player", async ({ page }) => {
+  await open(page, newHub());
+  await lookupField(page).fill("98765");
+  await page.getByTestId("player-hits").getByRole("button", { name: /Ravi/ }).click();
+  await expect(page.getByTestId("player-profile")).toContainText("ravi");
+});
+
+test("a complete number with no match offers Create profile with the phone and Guest", async ({
+  page,
+}) => {
+  await open(page, newHub());
+  await lookupField(page).fill("9123456789");
+  const lookup = page.getByTestId("player-lookup");
+  await expect(lookup).toContainText(en["hub.players.lookup.none"]);
+  await expect(lookup.getByRole("button", { name: en["hub.players.lookup.guest"] })).toHaveCount(2);
+  await lookup.getByRole("button", { name: en["hub.players.create"] }).click();
+  await expect(page.getByTestId("player-form")).toBeVisible();
+  await expect(page.getByLabel(en["hub.players.phone"])).toHaveValue("+919123456789");
+});
+
+test("a short number with no match shows no empty state", async ({ page }) => {
+  await open(page, newHub());
+  await lookupField(page).fill("91234");
+  await expect(page.getByTestId("player-lookup")).not.toContainText(en["hub.players.lookup.none"]);
+});
+
+test("Guest is a choice beside the field", async ({ page }) => {
+  await open(page, newHub());
+  await page
+    .getByTestId("player-lookup")
+    .getByRole("button", { name: en["hub.players.lookup.guest"] })
+    .click();
+  await expect(page.getByText(en["hub.players.lookup.guest_picked"])).toBeVisible();
+});
+
+test("Ctrl+K opens Players with the lookup focused and is ignored inside a text field", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  await page.locator("body").focus();
+  await page.keyboard.press("Control+k");
+  await expect(lookupField(page)).toBeFocused();
+  await page.getByRole("button", { name: en["hub.players.create"] }).first().click();
+  await expect(page.getByLabel(en["hub.players.username"])).toBeFocused();
+  await page.keyboard.press("Control+k");
+  await expect(page.getByLabel(en["hub.players.username"])).toBeFocused();
+  await page.getByRole("button", { name: en["hub.players.cancel"] }).click();
+  await page.locator("body").focus();
+  await page.keyboard.press("Control+k");
+  await expect(lookupField(page)).toBeFocused();
 });

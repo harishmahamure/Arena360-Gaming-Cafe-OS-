@@ -11,6 +11,8 @@ import type {
   IntentResult,
   Permission,
   PlayerForm,
+  PlayerHit,
+  PlayerProfile,
   ReasonCode,
   SessionStaff,
   SettingEntry,
@@ -26,6 +28,7 @@ export const SIGN_OUT_URL = "http://127.0.0.1:7409/ui/auth/sign-out";
 export const ME_URL = "http://127.0.0.1:7409/ui/me";
 export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
 export const PLAYERS_URL = "http://127.0.0.1:7409/ui/players";
+export const PLAYER_PROFILE_URL = "http://127.0.0.1:7409/ui/players/profile";
 export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
 export const ELEVATE_DROP_URL = "http://127.0.0.1:7409/ui/elevate/drop";
 export const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
@@ -337,6 +340,52 @@ export async function createPlayer(
     elevation_ticket: elevationTicket,
   });
 }
+
+export type ReadOutcome<T> =
+  | { kind: "ok"; value: T }
+  | { kind: "signed_out" }
+  | { kind: "error"; error: UiError | null }
+  | { kind: "unreachable" };
+
+async function getJson<T>(url: string): Promise<ReadOutcome<T>> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      cache: "no-store",
+    });
+  } catch {
+    return { kind: "unreachable" };
+  }
+  if (res.status === 401) {
+    setToken(null);
+    return { kind: "signed_out" };
+  }
+  if (res.ok) {
+    try {
+      return { kind: "ok", value: (await res.json()) as T };
+    } catch {
+      return { kind: "unreachable" };
+    }
+  }
+  const error = await errorOf(res);
+  noticeLocked(error);
+  return { kind: "error", error };
+}
+
+const withQuery = (url: string, params: Record<string, string>) => {
+  const u = new URL(url);
+  u.search = new URLSearchParams(params).toString();
+  return u.href;
+};
+
+export const findPlayers = (q: string) => getJson<PlayerHit[]>(withQuery(PLAYERS_URL, { q }));
+
+export const loadPlayer = (id: string) =>
+  getJson<PlayerProfile>(withQuery(PLAYER_PROFILE_URL, { id }));
 
 async function postIntent(
   url: string,

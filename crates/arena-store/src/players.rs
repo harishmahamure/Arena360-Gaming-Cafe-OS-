@@ -99,3 +99,53 @@ pub fn find_player_key(conn: &Connection, player_id: &str) -> Result<Option<Stri
     .optional()
     .map_err(db_error)
 }
+
+pub fn list_players_after(
+    conn: &Connection,
+    after: i64,
+) -> Result<Vec<(i64, PlayerRow, String)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.rowid, p.player_id, p.username, p.password_hash, p.phone_lookup, p.name_enc,
+                    p.phone_enc, p.email_enc, p.dob_enc, p.notes_enc, p.tags, k.dek_wrapped
+             FROM players p JOIN player_keys k ON k.player_id = p.player_id
+             WHERE p.rowid > ?1 AND p.deleted_at IS NULL ORDER BY p.rowid",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([after], |r| {
+        Ok((
+            r.get(0)?,
+            PlayerRow {
+                player_id: r.get(1)?,
+                username: r.get(2)?,
+                password_hash: r.get(3)?,
+                phone_lookup: r.get(4)?,
+                name_enc: r.get(5)?,
+                phone_enc: r.get(6)?,
+                email_enc: r.get(7)?,
+                dob_enc: r.get(8)?,
+                notes_enc: r.get(9)?,
+                tags: r.get(10)?,
+            },
+            r.get(11)?,
+        ))
+    })
+    .map_err(db_error)?
+    .collect::<Result<_, _>>()
+    .map_err(db_error)
+}
+
+pub fn latest_consent(
+    conn: &Connection,
+    player_id: &str,
+    purpose: &str,
+) -> Result<Option<(bool, String)>, AppError> {
+    conn.query_row(
+        "SELECT granted, policy_version FROM consents WHERE player_id = ?1 AND purpose = ?2
+         ORDER BY at DESC, rowid DESC LIMIT 1",
+        params![player_id, purpose],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(db_error)
+}

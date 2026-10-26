@@ -89,3 +89,14 @@ export function screenOf(pathname: string): Screen | undefined {
   const first = pathname.split("/").filter(Boolean)[0];
   return SCREENS.find((s) => s.id === first);
 }
+
+export function isSearchKey(event: KeyLike, active: Element | null): boolean {
+  return (
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.repeat &&
+    event.key.toLowerCase() === "k" &&
+    !isTextEntry(active)
+  );
+}

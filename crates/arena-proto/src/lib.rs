@@ -152,8 +152,9 @@ pub use players::{
     CONSENT_TRANSACTIONAL, PLAYER_EMAIL_MAX_CHARS, PLAYER_NAME_MAX_CHARS, PLAYER_NOTES_MAX_CHARS,
     PLAYER_PASSWORD_MIN_CHARS, PLAYER_PHONE_MAX_DIGITS, PLAYER_PHONE_MIN_DIGITS,
     PLAYER_TAG_MAX_CHARS, PLAYER_TAGS_MAX, PLAYER_USERNAME_MAX_CHARS, PLAYER_USERNAME_MIN_CHARS,
-    POLICY_VERSION_MAX_CHARS, PlayerCreate, PlayerForm, UiPlayerRequest, normalize_phone,
-    normalize_username, valid_phone, valid_policy_version, valid_tags, valid_username,
+    POLICY_VERSION_MAX_CHARS, PlayerConsent, PlayerCreate, PlayerForm, PlayerHit, PlayerProfile,
+    UiPlayerRequest, normalize_phone, normalize_username, valid_phone, valid_policy_version,
+    valid_tags, valid_username,
 };
 pub use printer::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_PORT, DEFAULT_PRINTER_SELECTED,

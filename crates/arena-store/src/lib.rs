@@ -67,8 +67,8 @@ pub use identity::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use players::{
-    PlayerRow, find_player_key, insert_consent, insert_player, insert_player_key, phone_taken,
-    username_taken,
+    PlayerRow, find_player_key, insert_consent, insert_player, insert_player_key, latest_consent,
+    list_players_after, phone_taken, username_taken,
 };
 pub use products::{
     ProductRow, barcode_holder, count_active_products, find_product, insert_component,
@@ -634,6 +634,24 @@ impl Store {
             return Ok(None);
         }
         find_player_key(&self.conn, player_id)
+    }
+
+    pub fn player_rows_after(&self, after: i64) -> Result<Vec<(i64, PlayerRow, String)>, AppError> {
+        if !self.table_exists("players")? || !self.table_exists("player_keys")? {
+            return Ok(Vec::new());
+        }
+        list_players_after(&self.conn, after)
+    }
+
+    pub fn latest_consent(
+        &self,
+        player_id: &str,
+        purpose: &str,
+    ) -> Result<Option<(bool, String)>, AppError> {
+        if !self.table_exists("consents")? {
+            return Ok(None);
+        }
+        latest_consent(&self.conn, player_id, purpose)
     }
 
     pub fn lots(&self, product_id: &str) -> Result<Vec<LotRow>, AppError> {

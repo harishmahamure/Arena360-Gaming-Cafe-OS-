@@ -11,7 +11,15 @@
   import LockOverlay from "../lib/LockOverlay.svelte";
   import { createIdleTracker } from "../lib/idle.js";
   import { setUiSettings, uiSettings } from "../lib/ui-settings.svelte";
-  import { BOTTOM_BAR, MORE, SCREENS, screenOf, shortcutTarget, type Screen } from "../lib/nav";
+  import {
+    BOTTOM_BAR,
+    MORE,
+    SCREENS,
+    isSearchKey,
+    screenOf,
+    shortcutTarget,
+    type Screen,
+  } from "../lib/nav";
   import { SNAPSHOT_DEPENDENCY } from "../lib/snapshot";
   import { PAIR_PATH } from "../lib/pair";
   import {
@@ -118,6 +126,14 @@
 
   function onkeydown(event: KeyboardEvent) {
     if (gated || locked) return;
+    if (isSearchKey(event, document.activeElement)) {
+      event.preventDefault();
+      moreOpen = false;
+      const field = document.querySelector<HTMLInputElement>("[data-player-lookup]");
+      if (field) field.focus();
+      else void goto("/players?lookup");
+      return;
+    }
     const target = shortcutTarget(event, document.activeElement);
     if (!target) return;
     event.preventDefault();

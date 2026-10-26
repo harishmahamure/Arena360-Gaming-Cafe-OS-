@@ -77,6 +77,30 @@ pub struct UiPlayerRequest {
     pub elevation_ticket: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerHit {
+    pub player_id: String,
+    pub name: String,
+    pub username: String,
+    pub phone: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerConsent {
+    pub granted: bool,
+    pub policy_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerProfile {
+    pub player: PlayerHit,
+    pub consent: Option<PlayerConsent>,
+}
+
 fn invalid(field: &str, message: &str) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
 }

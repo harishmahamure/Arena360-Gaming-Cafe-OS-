@@ -1,10 +1,12 @@
 use arena_proto::{
-    AppError, ErrorCode, PlayerCreate, PlayerForm, normalize_phone, normalize_username,
+    AppError, CONSENT_TRANSACTIONAL, ErrorCode, PlayerConsent, PlayerCreate, PlayerForm, PlayerHit,
+    PlayerProfile, normalize_phone, normalize_username,
 };
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
 
+use crate::SnapshotReader;
 use crate::audit::base64url_decode;
 use crate::staff::base64url;
 
@@ -127,6 +129,97 @@ pub fn open_field(
     String::from_utf8(plain).map_err(|_| internal("bad plaintext"))
 }
 
+pub const SEARCH_LIMIT: usize = 8;
+
+struct Entry {
+    hit: PlayerHit,
+    digits: String,
+    folded: String,
+}
+
+#[derive(Default)]
+pub struct PlayerIndex {
+    last: i64,
+    entries: Vec<Entry>,
+}
+
+impl PlayerIndex {
+    fn sync(&mut self, reader: &SnapshotReader, kek: &[u8; KEK_LEN]) -> Result<(), AppError> {
+        for (rowid, row, wrapped) in reader.player_rows_after(self.last)? {
+            self.last = rowid;
+            let open = |field, enc: &str| open_field(kek, &row.player_id, &wrapped, field, enc);
+            let (Ok(name), Ok(phone)) =
+                (open("name", &row.name_enc), open("phone", &row.phone_enc))
+            else {
+                tracing::warn!(player_id = %row.player_id, "player index: skipping an unreadable row");
+                continue;
+            };
+            self.entries.push(Entry {
+                digits: phone.chars().filter(char::is_ascii_digit).collect(),
+                folded: name.to_lowercase(),
+                hit: PlayerHit {
+                    tags: serde_json::from_str(&row.tags).unwrap_or_default(),
+                    player_id: row.player_id,
+                    name,
+                    username: row.username,
+                    phone,
+                },
+            });
+        }
+        Ok(())
+    }
+
+    pub fn search(
+        &mut self,
+        reader: &SnapshotReader,
+        kek: &[u8; KEK_LEN],
+        query: &str,
+    ) -> Result<Vec<PlayerHit>, AppError> {
+        self.sync(reader, kek)?;
+        let q: String = query.chars().filter(char::is_ascii_digit).collect();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut found: Vec<_> = self
+            .entries
+            .iter()
+            .filter_map(|e| e.digits.find(&q).map(|at| (at, &e.folded, &e.hit)))
+            .collect();
+        found.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        Ok(found
+            .into_iter()
+            .take(SEARCH_LIMIT)
+            .map(|(_, _, h)| h.clone())
+            .collect())
+    }
+
+    pub fn profile(
+        &mut self,
+        reader: &SnapshotReader,
+        kek: &[u8; KEK_LEN],
+        player_id: &str,
+    ) -> Result<PlayerProfile, AppError> {
+        self.sync(reader, kek)?;
+        let hit = self
+            .entries
+            .iter()
+            .find(|e| e.hit.player_id == player_id)
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no such player"))?
+            .hit
+            .clone();
+        let consent = reader
+            .latest_consent(player_id, CONSENT_TRANSACTIONAL)?
+            .map(|(granted, policy_version)| PlayerConsent {
+                granted,
+                policy_version,
+            });
+        Ok(PlayerProfile {
+            player: hit,
+            consent,
+        })
+    }
+}
+
 pub fn utc_day(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
         .map(|d| d.date_naive().to_string())
@@ -207,6 +300,72 @@ mod tests {
         assert_eq!(a, phone_lookup(&KEK, "+919876543210"));
         assert_ne!(a, phone_lookup(&[8; KEK_LEN], "+919876543210"));
         assert_eq!(a.len(), 64);
+    }
+
+    fn seeded(n: usize) -> (tempfile::TempDir, SnapshotReader) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("branch.db");
+        let mut store = arena_store::Store::open(&path, 0).unwrap();
+        store
+            .write_tx(|tx| {
+                for i in 0..n {
+                    let id = format!("P{i:05}");
+                    let mut f = form();
+                    f.name = format!("Player {}", n - i);
+                    f.phone = format!("+91 9{:09}", i * 7919 % 1_000_000_000);
+                    let p = seal(&KEK, &f, &id, "h".into()).unwrap();
+                    arena_store::insert_player(
+                        tx,
+                        &arena_store::PlayerRow {
+                            player_id: id.clone(),
+                            username: format!("user{i}"),
+                            password_hash: p.password_hash,
+                            phone_lookup: p.phone_lookup,
+                            name_enc: p.name_enc,
+                            phone_enc: p.phone_enc,
+                            email_enc: None,
+                            dob_enc: None,
+                            notes_enc: None,
+                            tags: "[\"vip\"]".into(),
+                        },
+                    )?;
+                    arena_store::insert_player_key(tx, &id, &p.wrapped_key)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let reader = SnapshotReader::open(&path).unwrap();
+        (dir, reader)
+    }
+
+    #[test]
+    fn search_matches_digits_best_first_and_syncs_new_rows() {
+        let (_dir, reader) = seeded(30);
+        let mut idx = PlayerIndex::default();
+        assert!(idx.search(&reader, &KEK, "abc").unwrap().is_empty());
+        let all = idx.search(&reader, &KEK, "+91 9").unwrap();
+        assert_eq!(all.len(), SEARCH_LIMIT);
+        assert!(all.iter().all(|h| h.phone.starts_with("+919")));
+        let one = idx.search(&reader, &KEK, "91-9").unwrap();
+        assert_eq!(one[0].tags, ["vip"]);
+        let p = idx.profile(&reader, &KEK, "P00003").unwrap();
+        assert_eq!((p.player.username.as_str(), p.consent), ("user3", None));
+        assert_eq!(
+            idx.profile(&reader, &KEK, "nope").unwrap_err().code,
+            ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn three_thousand_players_answer_in_under_100_ms() {
+        let (_dir, reader) = seeded(3000);
+        let mut idx = PlayerIndex::default();
+        idx.search(&reader, &KEK, "9").unwrap();
+        let start = std::time::Instant::now();
+        let hits = idx.search(&reader, &KEK, "9876").unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_millis(100));
+        assert!(hits.len() <= SEARCH_LIMIT);
+        assert_eq!(idx.entries.len(), 3000);
     }
 
     #[test]

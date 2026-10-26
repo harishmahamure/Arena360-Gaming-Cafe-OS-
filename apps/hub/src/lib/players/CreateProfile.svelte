@@ -2,16 +2,21 @@
   import { Button, InlinePin, TextField, focusFirstInvalid, t } from "@arena/ui";
   import type { PlayerForm, SessionStaff } from "@arena/ui/generated";
   import { messages, type MessageKey } from "@arena/ui/messages";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
   import { SESSION_DEPENDENCY, createPlayer, elevate, hasPermission } from "../auth";
 
   let {
     staff,
+    phone = "+91",
     oncreated,
     oncancel,
-  }: { staff: SessionStaff | null; oncreated: (username: string) => void; oncancel: () => void } =
-    $props();
+  }: {
+    staff: SessionStaff | null;
+    phone?: string;
+    oncreated: (username: string) => void;
+    oncancel: () => void;
+  } = $props();
 
   const INVALID: Record<string, MessageKey> = {
     username: "hub.players.invalid.username",
@@ -27,7 +32,7 @@
   let form = $state({
     username: "",
     password: "",
-    phone: "+91",
+    phone: untrack(() => phone),
     name: "",
     email: "",
     dob: "",

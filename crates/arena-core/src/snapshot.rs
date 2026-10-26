@@ -269,6 +269,27 @@ impl SnapshotReader {
             .is_some_and(|k| k == "owner")
     }
 
+    pub fn player_rows_after(
+        &self,
+        after: i64,
+    ) -> Result<Vec<(i64, arena_store::PlayerRow, String)>, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?
+            .player_rows_after(after)
+    }
+
+    pub fn latest_consent(
+        &self,
+        player_id: &str,
+        purpose: &str,
+    ) -> Result<Option<(bool, String)>, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?
+            .latest_consent(player_id, purpose)
+    }
+
     pub fn branch(&self) -> Result<Option<SnapshotBranch>, AppError> {
         let store = self
             .reader

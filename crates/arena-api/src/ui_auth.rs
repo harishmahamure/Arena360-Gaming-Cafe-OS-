@@ -72,7 +72,7 @@ use arena_proto::{
     Requirement, SessionStaff, SetupCodeRequest, SignInOk, SignInRequest, UiError, UiIntentRequest,
     UiMe, UiPlayerRequest, UnlockOk, UnlockRequest,
 };
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -415,6 +415,7 @@ pub struct UiAuth {
     streams: Mutex<HashMap<String, usize>>,
     pair_gate: Option<arena_core::PairGate>,
     kek: Option<Arc<dyn arena_core::players::Kek>>,
+    player_index: Arc<Mutex<arena_core::players::PlayerIndex>>,
 }
 
 pub type BackupProbe =
@@ -466,6 +467,7 @@ impl UiAuth {
             pairing: None,
             pair_gate: None,
             kek: None,
+            player_index: Arc::default(),
             streams: Mutex::new(HashMap::new()),
         }
     }
@@ -2074,6 +2076,70 @@ async fn players(
     run_intent(&auth, &token, &me, intent, elevation_ticket).await
 }
 
+async fn player_read<T: serde::Serialize + Send + 'static>(
+    auth: Arc<UiAuth>,
+    headers: HeaderMap,
+    read: impl FnOnce(
+        &mut arena_core::players::PlayerIndex,
+        &arena_core::SnapshotReader,
+        &[u8; arena_core::players::KEK_LEN],
+    ) -> Result<T, AppError>
+    + Send
+    + 'static,
+) -> Response {
+    let Some(token) = bearer(&headers) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    if !me.permissions.contains(&Permission::PlayerView) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            "looking up players needs the player.view permission",
+        )));
+    }
+    let Some(kek) = auth.kek.clone() else {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "this hub has no key store for profiles",
+        )));
+    };
+    let (reader, index) = (Arc::clone(&auth.reader), Arc::clone(&auth.player_index));
+    let done = tokio::task::spawn_blocking(move || {
+        let kek = kek.kek()?;
+        let mut index = index
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "player index lock poisoned"))?;
+        read(&mut index, &reader, &kek)
+    })
+    .await;
+    match done {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+async fn player_search(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let q = q.get("q").cloned().unwrap_or_default();
+    player_read(auth, headers, move |i, r, k| i.search(r, k, &q)).await
+}
+
+async fn player_profile(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let id = q.get("id").cloned().unwrap_or_default();
+    player_read(auth, headers, move |i, r, k| i.profile(r, k, &id)).await
+}
+
 async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -2119,7 +2185,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/elevate", post(elevate))
         .route("/ui/elevate/drop", post(elevate_drop))
         .route("/ui/intent", post(intent))
-        .route("/ui/players", post(players))
+        .route("/ui/players", post(players).get(player_search))
+        .route("/ui/players/profile", get(player_profile))
         .route("/ui/settings", get(settings))
         .route("/ui/products", get(products))
         .route("/ui/printer/find", post(crate::ui_printer::find))

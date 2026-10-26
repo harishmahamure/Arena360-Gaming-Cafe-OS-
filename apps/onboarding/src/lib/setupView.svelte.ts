@@ -7,11 +7,18 @@ const POLL_MS = 5000;
 
 export function watchSetup() {
   const w = $state<{ view: SetupDevicesView | null }>({ view: null });
+  let busy = false;
   async function refresh() {
-    const res = await getDevices();
-    if (res.ok) w.view = res.data;
-    const next = await getWizard();
-    if (next.ok && next.data.current !== wizard.state?.current) await advance(next.data);
+    if (busy) return;
+    busy = true;
+    try {
+      const res = await getDevices();
+      if (res.ok) w.view = res.data;
+      const next = await getWizard();
+      if (next.ok && next.data.current !== wizard.state?.current) await advance(next.data);
+    } finally {
+      busy = false;
+    }
   }
   onMount(() => {
     void refresh();

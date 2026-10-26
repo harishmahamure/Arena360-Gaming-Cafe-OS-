@@ -2014,7 +2014,7 @@ async fn an_old_hub_block_completes_nothing_new_and_a_skipped_printer_step_stays
 }
 
 #[tokio::test]
-async fn skipping_products_opens_step_seven_and_a_done_step_does_not_change() {
+async fn skipping_products_marks_it_skipped_and_refuses_early_or_anonymous_callers() {
     let h = Harness::new().await;
     let (a, _) = h.ready().await;
     let early = h

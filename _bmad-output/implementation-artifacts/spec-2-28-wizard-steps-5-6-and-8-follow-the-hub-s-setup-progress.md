@@ -2,7 +2,7 @@
 title: 'Story 2.28: Wizard steps 5, 6 and 8 follow the Hub''s setup progress'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: 'ba8973ec9d641a134e8b2856b788076195958a61'
 route: 'dispatch'
 review_loop_iteration: 0

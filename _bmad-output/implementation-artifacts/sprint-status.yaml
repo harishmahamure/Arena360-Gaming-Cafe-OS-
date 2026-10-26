@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-26-2026 23:05
+last_updated: 10-26-2026 23:59
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -67,7 +67,7 @@ development_status:
   epic-3: in-progress
   3-1-branch-billing-rules-rounding-minimum-grace-and-time-up-mode: done
   3-2-floor-view-shows-every-device-as-a-live-tile-grouped-by-zone: done
-  3-3-floor-view-performance-proven-on-reference-hardware: backlog
+  3-3-floor-view-performance-proven-on-reference-hardware: review
   3-4-collapsible-zones-with-per-state-counts: backlog
   3-5-non-modal-tile-sheet-with-remote-pc-actions: backlog
   3-6-create-a-player-profile-with-protected-personal-data-and-con: backlog

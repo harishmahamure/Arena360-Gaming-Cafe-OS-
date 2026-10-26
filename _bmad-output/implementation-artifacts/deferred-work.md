@@ -294,3 +294,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-15-owner-changes-reach-the-hub-through-the-command-mailbox-with.md`
   summary: A cloud restore can rewind `commands.id` below the Hub's cursor or onto old `applied_commands` ids and keys; a command that always fails `INTERNAL` blocks the queue behind it; a non-`NotFound` 4xx on a result post stalls the mailbox; `check-deploy` ignores the command Deployment, its Ingress path and rollout; missing tests for the 50-row page boundary and an `INTERNAL` failure inside the write transaction.
   evidence: Review findings from Edge Case Hunter, Blind Hunter and Verification Gap.
+
+## Deferred from: Story 3.3
+
+- `arena-hub dev seed` fails with `USER_LIMIT` on master (it upserts 4 staff before the licence is recorded, Free cap is 3). `release-bench` `hub-idle` seeding and `tests/dev_seed.rs` (2 tests) fail until the seed records its licence first or caps staff. A 60-device seed for the Hub service memory budget (Story 3.3 AC4) also needs it.

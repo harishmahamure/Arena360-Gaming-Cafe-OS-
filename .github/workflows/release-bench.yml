@@ -2,7 +2,9 @@ name: Release benchmark
 
 # Idle budgets on the reference hardware (2015 i3 + HDD): arena-hub < 50 MB, Hub UI + WebView2
 # < 250 MB; Kiosk service + app + WebView2 < 80 MB; no GPU use. Not part of ci-ok; runs on
-# demand and on release tags. The `soak` input adds the 8-hour WAN-down soak (Story 1.22).
+# demand and on release tags. `floor-perf` (Story 3.3) fails the run when the 60-device Floor misses
+# cold open 1 s, paint 2 s, frame 100 ms, input 100 ms or the 30-minute JS heap (250 MB).
+# The `soak` input adds the 8-hour WAN-down soak (Story 1.22).
 
 on:
   workflow_dispatch:
@@ -101,6 +103,24 @@ jobs:
           } else {
             Write-Host "nothing to uninstall ($uninstall not found)"
           }
+
+  floor-perf:
+    name: floor view, 60 devices (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 60
+    env:
+      FLOOR_BENCH_SECONDS: "60"
+      FLOOR_BENCH_SOAK_MINUTES: "30"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/hub exec playwright install chromium
+      - run: pnpm --filter @arena/hub bench:floor
 
   kiosk-installer:
     name: build the Kiosk installer

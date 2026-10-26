@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
-    "test:shell": "playwright test"
+    "test:shell": "playwright test",
+    "bench:floor": "playwright test -c playwright.bench.config.ts"
   },
   "dependencies": {
     "@arena/ui": "workspace:*"

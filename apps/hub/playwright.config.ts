@@ -14,7 +14,7 @@ const port = Number(
 export default defineConfig({
   testDir: "./tests",
   // The WAN-down smoke runs against a real Hub (`playwright.wan-down.config.ts`).
-  testIgnore: "**/wan-down/**",
+  testIgnore: ["**/wan-down/**", "**/bench/**"],
   fullyParallel: true,
   forbidOnly: CI,
   retries: 0,

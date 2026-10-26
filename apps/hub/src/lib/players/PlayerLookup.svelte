@@ -26,7 +26,7 @@
 
   export const focus = () => input?.focus();
 
-  async function search() {
+  export async function search() {
     const asked = digits;
     const turn = ++latest;
     if (!asked) {
@@ -44,7 +44,7 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
-    if (event.key === "Enter" && hits.length) {
+    if (event.key === "Enter" && hits.length && answered === digits) {
       event.preventDefault();
       onpick(hits[0]);
     }

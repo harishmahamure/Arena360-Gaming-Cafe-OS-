@@ -396,3 +396,13 @@ test("Ctrl+K opens Players with the lookup focused and is ignored inside a text 
   await page.keyboard.press("Control+k");
   await expect(lookupField(page)).toBeFocused();
 });
+
+test("Ctrl+K from another screen opens Players with the lookup focused", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  await page.goto("/floor");
+  await page.locator("body").focus();
+  await page.keyboard.press("Control+k");
+  await expect(page).toHaveURL(/\/players\?lookup/);
+  await expect(lookupField(page)).toBeFocused();
+});

@@ -71,7 +71,7 @@ development_status:
   3-4-collapsible-zones-with-per-state-counts: done
   3-5-non-modal-tile-sheet-with-remote-pc-actions: done
   3-6-create-a-player-profile-with-protected-personal-data-and-con: done
-  3-7-player-lookup-by-phone-guest-and-the-players-screen: review
+  3-7-player-lookup-by-phone-guest-and-the-players-screen: done
   3-8-edit-a-player-profile-and-reset-their-password: backlog
   3-9-start-a-postpaid-session-for-a-player-or-a-guest: backlog
   3-10-the-pc-unlocks-to-a-session-screen-when-a-session-starts: backlog

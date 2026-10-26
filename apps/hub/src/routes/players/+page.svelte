@@ -4,7 +4,7 @@
   import { onMount, tick } from "svelte";
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
-  import { SESSION_DEPENDENCY, loadPlayer } from "../../lib/auth";
+  import { SESSION_DEPENDENCY, hasPermission, loadPlayer } from "../../lib/auth";
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
   import { sessionStaff } from "../../lib/operating";
@@ -20,10 +20,14 @@
 
   const staff = $derived(sessionStaff(page.data));
 
+  let turn = 0;
+
   async function pick(id: string) {
     guest = false;
     failed = false;
+    const mine = ++turn;
     const outcome = await loadPlayer(id);
+    if (mine !== turn) return;
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     failed = outcome.kind !== "ok";
     profile = outcome.kind === "ok" ? outcome.value : null;
@@ -36,6 +40,7 @@
   async function close(username: string | null) {
     open = false;
     created = username;
+    if (username) void lookup?.search();
     await tick();
     trigger?.querySelector("button")?.focus();
   }
@@ -49,19 +54,21 @@
   <h1 class="type-hub-numeric" id="players-title">{t("hub.nav.players")}</h1>
   <p class="intro type-hub-body">{t("hub.players.intro")}</p>
 
-  <PlayerLookup
-    bind:this={lookup}
-    onpick={(hit) => void pick(hit.player_id)}
-    onguest={() => {
-      profile = null;
-      guest = true;
-    }}
-    oncreate={(phone) => {
-      prefill = phone;
-      created = null;
-      open = true;
-    }}
-  />
+  {#if hasPermission(staff, "player.view")}
+    <PlayerLookup
+      bind:this={lookup}
+      onpick={(hit) => void pick(hit.player_id)}
+      onguest={() => {
+        profile = null;
+        guest = true;
+      }}
+      oncreate={(phone) => {
+        prefill = phone;
+        created = null;
+        open = true;
+      }}
+    />
+  {/if}
 
   <div role="status" class="type-hub-label">
     {#if guest}{t("hub.players.lookup.guest_picked")}{/if}
@@ -114,12 +121,14 @@
   </p>
 
   {#if open}
-    <CreateProfile
-      {staff}
-      phone={prefill}
-      oncreated={(username) => void close(username)}
-      oncancel={() => void close(null)}
-    />
+    {#key prefill}
+      <CreateProfile
+        {staff}
+        phone={prefill}
+        oncreated={(username) => void close(username)}
+        oncancel={() => void close(null)}
+      />
+    {/key}
   {/if}
 </section>
 

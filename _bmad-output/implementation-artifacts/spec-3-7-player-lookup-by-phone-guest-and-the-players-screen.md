@@ -2,7 +2,7 @@
 title: 'Story 3.7: Player lookup by phone, Guest, and the Players screen'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_commit: '7d519de788ac9c4a78334be390d6d1918b6c99ca'
 baseline_revision: '7d519de788ac9c4a78334be390d6d1918b6c99ca'
 review_loop_iteration: 0

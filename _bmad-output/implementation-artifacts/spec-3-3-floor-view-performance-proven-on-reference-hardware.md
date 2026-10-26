@@ -2,7 +2,7 @@
 title: 'Story 3.3: Floor view performance proven on reference hardware'
 type: 'feature'
 created: '2026-10-26'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'c7ab93e'
 route: 'dispatch'
 context:

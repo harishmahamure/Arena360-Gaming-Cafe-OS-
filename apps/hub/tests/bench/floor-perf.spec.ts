@@ -166,12 +166,9 @@ test("floor with 60 devices meets the performance budgets", async ({ page }) => 
     await page.mouse.wheel(0, 120);
   }
   await page.waitForTimeout(500);
-  check(
-    "input to paint (max)",
-    max(await page.evaluate(() => window.__bench.inputs)),
-    INPUT_MS,
-    "ms",
-  );
+  const inputs = await page.evaluate(() => window.__bench.inputs);
+  if (inputs.length < N - 1) misses.push(`inputs painted: ${inputs.length} of at least ${N - 1}`);
+  check("input to paint (max)", max(inputs), INPUT_MS, "ms");
 
   if (SOAK_MIN > 0) {
     const cdp = await page.context().newCDPSession(page);

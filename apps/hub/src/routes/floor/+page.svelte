@@ -172,7 +172,9 @@
     "unassigned",
   ] as const;
   const stateOf = (d: SnapshotDevice) =>
-    groups.some((g) => g.id === d.group_id) ? BADGE[d.status ?? "offline"].state : "unassigned";
+    groups.some((g) => g.id === d.group_id)
+      ? (BADGE[d.status ?? "offline"] ?? BADGE.offline).state
+      : "unassigned";
   const counts = (members: SnapshotDevice[]) =>
     STATES.map((s) => [s, members.filter((d) => stateOf(d) === s).length] as const)
       .filter(([, n]) => n > 0)
@@ -436,11 +438,11 @@
   }
 
   .fold::before {
-    content: "▾";
+    content: "▾" / "";
   }
 
   .fold[aria-expanded="false"]::before {
-    content: "▸";
+    content: "▸" / "";
   }
 
   .devices {

@@ -2,7 +2,7 @@
 title: 'Story 3.4: Collapsible zones with per-state counts'
 type: 'feature'
 created: '2026-10-26'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'a8b0f6ed785dd69c9a459d1196250b811f7b84c3'
 review_loop_iteration: 0
 context:

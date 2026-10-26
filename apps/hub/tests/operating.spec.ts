@@ -89,6 +89,7 @@ function snapshot(hub: Hub): HubSnapshot {
       ad_consent: hub.adConsent,
       printer: "unset",
       products_count: 0,
+      groups_without_rate: 0,
     },
     lan: null,
     paired: true,

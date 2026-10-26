@@ -67,6 +67,7 @@ function snapshot(locked = false): HubSnapshot {
       ad_consent: "missing",
       printer: "unset",
       products_count: 0,
+      groups_without_rate: 0,
     },
     lan: null,
     paired: true,

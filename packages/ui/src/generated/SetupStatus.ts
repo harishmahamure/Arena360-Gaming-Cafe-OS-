@@ -8,4 +8,5 @@ export type SetupStatus = {
   ad_consent: AdConsentState;
   printer: PrinterState;
   products_count: number;
+  groups_without_rate: number;
 };

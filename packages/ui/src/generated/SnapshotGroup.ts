@@ -10,4 +10,5 @@ export type SnapshotGroup = {
   colour: string;
   sort_order: number;
   rev: number;
+  rate_minor?: number | null;
 };

@@ -7,7 +7,7 @@ use arena_store::{
 };
 
 use super::{
-    Target, devices, groups, maintenance, products, settings_set, staff_roles, stock, zones,
+    Target, devices, groups, maintenance, products, rates, settings_set, staff_roles, stock, zones,
 };
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
@@ -236,6 +236,10 @@ pub(super) fn mutate(
         },
         IntentPayload::StockInReverted(_) => match target {
             Target::Stock(t) => stock::mutate_revert(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::RateUpsert(r) => match target {
+            Target::Rate(t) => rates::mutate(tx, r, t),
             _ => Err(mismatch()),
         },
         IntentPayload::DeviceMaintenance(m) => match target {

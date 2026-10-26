@@ -56,6 +56,7 @@ pub fn build_snapshot(
                 colour: g.colour,
                 sort_order: g.sort_order,
                 rev: g.rev,
+                rate_minor: None,
             })
             .collect(),
         zones: zones
@@ -114,20 +115,28 @@ pub fn build_snapshot(
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, meta, groups, zones, locale, ui, setup) = store.read_consistent(|s| {
-        Ok((
-            s.branch_summary()?,
-            s.devices()?,
-            s.devices_meta()?,
-            s.groups()?,
-            s.zones()?,
-            read_locale(s, now_ms)?,
-            read_ui(s)?,
-            read_setup(s)?,
-        ))
-    })?;
+    let (branch, devices, meta, groups, rates, zones, locale, ui, setup) =
+        store.read_consistent(|s| {
+            Ok((
+                s.branch_summary()?,
+                s.devices()?,
+                s.devices_meta()?,
+                s.groups()?,
+                s.rates()?,
+                s.zones()?,
+                read_locale(s, now_ms)?,
+                read_ui(s)?,
+                read_setup(s)?,
+            ))
+        })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
+    for g in &mut snapshot.groups {
+        g.rate_minor = rates
+            .iter()
+            .find(|r| r.group_id == g.id)
+            .map(|r| r.price_per_hour_minor);
+    }
     snapshot.device_cap = Some(read_device_cap(&store.settings()?));
     Ok(snapshot)
 }
@@ -189,6 +198,7 @@ fn read_setup(store: &Store) -> Result<Option<SetupStatus>, AppError> {
         },
         crate::setup::hub_tier(),
         u32::try_from(store.products_count()?).unwrap_or(0),
+        u32::try_from(store.groups_without_rate()?).unwrap_or(0),
     )))
 }
 
@@ -477,6 +487,7 @@ mod tests {
                     ad_consent: arena_proto::AdConsentState::Missing,
                     printer: arena_proto::PrinterState::Unset,
                     products_count: 0,
+                    groups_without_rate: 0,
                 }),
                 lan: None,
                 paired: true,

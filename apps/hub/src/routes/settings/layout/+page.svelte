@@ -17,6 +17,8 @@
     newIdempotencyKey,
     submitIntent,
   } from "../../../lib/auth";
+  import { branchLocale } from "../../../lib/locale.svelte";
+  import { parsePrice, priceText } from "../../../lib/products";
   import { SNAPSHOT_DEPENDENCY } from "../../../lib/snapshot";
   import ZoneGrid from "./ZoneGrid.svelte";
 
@@ -70,6 +72,32 @@
   let zoneName = $state("");
   let zoneOrder = $state("");
   let zoneNameError: MessageKey | null = $state(null);
+  let rating: SnapshotGroup | null = $state(null);
+  let rateText = $state("");
+  let rateError: MessageKey | null = $state(null);
+
+  const exponent = $derived(branchLocale.current?.exponent ?? 2);
+  const symbol = $derived(branchLocale.current?.symbol ?? "");
+  const money = (minor: number) => {
+    const parts = [symbol, priceText(minor, exponent)];
+    return (branchLocale.current?.symbol_position === "after" ? parts.reverse() : parts).join("");
+  };
+
+  function startRate(group: SnapshotGroup | null) {
+    rating = group;
+    rateText = group?.rate_minor ? priceText(group.rate_minor, exponent) : "";
+    rateError = null;
+  }
+
+  function saveRate(event: SubmitEvent) {
+    event.preventDefault();
+    const minor = parsePrice(rateText, exponent);
+    if (!rating || !minor) return void (rateError = "hub.groups.rate_invalid");
+    rateError = null;
+    void run({
+      payload: { kind: "rate.upsert", group_id: rating.id, price_per_hour_minor: minor },
+    });
+  }
 
   function reset(group: SnapshotGroup | null = null) {
     editing = group;
@@ -103,6 +131,7 @@
     if (outcome.kind === "applied") {
       status = { tone: "ok", message: "hub.settings.saved" };
       if (job.payload.kind === "group.upsert") reset();
+      if (job.payload.kind === "rate.upsert") startRate(null);
       await invalidate(SNAPSHOT_DEPENDENCY);
       if (job.payload.kind === "zone.upsert") resetZone();
       if (job.payload.kind === "zone.delete" && editingZone?.id === job.payload.id) resetZone();
@@ -112,6 +141,10 @@
     if (error?.code === "PIN_REQUIRED") {
       approvalPrompt = "ui.pin.again";
       approving = job;
+      return;
+    }
+    if (error?.code === "VALIDATION_FAILED" && error.field === "price_per_hour_minor") {
+      rateError = "hub.groups.rate_invalid";
       return;
     }
     if (error?.code === "VALIDATION_FAILED" && error.field === "name") {
@@ -302,8 +335,18 @@
           >
             <GroupChip name={g.name} colour={g.colour} />
             <span class="type-hub-label">{kindLabel(g.kind)}</span>
+            <span class="rate type-hub-label" data-testid="group-rate">
+              {g.rate_minor
+                ? t("hub.groups.rate_value", { rate: money(g.rate_minor) })
+                : t("hub.groups.rate_none")}
+            </span>
           </div>
           <div class="actions">
+            <button
+              type="button"
+              class="ui-interactive btn type-hub-label"
+              onclick={() => startRate(g)}>{t("hub.groups.rate_edit", { name: g.name })}</button
+            >
             <button type="button" class="ui-interactive btn type-hub-label" onclick={() => reset(g)}
               >{t("hub.groups.edit", { name: g.name })}</button
             >
@@ -314,6 +357,25 @@
               >{t("hub.groups.delete", { name: g.name })}</button
             >
           </div>
+          {#if rating?.id === g.id}
+            <form class="rate-form" onsubmit={saveRate} data-testid="rate-form">
+              <TextField
+                label="hub.groups.rate"
+                bind:value={rateText}
+                error={rateError}
+                inputmode="decimal"
+                required
+              />
+              <div class="actions">
+                <Button label="hub.groups.rate_save" type="submit" />
+                <Button
+                  label="hub.groups.rate_cancel"
+                  variant="secondary"
+                  onclick={() => startRate(null)}
+                />
+              </div>
+            </form>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -422,6 +484,16 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
     background-color: var(--surface);
+  }
+
+  .rate {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rate-form {
+    display: grid;
+    flex-basis: 100%;
+    gap: var(--space-3);
   }
 
   .drop {

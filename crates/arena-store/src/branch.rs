@@ -44,11 +44,12 @@ pub enum Table {
     Stock,
     StockLots,
     StockMoves,
+    Rates,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 17] = [
+    pub const ALL: [Table; 18] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -66,6 +67,7 @@ impl Table {
         Table::Stock,
         Table::StockLots,
         Table::StockMoves,
+        Table::Rates,
     ];
 
     /// The SQL table name.
@@ -88,6 +90,7 @@ impl Table {
             Self::Stock => "stock",
             Self::StockLots => "stock_lots",
             Self::StockMoves => "stock_moves",
+            Self::Rates => "rates",
         }
     }
 
@@ -111,6 +114,7 @@ impl Table {
             Self::Stock => &["product_id"],
             Self::StockLots => &["lot_id"],
             Self::StockMoves => &["move_id"],
+            Self::Rates => &["rate_id"],
         }
     }
 
@@ -130,7 +134,8 @@ impl Table {
             | Self::Products
             | Self::Stock
             | Self::StockLots
-            | Self::StockMoves => true,
+            | Self::StockMoves
+            | Self::Rates => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -204,6 +209,9 @@ pub enum RowKey {
     StockMoves {
         move_id: String,
     },
+    Rates {
+        rate_id: String,
+    },
 }
 
 impl RowKey {
@@ -226,6 +234,7 @@ impl RowKey {
             Self::Stock { .. } => Table::Stock,
             Self::StockLots { .. } => Table::StockLots,
             Self::StockMoves { .. } => Table::StockMoves,
+            Self::Rates { .. } => Table::Rates,
         }
     }
 
@@ -255,6 +264,7 @@ impl RowKey {
             Self::Stock { product_id } => product_id.clone(),
             Self::StockLots { lot_id } => lot_id.clone(),
             Self::StockMoves { move_id } => move_id.clone(),
+            Self::Rates { rate_id } => rate_id.clone(),
         }
     }
 
@@ -320,6 +330,9 @@ impl RowKey {
             Table::StockMoves => Self::StockMoves {
                 move_id: text("move_id")?,
             },
+            Table::Rates => Self::Rates {
+                rate_id: text("rate_id")?,
+            },
         })
     }
 
@@ -348,6 +361,7 @@ impl RowKey {
             Self::Stock { product_id } => vec![product_id],
             Self::StockLots { lot_id } => vec![lot_id],
             Self::StockMoves { move_id } => vec![move_id],
+            Self::Rates { rate_id } => vec![rate_id],
         }
     }
 }

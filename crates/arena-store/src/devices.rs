@@ -385,6 +385,77 @@ pub fn set_group_deleted(conn: &Connection, group_id: &str, at_ms: i64) -> Resul
     expect_one(n, group_id)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateRow {
+    pub rate_id: String,
+    pub group_id: String,
+    pub price_per_hour_minor: i64,
+}
+
+fn rate_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<RateRow> {
+    Ok(RateRow {
+        rate_id: r.get(0)?,
+        group_id: r.get(1)?,
+        price_per_hour_minor: r.get(2)?,
+    })
+}
+
+pub fn find_active_rate(conn: &Connection, group_id: &str) -> Result<Option<RateRow>, AppError> {
+    conn.query_row(
+        "SELECT rate_id, group_id, price_per_hour_minor FROM rates
+         WHERE group_id = ?1 AND active = 1",
+        [group_id],
+        rate_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn list_active_rates(conn: &Connection) -> Result<Vec<RateRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT rate_id, group_id, price_per_hour_minor FROM rates WHERE active = 1
+             ORDER BY group_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], rate_from).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+pub fn count_groups_without_rate(conn: &Connection) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM device_groups g
+         WHERE g.deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM rates r WHERE r.group_id = g.group_id AND r.active = 1)",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+pub fn insert_rate(
+    conn: &Connection,
+    rate_id: &str,
+    group_id: &str,
+    price_per_hour_minor: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO rates (rate_id, group_id, price_per_hour_minor, active, rev, created_at,
+                            updated_at)
+         VALUES (?1, ?2, ?3, 1, 0, 0, 0)",
+        params![rate_id, group_id, price_per_hour_minor],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn deactivate_rate(conn: &Connection, rate_id: &str) -> Result<(), AppError> {
+    let n = conn
+        .execute("UPDATE rates SET active = 0 WHERE rate_id = ?1", [rate_id])
+        .map_err(db_error)?;
+    expect_one(n, rate_id)
+}
+
 pub fn set_device_group(
     conn: &Connection,
     device_id: &str,

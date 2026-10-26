@@ -50,13 +50,15 @@ pub use dedupe::{
     insert_applied_intent, prune_applied_intents,
 };
 pub use devices::{
-    DeviceMetaRow, DeviceRow, GroupRow, NewDevice, ZoneRow, cell_taken, count_group_devices,
-    count_live_devices, count_zone_devices, devices_meta_exists, find_device, find_device_meta,
+    DeviceMetaRow, DeviceRow, GroupRow, NewDevice, RateRow, ZoneRow, cell_taken,
+    count_group_devices, count_groups_without_rate, count_live_devices, count_zone_devices,
+    deactivate_rate, devices_meta_exists, find_active_rate, find_device, find_device_meta,
     find_group, find_group_by_name, find_zone, find_zone_by_name, insert_device,
-    insert_device_meta, insert_group, insert_zone, list_device_meta, list_devices, list_groups,
-    list_zones, set_device_group, set_device_label, set_device_meta_deleted, set_device_place,
-    set_device_reported_version, set_device_revoked, set_device_state, set_group_deleted,
-    set_zone_deleted, tv_number_taken, update_device_meta, update_group, update_zone,
+    insert_device_meta, insert_group, insert_rate, insert_zone, list_active_rates,
+    list_device_meta, list_devices, list_groups, list_zones, set_device_group, set_device_label,
+    set_device_meta_deleted, set_device_place, set_device_reported_version, set_device_revoked,
+    set_device_state, set_group_deleted, set_zone_deleted, tv_number_taken, update_device_meta,
+    update_group, update_zone,
 };
 pub use identity::{
     CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
@@ -553,6 +555,20 @@ impl Store {
             return Ok(Vec::new());
         }
         list_groups(&self.conn)
+    }
+
+    pub fn rates(&self) -> Result<Vec<RateRow>, AppError> {
+        if !self.table_exists("rates")? {
+            return Ok(Vec::new());
+        }
+        list_active_rates(&self.conn)
+    }
+
+    pub fn groups_without_rate(&self) -> Result<i64, AppError> {
+        if !self.table_exists("rates")? {
+            return Ok(0);
+        }
+        count_groups_without_rate(&self.conn)
     }
 
     pub fn zones(&self) -> Result<Vec<ZoneRow>, AppError> {

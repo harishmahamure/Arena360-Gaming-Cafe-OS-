@@ -20,6 +20,7 @@ import type { LicenceApply } from "./LicenceApply";
 import type { PrinterStatusSet } from "./PrinterStatusSet";
 import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
+import type { RateUpsert } from "./RateUpsert";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffSetCredentials } from "./StaffSetCredentials";
@@ -61,4 +62,5 @@ export type IntentPayload =
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
   | ({ kind: "stock.in" } & StockIn)
   | ({ kind: "stock.in.reverted" } & StockInReverted)
-  | ({ kind: "device.maintenance" } & DeviceMaintenance);
+  | ({ kind: "device.maintenance" } & DeviceMaintenance)
+  | ({ kind: "rate.upsert" } & RateUpsert);

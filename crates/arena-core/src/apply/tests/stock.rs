@@ -2,14 +2,14 @@ use super::*;
 use crate::rbac::{ROLE_COUNTER, ROLE_KITCHEN};
 use arena_proto::{ProductDelete, ProductUpsert, StaffUpsert, StockIn, StockInReverted};
 
-fn owner() -> Actor {
+pub(super) fn owner() -> Actor {
     Actor {
         kind: ActorKind::Owner,
         id: "o".into(),
     }
 }
 
-fn intent(actor: Actor, payload: IntentPayload) -> Intent {
+pub(super) fn intent(actor: Actor, payload: IntentPayload) -> Intent {
     Intent {
         kind: payload.kind(),
         payload,
@@ -48,7 +48,7 @@ async fn make(f: &Fixture, u: ProductUpsert) -> String {
         .clone()
 }
 
-async fn staff(f: &Fixture, login: &str, role: &str) -> Actor {
+pub(super) async fn staff(f: &Fixture, login: &str, role: &str) -> Actor {
     let rid = match reopen(f)
         .rows(Table::Roles)
         .unwrap()

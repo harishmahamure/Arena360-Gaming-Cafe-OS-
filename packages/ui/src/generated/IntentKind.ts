@@ -33,4 +33,5 @@ export type IntentKind =
   | "staff.set_credentials"
   | "stock.in"
   | "stock.in.reverted"
-  | "device.maintenance";
+  | "device.maintenance"
+  | "rate.upsert";

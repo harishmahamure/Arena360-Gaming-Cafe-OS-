@@ -19,6 +19,7 @@ use crate::status::{HubStatus, LeaseInfo, status_channel};
 use crate::writer::{Writer, WriterHandle};
 
 mod commands;
+mod rates;
 mod stock;
 
 const T0: i64 = 1_800_000_000_000;
@@ -4388,6 +4389,7 @@ mod operating {
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             }
         );
         let manager = staff(&f, "manager", ROLE_MANAGER).await;
@@ -4407,6 +4409,7 @@ mod operating {
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             }
         );
         f.writer
@@ -4429,6 +4432,7 @@ mod operating {
                 ad_consent: AdConsentState::Given,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             }
         );
         save(&f, "system.backup_dir", "").await.unwrap();
@@ -4469,6 +4473,7 @@ mod operating {
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             },
         )
         .await;
@@ -4481,6 +4486,7 @@ mod operating {
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             },
         )
         .await;
@@ -4506,6 +4512,7 @@ mod operating {
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Skipped,
                 products_count: 0,
+                groups_without_rate: 0,
             },
         )
         .await;
@@ -4518,6 +4525,7 @@ mod operating {
                 ad_consent: AdConsentState::Missing,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             },
         )
         .await;

@@ -36,6 +36,7 @@ mod maintenance;
 mod mutate;
 mod printer_status;
 mod products;
+mod rates;
 mod read_grants;
 pub(crate) mod seed_defaults;
 mod settings_set;
@@ -139,6 +140,7 @@ pub(crate) enum Target {
     Credentials(Option<arena_store::StaffRow>),
     Stock(Box<stock::StockTarget>),
     Maintenance(Box<maintenance::MaintenanceTarget>),
+    Rate(Box<rates::RateTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -165,6 +167,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::DeviceMaintenance(_) => {
             Target::Maintenance(Box::new(maintenance::load(tx, &intent.payload)?))
         }
+        P::RateUpsert(_) => Target::Rate(Box::new(rates::load(tx, &intent.payload)?)),
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
         }

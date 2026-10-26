@@ -94,9 +94,9 @@ pub use intent::{
     AuditReadGranted, BootstrapOnboarding, BranchBootstrap, BranchSeedDefaults, DeviceAssign,
     DeviceMaintenance, DevicePlace, DeviceRegister, DeviceRevoke, DeviceVersionReported,
     FLOOR_COLS, FLOOR_ROWS, GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert, Intent,
-    IntentCategory, IntentKind, IntentPayload, MAINTENANCE_NOTE_MAX, PermEffect, ReasonCode,
-    RolePerm, RoleUpsert, SettingsSet, StaffSetCredentials, StaffUpsert, ZoneDelete, ZoneUpsert,
-    reasons_json,
+    IntentCategory, IntentKind, IntentPayload, MAINTENANCE_NOTE_MAX, PermEffect, RATE_MAX_MINOR,
+    RateUpsert, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffSetCredentials, StaffUpsert,
+    ZoneDelete, ZoneUpsert, reasons_json,
 };
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,

@@ -299,9 +299,19 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
                         device_id: kiosk.clone(),
-                        group_id: Some(group),
+                        group_id: Some(group.clone()),
                     }),
                     Some(1),
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                        group_id: group,
+                        price_per_hour_minor: 12_000,
+                    }),
+                    None,
                 ))
                 .await
                 .unwrap();

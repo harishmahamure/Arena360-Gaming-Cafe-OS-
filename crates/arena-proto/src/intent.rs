@@ -113,11 +113,13 @@ pub enum IntentKind {
     StockInReverted,
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance,
+    #[serde(rename = "rate.upsert")]
+    RateUpsert,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 30] = [
+    pub const ALL: [IntentKind; 31] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -148,6 +150,7 @@ impl IntentKind {
         Self::StockIn,
         Self::StockInReverted,
         Self::DeviceMaintenance,
+        Self::RateUpsert,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -183,6 +186,7 @@ impl IntentKind {
             Self::StockIn => "stock.in",
             Self::StockInReverted => "stock.in.reverted",
             Self::DeviceMaintenance => "device.maintenance",
+            Self::RateUpsert => "rate.upsert",
         }
     }
 
@@ -210,7 +214,8 @@ impl IntentKind {
             | Self::ZoneUpsert
             | Self::ZoneDelete
             | Self::DevicePlace
-            | Self::DeviceMaintenance => IntentCategory::Device,
+            | Self::DeviceMaintenance
+            | Self::RateUpsert => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert | Self::StaffSetCredentials => {
                 IntentCategory::Staff
@@ -238,7 +243,8 @@ impl IntentKind {
             | Self::ZoneUpsert
             | Self::ZoneDelete
             | Self::DevicePlace
-            | Self::DeviceMaintenance => Requirement::Perm(Permission::DeviceManage),
+            | Self::DeviceMaintenance
+            | Self::RateUpsert => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
             Self::DeviceVersionReported | Self::LicenceApply | Self::StaffSetCredentials => {
                 Requirement::System
@@ -305,7 +311,7 @@ impl IntentKind {
             | Self::StaffSetCredentials
             | Self::StockIn
             | Self::StockInReverted => None,
-            Self::DeviceMaintenance => None,
+            Self::DeviceMaintenance | Self::RateUpsert => None,
         }
     }
 
@@ -647,6 +653,18 @@ pub struct DeviceMaintenance {
 }
 
 pub const MAINTENANCE_NOTE_MAX: usize = 200;
+
+/// The payload of `rate.upsert`: the group's hourly postpaid rate in the branch currency's
+/// minor units. A change deactivates the group's active rate and adds the new one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RateUpsert {
+    pub group_id: String,
+    #[ts(type = "number")]
+    pub price_per_hour_minor: i64,
+}
+
+pub const RATE_MAX_MINOR: i64 = 999_999_999_999;
 pub const FLOOR_COLS: i64 = 12;
 pub const FLOOR_ROWS: i64 = 8;
 pub const GROUP_KINDS: [&str; 4] = ["pc", "console", "vr", "other"];
@@ -715,6 +733,8 @@ pub enum IntentPayload {
     StockInReverted(crate::StockInReverted),
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance(DeviceMaintenance),
+    #[serde(rename = "rate.upsert")]
+    RateUpsert(RateUpsert),
 }
 
 impl IntentPayload {
@@ -750,6 +770,7 @@ impl IntentPayload {
             Self::StockIn(_) => IntentKind::StockIn,
             Self::StockInReverted(_) => IntentKind::StockInReverted,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
+            Self::RateUpsert(_) => IntentKind::RateUpsert,
         }
     }
 }
@@ -925,6 +946,22 @@ mod tests {
     }
 
     #[test]
+    fn rate_payload_round_trips() {
+        let p: IntentPayload = serde_json::from_value(
+            serde_json::json!({"kind": "rate.upsert", "group_id": "G", "price_per_hour_minor": 12000}),
+        )
+        .unwrap();
+        assert_eq!(
+            p,
+            IntentPayload::RateUpsert(RateUpsert {
+                group_id: "G".into(),
+                price_per_hour_minor: 12000
+            })
+        );
+        assert_eq!(p.kind().as_str(), "rate.upsert");
+    }
+
+    #[test]
     fn every_kind_has_exactly_one_requirement() {
         let mut seen = std::collections::HashSet::new();
         for kind in IntentKind::ALL {
@@ -940,9 +977,8 @@ mod tests {
                     Requirement::Perm(Permission::SettingsEdit)
                 }
                 "device.register" | "group.upsert" | "group.delete" | "device.assign"
-                | "zone.upsert" | "zone.delete" | "device.place" | "device.maintenance" => {
-                    Requirement::Perm(Permission::DeviceManage)
-                }
+                | "zone.upsert" | "zone.delete" | "device.place" | "device.maintenance"
+                | "rate.upsert" => Requirement::Perm(Permission::DeviceManage),
                 "device.revoke" | "device.admin_unlock" => {
                     Requirement::Perm(Permission::DeviceRemote)
                 }

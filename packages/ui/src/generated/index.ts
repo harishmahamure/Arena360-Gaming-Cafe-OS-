@@ -141,6 +141,7 @@ export type { ProcessRule } from "./ProcessRule";
 export type { Product } from "./Product";
 export type { ProductDelete } from "./ProductDelete";
 export type { ProductUpsert } from "./ProductUpsert";
+export type { RateUpsert } from "./RateUpsert";
 export type { ReasonCode } from "./ReasonCode";
 export type { RolePerm } from "./RolePerm";
 export type { RoleUpsert } from "./RoleUpsert";

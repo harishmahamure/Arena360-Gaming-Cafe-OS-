@@ -214,6 +214,9 @@ pub struct SnapshotGroup {
     pub sort_order: i64,
     #[ts(type = "number")]
     pub rev: i64,
+    #[serde(default)]
+    #[ts(type = "number | null", optional)]
+    pub rate_minor: Option<i64>,
 }
 
 /// One floor zone.

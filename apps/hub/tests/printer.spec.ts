@@ -106,6 +106,7 @@ function snapshot(hub: Hub): HubSnapshot {
       ad_consent: "missing",
       printer: printerState(hub),
       products_count: 0,
+      groups_without_rate: 0,
     },
   };
 }

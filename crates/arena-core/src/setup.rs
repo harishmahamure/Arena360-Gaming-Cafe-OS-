@@ -25,6 +25,7 @@ pub fn setup_status<'a>(
     value: impl Fn(&str) -> Option<&'a str>,
     tier: HubTier,
     products_count: u32,
+    groups_without_rate: u32,
 ) -> SetupStatus {
     let ad_consent = match tier {
         HubTier::Paid => AdConsentState::NotNeeded,
@@ -41,6 +42,7 @@ pub fn setup_status<'a>(
             .and_then(PrinterStatus::parse)
             .map_or(PrinterState::Unset, |s| s.state),
         products_count,
+        groups_without_rate,
     }
 }
 
@@ -132,6 +134,7 @@ mod tests {
             |k| rows.iter().find(|(key, _)| *key == k).map(|(_, v)| *v),
             tier,
             0,
+            0,
         )
     }
 
@@ -150,6 +153,7 @@ mod tests {
                 ad_consent: AdConsentState::Missing,
                 printer: PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             }
         );
         let given = r#"{"given":true,"at":1,"staff_id":"S"}"#;
@@ -170,6 +174,7 @@ mod tests {
                 ad_consent: AdConsentState::Given,
                 printer: PrinterState::Skipped,
                 products_count: 0,
+                groups_without_rate: 0,
             }
         );
         assert_eq!(
@@ -197,6 +202,7 @@ mod tests {
                 ad_consent: AdConsentState::Missing,
                 printer: PrinterState::Unset,
                 products_count: 0,
+                groups_without_rate: 0,
             }
         );
         for (value, state) in [

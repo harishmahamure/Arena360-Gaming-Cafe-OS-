@@ -2244,3 +2244,60 @@ async fn go_live_needs_every_required_item_then_queues_one_command() {
     let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
     assert_eq!(view.body["live"], true);
 }
+
+#[tokio::test]
+async fn a_paid_branch_goes_live_without_ad_consent_and_a_live_one_stays_live() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    h.db.grant_comp(&CompGrant {
+        branch_id: &branch,
+        tier: Tier::Basic,
+        until: T0 + 30 * 24 * 60 * 60 * 1000,
+        audit_id: "audit-1",
+        operator: "ops",
+        reason: "beta cafe",
+        details_json: "{}",
+        now: T0,
+    })
+    .await
+    .unwrap();
+    let token = h.paired_and_seen(&a).await;
+    let mut s = setup_status("ok");
+    s["opening_hours_set"] = true.into();
+    s["backup_location_set"] = true.into();
+    s["test_session"] = "passed".into();
+    h.advance(6_000);
+    h.beat_with(
+        &token,
+        json!({"devices": [pc(json!("G1"))], "groups": [rated_group(true)], "status": s}),
+    )
+    .await;
+    for kind in ["products", "staff"] {
+        let path = format!("/v1/wizard/{kind}/skip");
+        h.call("POST", &path, Some(json!({})), &a).await;
+    }
+    let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
+    assert_eq!(view.body["free"], false);
+    assert_eq!(view.body["blocker"], Value::Null);
+    assert!(
+        view.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["key"] != "ad_consent")
+    );
+    let r = h
+        .call("POST", "/v1/wizard/go-live", Some(json!({})), &a)
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    h.advance(6_000);
+    h.beat_with(
+        &token,
+        json!({"devices": [pc(json!("G1"))], "groups": [rated_group(true)], "status": setup_status("ok")}),
+    )
+    .await;
+    let r = h
+        .call("POST", "/v1/wizard/go-live", Some(json!({})), &a)
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}

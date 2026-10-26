@@ -53,6 +53,7 @@
   async function refresh() {
     const res = await getGoLive();
     if (res.ok) view = res.data;
+    else if (!view) error = "onboarding.golive.error";
   }
 
   async function go() {
@@ -89,6 +90,9 @@
 {:else}
   <h1 tabindex="-1">{t(STEP_NAMES.go_live)}</h1>
   <p>{t("onboarding.golive.intro")}</p>
+  {#if error}
+    <p class="form-error" role="alert"><span aria-hidden="true">⚠</span> {t(error)}</p>
+  {/if}
   {#if view}
     <ul data-testid="golive-list">
       {#each view.items as item (item.key)}
@@ -104,9 +108,6 @@
         </li>
       {/each}
     </ul>
-    {#if error}
-      <p class="form-error" role="alert"><span aria-hidden="true">⚠</span> {t(error)}</p>
-    {/if}
     <Button
       label="onboarding.golive.button"
       disabled={busy || !!view.blocker}

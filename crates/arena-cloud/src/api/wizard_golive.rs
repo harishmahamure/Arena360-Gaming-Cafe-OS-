@@ -124,13 +124,13 @@ async fn post_go_live(
     let owner_id = &signed.owner.id;
     let branch = ready_branch(&st, owner_id, body.branch_id.as_deref()).await?;
     let go = view(&st, &branch).await?;
-    if go.blocker.is_some() {
-        return Err(ApiError::validation(
-            "go_live",
-            "Finish the items listed above before you go live.",
-        ));
-    }
     if !go.live {
+        if go.blocker.is_some() {
+            return Err(ApiError::validation(
+                "go_live",
+                "Finish the items listed above before you go live.",
+            ));
+        }
         submit_command(
             &st,
             &branch.id,

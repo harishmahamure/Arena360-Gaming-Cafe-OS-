@@ -2,7 +2,7 @@
 title: 'Story 2.31: Step 10 — go-live checklist marks the branch live'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: 'be4a8b94d7a79fefe96f973e59fc4525c4b3227e'
 review_loop_iteration: 0
 followup_review_recommended: false

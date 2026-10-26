@@ -4563,6 +4563,11 @@ mod operating {
             },
         )
         .await;
+        save(&f, "setup.live", "true").await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx.wait_for(|s| s.live))
+            .await
+            .expect("published")
+            .unwrap();
         job.abort();
     }
 }

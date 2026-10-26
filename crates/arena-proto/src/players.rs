@@ -5,6 +5,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::stock::valid_date;
 
 pub const PLAYER_PASSWORD_MIN_CHARS: usize = 6;
+pub const PLAYER_PASSWORD_MAX_CHARS: usize = 128;
 pub const PLAYER_USERNAME_MIN_CHARS: usize = 3;
 pub const PLAYER_USERNAME_MAX_CHARS: usize = 32;
 pub const PLAYER_NAME_MAX_CHARS: usize = 80;
@@ -127,11 +128,10 @@ impl PlayerForm {
                 "username must be 3-32 characters: letters, digits, dot, dash or underscore",
             ));
         }
-        if self.password.chars().count() < PLAYER_PASSWORD_MIN_CHARS {
-            return Err(invalid(
-                "password",
-                "password must be at least 6 characters",
-            ));
+        if !(PLAYER_PASSWORD_MIN_CHARS..=PLAYER_PASSWORD_MAX_CHARS)
+            .contains(&self.password.chars().count())
+        {
+            return Err(invalid("password", "password must be 6 to 128 characters"));
         }
         if !valid_phone(&normalize_phone(&self.phone)) {
             return Err(invalid(
@@ -197,10 +197,11 @@ mod tests {
     #[test]
     fn each_rule_names_its_field() {
         type Edit = fn(&mut PlayerForm);
-        let cases: [(&str, Edit); 10] = [
+        let cases: [(&str, Edit); 11] = [
             ("username", |f| f.username = "ab".into()),
             ("username", |f| f.username = "a b c".into()),
             ("password", |f| f.password = "12345".into()),
+            ("password", |f| f.password = "x".repeat(129)),
             ("phone", |f| f.phone = "+91 12".into()),
             ("phone", |f| f.phone = "9876543210".into()),
             ("name", |f| f.name = "  ".into()),

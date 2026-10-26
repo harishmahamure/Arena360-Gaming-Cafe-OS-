@@ -2031,16 +2031,23 @@ async fn players(
             "this hub has no key store for profiles",
         )));
     };
+    if elevation_ticket.is_none() && !me.permissions.contains(&Permission::PlayerManage) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            "creating a profile needs a manager's PIN",
+        )));
+    }
     let now = auth.clock.now_ms();
     if let Err(e) = form.check(&arena_core::players::utc_day(now)) {
         return fail(ui_error(e));
     }
-    let Ok(_permit) = Arc::clone(&auth.pin_checks).acquire_owned().await else {
+    let Ok(permit) = Arc::clone(&auth.pin_checks).acquire_owned().await else {
         return fail(internal());
     };
     let player_id = ulid::Ulid::generate().to_string();
     let id = player_id.clone();
     let sealed = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         let hash = arena_core::staff::hash_secret(&form.password)?;
         arena_core::players::seal(&kek.kek()?, &form, &id, hash)
     })

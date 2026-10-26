@@ -1344,7 +1344,7 @@
   "hub.players.created": "Profile created for {username}.",
   "hub.players.approves": "A manager's PIN approves this profile.",
   "hub.players.invalid.username": "Use 3 to 32 characters: letters, digits, dot, dash or underscore.",
-  "hub.players.invalid.password": "Use at least 6 characters.",
+  "hub.players.invalid.password": "Use 6 to 128 characters.",
   "hub.players.invalid.phone": "Start with + and use 8 to 15 digits.",
   "hub.players.invalid.name": "Use 1 to 80 characters.",
   "hub.players.invalid.email": "Use an email with one @.",

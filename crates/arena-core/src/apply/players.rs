@@ -119,7 +119,7 @@ pub(super) fn mutate(
             tags,
         },
     )?;
-    let consent_id = ulid::Ulid::generate().to_string();
+    let consent_id = format!("{}:{CONSENT_TRANSACTIONAL}", p.player_id);
     insert_consent(
         tx,
         &consent_id,

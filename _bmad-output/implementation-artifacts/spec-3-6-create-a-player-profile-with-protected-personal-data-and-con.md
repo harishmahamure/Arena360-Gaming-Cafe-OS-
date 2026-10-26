@@ -2,7 +2,7 @@
 title: 'Story 3.6: Create a player profile with protected personal data and consent'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_commit: '1bc0ba31a1ac106281dc761aabddfc369e173484'
 review_loop_iteration: 0
 followup_review_recommended: false

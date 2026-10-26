@@ -54,7 +54,8 @@
     if (!/^[a-z0-9._-]{3,32}$/.test(form.username.trim().toLowerCase())) {
       bad.username = INVALID.username;
     }
-    if ([...form.password].length < 6) bad.password = INVALID.password;
+    const pw = [...form.password].length;
+    if (pw < 6 || pw > 128) bad.password = INVALID.password;
     if (!/^\+\d{8,15}$/.test(form.phone.replace(/[ -]/g, ""))) bad.phone = INVALID.phone;
     const name = [...form.name.trim()];
     if (name.length < 1 || name.length > 80) bad.name = INVALID.name;

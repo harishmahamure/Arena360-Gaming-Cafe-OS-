@@ -134,7 +134,7 @@ async fn heartbeat(
             .await
             .map_err(ApiError::internal)?;
         st.db
-            .record_setup(&hub.branch_id, &json, setup.grouped(), now)
+            .record_setup(&hub.branch_id, &json, setup, now)
             .await
             .map_err(ApiError::internal)?;
         changed |= before.is_none_or(|(b, _)| b != json);

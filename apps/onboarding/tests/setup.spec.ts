@@ -89,10 +89,14 @@ test.describe("routes", () => {
   test("a step without its story yet says it is coming soon", async ({ page }) => {
     await stubCloud(page, {
       ...ready,
-      wizard: { branch: {}, done: ["cafe", "tier", "install_hub", "devices"] },
+      wizard: {
+        branch: {},
+        done: ["cafe", "tier", "install_hub", "devices", "rates", "products", "staff"],
+        skipped: ["printer_payments"],
+      },
     });
     await page.goto("/setup");
-    await expect(page).toHaveURL(/\/setup\/rates$/);
+    await expect(page).toHaveURL(/\/setup\/test_session$/);
     await expect(page.getByText(t("onboarding.setup.coming_soon"))).toBeVisible();
   });
 

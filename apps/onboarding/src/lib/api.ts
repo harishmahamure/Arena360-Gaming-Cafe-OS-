@@ -237,6 +237,10 @@ export const newStaffCode = (id: string) =>
   withRefresh(() => call<StaffInvited>("POST", `/wizard/staff/${encodeURIComponent(id)}/code`, {}));
 export const skipStaff = () =>
   withRefresh(() => call<WizardState>("POST", "/wizard/staff/skip", {}));
+export const skipProducts = () =>
+  withRefresh(() => call<WizardState>("POST", "/wizard/products/skip", {}));
+export const skipPrinter = () =>
+  withRefresh(() => call<WizardState>("POST", "/wizard/printer-payments/skip", {}));
 export const getDevices = () => withRefresh(() => call<SetupDevicesView>("GET", "/wizard/devices"));
 export const sendDeviceCommand = (kind: string, payload: unknown) =>
   withRefresh(() => call<SetupCommandView>("POST", "/wizard/devices", { kind, payload }));

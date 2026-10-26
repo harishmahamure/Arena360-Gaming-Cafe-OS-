@@ -598,7 +598,16 @@ mod tests {
                 "version": "0.2.0",
                 "schema_version": 12,
                 "last_seq_uploaded": 0,
-                "setup": {"devices": [], "groups": []}
+                "setup": {"devices": [], "groups": [], "status": {
+                    "opening_hours_set": false,
+                    "backup_location_set": false,
+                    "ad_consent": "missing",
+                    "printer": "unset",
+                    "products_count": 0,
+                    "groups_without_rate": 0,
+                    "manager_exists": false,
+                    "test_session": "unset"
+                }}
             })
         );
     }

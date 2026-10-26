@@ -117,11 +117,11 @@ impl ControlDb {
         rows.first().map(|r| invite_from(r)).transpose()
     }
 
-    pub async fn skip_staff_step(&self, branch_id: &str) -> Result<(), ControlError> {
+    pub async fn skip_step(&self, branch_id: &str, step: &str) -> Result<(), ControlError> {
         self.execute(
             "UPDATE onboarding_progress SET state = 'skipped' \
-             WHERE branch_id = ? AND step = 'staff' AND state = 'pending'",
-            vec![text(branch_id)],
+             WHERE branch_id = ? AND step = ? AND state = 'pending'",
+            vec![text(branch_id), text(step)],
         )
         .await?;
         Ok(())

@@ -4390,6 +4390,8 @@ mod operating {
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
+                manager_exists: false,
+                test_session: Default::default(),
             }
         );
         let manager = staff(&f, "manager", ROLE_MANAGER).await;
@@ -4410,6 +4412,8 @@ mod operating {
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
+                manager_exists: true,
+                test_session: Default::default(),
             }
         );
         f.writer
@@ -4433,6 +4437,8 @@ mod operating {
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
+                manager_exists: true,
+                test_session: Default::default(),
             }
         );
         save(&f, "system.backup_dir", "").await.unwrap();
@@ -4474,6 +4480,8 @@ mod operating {
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
+                manager_exists: false,
+                test_session: Default::default(),
             },
         )
         .await;
@@ -4487,6 +4495,8 @@ mod operating {
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
+                manager_exists: false,
+                test_session: Default::default(),
             },
         )
         .await;
@@ -4513,6 +4523,8 @@ mod operating {
                 printer: arena_proto::PrinterState::Skipped,
                 products_count: 0,
                 groups_without_rate: 0,
+                manager_exists: true,
+                test_session: Default::default(),
             },
         )
         .await;
@@ -4526,6 +4538,8 @@ mod operating {
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
+                manager_exists: true,
+                test_session: Default::default(),
             },
         )
         .await;

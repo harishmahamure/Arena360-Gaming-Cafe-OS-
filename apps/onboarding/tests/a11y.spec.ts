@@ -219,6 +219,49 @@ const VIEWS: {
       await expect(h1(page, "ui.wizard.step.rates")).toBeVisible();
     },
   },
+  ...(
+    [
+      ["rates", ["devices"]],
+      ["products", ["devices", "rates"]],
+      ["printer_payments", ["devices", "rates", "products", "staff"]],
+    ] as const
+  ).map(([step, done]) => ({
+    name: `setup, ${step} with the Hub offline`,
+    cloud: {
+      signedIn: true,
+      owner: READY_OWNER,
+      wizard: {
+        branch: {},
+        done: ["cafe", "tier", "install_hub", ...done],
+        hubPaired: true,
+        devices: {
+          hub_online: false,
+          reported_at: Date.now() - 180_000,
+          setup: {
+            devices: [],
+            groups: [
+              { id: "G1", name: "Gaming", kind: "pc", colour: "teal", sort: 0, has_rate: false },
+            ],
+            status: {
+              opening_hours_set: false,
+              backup_location_set: false,
+              ad_consent: "missing" as const,
+              printer: "failed" as const,
+              products_count: 0,
+              groups_without_rate: 1,
+              manager_exists: false,
+              test_session: "unset" as const,
+            },
+          },
+        },
+      },
+    },
+    open: async (page: Page) => {
+      await page.goto(`/setup/${step}`);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      if (step !== "products") await expect(page.getByTestId("hub-offline")).toBeVisible();
+    },
+  })),
   {
     name: "setup, install the Hub with a live code",
     cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {}, done: ["cafe", "tier"] } },

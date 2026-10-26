@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arena_proto::{
     AppError, COMMAND_SCHEMA_VERSION, CommandStatus, ErrorCode, InviteRole, InviteStatus,
     IssuePairingCode, SETUP_CODE_HUB_TTL_MS, StaffInvite, StaffInviteView, StaffInvited,
-    StaffInvites, WizardState,
+    StaffInvites, WizardState, WizardStep,
 };
 use arena_store::control::{Branch, NewCommand, NewStaffInvite, RateRule, StaffInviteRow};
 use axum::extract::{Path, Query, State};
@@ -261,17 +261,26 @@ async fn post_code(
     invited(&st, &branch.id, &id, issued.code).await
 }
 
+pub(super) async fn skip(
+    st: &AuthState,
+    owner_id: &str,
+    body: IssuePairingCode,
+    step: WizardStep,
+) -> Result<Json<WizardState>, ApiError> {
+    let branch = ready_branch(st, owner_id, body.branch_id.as_deref()).await?;
+    st.db
+        .skip_step(&branch.id, step.as_str())
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(wizard_state(st, owner_id).await?))
+}
+
 async fn post_skip(
     State(st): State<Arc<AuthState>>,
     RequireSetupComplete(signed): RequireSetupComplete,
     ApiJson(body): ApiJson<IssuePairingCode>,
 ) -> Result<Json<WizardState>, ApiError> {
-    let branch = ready_branch(&st, &signed.owner.id, body.branch_id.as_deref()).await?;
-    st.db
-        .skip_staff_step(&branch.id)
-        .await
-        .map_err(ApiError::internal)?;
-    Ok(Json(wizard_state(&st, &signed.owner.id).await?))
+    skip(&st, &signed.owner.id, body, WizardStep::Staff).await
 }
 
 pub(super) fn router(st: Arc<AuthState>) -> Router {

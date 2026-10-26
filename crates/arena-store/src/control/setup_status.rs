@@ -1,14 +1,27 @@
+use arena_proto::{BranchSetup, PrinterState};
+
 use super::commands::{CommandRow, command_from};
 use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_text, text};
 
 pub const SETUP_KINDS: [&str; 3] = ["group.upsert", "device.assign", "device.register"];
+
+fn finish(step: &str, branch_id: &str, now: i64) -> Stmt {
+    Stmt::new(
+        "INSERT INTO onboarding_progress (branch_id, step, state, completed_at) \
+         VALUES (?, ?, 'done', ?) ON CONFLICT (branch_id, step) \
+         DO UPDATE SET state = 'done', completed_at = COALESCE(\
+         onboarding_progress.completed_at, excluded.completed_at) \
+         WHERE onboarding_progress.state = 'pending'",
+        vec![text(branch_id), text(step), SqlValue::Integer(now)],
+    )
+}
 
 impl ControlDb {
     pub async fn record_setup(
         &self,
         branch_id: &str,
         body: &str,
-        grouped: bool,
+        setup: &BranchSetup,
         now: i64,
     ) -> Result<(), ControlError> {
         let mut stmts = vec![Stmt::new(
@@ -17,15 +30,17 @@ impl ControlDb {
              reported_at = excluded.reported_at",
             vec![text(branch_id), text(body), SqlValue::Integer(now)],
         )];
-        if grouped {
-            stmts.push(Stmt::new(
-                "INSERT INTO onboarding_progress (branch_id, step, state, completed_at) \
-                 VALUES (?, 'devices', 'done', ?) ON CONFLICT (branch_id, step) \
-                 DO UPDATE SET state = 'done', completed_at = COALESCE(\
-                 onboarding_progress.completed_at, excluded.completed_at) \
-                 WHERE onboarding_progress.state <> 'done'",
-                vec![text(branch_id), SqlValue::Integer(now)],
-            ));
+        if setup.grouped() {
+            stmts.push(finish("devices", branch_id, now));
+        }
+        if setup.rated() {
+            stmts.push(finish("rates", branch_id, now));
+        }
+        if setup
+            .status
+            .is_some_and(|s| matches!(s.printer, PrinterState::Ok | PrinterState::Skipped))
+        {
+            stmts.push(finish("printer_payments", branch_id, now));
         }
         self.transact(stmts).await?;
         Ok(())

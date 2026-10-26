@@ -5,6 +5,9 @@
   import DevicesStep from "../../../lib/DevicesStep.svelte";
   import CafeStep from "../../../lib/CafeStep.svelte";
   import InstallHubStep from "../../../lib/InstallHubStep.svelte";
+  import PrinterStep from "../../../lib/PrinterStep.svelte";
+  import ProductsStep from "../../../lib/ProductsStep.svelte";
+  import RatesStep from "../../../lib/RatesStep.svelte";
   import StaffStep from "../../../lib/StaffStep.svelte";
   import TierStep from "../../../lib/TierStep.svelte";
   import { STEP_NAMES, isStep, stepIndex, stepPath, wizard } from "../../../lib/wizard.svelte";
@@ -31,8 +34,14 @@
   <InstallHubStep />
 {:else if open === "devices"}
   <DevicesStep />
+{:else if open === "rates"}
+  <RatesStep />
+{:else if open === "products"}
+  <ProductsStep />
 {:else if open === "staff"}
   <StaffStep />
+{:else if open === "printer_payments"}
+  <PrinterStep />
 {:else if open}
   <h1 tabindex="-1">{t(STEP_NAMES[open])}</h1>
   <p class="soon">{t("onboarding.setup.coming_soon")}</p>

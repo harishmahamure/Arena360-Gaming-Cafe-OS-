@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, BranchSetup, CommandStatus, SetupCommandRequest, SetupCommandView, SetupDevicesView,
+    AppError, BranchSetup, CommandStatus, IssuePairingCode, SetupCommandRequest, SetupCommandView,
+    SetupDevicesView, WizardState, WizardStep,
 };
 use arena_store::control::{CommandRow, SETUP_KINDS};
 use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -13,7 +14,7 @@ use super::commands::submit_command;
 use super::error::ApiError;
 use super::gate::RequireSetupComplete;
 use super::json::ApiJson;
-use super::wizard_staff::ready_branch;
+use super::wizard_staff::{ready_branch, skip};
 use crate::auth::AuthState;
 
 const HUB_ONLINE_MS: i64 = 3 * 60 * 1000;
@@ -111,8 +112,26 @@ async fn post_command(
     Ok(Json(command_view(row)?))
 }
 
+async fn skip_products(
+    State(st): State<Arc<AuthState>>,
+    RequireSetupComplete(signed): RequireSetupComplete,
+    ApiJson(body): ApiJson<IssuePairingCode>,
+) -> Result<Json<WizardState>, ApiError> {
+    skip(&st, &signed.owner.id, body, WizardStep::Products).await
+}
+
+async fn skip_printer(
+    State(st): State<Arc<AuthState>>,
+    RequireSetupComplete(signed): RequireSetupComplete,
+    ApiJson(body): ApiJson<IssuePairingCode>,
+) -> Result<Json<WizardState>, ApiError> {
+    skip(&st, &signed.owner.id, body, WizardStep::PrinterPayments).await
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/wizard/devices", get(get_devices).post(post_command))
+        .route("/wizard/products/skip", post(skip_products))
+        .route("/wizard/printer-payments/skip", post(skip_printer))
         .with_state(st)
 }

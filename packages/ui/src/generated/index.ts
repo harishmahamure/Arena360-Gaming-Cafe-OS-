@@ -201,6 +201,7 @@ export type { StockIn } from "./StockIn";
 export type { StockInReverted } from "./StockInReverted";
 export type { SymbolPosition } from "./SymbolPosition";
 export type { TaxMode } from "./TaxMode";
+export type { TestSessionState } from "./TestSessionState";
 export type { Tier } from "./Tier";
 export type { TierChoices } from "./TierChoices";
 export type { TierLimits } from "./TierLimits";

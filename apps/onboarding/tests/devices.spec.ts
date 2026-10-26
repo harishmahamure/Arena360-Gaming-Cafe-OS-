@@ -14,7 +14,7 @@ const pc = (over: Partial<SetupDevice> = {}): SetupDevice => ({
   status: "online",
   ...over,
 });
-const gaming = { id: "G1", name: "Gaming", kind: "pc", colour: "teal", sort: 0 };
+const gaming = { id: "G1", name: "Gaming", kind: "pc", colour: "teal", sort: 0, has_rate: false };
 const block = (over: Partial<BranchSetup> = {}): BranchSetup => ({
   devices: [pc()],
   groups: [gaming],

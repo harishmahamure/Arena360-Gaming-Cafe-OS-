@@ -174,6 +174,20 @@ pub struct SetupStatus {
     pub products_count: u32,
     #[serde(default)]
     pub groups_without_rate: u32,
+    #[serde(default)]
+    pub manager_exists: bool,
+    #[serde(default)]
+    pub test_session: TestSessionState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum TestSessionState {
+    #[default]
+    Unset,
+    Passed,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,9 +297,11 @@ mod tests {
                 printer: crate::PrinterState::Skipped,
                 products_count: 0,
                 groups_without_rate: 2,
+                manager_exists: true,
+                test_session: TestSessionState::Passed,
             })
             .unwrap(),
-            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "printer": "skipped", "products_count": 0, "groups_without_rate": 2})
+            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "printer": "skipped", "products_count": 0, "groups_without_rate": 2, "manager_exists": true, "test_session": "passed"})
         );
         assert_eq!(BackupDirProblem::NotWritable.as_str(), "not_writable");
         assert_eq!(

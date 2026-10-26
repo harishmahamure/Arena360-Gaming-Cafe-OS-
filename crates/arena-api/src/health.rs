@@ -638,7 +638,7 @@ mod tests {
                     },
                     "ui": {"idle_lock_minutes": 5, "hc": false},
                     "connectivity": {"state": "cloud_unreachable", "checked_at": 7},
-                    "setup": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset", "products_count": 0, "groups_without_rate": 0},
+                    "setup": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset", "products_count": 0, "groups_without_rate": 0, "manager_exists": false, "test_session": "unset"},
                     "lan": {
                         "addresses": ["192.168.1.20"],
                         "lan_port": 7400,

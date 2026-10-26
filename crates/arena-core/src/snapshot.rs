@@ -171,8 +171,10 @@ pub fn branch_setup(
                 kind: g.kind,
                 colour: g.colour,
                 sort: g.sort_order,
+                has_rate: g.rate_minor.is_some(),
             })
             .collect(),
+        status: snapshot.setup,
     }
 }
 
@@ -199,6 +201,7 @@ fn read_setup(store: &Store) -> Result<Option<SetupStatus>, AppError> {
         crate::setup::hub_tier(),
         u32::try_from(store.products_count()?).unwrap_or(0),
         u32::try_from(store.groups_without_rate()?).unwrap_or(0),
+        store.manager_exists()?,
     )))
 }
 
@@ -488,6 +491,8 @@ mod tests {
                     printer: arena_proto::PrinterState::Unset,
                     products_count: 0,
                     groups_without_rate: 0,
+                    manager_exists: false,
+                    test_session: Default::default(),
                 }),
                 lan: None,
                 paired: true,

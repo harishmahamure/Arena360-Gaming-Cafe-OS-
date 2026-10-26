@@ -576,6 +576,12 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
     cloud.deviceView.commands.push(command);
     return { status: 200, body: command };
   }
+  const skipping = /^\/v1\/wizard\/(products|printer-payments)\/skip$/.exec(path);
+  if (skipping && method === "POST") {
+    if (!cloud.hubPaired) return { status: 409, body: err("STEP_NOT_READY") };
+    cloud.skipped.add(skipping[1] === "products" ? "products" : "printer_payments");
+    return { status: 200, body: wizardBody(cloud) };
+  }
   if (path.startsWith("/v1/wizard/staff")) {
     if (!cloud.hubPaired) return { status: 409, body: err("STEP_NOT_READY") };
     if (path === "/v1/wizard/staff" && method === "GET") {

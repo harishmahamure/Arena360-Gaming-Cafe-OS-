@@ -119,3 +119,26 @@ async fn the_snapshot_carries_each_groups_rate() {
     assert_eq!((rate_of(&rated), rate_of(&bare)), (Some(12_000), None));
     assert_eq!(snap.setup.unwrap().groups_without_rate, 1);
 }
+
+#[tokio::test]
+async fn the_setup_block_flags_rated_groups_and_carries_the_status() {
+    let f = bootstrapped().await;
+    let rated = group(&f, "PCs").await;
+    group(&f, "VR").await;
+    set(&f, owner(), &rated, 12_000).await.unwrap();
+    let store = reopen(&f);
+    let snap = crate::read_snapshot(&store, T0).unwrap();
+    let block = crate::branch_setup(snap, |_| (false, None));
+    let flags: Vec<(&str, bool)> = block
+        .groups
+        .iter()
+        .map(|g| (g.name.as_str(), g.has_rate))
+        .collect();
+    assert_eq!(flags, [("PCs", true), ("VR", false)]);
+    assert!(!block.rated());
+    let status = block.status.unwrap();
+    assert!(!status.manager_exists);
+    staff(&f, "boss", ROLE_MANAGER).await;
+    let snap = crate::read_snapshot(&reopen(&f), T0).unwrap();
+    assert!(snap.setup.unwrap().manager_exists);
+}

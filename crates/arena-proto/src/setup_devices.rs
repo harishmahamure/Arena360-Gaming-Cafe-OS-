@@ -26,6 +26,8 @@ pub struct SetupGroup {
     pub colour: String,
     #[ts(type = "number")]
     pub sort: i64,
+    #[serde(default)]
+    pub has_rate: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -33,6 +35,9 @@ pub struct SetupGroup {
 pub struct BranchSetup {
     pub devices: Vec<SetupDevice>,
     pub groups: Vec<SetupGroup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<crate::SetupStatus>,
 }
 
 impl BranchSetup {
@@ -42,6 +47,10 @@ impl BranchSetup {
 
     pub fn grouped(&self) -> bool {
         self.devices.iter().any(|d| d.group_id.is_some())
+    }
+
+    pub fn rated(&self) -> bool {
+        !self.groups.is_empty() && self.groups.iter().all(|g| g.has_rate)
     }
 }
 

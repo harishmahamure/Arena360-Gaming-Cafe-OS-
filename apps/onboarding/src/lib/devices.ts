@@ -39,6 +39,7 @@ export function overlay(view: SetupDevicesView) {
         kind: p.group_kind,
         colour: p.colour,
         sort: Number(p.sort_order ?? 0),
+        has_rate: false,
         waiting: true,
       } as Waiting<SetupGroup>;
       const at = groups.findIndex((g) => g.id === next.id);

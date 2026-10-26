@@ -1941,7 +1941,7 @@ async fn a_setup_block_is_stored_and_a_grouped_device_finishes_step_four() {
     h.advance(6_000);
     let grouped = json!({
         "devices": [pc(json!("G1"))],
-        "groups": [{"id": "G1", "name": "Gaming", "kind": "pc", "colour": "teal", "sort": 0}],
+        "groups": [{"id": "G1", "name": "Gaming", "kind": "pc", "colour": "teal", "sort": 0, "has_rate": false}],
     });
     assert_eq!(h.beat_with(&token, grouped.clone()).await.status, 200);
     assert_eq!(h.step(&a, "devices").await, "done");
@@ -1951,6 +1951,86 @@ async fn a_setup_block_is_stored_and_a_grouped_device_finishes_step_four() {
     h.advance(4 * 60 * 1000);
     let stale = h.call("GET", "/v1/wizard/devices", None, &a).await;
     assert!(!stale.body["hub_online"].as_bool().unwrap());
+}
+
+fn rated_group(rate: bool) -> Value {
+    json!({"id": "G1", "name": "Gaming", "kind": "pc", "colour": "teal", "sort": 0, "has_rate": rate})
+}
+
+fn setup_status(printer: &str) -> Value {
+    json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": printer, "products_count": 0, "groups_without_rate": 0, "manager_exists": false, "test_session": "unset"})
+}
+
+#[tokio::test]
+async fn rates_and_printer_steps_complete_from_the_setup_block() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let beat = |groups: Vec<Value>, printer: Option<&str>| {
+        h.advance(6_000);
+        let mut b = json!({"devices": [], "groups": groups});
+        if let Some(p) = printer {
+            b["status"] = setup_status(p);
+        }
+        h.beat_with(&token, b)
+    };
+    beat(vec![], Some("unset")).await;
+    assert_eq!(h.step(&a, "rates").await, "pending");
+    beat(vec![rated_group(false), rated_group(true)], Some("failed")).await;
+    assert_eq!(h.step(&a, "rates").await, "pending");
+    assert_eq!(h.step(&a, "printer_payments").await, "pending");
+    beat(vec![rated_group(true)], Some("ok")).await;
+    assert_eq!(h.step(&a, "rates").await, "done");
+    assert_eq!(h.step(&a, "printer_payments").await, "done");
+    beat(vec![rated_group(false)], Some("failed")).await;
+    assert_eq!(h.step(&a, "rates").await, "done");
+    assert_eq!(h.step(&a, "printer_payments").await, "done");
+}
+
+#[tokio::test]
+async fn an_old_hub_block_completes_nothing_new_and_a_skipped_printer_step_stays() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    h.advance(6_000);
+    let old = json!({"devices": [], "groups": [{"id": "G1", "name": "Gaming", "kind": "pc", "colour": "teal", "sort": 0}]});
+    assert_eq!(h.beat_with(&token, old).await.status, 200);
+    assert_eq!(h.step(&a, "rates").await, "pending");
+    assert_eq!(h.step(&a, "printer_payments").await, "pending");
+    let r = h
+        .call(
+            "POST",
+            "/v1/wizard/printer-payments/skip",
+            Some(json!({})),
+            &a,
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(h.step(&a, "printer_payments").await, "skipped");
+    h.advance(6_000);
+    let b = json!({"devices": [], "groups": [], "status": setup_status("skipped")});
+    h.beat_with(&token, b).await;
+    assert_eq!(h.step(&a, "printer_payments").await, "skipped");
+}
+
+#[tokio::test]
+async fn skipping_products_opens_step_seven_and_a_done_step_does_not_change() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let early = h
+        .call("POST", "/v1/wizard/products/skip", Some(json!({})), &a)
+        .await;
+    assert_eq!((early.status, early.code()), (409, "STEP_NOT_READY"));
+    h.paired_and_seen(&a).await;
+    let r = h
+        .call("POST", "/v1/wizard/products/skip", Some(json!({})), &a)
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(h.step(&a, "products").await, "skipped");
+    let anon = h
+        .call("POST", "/v1/wizard/products/skip", Some(json!({})), "")
+        .await;
+    assert_eq!(anon.status, 401);
 }
 
 #[tokio::test]

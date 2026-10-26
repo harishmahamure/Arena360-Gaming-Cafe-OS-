@@ -582,6 +582,20 @@ impl Store {
         find_product(&self.conn, id)
     }
 
+    pub fn manager_exists(&self) -> Result<bool, AppError> {
+        if !self.table_exists("staff")? {
+            return Ok(false);
+        }
+        self.conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM staff s JOIN roles r ON r.role_id = s.role_id
+                 WHERE s.active = 1 AND r.name IN ('Manager', 'Owner'))",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_error)
+    }
+
     pub fn products_count(&self) -> Result<i64, AppError> {
         if !self.table_exists("products")? {
             return Ok(0);

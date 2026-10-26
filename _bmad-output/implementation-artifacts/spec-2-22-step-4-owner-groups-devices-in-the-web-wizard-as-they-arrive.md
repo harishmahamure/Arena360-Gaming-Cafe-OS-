@@ -2,7 +2,7 @@
 title: 'Story 2.22: Step 4 — owner groups devices in the web wizard as they arrive'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: '9517349'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -72,4 +72,4 @@ Decisions: the cloud overlay is stateless (the page derives "waiting" and refusa
 
 ## Review Triage Log
 
-No open review findings. Verify gate re-run: pnpm run check, cargo tests for cloud, core, proto, store and tasks, onboarding svelte-check and Playwright (172 passed, 2 skipped).
+Code review passed, no blocking findings (clippy, cargo workspace tests, pnpm check green). Earlier verify gate re-run: pnpm run check, cargo tests for cloud, core, proto, store and tasks, onboarding svelte-check and Playwright (172 passed, 2 skipped).

@@ -133,6 +133,12 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Maintenance(t) => maintenance::validate(m, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::DeviceTestSessionStart(_) | IntentPayload::DeviceTestSessionCompleted(_) => {
+            match target {
+                Target::TestSession(t) => super::test_session::validate(intent, t),
+                _ => Err(internal_target()),
+            }
+        }
         IntentPayload::DevicePlace(d) => match target {
             Target::Zone(t) => zones::validate_place(d, t),
             _ => Err(internal_target()),

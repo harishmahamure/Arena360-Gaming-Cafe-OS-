@@ -44,6 +44,8 @@ pub const ADMIN_EXIT_EVENT: &str = "admin-exit";
 pub const ADMIN_EXIT_ENDED_EVENT: &str = "admin-exit-ended";
 /// The Tauri event carrying the theme: `{hc}`.
 pub const THEME_EVENT: &str = "theme";
+pub const TEST_SESSION_EVENT: &str = "test-session";
+pub const TEST_SESSION_ENDED_EVENT: &str = "test-session-ended";
 pub const DISCOVERY_FOUND_EVENT: &str = "discovery-found";
 pub const DISCOVERY_DONE_EVENT: &str = "discovery-done";
 /// How long the shell waits for the service's answer to a PIN.
@@ -51,13 +53,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 12] = [
+const COMMANDS: [&str; 13] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
     "heartbeat",
     "admin_exit",
     "admin_exit_status",
+    "test_session",
     "theme",
     "discover",
     "probe_ip",
@@ -85,6 +88,8 @@ pub enum Emit {
     Theme(bool),
     DiscoveryFound(u64, Vec<DiscoveredHub>),
     DiscoveryDone(u64, Vec<DiscoveredHub>),
+    TestSession(u64),
+    TestSessionEnded,
 }
 
 /// What the service answered to a request: the body, or the error code (and the body that came
@@ -118,6 +123,7 @@ pub struct Bridge {
     exit_running: AtomicBool,
     /// This kiosk's high contrast, once the service has said (or `main.rs` has decided).
     theme: watch::Sender<Option<bool>>,
+    test_deadline: Mutex<Option<Instant>>,
 }
 
 impl Default for Bridge {
@@ -134,6 +140,7 @@ impl Default for Bridge {
             next_rid: AtomicU64::new(1),
             exit_running: AtomicBool::new(false),
             theme: watch::channel(None).0,
+            test_deadline: Mutex::default(),
         }
     }
 }
@@ -233,6 +240,15 @@ impl Bridge {
         }
     }
 
+    pub fn test_remaining_ms(&self) -> Option<u64> {
+        let deadline = (*lock(&self.test_deadline))?;
+        Some(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u64,
+        )
+    }
+
     /// The state to restore, once (cleared on delivery).
     pub fn take_restore(&self) -> Option<Value> {
         lock(&self.restore).take()
@@ -287,6 +303,14 @@ impl Bridge {
                 } else {
                     (None, None)
                 }
+            }
+            IpcMsg::TestSessionStarted { remaining_ms } => {
+                *lock(&self.test_deadline) = Some(now + Duration::from_millis(remaining_ms));
+                (None, Some(Emit::TestSession(remaining_ms)))
+            }
+            IpcMsg::TestSessionEnded => {
+                let ran = lock(&self.test_deadline).take().is_some();
+                (None, ran.then_some(Emit::TestSessionEnded))
             }
             IpcMsg::DiscoveryFound { search, hubs } => {
                 (None, Some(Emit::DiscoveryFound(search, hubs)))
@@ -506,6 +530,11 @@ mod tests {
         assert_eq!(names["events"]["restoreState"], RESTORE_STATE_EVENT);
         assert_eq!(names["events"]["toast"], TOAST_EVENT);
         assert_eq!(names["events"]["theme"], THEME_EVENT);
+        assert_eq!(names["events"]["testSession"], TEST_SESSION_EVENT);
+        assert_eq!(
+            names["events"]["testSessionEnded"],
+            TEST_SESSION_ENDED_EVENT
+        );
         assert_eq!(names["events"]["discoveryFound"], DISCOVERY_FOUND_EVENT);
         assert_eq!(names["events"]["discoveryDone"], DISCOVERY_DONE_EVENT);
         let mut listed: Vec<&str> = names["commands"]
@@ -659,6 +688,27 @@ mod tests {
             }),
             (None, Some(Emit::DiscoveryDone(4, vec![hub])))
         );
+    }
+
+    #[test]
+    fn a_test_session_is_counted_on_the_shells_clock_and_ended_once() {
+        let b = Bridge::default();
+        assert_eq!(b.test_remaining_ms(), None);
+        assert_eq!(b.on_message(IpcMsg::TestSessionEnded), (None, None));
+        assert_eq!(
+            b.on_message(IpcMsg::TestSessionStarted {
+                remaining_ms: 120_000
+            }),
+            (None, Some(Emit::TestSession(120_000)))
+        );
+        let left = b.test_remaining_ms().unwrap();
+        assert!((119_000..=120_000).contains(&left), "{left}");
+        assert_eq!(
+            b.on_message(IpcMsg::TestSessionEnded),
+            (None, Some(Emit::TestSessionEnded))
+        );
+        assert_eq!(b.test_remaining_ms(), None);
+        assert_eq!(b.on_message(IpcMsg::TestSessionEnded), (None, None));
     }
 
     #[test]

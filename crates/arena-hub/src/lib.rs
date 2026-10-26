@@ -379,8 +379,17 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             status_tx.clone(),
             command_poke,
         )
+        .with_presence({
+            let presence = lan_hub.presence();
+            Arc::new(move |id| presence.status(id))
+        })
         .run(),
     );
+    let test_session_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::TestSessionTask::new(w, Arc::clone(&snapshots), Arc::clone(&clock)).run(),
+        )
+    });
     let pairer: Arc<dyn arena_core::HubPairer> = Arc::new(CloudPairer::new(
         cloud,
         writer.clone(),
@@ -508,6 +517,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     let _ = command_job.await;
     setup_job.abort();
     let _ = setup_job.await;
+    if let Some(job) = test_session_job {
+        job.abort();
+        let _ = job.await;
+    }
     let _ = mdns_stop_tx.send(());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), mdns_job).await;
     // Close every LAN session before the writer goes away.

@@ -9,6 +9,7 @@ pub mod keystore;
 pub mod lease;
 pub mod mdns;
 pub mod printer;
+pub mod test_session;
 
 pub use cloud::{CloudClient, CloudEndpoint, CloudFailure, CloudPairer};
 pub use commands::{COMMAND_POLL_INTERVAL, CommandTask};
@@ -27,3 +28,4 @@ pub use mdns::{
     Advert, Advertiser, BranchSource, Interfaces, MDNS_FAILURE_LOG_INTERVAL, MDNS_POLL_INTERVAL,
     MdnsAdvertiser, MdnsTask, SystemInterfaces, lan_ipv4_addresses, mdns_host_name,
 };
+pub use test_session::TestSessionTask;

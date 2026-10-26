@@ -16,6 +16,8 @@ export const TOAST_EVENT = names.events.toast;
 export const ADMIN_EXIT_EVENT = names.events.adminExit;
 export const ADMIN_EXIT_ENDED_EVENT = names.events.adminExitEnded;
 export const THEME_EVENT = names.events.theme;
+export const TEST_SESSION_EVENT = names.events.testSession;
+export const TEST_SESSION_ENDED_EVENT = names.events.testSessionEnded;
 export const DISCOVERY_FOUND_EVENT = names.events.discoveryFound;
 export const DISCOVERY_DONE_EVENT = names.events.discoveryDone;
 const CMD = names.commands;
@@ -191,6 +193,29 @@ export async function onAdminExit(cb: (until: number) => void): Promise<() => vo
 export async function onAdminExitEnded(cb: () => void): Promise<() => void> {
   if (!inTauri()) return () => {};
   return listen<unknown>(ADMIN_EXIT_ENDED_EVENT, () => cb());
+}
+
+export async function currentTestSession(): Promise<number | null> {
+  if (!inTauri()) return null;
+  try {
+    const v: unknown = await invoke(CMD.testSession);
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function onTestSession(cb: (remainingMs: number) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(TEST_SESSION_EVENT, (e) => {
+    const ms = field(e.payload, "remaining_ms");
+    if (ms !== null) cb(ms);
+  });
+}
+
+export async function onTestSessionEnded(cb: () => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(TEST_SESSION_ENDED_EVENT, () => cb());
 }
 
 /** Whether `e` is the hidden admin-exit combination, Ctrl+Alt+Shift+A. */

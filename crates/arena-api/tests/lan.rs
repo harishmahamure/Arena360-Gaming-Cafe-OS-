@@ -1494,6 +1494,90 @@ async fn a_remote_unlock_reaches_the_kiosk_and_its_ack_reaches_the_hub_ui() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_test_session_reaches_the_kiosk_and_only_it_completes_it() {
+    let hub = start("0.1.0", true).await;
+    let w = hub.writer.as_ref().unwrap();
+    let group = w
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                id: None,
+                name: "PCs".into(),
+                group_kind: "pc".into(),
+                colour: "teal".into(),
+                sort_order: 1,
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+            device_id: hub.paired_id.clone(),
+            group_id: Some(group),
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::DeviceTestSessionStart(arena_proto::DeviceTestSessionStart {
+            device_id: hub.paired_id.clone(),
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    let lock_after_ms = loop {
+        match tokio::time::timeout(Duration::from_secs(5), events.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            HubEvent::TestSession { lock_after_ms } => break lock_after_ms,
+            _ => continue,
+        }
+    };
+    assert_eq!(lock_after_ms, 120_000);
+    let complete = |device: &str| {
+        serde_json::to_value(IntentSubmit {
+            intent: intent(
+                owner(),
+                IntentPayload::DeviceTestSessionCompleted(
+                    arena_proto::DeviceTestSessionCompleted {
+                        device_id: device.into(),
+                        outcome: arena_proto::TestSessionOutcome::Locked,
+                    },
+                ),
+                None,
+            ),
+        })
+        .unwrap()
+    };
+    let other = client
+        .request("intent.submit", complete("01JOTHERDEVICEAAAAAAAAAAAA"))
+        .await;
+    assert!(matches!(other, Err(ClientError::Hub(e)) if e.code == ErrorCode::Forbidden));
+    let frame = client
+        .request("intent.submit", complete(&hub.paired_id))
+        .await
+        .unwrap();
+    let FrameBody::IntentResult(r) = frame.body else {
+        panic!("{frame:?}")
+    };
+    assert_eq!(r.applied.changes[0].tbl, "settings");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_kds_session_may_not_verify_admin_pins() {
     let hub = start("0.1.0", true).await;
     let mut ws = hub.plain().await;

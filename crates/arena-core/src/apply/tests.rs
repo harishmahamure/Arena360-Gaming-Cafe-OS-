@@ -21,6 +21,7 @@ use crate::writer::{Writer, WriterHandle};
 mod commands;
 mod rates;
 mod stock;
+mod test_session;
 
 const T0: i64 = 1_800_000_000_000;
 const HUB: &str = "01JHUBAAAAAAAAAAAAAAAAAAAA";

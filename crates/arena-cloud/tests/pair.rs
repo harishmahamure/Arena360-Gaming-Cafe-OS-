@@ -1988,6 +1988,58 @@ async fn rates_and_printer_steps_complete_from_the_setup_block() {
 }
 
 #[tokio::test]
+async fn the_test_session_step_completes_only_on_passed_and_never_reverts() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let beat = |ts: Option<&str>| {
+        h.advance(6_000);
+        let mut b = json!({"devices": [], "groups": []});
+        if let Some(t) = ts {
+            let mut status = setup_status("unset");
+            status["test_session"] = t.into();
+            b["status"] = status;
+        }
+        h.beat_with(&token, b)
+    };
+    for ts in [None, Some("unset"), Some("running"), Some("failed")] {
+        assert_eq!(beat(ts).await.status, 200);
+        assert_eq!(h.step(&a, "test_session").await, "pending", "{ts:?}");
+    }
+    let old = json!({"devices": [], "groups": [], "status": {"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset"}});
+    h.advance(6_000);
+    assert_eq!(h.beat_with(&token, old).await.status, 200);
+    assert_eq!(h.step(&a, "test_session").await, "pending");
+    beat(Some("passed")).await;
+    assert_eq!(h.step(&a, "test_session").await, "done");
+    for ts in [Some("failed"), Some("running"), Some("unset"), None] {
+        beat(ts).await;
+        assert_eq!(h.step(&a, "test_session").await, "done", "{ts:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_test_session_command_is_queued_and_shows_its_rejection() {
+    let h = Harness::new().await;
+    let (a, _) = h.ready().await;
+    let token = h.paired_and_seen(&a).await;
+    let body = json!({"kind": "setup.test_session", "payload": {"device_id": "D1"}});
+    let made = h.call("POST", "/v1/wizard/devices", Some(body), &a).await;
+    assert_eq!(made.status, 200, "{}", made.body);
+    assert_eq!(made.body["status"], "pending");
+    let page = h.fetch_commands(&token, 0).await;
+    let id = page.body["commands"][0]["id"].as_i64().unwrap();
+    let error = json!({"code": "VALIDATION_FAILED", "message": "the device is offline", "field": "device_id"});
+    h.command_result(&token, id, json!({"epoch": "1:HUBA", "error": error}))
+        .await;
+    let view = h.call("GET", "/v1/wizard/devices", None, &a).await;
+    let cmd = &view.body["commands"][0];
+    assert_eq!(cmd["kind"], "setup.test_session");
+    assert_eq!(cmd["status"], "rejected");
+    assert_eq!(cmd["error"]["message"], "the device is offline");
+}
+
+#[tokio::test]
 async fn an_old_hub_block_completes_nothing_new_and_a_skipped_printer_step_stays() {
     let h = Harness::new().await;
     let (a, _) = h.ready().await;

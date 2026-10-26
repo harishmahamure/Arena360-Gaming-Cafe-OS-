@@ -7,12 +7,13 @@ use arena_store::{StoreTx, find_device_meta, find_setting, find_staff};
 
 use crate::apply::is_ulid;
 
-const HANDLED: [&str; 5] = [
+const HANDLED: [&str; 6] = [
     "group.upsert",
     "device.assign",
     "device.register",
     "staff.upsert",
     "settings.set",
+    "setup.test_session",
 ];
 
 fn refused(code: ErrorCode, field: &str, message: &str) -> AppError {
@@ -52,7 +53,11 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
             )
         })?),
     };
-    fields.insert("kind".into(), cmd.kind.clone().into());
+    let kind = match cmd.kind.as_str() {
+        "setup.test_session" => "device.test_session.start",
+        other => other,
+    };
+    fields.insert("kind".into(), kind.into());
     let payload: IntentPayload = serde_json::from_value(serde_json::Value::Object(fields))
         .map_err(|_| {
             refused(
@@ -137,12 +142,7 @@ mod tests {
 
     #[test]
     fn kinds_without_a_handler_or_outside_the_catalogue_are_unsupported() {
-        for kind in [
-            "setup.test_session",
-            "branch.go_live",
-            "pricing.set",
-            "branch.bootstrap",
-        ] {
+        for kind in ["branch.go_live", "pricing.set", "branch.bootstrap"] {
             let e = command_intent(&cmd(kind, json!({})), 1).unwrap_err();
             assert_eq!(e.code, ErrorCode::Unsupported, "{kind}");
         }
@@ -181,6 +181,17 @@ mod tests {
                 1
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_test_session_command_becomes_a_start_intent() {
+        let i = command_intent(&cmd("setup.test_session", json!({"device_id": "D"})), 7).unwrap();
+        assert_eq!(i.kind, arena_proto::IntentKind::DeviceTestSessionStart);
+        assert_eq!(i.actor.kind, ActorKind::Owner);
+        assert!(
+            command_intent(&cmd("setup.test_session", json!({})), 7)
+                .is_err_and(|e| e.code == ErrorCode::ValidationFailed)
         );
     }
 

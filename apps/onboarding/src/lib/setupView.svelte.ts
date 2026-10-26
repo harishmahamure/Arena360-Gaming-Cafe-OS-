@@ -1,11 +1,11 @@
-import type { SetupDevicesView } from "@arena/ui/generated";
+import type { SetupDevicesView, WizardState } from "@arena/ui/generated";
 import { onMount } from "svelte";
 import { getDevices, getWizard } from "./api";
 import { advance, wizard } from "./wizard.svelte";
 
 const POLL_MS = 5000;
 
-export function watchSetup() {
+export function watchSetup(hold: (next: WizardState) => number = () => 0) {
   const w = $state<{ view: SetupDevicesView | null }>({ view: null });
   let busy = false;
   async function refresh() {
@@ -15,7 +15,11 @@ export function watchSetup() {
       const res = await getDevices();
       if (res.ok) w.view = res.data;
       const next = await getWizard();
-      if (next.ok && next.data.current !== wizard.state?.current) await advance(next.data);
+      if (next.ok && next.data.current !== wizard.state?.current) {
+        const wait = hold(next.data);
+        if (wait) await new Promise((done) => setTimeout(done, wait));
+        await advance(next.data);
+      }
     } finally {
       busy = false;
     }
@@ -25,5 +29,10 @@ export function watchSetup() {
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   });
-  return w;
+  return {
+    get view() {
+      return w.view;
+    },
+    refresh,
+  };
 }

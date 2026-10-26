@@ -52,6 +52,7 @@ const PAIRED_SCOPE: &[IntentKind] = &[
     IntentKind::KioskProcessBlocked,
     IntentKind::DeviceAdminExit,
     IntentKind::DeviceAdminRelock,
+    IntentKind::DeviceTestSessionCompleted,
 ];
 /// Kitchen intents only (none exist yet).
 const KDS_SCOPE: &[IntentKind] = &[];
@@ -130,7 +131,8 @@ mod tests {
                 IntentKind::KioskLog,
                 IntentKind::KioskProcessBlocked,
                 IntentKind::DeviceAdminExit,
-                IntentKind::DeviceAdminRelock
+                IntentKind::DeviceAdminRelock,
+                IntentKind::DeviceTestSessionCompleted
             ]
         );
         assert!(!in_scope(

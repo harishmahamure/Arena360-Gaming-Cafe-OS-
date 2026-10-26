@@ -316,6 +316,39 @@ impl WriterHandle {
         .await
     }
 
+    pub async fn reject_command(
+        &self,
+        cmd: CommandWire,
+        error: AppError,
+    ) -> Result<AppliedCommand, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                if let Some(done) = find_applied_command(tx, cmd.id, &cmd.idempotency_key)? {
+                    return Ok(done);
+                }
+                let row = AppliedCommand {
+                    command_id: cmd.id,
+                    idempotency_key: cmd.idempotency_key,
+                    kind: cmd.kind,
+                    applied: false,
+                    applied_seq: None,
+                    error: Some(serde_json::to_string(&error).map_err(|e| {
+                        AppError::new(ErrorCode::Internal, format!("encode error: {e}"))
+                    })?),
+                    applied_at: clock.now_ms(),
+                    reported_at: None,
+                };
+                insert_applied_command(tx, &row)?;
+                Ok(row)
+            })
+        })
+        .await
+    }
+
     pub async fn apply_command(&self, cmd: CommandWire) -> Result<AppliedCommand, AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();

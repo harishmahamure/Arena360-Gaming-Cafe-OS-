@@ -1898,9 +1898,12 @@ async fn intent(
     };
     // A remote unlock needs the kiosk on the LAN now: refused at once otherwise, so no exit is
     // recorded that nobody could grant.
-    if let arena_proto::IntentPayload::DeviceAdminUnlock(u) = &intent.payload
-        && !auth.presence.online(&u.device_id)
-    {
+    let target = match &intent.payload {
+        arena_proto::IntentPayload::DeviceAdminUnlock(u) => Some(&u.device_id),
+        arena_proto::IntentPayload::DeviceTestSessionStart(s) => Some(&s.device_id),
+        _ => None,
+    };
+    if target.is_some_and(|id| !auth.presence.online(id)) {
         return fail(ui_error(AppError::with_field(
             ErrorCode::ValidationFailed,
             "device_id",
@@ -2486,6 +2489,23 @@ pub(crate) mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{reply}");
         assert_eq!(reply["applied"]["changes"][0]["tbl"], "device_admin_exits");
+    }
+
+    #[tokio::test]
+    async fn a_test_session_for_an_offline_kiosk_is_refused_at_once() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let body = json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::DeviceTestSessionStart(arena_proto::DeviceTestSessionStart {
+                device_id: "01JNOSUCHDEVICE".into(),
+            }),
+            None,
+        )).unwrap()});
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "device_id");
+        assert_eq!(reply["message"], "the device is offline");
     }
 
     #[tokio::test]

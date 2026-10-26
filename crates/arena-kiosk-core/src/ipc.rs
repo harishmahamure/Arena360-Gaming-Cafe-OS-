@@ -2,7 +2,7 @@
 //! app (`arena-kiosk-ui`, the unprivileged player session): one JSON object per line.
 //!
 //! The service sends `ping`, `hub_status`, `restore_state`, `toast`, `admin_exit_started`,
-//! `admin_exit_ended` and `reply`; the app sends `pong`, `app_state`, `request` and
+//! `admin_exit_ended`, `test_session_started`, `test_session_ended` and `reply`; the app sends `pong`, `app_state`, `request` and
 //! `admin_exit` (a manager PIN, answered with `reply`; the [`SecretPin`] never prints). The app never talks to the Hub: everything it needs from the Hub
 //! goes through a `request` the service answers. A line longer than [`MAX_LINE_BYTES`] or that
 //! does not parse is an error the reader skips (the connection stays up).
@@ -83,21 +83,33 @@ impl std::fmt::Debug for SecretPin {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IpcMsg {
     /// Service → app, every 2 s: the app answers `pong` with the same `n`.
-    Ping { n: u64 },
+    Ping {
+        n: u64,
+    },
     /// App → service.
-    Pong { n: u64 },
+    Pong {
+        n: u64,
+    },
     /// Service → app: the Hub link changed (also sent once on every new connection).
-    HubStatus { state: KioskHubState },
+    HubStatus {
+        state: KioskHubState,
+    },
     /// Service → app: whether this kiosk uses the high-contrast theme (its
     /// `display.hc.<device_id>` setting). Sent on every new connection, right after
     /// `hub_status`, and whenever it changes.
-    Theme { hc: bool },
+    Theme {
+        hc: bool,
+    },
     /// App → service: the app's restorable state (a JSON value the UI owns), sent whenever it
     /// changes.
-    AppState { json: Value },
+    AppState {
+        json: Value,
+    },
     /// Service → app, on connect: the last `app_state` the service saw, to restore after a
     /// restart.
-    RestoreState { json: Value },
+    RestoreState {
+        json: Value,
+    },
     /// App → service: a request (`kind`, e.g. `log`) the service answers with `reply`.
     Request {
         rid: String,
@@ -107,16 +119,27 @@ pub enum IpcMsg {
     },
     /// Service → app: show the player the catalogue line `key` as a toast that stays until
     /// dismissed (the same key again does not stack a second one).
-    Toast { key: String },
+    Toast {
+        key: String,
+    },
     /// App → service: a manager PIN for an admin exit (the hidden Ctrl+Alt+Shift+A panel). The
     /// answer is `reply` `rid`: `{until}` when granted, else `PIN_REJECTED` or `AUTH_LOCKED`
     /// with `{retry_after_s}`.
-    AdminExit { rid: String, pin: SecretPin },
+    AdminExit {
+        rid: String,
+        pin: SecretPin,
+    },
     /// Service → app: an admin exit runs until `until` (UTC ms): drop topmost and the keyboard
     /// lockdown and show the countdown badge. Also sent on every connection while one runs.
-    AdminExitStarted { until: i64 },
+    AdminExitStarted {
+        until: i64,
+    },
     /// Service → app: the exit is over: cover every screen and lock down again.
     AdminExitEnded,
+    TestSessionStarted {
+        remaining_ms: u64,
+    },
+    TestSessionEnded,
     #[serde(rename = "discovery.found")]
     DiscoveryFound {
         search: u64,
@@ -293,6 +316,21 @@ mod tests {
         let mut pin = SecretPin::new("1234");
         pin.clear();
         assert_eq!(pin.expose(), "");
+    }
+
+    #[test]
+    fn test_session_messages_are_tagged_lines() {
+        assert_eq!(
+            IpcMsg::TestSessionStarted {
+                remaining_ms: 120_000
+            }
+            .to_line(),
+            "{\"type\":\"test_session_started\",\"remaining_ms\":120000}\n"
+        );
+        assert_eq!(
+            IpcMsg::parse("{\"type\":\"test_session_ended\"}").unwrap(),
+            IpcMsg::TestSessionEnded
+        );
     }
 
     #[test]

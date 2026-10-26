@@ -658,6 +658,14 @@ impl Ctx<'_> {
                 "too many kiosk events from this device; retry later",
             ));
         }
+        if let arena_proto::IntentPayload::DeviceTestSessionCompleted(c) = &submit.intent.payload
+            && self.authed.device_id() != Some(c.device_id.as_str())
+        {
+            return Err(app(
+                ErrorCode::Forbidden,
+                "a kiosk completes only its own test session",
+            ));
+        }
         Ok(bind_to_session(submit.intent, &self.authed.actor))
     }
 

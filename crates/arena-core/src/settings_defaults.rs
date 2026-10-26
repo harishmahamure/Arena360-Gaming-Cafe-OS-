@@ -18,6 +18,7 @@ use arena_proto::{
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
 };
 use arena_proto::{DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_TAX, TaxSettings};
+use arena_proto::{DEFAULT_TEST_SESSION, KEY_TEST_SESSION};
 
 /// When staff last stopped the Android Hub service (epoch ms as text, empty until then). Staff
 /// set it through `settings.set`, so the audit log records the stop with both actors.
@@ -93,14 +94,16 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_KITCHEN_KOT_PRINTER, DEFAULT_KITCHEN_KOT_PRINTER),
     (KEY_KITCHEN_KOT_PAPER_MM, DEFAULT_KITCHEN_KOT_PAPER_MM),
     (KEY_TAX, DEFAULT_TAX),
+    (KEY_TEST_SESSION, DEFAULT_TEST_SESSION),
 ];
 
-pub const SYSTEM_MANAGED_KEYS: [&str; 5] = [
+pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
     KEY_BRANCH_CODE_LOCKED_AT,
     KEY_OPENING_HOURS_SET,
     KEY_ADS_CONSENT,
     KEY_PRINTER_STATUS,
     KEY_LICENCE_FLAGS,
+    KEY_TEST_SESSION,
 ];
 
 pub const KEYED_FIELD_KEYS: [&str; 13] = [
@@ -159,6 +162,7 @@ pub enum SettingRule {
     AdsConsent,
     PrinterSelected,
     PrinterStatus,
+    TestSession,
     Tax,
     BranchCode,
 }
@@ -222,6 +226,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         SettingRule::OneOf(PRINTER_PAPER_WIDTHS_MM),
     ),
     (KEY_TAX, SettingRule::Tax),
+    (KEY_TEST_SESSION, SettingRule::TestSession),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
     (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),
 ];
@@ -276,6 +281,7 @@ impl SettingRule {
             Self::AdsConsent => arena_proto::AdsConsent::parse(value).is_some(),
             Self::PrinterSelected => arena_proto::PrinterSelected::parse(value).is_ok(),
             Self::PrinterStatus => arena_proto::PrinterStatus::parse(value).is_some(),
+            Self::TestSession => arena_proto::TestSessionStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
             Self::BranchCode => arena_proto::valid_branch_code(value),
         }
@@ -528,6 +534,7 @@ mod tests {
             ("printer.paper_mm", "80"),
             ("printer.status", DEFAULT_PRINTER_STATUS),
             ("branch.tax", DEFAULT_TAX),
+            ("setup.test_session", DEFAULT_TEST_SESSION),
         ] {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
         }

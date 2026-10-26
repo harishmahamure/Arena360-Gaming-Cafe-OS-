@@ -63,6 +63,7 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         link_hold: watch::channel(false).0,
         discovery: crate::discovery::Discovery::system(),
         provisioned: Notify::new(),
+        test_session: watch::channel(None).0,
     })
 }
 

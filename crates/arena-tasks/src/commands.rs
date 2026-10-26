@@ -9,7 +9,7 @@ use arena_store::AppliedCommand;
 use tokio::sync::{Notify, watch};
 
 use crate::cloud::{CloudClient, CloudFailure};
-use crate::heartbeat::{REVOKED_BACKOFF, backoff, unit};
+use crate::heartbeat::{Presence, REVOKED_BACKOFF, backoff, unit};
 use crate::keystore::Keystore;
 
 pub const COMMAND_POLL_INTERVAL: Duration = Duration::from_secs(60);
@@ -22,6 +22,7 @@ pub struct CommandTask {
     gate: PairGate,
     status: watch::Sender<HubStatus>,
     poke: Arc<Notify>,
+    presence: Option<Presence>,
     interval: Duration,
     fails: u32,
 }
@@ -47,9 +48,15 @@ impl CommandTask {
             gate,
             status,
             poke,
+            presence: None,
             interval: COMMAND_POLL_INTERVAL,
             fails: 0,
         }
+    }
+
+    pub fn with_presence(mut self, presence: Presence) -> Self {
+        self.presence = Some(presence);
+        self
     }
 
     pub async fn run(mut self) {
@@ -143,12 +150,26 @@ impl CommandTask {
         cmd: CommandWire,
     ) -> Result<(), Stop> {
         let (id, kind) = (cmd.id, cmd.kind.clone());
-        let row = writer
-            .apply_command(cmd)
-            .await
-            .map_err(|e| failed("apply a command", &e))?;
+        let offline = self.offline_target(&cmd);
+        let row = match offline {
+            Some(error) => writer.reject_command(cmd, error).await,
+            None => writer.apply_command(cmd).await,
+        }
+        .map_err(|e| failed("apply a command", &e))?;
         tracing::info!(command_id = id, kind = %kind, applied = row.applied, "owner command resolved");
         self.report(writer, token, epoch, &row).await
+    }
+
+    fn offline_target(&self, cmd: &CommandWire) -> Option<AppError> {
+        let presence = self.presence.as_ref()?;
+        let device = cmd.payload.get("device_id")?.as_str()?;
+        (cmd.kind == "setup.test_session" && !presence(device).0).then(|| {
+            AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "device_id",
+                "the device is offline",
+            )
+        })
     }
 
     async fn report(
@@ -470,6 +491,34 @@ mod tests {
         assert!(posts[0].1.contains("VALIDATION_FAILED"), "{posts:?}");
         assert!(!posts[0].1.contains("applied_seq"), "{posts:?}");
         assert_eq!(f.writer.command_cursor().await.unwrap(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_test_session_for_an_offline_device_is_rejected_unapplied() {
+        let mut served = false;
+        let (port, seen) = serve(Box::new(move |line, _| {
+            if line.starts_with("GET /v1/commands") && !served {
+                served = true;
+                let mut c = command(7, "x");
+                c["kind"] = "setup.test_session".into();
+                c["payload"] = serde_json::json!({"device_id": "01JKIOSKAAAAAAAAAAAAAAAAAA"});
+                return page(vec![c]);
+            }
+            if line.starts_with("GET") {
+                return page(vec![]);
+            }
+            ack()
+        }))
+        .await;
+        let mut f = fx(port).await;
+        f.task = f.task.with_presence(Arc::new(|_| (false, None)));
+        f.task.poll().await;
+        let posts = calls(&seen, "POST");
+        assert_eq!(posts.len(), 1);
+        assert!(posts[0].1.contains("the device is offline"), "{posts:?}");
+        assert!(!posts[0].1.contains("applied_seq"), "{posts:?}");
+        assert_eq!(f.writer.command_cursor().await.unwrap(), 7);
+        assert!(f.writer.unreported_commands(10).await.unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -35,6 +35,7 @@ mod snapshot;
 mod staff_invite;
 mod stock;
 mod tax;
+mod test_session;
 pub mod tier;
 mod ui_auth;
 mod wizard;
@@ -186,6 +187,10 @@ pub use stock::{
 pub use tax::{
     DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,
     TaxSettings, gstin_valid,
+};
+pub use test_session::{
+    DEFAULT_TEST_SESSION, DeviceTestSessionCompleted, DeviceTestSessionStart, KEY_TEST_SESSION,
+    TEST_SESSION_CONFIRM_MS, TEST_SESSION_MS, TestSessionOutcome, TestSessionStatus,
 };
 pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use ui_auth::{

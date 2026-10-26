@@ -233,6 +233,11 @@ pub enum HubEvent {
     AdminUnlock { exit_id: String },
     #[serde(rename = "catalog.changed")]
     CatalogChanged { products: Vec<crate::CatalogEntry> },
+    #[serde(rename = "test_session")]
+    TestSession {
+        #[ts(type = "number")]
+        lock_after_ms: u64,
+    },
 }
 
 /// The body of an `event` frame.
@@ -531,6 +536,23 @@ mod tests {
             v["event"],
             serde_json::json!({"kind": "admin_unlock", "exit_id": "X"})
         );
+    }
+
+    #[test]
+    fn test_session_event_round_trips() {
+        let ev = Frame::new(
+            "e",
+            FrameBody::Event(EventFrame {
+                event: HubEvent::TestSession {
+                    lock_after_ms: 120_000,
+                },
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(&ev).unwrap()["event"],
+            serde_json::json!({"kind": "test_session", "lock_after_ms": 120000})
+        );
+        assert_eq!(parse_frame(&ev.to_text()).unwrap(), ev);
     }
 
     #[test]

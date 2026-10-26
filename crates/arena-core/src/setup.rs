@@ -7,8 +7,8 @@ use crate::{Applied, HubStatus, SnapshotReader};
 
 use arena_proto::{
     AdConsentState, AdsConsent, AppError, BACKUP_PROBE_PREFIX, BackupDirProblem, ErrorCode,
-    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET, KEY_PRINTER_STATUS, PrinterState,
-    PrinterStatus, SetupStatus,
+    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET, KEY_PRINTER_STATUS, KEY_TEST_SESSION,
+    PrinterState, PrinterStatus, SetupStatus, TestSessionStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +45,9 @@ pub fn setup_status<'a>(
         products_count,
         groups_without_rate,
         manager_exists,
-        test_session: Default::default(),
+        test_session: value(KEY_TEST_SESSION)
+            .and_then(TestSessionStatus::parse)
+            .map_or_else(Default::default, |s| s.state),
     }
 }
 

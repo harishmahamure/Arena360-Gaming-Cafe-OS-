@@ -109,6 +109,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             "the loaded target does not match the payload",
         )),
         (Target::AdminRelock(row), _) => admin_exit::authorize_relock(intent, row.as_ref()),
+        (Target::TestSession(_), _) => super::test_session::authorize(intent),
         (
             Target::None
             | Target::Setting(_)
@@ -173,6 +174,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         | Target::AdminUnlock(_)
         | Target::Credentials(_)
         | Target::Stock(_)
+        | Target::TestSession(_)
         | Target::Rate(_) => Ok(()),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),

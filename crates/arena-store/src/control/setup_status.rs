@@ -1,9 +1,14 @@
-use arena_proto::{BranchSetup, PrinterState};
+use arena_proto::{BranchSetup, PrinterState, TestSessionState};
 
 use super::commands::{CommandRow, command_from};
 use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_text, text};
 
-pub const SETUP_KINDS: [&str; 3] = ["group.upsert", "device.assign", "device.register"];
+pub const SETUP_KINDS: [&str; 4] = [
+    "group.upsert",
+    "device.assign",
+    "device.register",
+    "setup.test_session",
+];
 
 fn finish(step: &str, branch_id: &str, now: i64) -> Stmt {
     Stmt::new(
@@ -41,6 +46,12 @@ impl ControlDb {
             .is_some_and(|s| matches!(s.printer, PrinterState::Ok | PrinterState::Skipped))
         {
             stmts.push(finish("printer_payments", branch_id, now));
+        }
+        if setup
+            .status
+            .is_some_and(|s| s.test_session == TestSessionState::Passed)
+        {
+            stmts.push(finish("test_session", branch_id, now));
         }
         self.transact(stmts).await?;
         Ok(())

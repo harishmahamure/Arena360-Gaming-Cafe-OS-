@@ -728,7 +728,12 @@ async fn the_newest_app_connection_wins_and_requests_are_answered() {
     loop {
         match first.recv().await {
             Err(IpcError::Closed) => break,
-            Ok(IpcMsg::Ping { .. } | IpcMsg::Theme { .. } | IpcMsg::AdminExitEnded) => {}
+            Ok(
+                IpcMsg::Ping { .. }
+                | IpcMsg::Theme { .. }
+                | IpcMsg::AdminExitEnded
+                | IpcMsg::TestSessionEnded,
+            ) => {}
             other => panic!("{other:?}"),
         }
     }
@@ -1474,6 +1479,110 @@ async fn a_reconnecting_app_learns_whether_an_exit_runs() {
     arena_kiosk_svc::admin_exit::relock(&ctx).await;
     let mut app = kiosk.app().await;
     app.until(|m| matches!(m, IpcMsg::AdminExitEnded)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_started_test_session_reaches_the_app_with_two_minutes_on_the_clock() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    let group = hub
+        .writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                id: None,
+                name: "PCs".into(),
+                group_kind: "pc".into(),
+                colour: "teal".into(),
+                sort_order: 1,
+            }),
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone();
+    hub.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                device_id: hub.device_id.clone(),
+                group_id: Some(group),
+            }),
+        ))
+        .await
+        .unwrap();
+    hub.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::DeviceTestSessionStart(arena_proto::DeviceTestSessionStart {
+                device_id: hub.device_id.clone(),
+            }),
+        ))
+        .await
+        .unwrap();
+    let IpcMsg::TestSessionStarted { remaining_ms } = app
+        .until(|m| matches!(m, IpcMsg::TestSessionStarted { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert!(
+        (115_000..=120_000).contains(&remaining_ms),
+        "{remaining_ms}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_test_session_locks_at_zero_on_the_monotonic_clock_without_the_hub() {
+    let hub = Hub::seeded().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let mut app = kiosk.app().await;
+    app.until(|m| matches!(m, IpcMsg::TestSessionEnded)).await;
+    let completed = |ctx: &arena_kiosk_svc::Ctx| {
+        ctx.queue
+            .lock()
+            .unwrap()
+            .entries()
+            .unwrap()
+            .into_iter()
+            .filter(|q| q.intent.kind == arena_proto::IntentKind::DeviceTestSessionCompleted)
+            .count()
+    };
+    arena_kiosk_svc::test_session::begin(&ctx, 120_000);
+    arena_kiosk_svc::test_session::begin(&ctx, 1);
+    let IpcMsg::TestSessionStarted { remaining_ms } = app
+        .until(|m| matches!(m, IpcMsg::TestSessionStarted { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert!(
+        (110_000..=120_000).contains(&remaining_ms),
+        "{remaining_ms}"
+    );
+    tokio::time::advance(Duration::from_secs(60)).await;
+    assert!(ctx.test_session.borrow().is_some());
+    assert_eq!(completed(&ctx), 0);
+    drop(app);
+    let mut app = kiosk.app().await;
+    let IpcMsg::TestSessionStarted { remaining_ms } = app
+        .until(|m| matches!(m, IpcMsg::TestSessionStarted { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert!(remaining_ms <= 60_000, "{remaining_ms}");
+    tokio::time::advance(Duration::from_secs(61)).await;
+    app.until(|m| matches!(m, IpcMsg::TestSessionEnded)).await;
+    assert!(ctx.test_session.borrow().is_none());
+    assert_eq!(completed(&ctx), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

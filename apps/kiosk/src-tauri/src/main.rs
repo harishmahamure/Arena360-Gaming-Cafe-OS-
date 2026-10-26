@@ -15,7 +15,8 @@ use std::sync::Arc;
 use arena_proto::KioskHubStatus;
 use bridge::{
     ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, Answer, Bridge, DISCOVERY_DONE_EVENT,
-    DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT, THEME_EVENT, TOAST_EVENT,
+    DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, RESTORE_STATE_EVENT, TEST_SESSION_ENDED_EVENT,
+    TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
 };
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -60,6 +61,11 @@ fn heartbeat(bridge: tauri::State<'_, Arc<Bridge>>) {
 #[tauri::command]
 fn take_restore_state(bridge: tauri::State<'_, Arc<Bridge>>) -> Option<serde_json::Value> {
     bridge.take_restore()
+}
+
+#[tauri::command]
+fn test_session(bridge: tauri::State<'_, Arc<Bridge>>) -> Option<u64> {
+    bridge.test_remaining_ms()
 }
 
 /// The hidden admin-exit panel's PIN (Story 1.20): sent to the service only, as IPC
@@ -223,6 +229,7 @@ fn main() {
             heartbeat,
             admin_exit,
             admin_exit_status,
+            test_session,
             theme,
             discover,
             probe_ip,
@@ -256,6 +263,11 @@ fn main() {
                             on_admin_exit(&handle, false);
                             handle.emit(ADMIN_EXIT_ENDED_EVENT, ())
                         }
+                        Emit::TestSession(remaining_ms) => handle.emit(
+                            TEST_SESSION_EVENT,
+                            serde_json::json!({ "remaining_ms": remaining_ms }),
+                        ),
+                        Emit::TestSessionEnded => handle.emit(TEST_SESSION_ENDED_EVENT, ()),
                         Emit::Theme(hc) => {
                             if let Some(path) = theme_file(&handle)
                                 && let Err(e) = theme::write(&path, hc)

@@ -186,6 +186,7 @@ pub struct SetupStatus {
 pub enum TestSessionState {
     #[default]
     Unset,
+    Running,
     Passed,
     Failed,
 }

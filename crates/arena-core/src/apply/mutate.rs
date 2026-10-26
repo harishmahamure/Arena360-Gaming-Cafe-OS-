@@ -242,6 +242,12 @@ pub(super) fn mutate(
             Target::Rate(t) => rates::mutate(tx, r, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::DeviceTestSessionStart(_) | IntentPayload::DeviceTestSessionCompleted(_) => {
+            match target {
+                Target::TestSession(t) => super::test_session::mutate(tx, intent, t),
+                _ => Err(mismatch()),
+            }
+        }
         IntentPayload::DeviceMaintenance(m) => match target {
             Target::Maintenance(t) => maintenance::mutate(tx, m, t),
             _ => Err(mismatch()),

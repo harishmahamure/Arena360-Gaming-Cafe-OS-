@@ -121,6 +121,7 @@ pub(crate) async fn run<S: IpcServer>(
     let mut hub_state = ctx.hub_state.subscribe();
     let mut toasts = ctx.toasts.subscribe();
     let mut exits = ctx.admin.active.subscribe();
+    let mut tests = ctx.test_session.subscribe();
     let mut theme = ctx.theme.subscribe();
     let mut current: Option<Current> = None;
     let mut held = false;
@@ -147,6 +148,7 @@ pub(crate) async fn run<S: IpcServer>(
                             Some(e) => IpcMsg::AdminExitStarted { until: e.until },
                             None => IpcMsg::AdminExitEnded,
                         });
+                        let _ = out.try_send(crate::test_session::message(*tests.borrow_and_update()));
                         dog.on_connected(now_ms());
                         tracing::info!(conn = id, "app connected");
                         current = Some(Current { id, out, kill });
@@ -226,6 +228,13 @@ pub(crate) async fn run<S: IpcServer>(
                     Some(e) => IpcMsg::AdminExitStarted { until: e.until },
                     None => IpcMsg::AdminExitEnded,
                 };
+                if let Some(c) = &current {
+                    let _ = c.out.try_send(msg);
+                }
+            }
+            changed = tests.changed() => {
+                if changed.is_err() { break; }
+                let msg = crate::test_session::message(*tests.borrow_and_update());
                 if let Some(c) = &current {
                     let _ = c.out.try_send(msg);
                 }

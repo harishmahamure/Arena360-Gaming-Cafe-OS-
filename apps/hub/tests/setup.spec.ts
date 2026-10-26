@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { HubSnapshot, SessionStaff, SetupStatus } from "@arena/ui/generated";
+import type { HubSnapshot, SessionStaff, SetupStatus, SnapshotDevice } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -16,6 +16,23 @@ const COUNTER: SessionStaff = {
   role_name: "Counter",
   permissions: ["session.start"],
 };
+const MANAGER: SessionStaff = {
+  ...COUNTER,
+  display_name: "Manager",
+  role_name: "Manager",
+  permissions: ["session.start", "device.manage"],
+};
+const kiosk = (id: string, over: Partial<SnapshotDevice> = {}): SnapshotDevice => ({
+  device_id: id,
+  label: `PC-${id}`,
+  class: "paired",
+  zone: null,
+  online: true,
+  kind: "pc",
+  group_id: "G0",
+  status: "online",
+  ...over,
+});
 const STATUS: SetupStatus = {
   opening_hours_set: false,
   backup_location_set: false,
@@ -27,7 +44,12 @@ const STATUS: SetupStatus = {
   test_session: "unset",
 };
 
-function snapshot(setup: SetupStatus, groups: number, paired: boolean): HubSnapshot {
+function snapshot(
+  setup: SetupStatus,
+  groups: number,
+  paired: boolean,
+  devices: SnapshotDevice[] = [],
+): HubSnapshot {
   return {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     groups: Array.from({ length: groups }, (_, i) => ({
@@ -40,8 +62,8 @@ function snapshot(setup: SetupStatus, groups: number, paired: boolean): HubSnaps
     })),
     zones: [],
     devices: paired
-      ? [{ device_id: "D1", label: "PC-1", class: "paired", zone: null, online: true }]
-      : [],
+      ? [{ device_id: "D1", label: "PC-1", class: "paired", zone: null, online: true }, ...devices]
+      : devices,
     locale: {
       currency: "INR",
       exponent: 2,
@@ -61,7 +83,14 @@ function snapshot(setup: SetupStatus, groups: number, paired: boolean): HubSnaps
   };
 }
 
-async function open(page: Page, body: HubSnapshot) {
+type Reply = { status: number; body: unknown };
+
+async function open(
+  page: Page,
+  body: HubSnapshot,
+  staff: SessionStaff = COUNTER,
+  intent: { posts: unknown[]; reply: Reply } = { posts: [], reply: { status: 200, body: {} } },
+) {
   await page.addInitScript((t) => sessionStorage.setItem("arena.hub.token", t), "counter-token");
   await page.route(`${HUB}/**`, (route) => {
     const req = route.request();
@@ -77,7 +106,10 @@ async function open(page: Page, body: HubSnapshot) {
       case "/ui/snapshot":
         return json(200, body);
       case "/ui/me":
-        return json(200, COUNTER);
+        return json(200, staff);
+      case "/ui/intent":
+        intent.posts.push(req.postDataJSON());
+        return json(intent.reply.status, intent.reply.body);
       case "/ui/events":
         return route.fulfill({
           status: 200,
@@ -145,6 +177,106 @@ test("the Setup section is in the Settings navigation and passes axe", async ({ 
     "aria-current",
     "page",
   );
+  const results = await new AxeBuilder({ page }).analyze();
+  const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(bad.map((v) => v.id)).toEqual([]);
+});
+
+const pick = (page: Page) => page.getByLabel(en["hub.settings.setup.test_session.pick"]);
+const startButton = (page: Page) =>
+  page.getByRole("button", { name: en["hub.settings.setup.test_session.start"], exact: true });
+
+test("a counter user sees the Test session row without a Start button", async ({ page }) => {
+  await open(page, snapshot(STATUS, 1, true, [kiosk("D2")]));
+  await expect(row(page, "hub.settings.setup.test_session")).toBeVisible();
+  await expect(pick(page)).toHaveCount(0);
+  await expect(startButton(page)).toHaveCount(0);
+});
+
+test("a manager picks an online grouped PC and Start sends device.test_session.start", async ({
+  page,
+}) => {
+  const intent = { posts: [] as unknown[], reply: { status: 200, body: { applied: {} } } };
+  await open(
+    page,
+    snapshot(STATUS, 1, true, [
+      kiosk("D2"),
+      kiosk("D3", { online: false }),
+      kiosk("D4", { group_id: null }),
+      kiosk("D5", { kind: "console" }),
+      kiosk("D6", { status: "maintenance" }),
+      kiosk("D7"),
+    ]),
+    MANAGER,
+    intent,
+  );
+  await expect(pick(page).locator("option")).toHaveText(["PC-D2", "PC-D7"]);
+  await pick(page).selectOption("D7");
+  await startButton(page).click();
+  await expect.poll(() => intent.posts.length).toBe(1);
+  const sent = intent.posts[0] as { intent: { payload: unknown; kind: string } };
+  expect(sent.intent.kind).toBe("device.test_session.start");
+  expect(sent.intent.payload).toEqual({ kind: "device.test_session.start", device_id: "D7" });
+});
+
+test("a refusal shows inline and the list stays open", async ({ page }) => {
+  const intent = {
+    posts: [] as unknown[],
+    reply: {
+      status: 422,
+      body: {
+        code: "VALIDATION_FAILED",
+        message: "a test session is already running",
+        field: "device_id",
+      },
+    },
+  };
+  await open(page, snapshot(STATUS, 1, true, [kiosk("D2")]), MANAGER, intent);
+  await startButton(page).click();
+  await expect(page.getByTestId("test-session-refusal")).toContainText(
+    "a test session is already running",
+  );
+  await expect(pick(page)).toBeVisible();
+});
+
+test("a running test shows its line and hides Start", async ({ page }) => {
+  await open(
+    page,
+    snapshot({ ...STATUS, test_session: "running" }, 1, true, [kiosk("D2")]),
+    MANAGER,
+  );
+  await expect(page.getByTestId("test-session-state")).toHaveText(
+    en["hub.settings.setup.test_session.running"],
+  );
+  await expect(startButton(page)).toHaveCount(0);
+});
+
+test("a failed test shows its line and offers Start again", async ({ page }) => {
+  await open(
+    page,
+    snapshot({ ...STATUS, test_session: "failed" }, 1, true, [kiosk("D2")]),
+    MANAGER,
+  );
+  await expect(page.getByTestId("test-session-state")).toHaveText(
+    en["hub.settings.setup.test_session.failed"],
+  );
+  await expect(startButton(page)).toBeVisible();
+});
+
+test("a passed test shows its line", async ({ page }) => {
+  await open(
+    page,
+    snapshot({ ...STATUS, test_session: "passed" }, 1, true, [kiosk("D2")]),
+    MANAGER,
+  );
+  await expect(page.getByTestId("test-session-state")).toHaveText(
+    en["hub.settings.setup.test_session.passed"],
+  );
+});
+
+test("the Test session form passes axe", async ({ page }) => {
+  await open(page, snapshot(STATUS, 1, true, [kiosk("D2")]), MANAGER);
+  await expect(startButton(page)).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(bad.map((v) => v.id)).toEqual([]);

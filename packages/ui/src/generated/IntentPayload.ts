@@ -11,6 +11,8 @@ import type { DeviceMaintenance } from "./DeviceMaintenance";
 import type { DevicePlace } from "./DevicePlace";
 import type { DeviceRegister } from "./DeviceRegister";
 import type { DeviceRevoke } from "./DeviceRevoke";
+import type { DeviceTestSessionCompleted } from "./DeviceTestSessionCompleted";
+import type { DeviceTestSessionStart } from "./DeviceTestSessionStart";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
 import type { GroupDelete } from "./GroupDelete";
 import type { GroupUpsert } from "./GroupUpsert";
@@ -63,4 +65,6 @@ export type IntentPayload =
   | ({ kind: "stock.in" } & StockIn)
   | ({ kind: "stock.in.reverted" } & StockInReverted)
   | ({ kind: "device.maintenance" } & DeviceMaintenance)
-  | ({ kind: "rate.upsert" } & RateUpsert);
+  | ({ kind: "rate.upsert" } & RateUpsert)
+  | ({ kind: "device.test_session.start" } & DeviceTestSessionStart)
+  | ({ kind: "device.test_session.completed" } & DeviceTestSessionCompleted);

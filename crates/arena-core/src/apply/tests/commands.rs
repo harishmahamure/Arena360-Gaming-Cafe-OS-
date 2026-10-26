@@ -78,11 +78,7 @@ async fn a_rejected_command_writes_nothing_but_its_record_and_is_not_retried() {
 #[tokio::test]
 async fn commands_the_hub_cannot_run_are_recorded_as_unsupported() {
     let f = bootstrapped().await;
-    for (id, kind) in [
-        (1, "branch.go_live"),
-        (2, "setup.test_session"),
-        (3, "pricing.set"),
-    ] {
+    for (id, kind) in [(1, "branch.go_live"), (3, "pricing.set")] {
         let row = f
             .writer
             .apply_command(cmd(id, kind, json!({})))

@@ -11,6 +11,7 @@ use crate::permission::{Permission, Requirement};
 use crate::printer::PrinterStatusSet;
 use crate::process::KioskProcessBlocked;
 use crate::scope::ClientClass;
+use crate::test_session::{DeviceTestSessionCompleted, DeviceTestSessionStart};
 
 /// The domain an intent kind belongs to. Class scopes are checked against it: no browser class
 /// may reach a `staff`, `money` or `device` intent.
@@ -115,11 +116,15 @@ pub enum IntentKind {
     DeviceMaintenance,
     #[serde(rename = "rate.upsert")]
     RateUpsert,
+    #[serde(rename = "device.test_session.start")]
+    DeviceTestSessionStart,
+    #[serde(rename = "device.test_session.completed")]
+    DeviceTestSessionCompleted,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 31] = [
+    pub const ALL: [IntentKind; 33] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -151,6 +156,8 @@ impl IntentKind {
         Self::StockInReverted,
         Self::DeviceMaintenance,
         Self::RateUpsert,
+        Self::DeviceTestSessionStart,
+        Self::DeviceTestSessionCompleted,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -187,6 +194,8 @@ impl IntentKind {
             Self::StockInReverted => "stock.in.reverted",
             Self::DeviceMaintenance => "device.maintenance",
             Self::RateUpsert => "rate.upsert",
+            Self::DeviceTestSessionStart => "device.test_session.start",
+            Self::DeviceTestSessionCompleted => "device.test_session.completed",
         }
     }
 
@@ -215,6 +224,8 @@ impl IntentKind {
             | Self::ZoneDelete
             | Self::DevicePlace
             | Self::DeviceMaintenance
+            | Self::DeviceTestSessionStart
+            | Self::DeviceTestSessionCompleted
             | Self::RateUpsert => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
             Self::StaffUpsert | Self::RoleUpsert | Self::StaffSetCredentials => {
@@ -244,6 +255,7 @@ impl IntentKind {
             | Self::ZoneDelete
             | Self::DevicePlace
             | Self::DeviceMaintenance
+            | Self::DeviceTestSessionStart
             | Self::RateUpsert => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke => Requirement::Perm(Permission::DeviceRemote),
             Self::DeviceVersionReported | Self::LicenceApply | Self::StaffSetCredentials => {
@@ -252,7 +264,9 @@ impl IntentKind {
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
-            Self::KioskLog | Self::KioskProcessBlocked => Requirement::Device,
+            Self::KioskLog | Self::KioskProcessBlocked | Self::DeviceTestSessionCompleted => {
+                Requirement::Device
+            }
             // The kiosk itself acts; the approving manager must hold `device.remote`
             // ([`elevator_permission`](Self::elevator_permission)).
             Self::DeviceAdminExit | Self::DeviceAdminRelock => Requirement::Device,
@@ -311,7 +325,10 @@ impl IntentKind {
             | Self::StaffSetCredentials
             | Self::StockIn
             | Self::StockInReverted => None,
-            Self::DeviceMaintenance | Self::RateUpsert => None,
+            Self::DeviceMaintenance
+            | Self::RateUpsert
+            | Self::DeviceTestSessionStart
+            | Self::DeviceTestSessionCompleted => None,
         }
     }
 
@@ -735,6 +752,10 @@ pub enum IntentPayload {
     DeviceMaintenance(DeviceMaintenance),
     #[serde(rename = "rate.upsert")]
     RateUpsert(RateUpsert),
+    #[serde(rename = "device.test_session.start")]
+    DeviceTestSessionStart(DeviceTestSessionStart),
+    #[serde(rename = "device.test_session.completed")]
+    DeviceTestSessionCompleted(DeviceTestSessionCompleted),
 }
 
 impl IntentPayload {
@@ -771,6 +792,8 @@ impl IntentPayload {
             Self::StockInReverted(_) => IntentKind::StockInReverted,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
             Self::RateUpsert(_) => IntentKind::RateUpsert,
+            Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
+            Self::DeviceTestSessionCompleted(_) => IntentKind::DeviceTestSessionCompleted,
         }
     }
 }
@@ -946,6 +969,26 @@ mod tests {
     }
 
     #[test]
+    fn test_session_payloads_round_trip() {
+        let start: IntentPayload = serde_json::from_value(
+            serde_json::json!({"kind": "device.test_session.start", "device_id": "D"}),
+        )
+        .unwrap();
+        assert_eq!(start.kind(), IntentKind::DeviceTestSessionStart);
+        let done: IntentPayload = serde_json::from_value(
+            serde_json::json!({"kind": "device.test_session.completed", "device_id": "D", "outcome": "timed_out"}),
+        )
+        .unwrap();
+        assert_eq!(
+            done,
+            IntentPayload::DeviceTestSessionCompleted(DeviceTestSessionCompleted {
+                device_id: "D".into(),
+                outcome: crate::test_session::TestSessionOutcome::TimedOut
+            })
+        );
+    }
+
+    #[test]
     fn rate_payload_round_trips() {
         let p: IntentPayload = serde_json::from_value(
             serde_json::json!({"kind": "rate.upsert", "group_id": "G", "price_per_hour_minor": 12000}),
@@ -976,9 +1019,16 @@ mod tests {
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }
-                "device.register" | "group.upsert" | "group.delete" | "device.assign"
-                | "zone.upsert" | "zone.delete" | "device.place" | "device.maintenance"
-                | "rate.upsert" => Requirement::Perm(Permission::DeviceManage),
+                "device.register"
+                | "group.upsert"
+                | "group.delete"
+                | "device.assign"
+                | "zone.upsert"
+                | "zone.delete"
+                | "device.place"
+                | "device.maintenance"
+                | "rate.upsert"
+                | "device.test_session.start" => Requirement::Perm(Permission::DeviceManage),
                 "device.revoke" | "device.admin_unlock" => {
                     Requirement::Perm(Permission::DeviceRemote)
                 }
@@ -988,7 +1038,9 @@ mod tests {
                 "product.upsert" | "product.delete" => Requirement::Perm(Permission::CatalogEdit),
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
                 "console.plan_requested" => Requirement::Phone,
-                "kiosk.log" | "kiosk.process_blocked" => Requirement::Device,
+                "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
+                    Requirement::Device
+                }
                 other => panic!("{other} has no pinned requirement"),
             };
             assert_eq!(kind.requirement(), want, "{}", kind.as_str());

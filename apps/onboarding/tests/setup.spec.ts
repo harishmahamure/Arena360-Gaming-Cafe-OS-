@@ -91,12 +91,21 @@ test.describe("routes", () => {
       ...ready,
       wizard: {
         branch: {},
-        done: ["cafe", "tier", "install_hub", "devices", "rates", "products", "staff"],
+        done: [
+          "cafe",
+          "tier",
+          "install_hub",
+          "devices",
+          "rates",
+          "products",
+          "staff",
+          "test_session",
+        ],
         skipped: ["printer_payments"],
       },
     });
     await page.goto("/setup");
-    await expect(page).toHaveURL(/\/setup\/test_session$/);
+    await expect(page).toHaveURL(/\/setup\/go_live$/);
     await expect(page.getByText(t("onboarding.setup.coming_soon"))).toBeVisible();
   });
 

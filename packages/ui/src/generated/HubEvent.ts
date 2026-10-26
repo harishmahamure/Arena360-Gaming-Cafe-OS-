@@ -12,4 +12,5 @@ export type HubEvent =
   | ({ kind: "settings.changed" } & SettingsValues)
   | { kind: "verifier"; verifier: ManagerVerifier }
   | { kind: "admin_unlock"; exit_id: string }
-  | { kind: "catalog.changed"; products: Array<CatalogEntry> };
+  | { kind: "catalog.changed"; products: Array<CatalogEntry> }
+  | { kind: "test_session"; lock_after_ms: number };

@@ -115,7 +115,14 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
                         arena_proto::IntentPayload::BranchBootstrap(b) if b.onboarding.is_some()
                     ))
         }
-        Requirement::Device => actor.kind == ActorKind::Device,
+        Requirement::Device => {
+            actor.kind == ActorKind::Device
+                || (actor.kind == ActorKind::System
+                    && matches!(
+                        &intent.payload,
+                        arena_proto::IntentPayload::DeviceTestSessionCompleted(_)
+                    ))
+        }
         Requirement::Phone => false,
         Requirement::Perm(p) => match actor.kind {
             ActorKind::Owner => true,

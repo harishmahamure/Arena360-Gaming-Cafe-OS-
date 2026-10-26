@@ -26,6 +26,7 @@ export function overlay(view: SetupDevicesView) {
   }));
   const refusals: Refusal[] = [];
   for (const c of view.commands) {
+    if (c.kind === "setup.test_session") continue;
     if (c.status === "rejected") {
       const subject = c.kind === "device.assign" ? (field(c, "device_id") ?? null) : null;
       if (c.error) refusals.push({ key: c.key, kind: c.kind, subject, error: c.error });

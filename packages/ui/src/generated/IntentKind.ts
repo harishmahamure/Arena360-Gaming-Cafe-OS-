@@ -34,4 +34,6 @@ export type IntentKind =
   | "stock.in"
   | "stock.in.reverted"
   | "device.maintenance"
-  | "rate.upsert";
+  | "rate.upsert"
+  | "device.test_session.start"
+  | "device.test_session.completed";

@@ -263,6 +263,55 @@ const VIEWS: {
     },
   })),
   {
+    name: "setup, test session after a failed test",
+    cloud: {
+      signedIn: true,
+      owner: READY_OWNER,
+      wizard: {
+        branch: {},
+        done: [
+          "cafe",
+          "tier",
+          "install_hub",
+          "devices",
+          "rates",
+          "products",
+          "staff",
+          "printer_payments",
+        ],
+        hubPaired: true,
+        devices: {
+          reported_at: Date.now() - 20_000,
+          setup: {
+            devices: [
+              { id: "D1", label: "PC-1", kind: "pc", group_id: "G1", status: "online" as const },
+            ],
+            groups: [
+              { id: "G1", name: "Gaming", kind: "pc", colour: "teal", sort: 0, has_rate: true },
+            ],
+            status: {
+              opening_hours_set: false,
+              backup_location_set: false,
+              ad_consent: "missing" as const,
+              printer: "ok" as const,
+              products_count: 0,
+              groups_without_rate: 0,
+              manager_exists: false,
+              test_session: "failed" as const,
+            },
+          },
+        },
+      },
+    },
+    open: async (page: Page) => {
+      await page.goto("/setup/test_session");
+      await expect(page.getByTestId("test-session-state")).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: t("common.retry"), exact: true }),
+      ).toBeVisible();
+    },
+  },
+  {
     name: "setup, install the Hub with a live code",
     cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {}, done: ["cafe", "tier"] } },
     open: async (page) => {

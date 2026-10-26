@@ -84,6 +84,7 @@ pub struct Ctx {
     pub link_hold: watch::Sender<bool>,
     pub discovery: crate::discovery::Discovery,
     pub provisioned: Notify,
+    pub test_session: watch::Sender<Option<tokio::time::Instant>>,
 }
 
 impl Ctx {
@@ -209,11 +210,13 @@ impl Runtime {
             link_hold: watch::channel(false).0,
             discovery,
             provisioned: Notify::new(),
+            test_session: watch::channel(None).0,
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![
             tokio::spawn(crate::hub_link::run(Arc::clone(&ctx), stop_rx.clone())),
             tokio::spawn(crate::admin_exit::run(Arc::clone(&ctx), stop_rx.clone())),
+            tokio::spawn(crate::test_session::run(Arc::clone(&ctx), stop_rx.clone())),
             tokio::spawn(crate::app::run(Arc::clone(&ctx), ipc, launcher, stop_rx)),
         ];
         Ok(Self { ctx, stop, tasks })

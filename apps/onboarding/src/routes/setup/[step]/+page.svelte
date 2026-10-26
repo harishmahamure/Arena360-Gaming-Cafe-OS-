@@ -9,6 +9,7 @@
   import ProductsStep from "../../../lib/ProductsStep.svelte";
   import RatesStep from "../../../lib/RatesStep.svelte";
   import StaffStep from "../../../lib/StaffStep.svelte";
+  import TestSessionStep from "../../../lib/TestSessionStep.svelte";
   import TierStep from "../../../lib/TierStep.svelte";
   import { STEP_NAMES, isStep, stepIndex, stepPath, wizard } from "../../../lib/wizard.svelte";
 
@@ -42,6 +43,8 @@
   <StaffStep />
 {:else if open === "printer_payments"}
   <PrinterStep />
+{:else if open === "test_session"}
+  <TestSessionStep />
 {:else if open}
   <h1 tabindex="-1">{t(STEP_NAMES[open])}</h1>
   <p class="soon">{t("onboarding.setup.coming_soon")}</p>

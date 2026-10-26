@@ -5,6 +5,8 @@
     "toast": "toast",
     "adminExit": "admin-exit",
     "adminExitEnded": "admin-exit-ended",
+    "testSession": "test-session",
+    "testSessionEnded": "test-session-ended",
     "theme": "theme",
     "discoveryFound": "discovery-found",
     "discoveryDone": "discovery-done"
@@ -16,6 +18,7 @@
     "heartbeat": "heartbeat",
     "adminExit": "admin_exit",
     "adminExitStatus": "admin_exit_status",
+    "testSession": "test_session",
     "theme": "theme",
     "discover": "discover",
     "probeIp": "probe_ip",

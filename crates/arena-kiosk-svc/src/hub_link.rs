@@ -260,6 +260,9 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                     Some(HubEvent::AdminUnlock { exit_id }) => {
                         crate::admin_exit::grant_remote(ctx, client, exit_id).await;
                     }
+                    Some(HubEvent::TestSession { lock_after_ms }) => {
+                        crate::test_session::begin(ctx, lock_after_ms);
+                    }
                     Some(HubEvent::Applied(_) | HubEvent::CatalogChanged { .. }) => {}
                     None => events = None,
                 }

@@ -27,7 +27,8 @@ use arena_core::{Applied, DeviceDirectory};
 use arena_proto::{
     AdminExitMode, AdminUnlockAckEvent, AppError, AppliedSummary, ChangeOpKind, ChangeSummary,
     ClientClass, ErrorCode, EventFrame, Frame, FrameBody, HcTarget, HubEvent, ManagerVerifier,
-    PAIRED_SETTINGS_PREFIX, SettingEntry, SettingsValues, may_read_setting, parse_hc_key,
+    PAIRED_SETTINGS_PREFIX, SettingEntry, SettingsValues, TEST_SESSION_MS, TestSessionState,
+    TestSessionStatus, may_read_setting, parse_hc_key,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -302,6 +303,44 @@ impl Registry {
             },
         );
         self.push_paired(&msg, Some(device_id))
+    }
+
+    pub(crate) fn push_test_session(&self, device_id: &str) -> usize {
+        let msg = event_frame(
+            self.next_rid(),
+            HubEvent::TestSession {
+                lock_after_ms: TEST_SESSION_MS,
+            },
+        );
+        self.push_paired(&msg, Some(device_id))
+    }
+
+    async fn push_test_sessions(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
+        let key = arena_proto::KEY_TEST_SESSION;
+        if !applied
+            .changes
+            .iter()
+            .any(|c| c.tbl == "settings" && c.row_id.ends_with(&format!("/{key}")))
+        {
+            return;
+        }
+        let dir = Arc::clone(devices);
+        match tokio::task::spawn_blocking(move || dir.settings(&[key.to_owned()])).await {
+            Ok(Ok(rows)) => {
+                let running = rows
+                    .first()
+                    .and_then(|r| TestSessionStatus::parse(&r.value))
+                    .filter(|s| s.state == TestSessionState::Running);
+                if let Some(id) = running.and_then(|s| s.device_id) {
+                    let sent = self.push_test_session(&id);
+                    tracing::info!(device_id = %id, sessions = sent, "test session pushed");
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), "test session read failed")
+            }
+            Err(e) => tracing::warn!(error = %e, "test session read panicked"),
+        }
     }
 
     /// Re-reads the verifier and pushes it when its version changed since the last push.
@@ -641,6 +680,7 @@ impl Registry {
                         self.push_verifier_if_changed(&devices).await;
                     }
                     self.push_remote_exits(&devices, &applied).await;
+                    self.push_test_sessions(&devices, &applied).await;
                     let mut touched: Vec<String> = applied
                         .changes
                         .iter()

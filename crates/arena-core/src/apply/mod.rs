@@ -43,6 +43,7 @@ mod settings_set;
 mod staff_credentials;
 mod staff_roles;
 mod stock;
+mod test_session;
 mod ttl_dedupe;
 mod validate;
 pub(crate) mod verifier;
@@ -141,6 +142,7 @@ pub(crate) enum Target {
     Stock(Box<stock::StockTarget>),
     Maintenance(Box<maintenance::MaintenanceTarget>),
     Rate(Box<rates::RateTarget>),
+    TestSession(Box<test_session::SessionTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -168,6 +170,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Maintenance(Box::new(maintenance::load(tx, &intent.payload)?))
         }
         P::RateUpsert(_) => Target::Rate(Box::new(rates::load(tx, &intent.payload)?)),
+        P::DeviceTestSessionStart(_) | P::DeviceTestSessionCompleted(_) => {
+            test_session::load(tx, &intent.payload)?
+        }
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
         }

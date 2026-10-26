@@ -91,6 +91,28 @@ pub fn device_admin_exit(
     }
 }
 
+pub fn device_test_session_locked(device_id: &str, now_ms: i64) -> Intent {
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::DeviceTestSessionCompleted,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: now_ms,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::Device,
+            id: device_id.to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::DeviceTestSessionCompleted(
+            arena_proto::DeviceTestSessionCompleted {
+                device_id: device_id.to_owned(),
+                outcome: arena_proto::TestSessionOutcome::Locked,
+            },
+        ),
+    }
+}
+
 /// A `device.admin_relock` intent from `device_id`, minted at `now_ms` (when it re-locked).
 pub fn device_admin_relock(device_id: &str, now_ms: i64, exit_id: &str) -> Intent {
     Intent {

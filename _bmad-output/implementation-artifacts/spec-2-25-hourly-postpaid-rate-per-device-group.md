@@ -2,7 +2,7 @@
 title: 'Story 2.25: Hourly postpaid rate per device group'
 type: 'feature'
 created: '2026-10-26'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-2-context.md'
@@ -68,7 +68,7 @@ context:
 
 ## Review Triage Log
 
-Not reviewed yet. Decisions: no `base_rev` on `rate.upsert` (the new row replaces the active one, last write wins, so there is no STALE path); an identical price still writes a new history row (the Hub UI is the only caller and does not special-case it). Verify gate: `cargo test --workspace` (all pass), `arena-api --features dev-fixtures` pass, clippy `-D warnings` and fmt clean, `pnpm --filter @arena/hub check` 0 errors, Hub Playwright 539 passed / 11 skipped, every `pnpm run check:*` and `test:scripts` pass (`check:generated` is git-status based and passes once the regenerated types are committed). Known unrelated failure: `arena-hub --features dev-fixtures --test dev_seed` (2 tests, `USER_LIMIT` staff limit) fails identically on a clean tree.
+Reviewed: no blocking findings; verify gate re-run green. Decisions: no `base_rev` on `rate.upsert` (the new row replaces the active one, last write wins, so there is no STALE path); an identical price still writes a new history row (the Hub UI is the only caller and does not special-case it). Verify gate: `cargo test --workspace` (all pass), `arena-api --features dev-fixtures` pass, clippy `-D warnings` and fmt clean, `pnpm --filter @arena/hub check` 0 errors, Hub Playwright 539 passed / 11 skipped, every `pnpm run check:*` and `test:scripts` pass (`check:generated` is git-status based and passes once the regenerated types are committed). Known unrelated failure: `arena-hub --features dev-fixtures --test dev_seed` (2 tests, `USER_LIMIT` staff limit) fails identically on a clean tree.
 
 ## Verification
 

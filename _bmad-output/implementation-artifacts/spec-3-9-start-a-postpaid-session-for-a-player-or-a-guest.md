@@ -2,7 +2,7 @@
 title: 'Story 3.9: Start a postpaid session for a player or a guest'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_commit: 'b774a293fd62ab0177f1536c36eaf0b53c1aedf8'
 baseline_revision: 'b774a293fd62ab0177f1536c36eaf0b53c1aedf8'
 review_loop_iteration: 0

@@ -69,6 +69,10 @@
   const fitting = $derived(groups.filter((g) => g.kind === "pc"));
   const needsRemote = $derived(!hasPermission(staff, "device.remote"));
   const free = $derived(device.status === "online");
+
+  $effect(() => {
+    if (!free) picked = null;
+  });
   const canLookup = $derived(hasPermission(staff, "player.view"));
   const unassignedRefusal = $derived(
     cmd?.state === "refused" && cmd.refusal === "hub.session.unassigned",

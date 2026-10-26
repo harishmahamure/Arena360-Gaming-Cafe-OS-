@@ -301,6 +301,32 @@ async fn a_busy_pc_is_refused_and_power_commands_are_blocked() {
 }
 
 #[tokio::test]
+async fn a_pc_held_in_session_without_a_live_row_is_busy() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;
+    f.writer
+        .submit({
+            let d = d.clone();
+            move |tx| arena_store::set_device_state(tx, &d, "in_session", None, None)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        refusal(start(&f, &d, None).await),
+        (ErrorCode::PcBusy, Some("device_id".into()))
+    );
+    let power = IntentPayload::DevicePower(DevicePower {
+        device_id: d.clone(),
+        action: PcAction::Restart,
+    });
+    assert_eq!(
+        refusal(submit(&f, owner(), power).await).0,
+        ErrorCode::PcBusy
+    );
+    assert!(sessions(&f).is_empty());
+}
+
+#[tokio::test]
 async fn a_retried_key_returns_the_original_outcome_and_one_session() {
     let f = bootstrapped().await;
     let d = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;

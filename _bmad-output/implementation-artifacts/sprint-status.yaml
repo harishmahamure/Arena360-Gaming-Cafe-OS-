@@ -65,7 +65,7 @@ development_status:
   epic-2-retrospective: optional
 
   epic-3: backlog
-  3-1-branch-billing-rules-rounding-minimum-grace-and-time-up-mode: review
+  3-1-branch-billing-rules-rounding-minimum-grace-and-time-up-mode: done
   3-2-floor-view-shows-every-device-as-a-live-tile-grouped-by-zone: backlog
   3-3-floor-view-performance-proven-on-reference-hardware: backlog
   3-4-collapsible-zones-with-per-state-counts: backlog

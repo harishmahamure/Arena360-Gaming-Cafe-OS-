@@ -227,7 +227,7 @@ test("the bounds are accepted", async ({ page }) => {
   expect(hub.intents.map((i) => i.value)).toEqual(["60", "240", "0"]);
 });
 
-for (const bad of ["", "abc", "1e1", "+5", "-1", "12.5", "0", "61"]) {
+for (const bad of ["", "abc", "1e1", "+5", "-1", "12.5", "0", "61", "015"]) {
   test(`rounding ${JSON.stringify(bad)} shows an inline error and writes nothing`, async ({
     page,
   }) => {

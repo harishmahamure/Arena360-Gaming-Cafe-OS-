@@ -2,7 +2,7 @@
 title: 'Story 3.1: Branch billing rules — rounding, minimum, grace and time-up mode'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: '628df76cb901da6836ee77309b20d0df2f70db61'
 review_loop_iteration: 0
 context:

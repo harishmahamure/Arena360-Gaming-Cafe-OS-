@@ -19,7 +19,7 @@ export const MODES = ["clean_up", "staff_handles"] as const;
 
 export function validMinutes(field: Exclude<Field, "mode">, text: string): boolean {
   const [min, max] = RANGES[field];
-  return /^\d{1,3}$/.test(text) && Number(text) >= min && Number(text) <= max;
+  return /^(0|[1-9]\d{0,2})$/.test(text) && Number(text) >= min && Number(text) <= max;
 }
 
 export const validField = (field: Field, text: string): boolean =>

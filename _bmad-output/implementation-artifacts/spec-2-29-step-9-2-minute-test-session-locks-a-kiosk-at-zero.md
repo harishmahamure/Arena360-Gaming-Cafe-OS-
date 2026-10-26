@@ -2,7 +2,7 @@
 title: 'Story 2.29: Step 9 — 2-minute test session locks a kiosk at zero'
 type: 'feature'
 created: '2026-10-26'
-status: 'review'
+status: 'done'
 baseline_commit: '41cf8f50b098fdcfd6cfb57ccd9d767d4ea1f94b'
 review_loop_iteration: 0
 followup_review_recommended: false

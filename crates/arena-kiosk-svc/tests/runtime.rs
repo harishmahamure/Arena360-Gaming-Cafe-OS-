@@ -1553,6 +1553,16 @@ async fn a_test_session_locks_at_zero_on_the_monotonic_clock_without_the_hub() {
             .unwrap()
             .into_iter()
             .filter(|q| q.intent.kind == arena_proto::IntentKind::DeviceTestSessionCompleted)
+            .inspect(|q| {
+                let arena_proto::IntentPayload::DeviceTestSessionCompleted(c) = &q.intent.payload
+                else {
+                    panic!("wrong payload")
+                };
+                assert_eq!(c.outcome, arena_proto::TestSessionOutcome::Locked);
+                assert_eq!(c.device_id, q.intent.actor.id);
+                assert_eq!(q.intent.actor.kind, arena_proto::ActorKind::Device);
+                assert_ne!(c.device_id, "unprovisioned");
+            })
             .count()
     };
     arena_kiosk_svc::test_session::begin(&ctx, 120_000);

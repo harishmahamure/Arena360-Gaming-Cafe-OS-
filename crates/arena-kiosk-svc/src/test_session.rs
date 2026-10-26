@@ -12,7 +12,9 @@ pub fn begin(ctx: &Ctx, lock_after_ms: u64) {
         if d.is_some() {
             return false;
         }
-        *d = Some(Instant::now() + Duration::from_millis(lock_after_ms));
+        *d = Some(
+            Instant::now() + Duration::from_millis(lock_after_ms.min(arena_proto::TEST_SESSION_MS)),
+        );
         true
     });
 }

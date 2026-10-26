@@ -38,7 +38,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
-use arena_proto::{AppliedEvent, SettingsChangedEvent, SnapshotLocale, SnapshotUi};
+use arena_proto::{
+    AppliedEvent, SessionStartedEvent, SettingsChangedEvent, SnapshotLocale, SnapshotUi,
+};
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -177,6 +179,15 @@ fn setting_keys(applied: &Applied) -> Vec<String> {
         .collect()
 }
 
+fn session_started(applied: &Applied) -> Option<SessionStartedEvent> {
+    let row = |tbl: &str| applied.changes.iter().find(|c| c.tbl == tbl);
+    let session = row("sessions").filter(|c| c.op == arena_core::ChangeOp::Insert)?;
+    Some(SessionStartedEvent {
+        session_id: session.row_id.clone(),
+        device_id: row("devices_meta")?.row_id.clone(),
+    })
+}
+
 fn role_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Role> {
     status.as_ref().map(|s| s.borrow().role)
 }
@@ -259,6 +270,10 @@ impl HubTask {
                             .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta"))
                         {
                             self.send("devices.changed", "{}".into(), false);
+                        }
+                        if let Some(started) = session_started(&applied) {
+                            let data = serde_json::to_string(&started).unwrap_or_default();
+                            self.send("session.started", data, false);
                         }
                         if let Some(c) = applied
                             .changes
@@ -842,6 +857,79 @@ mod tests {
             assert!(seen.len() < 5, "{seen:?}");
         }
         assert_eq!(hub.lan.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_session_start_pushes_session_started_with_devices_changed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let submit = |payload| hub.writer.submit_intent(intent_as(owner(), payload, None));
+        let device = submit(IntentPayload::DeviceRegister(
+            arena_proto::DeviceRegister::new(
+                arena_proto::ClientClass::Paired,
+                "PC-01",
+                arena_core::devices::hash_token_secret("s").unwrap(),
+            ),
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+            .row_id
+            .clone();
+        let group = submit(IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+            id: None,
+            name: "PCs".into(),
+            group_kind: "pc".into(),
+            colour: "teal".into(),
+            sort_order: 1,
+        }))
+        .await
+        .unwrap()
+        .changes[0]
+            .row_id
+            .clone();
+        submit(IntentPayload::RateUpsert(arena_proto::RateUpsert {
+            group_id: group.clone(),
+            price_per_hour_minor: 12_000,
+        }))
+        .await
+        .unwrap();
+        submit(IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+            device_id: device.clone(),
+            group_id: Some(group),
+        }))
+        .await
+        .unwrap();
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let applied = submit(IntentPayload::SessionStart(arena_proto::SessionStart {
+            device_id: device.clone(),
+            mode: arena_proto::SessionMode::Postpaid,
+            player_id: None,
+        }))
+        .await
+        .unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            if event == "session.started" {
+                assert_eq!(
+                    data,
+                    serde_json::json!({
+                        "session_id": applied.changes[0].row_id,
+                        "device_id": device
+                    })
+                );
+                break;
+            }
+            seen.push(event);
+            assert!(seen.len() < 6, "{seen:?}");
+        }
+        assert!(seen.contains(&"devices.changed".to_owned()), "{seen:?}");
     }
 
     #[tokio::test]

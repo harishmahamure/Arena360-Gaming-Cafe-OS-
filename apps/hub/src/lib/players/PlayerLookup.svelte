@@ -11,7 +11,7 @@
   }: {
     onpick: (hit: PlayerHit) => void;
     onguest: () => void;
-    oncreate: (phone: string) => void;
+    oncreate?: (phone: string) => void;
   } = $props();
 
   let q = $state("");
@@ -79,10 +79,12 @@
     {:else if none}
       <p class="type-hub-label">{t("hub.players.lookup.none")}</p>
       <div class="row">
-        <Button
-          label="hub.players.create"
-          onclick={() => oncreate(digits.length === 10 ? `+91${digits}` : `+${digits}`)}
-        />
+        {#if oncreate}
+          <Button
+            label="hub.players.create"
+            onclick={() => oncreate(digits.length === 10 ? `+91${digits}` : `+${digits}`)}
+          />
+        {/if}
         <Button label="hub.players.lookup.guest" variant="secondary" onclick={onguest} />
       </div>
     {/if}

@@ -61,4 +61,8 @@ export type ErrorCode =
   | "LOGIN_TAKEN"
   | "USER_LIMIT"
   | "USERNAME_TAKEN"
-  | "PHONE_TAKEN";
+  | "PHONE_TAKEN"
+  | "PC_BUSY"
+  | "PC_UNAVAILABLE"
+  | "NO_RATE"
+  | "DEVICE_UNASSIGNED";

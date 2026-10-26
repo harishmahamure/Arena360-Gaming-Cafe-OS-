@@ -41,6 +41,7 @@ mod products;
 mod rates;
 mod read_grants;
 pub(crate) mod seed_defaults;
+mod session;
 mod settings_set;
 mod staff_credentials;
 mod staff_roles;
@@ -147,6 +148,7 @@ pub(crate) enum Target {
     TestSession(Box<test_session::SessionTarget>),
     Pc(Box<pc_command::PcTarget>),
     Player(Box<players::PlayerTarget>),
+    Session(Box<session::SessionTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -190,6 +192,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::PlayerCreate(_) | P::PlayerUpdate(_) | P::PlayerPasswordReset(_) => {
             Target::Player(Box::new(players::load(tx, &intent.payload)?))
         }
+        P::SessionStart(s) => Target::Session(Box::new(session::load(tx, s)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }
@@ -237,7 +240,7 @@ pub(crate) fn run(
     guards::authorize(intent, &target)?;
     guards::base_rev(intent, &target)?;
     validate::validate(intent, &target)?;
-    let written = mutate::mutate(tx, intent, &target, now)?;
+    let written = mutate::mutate(tx, intent, &target, &epoch, now)?;
     // A change to staff or roles may change who can unlock a kiosk offline.
     if matches!(
         intent.kind,

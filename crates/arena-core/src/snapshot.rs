@@ -30,6 +30,7 @@ pub fn build_snapshot(
         .map(|m| (m.device_id.clone(), m))
         .collect();
     HubSnapshot {
+        sessions: Vec::new(),
         locale,
         ui,
         // The probe's state is the Hub status's, not the database's: the snapshot handler
@@ -115,8 +116,8 @@ pub fn build_snapshot(
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, meta, groups, rates, zones, locale, ui, setup) =
-        store.read_consistent(|s| {
+    let (branch, devices, meta, groups, rates, zones, locale, ui, setup, sessions) = store
+        .read_consistent(|s| {
             Ok((
                 s.branch_summary()?,
                 s.devices()?,
@@ -127,10 +128,23 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
                 read_locale(s, now_ms)?,
                 read_ui(s)?,
                 read_setup(s)?,
+                s.live_sessions()?,
             ))
         })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
+    snapshot.sessions = sessions
+        .into_iter()
+        .map(|s| arena_proto::SnapshotSession {
+            id: s.id,
+            device_id: s.device_id,
+            state: s.state,
+            started_at: s.started_at,
+            player_id: s.player_id,
+            username: s.username,
+            guest_no: s.guest_no,
+        })
+        .collect();
     for g in &mut snapshot.groups {
         g.rate_minor = rates
             .iter()
@@ -259,6 +273,17 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         Ok(store.path().to_path_buf())
+    }
+
+    pub fn paired_device(&self, device_id: &str) -> Result<bool, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store
+            .devices()?
+            .iter()
+            .any(|d| d.device_id == device_id && !d.token_hash.is_empty()))
     }
 
     pub fn owner_wrote(&self, epoch: &str, seq: i64) -> bool {
@@ -482,6 +507,7 @@ mod tests {
                 }),
                 groups: vec![],
                 zones: vec![],
+                sessions: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
                     label: "Front PC".into(),
@@ -558,6 +584,7 @@ mod tests {
                 branch: None,
                 groups: vec![],
                 zones: vec![],
+                sessions: vec![],
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),

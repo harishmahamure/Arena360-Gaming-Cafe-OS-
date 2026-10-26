@@ -1,7 +1,7 @@
 use arena_proto::{AppError, ErrorCode, Intent, IntentPayload};
 use arena_store::{
-    ChangeOp, DeviceMetaRow, NewDeviceEvent, RowKey, StoreTx, current_branch_id, find_device_meta,
-    insert_device_event,
+    ChangeOp, DeviceMetaRow, NewDeviceEvent, RowKey, StoreTx, current_branch_id,
+    device_has_live_session, find_device_meta, insert_device_event,
 };
 
 use super::mutate::Written;
@@ -10,6 +10,7 @@ use super::mutate::Written;
 pub(crate) struct PcTarget {
     branch: Option<String>,
     device: Option<DeviceMetaRow>,
+    busy: bool,
 }
 
 fn invalid(field: &str, message: &str) -> AppError {
@@ -31,9 +32,16 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<PcTarget, AppE
         Some((id, ..)) => find_device_meta(tx, id)?.filter(|d| d.deleted_at.is_none()),
         None => None,
     };
+    let busy = match (p, &device) {
+        (IntentPayload::DevicePower(_), Some(d)) => {
+            d.state == "in_session" || device_has_live_session(tx, &d.device_id)?
+        }
+        _ => false,
+    };
     Ok(PcTarget {
         branch: current_branch_id(tx)?,
         device,
+        busy,
     })
 }
 
@@ -53,6 +61,7 @@ pub(super) fn validate(intent: &Intent, t: &PcTarget) -> Result<(), AppError> {
         ));
     }
     match &t.device {
+        Some(d) if d.kind == "pc" && t.busy => Err(super::session::busy_error()),
         Some(d) if d.kind == "pc" => Ok(()),
         Some(_) => Err(invalid("device_id", "only a PC takes this command")),
         None => Err(invalid("device_id", "no such device")),

@@ -47,11 +47,13 @@ pub enum Table {
     Rates,
     Players,
     Consents,
+    Sessions,
+    SessionSegments,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 20] = [
+    pub const ALL: [Table; 22] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -72,6 +74,8 @@ impl Table {
         Table::Rates,
         Table::Players,
         Table::Consents,
+        Table::Sessions,
+        Table::SessionSegments,
     ];
 
     /// The SQL table name.
@@ -97,6 +101,8 @@ impl Table {
             Self::Rates => "rates",
             Self::Players => "players",
             Self::Consents => "consents",
+            Self::Sessions => "sessions",
+            Self::SessionSegments => "session_segments",
         }
     }
 
@@ -123,6 +129,7 @@ impl Table {
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
             Self::Consents => &["consent_id"],
+            Self::Sessions | Self::SessionSegments => &["id"],
         }
     }
 
@@ -145,7 +152,9 @@ impl Table {
             | Self::StockMoves
             | Self::Rates
             | Self::Players
-            | Self::Consents => true,
+            | Self::Consents
+            | Self::Sessions
+            | Self::SessionSegments => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -228,6 +237,12 @@ pub enum RowKey {
     Consents {
         consent_id: String,
     },
+    Sessions {
+        id: String,
+    },
+    SessionSegments {
+        id: String,
+    },
 }
 
 impl RowKey {
@@ -253,6 +268,8 @@ impl RowKey {
             Self::Rates { .. } => Table::Rates,
             Self::Players { .. } => Table::Players,
             Self::Consents { .. } => Table::Consents,
+            Self::Sessions { .. } => Table::Sessions,
+            Self::SessionSegments { .. } => Table::SessionSegments,
         }
     }
 
@@ -285,6 +302,7 @@ impl RowKey {
             Self::Rates { rate_id } => rate_id.clone(),
             Self::Players { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
+            Self::Sessions { id } | Self::SessionSegments { id } => id.clone(),
         }
     }
 
@@ -359,6 +377,8 @@ impl RowKey {
             Table::Consents => Self::Consents {
                 consent_id: text("consent_id")?,
             },
+            Table::Sessions => Self::Sessions { id: text("id")? },
+            Table::SessionSegments => Self::SessionSegments { id: text("id")? },
         })
     }
 
@@ -390,6 +410,7 @@ impl RowKey {
             Self::Rates { rate_id } => vec![rate_id],
             Self::Players { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],
+            Self::Sessions { id } | Self::SessionSegments { id } => vec![id],
         }
     }
 }

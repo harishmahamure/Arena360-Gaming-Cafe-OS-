@@ -32,6 +32,11 @@ const REFUSALS: Record<string, MessageKey> = {
   STALE: "hub.settings.branch.stale",
   GROUP_KIND_MISMATCH: "hub.groups.kind_mismatch",
   PERMISSION_DENIED: "hub.refusal.permission",
+  PC_BUSY: "hub.session.busy",
+  "PC_BUSY:device.power": "hub.session.power_busy",
+  PC_UNAVAILABLE: "hub.session.unavailable",
+  NO_RATE: "hub.session.no_rate",
+  DEVICE_UNASSIGNED: "hub.session.unassigned",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -47,6 +52,12 @@ export const screenJob = (device_id: string, action: PcAction, text?: string) =>
 
 export const powerJob = (device_id: string, action: PcAction) =>
   job({ kind: "device.power", device_id, action }, { done: DONE[action] });
+
+export const startJob = (device_id: string, player_id?: string) =>
+  job(
+    { kind: "session.start", device_id, mode: "postpaid", player_id },
+    { track: "none", done: "hub.sheet.done.started" },
+  );
 
 export const adminUnlockJob = (device_id: string) =>
   job(
@@ -73,11 +84,13 @@ export const assignJob = (device_id: string, group_id: string, rev?: number) =>
 export const MESSAGE_MAX = 140;
 
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
-  kind === "device.screen"
-    ? "device.screen"
-    : kind === "device.power" || kind === "device.admin_unlock"
-      ? "device.remote"
-      : "device.manage";
+  kind === "session.start"
+    ? "session.start"
+    : kind === "device.screen"
+      ? "device.screen"
+      : kind === "device.power" || kind === "device.admin_unlock"
+        ? "device.remote"
+        : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 
@@ -109,7 +122,8 @@ export async function send(
   else if (outcome.kind === "error") {
     const { code, field } = outcome.error;
     const offline = code === "VALIDATION_FAILED" && field === "device_id";
-    settle(offline ? "failed" : "refused", REFUSALS[code] ?? "hub.settings.failed");
+    const text = REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code];
+    settle(offline ? "failed" : "refused", text ?? "hub.settings.failed");
   } else if (j.track === "none") settle("done");
   else {
     const id =

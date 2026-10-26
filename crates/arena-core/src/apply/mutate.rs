@@ -12,6 +12,7 @@ use super::{
 };
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
+use crate::status::Epoch;
 
 /// One row the intent wrote.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +29,7 @@ pub(super) fn mutate(
     tx: &StoreTx<'_>,
     intent: &Intent,
     target: &Target,
+    epoch: &Epoch,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     match &intent.payload {
@@ -260,6 +262,10 @@ pub(super) fn mutate(
                 _ => Err(mismatch()),
             }
         }
+        IntentPayload::SessionStart(s) => match target {
+            Target::Session(t) => super::session::mutate(tx, s, t, epoch, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceMaintenance(m) => match target {
             Target::Maintenance(t) => maintenance::mutate(tx, m, t),
             _ => Err(mismatch()),

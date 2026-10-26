@@ -6,6 +6,7 @@ import type { SnapshotDevice } from "./SnapshotDevice";
 import type { SnapshotGroup } from "./SnapshotGroup";
 import type { SnapshotLan } from "./SnapshotLan";
 import type { SnapshotLocale } from "./SnapshotLocale";
+import type { SnapshotSession } from "./SnapshotSession";
 import type { SnapshotUi } from "./SnapshotUi";
 import type { SnapshotZone } from "./SnapshotZone";
 
@@ -29,6 +30,7 @@ export type HubSnapshot = {
    * The live floor zones, in `sort_order` then name order.
    */
   zones: Array<SnapshotZone>;
+  sessions?: Array<SnapshotSession>;
   /**
    * The branch locale in effect now, or `null` before the branch is set up.
    */

@@ -33,6 +33,20 @@
   };
 
   const snapshot = $derived(data.hub.ok ? data.hub.snapshot : null);
+  const sessionOf = (d: SnapshotDevice) =>
+    snapshot?.sessions?.find((s) => s.device_id === d.device_id);
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!snapshot?.sessions?.length) return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(timer);
+  });
+  const two = (n: number) => String(n).padStart(2, "0");
+  const elapsed = (from: number) => {
+    const s = Math.max(0, Math.floor((now - from) / 1000));
+    return [Math.floor(s / 3600), two(Math.floor(s / 60) % 60), two(s % 60)].join(":");
+  };
   const tz = $derived(snapshot?.locale?.tz);
   const groups = $derived(snapshot?.groups ?? []);
   const zones = $derived(snapshot?.zones ?? []);
@@ -130,6 +144,7 @@
 
 {#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined, cell = false)}
   {@const badge = BADGE[device.status ?? "offline"] ?? BADGE.offline}
+  {@const session = group ? sessionOf(device) : undefined}
   {@const rate =
     group?.rate_minor != null && snapshot?.locale
       ? formatMoney(group.rate_minor, snapshot.locale)
@@ -139,6 +154,7 @@
     name={device.label}
     state={group ? badge.state : "unassigned"}
     label={group ? badge.label : undefined}
+    time={session ? elapsed(session.started_at) : undefined}
     tabindex={tabStop === device.device_id ? 0 : -1}
     {group}
     onactivate={() => (activeId = device.device_id)}
@@ -162,6 +178,10 @@
       {:else if device.status === "offline" && device.last_seen_at}
         <span data-testid="device-last-seen"
           >{t("hub.floor.last_seen", { at: formatDateTime(device.last_seen_at, tz) })}</span
+        >
+      {:else if session}
+        <span data-testid="session-line"
+          >{session.username ?? t("hub.session.guest", { n: session.guest_no ?? 0 })}</span
         >
       {:else if device.status === "online" && group}
         <span>{rate ? t("hub.floor.free_rate", { rate }) : t("hub.floor.tap_to_start")}</span>

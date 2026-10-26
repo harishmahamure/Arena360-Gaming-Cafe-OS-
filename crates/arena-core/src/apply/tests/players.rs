@@ -6,7 +6,7 @@ use arena_proto::PlayerForm;
 
 const KEK: [u8; KEK_LEN] = [9; KEK_LEN];
 
-fn form(username: &str, phone: &str) -> PlayerForm {
+pub(super) fn form(username: &str, phone: &str) -> PlayerForm {
     PlayerForm {
         username: username.into(),
         password: "secret1".into(),
@@ -27,7 +27,11 @@ fn create(f: &PlayerForm) -> (String, IntentPayload) {
     (id, IntentPayload::PlayerCreate(sealed))
 }
 
-async fn add(f: &Fixture, actor: Actor, form: &PlayerForm) -> Result<(String, Applied), AppError> {
+pub(super) async fn add(
+    f: &Fixture,
+    actor: Actor,
+    form: &PlayerForm,
+) -> Result<(String, Applied), AppError> {
     let (id, payload) = create(form);
     f.writer
         .submit_intent(intent(actor, payload))

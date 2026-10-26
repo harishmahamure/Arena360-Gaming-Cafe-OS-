@@ -33,6 +33,7 @@ export type EventHandlers = {
   /** `device.admin_unlock_ack`: a kiosk granted a remote unlock. */
   onAdminUnlockAck?: (event: AdminUnlockAckEvent) => void;
   onPcAck?: (event: PcAckEvent) => void;
+  onSessionStarted?: () => void;
   onPairingCodeChanged?: (change: PairingChange) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
@@ -91,6 +92,7 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
     });
     es.addEventListener("resync", () => handlers.onResync());
     es.addEventListener("devices.changed", () => handlers.onDevicesChanged?.());
+    es.addEventListener("session.started", () => handlers.onSessionStarted?.());
     es.addEventListener("groups.changed", (ev) => {
       try {
         const data: unknown = JSON.parse((ev as MessageEvent<string>).data);

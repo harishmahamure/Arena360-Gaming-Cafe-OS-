@@ -5,6 +5,7 @@
   import { invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
   import { SESSION_DEPENDENCY, dropElevation, elevate, hasPermission } from "./auth";
+  import PlayerLookup from "./players/PlayerLookup.svelte";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
   import {
     MESSAGE_MAX,
@@ -16,6 +17,7 @@
     powerJob,
     screenJob,
     send,
+    startJob,
     type Job,
   } from "./tile-actions.svelte";
 
@@ -51,6 +53,7 @@
   let text = $state("");
   let textError: MessageKey | null = $state(null);
   let pick = $state("");
+  let picked: { id?: string; name?: string } | null = $state(null);
   let approving: Job | null = $state(null);
   let approvalPrompt: MessageKey = $state("ui.pin.prompt");
 
@@ -65,6 +68,11 @@
   const live = $derived(isPc && assigned && !maintenance && !offline);
   const fitting = $derived(groups.filter((g) => g.kind === "pc"));
   const needsRemote = $derived(!hasPermission(staff, "device.remote"));
+  const free = $derived(device.status === "online");
+  const canLookup = $derived(hasPermission(staff, "player.view"));
+  const unassignedRefusal = $derived(
+    cmd?.state === "refused" && cmd.refusal === "hub.session.unassigned",
+  );
 
   onMount(() => {
     heading?.focus();
@@ -122,6 +130,11 @@
     }
     textError = null;
     void go(screenJob(device.device_id, "message", body));
+  }
+
+  async function focusAssign() {
+    await tick();
+    root?.querySelector<HTMLElement>('[data-testid="sheet-assign"] select')?.focus();
   }
 
   function assign(event: SubmitEvent) {
@@ -204,6 +217,11 @@
       {:else}<span>{t(cmd.state === "waiting" ? cmd.job.waiting : cmd.job.done)}</span>{/if}
     {/if}
   </p>
+  {#if unassignedRefusal}
+    <div>
+      <Button label="hub.sheet.assign" variant="secondary" onclick={() => void focusAssign()} />
+    </div>
+  {/if}
   {#if cmd?.state === "failed"}
     <div>
       <Button
@@ -253,6 +271,35 @@
     </div>
     {@render admin()}
   {:else if live}
+    {#if free}
+      <div class="section" data-testid="session-start">
+        {#if canLookup}
+          <PlayerLookup
+            onpick={(hit) => (picked = { id: hit.player_id, name: hit.name })}
+            onguest={() => (picked = {})}
+          />
+        {:else}
+          <Button
+            label="hub.players.lookup.guest"
+            variant="secondary"
+            onclick={() => (picked = {})}
+          />
+        {/if}
+        <p class="type-hub-label" role="status" data-testid="start-picked">
+          {#if picked?.id}{t("hub.session.picked", { name: picked.name ?? "" })}
+          {:else if picked}{t("hub.players.lookup.guest_picked")}{/if}
+        </p>
+        <p class="type-hub-label" data-testid="start-rate">
+          {rate ? t("hub.session.rate", { rate }) : t("hub.sheet.no_rate")}
+        </p>
+        <Button
+          label="hub.session.start"
+          disabled={busy || !picked}
+          disabledReason={busy ? "hub.sheet.waiting" : "hub.session.pick_first"}
+          onclick={() => picked && void go(startJob(device.device_id, picked.id))}
+        />
+      </div>
+    {/if}
     <div class="section" role="group" aria-label={t("hub.sheet.screen")}>
       <Button
         label="hub.sheet.unlock"

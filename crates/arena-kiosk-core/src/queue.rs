@@ -68,7 +68,11 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::CellTaken
         | ErrorCode::TierLocked
         | ErrorCode::DeviceLimit
-        | ErrorCode::UserLimit => true,
+        | ErrorCode::UserLimit
+        | ErrorCode::PcBusy
+        | ErrorCode::PcUnavailable
+        | ErrorCode::NoRate
+        | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame
         | ErrorCode::HsnRequired
         | ErrorCode::BarcodeTaken

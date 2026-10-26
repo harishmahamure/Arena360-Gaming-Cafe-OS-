@@ -112,6 +112,7 @@ mod tests {
                             | IntentCategory::Money
                             | IntentCategory::Device
                             | IntentCategory::Player
+                            | IntentCategory::Session
                     ),
                     "{} may submit {}",
                     class.as_str(),

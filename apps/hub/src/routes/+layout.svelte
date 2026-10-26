@@ -244,6 +244,7 @@
           if (locked && !unlocking) void finishUnlock(e);
         },
         onDevicesChanged: () => void refresh(),
+        onSessionStarted: () => void refresh(),
         onGroupsChanged: (byOwner) => {
           void refresh();
           if (!byOwner) return;

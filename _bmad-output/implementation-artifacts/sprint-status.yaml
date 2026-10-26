@@ -73,7 +73,7 @@ development_status:
   3-6-create-a-player-profile-with-protected-personal-data-and-con: done
   3-7-player-lookup-by-phone-guest-and-the-players-screen: done
   3-8-edit-a-player-profile-and-reset-their-password: done
-  3-9-start-a-postpaid-session-for-a-player-or-a-guest: backlog
+  3-9-start-a-postpaid-session-for-a-player-or-a-guest: review
   3-10-the-pc-unlocks-to-a-session-screen-when-a-session-starts: backlog
   3-11-end-a-postpaid-session-and-see-the-bill-to-the-minute: backlog
   3-12-settle-a-bill-into-payment-records-with-reference-rules: backlog

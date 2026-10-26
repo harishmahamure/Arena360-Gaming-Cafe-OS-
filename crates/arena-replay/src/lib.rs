@@ -359,7 +359,7 @@ mod tests {
             );
             relock.actor = Actor {
                 kind: ActorKind::Device,
-                id: kiosk,
+                id: kiosk.clone(),
             };
             writer.submit_intent(relock).await.unwrap();
             let cola = writer
@@ -517,8 +517,19 @@ mod tests {
             writer
                 .submit_intent(submit(
                     IntentPayload::PlayerPasswordReset(arena_proto::PlayerPasswordReset {
-                        player_id,
+                        player_id: player_id.clone(),
                         password_hash: arena_core::staff::hash_secret("pw2").unwrap(),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionStart(arena_proto::SessionStart {
+                        device_id: kiosk,
+                        mode: arena_proto::SessionMode::Postpaid,
+                        player_id: Some(player_id),
                     }),
                     None,
                 ))

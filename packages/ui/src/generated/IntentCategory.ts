@@ -15,4 +15,5 @@ export type IntentCategory =
   | "audit"
   | "kiosk"
   | "catalog"
-  | "player";
+  | "player"
+  | "session";

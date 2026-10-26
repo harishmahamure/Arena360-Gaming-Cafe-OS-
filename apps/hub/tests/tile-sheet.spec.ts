@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { SessionStaff, SnapshotDevice } from "@arena/ui/generated";
+import type { SessionStaff, SnapshotDevice, SnapshotSession } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { CORS, HUB, device, json, snapshot } from "./floor-fixture";
 
@@ -27,6 +27,7 @@ type Sent = {
 };
 type Hub = {
   devices: SnapshotDevice[];
+  sessions: SnapshotSession[];
   sent: Sent[];
   elevations: { items: unknown[]; pin: string }[];
   ack: boolean;
@@ -36,6 +37,16 @@ type Hub = {
 
 const PIN = "2222";
 const ONLINE = device(1, { status: "online" });
+const sessions = (): SnapshotSession[] => [
+  {
+    id: "S2",
+    device_id: device(2, {}).device_id,
+    state: "active",
+    started_at: Date.now() - 3_725_000,
+    player_id: "P1",
+    username: "asha",
+  },
+];
 const devices = (): SnapshotDevice[] => [
   ONLINE,
   device(2, { status: "in_session", floor_x: 1 }),
@@ -48,6 +59,7 @@ const devices = (): SnapshotDevice[] => [
 async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise<Hub> {
   const hub: Hub = {
     devices: devices(),
+    sessions: sessions(),
     sent: [],
     elevations: [],
     ack: true,
@@ -104,6 +116,7 @@ async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise
           rev: 1,
           rate_minor: 5000,
         });
+        snap.sessions = hub.sessions;
         snap.ui = { idle_lock_minutes: 5, hc: hub.hc };
         return json(route, snap);
       }
@@ -252,6 +265,23 @@ test("the sheet shows name, group, zone, rate and status", async ({ page }) => {
   await expect(page.getByTestId("sheet-zone")).toHaveText("Main hall");
   await expect(page.getByTestId("sheet-rate")).toHaveText("₹100.00/hr");
   await expect(page.getByTestId("sheet-status")).toContainText(en["ui.status.in_session"]);
+});
+
+test("an in-session PC shows the clock and the player on its tile and offers no start", async ({
+  page,
+}) => {
+  await open(page, "counter-token");
+  await expect(tile(page, "PC 2").getByTestId("device-presence")).toHaveText(
+    en["ui.status.in_session"],
+  );
+  await expect(tile(page, "PC 2")).toContainText(/1:02:\d\d/);
+  await expect(tile(page, "PC 2").getByTestId("session-line")).toHaveText("asha");
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("session-start")).toHaveCount(0);
+  await face(page, "PC 1").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("session-start")).toBeVisible();
 });
 
 test("a free or in-session PC offers every action", async ({ page }) => {
@@ -494,6 +524,10 @@ test("keyboard alone opens the sheet, acts, and closes it", async ({ page }) => 
   await expect(sheet(page).getByRole("heading")).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(act(page, "Close")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(act(page, "Guest")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(act(page, en["hub.session.start"])).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(act(page, "Unlock")).toBeFocused();
   await page.keyboard.press("Enter");

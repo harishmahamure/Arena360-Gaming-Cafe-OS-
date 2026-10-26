@@ -115,6 +115,10 @@ enum Op {
     PlayerReset {
         known: bool,
     },
+    Session {
+        slot: u8,
+        guest: bool,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -231,6 +235,7 @@ fn op() -> impl Strategy<Value = Op> {
             }
         ),
         1 => prop::bool::weighted(0.8).prop_map(|known| Op::PlayerReset { known }),
+        3 => (0..3u8, any::<bool>()).prop_map(|(slot, guest)| Op::Session { slot, guest }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -972,9 +977,105 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), changes_before);
             }
         }
+        Op::Session { slot, guest } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let slot = usize::from(*slot);
+            let pcs = hub.reader.rows(Table::DevicesMeta).unwrap();
+            let device = match pcs.get(slot) {
+                Some(row) => text(row, "device_id"),
+                None => {
+                    let mut reg = arena_proto::DeviceRegister::new(
+                        arena_proto::ClientClass::Paired,
+                        "PC",
+                        password_hash(),
+                    );
+                    reg.device_kind = arena_proto::DeviceKind::Pc;
+                    let device = hub
+                        .submit_new(hub.intent(IntentPayload::DeviceRegister(reg), None))
+                        .unwrap()
+                        .changes[0]
+                        .row_id
+                        .clone();
+                    let group = hub
+                        .submit_new(hub.intent(
+                            IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                                id: None,
+                                name: format!("PCs{}", pcs.len()),
+                                group_kind: "pc".into(),
+                                colour: "teal".into(),
+                                sort_order: 1,
+                            }),
+                            None,
+                        ))
+                        .unwrap()
+                        .changes[0]
+                        .row_id
+                        .clone();
+                    for payload in [
+                        IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                            group_id: group.clone(),
+                            price_per_hour_minor: 12_000,
+                        }),
+                        IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                            device_id: device.clone(),
+                            group_id: Some(group),
+                        }),
+                    ] {
+                        let out = hub.submit_new(hub.intent(payload, None));
+                        prop_assert!(out.is_ok(), "{:?}", out);
+                    }
+                    device
+                }
+            };
+            let player = hub
+                .reader
+                .rows(Table::Players)
+                .unwrap()
+                .first()
+                .map(|p| text(p, "player_id"))
+                .filter(|_| !*guest);
+            let live = |hub: &Hub| {
+                hub.reader
+                    .rows(Table::Sessions)
+                    .unwrap()
+                    .iter()
+                    .filter(|s| {
+                        text(s, "device_id") == device
+                            && ["active", "paused", "grace"].contains(&text(s, "state").as_str())
+                    })
+                    .count()
+            };
+            let busy = live(hub) > 0;
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionStart(arena_proto::SessionStart {
+                    device_id: device.clone(),
+                    mode: arena_proto::SessionMode::Postpaid,
+                    player_id: player,
+                }),
+                None,
+            ));
+            if busy {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PcBusy, Some("device_id"))));
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 3);
+            }
+            prop_assert_eq!(live(hub), 1);
+        }
         Op::Advance { ms } => hub.clock.advance(*ms),
     }
     assert_gap_free(hub)
+}
+
+fn text(row: &arena_store::Row, col: &str) -> String {
+    match &row[col] {
+        RowValue::Text(t) => t.clone(),
+        other => panic!("{col}: {other:?}"),
+    }
 }
 
 /// Replays the Hub's log into an empty database and compares the rows.

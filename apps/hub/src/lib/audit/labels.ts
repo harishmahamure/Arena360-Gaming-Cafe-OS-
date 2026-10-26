@@ -30,6 +30,7 @@ const MODULE_LABELS: Record<string, MessageKey> = {
   audit: "hub.audit.module.audit",
   kiosk: "hub.audit.module.kiosk",
   player: "hub.audit.module.player",
+  session: "hub.audit.module.session",
 };
 
 /** Intent kinds with a catalogue label; any other kind shows as it is (`settings.set`). */
@@ -39,6 +40,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "device.admin_unlock": "hub.audit.intent.device.admin_unlock",
   "device.screen": "hub.audit.intent.device.screen",
   "device.power": "hub.audit.intent.device.power",
+  "session.start": "hub.audit.intent.session.start",
   "player.update": "hub.audit.intent.player.update",
   "player.password_reset": "hub.audit.intent.player.password_reset",
   "ads.consent": "hub.audit.intent.ads.consent",

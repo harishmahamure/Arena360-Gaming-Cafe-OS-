@@ -858,7 +858,11 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::BarcodeTaken
         | ErrorCode::LoginTaken
         | ErrorCode::UsernameTaken
-        | ErrorCode::PhoneTaken => StatusCode::CONFLICT,
+        | ErrorCode::PhoneTaken
+        | ErrorCode::PcBusy
+        | ErrorCode::PcUnavailable
+        | ErrorCode::NoRate
+        | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }
@@ -1944,6 +1948,23 @@ async fn run_intent(
             "the device is offline",
         )));
     }
+    if let arena_proto::IntentPayload::SessionStart(s) = &intent.payload
+        && !auth.presence.online(&s.device_id)
+    {
+        let (reader, id) = (Arc::clone(&auth.reader), s.device_id.clone());
+        match tokio::task::spawn_blocking(move || reader.paired_device(&id)).await {
+            Ok(Ok(true)) => {
+                return fail(ui_error(AppError::with_field(
+                    ErrorCode::PcUnavailable,
+                    "device_id",
+                    "This PC is offline.",
+                )));
+            }
+            Ok(Ok(false)) => {}
+            Ok(Err(e)) => return fail(ui_error(e)),
+            Err(_) => return fail(internal()),
+        }
+    }
     let can_edit = me.permissions.contains(&Permission::SettingsEdit);
     let mut redeemed = None;
     if let Some(ticket) = elevation_ticket {
@@ -2999,6 +3020,195 @@ pub(crate) mod tests {
                 Some(hub.manager_id.as_str())
             )
         );
+    }
+
+    async fn rated_pc(hub: &Hub, token_hash: String) -> String {
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let device = hub
+            .writer
+            .submit_intent(intent_as(
+                owner(),
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    device_kind: Default::default(),
+                    class: arena_proto::ClientClass::Paired,
+                    label: "PC 1".into(),
+                    token_hash,
+                    tv_number: None,
+                    group_id: None,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let group = hub
+            .writer
+            .submit_intent(intent_as(
+                owner(),
+                IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                    id: None,
+                    name: "PCs".into(),
+                    group_kind: "pc".into(),
+                    colour: "teal".into(),
+                    sort_order: 1,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        for payload in [
+            IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                group_id: group.clone(),
+                price_per_hour_minor: 12_000,
+            }),
+            IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                device_id: device.clone(),
+                group_id: Some(group),
+            }),
+        ] {
+            hub.writer
+                .submit_intent(intent_as(owner(), payload, None))
+                .await
+                .unwrap();
+        }
+        device
+    }
+
+    fn start_body(device: &str) -> Value {
+        json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::SessionStart(arena_proto::SessionStart {
+                device_id: device.into(),
+                mode: arena_proto::SessionMode::Postpaid,
+                player_id: None,
+            }),
+            None,
+        )).unwrap()})
+    }
+
+    #[tokio::test]
+    async fn a_session_start_needs_a_paired_pc_online_but_a_manual_pc_counts_online() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let paired = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&paired)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "PC_UNAVAILABLE");
+        let store = Store::open_reader(&hub.path).unwrap();
+        assert!(store.rows(arena_store::Table::Sessions).unwrap().is_empty());
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(paired.clone()), tx);
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&paired)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["applied"]["changes"][0]["tbl"], "sessions");
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&paired)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "PC_BUSY");
+    }
+
+    #[tokio::test]
+    async fn a_manual_console_is_not_offline_but_is_refused_as_not_a_pc() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let console = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "owner".into(),
+                },
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    device_kind: arena_proto::DeviceKind::Console,
+                    class: arena_proto::ClientClass::Paired,
+                    label: "TV 1".into(),
+                    token_hash: String::new(),
+                    tv_number: Some(1),
+                    group_id: None,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&console)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["code"], "VALIDATION_FAILED");
+        assert_eq!(reply["field"], "device_id");
+    }
+
+    #[tokio::test]
+    async fn restart_of_a_pc_in_session_is_pc_busy_and_nothing_is_pushed() {
+        let hub = hub().await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let power = json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::DevicePower(arena_proto::DevicePower {
+                device_id: device.clone(),
+                action: arena_proto::PcAction::Restart,
+            }),
+            None,
+        )).unwrap()});
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(power)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "PC_BUSY");
+        assert_eq!(reply["message"], "End or pause the session first");
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

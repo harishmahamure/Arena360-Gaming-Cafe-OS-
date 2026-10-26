@@ -15,6 +15,7 @@ mod identity;
 mod migrations;
 mod players;
 mod products;
+mod sessions;
 mod staff;
 mod stock;
 
@@ -78,6 +79,10 @@ pub use products::{
 };
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
+pub use sessions::{
+    LiveSession, NewSession, device_has_live_session, insert_segment, insert_session,
+    list_live_sessions, next_guest_no,
+};
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
     find_role, find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
@@ -649,6 +654,13 @@ impl Store {
             return Ok(None);
         }
         find_player(&self.conn, player_id)
+    }
+
+    pub fn live_sessions(&self) -> Result<Vec<LiveSession>, AppError> {
+        if !self.table_exists("sessions")? {
+            return Ok(Vec::new());
+        }
+        list_live_sessions(&self.conn)
     }
 
     pub fn latest_consent(

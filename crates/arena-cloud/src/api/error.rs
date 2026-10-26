@@ -55,7 +55,11 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::BarcodeTaken
         | ErrorCode::LoginTaken
         | ErrorCode::UsernameTaken
-        | ErrorCode::PhoneTaken => StatusCode::CONFLICT,
+        | ErrorCode::PhoneTaken
+        | ErrorCode::PcBusy
+        | ErrorCode::PcUnavailable
+        | ErrorCode::NoRate
+        | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
         }

@@ -109,6 +109,10 @@ pub enum ErrorCode {
     UserLimit,
     UsernameTaken,
     PhoneTaken,
+    PcBusy,
+    PcUnavailable,
+    NoRate,
+    DeviceUnassigned,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -184,6 +188,10 @@ impl ErrorCode {
             Self::UserLimit => "USER_LIMIT",
             Self::UsernameTaken => "USERNAME_TAKEN",
             Self::PhoneTaken => "PHONE_TAKEN",
+            Self::PcBusy => "PC_BUSY",
+            Self::PcUnavailable => "PC_UNAVAILABLE",
+            Self::NoRate => "NO_RATE",
+            Self::DeviceUnassigned => "DEVICE_UNASSIGNED",
         }
     }
 }
@@ -317,6 +325,10 @@ mod tests {
             (ErrorCode::UserLimit, "USER_LIMIT"),
             (ErrorCode::UsernameTaken, "USERNAME_TAKEN"),
             (ErrorCode::PhoneTaken, "PHONE_TAKEN"),
+            (ErrorCode::PcBusy, "PC_BUSY"),
+            (ErrorCode::PcUnavailable, "PC_UNAVAILABLE"),
+            (ErrorCode::NoRate, "NO_RATE"),
+            (ErrorCode::DeviceUnassigned, "DEVICE_UNASSIGNED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

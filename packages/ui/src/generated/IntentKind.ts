@@ -41,4 +41,5 @@ export type IntentKind =
   | "device.power"
   | "player.create"
   | "player.update"
-  | "player.password_reset";
+  | "player.password_reset"
+  | "session.start";

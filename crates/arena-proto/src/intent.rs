@@ -31,6 +31,7 @@ pub enum IntentCategory {
     Kiosk,
     Catalog,
     Player,
+    Session,
 }
 
 /// What an intent asks for, as `domain.verb`.
@@ -132,11 +133,13 @@ pub enum IntentKind {
     PlayerUpdate,
     #[serde(rename = "player.password_reset")]
     PlayerPasswordReset,
+    #[serde(rename = "session.start")]
+    SessionStart,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 38] = [
+    pub const ALL: [IntentKind; 39] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -175,6 +178,7 @@ impl IntentKind {
         Self::PlayerCreate,
         Self::PlayerUpdate,
         Self::PlayerPasswordReset,
+        Self::SessionStart,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -218,6 +222,7 @@ impl IntentKind {
             Self::PlayerCreate => "player.create",
             Self::PlayerUpdate => "player.update",
             Self::PlayerPasswordReset => "player.password_reset",
+            Self::SessionStart => "session.start",
         }
     }
 
@@ -263,6 +268,7 @@ impl IntentKind {
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
+            Self::SessionStart => IntentCategory::Session,
         }
     }
 
@@ -304,6 +310,7 @@ impl IntentKind {
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 Requirement::Perm(Permission::PlayerManage)
             }
+            Self::SessionStart => Requirement::Perm(Permission::SessionStart),
         }
     }
 
@@ -364,7 +371,8 @@ impl IntentKind {
             | Self::DevicePower
             | Self::PlayerCreate
             | Self::PlayerUpdate
-            | Self::PlayerPasswordReset => None,
+            | Self::PlayerPasswordReset
+            | Self::SessionStart => None,
         }
     }
 
@@ -802,6 +810,8 @@ pub enum IntentPayload {
     PlayerUpdate(crate::PlayerUpdate),
     #[serde(rename = "player.password_reset")]
     PlayerPasswordReset(crate::PlayerPasswordReset),
+    #[serde(rename = "session.start")]
+    SessionStart(crate::SessionStart),
 }
 
 impl IntentPayload {
@@ -845,6 +855,7 @@ impl IntentPayload {
             Self::PlayerCreate(_) => IntentKind::PlayerCreate,
             Self::PlayerUpdate(_) => IntentKind::PlayerUpdate,
             Self::PlayerPasswordReset(_) => IntentKind::PlayerPasswordReset,
+            Self::SessionStart(_) => IntentKind::SessionStart,
         }
     }
 }
@@ -925,7 +936,6 @@ mod tests {
         Permission::WalletTopup,
         Permission::CreditManage,
         Permission::CreditCollect,
-        Permission::SessionStart,
         Permission::SessionPause,
         Permission::SessionExtend,
         Permission::SessionTransfer,
@@ -1091,6 +1101,7 @@ mod tests {
                 "player.create" | "player.update" | "player.password_reset" => {
                     Requirement::Perm(Permission::PlayerManage)
                 }
+                "session.start" => Requirement::Perm(Permission::SessionStart),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

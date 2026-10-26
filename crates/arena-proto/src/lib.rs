@@ -31,6 +31,7 @@ mod players;
 mod printer;
 mod process;
 mod scope;
+mod session;
 mod setup_devices;
 mod signin;
 mod signup;
@@ -176,6 +177,7 @@ pub use process::{
     is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
+pub use session::{SessionMode, SessionStart, SessionStartedEvent, SnapshotSession};
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
     SetupDevicesView, SetupGroup,

@@ -10,6 +10,8 @@ pub mod ui_auth;
 pub mod ui_events;
 pub mod ui_pair;
 mod ui_pairing;
+#[cfg(test)]
+mod ui_player_tests;
 mod ui_printer;
 #[cfg(test)]
 mod ui_setup_tests;

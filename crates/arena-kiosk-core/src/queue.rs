@@ -73,6 +73,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::HsnRequired
         | ErrorCode::BarcodeTaken
         | ErrorCode::LoginTaken
+        | ErrorCode::UsernameTaken
+        | ErrorCode::PhoneTaken
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary
         | ErrorCode::SchemaTooNew

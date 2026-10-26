@@ -30,6 +30,7 @@ pub enum IntentCategory {
     Audit,
     Kiosk,
     Catalog,
+    Player,
 }
 
 /// What an intent asks for, as `domain.verb`.
@@ -125,11 +126,13 @@ pub enum IntentKind {
     DeviceScreen,
     #[serde(rename = "device.power")]
     DevicePower,
+    #[serde(rename = "player.create")]
+    PlayerCreate,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 35] = [
+    pub const ALL: [IntentKind; 36] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -165,6 +168,7 @@ impl IntentKind {
         Self::DeviceTestSessionCompleted,
         Self::DeviceScreen,
         Self::DevicePower,
+        Self::PlayerCreate,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -205,6 +209,7 @@ impl IntentKind {
             Self::DeviceTestSessionCompleted => "device.test_session.completed",
             Self::DeviceScreen => "device.screen",
             Self::DevicePower => "device.power",
+            Self::PlayerCreate => "player.create",
         }
     }
 
@@ -247,6 +252,7 @@ impl IntentKind {
             Self::ProductUpsert | Self::ProductDelete | Self::StockIn | Self::StockInReverted => {
                 IntentCategory::Catalog
             }
+            Self::PlayerCreate => IntentCategory::Player,
         }
     }
 
@@ -285,6 +291,7 @@ impl IntentKind {
             Self::DeviceAdminUnlock => Requirement::Perm(Permission::DeviceRemote),
             Self::ProductUpsert | Self::ProductDelete => Requirement::Perm(Permission::CatalogEdit),
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
+            Self::PlayerCreate => Requirement::Perm(Permission::PlayerManage),
         }
     }
 
@@ -342,7 +349,8 @@ impl IntentKind {
             | Self::DeviceTestSessionStart
             | Self::DeviceTestSessionCompleted
             | Self::DeviceScreen
-            | Self::DevicePower => None,
+            | Self::DevicePower
+            | Self::PlayerCreate => None,
         }
     }
 
@@ -774,6 +782,8 @@ pub enum IntentPayload {
     DeviceScreen(DeviceScreen),
     #[serde(rename = "device.power")]
     DevicePower(DevicePower),
+    #[serde(rename = "player.create")]
+    PlayerCreate(crate::PlayerCreate),
 }
 
 impl IntentPayload {
@@ -814,6 +824,7 @@ impl IntentPayload {
             Self::DeviceTestSessionCompleted(_) => IntentKind::DeviceTestSessionCompleted,
             Self::DeviceScreen(_) => IntentKind::DeviceScreen,
             Self::DevicePower(_) => IntentKind::DevicePower,
+            Self::PlayerCreate(_) => IntentKind::PlayerCreate,
         }
     }
 }
@@ -890,7 +901,6 @@ mod tests {
 
     /// Permissions no intent requires yet: views, ops and the modules later stories build.
     const USED_BY_LATER_STORIES: &[Permission] = &[
-        Permission::PlayerManage,
         Permission::PlayerView,
         Permission::WalletTopup,
         Permission::CreditManage,
@@ -1058,6 +1068,7 @@ mod tests {
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" => Requirement::Perm(Permission::CatalogEdit),
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
+                "player.create" => Requirement::Perm(Permission::PlayerManage),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

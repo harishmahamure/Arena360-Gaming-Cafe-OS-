@@ -1,6 +1,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use arena_core::players::{KEK_LEN, Kek};
+use arena_proto::{AppError, ErrorCode};
+
 pub const HUB_TOKEN_FILE: &str = "hub-token.bin";
 pub const ENTROPY_FILE: &str = "hub-token.entropy";
 
@@ -9,8 +12,14 @@ pub trait Keystore: Send + Sync {
     fn get(&self) -> io::Result<Option<Vec<u8>>>;
 }
 
+pub const KEK_FILE: &str = "branch-kek.bin";
+
 pub fn platform_keystore(data_dir: &Path) -> Box<dyn Keystore> {
-    let path = data_dir.join(HUB_TOKEN_FILE);
+    named_keystore(data_dir, HUB_TOKEN_FILE)
+}
+
+pub fn named_keystore(data_dir: &Path, file: &str) -> Box<dyn Keystore> {
+    let path = data_dir.join(file);
     #[cfg(windows)]
     {
         Box::new(DpapiKeystore { path })
@@ -76,7 +85,7 @@ impl Keystore for FileKeystore {
         if !cfg!(windows) {
             tracing::warn!(
                 path = %self.path.display(),
-                "the hub token is stored NOT encrypted (0600 file, non-Windows dev build)"
+                "a secret is stored NOT encrypted (0600 file, non-Windows dev build)"
             );
         }
         write_private(&self.path, secret)
@@ -84,6 +93,48 @@ impl Keystore for FileKeystore {
 
     fn get(&self) -> io::Result<Option<Vec<u8>>> {
         read_optional(&self.path)
+    }
+}
+
+pub struct KeystoreKek {
+    store: Box<dyn Keystore>,
+    cached: std::sync::Mutex<Option<[u8; KEK_LEN]>>,
+}
+
+impl KeystoreKek {
+    pub fn new(store: Box<dyn Keystore>) -> Self {
+        Self {
+            store,
+            cached: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+fn kek_error(e: impl std::fmt::Display) -> AppError {
+    AppError::new(ErrorCode::Internal, format!("branch key store: {e}"))
+}
+
+impl Kek for KeystoreKek {
+    fn kek(&self) -> Result<[u8; KEK_LEN], AppError> {
+        let mut cached = self.cached.lock().map_err(kek_error)?;
+        if let Some(k) = *cached {
+            return Ok(k);
+        }
+        let key: [u8; KEK_LEN] = match self.store.get().map_err(kek_error)? {
+            Some(b) => b
+                .try_into()
+                .map_err(|_| kek_error("the stored key is corrupt"))?,
+            None => {
+                let fresh: [u8; KEK_LEN] = random_bytes(KEK_LEN)
+                    .map_err(kek_error)?
+                    .try_into()
+                    .map_err(|_| kek_error("bad key length"))?;
+                self.store.put(&fresh).map_err(kek_error)?;
+                fresh
+            }
+        };
+        *cached = Some(key);
+        Ok(key)
     }
 }
 
@@ -260,6 +311,25 @@ mod tests {
             .unwrap();
         let file = std::fs::read(dir.path().join(HUB_TOKEN_FILE)).unwrap();
         assert!(!file.windows(12).any(|w| w == b"plain-secret"));
+    }
+
+    #[test]
+    fn the_branch_key_is_minted_once_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = KeystoreKek::new(named_keystore(dir.path(), KEK_FILE))
+            .kek()
+            .unwrap();
+        let again = KeystoreKek::new(named_keystore(dir.path(), KEK_FILE));
+        assert_eq!(again.kek().unwrap(), first);
+        assert_eq!(again.kek().unwrap(), first);
+        assert_ne!(first, [0; KEK_LEN]);
+        assert!(!dir.path().join(HUB_TOKEN_FILE).exists());
+        std::fs::write(dir.path().join(KEK_FILE), b"short").unwrap();
+        assert!(
+            KeystoreKek::new(named_keystore(dir.path(), KEK_FILE))
+                .kek()
+                .is_err()
+        );
     }
 
     #[test]

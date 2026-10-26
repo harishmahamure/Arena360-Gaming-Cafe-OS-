@@ -38,4 +38,5 @@ export type IntentKind =
   | "device.test_session.start"
   | "device.test_session.completed"
   | "device.screen"
-  | "device.power";
+  | "device.power"
+  | "player.create";

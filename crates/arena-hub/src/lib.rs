@@ -338,7 +338,10 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         .with_presence(lan_hub.presence())
         .with_printer(printer)
         .with_pairing(pairing)
-        .with_pair_gate(pair_gate.clone()),
+        .with_pair_gate(pair_gate.clone())
+        .with_player_kek(Arc::new(arena_tasks::KeystoreKek::new(
+            arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
+        ))),
     );
     let cloud = CloudClient::new(&CloudEndpoint {
         host: cfg.cloud_host.clone(),

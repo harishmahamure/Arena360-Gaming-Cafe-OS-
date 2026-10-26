@@ -35,6 +35,7 @@ mod licence;
 mod maintenance;
 mod mutate;
 mod pc_command;
+mod players;
 mod printer_status;
 mod products;
 mod rates;
@@ -145,6 +146,7 @@ pub(crate) enum Target {
     Rate(Box<rates::RateTarget>),
     TestSession(Box<test_session::SessionTarget>),
     Pc(Box<pc_command::PcTarget>),
+    Player(Box<players::PlayerTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -185,6 +187,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::ProductUpsert(_) | P::ProductDelete(_) => {
             Target::Product(Box::new(products::load(tx, &intent.payload)?))
         }
+        P::PlayerCreate(_) => Target::Player(Box::new(players::load(tx, &intent.payload)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

@@ -102,6 +102,11 @@ enum Op {
         past: bool,
         undo: bool,
     },
+    Player {
+        user: u8,
+        phone: u8,
+        consent: bool,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -205,6 +210,11 @@ fn op() -> impl Strategy<Value = Op> {
             any::<bool>(),
         )
             .prop_map(|(qty, cost, past, undo)| Op::Stock { qty, cost, past, undo }),
+        2 => (0..4u8, 0..4u8, any::<bool>()).prop_map(|(user, phone, consent)| Op::Player {
+            user,
+            phone,
+            consent,
+        }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -803,6 +813,62 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .map(|l| l.qty_remaining)
                 .sum();
             prop_assert_eq!(lots, held(hub).0);
+        }
+        Op::Player {
+            user,
+            phone,
+            consent,
+        } => {
+            const KEK: [u8; 32] = [3; 32];
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let username = format!("user{user}");
+            let phone = format!("+9190000000{phone}");
+            let lookup = arena_core::players::phone_lookup(&KEK, &phone);
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let held = |col: &str, v: &str| {
+                players
+                    .iter()
+                    .any(|r| r[col] == RowValue::Text(v.to_owned()))
+            };
+            let (user_taken, phone_taken) =
+                (held("username", &username), held("phone_lookup", &lookup));
+            let form = arena_proto::PlayerForm {
+                username,
+                password: "secret1".into(),
+                phone,
+                name: "Asha".into(),
+                email: String::new(),
+                dob: String::new(),
+                notes: String::new(),
+                tags: Vec::new(),
+                consent: *consent,
+                policy_version: "1".into(),
+            };
+            let sealed = arena_core::players::seal(
+                &KEK,
+                &form,
+                &ulid::Ulid::generate().to_string(),
+                password_hash().to_owned(),
+            )
+            .unwrap();
+            let out = hub.submit_new(hub.intent(IntentPayload::PlayerCreate(sealed), None));
+            if user_taken || phone_taken {
+                let want = if user_taken {
+                    (ErrorCode::UsernameTaken, Some("username"))
+                } else {
+                    (ErrorCode::PhoneTaken, Some("phone"))
+                };
+                prop_assert_eq!(code(&out), Some(want));
+                prop_assert_eq!(hub.change_count(), changes_before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), changes_before + 2);
+                let consents = hub.reader.rows(Table::Consents).unwrap();
+                let last = consents.last().unwrap();
+                prop_assert_eq!(&last["granted"], &RowValue::Integer(i64::from(*consent)));
+            }
         }
         Op::Advance { ms } => hub.clock.advance(*ms),
     }

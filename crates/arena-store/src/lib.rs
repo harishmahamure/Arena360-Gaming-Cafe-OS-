@@ -13,6 +13,7 @@ mod dedupe;
 mod devices;
 mod identity;
 mod migrations;
+mod players;
 mod products;
 mod staff;
 mod stock;
@@ -65,6 +66,10 @@ pub use identity::{
     find_trusted_clock, insert_hub_identity, store_licence, store_trusted_clock,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
+pub use players::{
+    PlayerRow, find_player_key, insert_consent, insert_player, insert_player_key, phone_taken,
+    username_taken,
+};
 pub use products::{
     ProductRow, barcode_holder, count_active_products, find_product, insert_component,
     insert_product, list_components, list_products, live_bundles_with, set_product_deleted,
@@ -624,6 +629,13 @@ impl Store {
         find_stock(&self.conn, product_id)
     }
 
+    pub fn player_key(&self, player_id: &str) -> Result<Option<String>, AppError> {
+        if !self.table_exists("player_keys")? {
+            return Ok(None);
+        }
+        find_player_key(&self.conn, player_id)
+    }
+
     pub fn lots(&self, product_id: &str) -> Result<Vec<LotRow>, AppError> {
         if !self.table_exists("stock_lots")? {
             return Ok(Vec::new());
@@ -1117,6 +1129,56 @@ mod tests {
                     assert!(tx.execute(sql, []).is_err(), "{sql}");
                 }
                 Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn v23_database_upgrades_to_players_and_consents_stay_append_only() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &migrations::MIGRATIONS[..23] {
+                conn.execute_batch(m.sql).unwrap();
+                record_schema_version(&conn, m.version, 0).unwrap();
+            }
+        }
+        let mut store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        let player = |id: &str, username: &str, phone: &str| PlayerRow {
+            player_id: id.into(),
+            username: username.into(),
+            password_hash: "h".into(),
+            phone_lookup: phone.into(),
+            name_enc: "n".into(),
+            phone_enc: "p".into(),
+            email_enc: None,
+            dob_enc: None,
+            notes_enc: None,
+            tags: "[]".into(),
+        };
+        store
+            .write_tx(|tx| {
+                insert_player(tx, &player("A", "asha", "L1"))?;
+                insert_consent(tx, "C", "A", "transactional", "1", true, 5)?;
+                insert_player_key(tx, "A", "k")?;
+                assert!(username_taken(tx, "asha")? && !username_taken(tx, "ravi")?);
+                assert!(phone_taken(tx, "L1")? && !phone_taken(tx, "L2")?);
+                assert_eq!(find_player_key(tx, "A")?.as_deref(), Some("k"));
+                assert!(insert_player(tx, &player("B", "asha", "L2")).is_err());
+                assert!(insert_player(tx, &player("B", "ravi", "L1")).is_err());
+                tx.execute_batch("UPDATE consents SET rev = 2, updated_at = 5;")
+                    .map_err(db_error)?;
+                for sql in [
+                    "UPDATE consents SET granted = 0",
+                    "UPDATE consents SET policy_version = '2'",
+                    "DELETE FROM consents",
+                ] {
+                    assert!(tx.execute(sql, []).is_err(), "{sql}");
+                }
+                tx.execute_batch("UPDATE players SET deleted_at = 9")
+                    .map_err(db_error)?;
+                insert_player(tx, &player("B", "asha", "L1"))
             })
             .unwrap();
     }

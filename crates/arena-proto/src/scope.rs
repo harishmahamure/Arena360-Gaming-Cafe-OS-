@@ -108,7 +108,10 @@ mod tests {
                 assert!(
                     !matches!(
                         kind.category(),
-                        IntentCategory::Staff | IntentCategory::Money | IntentCategory::Device
+                        IntentCategory::Staff
+                            | IntentCategory::Money
+                            | IntentCategory::Device
+                            | IntentCategory::Player
                     ),
                     "{} may submit {}",
                     class.as_str(),

@@ -70,7 +70,7 @@ use arena_proto::{
     ActorKind, AppError, ElevateDrop, ElevateOk, ElevateRequest, ElevatedBy, ElevationItem,
     ElevationKind, ElevationMode, ErrorCode, IntentKind, IntentResult, MAX_TICKET_USES, Permission,
     Requirement, SessionStaff, SetupCodeRequest, SignInOk, SignInRequest, UiError, UiIntentRequest,
-    UiMe, UnlockOk, UnlockRequest,
+    UiMe, UiPlayerRequest, UnlockOk, UnlockRequest,
 };
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -414,6 +414,7 @@ pub struct UiAuth {
     pairing: Option<Arc<crate::pairing::Pairing>>,
     streams: Mutex<HashMap<String, usize>>,
     pair_gate: Option<arena_core::PairGate>,
+    kek: Option<Arc<dyn arena_core::players::Kek>>,
 }
 
 pub type BackupProbe =
@@ -464,8 +465,14 @@ impl UiAuth {
             printer_job: tokio::sync::Mutex::new(()),
             pairing: None,
             pair_gate: None,
+            kek: None,
             streams: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_player_kek(mut self, kek: Arc<dyn arena_core::players::Kek>) -> Self {
+        self.kek = Some(kek);
+        self
     }
 
     pub fn with_pair_gate(mut self, gate: arena_core::PairGate) -> Self {
@@ -847,7 +854,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ZoneNotEmpty
         | ErrorCode::CellTaken
         | ErrorCode::BarcodeTaken
-        | ErrorCode::LoginTaken => StatusCode::CONFLICT,
+        | ErrorCode::LoginTaken
+        | ErrorCode::UsernameTaken
+        | ErrorCode::PhoneTaken => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }
@@ -1883,12 +1892,28 @@ async fn intent(
             "credentials are set with a setup code",
         )));
     }
+    if matches!(intent.payload, arena_proto::IntentPayload::PlayerCreate(_)) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "profiles are created from the profile form",
+        )));
+    }
     if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) {
         return fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
             "the printer status is recorded by a test print or by skipping the printer",
         )));
     }
+    run_intent(&auth, &token, &me, intent, elevation_ticket).await
+}
+
+async fn run_intent(
+    auth: &Arc<UiAuth>,
+    token: &str,
+    me: &SessionStaff,
+    mut intent: arena_proto::Intent,
+    elevation_ticket: Option<String>,
+) -> Response {
     // A follower spends no ticket use.
     let Some(writer) = &auth.writer else {
         return fail(ui_error(AppError::new(
@@ -1918,7 +1943,7 @@ async fn intent(
         if intent.kind != intent.payload.kind() {
             return fail(ui_error(pin_required()));
         }
-        match auth.redeem(&ticket, &token, &intent) {
+        match auth.redeem(&ticket, token, &intent) {
             Ok((elevated, index)) => {
                 intent.elevated_by = Some(elevated);
                 redeemed = Some((ticket, index));
@@ -1972,6 +1997,76 @@ async fn intent(
     }
 }
 
+async fn players(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    let Ok(UiPlayerRequest {
+        form,
+        idempotency_key,
+        elevation_ticket,
+    }) = serde_json::from_slice::<UiPlayerRequest>(&body)
+    else {
+        return fail(bad_frame(
+            "the body must be {\"form\": PlayerForm, \"idempotency_key\", \"elevation_ticket\"?}",
+        ));
+    };
+    if auth.writer.is_none() {
+        return fail(ui_error(AppError::new(
+            ErrorCode::NotPrimary,
+            "this hub is not the primary writer",
+        )));
+    }
+    let Some(kek) = auth.kek.clone() else {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "this hub has no key store for profiles",
+        )));
+    };
+    let now = auth.clock.now_ms();
+    if let Err(e) = form.check(&arena_core::players::utc_day(now)) {
+        return fail(ui_error(e));
+    }
+    let Ok(_permit) = Arc::clone(&auth.pin_checks).acquire_owned().await else {
+        return fail(internal());
+    };
+    let player_id = ulid::Ulid::generate().to_string();
+    let id = player_id.clone();
+    let sealed = tokio::task::spawn_blocking(move || {
+        let hash = arena_core::staff::hash_secret(&form.password)?;
+        arena_core::players::seal(&kek.kek()?, &form, &id, hash)
+    })
+    .await;
+    let payload = match sealed {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => return fail(ui_error(e)),
+        Err(_) => return fail(internal()),
+    };
+    let intent = arena_proto::Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::PlayerCreate,
+        idempotency_key,
+        issued_at: now,
+        base_rev: None,
+        actor: arena_proto::Actor {
+            kind: ActorKind::Staff,
+            id: me.staff_id.clone(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: arena_proto::IntentPayload::PlayerCreate(payload),
+    };
+    run_intent(&auth, &token, &me, intent, elevation_ticket).await
+}
+
 async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -2017,6 +2112,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/elevate", post(elevate))
         .route("/ui/elevate/drop", post(elevate_drop))
         .route("/ui/intent", post(intent))
+        .route("/ui/players", post(players))
         .route("/ui/settings", get(settings))
         .route("/ui/products", get(products))
         .route("/ui/printer/find", post(crate::ui_printer::find))
@@ -2146,6 +2242,16 @@ pub(crate) mod tests {
         /// The LAN registry behind the auth's presence (tests register sessions in it).
         pub(crate) lan: Arc<crate::lan::registry::Registry>,
         pub(crate) pairing: Arc<crate::pairing::Pairing>,
+    }
+
+    pub(crate) const TEST_KEK: [u8; 32] = [4; 32];
+
+    struct TestKek;
+
+    impl arena_core::players::Kek for TestKek {
+        fn kek(&self) -> Result<[u8; 32], AppError> {
+            Ok(TEST_KEK)
+        }
     }
 
     pub(crate) fn intent_as(actor: Actor, payload: IntentPayload, base_rev: Option<i64>) -> Intent {
@@ -2283,7 +2389,8 @@ pub(crate) mod tests {
             .with_status(status_tx.subscribe())
             .with_events_config(config)
             .with_presence(crate::lan::Presence::of(Arc::clone(&lan)))
-            .with_pairing(Arc::clone(&pairing)),
+            .with_pairing(Arc::clone(&pairing))
+            .with_player_kek(Arc::new(TestKek)),
         );
         Hub {
             lan,

@@ -59,4 +59,6 @@ export type ErrorCode =
   | "BARCODE_TAKEN"
   | "SETUP_CODE_INVALID"
   | "LOGIN_TAKEN"
-  | "USER_LIMIT";
+  | "USER_LIMIT"
+  | "USERNAME_TAKEN"
+  | "PHONE_TAKEN";

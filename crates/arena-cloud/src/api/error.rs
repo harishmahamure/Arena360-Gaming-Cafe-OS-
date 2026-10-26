@@ -53,7 +53,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ZoneNotEmpty
         | ErrorCode::CellTaken
         | ErrorCode::BarcodeTaken
-        | ErrorCode::LoginTaken => StatusCode::CONFLICT,
+        | ErrorCode::LoginTaken
+        | ErrorCode::UsernameTaken
+        | ErrorCode::PhoneTaken => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
         }

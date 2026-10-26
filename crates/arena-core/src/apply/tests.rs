@@ -19,6 +19,7 @@ use crate::status::{HubStatus, LeaseInfo, status_channel};
 use crate::writer::{Writer, WriterHandle};
 
 mod commands;
+mod players;
 mod rates;
 mod stock;
 mod test_session;

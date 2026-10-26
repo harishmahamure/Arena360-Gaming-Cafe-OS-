@@ -10,6 +10,7 @@ import type {
   IntentPayload,
   IntentResult,
   Permission,
+  PlayerForm,
   ReasonCode,
   SessionStaff,
   SettingEntry,
@@ -24,6 +25,7 @@ export const SETUP_CODE_URL = "http://127.0.0.1:7409/ui/auth/setup-code";
 export const SIGN_OUT_URL = "http://127.0.0.1:7409/ui/auth/sign-out";
 export const ME_URL = "http://127.0.0.1:7409/ui/me";
 export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
+export const PLAYERS_URL = "http://127.0.0.1:7409/ui/players";
 export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
 export const ELEVATE_DROP_URL = "http://127.0.0.1:7409/ui/elevate/drop";
 export const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
@@ -317,13 +319,38 @@ export async function submitIntent(
     reason: options.reason,
     payload,
   };
+  return postIntent(INTENT_URL, token, TIMEOUT_MS, {
+    intent,
+    elevation_ticket: options.elevationTicket,
+  });
+}
+
+export async function createPlayer(
+  form: PlayerForm,
+  elevationTicket?: string,
+): Promise<IntentOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  return postIntent(PLAYERS_URL, token, TIMEOUT_MS * 3, {
+    form,
+    idempotency_key: newIdempotencyKey(),
+    elevation_ticket: elevationTicket,
+  });
+}
+
+async function postIntent(
+  url: string,
+  token: string,
+  timeoutMs: number,
+  body: unknown,
+): Promise<IntentOutcome> {
   let res: Response;
   try {
-    res = await fetch(INTENT_URL, {
+    res = await fetch(url, {
       method: "POST",
       headers: { ...authHeaders(token), "content-type": "application/json" },
-      body: JSON.stringify({ intent, elevation_ticket: options.elevationTicket }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     return { kind: "unreachable" };

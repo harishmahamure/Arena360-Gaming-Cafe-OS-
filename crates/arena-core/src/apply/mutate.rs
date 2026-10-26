@@ -7,7 +7,8 @@ use arena_store::{
 };
 
 use super::{
-    Target, devices, groups, maintenance, products, rates, settings_set, staff_roles, stock, zones,
+    Target, devices, groups, maintenance, players, products, rates, settings_set, staff_roles,
+    stock, zones,
 };
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
@@ -247,6 +248,7 @@ pub(super) fn mutate(
             Target::Rate(t) => rates::mutate(tx, r, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::PlayerCreate(p) => players::mutate(tx, p, now_ms),
         IntentPayload::DeviceTestSessionStart(_) | IntentPayload::DeviceTestSessionCompleted(_) => {
             match target {
                 Target::TestSession(t) => super::test_session::mutate(tx, intent, t),

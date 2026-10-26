@@ -18,7 +18,9 @@ use arena_store::{AuditCursor, AuditFilter, AuditRow, ChangeOp, Row, RowValue, S
 /// Columns whose values the viewer never shows: secrets (argon2id hashes) and, from later
 /// epics, player personal data. Both images read [`REDACTED_MARKER`] instead; a change to one
 /// is still listed in `changed`, so the viewer shows only that it changed.
-pub const REDACTED: &[&str] = &["password_hash", "pin_hash", "token_hash"];
+pub const REDACTED: &[&str] = &["password_hash", "pin_hash", "token_hash", "phone_lookup"];
+
+pub const REDACTED_SUFFIX: &str = "_enc";
 
 /// Columns that reference a player: the viewer shows them as ids only, never resolved to a
 /// name or other personal data (no player tables exist yet; the rule is set here for them).
@@ -43,7 +45,7 @@ fn internal(message: String) -> AppError {
 const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// Decodes unpadded base64url (`None` on any other character or a dangling sextet).
-fn base64url_decode(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn base64url_decode(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() * 3 / 4);
     let mut acc: u32 = 0;
     let mut bits = 0;
@@ -330,7 +332,7 @@ pub fn changed_fields(before: Option<&Row>, after: &Row) -> Vec<String> {
 
 /// Whether the viewer must never show `column`'s value.
 pub fn is_redacted(column: &str) -> bool {
-    REDACTED.contains(&column)
+    REDACTED.contains(&column) || column.ends_with(REDACTED_SUFFIX)
 }
 
 /// Whether `column` holds a player reference shown as an id only ([`ID_ONLY`]).
@@ -638,8 +640,21 @@ mod tests {
         );
         assert_eq!(shown["login"], AuditValue::Text("counter".into()));
         assert_eq!(redact(&after)["password_hash"], AuditValue::Null);
-        for secret in ["password_hash", "pin_hash", "token_hash"] {
+        for secret in [
+            "password_hash",
+            "pin_hash",
+            "token_hash",
+            "phone_lookup",
+            "name_enc",
+            "phone_enc",
+            "email_enc",
+            "dob_enc",
+            "notes_enc",
+        ] {
             assert!(is_redacted(secret));
+        }
+        for shown in ["policy_version", "purpose", "granted", "tags", "username"] {
+            assert!(!is_redacted(shown));
         }
         assert!(!ID_ONLY.iter().any(|c| is_redacted(c)));
     }

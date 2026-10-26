@@ -12,6 +12,7 @@ pub mod entitlement;
 pub mod invoice;
 pub mod locale;
 pub mod pairing;
+pub mod players;
 pub mod printer;
 pub mod rbac;
 mod settings_defaults;

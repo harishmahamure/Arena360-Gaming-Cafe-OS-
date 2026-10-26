@@ -29,6 +29,7 @@ const MODULE_LABELS: Record<string, MessageKey> = {
   role: "hub.audit.module.role",
   audit: "hub.audit.module.audit",
   kiosk: "hub.audit.module.kiosk",
+  player: "hub.audit.module.player",
 };
 
 /** Intent kinds with a catalogue label; any other kind shows as it is (`settings.set`). */

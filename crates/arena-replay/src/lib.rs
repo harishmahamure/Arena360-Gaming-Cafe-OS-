@@ -469,6 +469,28 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            let player = arena_core::players::seal(
+                &[5; 32],
+                &arena_proto::PlayerForm {
+                    username: "asha".into(),
+                    password: "secret1".into(),
+                    phone: "+919876543210".into(),
+                    name: "Asha".into(),
+                    email: String::new(),
+                    dob: String::new(),
+                    notes: String::new(),
+                    tags: vec!["vip".into()],
+                    consent: true,
+                    policy_version: "1".into(),
+                },
+                &ulid::Ulid::generate().to_string(),
+                arena_core::staff::hash_secret("pw").unwrap(),
+            )
+            .unwrap();
+            writer
+                .submit_intent(submit(IntentPayload::PlayerCreate(player), None))
+                .await
+                .unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

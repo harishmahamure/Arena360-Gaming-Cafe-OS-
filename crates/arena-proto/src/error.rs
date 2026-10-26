@@ -107,6 +107,8 @@ pub enum ErrorCode {
     SetupCodeInvalid,
     LoginTaken,
     UserLimit,
+    UsernameTaken,
+    PhoneTaken,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -180,6 +182,8 @@ impl ErrorCode {
             Self::BarcodeTaken => "BARCODE_TAKEN",
             Self::LoginTaken => "LOGIN_TAKEN",
             Self::UserLimit => "USER_LIMIT",
+            Self::UsernameTaken => "USERNAME_TAKEN",
+            Self::PhoneTaken => "PHONE_TAKEN",
         }
     }
 }
@@ -311,6 +315,8 @@ mod tests {
             (ErrorCode::BarcodeTaken, "BARCODE_TAKEN"),
             (ErrorCode::LoginTaken, "LOGIN_TAKEN"),
             (ErrorCode::UserLimit, "USER_LIMIT"),
+            (ErrorCode::UsernameTaken, "USERNAME_TAKEN"),
+            (ErrorCode::PhoneTaken, "PHONE_TAKEN"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

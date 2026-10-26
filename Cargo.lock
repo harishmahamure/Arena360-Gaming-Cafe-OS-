@@ -218,6 +218,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "proptest",
+ "ring",
  "rmp-serde",
  "serde",
  "serde_json",

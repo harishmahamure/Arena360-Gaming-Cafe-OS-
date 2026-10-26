@@ -45,11 +45,13 @@ pub enum Table {
     StockLots,
     StockMoves,
     Rates,
+    Players,
+    Consents,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 18] = [
+    pub const ALL: [Table; 20] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -68,6 +70,8 @@ impl Table {
         Table::StockLots,
         Table::StockMoves,
         Table::Rates,
+        Table::Players,
+        Table::Consents,
     ];
 
     /// The SQL table name.
@@ -91,6 +95,8 @@ impl Table {
             Self::StockLots => "stock_lots",
             Self::StockMoves => "stock_moves",
             Self::Rates => "rates",
+            Self::Players => "players",
+            Self::Consents => "consents",
         }
     }
 
@@ -115,6 +121,8 @@ impl Table {
             Self::StockLots => &["lot_id"],
             Self::StockMoves => &["move_id"],
             Self::Rates => &["rate_id"],
+            Self::Players => &["player_id"],
+            Self::Consents => &["consent_id"],
         }
     }
 
@@ -135,7 +143,9 @@ impl Table {
             | Self::Stock
             | Self::StockLots
             | Self::StockMoves
-            | Self::Rates => true,
+            | Self::Rates
+            | Self::Players
+            | Self::Consents => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -212,6 +222,12 @@ pub enum RowKey {
     Rates {
         rate_id: String,
     },
+    Players {
+        player_id: String,
+    },
+    Consents {
+        consent_id: String,
+    },
 }
 
 impl RowKey {
@@ -235,6 +251,8 @@ impl RowKey {
             Self::StockLots { .. } => Table::StockLots,
             Self::StockMoves { .. } => Table::StockMoves,
             Self::Rates { .. } => Table::Rates,
+            Self::Players { .. } => Table::Players,
+            Self::Consents { .. } => Table::Consents,
         }
     }
 
@@ -265,6 +283,8 @@ impl RowKey {
             Self::StockLots { lot_id } => lot_id.clone(),
             Self::StockMoves { move_id } => move_id.clone(),
             Self::Rates { rate_id } => rate_id.clone(),
+            Self::Players { player_id } => player_id.clone(),
+            Self::Consents { consent_id } => consent_id.clone(),
         }
     }
 
@@ -333,6 +353,12 @@ impl RowKey {
             Table::Rates => Self::Rates {
                 rate_id: text("rate_id")?,
             },
+            Table::Players => Self::Players {
+                player_id: text("player_id")?,
+            },
+            Table::Consents => Self::Consents {
+                consent_id: text("consent_id")?,
+            },
         })
     }
 
@@ -362,6 +388,8 @@ impl RowKey {
             Self::StockLots { lot_id } => vec![lot_id],
             Self::StockMoves { move_id } => vec![move_id],
             Self::Rates { rate_id } => vec![rate_id],
+            Self::Players { player_id } => vec![player_id],
+            Self::Consents { consent_id } => vec![consent_id],
         }
     }
 }

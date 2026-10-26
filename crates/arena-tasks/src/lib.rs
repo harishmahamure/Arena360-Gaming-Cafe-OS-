@@ -22,7 +22,10 @@ pub use heartbeat::HeartbeatTask;
 pub use housekeeping::{
     DEDUPE_RETENTION_MS, HOUSEKEEPING_INTERVAL, Housekeeping, HousekeepingTask,
 };
-pub use keystore::{AndroidKeystore, FileKeystore, HUB_TOKEN_FILE, Keystore, platform_keystore};
+pub use keystore::{
+    AndroidKeystore, FileKeystore, HUB_TOKEN_FILE, KEK_FILE, Keystore, KeystoreKek, named_keystore,
+    platform_keystore,
+};
 pub use lease::{LEASE_TTL_MS, LeaseTask, RENEW_INTERVAL, Tick};
 pub use mdns::{
     Advert, Advertiser, BranchSource, Interfaces, MDNS_FAILURE_LOG_INTERVAL, MDNS_POLL_INTERVAL,

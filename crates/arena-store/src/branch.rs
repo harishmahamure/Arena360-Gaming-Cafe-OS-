@@ -452,7 +452,7 @@ pub struct BranchSummary {
 /// The branch's display fields, if it has been bootstrapped (a database holds one branch).
 pub fn find_branch_summary(conn: &Connection) -> Result<Option<BranchSummary>, AppError> {
     conn.query_row(
-        "SELECT branch_id, name,
+        "SELECT branch_id, COALESCE((SELECT value FROM settings WHERE key = 'branch.name'), name),
                 COALESCE((SELECT value FROM settings WHERE key = 'branch.code'), branch_code),
                 COALESCE((SELECT value <> '' FROM settings WHERE key = 'branch.code_locked_at'), 0)
          FROM branch LIMIT 1",

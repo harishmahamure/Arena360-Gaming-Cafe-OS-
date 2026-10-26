@@ -128,6 +128,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 13,
         sql: include_str!("../control-migrations/0013_branch_setup_status.sql"),
     },
+    ControlMigration {
+        version: 14,
+        sql: include_str!("../control-migrations/0014_branch_live_at.sql"),
+    },
 ];
 
 /// The `gz_control` schema version this binary writes.

@@ -33,7 +33,7 @@ import type {
   TrustedDevice,
   WizardState,
 } from "@arena/ui/generated";
-import { clearWizard } from "./wizard.svelte";
+import { clearWizard, target } from "./wizard.svelte";
 
 /** The API origin (empty: same origin, through the dev/preview proxy). */
 const base = () => (PUBLIC_API_BASE ?? "").replace(/\/$/, "");
@@ -97,11 +97,17 @@ export function retryAfterSeconds(header: string | null, now = Date.now()): numb
   return Number.isNaN(at) ? null : Math.max(0, Math.ceil((at - now) / 1000));
 }
 
+const branchQuery = () => new URLSearchParams({ branch_id: target.id }).toString();
+
 async function call<T>(
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
+  if (target.id && path.startsWith("/wizard")) {
+    if (method === "GET") path += (path.includes("?") ? "&" : "?") + branchQuery();
+    else if (body && typeof body === "object") body = { ...body, branch_id: target.id };
+  }
   let res: Response;
   try {
     res = await fetch(base() + "/v1" + path, {
@@ -209,7 +215,8 @@ export const signOutEverywhere = async () => {
   return res;
 };
 
-export const eventsUrl = () => base() + "/v1" + "/wizard/events";
+export const eventsUrl = () =>
+  base() + "/v1/wizard/events" + (target.id ? "?" + branchQuery() : "");
 export const getWizard = () => withRefresh(() => call<WizardState>("GET", "/wizard"));
 export const saveCafe = (details: CafeDetails) =>
   withRefresh(() => call<WizardState>("PUT", "/wizard/cafe", details));

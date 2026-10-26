@@ -27,7 +27,10 @@ export function stepIndex(key: WizardStep): number {
   return STEP_KEYS.indexOf(key);
 }
 
-export const stepPath = (key: WizardStep) => `/setup/${key}`;
+export const target = $state({ id: "" });
+
+export const stepPath = (key: WizardStep) =>
+  `/setup/${key}${target.id ? `?branch=${encodeURIComponent(target.id)}` : ""}`;
 
 class Wizard {
   state = $state<WizardState | null>(null);

@@ -4,7 +4,14 @@
   import { page } from "$app/state";
   import { onMount, type Snippet } from "svelte";
   import { eventsUrl, getWizard } from "../../lib/api";
-  import { advance, clearWizard, setWizard, stepPath, wizard } from "../../lib/wizard.svelte";
+  import {
+    advance,
+    clearWizard,
+    setWizard,
+    stepPath,
+    target,
+    wizard,
+  } from "../../lib/wizard.svelte";
 
   let { children }: { children: Snippet } = $props();
 
@@ -44,6 +51,7 @@
   }
 
   onMount(() => {
+    target.id = page.url.searchParams.get("branch") ?? "";
     clearWizard();
     load();
     const source = new EventSource(eventsUrl(), { withCredentials: true });
@@ -59,6 +67,7 @@
     return () => {
       source.close();
       clearInterval(poll);
+      target.id = "";
     };
   });
 </script>

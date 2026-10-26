@@ -27,6 +27,7 @@ pub struct Branch {
     pub code_locked_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub live_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +74,7 @@ const TENANT_COLUMNS: &str = "id, owner_id, name, created_at";
 
 const BRANCH_COLUMNS: &str = "b.id, b.tenant_id, b.name, b.city, b.country, b.currency, \
      b.timezone, b.gst_registered, b.gstin, b.branch_code, b.code_locked_at, b.created_at, \
-     b.updated_at";
+     b.updated_at, b.live_at";
 
 fn tenant_from(row: &[SqlValue]) -> Result<Tenant, ControlError> {
     Ok(Tenant {
@@ -99,6 +100,7 @@ fn branch_from(row: &[SqlValue]) -> Result<Branch, ControlError> {
         code_locked_at: col_opt_int(row, 10)?,
         created_at: col_int(row, 11)?,
         updated_at: col_int(row, 12)?,
+        live_at: col_opt_int(row, 13)?,
     })
 }
 
@@ -106,11 +108,11 @@ fn opt_text(v: Option<&str>) -> SqlValue {
     v.map_or(SqlValue::Null, text)
 }
 
-fn progress_rows(branch_id: &str, now: i64) -> Vec<Stmt> {
+fn progress_rows(branch_id: &str, now: i64, cafe_done: bool) -> Vec<Stmt> {
     WizardStep::ALL
         .into_iter()
         .map(|step| {
-            let done = step == WizardStep::Cafe;
+            let done = cafe_done && step == WizardStep::Cafe;
             Stmt::new(
                 "INSERT INTO onboarding_progress (branch_id, step, state, completed_at) \
                  VALUES (?, ?, ?, ?)",
@@ -237,7 +239,7 @@ impl ControlDb {
             )
             .expect(1),
         ];
-        stmts.extend(progress_rows(n.branch_id, n.now));
+        stmts.extend(progress_rows(n.branch_id, n.now, true));
         self.transact(stmts).await
     }
 
@@ -280,7 +282,7 @@ impl ControlDb {
             )
             .expect(1),
         ];
-        stmts.extend(progress_rows(branch_id, now));
+        stmts.extend(progress_rows(branch_id, now, true));
         self.transact(stmts).await
     }
 
@@ -327,6 +329,104 @@ impl ControlDb {
             .expect(1),
         ])
         .await
+    }
+
+    pub async fn add_branch(
+        &self,
+        tenant_id: &str,
+        branch_id: &str,
+        branch_code: &str,
+        profile: &BranchProfile,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        let p = profile;
+        let mut stmts = vec![
+            Stmt::new(
+                "INSERT INTO branches (id, tenant_id, name, city, country, currency, timezone, \
+                 gst_registered, gstin, branch_code, code_locked_at, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+                vec![
+                    text(branch_id),
+                    text(tenant_id),
+                    text(&p.name),
+                    text(&p.city),
+                    text(&p.country),
+                    text(&p.currency),
+                    text(&p.timezone),
+                    SqlValue::Integer(i64::from(p.gst_registered)),
+                    opt_text(p.gstin.as_deref()),
+                    text(branch_code),
+                    SqlValue::Integer(now),
+                    SqlValue::Integer(now),
+                ],
+            )
+            .expect(1),
+        ];
+        stmts.extend(progress_rows(branch_id, now, false));
+        self.transact(stmts).await
+    }
+
+    pub async fn update_branch_profile(
+        &self,
+        tenant_id: &str,
+        branch_id: &str,
+        profile: &BranchProfile,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        let p = profile;
+        self.transact(vec![
+            Stmt::new(
+                "UPDATE branches SET name = ?, city = ?, country = ?, currency = ?, \
+                 timezone = ?, gst_registered = ?, gstin = ?, updated_at = ? \
+                 WHERE id = ? AND tenant_id = ?",
+                vec![
+                    text(&p.name),
+                    text(&p.city),
+                    text(&p.country),
+                    text(&p.currency),
+                    text(&p.timezone),
+                    SqlValue::Integer(i64::from(p.gst_registered)),
+                    opt_text(p.gstin.as_deref()),
+                    SqlValue::Integer(now),
+                    text(branch_id),
+                    text(tenant_id),
+                ],
+            )
+            .expect(1),
+            Stmt::new(
+                "INSERT INTO onboarding_progress (branch_id, step, state, completed_at) \
+                 VALUES (?, 'cafe', 'done', ?) ON CONFLICT (branch_id, step) DO UPDATE SET \
+                 state = 'done', completed_at = COALESCE(onboarding_progress.completed_at, \
+                 excluded.completed_at)",
+                vec![text(branch_id), SqlValue::Integer(now)],
+            )
+            .expect(1),
+        ])
+        .await
+    }
+
+    pub async fn rename_branch(
+        &self,
+        tenant_id: &str,
+        branch_id: &str,
+        name: &str,
+        timezone: &str,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        Ok(self
+            .execute(
+                "UPDATE branches SET name = ?, timezone = ?, updated_at = ? \
+                 WHERE id = ? AND tenant_id = ?",
+                vec![
+                    text(name),
+                    text(timezone),
+                    SqlValue::Integer(now),
+                    text(branch_id),
+                    text(tenant_id),
+                ],
+            )
+            .await?
+            == 1)
     }
 
     pub async fn set_branch_code(

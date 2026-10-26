@@ -124,3 +124,13 @@ test("step 8 completes by itself when the Hub reports the printer ok", async ({ 
   await page.clock.runFor(5000);
   await expect(h1(page, "ui.wizard.step.test_session")).toBeFocused();
 });
+
+test("a branch in the address is carried on every wizard call", async ({ page }) => {
+  const urls: string[] = [];
+  page.on("request", (r) => urls.push(r.url()));
+  await open(page, "/setup/rates?branch=B2", BEFORE_RATES);
+  await expect(h1(page, "ui.wizard.step.rates")).toBeVisible();
+  expect(urls.some((u) => u.includes("/v1/wizard?branch_id=B2"))).toBe(true);
+  expect(urls.some((u) => u.includes("/v1/wizard/events?branch_id=B2"))).toBe(true);
+  await expect(page).toHaveURL(/\/setup\/rates\?branch=B2$/);
+});

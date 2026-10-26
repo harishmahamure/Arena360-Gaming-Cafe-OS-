@@ -111,7 +111,7 @@ fn bootstrap() -> Intent {
 fn bootstrap_changes() -> usize {
     1 + DEFAULT_SETTINGS.len()
         + crate::LOCALE_KEYS.len()
-        + 2
+        + 3
         + crate::rbac::BUILTIN_ROLES
             .iter()
             .map(|r| 1 + crate::rbac::builtin_perms(r).len())
@@ -153,7 +153,7 @@ async fn bootstrap_writes_branch_settings_and_gap_free_changes() {
     let settings = store.rows(Table::Settings).unwrap();
     assert_eq!(
         settings.len(),
-        DEFAULT_SETTINGS.len() + crate::LOCALE_KEYS.len() + 2
+        DEFAULT_SETTINGS.len() + crate::LOCALE_KEYS.len() + 3
     );
     let seeded: Vec<(String, String)> = DEFAULT_SETTINGS
         .iter()
@@ -3435,6 +3435,18 @@ mod locale_matrix {
     }
 
     #[tokio::test]
+    async fn a_branch_name_change_applies_at_once_and_bad_names_are_refused() {
+        let f = bootstrapped().await;
+        save(&f, "branch.name", "Pixel Arena 2").await.unwrap();
+        let summary = reopen(&f).branch_summary().unwrap().unwrap();
+        assert_eq!(summary.name, "Pixel Arena 2");
+        for bad in ["", " x", "x ", "a\nb", &"x".repeat(81)] {
+            let e = save(&f, "branch.name", bad).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
     async fn a_tz_change_during_d_stamps_d_under_the_old_rules_until_d_plus_one() {
         let f = bootstrapped().await;
         let reader = SnapshotReader::open(&f.path).unwrap();
@@ -3621,7 +3633,7 @@ mod seed_defaults {
         assert_eq!(branch_defaults, 5);
         assert_eq!(
             applied.changes.len(),
-            crate::LOCALE_KEYS.len() + 2 + branch_defaults + roles
+            crate::LOCALE_KEYS.len() + 3 + branch_defaults + roles
         );
         let s = reopen(&f);
         let changes = s.changes().unwrap();

@@ -153,7 +153,9 @@ async fn put_tier(
         }
         FreeTierOutcome::Missing => return Err(not_your_branch()),
     }
-    Ok(Json(wizard_state(&st, owner_id).await?))
+    Ok(Json(
+        wizard_state(&st, owner_id, body.branch_id.as_deref()).await?,
+    ))
 }
 
 pub(super) fn router(st: Arc<AuthState>) -> Router {

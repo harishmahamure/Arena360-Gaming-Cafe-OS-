@@ -256,6 +256,9 @@ pub struct CafeDetails {
     #[serde(default)]
     #[ts(optional)]
     pub gstin: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub branch_id: Option<String>,
 }
 
 impl std::fmt::Debug for CafeDetails {
@@ -319,6 +322,47 @@ pub struct ChooseTier {
     pub branch_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BranchHub {
+    pub paired: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number", optional)]
+    pub last_seen_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerBranch {
+    pub id: String,
+    pub name: String,
+    pub branch_code: String,
+    pub timezone: String,
+    pub tier: Tier,
+    pub flags: Vec<String>,
+    pub live: bool,
+    pub hub: BranchHub,
+    pub waiting: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UpdateBranch {
+    #[serde(default)]
+    #[ts(optional)]
+    pub name: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AddBranch {
+    pub name: String,
+}
+
+pub const KEY_BRANCH_NAME: &str = "branch.name";
 pub const KEY_BRANCH_CODE: &str = "branch.code";
 pub const KEY_BRANCH_CODE_LOCKED_AT: &str = "branch.code_locked_at";
 pub const BRANCH_CODE_MIN: usize = 3;

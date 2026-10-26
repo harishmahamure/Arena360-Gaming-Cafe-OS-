@@ -272,7 +272,9 @@ pub(super) async fn skip(
         .skip_step(&branch.id, step.as_str())
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(wizard_state(st, owner_id).await?))
+    Ok(Json(
+        wizard_state(st, owner_id, body.branch_id.as_deref()).await?,
+    ))
 }
 
 async fn post_skip(

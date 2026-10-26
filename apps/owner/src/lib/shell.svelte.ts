@@ -1,5 +1,5 @@
-import type { SessionInfo } from "@arena/ui/generated";
-import { dropCache, load, signInUrl, type OwnerBranch } from "./api";
+import type { OwnerBranch, SessionInfo } from "@arena/ui/generated";
+import { dropCache, load, signInUrl } from "./api";
 
 export const shell = $state({
   cafe: "",

@@ -8,4 +8,5 @@ export type CafeDetails = {
   timezone: string;
   gst_registered: boolean;
   gstin?: string;
+  branch_id?: string;
 };

@@ -5,13 +5,15 @@ use arena_proto::{
     country, current_step,
 };
 use arena_store::control::{Branch, BranchProfile, NewTenantBranch, Tenant};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::{get, put};
 use axum::{Json, Router};
+use serde::Deserialize;
 
 use super::error::ApiError;
 use super::gate::RequireSetupComplete;
 use super::json::ApiJson;
+use super::owned::not_your_branch;
 use crate::auth::{AuthState, valid_text};
 use crate::{branch_code, gstin};
 
@@ -52,11 +54,25 @@ async fn first_branch(
     Ok(Some((tenant, branch)))
 }
 
-pub async fn wizard_state(st: &AuthState, owner_id: &str) -> Result<WizardState, ApiError> {
+pub async fn wizard_state(
+    st: &AuthState,
+    owner_id: &str,
+    branch_id: Option<&str>,
+) -> Result<WizardState, ApiError> {
     let found = first_branch(st, owner_id).await?;
     let (tenant, branch) = match found {
         Some((t, b)) => (Some(t), b),
         None => (None, None),
+    };
+    let branch = match branch_id {
+        Some(id) => Some(
+            st.db
+                .owned_branch(owner_id, id)
+                .await
+                .map_err(ApiError::internal)?
+                .ok_or_else(not_your_branch)?,
+        ),
+        None => branch,
     };
     let states: Vec<(WizardStep, StepState)> = match &branch {
         Some(b) => st
@@ -91,11 +107,19 @@ pub async fn wizard_state(st: &AuthState, owner_id: &str) -> Result<WizardState,
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct WizardQuery {
+    branch_id: Option<String>,
+}
+
 async fn get_wizard(
     State(st): State<Arc<AuthState>>,
     RequireSetupComplete(signed): RequireSetupComplete,
+    Query(q): Query<WizardQuery>,
 ) -> Result<Json<WizardState>, ApiError> {
-    Ok(Json(wizard_state(&st, &signed.owner.id).await?))
+    Ok(Json(
+        wizard_state(&st, &signed.owner.id, q.branch_id.as_deref()).await?,
+    ))
 }
 
 pub fn validate_cafe(body: &CafeDetails) -> Result<BranchProfile, ApiError> {
@@ -185,6 +209,24 @@ async fn put_cafe(
     let profile = validate_cafe(&body)?;
     let owner_id = &signed.owner.id;
     let now = st.now();
+    if let Some(id) = body.branch_id.as_deref() {
+        let branch = st
+            .db
+            .owned_branch(owner_id, id)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(not_your_branch)?;
+        if !st
+            .db
+            .update_branch_profile(&branch.tenant_id, &branch.id, &profile, now)
+            .await
+            .map_err(ApiError::internal)?
+        {
+            return Err(ApiError::internal("café update changed no row"));
+        }
+        tracing::info!(owner_id = %owner_id, branch_id = %branch.id, "branch details updated");
+        return Ok(Json(wizard_state(&st, owner_id, Some(id)).await?));
+    }
     let mut existing = first_branch(&st, owner_id).await?;
     if existing.is_none() {
         let tenant_id = ulid::Ulid::generate().to_string();
@@ -205,7 +247,7 @@ async fn put_cafe(
             .map_err(ApiError::internal)?;
         if created {
             tracing::info!(owner_id = %owner_id, tenant_id = %tenant_id, branch_id = %branch_id, "tenant and first branch created");
-            return Ok(Json(wizard_state(&st, owner_id).await?));
+            return Ok(Json(wizard_state(&st, owner_id, None).await?));
         }
         existing = first_branch(&st, owner_id).await?;
     }
@@ -224,7 +266,7 @@ async fn put_cafe(
             .map_err(ApiError::internal)?;
         if created {
             tracing::info!(owner_id = %owner_id, tenant_id = %tenant.id, branch_id = %branch_id, "first branch created for an existing tenant");
-            return Ok(Json(wizard_state(&st, owner_id).await?));
+            return Ok(Json(wizard_state(&st, owner_id, None).await?));
         }
         existing = first_branch(&st, owner_id).await?;
     }
@@ -240,7 +282,7 @@ async fn put_cafe(
         return Err(ApiError::internal("café update changed no row"));
     }
     tracing::info!(owner_id = %owner_id, branch_id = %branch.id, "café details updated");
-    Ok(Json(wizard_state(&st, owner_id).await?))
+    Ok(Json(wizard_state(&st, owner_id, None).await?))
 }
 
 pub(super) fn router(st: Arc<AuthState>) -> Router {

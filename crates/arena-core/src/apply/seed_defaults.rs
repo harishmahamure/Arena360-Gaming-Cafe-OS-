@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 
 use arena_proto::{
-    AppError, ErrorCode, HC_DEFAULT, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, hc_key,
-    parse_hc_key,
+    AppError, ErrorCode, HC_DEFAULT, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME,
+    hc_key, parse_hc_key,
 };
 use arena_store::{
     ChangeOp, RowKey, StoreTx, current_branch_id, find_branch_locale, find_branch_summary,
@@ -59,6 +59,7 @@ pub fn missing(tx: &StoreTx<'_>) -> Result<Option<Missing>, AppError> {
     }
     if let Some(summary) = find_branch_summary(tx)? {
         for (key, value) in [
+            (KEY_BRANCH_NAME, summary.name.as_str()),
             (KEY_BRANCH_CODE, summary.branch_code.as_str()),
             (KEY_BRANCH_CODE_LOCKED_AT, ""),
         ] {

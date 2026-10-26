@@ -75,6 +75,7 @@ pub(super) fn mutate(
                 })
                 .chain(locale.iter().map(|(k, v)| (*k, v.as_str())))
                 .chain([
+                    (arena_proto::KEY_BRANCH_NAME, b.name.as_str()),
                     (arena_proto::KEY_BRANCH_CODE, b.branch_code.as_str()),
                     (arena_proto::KEY_BRANCH_CODE_LOCKED_AT, ""),
                 ]);

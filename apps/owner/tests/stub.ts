@@ -1,20 +1,39 @@
 import type { Page } from "@playwright/test";
+import type { OwnerBranch } from "@arena/ui/generated";
 import { t } from "../../../packages/ui/src/messages/index.js";
 
 export { t };
 
-export type Branch = {
-  id: string;
-  name: string;
-  tier: "free" | "basic" | "premium";
-  flags: string[];
-};
+export type Branch = OwnerBranch;
+
+const base = {
+  timezone: "Asia/Kolkata",
+  live: false,
+  hub: { paired: false },
+  waiting: false,
+} as const;
 
 export const PAID: Branch[] = [
-  { id: "b1", name: "Pixel Arena MG Road", tier: "basic", flags: ["tunnel"] },
-  { id: "b2", name: "Pixel Arena Indiranagar", tier: "free", flags: [] },
+  {
+    ...base,
+    id: "b1",
+    name: "Pixel Arena MG Road",
+    branch_code: "MGR",
+    tier: "basic",
+    flags: ["tunnel"],
+  },
+  {
+    ...base,
+    id: "b2",
+    name: "Pixel Arena Indiranagar",
+    branch_code: "IND",
+    tier: "free",
+    flags: [],
+  },
 ];
-export const FREE: Branch[] = [{ id: "b1", name: "Pixel Arena MG Road", tier: "free", flags: [] }];
+export const FREE: Branch[] = [
+  { ...base, id: "b1", name: "Pixel Arena MG Road", branch_code: "MGR", tier: "free", flags: [] },
+];
 
 export async function stubCloud(page: Page, branches: Branch[] = PAID) {
   const calls: string[] = [];
@@ -36,7 +55,14 @@ export async function stubCloud(page: Page, branches: Branch[] = PAID) {
           sms_fallback: false,
         },
       });
-    if (path === "/v1/branches") return json(branches);
+    if (path === "/v1/branches" && req.method() === "GET") return json(branches);
+    if (path === "/v1/branches" && req.method() === "POST")
+      return json({ ...branches[0], id: "b9", name: req.postDataJSON().name });
+    if (path.startsWith("/v1/branches/") && req.method() === "PATCH")
+      return json({ ...branches[0], ...req.postDataJSON() });
+    if (path === "/v1/meta/timezones") return json(["Asia/Dubai", "Asia/Kolkata"]);
+    if (path === "/v1/wizard/install-hub/code")
+      return json({ code: "ABCD2345", expires_at: Date.now() + 900_000, server_now: Date.now() });
     if (path === "/v1/signout") return json(null, 200);
     return json({ code: "NOT_FOUND", message: "" }, 404);
   });

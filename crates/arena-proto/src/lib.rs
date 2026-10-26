@@ -199,10 +199,11 @@ pub use ui_auth::{
     SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk, UnlockRequest,
 };
 pub use wizard::{
-    BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, COUNTRIES, CafeDetails, ChooseTier, Country,
-    CountryRow, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, SetBranchCode, StepState, TierChoices,
-    TierOption, TierUnavailable, WizardBranch, WizardState, WizardStep, WizardStepInfo,
-    WizardTenant, country, current_step, valid_branch_code,
+    AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, COUNTRIES, CafeDetails,
+    ChooseTier, Country, CountryRow, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME,
+    OwnerBranch, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable, UpdateBranch,
+    WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant, country, current_step,
+    valid_branch_code,
 };
 
 /// Returns this crate's name.

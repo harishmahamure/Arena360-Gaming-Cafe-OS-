@@ -17,7 +17,9 @@ use arena_proto::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
 };
-use arena_proto::{DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_TAX, TaxSettings};
+use arena_proto::{
+    DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME, KEY_TAX, TaxSettings,
+};
 use arena_proto::{DEFAULT_TEST_SESSION, KEY_TEST_SESSION};
 
 /// When staff last stopped the Android Hub service (epoch ms as text, empty until then). Staff
@@ -165,6 +167,7 @@ pub enum SettingRule {
     TestSession,
     Tax,
     BranchCode,
+    BranchName,
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -228,6 +231,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     (KEY_TAX, SettingRule::Tax),
     (KEY_TEST_SESSION, SettingRule::TestSession),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
+    (KEY_BRANCH_NAME, SettingRule::BranchName),
     (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),
 ];
 
@@ -284,6 +288,12 @@ impl SettingRule {
             Self::TestSession => arena_proto::TestSessionStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
             Self::BranchCode => arena_proto::valid_branch_code(value),
+            Self::BranchName => {
+                let n = value.chars().count();
+                value == value.trim()
+                    && (1..=80).contains(&n)
+                    && !value.chars().any(char::is_control)
+            }
         }
     }
 
@@ -306,13 +316,13 @@ mod tests {
         // covered by the `display.hc.` prefix rule.
         assert_eq!(
             SETTING_RULES.len() + 1,
-            DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 2
+            DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 3
         );
         for (key, _) in SETTING_RULES {
             assert!(
                 DEFAULT_SETTINGS.iter().any(|(k, _)| k == key)
                     || LOCALE_KEYS.contains(key)
-                    || [KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT].contains(key),
+                    || [KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME].contains(key),
                 "{key} has a rule but no default"
             );
         }

@@ -426,7 +426,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .sum();
                 prop_assert_eq!(
                     hub.change_count(),
-                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 2 + roles
+                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 3 + roles
                 );
                 hub.bootstrapped = true;
                 // One staff member per built-in role (outside the history: not retried).
@@ -462,7 +462,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
                 prop_assert_eq!(
                     hub.change_count(),
-                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 2 + roles + STAFF_ROLES.len()
+                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 3 + roles + STAFF_ROLES.len()
                 );
             }
         }

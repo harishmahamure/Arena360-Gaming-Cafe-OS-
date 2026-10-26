@@ -195,6 +195,17 @@ impl ControlDb {
         Ok(u32::try_from(n).unwrap_or(u32::MAX))
     }
 
+    pub async fn settings_pending(&self, branch_id: &str) -> Result<bool, ControlError> {
+        let rows = self
+            .query(
+                "SELECT 1 FROM commands WHERE branch_id = ? AND kind = 'settings.set' \
+                 AND status IN ('pending', 'fetched') LIMIT 1",
+                vec![text(branch_id)],
+            )
+            .await?;
+        Ok(!rows.is_empty())
+    }
+
     pub async fn command(&self, id: i64) -> Result<Option<CommandRow>, ControlError> {
         let rows = self
             .query(SELECT_BY_ID, vec![SqlValue::Integer(id)])

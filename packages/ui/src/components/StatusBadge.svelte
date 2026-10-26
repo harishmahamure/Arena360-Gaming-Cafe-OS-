@@ -1,35 +1,13 @@
 <script lang="ts">
   import { t, type MessageKey } from "../messages/index.js";
+  import { STATUS_LABELS, type Status } from "../status.js";
 
   /** Hub-only: dark and HC themes. The state is always written out, never colour alone. */
-  type State =
-    | "free"
-    | "in-session"
-    | "paused"
-    | "reserved"
-    | "order-pending"
-    | "maintenance"
-    | "offline"
-    | "unassigned"
-    | "warning";
-
-  const LABELS: Record<State, MessageKey> = {
-    free: "ui.status.free",
-    "in-session": "ui.status.in_session",
-    paused: "ui.status.paused",
-    reserved: "ui.status.reserved",
-    "order-pending": "ui.status.order_pending",
-    maintenance: "ui.status.maintenance",
-    offline: "ui.status.offline",
-    unassigned: "ui.status.unassigned",
-    warning: "ui.status.warning",
-  };
-
-  let { state, label }: { state: State; label?: MessageKey } = $props();
+  let { state, label }: { state: Status; label?: MessageKey } = $props();
 </script>
 
 <span class="badge type-hub-micro state-{state}" data-component="status-badge"
-  >{t(label ?? LABELS[state])}</span
+  >{t(label ?? STATUS_LABELS[state])}</span
 >
 
 <style>

@@ -65,6 +65,31 @@ test("tier-lock reads in text in every theme and its Upgrade link is a 44 px tar
   }
 });
 
+test("floor-tile: eight states in dark and HC, named by device, state and time", async ({
+  page,
+}) => {
+  for (const theme of ["dark", "hc"] as const) {
+    const section = page.locator(`[data-theme="${theme}"]`);
+    const tiles = section.locator('[data-component="floor-tile"]');
+    await expect(tiles).toHaveCount(8);
+    const faces = tiles.getByRole("group");
+    await expect(faces.nth(1)).toHaveAttribute("aria-label", "PC 2, In session, 01:23:45");
+    await expect(faces.nth(0)).toHaveAttribute("aria-label", "PC 1, Free");
+    for (let i = 0; i < 8; i++) {
+      const box = await tiles.nth(i).boundingBox();
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(128);
+      await expect(tiles.nth(i).locator('[data-component="status-badge"]')).toBeVisible();
+    }
+    const last = tiles.nth(7);
+    await expect(last.locator('[data-component="group-chip"]')).toHaveCount(0);
+    await expect(last.locator(".bar")).toHaveCount(0);
+    expect(await last.evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe("dashed");
+    await faces.nth(0).focus();
+    await page.keyboard.press("Enter");
+    await expect(section.getByTestId("tile-activated")).toHaveText("1");
+  }
+});
+
 test("keyboard focus: every tab stop shows a visible indicator", async ({ page }) => {
   const indicator = (el: Element) => {
     const s = getComputedStyle(el);
@@ -445,7 +470,7 @@ test("badges: live regions exist for the AlertBadge count and TextField errors",
   for (const theme of THEMES) {
     const section = page.locator(`[data-theme="${theme}"]`);
     const alertRegion = section.locator(
-      '[data-component="alert-badge"] [aria-live="polite"][role="status"]',
+      '.row [data-component="alert-badge"] [aria-live="polite"][role="status"]',
     );
     await expect(alertRegion).toHaveCount(1);
     await expect(alertRegion).toHaveText("3 alerts");

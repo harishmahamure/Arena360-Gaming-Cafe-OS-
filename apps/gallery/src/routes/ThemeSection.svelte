@@ -3,6 +3,7 @@
     AlertBadge,
     Button,
     Card,
+    FloorTile,
     InlinePin,
     ReasonPicker,
     GroupChip,
@@ -59,6 +60,18 @@
   };
 
   let alerts = $state(3);
+  let activated = $state(0);
+
+  const TILES = [
+    { state: "free", time: "", group: "teal" },
+    { state: "in-session", time: "01:23:45", group: "orange" },
+    { state: "paused", time: "00:42:10", group: "lime" },
+    { state: "reserved", time: "", group: "sand" },
+    { state: "order-pending", time: "00:10:00", group: "coral" },
+    { state: "maintenance", time: "", group: "silver" },
+    { state: "offline", time: "", group: "teal" },
+    { state: "unassigned", time: "", group: "" },
+  ] as const;
 
   // Demo form: submit validates, then focuses the first invalid field.
   let form: HTMLFormElement | undefined = $state();
@@ -225,6 +238,25 @@
       <AlertBadge tag="request" />
       <Button variant="secondary" label="gallery.alert.add" onclick={() => alerts++} />
     </div>
+    <h4>{t("gallery.section.floor_tile")}</h4>
+    {#if hubThemes}
+      <div class="tiles">
+        {#each TILES as tile, i (tile.state)}
+          <FloorTile
+            name="PC {i + 1}"
+            state={tile.state}
+            time={tile.time || undefined}
+            secondary={t("gallery.tile.secondary")}
+            group={tile.group ? { name: tile.group, colour: tile.group } : undefined}
+            alerts={i === 1 ? 2 : undefined}
+            onactivate={() => activated++}
+          />
+        {/each}
+      </div>
+      <p class="note" role="status" data-testid="tile-activated">{activated}</p>
+    {:else}
+      <p class="note">{t("gallery.hub_only")}</p>
+    {/if}
     <h4>{t("gallery.section.tier_lock")}</h4>
     <div class="row">
       <TierLock tier="Basic" />
@@ -382,6 +414,12 @@
     flex-wrap: wrap;
     align-items: flex-start;
     gap: var(--space-5);
+  }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+    gap: var(--space-4);
   }
 
   .cell {

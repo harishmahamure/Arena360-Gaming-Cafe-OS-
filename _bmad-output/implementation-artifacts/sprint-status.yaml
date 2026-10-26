@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-26-2026 22:30
+last_updated: 10-26-2026 23:05
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -64,9 +64,9 @@ development_status:
   2-31-step-10-go-live-checklist-marks-the-branch-live: done
   epic-2-retrospective: optional
 
-  epic-3: backlog
+  epic-3: in-progress
   3-1-branch-billing-rules-rounding-minimum-grace-and-time-up-mode: done
-  3-2-floor-view-shows-every-device-as-a-live-tile-grouped-by-zone: backlog
+  3-2-floor-view-shows-every-device-as-a-live-tile-grouped-by-zone: review
   3-3-floor-view-performance-proven-on-reference-hardware: backlog
   3-4-collapsible-zones-with-per-state-counts: backlog
   3-5-non-modal-tile-sheet-with-remote-pc-actions: backlog

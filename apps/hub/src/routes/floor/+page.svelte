@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, GroupChip, InlinePin, StatusBadge, formatDateTime, t } from "@arena/ui";
+  import { Button, FloorTile, InlinePin, formatDateTime, formatMoney, t } from "@arena/ui";
   import type {
     DeviceStatus,
     SessionStaff,
@@ -19,6 +19,7 @@
     newIdempotencyKey,
     submitIntent,
   } from "../../lib/auth";
+  import { nextTile } from "../../lib/floor-nav";
   import type { PageData } from "./$types";
 
   let { data }: { data: PageData } = $props();
@@ -134,7 +135,38 @@
   const unassigned = $derived(
     snapshot?.devices.filter((d) => !placed(d) && !groups.some((g) => g.id === d.group_id)) ?? [],
   );
+  const loose = (id: string) =>
+    snapshot?.devices.filter((d) => d.group_id === id && !placed(d)) ?? [];
+  const order = $derived([
+    ...zones.flatMap((z) => inZone(z.id)),
+    ...groups.flatMap((g) => loose(g.id)),
+    ...unassigned,
+  ]);
+  let focusId: string | null = $state(null);
+  let activeId: string | null = $state(null);
+  const tabStop = $derived(
+    order.find((d) => d.device_id === focusId)?.device_id ?? order[0]?.device_id,
+  );
+  const count = (n: number) =>
+    t(n === 1 ? "hub.floor.count_one" : "hub.floor.count_other", { count: n });
+
+  const face = (e: Event) => (e.target as HTMLElement).closest<HTMLElement>("[data-tile-face]");
+
+  function onkeydown(e: KeyboardEvent) {
+    const current = e.key.startsWith("Arrow") && face(e);
+    if (!current || e.target !== current) return;
+    const faces = [...document.querySelectorAll<HTMLElement>("[data-tile-face]")];
+    e.preventDefault();
+    faces[nextTile(faces, faces.indexOf(current), e.key)]?.focus();
+  }
+
+  function onfocusin(e: FocusEvent) {
+    const id = face(e)?.closest<HTMLElement>("[data-device-id]")?.dataset.deviceId;
+    if (id) focusId = id;
+  }
 </script>
+
+<svelte:window {onkeydown} {onfocusin} />
 
 <svelte:head>
   <title>{t("hub.page_title", { screen: t("hub.nav.floor") })}</title>
@@ -142,34 +174,42 @@
 
 {#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined, cell = false)}
   {@const badge = BADGE[device.status ?? "offline"] ?? BADGE.offline}
-  <li
-    class="device"
-    class:assigned={group || cell}
+  {@const rate =
+    group?.rate_minor != null && snapshot?.locale
+      ? formatMoney(group.rate_minor, snapshot.locale)
+      : null}
+  <FloorTile
+    tag="li"
+    name={device.label}
+    state={group ? badge.state : "unassigned"}
+    label={group ? badge.label : undefined}
+    tabindex={tabStop === device.device_id ? 0 : -1}
+    {group}
+    onactivate={() => (activeId = device.device_id)}
     style={cell ? `--x:${(device.floor_x ?? 0) + 1};--y:${(device.floor_y ?? 0) + 1}` : undefined}
+    aria-current={activeId === device.device_id ? "true" : undefined}
     data-device-id={device.device_id}
     data-testid={cell ? "zone-device" : group ? "group-device" : "unassigned-device"}
   >
-    <span class="label type-hub-title">{device.label}</span>
+    {#snippet secondary()}
+      {#if !group}<span data-testid="device-presence">{t(badge.label)}</span>{/if}
+      {#if device.status === "maintenance"}
+        <span data-testid="device-unavailable"
+          >{t("hub.floor.unavailable")}{device.maintenance_note
+            ? ` · ${device.maintenance_note}`
+            : ""}</span
+        >
+      {:else if device.status === "offline" && device.last_seen_at}
+        <span data-testid="device-last-seen"
+          >{t("hub.floor.last_seen", { at: formatDateTime(device.last_seen_at, tz) })}</span
+        >
+      {:else if device.status === "online" && group}
+        <span>{rate ? t("hub.floor.free_rate", { rate }) : t("hub.floor.tap_to_start")}</span>
+      {/if}
+    {/snippet}
     {#if device.tv_number}<span class="type-hub-label" data-testid="tv-number"
         >{t("hub.floor.tv", { n: device.tv_number })}</span
       >{/if}
-    {#if group}<GroupChip name={group.name} colour={group.colour} />{:else if !cell}<StatusBadge
-        state="unassigned"
-      />{/if}
-    <span class="presence type-hub-body" data-testid="device-presence"
-      ><StatusBadge state={badge.state} label={badge.label} /></span
-    >
-    {#if device.status === "maintenance"}
-      <span class="type-hub-label" data-testid="device-unavailable"
-        >{t("hub.floor.unavailable")}{device.maintenance_note
-          ? ` · ${device.maintenance_note}`
-          : ""}</span
-      >
-    {:else if device.status === "offline" && device.last_seen_at}
-      <span class="type-hub-label" data-testid="device-last-seen"
-        >{t("hub.floor.last_seen", { at: formatDateTime(device.last_seen_at, tz) })}</span
-      >
-    {/if}
     {#if device.class === "paired" && !device.manual}
       <span class="unlock" bind:this={wraps[device.device_id]}>
         <Button
@@ -202,7 +242,7 @@
         />
       {/if}
     {/if}
-  </li>
+  </FloorTile>
 {/snippet}
 
 <div class="floor">
@@ -225,10 +265,13 @@
         aria-labelledby="floor-zone-{zone.id}"
         data-testid="floor-zone"
       >
-        <h2 class="type-hub-title" id="floor-zone-{zone.id}">{zone.name}</h2>
+        <div class="head">
+          <h2 class="type-hub-title" id="floor-zone-{zone.id}">{zone.name}</h2>
+          <span class="muted type-hub-label">{count(members.length)}</span>
+        </div>
         <ul
           class="devices cells"
-          style="--cols:{Math.max(1, ...members.map((d) => (d.floor_x ?? 0) + 1))};--rows:{Math.max(
+          style="--cols:{Math.max(6, ...members.map((d) => (d.floor_x ?? 0) + 1))};--rows:{Math.max(
             1,
             ...members.map((d) => (d.floor_y ?? 0) + 1),
           )}"
@@ -245,10 +288,13 @@
     {/each}
 
     {#each groups as group (group.id)}
-      {@const members = snapshot.devices.filter((d) => d.group_id === group.id && !placed(d))}
+      {@const members = loose(group.id)}
       {#if members.length > 0}
         <section class="unassigned" aria-labelledby="floor-group-{group.id}">
-          <h2 class="type-hub-title" id="floor-group-{group.id}">{group.name}</h2>
+          <div class="head">
+            <h2 class="type-hub-title" id="floor-group-{group.id}">{group.name}</h2>
+            <span class="muted type-hub-label">{count(members.length)}</span>
+          </div>
           <ul class="devices">
             {#each members as device (device.device_id)}
               {@render tile(device, group)}
@@ -259,7 +305,10 @@
     {/each}
 
     <section class="unassigned" aria-labelledby="floor-unassigned-title">
-      <h2 class="type-hub-title" id="floor-unassigned-title">{t("hub.floor.unassigned")}</h2>
+      <div class="head">
+        <h2 class="type-hub-title" id="floor-unassigned-title">{t("hub.floor.unassigned")}</h2>
+        <span class="muted type-hub-label">{count(unassigned.length)}</span>
+      </div>
       {#if unassigned.length === 0}
         <p class="type-hub-body muted">{t("hub.floor.no_devices")}</p>
       {:else}
@@ -286,7 +335,6 @@
   }
 
   .muted,
-  .presence,
   .note {
     color: var(--text-muted);
   }
@@ -309,6 +357,12 @@
     gap: var(--space-4);
   }
 
+  .head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
   .devices {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
@@ -318,21 +372,17 @@
     list-style: none;
   }
 
-  /* An unassigned device: a 2px dashed state-unassigned outline and no state bar. */
-  .device {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-2);
-    padding: var(--space-hub-tile-padding);
-    border: 2px dashed var(--state-unassigned);
-    border-radius: var(--radius-md);
-    background-color: var(--floor-tile-background);
-    overflow-wrap: anywhere;
+  @media (min-width: 1600px) {
+    .devices:not(.cells) {
+      grid-template-columns: repeat(6, 1fr);
+    }
   }
 
-  .device.assigned {
-    border: 1px solid var(--line);
+  @media (max-width: 839px) {
+    .devices {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
   }
 
   .zone {
@@ -345,7 +395,7 @@
       grid-template-rows: repeat(var(--rows), minmax(4rem, auto));
     }
 
-    .cells > .device {
+    .cells > :global([data-component="floor-tile"]) {
       grid-column: var(--x);
       grid-row: var(--y);
     }

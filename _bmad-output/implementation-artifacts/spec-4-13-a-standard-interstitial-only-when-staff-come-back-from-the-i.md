@@ -2,7 +2,7 @@
 title: 'Story 4.13: A standard interstitial only when staff come back from the idle lock'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
@@ -72,3 +72,10 @@ deferred: []
 ## Verification Log
 
 Pass: `pnpm --filter @arena/hub check` (0 errors), `check:strings`, `check:layers`, `check:ads`, `check:hex`, `format:check`, Hub Playwright (1199 passed, 60 skipped, 1 failed: `players.spec.ts` `Ctrl+K from another screen`, the same flaky test noted on Story 4.12, unrelated). New tests: 34 across both projects. Not run: everything Android.
+
+### Review Findings
+
+Code review (2026-10-28): clean review — no decision-needed, patch or defer findings. Typecheck (0 errors), strings/layers/ads/hex checks, prettier and the 34 new interstitial tests pass.
+
+Rejected:
+- Lock restored after a page reload (`lockScreen(true)` from the local-lock flag) has no open surfaces and so may bring an ad — low, an edge of the same idle lock, fix would add state; not worth it.

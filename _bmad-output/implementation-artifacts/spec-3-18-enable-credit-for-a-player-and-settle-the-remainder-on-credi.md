@@ -2,7 +2,7 @@
 title: 'Story 3.18: Enable Credit for a Player and Settle the Remainder on Credit'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'b08b69b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -81,6 +81,8 @@ deferred: []
 
 ## Review Triage Log
 
+Re-run 2026-10-27: no open findings; fmt, clippy (all crates except arena-kiosk-svc), proto/store/core/replay tests, hub check, strings, protocol and format all pass.
+
 ## Verification
 
 **Commands:**
@@ -90,7 +92,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: `cargo fmt --check`; clippy `-D warnings` clean for every crate except `arena-kiosk-svc` tests (`tests/discovery.rs` has unused imports on this Windows machine, unchanged by this story; its lib and bins are clean); `cargo test` for proto, store, core (incl. the new credit tests and the proptest with `CreditSet` / `CreditPay`, 600 cases), replay (`CreditSetLimit` replayed) and api (incl. the credit route test); `pnpm run gen:types`; `pnpm --filter @arena/hub check`, check:strings, check:tokens-used, check:contrast, check:protocol, check:layers, format:check; the full Hub Playwright suite (842 passed, 11 skipped) including the new `credit.spec.ts` (16 passed). One run of `players.spec.ts` "Ctrl+K from another screen" failed under load and passes alone.
 Not run: `arena-e2e` (Unix-only). These fail the same way on the untouched baseline: `arena-cloud` `backup::a_hung_run_times_out_with_its_own_code` and `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token`, and the Windows-admin `arena-kiosk-svc` lockdown/pipe tests. `arena-api` `ui_events::a_component_change_also_reports_the_bundles_that_hold_it` failed once under load and passes alone.
 Left for later: nothing sets `credit_paused` yet (Story 3.20); credit collection and the allocation of spends (Story 3.19); a limit of 0 can be saved and behaves as "credit off"; staff without `credit.manage` see the credit block read-only (no PIN flow on the profile); the override is checked per player per business day from the settle intent, with a settle-undo clearing it.

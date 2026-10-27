@@ -556,6 +556,7 @@ mod tests {
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: Some(player_id.clone()),
                         pack_id: None,
+                        plan_id: None,
                     }),
                     None,
                 ))
@@ -688,6 +689,7 @@ mod tests {
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: None,
                         pack_id: None,
+                        plan_id: None,
                     }),
                     None,
                 ))
@@ -847,6 +849,7 @@ mod tests {
                             mode,
                             player_id: Some(player_id.clone()),
                             pack_id,
+                            plan_id: None,
                         }),
                         None,
                     ))

@@ -1,7 +1,7 @@
 use super::session::{
     balance, collect_intent, credit_intent, end, end_intent, int, ledger_sum, pay, pc, player,
-    refusal, rev_of, row_of, sale_order, sell_intent, sell_revert_intent, sessions, state_of,
-    submit, table, text, topped_up, topup_revert_intent,
+    refusal, rev_of, row_of, sale_order, sell_intent, sell_revert_intent, sessions, settle_intent,
+    state_of, submit, table, text, topped_up, topup_revert_intent,
 };
 use super::stock::{intent, owner};
 use super::*;
@@ -84,6 +84,7 @@ fn start_as(device: &str, player: Option<&str>, mode: SessionMode, pack: Option<
             mode,
             player_id: player.map(Into::into),
             pack_id: pack.map(Into::into),
+            plan_id: None,
         }),
     );
     i.issued_at = T0;
@@ -98,6 +99,27 @@ async fn begin(
     pack: Option<&str>,
 ) -> Result<Applied, AppError> {
     let mut i = start_as(device, player, mode, pack);
+    i.issued_at = f.clock.now_ms();
+    f.writer.submit_intent(i).await
+}
+
+async fn begin_block(
+    f: &Fixture,
+    device: &str,
+    player: Option<&str>,
+    plan: &str,
+    mode: SessionMode,
+) -> Result<Applied, AppError> {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionStart(SessionStart {
+            device_id: device.into(),
+            mode,
+            player_id: player.map(Into::into),
+            pack_id: None,
+            plan_id: Some(plan.into()),
+        }),
+    );
     i.issued_at = f.clock.now_ms();
     f.writer.submit_intent(i).await
 }
@@ -563,7 +585,7 @@ async fn a_finished_wallet_session_releases_its_reservation() {
 }
 
 #[tokio::test]
-async fn a_postpaid_start_takes_no_pack_and_pass_and_block_cannot_start_yet() {
+async fn a_postpaid_start_takes_no_pack_or_plan_and_pass_and_block_need_theirs() {
     let f = bootstrapped().await;
     let d = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;
     let p = player(&f, "asha", "+919876543210").await;
@@ -572,12 +594,18 @@ async fn a_postpaid_start_takes_no_pack_and_pass_and_block_cannot_start_yet() {
         refusal(begin(&f, &d, Some(&p), SessionMode::Postpaid, Some("X")).await),
         field(ErrorCode::ValidationFailed, "pack_id")
     );
-    for mode in [SessionMode::Pass, SessionMode::Block] {
-        assert_eq!(
-            refusal(begin(&f, &d, Some(&p), mode, None).await),
-            field(ErrorCode::ValidationFailed, "mode")
-        );
-    }
+    assert_eq!(
+        refusal(begin(&f, &d, Some(&p), SessionMode::Pass, None).await),
+        field(ErrorCode::ValidationFailed, "pack_id")
+    );
+    assert_eq!(
+        refusal(begin(&f, &d, Some(&p), SessionMode::Block, None).await),
+        field(ErrorCode::ValidationFailed, "plan_id")
+    );
+    assert_eq!(
+        refusal(begin_block(&f, &d, Some(&p), "X", SessionMode::Postpaid).await),
+        field(ErrorCode::ValidationFailed, "plan_id")
+    );
     assert!(sessions(&f).is_empty());
 }
 
@@ -618,4 +646,397 @@ async fn a_pack_sale_cannot_be_undone_while_a_session_runs_on_it() {
         refusal(end(&f, sell_revert_intent(&order, Some(rev))).await),
         (ErrorCode::UndoNotAllowed, None)
     );
+}
+
+fn ist(local: &str) -> i64 {
+    use chrono::TimeZone;
+    let naive = chrono::NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M").unwrap();
+    chrono_tz::Tz::Asia__Kolkata
+        .from_local_datetime(&naive)
+        .unwrap()
+        .timestamp_millis()
+}
+
+async fn window_plan(f: &Fixture, kind: &str, groups: &[String], price: i64) -> String {
+    submit(
+        f,
+        owner(),
+        IntentPayload::PlanUpsert(PlanUpsert {
+            id: None,
+            plan_kind: kind.into(),
+            name: format!("Night {kind}"),
+            price_minor: price,
+            minutes: None,
+            validity_days: (kind == "pass").then_some(30),
+            window_start_min: Some(22 * 60),
+            window_end_min: Some(6 * 60),
+            group_ids: groups.to_vec(),
+            active: true,
+        }),
+    )
+    .await
+    .unwrap()
+    .changes
+    .iter()
+    .find(|c| c.tbl == "plans")
+    .unwrap()
+    .row_id
+    .clone()
+}
+
+async fn owned_pass(f: &Fixture, player: &str, groups: &[String]) -> String {
+    let plan = window_plan(f, "pass", groups, 90_000).await;
+    end(f, sell_intent(player, &plan, vec![pay(Cash, 90_000, None)]))
+        .await
+        .unwrap();
+    text(table(f, Table::PlayerPacks).last().unwrap(), "id")
+}
+
+async fn begin_pass(f: &Fixture, d: &str, p: &str, pass: &str) -> Result<Applied, AppError> {
+    begin(f, d, Some(p), SessionMode::Pass, Some(pass)).await
+}
+
+#[tokio::test]
+async fn a_pass_started_before_midnight_ends_at_the_window_end_the_next_morning() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pass = owned_pass(&f, &p, &[group_of(&f, &d)]).await;
+    f.clock.set(ist("2027-01-15 23:30"));
+    let a = begin_pass(&f, &d, &p, &pass).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["sessions", "session_segments", "devices_meta"]
+    );
+    let s = &sessions(&f)[0];
+    assert_eq!(text(s, "mode"), "pass");
+    assert_eq!(text(s, "pack_id"), pass);
+    assert_eq!(s["rate_id"], RowValue::Null);
+    assert_eq!(int(s, "ends_at"), ist("2027-01-16 06:00"));
+}
+
+#[tokio::test]
+async fn a_pass_started_after_midnight_ends_that_morning() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pass = owned_pass(&f, &p, &[group_of(&f, &d)]).await;
+    f.clock.set(ist("2027-01-16 02:15"));
+    begin_pass(&f, &d, &p, &pass).await.unwrap();
+    assert_eq!(int(&sessions(&f)[0], "ends_at"), ist("2027-01-16 06:00"));
+}
+
+#[tokio::test]
+async fn a_pass_outside_its_window_is_refused_naming_the_window() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pass = owned_pass(&f, &p, &[group_of(&f, &d)]).await;
+    for at in ["2027-01-15 14:00", "2027-01-16 06:00", "2027-01-15 21:59"] {
+        f.clock.set(ist(at));
+        let e = begin_pass(&f, &d, &p, &pass).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::PassOutsideWindow, Some("pack_id")),
+            "{at}"
+        );
+        assert!(e.message.contains("22:00–06:00"), "{}", e.message);
+    }
+    f.clock.set(ist("2027-01-15 22:00"));
+    begin_pass(&f, &d, &p, &pass).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_pass_is_refused_for_another_group_a_pack_id_and_a_busy_pass() {
+    let f = bootstrapped().await;
+    let (d, other) = (
+        pc(&f, DeviceKind::Pc, "pc", None).await,
+        pc(&f, DeviceKind::Pc, "pc", None).await,
+    );
+    let p = player(&f, "asha", "+919876543210").await;
+    let pass = owned_pass(&f, &p, &[group_of(&f, &d)]).await;
+    let pack = owned_pack(&f, &p, &[group_of(&f, &d)], 60).await;
+    f.clock.set(ist("2027-01-15 23:30"));
+    let field = |c, f: &str| (c, Some(f.to_owned()));
+    assert_eq!(
+        refusal(begin_pass(&f, &other, &p, &pass).await),
+        field(ErrorCode::PlanNotForGroup, "pack_id")
+    );
+    assert_eq!(
+        refusal(begin_pass(&f, &d, &p, &pack).await),
+        field(ErrorCode::NotFound, "pack_id")
+    );
+    assert_eq!(
+        refusal(begin(&f, &d, Some(&p), SessionMode::Pack, Some(&pass)).await),
+        field(ErrorCode::NotFound, "pack_id")
+    );
+    assert_eq!(
+        refusal(begin(&f, &d, None, SessionMode::Pass, Some(&pass)).await),
+        field(ErrorCode::ValidationFailed, "player_id")
+    );
+    sql(
+        &f,
+        format!(
+            "UPDATE player_packs SET expires_at = {} WHERE id = '{pass}'",
+            ist("2027-01-15 23:00")
+        ),
+    )
+    .await;
+    assert_eq!(
+        refusal(begin_pass(&f, &d, &p, &pass).await),
+        field(ErrorCode::PackExpired, "pack_id")
+    );
+    sql(
+        &f,
+        format!(
+            "UPDATE player_packs SET expires_at = {} WHERE id = '{pass}'",
+            ist("2027-02-15 23:00")
+        ),
+    )
+    .await;
+    begin_pass(&f, &d, &p, &pass).await.unwrap();
+    assert_eq!(sessions(&f).len(), 1);
+}
+
+#[tokio::test]
+async fn a_pass_already_running_a_session_cannot_start_another() {
+    let f = bootstrapped().await;
+    let (d, second) = (
+        pc(&f, DeviceKind::Pc, "pc", None).await,
+        pc(&f, DeviceKind::Pc, "pc", None).await,
+    );
+    let p = player(&f, "asha", "+919876543210").await;
+    let groups = [group_of(&f, &d), group_of(&f, &second)];
+    let pass = owned_pass(&f, &p, &groups).await;
+    f.clock.set(ist("2027-01-15 23:30"));
+    begin_pass(&f, &d, &p, &pass).await.unwrap();
+    assert_eq!(
+        refusal(begin_pass(&f, &second, &p, &pass).await),
+        (ErrorCode::ValidationFailed, Some("pack_id".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn a_pass_session_closes_with_a_zero_bill_and_the_pass_can_be_used_again() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pass = owned_pass(&f, &p, &[group_of(&f, &d)]).await;
+    f.clock.set(ist("2027-01-15 23:30"));
+    begin_pass(&f, &d, &p, &pass).await.unwrap();
+    let session = text(&sessions(&f)[0], "id");
+    f.clock.advance(20 * MIN);
+    stop(&f, &session).await.unwrap();
+    let o = order_of(&f, &session);
+    assert_eq!(
+        (text(&o, "status").as_str(), int(&o, "total_minor")),
+        ("settled", 0)
+    );
+    assert_eq!(
+        row_of(&f, Table::PlayerPacks, &pass)["minutes_left"],
+        RowValue::Null
+    );
+    assert!(reopen(&f).ending(&session).unwrap().unwrap().irreversible);
+    f.clock.advance(MIN);
+    begin_pass(&f, &d, &p, &pass).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_pass_session_expires_at_the_window_end() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pass = owned_pass(&f, &p, &[group_of(&f, &d)]).await;
+    f.clock.set(ist("2027-01-15 23:30"));
+    begin_pass(&f, &d, &p, &pass).await.unwrap();
+    let session = text(&sessions(&f)[0], "id");
+    f.clock.set(ist("2027-01-16 06:00"));
+    expire(&f, &session, ist("2027-01-16 06:00")).await.unwrap();
+    let s = row_of(&f, Table::Sessions, &session);
+    assert_eq!(text(&s, "state"), "expired");
+    assert_eq!(int(&s, "ended_at"), ist("2027-01-16 06:00"));
+    assert_eq!(text(&order_of(&f, &session), "status"), "settled");
+    assert_ne!(state_of(&f, &d), "in_session");
+}
+
+#[tokio::test]
+async fn a_block_for_a_guest_opens_its_bill_at_once_and_ends_at_the_window_end() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let plan = window_plan(&f, "block", &[group_of(&f, &d)], 20_000).await;
+    f.clock.set(ist("2027-01-15 23:45"));
+    let a = begin_block(&f, &d, None, &plan, SessionMode::Block)
+        .await
+        .unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        [
+            "sessions",
+            "session_segments",
+            "devices_meta",
+            "orders",
+            "order_lines"
+        ]
+    );
+    let s = &sessions(&f)[0];
+    assert_eq!(text(s, "mode"), "block");
+    assert_eq!(s["player_id"], RowValue::Null);
+    assert_eq!(int(s, "ends_at"), ist("2027-01-16 06:00"));
+    let o = order_of(&f, &text(s, "id"));
+    assert_eq!(
+        (text(&o, "status").as_str(), int(&o, "total_minor")),
+        ("open", 20_000)
+    );
+    let line = &table(&f, Table::OrderLines)[0];
+    assert_eq!(
+        (int(line, "amount_minor"), int(line, "minutes")),
+        (20_000, 375)
+    );
+    assert_eq!(state_of(&f, &d), "in_session");
+}
+
+#[tokio::test]
+async fn a_block_ends_at_the_same_time_whenever_it_starts_in_the_window() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let plan = window_plan(&f, "block", &[group_of(&f, &d)], 20_000).await;
+    f.clock.set(ist("2027-01-16 03:00"));
+    begin_block(&f, &d, Some(&p), &plan, SessionMode::Block)
+        .await
+        .unwrap();
+    let s = &sessions(&f)[0];
+    assert_eq!(int(s, "ends_at"), ist("2027-01-16 06:00"));
+    assert_eq!(text(s, "player_id"), p);
+    assert_eq!(text(&order_of(&f, &text(s, "id")), "player_id"), p);
+}
+
+#[tokio::test]
+async fn a_block_is_refused_outside_its_window_for_another_group_or_when_unknown() {
+    let f = bootstrapped().await;
+    let (d, other) = (
+        pc(&f, DeviceKind::Pc, "pc", None).await,
+        pc(&f, DeviceKind::Pc, "pc", None).await,
+    );
+    let plan = window_plan(&f, "block", &[group_of(&f, &d)], 20_000).await;
+    let field = |c, f: &str| (c, Some(f.to_owned()));
+    f.clock.set(ist("2027-01-15 14:00"));
+    let e = begin_block(&f, &d, None, &plan, SessionMode::Block)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (e.code, e.field.as_deref()),
+        (ErrorCode::PassOutsideWindow, Some("plan_id"))
+    );
+    assert!(e.message.contains("22:00–06:00"), "{}", e.message);
+    f.clock.set(ist("2027-01-15 23:00"));
+    assert_eq!(
+        refusal(begin_block(&f, &other, None, &plan, SessionMode::Block).await),
+        field(ErrorCode::PlanNotForGroup, "plan_id")
+    );
+    assert_eq!(
+        refusal(begin_block(&f, &d, None, "NOPE", SessionMode::Block).await),
+        field(ErrorCode::NotFound, "plan_id")
+    );
+    let pass = window_plan(&f, "pass", &[group_of(&f, &d)], 90_000).await;
+    assert_eq!(
+        refusal(begin_block(&f, &d, None, &pass, SessionMode::Block).await),
+        field(ErrorCode::NotFound, "plan_id")
+    );
+    assert!(sessions(&f).is_empty());
+    assert!(table(&f, Table::Orders).is_empty());
+}
+
+#[tokio::test]
+async fn a_block_bill_can_be_settled_while_the_session_runs_and_expiry_adds_no_second_bill() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let plan = window_plan(&f, "block", &[group_of(&f, &d)], 20_000).await;
+    f.clock.set(ist("2027-01-15 23:45"));
+    begin_block(&f, &d, None, &plan, SessionMode::Block)
+        .await
+        .unwrap();
+    let session = text(&sessions(&f)[0], "id");
+    let order = order_of(&f, &session);
+    end(
+        &f,
+        settle_intent(
+            &text(&order, "id"),
+            Some(int(&order, "rev")),
+            vec![pay(Cash, 20_000, None)],
+        ),
+    )
+    .await
+    .unwrap();
+    f.clock.set(ist("2027-01-16 06:00"));
+    expire(&f, &session, ist("2027-01-16 06:00")).await.unwrap();
+    let s = row_of(&f, Table::Sessions, &session);
+    assert_eq!(text(&s, "state"), "expired");
+    assert_eq!(
+        table(&f, Table::Orders)
+            .iter()
+            .filter(|o| text(o, "session_id") == session)
+            .count(),
+        1
+    );
+    assert_eq!(text(&order_of(&f, &session), "status"), "settled");
+    assert_ne!(state_of(&f, &d), "in_session");
+}
+
+#[tokio::test]
+async fn ending_a_block_early_keeps_its_one_bill_open_for_settling() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let plan = window_plan(&f, "block", &[group_of(&f, &d)], 20_000).await;
+    f.clock.set(ist("2027-01-15 23:45"));
+    begin_block(&f, &d, None, &plan, SessionMode::Block)
+        .await
+        .unwrap();
+    let session = text(&sessions(&f)[0], "id");
+    f.clock.advance(30 * MIN);
+    stop(&f, &session).await.unwrap();
+    let s = row_of(&f, Table::Sessions, &session);
+    assert_eq!(text(&s, "state"), "ended");
+    assert_eq!(int(&s, "ended_at"), ist("2027-01-16 00:15"));
+    let orders = table(&f, Table::Orders);
+    assert_eq!(orders.len(), 1);
+    assert_eq!(
+        (
+            text(&orders[0], "status").as_str(),
+            int(&orders[0], "total_minor")
+        ),
+        ("open", 20_000)
+    );
+    assert!(reopen(&f).ending(&session).unwrap().unwrap().irreversible);
+    assert_ne!(state_of(&f, &d), "in_session");
+}
+
+#[tokio::test]
+async fn a_held_block_session_ends_at_its_window_end_in_staff_handles_mode() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let plan = window_plan(&f, "block", &[group_of(&f, &d)], 20_000).await;
+    f.clock.set(ist("2027-01-15 23:45"));
+    begin_block(&f, &d, None, &plan, SessionMode::Block)
+        .await
+        .unwrap();
+    let session = text(&sessions(&f)[0], "id");
+    sql(
+        &f,
+        format!("UPDATE sessions SET time_up_mode = 'staff_handles' WHERE id = '{session}'"),
+    )
+    .await;
+    f.clock.set(ist("2027-01-16 06:00"));
+    expire(&f, &session, ist("2027-01-16 06:00")).await.unwrap();
+    assert_eq!(
+        text(&row_of(&f, Table::Sessions, &session), "state"),
+        "expired"
+    );
+    assert_eq!(state_of(&f, &d), "in_session");
+    f.clock.set(ist("2027-01-16 06:20"));
+    stop(&f, &session).await.unwrap();
+    let s = row_of(&f, Table::Sessions, &session);
+    assert_eq!(int(&s, "ended_at"), ist("2027-01-16 06:00"));
+    assert_eq!(table(&f, Table::Orders).len(), 1);
+    assert_ne!(state_of(&f, &d), "in_session");
 }

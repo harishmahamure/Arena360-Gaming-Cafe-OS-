@@ -1088,6 +1088,7 @@ mod tests {
             mode: arena_proto::SessionMode::Postpaid,
             player_id: None,
             pack_id: None,
+            plan_id: None,
         }))
         .await
         .unwrap();
@@ -1242,6 +1243,7 @@ mod tests {
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,
                 pack_id: None,
+                plan_id: None,
             }),
             None,
         )

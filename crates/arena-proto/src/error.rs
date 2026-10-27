@@ -136,6 +136,8 @@ pub enum ErrorCode {
     PackExpired,
     /// A pack session started on a device group the pack does not allow.
     PlanNotForGroup,
+    /// A pass or block session started outside the window of the plan.
+    PassOutsideWindow,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -226,6 +228,7 @@ impl ErrorCode {
             Self::PassAlreadyActive => "PASS_ALREADY_ACTIVE",
             Self::PackExpired => "PACK_EXPIRED",
             Self::PlanNotForGroup => "PLAN_NOT_FOR_GROUP",
+            Self::PassOutsideWindow => "PASS_OUTSIDE_WINDOW",
         }
     }
 }
@@ -377,6 +380,7 @@ mod tests {
             (ErrorCode::PassAlreadyActive, "PASS_ALREADY_ACTIVE"),
             (ErrorCode::PackExpired, "PACK_EXPIRED"),
             (ErrorCode::PlanNotForGroup, "PLAN_NOT_FOR_GROUP"),
+            (ErrorCode::PassOutsideWindow, "PASS_OUTSIDE_WINDOW"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

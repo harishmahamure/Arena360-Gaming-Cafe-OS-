@@ -52,7 +52,7 @@ pub(super) fn load(
         Some(id) => find_player(tx, id)?.is_some(),
         None => false,
     };
-    let prepaid = if player {
+    let prepaid = if player || s.mode == SessionMode::Block {
         super::prepaid::load_start(tx, s, rate.as_ref(), now_ms)?
     } else {
         super::prepaid::StartExtras::default()
@@ -74,6 +74,12 @@ pub(super) fn busy_error() -> AppError {
     )
 }
 
+/// Whether a session of this mode runs at the group's hourly rate (a pack, pass or block is
+/// priced by its plan instead).
+fn priced_by_rate(mode: SessionMode) -> bool {
+    matches!(mode, SessionMode::Postpaid | SessionMode::Wallet)
+}
+
 pub(super) fn validate(
     intent: &Intent,
     s: &SessionStart,
@@ -82,17 +88,14 @@ pub(super) fn validate(
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "session.start takes no base_rev"));
     }
-    if matches!(s.mode, SessionMode::Pass | SessionMode::Block) {
-        return Err(invalid(
-            "mode",
-            "only a postpaid, pack or wallet session can start here",
-        ));
-    }
-    let prepaid = s.mode != SessionMode::Postpaid;
-    if prepaid && s.player_id.is_none() {
+    let needs_player = matches!(
+        s.mode,
+        SessionMode::Pack | SessionMode::Pass | SessionMode::Wallet
+    );
+    if needs_player && s.player_id.is_none() {
         return Err(invalid(
             "player_id",
-            "a pack or wallet session needs a player profile",
+            "a pack, pass or wallet session needs a player profile",
         ));
     }
     let Some(d) = &t.device else {
@@ -126,7 +129,7 @@ pub(super) fn validate(
             "This PC already has a session.",
         ));
     }
-    if t.rate.is_none() && s.mode != SessionMode::Pack {
+    if t.rate.is_none() && priced_by_rate(s.mode) {
         return Err(AppError::with_field(
             ErrorCode::NoRate,
             "device_id",
@@ -159,7 +162,7 @@ pub(super) fn mutate(
             "a session validated without its target",
         ));
     };
-    let rate = t.rate.as_ref().filter(|_| s.mode != SessionMode::Pack);
+    let rate = t.rate.as_ref().filter(|_| priced_by_rate(s.mode));
     let plan = super::prepaid::plan_start(s, &t.prepaid, now_ms)?;
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
         AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
@@ -203,14 +206,16 @@ pub(super) fn mutate(
         rate.map_or(0, |r| r.price_per_hour_minor),
     )?;
     set_device_state(tx, &d.device_id, "in_session", Some(&d.state), None)?;
-    Ok(vec![
+    let mut written = vec![
         Written {
-            key: RowKey::Sessions { id },
+            key: RowKey::Sessions { id: id.clone() },
             op: ChangeOp::Insert,
             before: None,
         },
         Written {
-            key: RowKey::SessionSegments { id: segment_id },
+            key: RowKey::SessionSegments {
+                id: segment_id.clone(),
+            },
             op: ChangeOp::Insert,
             before: None,
         },
@@ -221,7 +226,25 @@ pub(super) fn mutate(
             op: ChangeOp::Update,
             before: None,
         },
-    ])
+    ];
+    if let (SessionMode::Block, Some(ends_at)) = (s.mode, plan.ends_at) {
+        written.extend(super::prepaid::open_block_bill(
+            tx,
+            &t.prepaid,
+            &super::prepaid::BlockBill {
+                session_id: &id,
+                segment_id: &segment_id,
+                player_id: s.player_id.as_deref(),
+                guest_no,
+                device_id: &d.device_id,
+                business_day: &business_day,
+                fy: &fy,
+                ends_at,
+            },
+            now_ms,
+        )?);
+    }
+    Ok(written)
 }
 
 #[derive(Default)]
@@ -271,12 +294,6 @@ pub(super) fn validate_end(t: &EndTarget) -> Result<(), AppError> {
     if !held && !["active", "paused", "grace"].contains(&s.state.as_str()) {
         return Err(invalid("session_id", "this session has already ended"));
     }
-    if !["postpaid", "pack", "wallet"].contains(&s.mode.as_str()) {
-        return Err(invalid(
-            "session_id",
-            "this kind of session cannot end here",
-        ));
-    }
     Ok(())
 }
 
@@ -292,6 +309,20 @@ pub(super) fn mutate_end(
             "a session validated without its target",
         ));
     };
+    let ended_at = match (s.state.as_str(), s.ends_at) {
+        ("grace" | "expired", Some(at)) => at.min(now_ms),
+        _ => now_ms,
+    };
+    if s.mode == SessionMode::Block.as_str() {
+        return super::prepaid::end_block(
+            tx,
+            s,
+            &t.segments,
+            t.device.as_ref(),
+            ended_at,
+            &intent.actor.id,
+        );
+    }
     if super::prepaid::is_prepaid(s) {
         return super::prepaid::close_out(
             tx,
@@ -301,10 +332,7 @@ pub(super) fn mutate_end(
                 device: t.device.as_ref(),
                 extras: &t.close,
                 ending: super::prepaid::Ending::Staff,
-                ended_at: match (s.state.as_str(), s.ends_at) {
-                    ("grace" | "expired", Some(at)) => at.min(now_ms),
-                    _ => now_ms,
-                },
+                ended_at,
                 actor_id: &intent.actor.id,
             },
             now_ms,

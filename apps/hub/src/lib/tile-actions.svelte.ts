@@ -27,7 +27,11 @@ export type Cmd = {
 };
 
 export type StartChoice =
-  { mode: "postpaid" } | { mode: "pack"; pack_id: string } | { mode: "wallet" };
+  | { mode: "postpaid" }
+  | { mode: "pack"; pack_id: string }
+  | { mode: "pass"; pack_id: string }
+  | { mode: "block"; plan_id: string }
+  | { mode: "wallet" };
 
 export const cmds: Record<string, Cmd | undefined> = $state({});
 
@@ -62,6 +66,7 @@ const REFUSALS: Record<string, MessageKey> = {
   "STALE:session.settle": "hub.settle.stale",
   PACK_EXPIRED: "hub.session.pack_expired",
   PLAN_NOT_FOR_GROUP: "hub.session.pack_group",
+  PASS_OUTSIDE_WINDOW: "hub.session.window_closed",
   "INSUFFICIENT_BALANCE:session.start": "hub.session.wallet_short",
 };
 
@@ -91,7 +96,8 @@ export const startJob = (
       device_id,
       mode: choice.mode,
       player_id,
-      pack_id: choice.mode === "pack" ? choice.pack_id : undefined,
+      pack_id: choice.mode === "pack" || choice.mode === "pass" ? choice.pack_id : undefined,
+      plan_id: choice.mode === "block" ? choice.plan_id : undefined,
     },
     { track: manual ? "none" : "cmd", done: "hub.sheet.done.started" },
   );
@@ -198,11 +204,15 @@ export async function send(
     const { code, field, message } = outcome.error;
     const offline = code === "VALIDATION_FAILED" && field === "device_id";
     const text =
-      (code === "VALIDATION_FAILED" || code === "NOT_FOUND") && field === "pack_id"
+      (code === "VALIDATION_FAILED" || code === "NOT_FOUND") &&
+      (field === "pack_id" || field === "plan_id")
         ? "hub.session.pack_refused"
         : (REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code]);
     const detail =
-      code === "INSUFFICIENT_BALANCE" && j.payload.kind === "session.start" ? message : undefined;
+      (code === "INSUFFICIENT_BALANCE" || code === "PASS_OUTSIDE_WINDOW") &&
+      j.payload.kind === "session.start"
+        ? message
+        : undefined;
     settle(offline ? "failed" : "refused", text ?? "hub.settings.failed", detail);
   } else if (j.track === "none") {
     offerUndo(outcome.result);

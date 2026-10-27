@@ -76,4 +76,5 @@ export type ErrorCode =
   | "CREDIT_PAUSED"
   | "PASS_ALREADY_ACTIVE"
   | "PACK_EXPIRED"
-  | "PLAN_NOT_FOR_GROUP";
+  | "PLAN_NOT_FOR_GROUP"
+  | "PASS_OUTSIDE_WINDOW";

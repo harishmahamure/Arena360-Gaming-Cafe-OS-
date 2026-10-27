@@ -22,6 +22,7 @@ pub mod setup;
 mod snapshot;
 pub mod staff;
 mod status;
+pub mod windows;
 mod writer;
 
 use arena_proto::AppError;

@@ -6,4 +6,5 @@ export type SessionStart = {
   mode: SessionMode;
   player_id?: string;
   pack_id?: string;
+  plan_id?: string;
 };

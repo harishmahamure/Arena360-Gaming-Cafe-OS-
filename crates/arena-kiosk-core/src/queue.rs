@@ -83,6 +83,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PassAlreadyActive
         | ErrorCode::PackExpired
         | ErrorCode::PlanNotForGroup
+        | ErrorCode::PassOutsideWindow
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame
         | ErrorCode::HsnRequired

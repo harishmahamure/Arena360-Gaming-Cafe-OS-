@@ -134,6 +134,8 @@
   const START_LABEL: Record<StartChoice["mode"], MessageKey> = {
     postpaid: "hub.session.start",
     pack: "hub.session.start_pack",
+    pass: "hub.session.start_pass",
+    block: "hub.session.start_block",
     wallet: "hub.session.start_wallet",
   };
   const billing = $derived(session !== undefined);
@@ -468,9 +470,9 @@
         <p class="type-hub-label" data-testid="start-rate">
           {rate ? t("hub.session.rate", { rate }) : t("hub.sheet.no_rate")}
         </p>
-        {#if picked?.id && group}
+        {#if picked && group}
           <StartOptions
-            playerId={picked.id}
+            playerId={picked.id ?? null}
             groupId={group.id}
             {locale}
             {rate}

@@ -979,6 +979,7 @@ async fn ending_a_wallet_session_settles_at_once_and_offers_no_undo() {
                 mode: SessionMode::Wallet,
                 player_id: Some(player.clone()),
                 pack_id: None,
+                plan_id: None,
             }),
             None,
         )).unwrap()})

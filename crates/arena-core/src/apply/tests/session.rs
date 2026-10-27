@@ -96,6 +96,7 @@ pub(super) fn start_of(device: &str, player: Option<&str>) -> IntentPayload {
         mode: SessionMode::Postpaid,
         player_id: player.map(Into::into),
         pack_id: None,
+        plan_id: None,
     })
 }
 
@@ -271,10 +272,11 @@ async fn refusals_name_the_code_and_write_nothing() {
         mode: SessionMode::Pass,
         player_id: None,
         pack_id: None,
+        plan_id: None,
     });
     assert_eq!(
         refusal(submit(&f, owner(), pass).await),
-        field(ErrorCode::ValidationFailed, "mode")
+        field(ErrorCode::ValidationFailed, "player_id")
     );
     let mut with_rev = intent(owner(), start_of(&ok, None));
     with_rev.base_rev = Some(1);
@@ -589,7 +591,11 @@ pub(super) fn pay(
     }
 }
 
-fn settle_intent(order: &str, rev: Option<i64>, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+pub(super) fn settle_intent(
+    order: &str,
+    rev: Option<i64>,
+    payments: Vec<arena_proto::PaymentRow>,
+) -> Intent {
     let mut i = intent(
         owner(),
         IntentPayload::SessionSettle(arena_proto::SessionSettle {

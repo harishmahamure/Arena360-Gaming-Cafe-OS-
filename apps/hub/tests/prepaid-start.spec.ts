@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import type {
   OwnedPlanView,
+  PlanView,
   PlayerHit,
   SessionStaff,
   SnapshotDevice,
@@ -69,6 +70,19 @@ type Hub = {
   sessions: SnapshotSession[];
   sent: Sent[];
   fail?: { status: number; code: string; message?: string };
+  plans?: PlanView[];
+};
+
+const BLOCK: PlanView = {
+  id: "BL1",
+  plan_kind: "block",
+  name: "Night block",
+  price_minor: 20000,
+  window_start_min: 1320,
+  window_end_min: 360,
+  group_ids: ["G1"],
+  active: true,
+  rev: 1,
 };
 
 async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
@@ -109,6 +123,8 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
           digits ? PLAYERS.filter((p) => p.phone.replace(/\D/g, "").includes(digits)) : [],
         );
       }
+      case "/ui/plans":
+        return json(route, hub.plans ?? []);
       case "/ui/players/wallet":
         return json(route, { player_id: "P1", balance_minor: 25000, txns: [], plans: PLANS });
       case "/ui/intent": {
@@ -180,7 +196,10 @@ test("a picked player is offered Pay later, packs for this group and the wallet"
   await expect(packs.nth(1)).toContainText("Expired");
   await expect(packs.nth(1)).toHaveAttribute("aria-disabled", "true");
   await expect(options(page)).not.toContainText("VIP pack");
-  await expect(options(page)).not.toContainText("Night pass");
+  const passes = page.getByTestId("start-option-pass");
+  await expect(passes).toHaveCount(1);
+  await expect(passes.nth(0)).toContainText("Night pass");
+  await expect(passes.nth(0)).toContainText("22:00–06:00");
   await expect(page.getByTestId("start-option-wallet")).toContainText("₹250.00");
   await expect(page.getByTestId("start-option-wallet")).toContainText("₹100.00/hr");
   for (const el of await options(page).getByRole("button").all()) {
@@ -283,4 +302,60 @@ test("a wallet below the first bill shows the balance message from the Hub", asy
   await page.getByTestId("start-option-wallet").click();
   await act(page, en["hub.session.start_wallet"]).click();
   await expect(status(page)).toContainText("Balance ₹10.00. Top up at counter.");
+});
+
+test("a picked player starts on a pass and sends the owned pass id", async ({ page }) => {
+  const hub = await open(page);
+  await openSheet(page);
+  await pickPlayer(page);
+  await page.getByTestId("start-option-pass").click();
+  await act(page, en["hub.session.start_pass"]).click();
+  await expect(status(page)).toHaveText(en["hub.sheet.done.started"]);
+  expect(hub.sent[0].payload).toEqual({
+    kind: "session.start",
+    device_id: hub.devices[0].device_id,
+    mode: "pass",
+    player_id: "P1",
+    pack_id: "PK4",
+  });
+});
+
+test("a guest can start a block for this group and the Hub gets the plan id", async ({ page }) => {
+  const hub = await open(page, { plans: [BLOCK, { ...BLOCK, id: "BL2", group_ids: ["G2"] }] });
+  await openSheet(page);
+  await act(page, "Guest").click();
+  await expect(options(page)).toBeVisible();
+  const blocks = page.getByTestId("start-option-block");
+  await expect(blocks).toHaveCount(1);
+  await expect(blocks.nth(0)).toContainText("Night block");
+  await expect(blocks.nth(0)).toContainText("₹200.00");
+  await expect(blocks.nth(0)).toContainText("22:00–06:00");
+  await expect(page.getByTestId("start-option-wallet")).toHaveCount(0);
+  await blocks.nth(0).click();
+  await act(page, en["hub.session.start_block"]).click();
+  await expect(status(page)).toHaveText(en["hub.sheet.done.started"]);
+  expect(hub.sent[0].payload).toEqual({
+    kind: "session.start",
+    device_id: hub.devices[0].device_id,
+    mode: "block",
+    plan_id: "BL1",
+  });
+});
+
+test("a start outside the window is refused inline with the window from the Hub", async ({
+  page,
+}) => {
+  await open(page, {
+    plans: [BLOCK],
+    fail: {
+      status: 409,
+      code: "PASS_OUTSIDE_WINDOW",
+      message: "This block starts 22:00–06:00.",
+    },
+  });
+  await openSheet(page);
+  await act(page, "Guest").click();
+  await page.getByTestId("start-option-block").click();
+  await act(page, en["hub.session.start_block"]).click();
+  await expect(status(page)).toContainText("This block starts 22:00–06:00.");
 });

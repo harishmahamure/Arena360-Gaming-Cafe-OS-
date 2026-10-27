@@ -873,6 +873,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PassAlreadyActive
         | ErrorCode::PackExpired
         | ErrorCode::PlanNotForGroup
+        | ErrorCode::PassOutsideWindow
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -3494,6 +3495,7 @@ pub(crate) mod tests {
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,
                 pack_id: None,
+                plan_id: None,
             }),
             None,
         )).unwrap()})

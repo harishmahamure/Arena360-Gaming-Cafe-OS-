@@ -273,6 +273,11 @@ pub fn stamp(tx: &StoreTx<'_>, now_ms: i64) -> Result<Option<(String, String)>, 
     }))
 }
 
+/// The branch time zone in effect at `now_ms` (`None` before the branch exists).
+pub fn tz_at(tx: &StoreTx<'_>, now_ms: i64) -> Result<Option<Tz>, AppError> {
+    Ok(read_rows(tx)?.map(|rows| resolve(&rows, now_ms).1.tz))
+}
+
 /// The business day in effect at `now_ms` (`None` before the branch exists).
 pub fn current_business_day(
     store: &arena_store::Store,

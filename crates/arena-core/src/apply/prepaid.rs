@@ -1,29 +1,34 @@
-//! Sessions paid for up front: starting on a pack or the wallet, and the close-out they share
-//! whether staff end them or the timer expires them.
+//! Sessions paid for up front: starting on a pack, a pass, a block or the wallet, and the
+//! close-out they share whether staff end them or the timer expires them.
 
 use arena_proto::{
     AppError, BillLine, ErrorCode, PaymentMethod, PaymentRow, SessionMode, SessionStart,
 };
 use arena_store::{
-    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, PlayerPackRow, RateRow, RowKey,
-    SegmentRow, StoreTx, close_segments, deduct_pack_minutes, end_session, expire_session,
-    find_player_pack, find_wallet, insert_order, insert_order_line, pack_in_use, set_device_state,
-    settle_order, sum_reserved_minor,
+    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, PlanRow, PlayerPackRow, RateRow,
+    RowKey, SegmentRow, StoreTx, close_segments, deduct_pack_minutes, end_session, expire_session,
+    find_plan, find_player_pack, find_wallet, insert_order, insert_order_line, list_plan_groups,
+    pack_in_use, set_device_state, settle_order, sum_reserved_minor,
 };
 
 use super::mutate::Written;
 use super::session::{Stamp, insert_payments, invalid, record_payer_txns};
 use crate::billing::{self, WalletHorizon};
+use crate::windows::PlayWindow;
 
 const MIN_MS: i64 = 60_000;
 
-/// What a pack or wallet start reads before it validates.
+/// What a pack, pass, block or wallet start reads before it validates.
 #[derive(Default)]
 pub(super) struct StartExtras {
     pack: Option<PlayerPackRow>,
     pack_busy: bool,
     horizon: Option<WalletHorizon>,
     short: Option<String>,
+    plan: Option<PlanRow>,
+    plan_groups: Vec<String>,
+    window: Option<PlayWindow>,
+    window_ends_at: Option<i64>,
     now: i64,
 }
 
@@ -44,14 +49,35 @@ pub(super) fn load_start(
         now: now_ms,
         ..StartExtras::default()
     };
+    let tz = crate::locale::tz_at(tx, now_ms)?;
+    let open_window = |extras: &mut StartExtras, start, end| {
+        extras.window = PlayWindow::new(start, end);
+        extras.window_ends_at = extras
+            .window
+            .zip(tz)
+            .and_then(|(w, tz)| w.ends_at(now_ms, tz));
+    };
+    if s.mode == SessionMode::Block {
+        if let Some(plan_id) = s.plan_id.as_deref() {
+            extras.plan = find_plan(tx, plan_id)?.filter(|p| p.kind == "block" && p.active);
+            if let Some(p) = extras.plan.clone() {
+                extras.plan_groups = list_plan_groups(tx, &p.plan_id)?;
+                open_window(&mut extras, p.window_start_min, p.window_end_min);
+            }
+        }
+        return Ok(extras);
+    }
     let Some(player_id) = s.player_id.as_deref() else {
         return Ok(extras);
     };
     match s.mode {
-        SessionMode::Pack => {
+        SessionMode::Pack | SessionMode::Pass => {
             if let Some(pack_id) = s.pack_id.as_deref() {
                 extras.pack = find_player_pack(tx, player_id, pack_id)?;
                 extras.pack_busy = extras.pack.is_some() && pack_in_use(tx, pack_id)?;
+                if let Some(p) = extras.pack.clone() {
+                    open_window(&mut extras, p.window_start_min, p.window_end_min);
+                }
             }
         }
         SessionMode::Wallet => {
@@ -87,14 +113,17 @@ pub(super) fn check_start(
     group_id: &str,
     x: &StartExtras,
 ) -> Result<(), AppError> {
+    if s.plan_id.is_some() && s.mode != SessionMode::Block {
+        return Err(invalid("plan_id", "only a block session takes a plan"));
+    }
     match s.mode {
         SessionMode::Postpaid => match s.pack_id {
             None => Ok(()),
-            Some(_) => Err(invalid("pack_id", "only a pack session takes a pack")),
+            Some(_) => Err(invalid("pack_id", "only a pack or pass session takes one")),
         },
         SessionMode::Wallet => {
             if s.pack_id.is_some() {
-                return Err(invalid("pack_id", "only a pack session takes a pack"));
+                return Err(invalid("pack_id", "only a pack or pass session takes one"));
             }
             match (&x.horizon, &x.short) {
                 (Some(_), _) => Ok(()),
@@ -107,38 +136,43 @@ pub(super) fn check_start(
                 )),
             }
         }
-        SessionMode::Pack => check_pack(s, group_id, x),
-        SessionMode::Pass | SessionMode::Block => Err(invalid(
-            "mode",
-            "only a postpaid, pack or wallet session can start here",
-        )),
+        SessionMode::Pack | SessionMode::Pass => check_pack(s, group_id, x),
+        SessionMode::Block => check_block(s, group_id, x),
     }
 }
 
 fn check_pack(s: &SessionStart, group_id: &str, x: &StartExtras) -> Result<(), AppError> {
+    let pass = s.mode == SessionMode::Pass;
+    let (kind, noun) = if pass {
+        ("pass", "pass")
+    } else {
+        ("pack", "pack")
+    };
     let Some(pack_id) = s.pack_id.as_deref() else {
-        return Err(invalid("pack_id", "choose a pack"));
+        return Err(invalid("pack_id", &format!("choose a {noun}")));
     };
     let pack = x
         .pack
         .as_ref()
-        .filter(|p| p.kind == "pack" && p.id == pack_id)
-        .ok_or_else(|| AppError::with_field(ErrorCode::NotFound, "pack_id", "no such pack"))?;
+        .filter(|p| p.kind == kind && p.id == pack_id)
+        .ok_or_else(|| {
+            AppError::with_field(ErrorCode::NotFound, "pack_id", format!("no such {noun}"))
+        })?;
     if !pack.group_ids.iter().any(|g| g == group_id) {
         return Err(AppError::with_field(
             ErrorCode::PlanNotForGroup,
             "pack_id",
-            "This pack is not for this PC's group.",
+            format!("This {noun} is not for this PC's group."),
         ));
     }
     if pack.expires_at <= x.now {
         return Err(AppError::with_field(
             ErrorCode::PackExpired,
             "pack_id",
-            "This pack has expired.",
+            format!("This {noun} has expired."),
         ));
     }
-    if pack.minutes_left.unwrap_or(0) <= 0 {
+    if !pass && pack.minutes_left.unwrap_or(0) <= 0 {
         return Err(AppError::with_field(
             ErrorCode::PackExpired,
             "pack_id",
@@ -148,10 +182,53 @@ fn check_pack(s: &SessionStart, group_id: &str, x: &StartExtras) -> Result<(), A
     if x.pack_busy {
         return Err(invalid(
             "pack_id",
-            "This pack is already running a session.",
+            &format!("This {noun} is already running a session."),
         ));
     }
+    if pass {
+        window_open("pack_id", "This pass plays", x)?;
+    }
     Ok(())
+}
+
+fn check_block(s: &SessionStart, group_id: &str, x: &StartExtras) -> Result<(), AppError> {
+    if s.pack_id.is_some() {
+        return Err(invalid("pack_id", "only a pack or pass session takes one"));
+    }
+    if s.plan_id.is_none() {
+        return Err(invalid("plan_id", "choose a block"));
+    }
+    if x.plan.is_none() {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "plan_id",
+            "no such block",
+        ));
+    }
+    if !x.plan_groups.iter().any(|g| g == group_id) {
+        return Err(AppError::with_field(
+            ErrorCode::PlanNotForGroup,
+            "plan_id",
+            "This block is not for this PC's group.",
+        ));
+    }
+    window_open("plan_id", "This block starts", x)
+}
+
+/// Refuses `PASS_OUTSIDE_WINDOW`, naming the window, when now is outside it.
+fn window_open(field: &str, lead: &str, x: &StartExtras) -> Result<(), AppError> {
+    match (&x.window, x.window_ends_at) {
+        (Some(_), Some(_)) => Ok(()),
+        (Some(w), None) => Err(AppError::with_field(
+            ErrorCode::PassOutsideWindow,
+            field,
+            format!("{lead} {}.", w.label()),
+        )),
+        (None, _) => Err(AppError::new(
+            ErrorCode::Internal,
+            "a pass or block has no play window",
+        )),
+    }
 }
 
 /// The end time and reservation of a validated start at `now_ms`.
@@ -171,6 +248,19 @@ pub(super) fn plan_start(
                 pack_id: Some(pack.id.clone()),
             })
         }
+        SessionMode::Pass => {
+            let pack = x.pack.as_ref().ok_or_else(internal)?;
+            Ok(StartPlan {
+                ends_at: Some(x.window_ends_at.ok_or_else(internal)?),
+                reserved_minor: 0,
+                pack_id: Some(pack.id.clone()),
+            })
+        }
+        SessionMode::Block => Ok(StartPlan {
+            ends_at: Some(x.window_ends_at.ok_or_else(internal)?),
+            reserved_minor: 0,
+            pack_id: None,
+        }),
         SessionMode::Wallet => {
             let h = x.horizon.ok_or_else(internal)?;
             Ok(StartPlan {
@@ -195,7 +285,9 @@ pub(super) struct CloseExtras {
 }
 
 pub(super) fn is_prepaid(s: &LiveSession) -> bool {
-    s.mode == SessionMode::Pack.as_str() || s.mode == SessionMode::Wallet.as_str()
+    [SessionMode::Pack, SessionMode::Pass, SessionMode::Wallet]
+        .iter()
+        .any(|m| s.mode == m.as_str())
 }
 
 pub(super) fn load_close(tx: &StoreTx<'_>, s: &LiveSession) -> Result<CloseExtras, AppError> {
@@ -249,7 +341,8 @@ pub(super) fn close_out(
         Ending::Expired => expire_session(tx, &s.id, c.ended_at)?,
     }
     let is_pack = s.mode == SessionMode::Pack.as_str();
-    let mut lines = if is_pack {
+    let zero_bill = is_pack || s.mode == SessionMode::Pass.as_str();
+    let mut lines = if zero_bill {
         billing::bill(c.segments, 0, 0, None, c.ended_at)
     } else {
         billing::bill(c.segments, s.rounding_min, s.minimum_min, None, c.ended_at)
@@ -257,7 +350,7 @@ pub(super) fn close_out(
     let left = c.extras.pack.as_ref().and_then(|p| p.minutes_left);
     let used = lines.iter().map(|l| l.minutes).sum::<i64>();
     let used = left.map_or(used, |l| used.min(l));
-    let debit = if is_pack {
+    let debit = if zero_bill {
         0
     } else {
         let subtotal: i64 = lines.iter().map(|l| l.amount_minor).sum();
@@ -344,7 +437,7 @@ pub(super) fn close_out(
         )?;
     }
     settle_order(tx, &order_id, now_ms, c.actor_id)?;
-    if let Some(pack) = &c.extras.pack {
+    if let Some(pack) = c.extras.pack.as_ref().filter(|_| is_pack) {
         deduct_pack_minutes(tx, &pack.id, used)?;
         written.push(Written {
             key: RowKey::PlayerPacks {
@@ -355,6 +448,112 @@ pub(super) fn close_out(
         });
     }
     if let Some(d) = c.device {
+        let state = d.prior_state.as_deref().filter(|p| *p != "in_session");
+        set_device_state(tx, &d.device_id, state.unwrap_or("online"), None, None)?;
+        written.push(Written {
+            key: RowKey::DevicesMeta {
+                device_id: d.device_id.clone(),
+            },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    Ok(written)
+}
+
+/// The rows of a just-inserted block session that its bill hangs from.
+pub(super) struct BlockBill<'a> {
+    pub session_id: &'a str,
+    pub segment_id: &'a str,
+    pub player_id: Option<&'a str>,
+    pub guest_no: Option<i64>,
+    pub device_id: &'a str,
+    pub business_day: &'a str,
+    pub fy: &'a str,
+    pub ends_at: i64,
+}
+
+/// Opens the bill of a block session at its start: one line at the block price, unpaid until
+/// staff settle it (now or at the end).
+pub(super) fn open_block_bill(
+    tx: &StoreTx<'_>,
+    x: &StartExtras,
+    b: &BlockBill<'_>,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let plan = x
+        .plan
+        .as_ref()
+        .ok_or_else(|| AppError::new(ErrorCode::Internal, "a block validated without its plan"))?;
+    let order_id = ulid::Ulid::generate().to_string();
+    let line_id = ulid::Ulid::generate().to_string();
+    insert_order(
+        tx,
+        &NewOrder {
+            id: &order_id,
+            session_id: b.session_id,
+            player_id: b.player_id,
+            guest_no: b.guest_no,
+            device_id: b.device_id,
+            subtotal_minor: plan.price_minor,
+            business_day: b.business_day,
+            fy: b.fy,
+        },
+    )?;
+    insert_order_line(
+        tx,
+        &NewOrderLine {
+            id: &line_id,
+            order_id: &order_id,
+            segment_id: b.segment_id,
+            device_id: b.device_id,
+            from_at: now_ms,
+            to_at: b.ends_at,
+            minutes: (b.ends_at - now_ms + MIN_MS - 1) / MIN_MS,
+            rate_minor_per_hour: 0,
+            amount_minor: plan.price_minor,
+            position: 0,
+        },
+    )?;
+    Ok(vec![
+        Written {
+            key: RowKey::Orders { id: order_id },
+            op: ChangeOp::Insert,
+            before: None,
+        },
+        Written {
+            key: RowKey::OrderLines { id: line_id },
+            op: ChangeOp::Insert,
+            before: None,
+        },
+    ])
+}
+
+/// Ends a block session: the block price was billed at the start, so ending early charges
+/// nothing more and refunds nothing.
+pub(super) fn end_block(
+    tx: &StoreTx<'_>,
+    s: &LiveSession,
+    segments: &[SegmentRow],
+    device: Option<&DeviceMetaRow>,
+    ended_at: i64,
+    actor_id: &str,
+) -> Result<Vec<Written>, AppError> {
+    close_segments(tx, &s.id, ended_at)?;
+    end_session(tx, &s.id, ended_at, actor_id)?;
+    let mut written = vec![Written {
+        key: RowKey::Sessions { id: s.id.clone() },
+        op: ChangeOp::Update,
+        before: None,
+    }];
+    for seg in segments.iter().filter(|g| g.to_at.is_none()) {
+        written.push(Written {
+            key: RowKey::SessionSegments { id: seg.id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    if let Some(d) = device {
         let state = d.prior_state.as_deref().filter(|p| *p != "in_session");
         set_device_state(tx, &d.device_id, state.unwrap_or("online"), None, None)?;
         written.push(Written {

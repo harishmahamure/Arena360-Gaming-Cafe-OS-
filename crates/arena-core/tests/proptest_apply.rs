@@ -138,6 +138,13 @@ enum Op {
         wallet: bool,
         guest: bool,
     },
+    /// A pass (for the first player) or block (for them or a guest) start on an existing PC: it
+    /// either writes the session rows with a window end, plus the block's open bill, or nothing.
+    WindowStart {
+        slot: u8,
+        pass: bool,
+        guest: bool,
+    },
     SessionEnd {
         slot: u8,
     },
@@ -351,6 +358,11 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         1 => prop::bool::weighted(0.8).prop_map(|known| Op::PlayerReset { known }),
         3 => (0..3u8, any::<bool>()).prop_map(|(slot, guest)| Op::Session { slot, guest }),
+        1 => (0..3u8, any::<bool>(), any::<bool>()).prop_map(|(slot, pass, guest)| Op::WindowStart {
+            slot,
+            pass,
+            guest
+        }),
         2 => (0..3u8, any::<bool>(), prop::bool::weighted(0.2)).prop_map(|(slot, wallet, guest)| Op::PrepaidStart {
             slot,
             wallet,
@@ -1329,6 +1341,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     mode: arena_proto::SessionMode::Postpaid,
                     player_id: player,
                     pack_id: None,
+                    plan_id: None,
                 }),
                 None,
             ));
@@ -1340,6 +1353,84 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), before + 3);
             }
             prop_assert_eq!(live(hub), 1);
+        }
+        Op::WindowStart { slot, pass, guest } => {
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let player = hub
+                .reader
+                .rows(Table::Players)
+                .unwrap()
+                .first()
+                .map(|p| text(p, "player_id"))
+                .filter(|_| !*guest || *pass);
+            let owned = player.as_ref().and_then(|p| {
+                hub.reader
+                    .rows(Table::PlayerPacks)
+                    .unwrap()
+                    .iter()
+                    .find(|r| text(r, "player_id") == *p && text(r, "kind") == "pass")
+                    .map(|r| text(r, "id"))
+            });
+            let block = hub
+                .reader
+                .plans()
+                .unwrap()
+                .into_iter()
+                .find(|(p, _)| p.kind == "block")
+                .map(|(p, _)| p.plan_id);
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionStart(arena_proto::SessionStart {
+                    device_id: device.clone(),
+                    mode: if *pass {
+                        arena_proto::SessionMode::Pass
+                    } else {
+                        arena_proto::SessionMode::Block
+                    },
+                    player_id: player,
+                    pack_id: owned.filter(|_| *pass),
+                    plan_id: block.filter(|_| !*pass),
+                }),
+                None,
+            ));
+            match &out {
+                Ok(_) => {
+                    prop_assert_eq!(hub.change_count(), before + if *pass { 3 } else { 5 });
+                    let started = hub
+                        .reader
+                        .rows(Table::Sessions)
+                        .unwrap()
+                        .into_iter()
+                        .filter(|s| text(s, "device_id") == device && text(s, "state") == "active")
+                        .collect::<Vec<_>>();
+                    prop_assert_eq!(started.len(), 1);
+                    prop_assert!(matches!(started[0]["ends_at"], RowValue::Integer(_)));
+                }
+                Err(e) => {
+                    prop_assert_eq!(hub.change_count(), before);
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::PcBusy
+                                | ErrorCode::ValidationFailed
+                                | ErrorCode::NotFound
+                                | ErrorCode::PackExpired
+                                | ErrorCode::PlanNotForGroup
+                                | ErrorCode::PassOutsideWindow
+                        ),
+                        "{:?}",
+                        e
+                    );
+                }
+            }
         }
         Op::PrepaidStart {
             slot,
@@ -1381,6 +1472,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     },
                     player_id: player,
                     pack_id: pack.filter(|_| !*wallet),
+                    plan_id: None,
                 }),
                 None,
             ));
@@ -1411,6 +1503,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                                 | ErrorCode::NotFound
                                 | ErrorCode::PackExpired
                                 | ErrorCode::PlanNotForGroup
+                                | ErrorCode::PassOutsideWindow
                         ),
                         "{:?}",
                         e

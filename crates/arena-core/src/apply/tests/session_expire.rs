@@ -44,6 +44,7 @@ async fn timed_with(f: &Fixture, ends_in_ms: i64, grace_min: u32, mode: &str) ->
             mode: SessionMode::Postpaid,
             player_id: Some(player),
             pack_id: None,
+            plan_id: None,
         }),
     );
     i.issued_at = f.clock.now_ms();
@@ -184,6 +185,7 @@ async fn an_expired_session_lets_the_device_start_another() {
             mode: SessionMode::Postpaid,
             player_id: None,
             pack_id: None,
+            plan_id: None,
         }),
     );
     i.issued_at = T0 + 2_000;
@@ -309,6 +311,7 @@ async fn staff_handles_holds_the_session_expired_with_a_time_up_alert_until_staf
             mode: SessionMode::Postpaid,
             player_id: None,
             pack_id: None,
+            plan_id: None,
         }),
     );
     start.issued_at = ends + 70_000;

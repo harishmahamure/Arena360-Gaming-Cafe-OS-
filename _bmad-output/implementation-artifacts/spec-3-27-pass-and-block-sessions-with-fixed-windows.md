@@ -2,7 +2,7 @@
 title: 'Story 3.27: Pass and Block Sessions with Fixed Windows'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'aa48908'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -92,3 +92,8 @@ Status: review
 Verified: fmt, clippy, hub and kiosk check, string/token/contrast/protocol/layer checks and prettier pass; arena-core (526 lib tests incl. new pass/block matrix and `windows` goldens, proptest with `WindowStart`) pass; `prepaid-start` and `session-start` Playwright specs pass on desktop and phone. Unrelated timing failures as before: arena-cloud (`a_hung_run_times_out_with_its_own_code`, `unreachable_at_start_retries_then_exits_1_without_logging_the_token`), arena-tasks (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reading_times_out`). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: one code `PASS_OUTSIDE_WINDOW` covers pass and block; a block's start window and its play window are the plan's single window; a block's order line spans start to `ends_at` at rate 0 so the price is the line amount; windows are wall-clock in the branch tz, not business-day relative; the Hub does not pre-compute window validity, the Hub's refusal text names it.
 Left for later: replay coverage of window starts; extend of pass and block sessions (3.28); the "All day" window wording of Epic 6.
+
+## Review Triage Log (code review)
+
+Patched: window end could precede now in a DST repeated hour (`local_ms` now picks the occurrence after now); an unbootstrapped branch zone reported `PASS_OUTSIDE_WINDOW` and now reports `INTERNAL`; added tests for pass/block on a rated group, an inactive block, `pack_id` on a block, and the repeated-hour window.
+Rejected or deferred (spec-conformant, cosmetic or out of scope): block expiry with an unsettled bill (spec: expiry only ends the session); pass outliving its `expires_at` (spec silent); Hub window pre-check and plans-fetch fallback (same behaviour as packs); refusal wording reuse; replay coverage (already listed as left for later).

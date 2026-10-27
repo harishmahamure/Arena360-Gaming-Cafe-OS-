@@ -46,14 +46,24 @@ impl PlayWindow {
         } else {
             return None;
         };
-        local_ms(tz, end_day, self.end_min)
+        let end = local_ms(tz, end_day, self.end_min, now_ms)?;
+        (end > now_ms).then_some(end)
     }
 }
 
-fn local_ms(tz: Tz, day: NaiveDate, min: i64) -> Option<i64> {
+/// The instant of local `min` on `day`. When the clock shows that minute twice, the first time
+/// it does, unless that has already passed at `now_ms`.
+fn local_ms(tz: Tz, day: NaiveDate, min: i64, now_ms: i64) -> Option<i64> {
     let at = day.and_hms_opt(0, 0, 0)? + Duration::minutes(min);
     let t = match tz.from_local_datetime(&at) {
-        chrono::LocalResult::Single(t) | chrono::LocalResult::Ambiguous(t, _) => t,
+        chrono::LocalResult::Single(t) => t,
+        chrono::LocalResult::Ambiguous(first, second) => {
+            if first.timestamp_millis() > now_ms {
+                first
+            } else {
+                second
+            }
+        }
         chrono::LocalResult::None => tz
             .from_local_datetime(&(at + Duration::hours(1)))
             .earliest()?,
@@ -127,6 +137,23 @@ mod tests {
         let now = at(dubai, "2027-03-10 21:00");
         assert_eq!(night().ends_at(now, dubai), None);
         assert_eq!(night().ends_at(now, IST), Some(at(IST, "2027-03-11 06:00")));
+    }
+
+    #[test]
+    fn a_window_ending_in_a_repeated_hour_never_ends_before_now() {
+        let ny = Tz::America__New_York;
+        let w = PlayWindow::new(Some(23 * 60), Some(60 + 30)).unwrap();
+        let first = ny
+            .from_local_datetime(
+                &NaiveDateTime::parse_from_str("2027-11-07 01:30", "%Y-%m-%d %H:%M").unwrap(),
+            )
+            .earliest()
+            .unwrap()
+            .timestamp_millis();
+        let second = first + 3_600_000;
+        assert_eq!(w.ends_at(first - 600_000, ny), Some(first));
+        assert_eq!(w.ends_at(second - 1_200_000, ny), Some(second));
+        assert_eq!(w.ends_at(second, ny), None);
     }
 
     #[test]

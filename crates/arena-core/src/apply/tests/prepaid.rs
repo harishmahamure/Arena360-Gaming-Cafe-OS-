@@ -1040,3 +1040,67 @@ async fn a_held_block_session_ends_at_its_window_end_in_staff_handles_mode() {
     assert_eq!(table(&f, Table::Orders).len(), 1);
     assert_ne!(state_of(&f, &d), "in_session");
 }
+
+#[tokio::test]
+async fn pass_and_block_sessions_on_a_rated_group_take_no_group_rate() {
+    let f = bootstrapped().await;
+    let (a, b) = (
+        pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await,
+        pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await,
+    );
+    let p = player(&f, "asha", "+919876543210").await;
+    let pass = owned_pass(&f, &p, &[group_of(&f, &a)]).await;
+    let block = window_plan(&f, "block", &[group_of(&f, &b)], 20_000).await;
+    f.clock.set(ist("2027-01-15 23:30"));
+    begin_pass(&f, &a, &p, &pass).await.unwrap();
+    begin_block(&f, &b, None, &block, SessionMode::Block)
+        .await
+        .unwrap();
+    for s in sessions(&f) {
+        assert_eq!(s["rate_id"], RowValue::Null);
+    }
+    for seg in table(&f, Table::SessionSegments) {
+        assert_eq!(int(&seg, "rate_minor_per_hour"), 0);
+    }
+}
+
+#[tokio::test]
+async fn an_inactive_block_or_a_block_with_a_pack_id_is_refused() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let group = group_of(&f, &d);
+    let plan = window_plan(&f, "block", std::slice::from_ref(&group), 20_000).await;
+    f.clock.set(ist("2027-01-15 23:30"));
+    let mut i = start_as(&d, None, SessionMode::Block, Some("PACK"));
+    i.issued_at = f.clock.now_ms();
+    if let IntentPayload::SessionStart(s) = &mut i.payload {
+        s.plan_id = Some(plan.clone());
+    }
+    assert_eq!(
+        refusal(f.writer.submit_intent(i).await),
+        (ErrorCode::ValidationFailed, Some("pack_id".to_owned()))
+    );
+    submit(
+        &f,
+        owner(),
+        IntentPayload::PlanUpsert(PlanUpsert {
+            id: Some(plan.clone()),
+            plan_kind: "block".into(),
+            name: "Night block".into(),
+            price_minor: 20_000,
+            minutes: None,
+            validity_days: None,
+            window_start_min: Some(22 * 60),
+            window_end_min: Some(6 * 60),
+            group_ids: vec![group],
+            active: false,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        refusal(begin_block(&f, &d, None, &plan, SessionMode::Block).await),
+        (ErrorCode::NotFound, Some("plan_id".to_owned()))
+    );
+    assert!(sessions(&f).is_empty());
+}

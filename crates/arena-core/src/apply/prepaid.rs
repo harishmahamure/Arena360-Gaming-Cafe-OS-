@@ -29,6 +29,7 @@ pub(super) struct StartExtras {
     plan_groups: Vec<String>,
     window: Option<PlayWindow>,
     window_ends_at: Option<i64>,
+    no_zone: bool,
     now: i64,
 }
 
@@ -56,6 +57,7 @@ pub(super) fn load_start(
             .window
             .zip(tz)
             .and_then(|(w, tz)| w.ends_at(now_ms, tz));
+        extras.no_zone = extras.window.is_some() && tz.is_none();
     };
     if s.mode == SessionMode::Block {
         if let Some(plan_id) = s.plan_id.as_deref() {
@@ -217,6 +219,12 @@ fn check_block(s: &SessionStart, group_id: &str, x: &StartExtras) -> Result<(), 
 
 /// Refuses `PASS_OUTSIDE_WINDOW`, naming the window, when now is outside it.
 fn window_open(field: &str, lead: &str, x: &StartExtras) -> Result<(), AppError> {
+    if x.no_zone {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "the branch has not been bootstrapped",
+        ));
+    }
     match (&x.window, x.window_ends_at) {
         (Some(_), Some(_)) => Ok(()),
         (Some(w), None) => Err(AppError::with_field(

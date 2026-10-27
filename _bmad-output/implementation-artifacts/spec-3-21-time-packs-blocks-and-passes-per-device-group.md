@@ -2,7 +2,7 @@
 title: 'Story 3.21: Time Packs, Blocks and Passes per Device Group'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'cf3d210'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -79,6 +79,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review 2026-10-27: no blocking findings; fmt, clippy and hub check green. Unrelated timing tests fail in arena-cloud and arena-tasks (untouched).
+
 ## Verification
 
 **Commands:**
@@ -88,6 +90,6 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: all commands above pass (`arena-kiosk-svc` test targets fail to compile on unused imports unrelated to this story, as before).
 Left for later: selling plans and owned copies (3.22), plan checks and windows at session start (3.24, 3.27), Owner-app plan management (8.23), CSV plan import (5.34).

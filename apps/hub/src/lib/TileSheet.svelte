@@ -21,6 +21,7 @@
     SnapshotSession,
     PauseReason,
     PaymentRow,
+    ReasonCode,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
@@ -42,6 +43,8 @@
   import SettleBar from "./SettleBar.svelte";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
   import {
+    FORCE_LABELS,
+    FORCE_REASONS,
     MESSAGE_MAX,
     PAUSE_LABELS,
     adminUnlockJob,
@@ -49,6 +52,7 @@
     cmds,
     endJob,
     extendJob,
+    forceEndJob,
     groupJob,
     maintenanceJob,
     payerJob,
@@ -75,6 +79,8 @@
     value,
     label: PAUSE_LABELS[value],
   }));
+
+  const FORCE_OPTIONS = FORCE_REASONS.map((value) => ({ value, label: FORCE_LABELS[value] }));
 
   let {
     device,
@@ -135,6 +141,7 @@
   let choice: StartChoice = $state({ mode: "postpaid" });
   let pausing = $state(false);
   let extending = $state(false);
+  let forcing = $state(false);
   let approving: Job | null = $state(null);
   let approvalPrompt: MessageKey = $state("ui.pin.prompt");
 
@@ -277,6 +284,33 @@
     pausing = false;
     await tick();
     root?.querySelector<HTMLElement>('[data-testid="session-bill"] button')?.focus();
+  }
+
+  /** A paid session with time left ends only on a manager's PIN and a reason. */
+  const timeLeft = $derived(
+    session !== undefined &&
+      session.mode !== "postpaid" &&
+      session.mode !== undefined &&
+      session.mode !== null &&
+      session.ends_at != null &&
+      session.ends_at > Date.now() &&
+      ["active", "paused"].includes(session.state),
+  );
+
+  $effect(() => {
+    if (!session) forcing = false;
+  });
+
+  async function cancelForce() {
+    forcing = false;
+    await tick();
+    root?.querySelector<HTMLElement>('[data-testid="session-bill"] button')?.focus();
+  }
+
+  async function chooseForce(value: string, note?: string) {
+    if (!session) return;
+    forcing = false;
+    await go(forceEndJob(session.id, session.rev, value as ReasonCode, note));
   }
 
   async function choosePause(value: string, note?: string) {
@@ -704,12 +738,32 @@
             />
           {/if}
         {/if}
-        <Button
-          label="hub.session.end"
-          disabled={busy}
-          disabledReason="hub.sheet.waiting"
-          onclick={() => void go(endJob(session.id, session.rev))}
-        />
+        {#if forcing}
+          <ReasonPicker
+            options={FORCE_OPTIONS}
+            legend="hub.force.legend"
+            noteFor="other"
+            noteLabel="hub.force.note"
+            onconfirm={chooseForce}
+            oncancel={cancelForce}
+          />
+        {:else}
+          <Button
+            label="hub.session.end"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => (timeLeft ? (forcing = true) : void go(endJob(session.id, session.rev)))}
+          />
+          {#if !timeLeft}
+            <Button
+              label="hub.session.force_end"
+              variant="secondary"
+              disabled={busy}
+              disabledReason="hub.sheet.waiting"
+              onclick={() => (forcing = true)}
+            />
+          {/if}
+        {/if}
         {#if !session.player_id}
           <ConvertGuest
             sessionId={session.id}

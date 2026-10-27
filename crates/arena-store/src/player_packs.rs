@@ -193,6 +193,16 @@ pub fn pack_in_use(conn: &Connection, id: &str) -> Result<bool, AppError> {
 }
 
 /// Takes `minutes` off the owned pack's balance, never below 0.
+/// Gives minutes back to a pack (the undo of a forced end).
+pub fn restore_pack_minutes(conn: &Connection, id: &str, minutes: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE player_packs SET minutes_left = COALESCE(minutes_left, 0) + ?2 WHERE id = ?1",
+        params![id, minutes],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 pub fn deduct_pack_minutes(conn: &Connection, id: &str, minutes: i64) -> Result<(), AppError> {
     conn.execute(
         "UPDATE player_packs SET minutes_left = MAX(COALESCE(minutes_left, 0) - ?2, 0)

@@ -32,6 +32,7 @@ mod credit_collect;
 pub(crate) mod credit_pause;
 mod devices;
 mod extend;
+mod force_end;
 mod frame;
 mod group_bill;
 mod groups;
@@ -168,6 +169,8 @@ pub(crate) enum Target {
     SessionEnd(Box<session::EndTarget>),
     SessionSettle(Box<session::SettleTarget>),
     SessionEndReverted(Box<session::EndRevertTarget>),
+    SessionForceEnd(Box<force_end::ForceEndTarget>),
+    SessionForceEndReverted(Box<force_end::ForceEndRevertTarget>),
     SessionSettleReverted(Box<session::SettleRevertTarget>),
     SessionPause(Box<session::PauseTarget>),
     SessionResume(Box<session::PauseTarget>),
@@ -235,6 +238,10 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::SessionStart(s) => Target::Session(Box::new(session::load(tx, s, now)?)),
         P::SessionEnd(e) => Target::SessionEnd(Box::new(session::load_end(tx, e)?)),
         P::SessionSettle(s) => Target::SessionSettle(Box::new(session::load_settle(tx, s, now)?)),
+        P::SessionForceEnd(f) => Target::SessionForceEnd(Box::new(force_end::load(tx, f)?)),
+        P::SessionForceEndReverted(r) => {
+            Target::SessionForceEndReverted(Box::new(force_end::load_reverted(tx, r, now)?))
+        }
         P::SessionEndReverted(r) => {
             Target::SessionEndReverted(Box::new(session::load_end_reverted(tx, r, now)?))
         }

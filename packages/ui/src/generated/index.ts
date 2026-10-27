@@ -205,6 +205,8 @@ export type { SessionEnd } from "./SessionEnd";
 export type { SessionEndReverted } from "./SessionEndReverted";
 export type { SessionExpire } from "./SessionExpire";
 export type { SessionExtend } from "./SessionExtend";
+export type { SessionForceEnd } from "./SessionForceEnd";
+export type { SessionForceEndReverted } from "./SessionForceEndReverted";
 export type { SessionGroup } from "./SessionGroup";
 export type { SessionInfo } from "./SessionInfo";
 export type { SessionListRow } from "./SessionListRow";

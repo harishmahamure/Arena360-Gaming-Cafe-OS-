@@ -180,6 +180,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionEnd(_)
             | Target::SessionSettle(_)
             | Target::SessionEndReverted(_)
+            | Target::SessionForceEnd(_)
+            | Target::SessionForceEndReverted(_)
             | Target::SessionSettleReverted(_)
             | Target::SessionPause(_)
             | Target::SessionResume(_)
@@ -254,6 +256,8 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionEnd(t) => super::session::base_rev_end(intent, t),
         Target::SessionSettle(t) => super::session::base_rev_settle(intent, t),
         Target::SessionEndReverted(t) => super::session::base_rev_end_reverted(intent, t),
+        Target::SessionForceEnd(t) => super::force_end::base_rev(intent, t),
+        Target::SessionForceEndReverted(t) => super::force_end::base_rev_reverted(intent, t),
         Target::SessionSettleReverted(t) => super::session::base_rev_settle_reverted(intent, t),
         Target::SessionPause(t) => super::session::base_rev_pause(intent, t, "session.pause"),
         Target::SessionResume(t) => super::session::base_rev_pause(intent, t, "session.resume"),

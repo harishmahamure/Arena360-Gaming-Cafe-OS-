@@ -50,6 +50,8 @@ export type IntentKind =
   | "session.end"
   | "session.settle"
   | "session.end.reverted"
+  | "session.force_end"
+  | "session.force_end.reverted"
   | "session.settle.reverted"
   | "session.pause"
   | "session.resume"

@@ -93,7 +93,7 @@ pub use plans::{
 pub use player_packs::{
     NewPlanLine, NewPlayerPack, PlayerPackRow, deduct_pack_minutes, find_pack_for_order,
     find_player_pack, has_unexpired_pass, insert_plan_line, insert_player_pack, list_player_packs,
-    pack_in_use,
+    pack_in_use, restore_pack_minutes,
 };
 pub use players::{
     PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
@@ -111,15 +111,15 @@ pub use products::{
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
 pub use sessions::{
-    Ending, LiveSession, NewExtensionOrder, NewOrder, NewOrderLine, NewPayment, NewSession,
-    OpenOrder, OrderLineRow, OrderRow, SegmentRow, Settlement, close_segments,
+    Ending, ForcedEnd, LiveSession, NewExtensionOrder, NewOrder, NewOrderLine, NewPayment,
+    NewSession, OpenOrder, OrderLineRow, OrderRow, SegmentRow, Settlement, close_segments,
     device_has_live_session, effect_recorded, end_session, expire_session, extend_session,
     find_ending, find_order, find_order_for_session, find_session, find_settlement,
-    forward_intent_id, grace_session, hold_session_expired, insert_effect, insert_extension_order,
-    insert_order, insert_order_line, insert_payment, insert_segment, insert_session,
-    list_live_sessions, list_open_order_lines, list_open_orders, list_order_line_ids,
-    list_payment_ids, list_segments, next_guest_no, reopen_order, reopen_segments, reopen_session,
-    settle_order, sum_reserved_minor,
+    forced_pack_minutes, forward_intent_id, grace_session, hold_session_expired, insert_effect,
+    insert_extension_order, insert_order, insert_order_line, insert_payment, insert_segment,
+    insert_session, list_live_sessions, list_open_order_lines, list_open_orders,
+    list_order_line_ids, list_payment_ids, list_segments, mark_forced, next_guest_no, reopen_order,
+    reopen_segments, reopen_session, settle_order, sum_reserved_minor,
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,

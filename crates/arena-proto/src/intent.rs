@@ -149,6 +149,11 @@ pub enum IntentKind {
     SessionSettle,
     #[serde(rename = "session.end.reverted")]
     SessionEndReverted,
+    /// Ends a session early on a manager's PIN and a reason, charging only the time used.
+    #[serde(rename = "session.force_end")]
+    SessionForceEnd,
+    #[serde(rename = "session.force_end.reverted")]
+    SessionForceEndReverted,
     #[serde(rename = "session.settle.reverted")]
     SessionSettleReverted,
     #[serde(rename = "session.pause")]
@@ -203,7 +208,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 64] = [
+    pub const ALL: [IntentKind; 66] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -250,6 +255,8 @@ impl IntentKind {
         Self::SessionEnd,
         Self::SessionSettle,
         Self::SessionEndReverted,
+        Self::SessionForceEnd,
+        Self::SessionForceEndReverted,
         Self::SessionSettleReverted,
         Self::SessionPause,
         Self::SessionResume,
@@ -319,6 +326,8 @@ impl IntentKind {
             Self::SessionEnd => "session.end",
             Self::SessionSettle => "session.settle",
             Self::SessionEndReverted => "session.end.reverted",
+            Self::SessionForceEnd => "session.force_end",
+            Self::SessionForceEndReverted => "session.force_end.reverted",
             Self::SessionSettleReverted => "session.settle.reverted",
             Self::SessionPause => "session.pause",
             Self::SessionResume => "session.resume",
@@ -389,6 +398,8 @@ impl IntentKind {
             | Self::SessionEnd
             | Self::SessionSettle
             | Self::SessionEndReverted
+            | Self::SessionForceEnd
+            | Self::SessionForceEndReverted
             | Self::SessionSettleReverted
             | Self::SessionPause
             | Self::SessionResume
@@ -463,6 +474,9 @@ impl IntentKind {
             Self::SessionEnd | Self::SessionEndReverted => {
                 Requirement::Perm(Permission::SessionEnd)
             }
+            Self::SessionForceEnd | Self::SessionForceEndReverted => {
+                Requirement::Perm(Permission::SessionForceEnd)
+            }
             Self::SessionSettle | Self::SessionSettleReverted | Self::GroupPayer => {
                 Requirement::Perm(Permission::PosSell)
             }
@@ -499,6 +513,12 @@ impl IntentKind {
                 ReasonCode::Lost,
                 ReasonCode::Stolen,
                 ReasonCode::Replaced,
+                ReasonCode::Other,
+            ]),
+            Self::SessionForceEnd => Some(&[
+                ReasonCode::RuleViolation,
+                ReasonCode::HardwareIssue,
+                ReasonCode::Closing,
                 ReasonCode::Other,
             ]),
             Self::BranchBootstrap
@@ -546,6 +566,7 @@ impl IntentKind {
             | Self::SessionEnd
             | Self::SessionSettle
             | Self::SessionEndReverted
+            | Self::SessionForceEndReverted
             | Self::SessionSettleReverted
             | Self::SessionPause
             | Self::SessionResume
@@ -583,11 +604,22 @@ pub enum ReasonCode {
     Stolen,
     Replaced,
     Other,
+    RuleViolation,
+    HardwareIssue,
+    Closing,
 }
 
 impl ReasonCode {
     /// Every code.
-    pub const ALL: [ReasonCode; 4] = [Self::Lost, Self::Stolen, Self::Replaced, Self::Other];
+    pub const ALL: [ReasonCode; 7] = [
+        Self::Lost,
+        Self::Stolen,
+        Self::Replaced,
+        Self::Other,
+        Self::RuleViolation,
+        Self::HardwareIssue,
+        Self::Closing,
+    ];
 
     /// The stored and wire form, e.g. `stolen`.
     pub fn as_str(self) -> &'static str {
@@ -596,6 +628,9 @@ impl ReasonCode {
             Self::Stolen => "stolen",
             Self::Replaced => "replaced",
             Self::Other => "other",
+            Self::RuleViolation => "rule_violation",
+            Self::HardwareIssue => "hardware_issue",
+            Self::Closing => "closing",
         }
     }
 }
@@ -1017,6 +1052,10 @@ pub enum IntentPayload {
     SessionSettle(crate::SessionSettle),
     #[serde(rename = "session.end.reverted")]
     SessionEndReverted(crate::SessionEndReverted),
+    #[serde(rename = "session.force_end")]
+    SessionForceEnd(crate::SessionForceEnd),
+    #[serde(rename = "session.force_end.reverted")]
+    SessionForceEndReverted(crate::SessionForceEndReverted),
     #[serde(rename = "session.settle.reverted")]
     SessionSettleReverted(crate::SessionSettleReverted),
     #[serde(rename = "session.pause")]
@@ -1104,6 +1143,8 @@ impl IntentPayload {
             Self::SessionEnd(_) => IntentKind::SessionEnd,
             Self::SessionSettle(_) => IntentKind::SessionSettle,
             Self::SessionEndReverted(_) => IntentKind::SessionEndReverted,
+            Self::SessionForceEnd(_) => IntentKind::SessionForceEnd,
+            Self::SessionForceEndReverted(_) => IntentKind::SessionForceEndReverted,
             Self::SessionSettleReverted(_) => IntentKind::SessionSettleReverted,
             Self::SessionPause(_) => IntentKind::SessionPause,
             Self::SessionResume(_) => IntentKind::SessionResume,
@@ -1199,7 +1240,6 @@ mod tests {
     /// Permissions no intent requires yet: views, ops and the modules later stories build.
     const USED_BY_LATER_STORIES: &[Permission] = &[
         Permission::PlayerView,
-        Permission::SessionForceEnd,
         Permission::BookingManage,
         Permission::PosVoid,
         Permission::RefundIssue,
@@ -1369,6 +1409,9 @@ mod tests {
                     Requirement::Perm(Permission::SessionStart)
                 }
                 "session.end" | "session.end.reverted" => Requirement::Perm(Permission::SessionEnd),
+                "session.force_end" | "session.force_end.reverted" => {
+                    Requirement::Perm(Permission::SessionForceEnd)
+                }
                 "session.settle" | "session.settle.reverted" | "group.payer" => {
                     Requirement::Perm(Permission::PosSell)
                 }
@@ -1458,10 +1501,16 @@ mod tests {
     }
 
     #[test]
-    fn only_device_revoke_requires_a_reason() {
+    fn only_device_revoke_and_force_end_require_a_reason() {
         for kind in IntentKind::ALL {
             let want: Option<&[ReasonCode]> = match kind {
-                IntentKind::DeviceRevoke => Some(&ReasonCode::ALL),
+                IntentKind::DeviceRevoke => Some(&ReasonCode::ALL[..4]),
+                IntentKind::SessionForceEnd => Some(&[
+                    ReasonCode::RuleViolation,
+                    ReasonCode::HardwareIssue,
+                    ReasonCode::Closing,
+                    ReasonCode::Other,
+                ]),
                 _ => None,
             };
             assert_eq!(kind.reasons(), want, "{}", kind.as_str());
@@ -1484,7 +1533,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&reasons_json()).unwrap();
         assert_eq!(
             v,
-            serde_json::json!({"device.revoke": ["lost", "stolen", "replaced", "other"]})
+            serde_json::json!({
+                "device.revoke": ["lost", "stolen", "replaced", "other"],
+                "session.force_end": ["rule_violation", "hardware_issue", "closing", "other"],
+            })
         );
     }
 

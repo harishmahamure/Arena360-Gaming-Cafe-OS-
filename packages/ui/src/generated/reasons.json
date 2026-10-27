@@ -1,3 +1,4 @@
 {
-  "device.revoke": ["lost", "stolen", "replaced", "other"]
+  "device.revoke": ["lost", "stolen", "replaced", "other"],
+  "session.force_end": ["rule_violation", "hardware_issue", "closing", "other"]
 }

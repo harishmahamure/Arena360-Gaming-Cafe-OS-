@@ -4,6 +4,7 @@ import type {
   PaymentRow,
   PcAction,
   Permission,
+  ReasonCode,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { waitForAck } from "./admin-unlock";
@@ -14,6 +15,7 @@ export type Job = {
   payload: IntentPayload;
   key: string;
   rev?: number;
+  reason?: ReasonCode;
   track: "cmd" | "exit" | "none";
   moves_to?: string;
   waiting: MessageKey;
@@ -63,6 +65,9 @@ const REFUSALS: Record<string, MessageKey> = {
   NO_RATE: "hub.session.no_rate",
   DEVICE_UNASSIGNED: "hub.session.unassigned",
   "STALE:session.end": "hub.session.end_stale",
+  "STALE:session.force_end": "hub.session.end_stale",
+  "VALIDATION_FAILED:session.force_end": "hub.force.refused",
+  "NOT_FOUND:session.force_end": "hub.force.refused",
   "STALE:session.pause": "hub.session.pause_stale",
   "STALE:session.resume": "hub.session.pause_stale",
   "VALIDATION_FAILED:session.pause": "hub.session.pause_refused",
@@ -170,6 +175,21 @@ export const payerJob = (
 export const endJob = (session_id: string, rev: number) =>
   job({ kind: "session.end", session_id }, { track: "none", rev, done: "hub.sheet.done.ended" });
 
+export const FORCE_REASONS: ReasonCode[] = ["rule_violation", "hardware_issue", "closing", "other"];
+
+export const FORCE_LABELS: Record<string, MessageKey> = {
+  rule_violation: "reason.rule_violation",
+  hardware_issue: "reason.hardware_issue",
+  closing: "reason.closing",
+  other: "reason.other",
+};
+
+export const forceEndJob = (session_id: string, rev: number, reason: ReasonCode, note?: string) =>
+  job(
+    { kind: "session.force_end", session_id, note },
+    { track: "none", rev, reason, done: "hub.sheet.done.force_ended" },
+  );
+
 export const pauseJob = (session_id: string, rev: number, reason: PauseReason, note?: string) =>
   job(
     { kind: "session.pause", session_id, reason, note },
@@ -222,29 +242,31 @@ export const MESSAGE_MAX = 140;
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
   kind === "session.start" || kind === "session.end"
     ? kind
-    : kind === "session.group"
-      ? "session.start"
-      : kind === "group.payer"
-        ? "pos.sell"
-        : kind === "session.pause" || kind === "session.resume"
-          ? "session.pause"
-          : kind === "session.extend"
-            ? "session.extend"
-            : kind === "session.transfer"
-              ? "session.transfer"
-              : kind === "session.end.reverted"
-                ? "session.end"
-                : kind === "session.settle" || kind === "session.settle.reverted"
-                  ? "pos.sell"
-                  : kind === "credit.collect" || kind === "credit.collect.reverted"
-                    ? "credit.collect"
-                    : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-                      ? "wallet.topup"
-                      : kind === "device.screen"
-                        ? "device.screen"
-                        : kind === "device.power" || kind === "device.admin_unlock"
-                          ? "device.remote"
-                          : "device.manage";
+    : kind === "session.force_end" || kind === "session.force_end.reverted"
+      ? "session.force_end"
+      : kind === "session.group"
+        ? "session.start"
+        : kind === "group.payer"
+          ? "pos.sell"
+          : kind === "session.pause" || kind === "session.resume"
+            ? "session.pause"
+            : kind === "session.extend"
+              ? "session.extend"
+              : kind === "session.transfer"
+                ? "session.transfer"
+                : kind === "session.end.reverted"
+                  ? "session.end"
+                  : kind === "session.settle" || kind === "session.settle.reverted"
+                    ? "pos.sell"
+                    : kind === "credit.collect" || kind === "credit.collect.reverted"
+                      ? "credit.collect"
+                      : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+                        ? "wallet.topup"
+                        : kind === "device.screen"
+                          ? "device.screen"
+                          : kind === "device.power" || kind === "device.admin_unlock"
+                            ? "device.remote"
+                            : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 
@@ -264,7 +286,10 @@ export async function send(
   const settle = (state: Cmd["state"], refusal?: MessageKey, detail?: string) => {
     if (cmds[at]?.job.key === j.key) cmds[at] = { job: j, state, refusal, detail };
   };
-  const outcome = await submitIntent(j.payload, j.key, j.rev, { elevationTicket: ticket });
+  const outcome = await submitIntent(j.payload, j.key, j.rev, {
+    elevationTicket: ticket,
+    reason: j.reason,
+  });
   if (outcome.kind === "signed_out") {
     delete cmds[at];
     return "signed_out";
@@ -299,7 +324,7 @@ export async function send(
         : undefined;
     settle(offline ? "failed" : "refused", text ?? "hub.settings.failed", detail);
   } else if (j.track === "none") {
-    offerUndo(outcome.result);
+    offerUndo(outcome.result, "settle", j.payload.kind === "session.force_end" ? "forced" : "end");
     settle("done");
   } else {
     if (j.moves_to && j.moves_to !== at) {

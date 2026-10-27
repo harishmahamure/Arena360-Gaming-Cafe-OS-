@@ -45,6 +45,8 @@ import type { SessionEnd } from "./SessionEnd";
 import type { SessionEndReverted } from "./SessionEndReverted";
 import type { SessionExpire } from "./SessionExpire";
 import type { SessionExtend } from "./SessionExtend";
+import type { SessionForceEnd } from "./SessionForceEnd";
+import type { SessionForceEndReverted } from "./SessionForceEndReverted";
 import type { SessionGroup } from "./SessionGroup";
 import type { SessionPause } from "./SessionPause";
 import type { SessionRateFlip } from "./SessionRateFlip";
@@ -112,6 +114,8 @@ export type IntentPayload =
   | ({ kind: "session.end" } & SessionEnd)
   | ({ kind: "session.settle" } & SessionSettle)
   | ({ kind: "session.end.reverted" } & SessionEndReverted)
+  | ({ kind: "session.force_end" } & SessionForceEnd)
+  | ({ kind: "session.force_end.reverted" } & SessionForceEndReverted)
   | ({ kind: "session.settle.reverted" } & SessionSettleReverted)
   | ({ kind: "session.pause" } & SessionPause)
   | ({ kind: "session.resume" } & SessionResume)

@@ -359,12 +359,47 @@ pub fn end_session(
 
 pub fn reopen_session(conn: &Connection, id: &str) -> Result<(), AppError> {
     conn.execute(
-        "UPDATE sessions SET state = 'active', ended_at = NULL, end_reason = NULL, ended_by = NULL
+        "UPDATE sessions SET state = 'active', ended_at = NULL, end_reason = NULL, ended_by = NULL,
+                forced_reason = NULL, forced_note = NULL, forced_left_min = NULL,
+                forced_pack_min = NULL
          WHERE id = ?1",
         [id],
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// What a forced end records on the session it just ended.
+pub struct ForcedEnd<'a> {
+    pub reason: &'a str,
+    pub note: Option<&'a str>,
+    pub left_min: i64,
+    pub pack_min: i64,
+}
+
+/// Marks an ended session as force-ended: `end_reason` becomes `forced`, with the reason, note,
+/// the whole minutes it had left and the pack minutes its end deducted.
+pub fn mark_forced(conn: &Connection, id: &str, f: &ForcedEnd<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET end_reason = 'forced', forced_reason = ?2, forced_note = ?3,
+                forced_left_min = ?4, forced_pack_min = ?5
+         WHERE id = ?1",
+        params![id, f.reason, f.note, f.left_min, f.pack_min],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The pack minutes a forced end deducted (0 for none); `None` when the session was not
+/// force-ended.
+pub fn forced_pack_minutes(conn: &Connection, id: &str) -> Result<Option<i64>, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(forced_pack_min, 0) FROM sessions WHERE id = ?1 AND end_reason = 'forced'",
+        [id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
 }
 
 pub fn reopen_segments(conn: &Connection, session_id: &str, ended_at: i64) -> Result<(), AppError> {
@@ -658,10 +693,10 @@ pub fn effect_recorded(
 }
 
 pub fn find_ending(conn: &Connection, session_id: &str) -> Result<Option<Ending>, AppError> {
-    type Found = (String, String, i64, i64, i64, String);
+    type Found = (String, String, i64, i64, i64, String, Option<String>);
     let found: Option<Found> = conn
         .query_row(
-            "SELECT s.id, o.id, s.ended_at, s.rev, o.total_minor, s.mode
+            "SELECT s.id, o.id, s.ended_at, s.rev, o.total_minor, s.mode, s.end_reason
              FROM sessions s JOIN orders o ON o.session_id = s.id
              WHERE s.id = ?1 AND s.state = 'ended' AND s.ended_at IS NOT NULL",
             [session_id],
@@ -673,16 +708,25 @@ pub fn find_ending(conn: &Connection, session_id: &str) -> Result<Option<Ending>
                     r.get(3)?,
                     r.get(4)?,
                     r.get(5)?,
+                    r.get(6)?,
                 ))
             },
         )
         .optional()
         .map_err(db_error)?;
-    let Some((session_id, order_id, ended_at, session_rev, total_minor, mode)) = found else {
+    let Some((session_id, order_id, ended_at, session_rev, total_minor, mode, end_reason)) = found
+    else {
         return Ok(None);
     };
-    let forward = forward_intent_id(conn, "sessions", &session_id, "session.end")?;
-    let irreversible = mode != "postpaid" || effect_recorded(conn, forward.as_deref(), &order_id)?;
+    let forced = end_reason.as_deref() == Some("forced");
+    let kind = if forced {
+        "session.force_end"
+    } else {
+        "session.end"
+    };
+    let forward = forward_intent_id(conn, "sessions", &session_id, kind)?;
+    let irreversible =
+        (mode != "postpaid" && !forced) || effect_recorded(conn, forward.as_deref(), &order_id)?;
     Ok(Some(Ending {
         session_id,
         order_id,

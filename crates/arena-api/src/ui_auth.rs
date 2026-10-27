@@ -2047,14 +2047,23 @@ async fn run_intent(
         }
         _ => None,
     };
-    let ended = matches!(intent.payload, arena_proto::IntentPayload::SessionEnd(_));
+    let ended = matches!(
+        intent.payload,
+        arena_proto::IntentPayload::SessionEnd(_) | arena_proto::IntentPayload::SessionForceEnd(_)
+    );
+    let forced = matches!(
+        intent.payload,
+        arena_proto::IntentPayload::SessionForceEnd(_)
+    );
     let ending = match &intent.payload {
         arena_proto::IntentPayload::SessionEnd(e) => Some(e.session_id.clone()),
+        arena_proto::IntentPayload::SessionForceEnd(e) => Some(e.session_id.clone()),
         _ => None,
     };
     let reopening = matches!(
         intent.payload,
         arena_proto::IntentPayload::SessionEndReverted(_)
+            | arena_proto::IntentPayload::SessionForceEndReverted(_)
     );
     let topping_up = matches!(
         intent.payload,
@@ -2087,9 +2096,13 @@ async fn run_intent(
                     &cmd_id,
                     arena_proto::PcAction::Lock,
                     None,
-                    Some(arena_proto::LockReason::PayAtCounter),
+                    Some(if forced {
+                        arena_proto::LockReason::EndedByStaff
+                    } else {
+                        arena_proto::LockReason::PayAtCounter
+                    }),
                 );
-                tracing::info!(device_id = %c.row_id, cmd_id = %cmd_id, sessions = sent, "pay at counter lock pushed");
+                tracing::info!(device_id = %c.row_id, cmd_id = %cmd_id, forced, sessions = sent, "end lock pushed");
             }
             let started = started.or_else(|| {
                 reopening
@@ -3697,6 +3710,74 @@ pub(crate) mod tests {
         assert_eq!(snapshot.bills.len(), 1);
         assert_eq!(snapshot.bills[0].subtotal_minor, 6_000);
         assert!(snapshot.bills[0].order_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_forced_end_locks_the_kiosk_with_ended_by_staff_and_offers_an_undo() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let session_id = reply["applied"]["changes"][0]["row_id"].as_str().unwrap();
+        rx.recv().await.unwrap();
+        let mut forced = intent_as(
+            Actor {
+                kind: ActorKind::Staff,
+                id: "x".into(),
+            },
+            IntentPayload::SessionForceEnd(arena_proto::SessionForceEnd {
+                session_id: session_id.into(),
+                note: None,
+            }),
+            Some(1),
+        );
+        forced.reason = Some(arena_proto::ReasonCode::HardwareIssue);
+        let key = forced.idempotency_key.clone();
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(json!({ "intent": forced })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["ended"]["irreversible"], false);
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the lock pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event:
+                arena_proto::HubEvent::PcCommand {
+                    cmd_id,
+                    action,
+                    reason,
+                    ..
+                },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a pc command")
+        };
+        assert_eq!(
+            (cmd_id, action, reason),
+            (
+                key,
+                arena_proto::PcAction::Lock,
+                Some(arena_proto::LockReason::EndedByStaff)
+            )
+        );
     }
 
     async fn second_pc(hub: &Hub, first: &str) -> String {

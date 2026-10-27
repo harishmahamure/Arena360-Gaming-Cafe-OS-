@@ -221,6 +221,12 @@ enum Op {
         slot: u8,
         target: u8,
     },
+    /// A forced end of a running or paused session with a reason, which always applies, then maybe
+    /// its undo, which either reopens the session or writes nothing.
+    ForceEnd {
+        slot: u8,
+        undo: bool,
+    },
     /// Staff put a session and another into one group bill, or are refused and nothing is
     /// written; a payer is then named, or refused the same way.
     Group {
@@ -470,6 +476,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
         2 => (0..3u8, 0..4u8).prop_map(|(slot, target)| Op::Transfer { slot, target }),
         2 => (0..3u8, 0..3u8, 0..4u8).prop_map(|(slot, other, guest)| Op::Group { slot, other, guest }),
+        2 => (0..3u8, prop::bool::ANY).prop_map(|(slot, undo)| Op::ForceEnd { slot, undo }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -2476,6 +2483,63 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     _,
                 )) => prop_assert_eq!(hub.change_count(), before),
                 Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
+            }
+        }
+        Op::ForceEnd { slot, undo } => {
+            let Some(session) = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .filter(|s| matches!(text(s, "state").as_str(), "active" | "paused"))
+                .nth(usize::from(*slot))
+            else {
+                return Ok(());
+            };
+            let id = text(&session, "id");
+            let before = hub.change_count();
+            let mut intent = hub.intent(
+                IntentPayload::SessionForceEnd(arena_proto::SessionForceEnd {
+                    session_id: id.clone(),
+                    note: None,
+                }),
+                Some(int(&session, "rev")),
+            );
+            intent.reason = Some(arena_proto::ReasonCode::Closing);
+            let out = hub.submit_new(intent);
+            prop_assert!(out.is_ok(), "{:?}", out);
+            prop_assert!(hub.change_count() > before);
+            let find = |hub: &Hub| {
+                hub.reader
+                    .rows(Table::Sessions)
+                    .unwrap()
+                    .into_iter()
+                    .find(|s| text(s, "id") == id)
+                    .unwrap()
+            };
+            let ended = find(hub);
+            prop_assert_eq!(text(&ended, "state"), "ended");
+            prop_assert_eq!(text(&ended, "end_reason"), "forced");
+            if *undo {
+                let before = hub.change_count();
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::SessionForceEndReverted(arena_proto::SessionForceEndReverted {
+                        session_id: id.clone(),
+                    }),
+                    Some(int(&ended, "rev")),
+                ));
+                match code(&out) {
+                    None => {
+                        prop_assert!(out.is_ok(), "{:?}", out);
+                        let back = find(hub);
+                        prop_assert_eq!(text(&back, "state"), "active");
+                        prop_assert!(back["end_reason"] == RowValue::Null);
+                    }
+                    Some((ErrorCode::UndoNotAllowed | ErrorCode::Stale, _)) => {
+                        prop_assert_eq!(hub.change_count(), before)
+                    }
+                    Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
+                }
             }
         }
         Op::Group { slot, other, guest } => {

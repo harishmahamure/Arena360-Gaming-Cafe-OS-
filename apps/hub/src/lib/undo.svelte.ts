@@ -11,7 +11,7 @@ import {
 } from "./auth";
 import { SNAPSHOT_DEPENDENCY } from "./snapshot";
 
-export type UndoKind = "end" | "settle" | "topup" | "collect" | "plan";
+export type UndoKind = "end" | "forced" | "settle" | "topup" | "collect" | "plan";
 
 export type Undo = {
   kind: UndoKind;
@@ -40,6 +40,7 @@ let closer: ReturnType<typeof setTimeout> | undefined;
 
 const PERMISSION: Record<UndoKind, Permission> = {
   end: "session.end",
+  forced: "session.force_end",
   settle: "pos.sell",
   topup: "wallet.topup",
   collect: "credit.collect",
@@ -49,16 +50,19 @@ const PERMISSION: Record<UndoKind, Permission> = {
 const payloadOf = (u: Undo): IntentPayload =>
   u.kind === "end"
     ? { kind: "session.end.reverted", session_id: u.id }
-    : u.kind === "topup"
-      ? { kind: "wallet.topup.reverted", order_id: u.id }
-      : u.kind === "plan"
-        ? { kind: "plan.sell.reverted", order_id: u.id }
-        : u.kind === "collect"
-          ? { kind: "credit.collect.reverted", order_id: u.id }
-          : { kind: "session.settle.reverted", order_id: u.id };
+    : u.kind === "forced"
+      ? { kind: "session.force_end.reverted", session_id: u.id }
+      : u.kind === "topup"
+        ? { kind: "wallet.topup.reverted", order_id: u.id }
+        : u.kind === "plan"
+          ? { kind: "plan.sell.reverted", order_id: u.id }
+          : u.kind === "collect"
+            ? { kind: "credit.collect.reverted", order_id: u.id }
+            : { kind: "session.settle.reverted", order_id: u.id };
 
 const DONE: Record<UndoKind, MessageKey> = {
   end: "hub.undo.done.end",
+  forced: "hub.undo.done.forced",
   settle: "hub.undo.done.settle",
   topup: "hub.undo.done.topup",
   collect: "hub.undo.done.collect",
@@ -104,13 +108,14 @@ function open(next: Omit<Undo, "key" | "phase">): void {
 export function offerUndo(
   result: UiIntentResult,
   settledKind: "settle" | "topup" | "collect" | "plan" = "settle",
+  endKind: "end" | "forced" = "end",
 ): void {
   const { ended, settled } = result;
   const now = Date.now();
   if (ended) {
     if (ended.irreversible) return closeUndo();
     open({
-      kind: "end",
+      kind: endKind,
       id: ended.session_id,
       orderId: ended.order_id,
       rev: ended.session_rev,

@@ -4,4 +4,5 @@
  * Why an intent was done, for kinds that require one ([`IntentKind::reasons`]). The UI shows
  * each code through the catalogue key `reason.<code>`.
  */
-export type ReasonCode = "lost" | "stolen" | "replaced" | "other";
+export type ReasonCode =
+  "lost" | "stolen" | "replaced" | "other" | "rule_violation" | "hardware_issue" | "closing";

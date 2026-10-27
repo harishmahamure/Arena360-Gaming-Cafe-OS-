@@ -211,6 +211,24 @@ pub struct SessionEndReverted {
     pub session_id: String,
 }
 
+/// Ends a session early. Needs a manager's PIN and one of the reasons of
+/// [`IntentKind::SessionForceEnd`](crate::IntentKind::reasons); `note` is required with
+/// `other`. The player is charged only the time used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionForceEnd {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionForceEndReverted {
+    pub session_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SessionSettleReverted {

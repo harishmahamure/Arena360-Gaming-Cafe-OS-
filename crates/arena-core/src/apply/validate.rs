@@ -188,6 +188,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionEnd(t) => super::session::validate_end(t),
             _ => Err(internal_target()),
         },
+        IntentPayload::SessionForceEnd(f) => match target {
+            Target::SessionForceEnd(t) => super::force_end::validate(intent, f, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::SessionForceEndReverted(_) => match target {
+            Target::SessionForceEndReverted(t) => super::force_end::validate_reverted(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::SessionSettle(s) => match target {
             Target::SessionSettle(t) => super::session::validate_settle(s, t),
             _ => Err(internal_target()),

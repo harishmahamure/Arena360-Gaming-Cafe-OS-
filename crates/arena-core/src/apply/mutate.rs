@@ -278,6 +278,14 @@ pub(super) fn mutate(
             Target::SessionEnd(t) => super::session::mutate_end(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionForceEnd(f) => match target {
+            Target::SessionForceEnd(t) => super::force_end::mutate(tx, intent, f, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::SessionForceEndReverted(_) => match target {
+            Target::SessionForceEndReverted(t) => super::force_end::mutate_reverted(tx, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::SessionSettle(s) => match target {
             Target::SessionSettle(t) => super::session::mutate_settle(tx, intent, s, t, now_ms),
             _ => Err(mismatch()),

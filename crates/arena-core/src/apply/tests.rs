@@ -21,6 +21,7 @@ use crate::writer::{Writer, WriterHandle};
 mod alert;
 mod commands;
 mod extend;
+mod force_end;
 mod group_bill;
 mod plans;
 mod players;
@@ -2571,6 +2572,70 @@ mod rbac_matrix {
         assert_eq!(change.reason.as_deref(), Some("stolen"));
         assert_eq!(change.actor_id, c.counter);
         assert_eq!(change.elevated_by_id.as_deref(), Some(c.manager.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_forced_end_and_its_undo_need_a_managers_pin_and_record_who_approved() {
+        use super::session::{rev_of, sessions, start, text};
+        let c = crew().await;
+        let d = super::session::pc(&c.f, arena_proto::DeviceKind::Pc, "pc", Some(6000)).await;
+        start(&c.f, &d, None).await.unwrap();
+        let session = text(sessions(&c.f).last().unwrap(), "id");
+        let force = |by: Option<ElevatedBy>| Intent {
+            elevated_by: by,
+            reason: Some(ReasonCode::RuleViolation),
+            ..as_actor(
+                staff_actor(&c.counter),
+                IntentPayload::SessionForceEnd(arena_proto::SessionForceEnd {
+                    session_id: session.clone(),
+                    note: None,
+                }),
+                Some(rev_of(&c.f, Table::Sessions, &session)),
+            )
+        };
+        let before = snapshot(&c.f);
+        for by in [None, Some(pin_by(&c.kitchen, 1))] {
+            let err = expect_err(&c.f, force(by)).await;
+            assert_eq!(err.code, ErrorCode::PermissionDenied);
+        }
+        assert_eq!(snapshot(&c.f), before);
+        c.f.writer
+            .submit_intent(force(Some(pin_by(&c.manager, 1))))
+            .await
+            .unwrap();
+        let change = reopen(&c.f)
+            .changes()
+            .unwrap()
+            .into_iter()
+            .rfind(|ch| ch.intent_kind == "session.force_end" && ch.tbl == "sessions")
+            .unwrap();
+        assert_eq!(change.reason.as_deref(), Some("rule_violation"));
+        assert_eq!(change.actor_id, c.counter);
+        assert_eq!(change.elevated_by_id.as_deref(), Some(c.manager.as_str()));
+        let undo = |by: Option<ElevatedBy>| Intent {
+            elevated_by: by,
+            ..as_actor(
+                staff_actor(&c.counter),
+                IntentPayload::SessionForceEndReverted(arena_proto::SessionForceEndReverted {
+                    session_id: session.clone(),
+                }),
+                Some(rev_of(&c.f, Table::Sessions, &session)),
+            )
+        };
+        let err = expect_err(&c.f, undo(None)).await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        c.f.writer
+            .submit_intent(undo(Some(pin_by(&c.manager, 1))))
+            .await
+            .unwrap();
+        let reopened = reopen(&c.f);
+        let row = reopened
+            .rows(Table::Sessions)
+            .unwrap()
+            .into_iter()
+            .find(|r| r["id"] == RowValue::Text(session.clone()))
+            .unwrap();
+        assert_eq!(row["state"], RowValue::Text("active".into()));
     }
 
     async fn pc(c: &Crew) -> String {

@@ -270,7 +270,7 @@ pub(super) fn mutate(
 
 #[derive(Default)]
 pub(crate) struct EndTarget {
-    session: Option<LiveSession>,
+    pub(super) session: Option<LiveSession>,
     segments: Vec<SegmentRow>,
     device: Option<DeviceMetaRow>,
     close: super::prepaid::CloseExtras,
@@ -1009,14 +1009,14 @@ pub(super) fn check_rev(intent: &Intent, current: i64, what: &str) -> Result<(),
 
 #[derive(Default)]
 pub(crate) struct EndRevertTarget {
-    session: Option<LiveSession>,
-    order: Option<OrderRow>,
+    pub(super) session: Option<LiveSession>,
+    pub(super) order: Option<OrderRow>,
     segments: Vec<SegmentRow>,
-    device: Option<DeviceMetaRow>,
-    busy: bool,
-    paid: bool,
-    effect: bool,
-    now: i64,
+    pub(super) device: Option<DeviceMetaRow>,
+    pub(super) busy: bool,
+    pub(super) paid: bool,
+    pub(super) effect: bool,
+    pub(super) now: i64,
 }
 
 pub(super) fn load_end_reverted(
@@ -1024,7 +1024,17 @@ pub(super) fn load_end_reverted(
     r: &SessionEndReverted,
     now: i64,
 ) -> Result<EndRevertTarget, AppError> {
-    let Some(session) = find_session(tx, &r.session_id)? else {
+    load_end_reverted_of(tx, &r.session_id, now, "session.end")
+}
+
+/// The end-undo target of `session_id`, whose forward end was an intent of kind `forward_kind`.
+pub(super) fn load_end_reverted_of(
+    tx: &StoreTx<'_>,
+    session_id: &str,
+    now: i64,
+    forward_kind: &str,
+) -> Result<EndRevertTarget, AppError> {
+    let Some(session) = find_session(tx, session_id)? else {
         return Ok(EndRevertTarget {
             now,
             ..EndRevertTarget::default()
@@ -1038,7 +1048,7 @@ pub(super) fn load_end_reverted(
     };
     let (paid, effect) = match &order {
         Some(o) => {
-            let forward = forward_intent_id(tx, "sessions", &session.id, "session.end")?;
+            let forward = forward_intent_id(tx, "sessions", &session.id, forward_kind)?;
             (
                 !list_payment_ids(tx, &o.id)?.is_empty(),
                 effect_recorded(tx, forward.as_deref(), &o.id)?,
@@ -1176,12 +1186,28 @@ pub(super) fn mutate_end_reverted(
 
 #[derive(Default)]
 pub(crate) struct SettleRevertTarget {
-    order: Option<OrderRow>,
-    payments: Vec<String>,
-    txns: Vec<OrderTxn>,
+    pub(super) order: Option<OrderRow>,
+    pub(super) payments: Vec<String>,
+    pub(super) txns: Vec<OrderTxn>,
     credit_blocked: bool,
     effect: bool,
     now: i64,
+}
+
+impl SettleRevertTarget {
+    /// The payments and wallet debits of the bill an end-undo target would drop, to be undone
+    /// before the bill itself goes.
+    pub(super) fn of(tx: &StoreTx<'_>, end: &EndRevertTarget) -> Result<Self, AppError> {
+        let Some(order) = end.order.clone() else {
+            return Ok(Self::default());
+        };
+        Ok(Self {
+            payments: list_payment_ids(tx, &order.id)?,
+            txns: list_order_wallet_txns(tx, &order.id)?,
+            order: Some(order),
+            ..Self::default()
+        })
+    }
 }
 
 pub(super) fn load_settle_reverted(

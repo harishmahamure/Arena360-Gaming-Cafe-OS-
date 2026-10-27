@@ -53,6 +53,9 @@
   "reason.stolen": "Stolen",
   "reason.replaced": "Replaced",
   "reason.other": "Other",
+  "reason.rule_violation": "Rule violation",
+  "reason.hardware_issue": "Hardware issue",
+  "reason.closing": "Closing",
 
   "hub.page_title": "{screen} · Arena 360 Hub",
   "hub.nav.label": "Hub screens",
@@ -1818,5 +1821,15 @@
   "hub.group.stale": "The group bill changed. Reopen the tile and try again.",
   "hub.group.payer_refused": "The payer can't be changed now.",
   "hub.sheet.done.grouped": "Added to the group bill.",
-  "hub.sheet.done.payer": "Payer changed."
+  "hub.sheet.done.payer": "Payer changed.",
+  "hub.session.force_end": "Force end",
+  "hub.force.legend": "Why end this session early?",
+  "hub.force.note": "What happened?",
+  "hub.force.hint": "Ending paid time early needs a manager's PIN and a reason.",
+  "hub.force.refused": "This session can't be force-ended now.",
+  "hub.sheet.done.force_ended": "Session ended early. The player was told to see the counter.",
+  "hub.undo.forced": "Session ended early · {amount}",
+  "hub.undo.done.forced": "End undone. The session is running again.",
+  "hub.audit.intent.session.force_end": "Session ended early",
+  "hub.audit.intent.session.force_end.reverted": "Early end undone"
 }

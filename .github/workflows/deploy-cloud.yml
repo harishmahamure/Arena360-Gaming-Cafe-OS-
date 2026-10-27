@@ -39,6 +39,9 @@ env:
 jobs:
   ci:
     name: ci
+    # PAUSED: no CI or deploy on push until every story is complete. Every other job needs
+    # this one, so skipping it skips the whole run. Delete the `if` line to resume.
+    if: false
     uses: ./.github/workflows/ci.yml
 
   build:

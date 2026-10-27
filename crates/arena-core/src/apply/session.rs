@@ -1,16 +1,16 @@
 use arena_proto::{
     AppError, CARD_REFERENCE_MAX, ErrorCode, Intent, PaymentMethod, PaymentRow, SessionEnd,
-    SessionEndReverted, SessionMode, SessionSettle, SessionSettleReverted, SessionStart,
-    UNDO_WINDOW_MS,
+    SessionEndReverted, SessionMode, SessionPause, SessionResume, SessionSettle,
+    SessionSettleReverted, SessionStart, UNDO_WINDOW_MS,
 };
 use arena_store::{
     ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OrderRow,
     RateRow, RowKey, SegmentRow, StoreTx, Table, close_segments, delete_row,
     device_has_live_session, effect_recorded, end_session, find_active_rate, find_device_meta,
-    find_order, find_order_for_session, find_player, find_session, forward_intent_id, insert_order,
-    insert_order_line, insert_payment, insert_segment, insert_session, list_order_line_ids,
-    list_payment_ids, list_segments, next_guest_no, read_row, reopen_order, reopen_segments,
-    reopen_session, set_device_state, settle_order,
+    find_order, find_order_for_session, find_player, find_session, fold_pause, forward_intent_id,
+    insert_order, insert_order_line, insert_payment, insert_segment, insert_session,
+    list_order_line_ids, list_payment_ids, list_segments, next_guest_no, pause_session, read_row,
+    reopen_order, reopen_segments, reopen_session, resume_session, set_device_state, settle_order,
 };
 
 use super::mutate::Written;
@@ -262,11 +262,14 @@ pub(super) fn mutate_end(
         &t.segments,
         s.rounding_min,
         s.minimum_min,
-        s.paused_total_ms,
+        s.paused_at,
         now_ms,
     );
     let subtotal: i64 = lines.iter().map(|l| l.amount_minor).sum();
     let order_id = ulid::Ulid::generate().to_string();
+    if let Some(paused_at) = s.paused_at {
+        fold_pause(tx, &s.id, (now_ms - paused_at).max(0))?;
+    }
     close_segments(tx, &s.id, now_ms)?;
     end_session(tx, &s.id, now_ms, &intent.actor.id)?;
     insert_order(
@@ -489,6 +492,137 @@ pub(super) fn mutate_settle(
         op: ChangeOp::Update,
         before: None,
     });
+    Ok(written)
+}
+
+#[derive(Default)]
+pub(crate) struct PauseTarget {
+    session: Option<LiveSession>,
+    open_segments: Vec<String>,
+}
+
+fn load_pausable(tx: &StoreTx<'_>, session_id: &str) -> Result<PauseTarget, AppError> {
+    let Some(session) = find_session(tx, session_id)? else {
+        return Ok(PauseTarget::default());
+    };
+    let open_segments = list_segments(tx, Some(&session.id))?
+        .into_iter()
+        .filter(|g| g.to_at.is_none())
+        .map(|g| g.id)
+        .collect();
+    Ok(PauseTarget {
+        session: Some(session),
+        open_segments,
+    })
+}
+
+pub(super) fn load_pause(tx: &StoreTx<'_>, p: &SessionPause) -> Result<PauseTarget, AppError> {
+    load_pausable(tx, &p.session_id)
+}
+
+pub(super) fn load_resume(tx: &StoreTx<'_>, r: &SessionResume) -> Result<PauseTarget, AppError> {
+    load_pausable(tx, &r.session_id)
+}
+
+pub(super) fn base_rev_pause(intent: &Intent, t: &PauseTarget, what: &str) -> Result<(), AppError> {
+    let Some(s) = &t.session else {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "session_id",
+            "no such session",
+        ));
+    };
+    check_rev(intent, s.rev, what)
+}
+
+fn postpaid_in_state<'a>(
+    t: &'a PauseTarget,
+    state: &str,
+    wrong_state: &str,
+) -> Result<&'a LiveSession, AppError> {
+    let Some(s) = &t.session else {
+        return Err(invalid("session_id", "no such session"));
+    };
+    if ["ended", "expired", "orphaned"].contains(&s.state.as_str()) {
+        return Err(invalid("session_id", "this session has already ended"));
+    }
+    if s.mode != SessionMode::Postpaid.as_str() {
+        return Err(invalid(
+            "session_id",
+            "only a postpaid session can be paused",
+        ));
+    }
+    if s.state != state {
+        return Err(invalid("session_id", wrong_state));
+    }
+    Ok(s)
+}
+
+pub(super) fn validate_pause(p: &SessionPause, t: &PauseTarget) -> Result<(), AppError> {
+    let wrong = if t.session.as_ref().is_some_and(|s| s.state == "paused") {
+        "this session is already paused"
+    } else {
+        "only a running session can be paused"
+    };
+    postpaid_in_state(t, "active", wrong)?;
+    p.checked_note()?;
+    Ok(())
+}
+
+pub(super) fn validate_resume(t: &PauseTarget) -> Result<(), AppError> {
+    postpaid_in_state(t, "paused", "this session is not paused")?;
+    Ok(())
+}
+
+pub(super) fn mutate_pause(
+    tx: &StoreTx<'_>,
+    p: &SessionPause,
+    t: &PauseTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let Some(s) = &t.session else {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "a pause validated without its target",
+        ));
+    };
+    let note = p.checked_note()?;
+    pause_session(tx, &s.id, now_ms, p.reason.as_str(), note.as_deref())?;
+    Ok(vec![Written {
+        key: RowKey::Sessions { id: s.id.clone() },
+        op: ChangeOp::Update,
+        before: None,
+    }])
+}
+
+pub(super) fn mutate_resume(
+    tx: &StoreTx<'_>,
+    t: &PauseTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let Some((s, paused_at)) = t
+        .session
+        .as_ref()
+        .and_then(|s| s.paused_at.map(|at| (s, at)))
+    else {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "a resume validated without its target",
+        ));
+    };
+    resume_session(tx, &s.id, (now_ms - paused_at).max(0))?;
+    let mut written = vec![Written {
+        key: RowKey::Sessions { id: s.id.clone() },
+        op: ChangeOp::Update,
+        before: None,
+    }];
+    for id in &t.open_segments {
+        written.push(Written {
+            key: RowKey::SessionSegments { id: id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
     Ok(written)
 }
 

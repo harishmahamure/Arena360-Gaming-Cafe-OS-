@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import { t, type MessageKey } from "../messages/index.js";
   import Button from "./Button.svelte";
+  import TextField from "./TextField.svelte";
 
   type Option = { value: string; label: MessageKey };
 
@@ -10,7 +11,8 @@
    * from catalogue keys, then Confirm. Confirming with nothing chosen shows the field error and
    * keeps focus on the options. `onconfirm` may answer a catalogue key, shown inline (a throw
    * shows `ui.pin.unreachable`). Esc calls `oncancel` and returns focus to `returnFocusTo`
-   * (not while a confirm is in flight).
+   * (not while a confirm is in flight). With `noteFor`, choosing that option reveals a required
+   * note field and `onconfirm` gets the trimmed note as its second argument.
    */
   let {
     options,
@@ -19,19 +21,25 @@
     legend = "ui.reason.legend",
     returnFocusTo = null,
     autofocus = true,
+    noteFor = undefined,
+    noteLabel = "ui.reason.note",
   }: {
     options: Option[];
-    onconfirm: (value: string) => void | MessageKey | Promise<void | MessageKey>;
+    onconfirm: (value: string, note?: string) => void | MessageKey | Promise<void | MessageKey>;
     oncancel: () => void;
     legend?: MessageKey;
     returnFocusTo?: HTMLElement | null;
     autofocus?: boolean;
+    noteFor?: string;
+    noteLabel?: MessageKey;
   } = $props();
 
   const id = $props.id();
   const errorId = id + "-error";
 
   let chosen = $state("");
+  let note = $state("");
+  const wantsNote = $derived(noteFor !== undefined && chosen === noteFor);
   let error: MessageKey | null = $state(null);
   let busy = $state(false);
   let group: HTMLFieldSetElement | undefined = $state();
@@ -53,10 +61,17 @@
       firstRadio()?.focus();
       return;
     }
+    const body = note.trim();
+    if (wantsNote && (!body || [...body].length > 140)) {
+      error = "ui.reason.note_required";
+      await tick();
+      group?.parentElement?.querySelector<HTMLInputElement>("input[type=text]")?.focus(); // i18n-ignore (a selector)
+      return;
+    }
     busy = true;
     let refusal: MessageKey | void;
     try {
-      refusal = await onconfirm(chosen);
+      refusal = await (wantsNote ? onconfirm(chosen, body) : onconfirm(chosen));
     } catch {
       refusal = "ui.pin.unreachable";
     } finally {
@@ -72,6 +87,7 @@
   function cancel() {
     if (busy) return;
     chosen = "";
+    note = "";
     error = null;
     oncancel();
     returnFocusTo?.focus();
@@ -111,6 +127,9 @@
       </label>
     {/each}
   </fieldset>
+  {#if wantsNote}
+    <TextField label={noteLabel} bind:value={note} />
+  {/if}
   <p class="error" id={errorId} aria-live="polite">
     {#if error}<span aria-hidden="true">⚠</span>
       <span>{t(error)}</span>{/if}

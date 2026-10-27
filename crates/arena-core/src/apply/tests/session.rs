@@ -1305,3 +1305,288 @@ async fn the_audit_links_a_reverted_intent_to_its_forward_intent() {
             .all(|r| r.reverts.as_deref() == Some(e.applied.intent_id.as_str()))
     );
 }
+
+fn pause_intent(
+    session: &str,
+    reason: arena_proto::PauseReason,
+    note: Option<&str>,
+    rev: Option<i64>,
+) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionPause(arena_proto::SessionPause {
+            session_id: session.into(),
+            reason,
+            note: note.map(Into::into),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+fn resume_intent(session: &str, rev: Option<i64>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionResume(arena_proto::SessionResume {
+            session_id: session.into(),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+async fn pause(
+    f: &Fixture,
+    session: &str,
+    reason: arena_proto::PauseReason,
+    note: Option<&str>,
+) -> Result<Applied, AppError> {
+    let rev = rev_of(f, Table::Sessions, session);
+    end(f, pause_intent(session, reason, note, Some(rev))).await
+}
+
+async fn resume(f: &Fixture, session: &str) -> Result<Applied, AppError> {
+    let rev = rev_of(f, Table::Sessions, session);
+    end(f, resume_intent(session, Some(rev))).await
+}
+
+fn row_of(f: &Fixture, t: Table, id: &str) -> Row {
+    table(f, t)
+        .into_iter()
+        .find(|r| text(r, "id") == id)
+        .unwrap()
+}
+
+async fn running(f: &Fixture, rate: i64) -> (String, String) {
+    let d = pc(f, DeviceKind::Pc, "pc", Some(rate)).await;
+    start(f, &d, None).await.unwrap();
+    (text(&sessions(f)[0], "id"), d)
+}
+
+#[tokio::test]
+async fn pausing_freezes_the_session_and_resuming_adds_the_paused_time() {
+    use arena_proto::PauseReason::HardwareIssue;
+    let f = bootstrapped().await;
+    let (id, d) = running(&f, 6_000).await;
+    f.clock.advance(20 * 60_000);
+    let a = pause(&f, &id, HardwareIssue, None).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["sessions"]
+    );
+    let s = row_of(&f, Table::Sessions, &id);
+    assert_eq!(text(&s, "state"), "paused");
+    assert_eq!(int(&s, "paused_at"), T0 + 20 * 60_000);
+    assert_eq!(text(&s, "pause_reason"), "hardware_issue");
+    assert_eq!(s["pause_note"], RowValue::Null);
+    assert_eq!(int(&s, "rev"), 2);
+    assert_eq!(state_of(&f, &d), "in_session");
+    assert_eq!(
+        refusal(start(&f, &d, None).await),
+        (ErrorCode::PcBusy, Some("device_id".into()))
+    );
+
+    f.clock.advance(5 * 60_000);
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    let live = &snap.sessions[0];
+    assert_eq!(live.state, "paused");
+    assert_eq!(live.paused_at, Some(T0 + 20 * 60_000));
+    assert_eq!(live.paused_total_ms, 0);
+    assert_eq!(live.pause_reason, Some(HardwareIssue));
+    assert_eq!(snap.bills[0].lines[0].minutes, 30);
+    let screens = crate::session_screens(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(screens[0].1.elapsed_ms, 20 * 60_000);
+
+    f.clock.advance(15 * 60_000);
+    let a = resume(&f, &id).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["sessions", "session_segments"]
+    );
+    let s = row_of(&f, Table::Sessions, &id);
+    assert_eq!(text(&s, "state"), "active");
+    assert_eq!(int(&s, "paused_total_ms"), 20 * 60_000);
+    for col in ["paused_at", "pause_reason", "pause_note"] {
+        assert_eq!(s[col], RowValue::Null, "{col}");
+    }
+    assert_eq!(int(&s, "rev"), 3);
+    assert_eq!(
+        int(&table(&f, Table::SessionSegments)[0], "paused_ms"),
+        20 * 60_000
+    );
+    let screens = crate::session_screens(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(screens[0].1.elapsed_ms, 20 * 60_000);
+    f.clock.advance(10 * 60_000);
+    let screens = crate::session_screens(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(screens[0].1.elapsed_ms, 30 * 60_000);
+}
+
+#[tokio::test]
+async fn other_needs_a_note_and_a_listed_reason_takes_none() {
+    use arena_proto::PauseReason::{Other, PowerCut};
+    let f = bootstrapped().await;
+    let (id, _) = running(&f, 6_000).await;
+    let before = reopen(&f).changes().unwrap().len();
+    for (reason, note) in [
+        (Other, None),
+        (Other, Some("")),
+        (Other, Some("   ")),
+        (Other, Some("bad\u{7}note")),
+        (Other, Some("x".repeat(141).leak() as &str)),
+        (PowerCut, Some("storm")),
+    ] {
+        assert_eq!(
+            refusal(pause(&f, &id, reason, note).await),
+            (ErrorCode::ValidationFailed, Some("note".into())),
+            "{reason:?} {note:?}"
+        );
+    }
+    assert_eq!(text(&sessions(&f)[0], "state"), "active");
+    assert_eq!(reopen(&f).changes().unwrap().len(), before);
+    pause(&f, &id, Other, Some("  Fan noise ")).await.unwrap();
+    let s = row_of(&f, Table::Sessions, &id);
+    assert_eq!(text(&s, "pause_reason"), "other");
+    assert_eq!(text(&s, "pause_note"), "Fan noise");
+    resume(&f, &id).await.unwrap();
+    assert_eq!(
+        row_of(&f, Table::Sessions, &id)["pause_note"],
+        RowValue::Null
+    );
+}
+
+#[tokio::test]
+async fn pause_and_resume_refuse_the_wrong_state_a_stale_or_missing_rev_and_change_nothing() {
+    use arena_proto::PauseReason::PowerCut;
+    let f = bootstrapped().await;
+    let (id, _) = running(&f, 6_000).await;
+    let before = reopen(&f).changes().unwrap().len();
+    let invalid = (ErrorCode::ValidationFailed, Some("session_id".into()));
+    let field = |c, f: &str| (c, Some(f.to_owned()));
+    assert_eq!(refusal(resume(&f, &id).await), invalid);
+    assert_eq!(
+        refusal(end(&f, pause_intent(&id, PowerCut, None, None)).await),
+        field(ErrorCode::ValidationFailed, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, resume_intent(&id, None)).await),
+        field(ErrorCode::ValidationFailed, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, pause_intent(&id, PowerCut, None, Some(0))).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, resume_intent(&id, Some(0))).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, resume_intent("nope", Some(1))).await),
+        field(ErrorCode::NotFound, "session_id")
+    );
+    nothing_changed(&f, before);
+    pause(&f, &id, PowerCut, None).await.unwrap();
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(refusal(pause(&f, &id, PowerCut, None).await), invalid);
+    nothing_changed(&f, before);
+    resume(&f, &id).await.unwrap();
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(refusal(resume(&f, &id).await), invalid);
+    nothing_changed(&f, before);
+    let ended = rev_of(&f, Table::Sessions, &id);
+    end(&f, end_intent(&id, Some(ended))).await.unwrap();
+    let before = reopen(&f).changes().unwrap().len();
+    let rev = rev_of(&f, Table::Sessions, &id);
+    assert_eq!(
+        refusal(end(&f, pause_intent(&id, PowerCut, None, Some(rev))).await),
+        invalid
+    );
+    assert_eq!(
+        refusal(end(&f, resume_intent(&id, Some(rev))).await),
+        invalid
+    );
+    nothing_changed(&f, before);
+}
+
+#[tokio::test]
+async fn pausing_needs_the_pause_permission() {
+    let f = bootstrapped().await;
+    let (id, _) = running(&f, 6_000).await;
+    let kitchen = staff(&f, "kit", ROLE_KITCHEN).await;
+    let counter = staff(&f, "ctr", ROLE_COUNTER).await;
+    let rev = rev_of(&f, Table::Sessions, &id);
+    let i = with_actor(
+        pause_intent(&id, arena_proto::PauseReason::PowerCut, None, Some(rev)),
+        kitchen.clone(),
+    );
+    assert_eq!(
+        end(&f, i).await.unwrap_err().code,
+        ErrorCode::PermissionDenied
+    );
+    let i = with_actor(resume_intent(&id, Some(rev)), kitchen);
+    assert_eq!(
+        end(&f, i).await.unwrap_err().code,
+        ErrorCode::PermissionDenied
+    );
+    let i = with_actor(
+        pause_intent(&id, arena_proto::PauseReason::PowerCut, None, Some(rev)),
+        counter,
+    );
+    end(&f, i).await.unwrap();
+}
+
+#[tokio::test]
+async fn golden_a_sixty_minute_session_with_a_twenty_minute_pause_bills_forty_before_rounding() {
+    use arena_proto::PauseReason::PlayerSteppedAway;
+    let f = bootstrapped().await;
+    let (id, _) = running(&f, 6_000).await;
+    f.clock.advance(20 * 60_000);
+    pause(&f, &id, PlayerSteppedAway, None).await.unwrap();
+    f.clock.advance(20 * 60_000);
+    resume(&f, &id).await.unwrap();
+    f.clock.advance(20 * 60_000);
+    let live = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(live.bills[0].lines[0].minutes, 45);
+    let rev = rev_of(&f, Table::Sessions, &id);
+    end(&f, end_intent(&id, Some(rev))).await.unwrap();
+    let line = &table(&f, Table::OrderLines)[0];
+    assert_eq!(
+        (int(line, "minutes"), int(line, "amount_minor")),
+        (45, 4_500)
+    );
+    assert_eq!(
+        int(&table(&f, Table::SessionSegments)[0], "paused_ms"),
+        20 * 60_000
+    );
+}
+
+#[tokio::test]
+async fn ending_a_paused_session_folds_the_pause_and_bills_to_the_end_time() {
+    use arena_proto::PauseReason::HardwareIssue;
+    let f = bootstrapped().await;
+    let (id, d) = running(&f, 6_000).await;
+    f.clock.advance(40 * 60_000);
+    pause(&f, &id, HardwareIssue, None).await.unwrap();
+    f.clock.advance(35 * 60_000);
+    let live = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(live.bills[0].lines[0].minutes, 45);
+    let rev = rev_of(&f, Table::Sessions, &id);
+    end(&f, end_intent(&id, Some(rev))).await.unwrap();
+    let s = row_of(&f, Table::Sessions, &id);
+    assert_eq!(text(&s, "state"), "ended");
+    assert_eq!(int(&s, "paused_total_ms"), 35 * 60_000);
+    for col in ["paused_at", "pause_reason", "pause_note"] {
+        assert_eq!(s[col], RowValue::Null, "{col}");
+    }
+    let seg = &table(&f, Table::SessionSegments)[0];
+    assert_eq!(int(seg, "paused_ms"), 35 * 60_000);
+    assert_eq!(int(seg, "to_at"), T0 + 75 * 60_000);
+    assert_eq!(int(&table(&f, Table::OrderLines)[0], "minutes"), 45);
+    assert_ne!(state_of(&f, &d), "in_session");
+
+    let rev = rev_of(&f, Table::Sessions, &id);
+    end(&f, end_revert_intent(&id, Some(rev))).await.unwrap();
+    let s = row_of(&f, Table::Sessions, &id);
+    assert_eq!(text(&s, "state"), "active");
+    assert_eq!(s["paused_at"], RowValue::Null);
+    assert_eq!(state_of(&f, &d), "in_session");
+}

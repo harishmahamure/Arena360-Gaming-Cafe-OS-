@@ -127,6 +127,12 @@ enum Op {
         short: bool,
         split: bool,
     },
+    /// A Pause of a running session or a Resume of a paused one, maybe stale, then the repeat.
+    SessionPause {
+        slot: u8,
+        reason: u8,
+        stale: bool,
+    },
     /// An End (or, with `settle`, a Settle) and then its `.reverted` twin, maybe late or stale.
     SessionUndo {
         slot: u8,
@@ -256,6 +262,9 @@ fn op() -> impl Strategy<Value = Op> {
             slot,
             short,
             split
+        }),
+        3 => (0..3u8, 0..4u8, prop::bool::weighted(0.25)).prop_map(|(slot, reason, stale)| {
+            Op::SessionPause { slot, reason, stale }
         }),
         3 => (0..3u8, any::<bool>(), prop::bool::weighted(0.25), prop::bool::weighted(0.25))
             .prop_map(|(slot, settle, late, stale)| Op::SessionUndo {
@@ -1199,6 +1208,96 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .map(|p| int(p, "amount_minor"))
                     .sum();
                 prop_assert_eq!(paid, int(&o, "total_minor"));
+            }
+        }
+        Op::SessionPause {
+            slot,
+            reason,
+            stale,
+        } => {
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let find = |hub: &Hub| {
+                hub.reader
+                    .rows(Table::Sessions)
+                    .unwrap()
+                    .into_iter()
+                    .find(|s| {
+                        text(s, "device_id") == device
+                            && ["active", "paused", "grace"].contains(&text(s, "state").as_str())
+                    })
+            };
+            let Some(session) = find(hub) else {
+                return Ok(());
+            };
+            let (id, rev, paused) = (
+                text(&session, "id"),
+                int(&session, "rev"),
+                text(&session, "state") == "paused",
+            );
+            let before = hub.change_count();
+            let pause_reason = arena_proto::PauseReason::ALL[usize::from(*reason)];
+            let pause = |note: Option<&str>| {
+                IntentPayload::SessionPause(arena_proto::SessionPause {
+                    session_id: id.clone(),
+                    reason: pause_reason,
+                    note: note.map(Into::into),
+                })
+            };
+            let resume = IntentPayload::SessionResume(arena_proto::SessionResume {
+                session_id: id.clone(),
+            });
+            let based = if *stale { rev - 1 } else { rev };
+            if paused {
+                let out = hub.submit_new(hub.intent(resume.clone(), Some(based)));
+                if *stale {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
+                    prop_assert_eq!(hub.change_count(), before);
+                    return Ok(());
+                }
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 2);
+                let s = find(hub).unwrap();
+                prop_assert_eq!(text(&s, "state"), "active".to_owned());
+                prop_assert!(int(&s, "paused_total_ms") >= int(&session, "paused_total_ms"));
+                let again = hub.submit_new(hub.intent(resume, Some(rev + 1)));
+                prop_assert_eq!(
+                    code(&again),
+                    Some((ErrorCode::ValidationFailed, Some("session_id")))
+                );
+                prop_assert_eq!(hub.change_count(), before + 2);
+            } else {
+                let note = (pause_reason == arena_proto::PauseReason::Other).then_some("Fan noise");
+                let wrong_note = if note.is_some() { None } else { Some("x") };
+                let bad = hub.submit_new(hub.intent(pause(wrong_note), Some(rev)));
+                prop_assert_eq!(
+                    code(&bad),
+                    Some((ErrorCode::ValidationFailed, Some("note")))
+                );
+                let out = hub.submit_new(hub.intent(pause(note), Some(based)));
+                if *stale {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
+                    prop_assert_eq!(hub.change_count(), before);
+                    return Ok(());
+                }
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 1);
+                let s = find(hub).unwrap();
+                prop_assert_eq!(text(&s, "state"), "paused".to_owned());
+                prop_assert_eq!(text(&s, "pause_reason"), pause_reason.as_str().to_owned());
+                let again = hub.submit_new(hub.intent(pause(note), Some(rev + 1)));
+                prop_assert_eq!(
+                    code(&again),
+                    Some((ErrorCode::ValidationFailed, Some("session_id")))
+                );
+                prop_assert_eq!(hub.change_count(), before + 1);
             }
         }
         Op::SessionUndo {

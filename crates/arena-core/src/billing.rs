@@ -14,16 +14,17 @@ pub fn bill(
     segments: &[SegmentRow],
     rounding_min: u32,
     minimum_min: u32,
-    paused_total_ms: i64,
+    paused_since: Option<i64>,
     now_ms: i64,
 ) -> Vec<BillLine> {
     let last = segments.len().saturating_sub(1);
+    let open_pause = paused_since.map_or(0, |at| (now_ms - at).max(0));
     let mut minutes: Vec<i64> = segments
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let paused = if i == last { paused_total_ms } else { 0 };
-            let ms = (s.to_at.unwrap_or(now_ms) - s.from_at - paused).max(0);
+            let open = if i == last { open_pause } else { 0 };
+            let ms = (s.to_at.unwrap_or(now_ms) - s.from_at - s.paused_ms - open).max(0);
             (ms + MIN_MS - 1) / MIN_MS
         })
         .collect();
@@ -56,6 +57,10 @@ mod tests {
     use super::*;
 
     fn seg(from: i64, to: Option<i64>, rate: i64) -> SegmentRow {
+        paused_seg(from, to, rate, 0)
+    }
+
+    fn paused_seg(from: i64, to: Option<i64>, rate: i64, paused_ms: i64) -> SegmentRow {
         SegmentRow {
             id: "G".into(),
             session_id: "S".into(),
@@ -63,6 +68,7 @@ mod tests {
             to_at: to,
             device_id: "D".into(),
             rate_minor_per_hour: rate,
+            paused_ms,
         }
     }
 
@@ -73,30 +79,65 @@ mod tests {
     #[test]
     fn golden_rounds_up_to_the_unit_and_applies_the_minimum() {
         let s = [seg(0, None, 10_000)];
-        assert_eq!(amounts(&bill(&s, 15, 30, 0, 41 * MIN_MS)), [(45, 7500)]);
-        assert_eq!(amounts(&bill(&s, 15, 30, 0, 10 * MIN_MS)), [(30, 5000)]);
-        assert_eq!(amounts(&bill(&s, 15, 30, 0, 41 * MIN_MS + 1)), [(45, 7500)]);
-        assert_eq!(amounts(&bill(&s, 1, 0, 0, 41 * MIN_MS + 1)), [(42, 7000)]);
-        assert_eq!(amounts(&bill(&s, 0, 0, 0, 41 * MIN_MS)), [(41, 6833)]);
+        assert_eq!(amounts(&bill(&s, 15, 30, None, 41 * MIN_MS)), [(45, 7500)]);
+        assert_eq!(amounts(&bill(&s, 15, 30, None, 10 * MIN_MS)), [(30, 5000)]);
+        assert_eq!(
+            amounts(&bill(&s, 15, 30, None, 41 * MIN_MS + 1)),
+            [(45, 7500)]
+        );
+        assert_eq!(
+            amounts(&bill(&s, 1, 0, None, 41 * MIN_MS + 1)),
+            [(42, 7000)]
+        );
+        assert_eq!(amounts(&bill(&s, 0, 0, None, 41 * MIN_MS)), [(41, 6833)]);
     }
 
     #[test]
-    fn minimum_is_on_the_first_segment_rounding_on_the_last_and_pause_off_the_last() {
+    fn minimum_is_on_the_first_segment_rounding_on_the_last_and_pause_off_each_segment() {
         let s = [
             seg(0, Some(10 * MIN_MS), 6_000),
             seg(10 * MIN_MS, None, 12_000),
         ];
         assert_eq!(
-            amounts(&bill(&s, 15, 30, 0, 21 * MIN_MS)),
+            amounts(&bill(&s, 15, 30, None, 21 * MIN_MS)),
             [(30, 3000), (15, 3000)]
         );
+        let s = [
+            paused_seg(0, Some(10 * MIN_MS), 6_000, 0),
+            paused_seg(10 * MIN_MS, None, 12_000, 5 * MIN_MS),
+        ];
         assert_eq!(
-            amounts(&bill(&s, 15, 30, 5 * MIN_MS, 40 * MIN_MS)),
+            amounts(&bill(&s, 15, 30, None, 40 * MIN_MS)),
             [(30, 3000), (30, 6000)]
         );
+        let s = [paused_seg(0, None, 12_000, 99 * MIN_MS)];
+        assert_eq!(amounts(&bill(&s, 0, 0, None, 40 * MIN_MS))[0], (0, 0));
+        let s = [
+            paused_seg(0, Some(30 * MIN_MS), 6_000, 20 * MIN_MS),
+            seg(30 * MIN_MS, None, 12_000),
+        ];
         assert_eq!(
-            amounts(&bill(&s, 0, 0, 99 * MIN_MS, 40 * MIN_MS))[1],
-            (0, 0)
+            amounts(&bill(&s, 0, 0, None, 40 * MIN_MS)),
+            [(10, 1000), (10, 2000)]
+        );
+    }
+
+    #[test]
+    fn golden_a_sixty_minute_session_with_a_twenty_minute_pause_bills_forty() {
+        let s = [paused_seg(0, Some(60 * MIN_MS), 6_000, 20 * MIN_MS)];
+        assert_eq!(amounts(&bill(&s, 0, 0, None, 60 * MIN_MS)), [(40, 4000)]);
+    }
+
+    #[test]
+    fn a_pause_still_open_is_excluded_up_to_the_bill_end() {
+        let s = [paused_seg(0, None, 6_000, 10 * MIN_MS)];
+        assert_eq!(
+            amounts(&bill(&s, 0, 0, Some(40 * MIN_MS), 60 * MIN_MS)),
+            [(30, 3000)]
+        );
+        assert_eq!(
+            amounts(&bill(&s, 0, 0, Some(70 * MIN_MS), 60 * MIN_MS)),
+            [(50, 5000)]
         );
     }
 }

@@ -31,6 +31,8 @@ import type { RateUpsert } from "./RateUpsert";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { SessionEnd } from "./SessionEnd";
 import type { SessionEndReverted } from "./SessionEndReverted";
+import type { SessionPause } from "./SessionPause";
+import type { SessionResume } from "./SessionResume";
 import type { SessionSettle } from "./SessionSettle";
 import type { SessionSettleReverted } from "./SessionSettleReverted";
 import type { SessionStart } from "./SessionStart";
@@ -87,4 +89,6 @@ export type IntentPayload =
   | ({ kind: "session.end" } & SessionEnd)
   | ({ kind: "session.settle" } & SessionSettle)
   | ({ kind: "session.end.reverted" } & SessionEndReverted)
-  | ({ kind: "session.settle.reverted" } & SessionSettleReverted);
+  | ({ kind: "session.settle.reverted" } & SessionSettleReverted)
+  | ({ kind: "session.pause" } & SessionPause)
+  | ({ kind: "session.resume" } & SessionResume);

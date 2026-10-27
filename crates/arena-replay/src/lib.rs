@@ -536,12 +536,33 @@ mod tests {
                 .await
                 .unwrap();
             let session_id = started.changes[0].row_id.clone();
+            let pause = |rev: i64| {
+                submit(
+                    IntentPayload::SessionPause(arena_proto::SessionPause {
+                        session_id: session_id.clone(),
+                        reason: arena_proto::PauseReason::Other,
+                        note: Some("Fan noise".into()),
+                    }),
+                    Some(rev),
+                )
+            };
+            writer.submit_intent(pause(1)).await.unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionResume(arena_proto::SessionResume {
+                        session_id: session_id.clone(),
+                    }),
+                    Some(2),
+                ))
+                .await
+                .unwrap();
+            writer.submit_intent(pause(3)).await.unwrap();
             writer
                 .submit_intent(submit(
                     IntentPayload::SessionEnd(arena_proto::SessionEnd {
                         session_id: session_id.clone(),
                     }),
-                    Some(1),
+                    Some(4),
                 ))
                 .await
                 .unwrap();
@@ -550,7 +571,7 @@ mod tests {
                     IntentPayload::SessionEndReverted(arena_proto::SessionEndReverted {
                         session_id: session_id.clone(),
                     }),
-                    Some(2),
+                    Some(5),
                 ))
                 .await
                 .unwrap();
@@ -559,7 +580,7 @@ mod tests {
                     IntentPayload::SessionEnd(arena_proto::SessionEnd {
                         session_id: session_id.clone(),
                     }),
-                    Some(3),
+                    Some(6),
                 ))
                 .await
                 .unwrap();

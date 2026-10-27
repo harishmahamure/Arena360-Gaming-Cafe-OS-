@@ -40,6 +40,10 @@ pub struct LiveSession {
     pub fy: String,
     pub ended_at: Option<i64>,
     pub ended_by: Option<String>,
+    pub ends_at: Option<i64>,
+    pub paused_at: Option<i64>,
+    pub pause_reason: Option<String>,
+    pub pause_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +54,7 @@ pub struct SegmentRow {
     pub to_at: Option<i64>,
     pub device_id: String,
     pub rate_minor_per_hour: i64,
+    pub paused_ms: i64,
 }
 
 pub struct NewOrder<'a> {
@@ -164,7 +169,8 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 
 const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
-        s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by";
+        s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by, s.ends_at, s.paused_at,
+        s.pause_reason, s.pause_note";
 
 fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
@@ -185,6 +191,10 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         fy: r.get(14)?,
         ended_at: r.get(15)?,
         ended_by: r.get(16)?,
+        ends_at: r.get(17)?,
+        paused_at: r.get(18)?,
+        pause_reason: r.get(19)?,
+        pause_note: r.get(20)?,
     })
 }
 
@@ -222,7 +232,8 @@ pub fn list_segments(
 ) -> Result<Vec<SegmentRow>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT g.id, g.session_id, g.from_at, g.to_at, g.device_id, g.rate_minor_per_hour
+            "SELECT g.id, g.session_id, g.from_at, g.to_at, g.device_id, g.rate_minor_per_hour,
+                    g.paused_ms
              FROM session_segments g JOIN sessions s ON s.id = g.session_id
              WHERE (?1 IS NOT NULL AND g.session_id = ?1)
                 OR (?1 IS NULL AND s.state IN ('active', 'paused', 'grace'))
@@ -237,11 +248,53 @@ pub fn list_segments(
             to_at: r.get(3)?,
             device_id: r.get(4)?,
             rate_minor_per_hour: r.get(5)?,
+            paused_ms: r.get(6)?,
         })
     })
     .map_err(db_error)?
     .collect::<Result<_, _>>()
     .map_err(db_error)
+}
+
+pub fn pause_session(
+    conn: &Connection,
+    id: &str,
+    paused_at: i64,
+    reason: &str,
+    note: Option<&str>,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET state = 'paused', paused_at = ?2, pause_reason = ?3, pause_note = ?4
+         WHERE id = ?1",
+        params![id, paused_at, reason, note],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn fold_pause(conn: &Connection, id: &str, paused_ms: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE session_segments SET paused_ms = paused_ms + ?2
+         WHERE session_id = ?1 AND to_at IS NULL",
+        params![id, paused_ms],
+    )
+    .map_err(db_error)?;
+    conn.execute(
+        "UPDATE sessions SET paused_total_ms = paused_total_ms + ?2,
+                             ends_at = CASE WHEN ends_at IS NULL THEN NULL ELSE ends_at + ?2 END,
+                             paused_at = NULL, pause_reason = NULL, pause_note = NULL
+         WHERE id = ?1",
+        params![id, paused_ms],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn resume_session(conn: &Connection, id: &str, paused_ms: i64) -> Result<(), AppError> {
+    fold_pause(conn, id, paused_ms)?;
+    conn.execute("UPDATE sessions SET state = 'active' WHERE id = ?1", [id])
+        .map_err(db_error)?;
+    Ok(())
 }
 
 pub fn end_session(

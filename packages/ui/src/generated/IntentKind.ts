@@ -46,4 +46,6 @@ export type IntentKind =
   | "session.end"
   | "session.settle"
   | "session.end.reverted"
-  | "session.settle.reverted";
+  | "session.settle.reverted"
+  | "session.pause"
+  | "session.resume";

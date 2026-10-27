@@ -114,6 +114,7 @@ async function open(page: Page, who: keyof typeof STAFF, over: Partial<Hub> = {}
                   device_id: BUSY.device_id,
                   state: "active",
                   started_at: T0,
+                  paused_total_ms: 0,
                   rev: 3,
                   guest_no: 1,
                 },

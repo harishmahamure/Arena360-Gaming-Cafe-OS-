@@ -143,13 +143,7 @@ fn bills(
             .filter(|g| g.session_id == s.id)
             .cloned()
             .collect();
-        let lines = crate::billing::bill(
-            &own,
-            s.rounding_min,
-            s.minimum_min,
-            s.paused_total_ms,
-            now_ms,
-        );
+        let lines = crate::billing::bill(&own, s.rounding_min, s.minimum_min, s.paused_at, now_ms);
         bill(s.id.clone(), s.device_id.clone(), None, None, lines)
     });
     let open = orders.into_iter().map(|o| {
@@ -222,6 +216,13 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             player_id: s.player_id,
             username: s.username,
             guest_no: s.guest_no,
+            paused_at: s.paused_at,
+            paused_total_ms: s.paused_total_ms,
+            pause_reason: s
+                .pause_reason
+                .as_deref()
+                .and_then(arena_proto::PauseReason::parse),
+            pause_note: s.pause_note,
         })
         .collect();
     for g in &mut snapshot.groups {

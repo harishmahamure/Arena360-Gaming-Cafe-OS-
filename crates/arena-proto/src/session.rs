@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::error::{AppError, ErrorCode};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -37,6 +39,73 @@ pub struct SessionStart {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SessionEnd {
+    pub session_id: String,
+}
+
+pub const PAUSE_NOTE_MAX: usize = 140;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PauseReason {
+    PlayerSteppedAway,
+    HardwareIssue,
+    PowerCut,
+    Other,
+}
+
+impl PauseReason {
+    pub const ALL: [PauseReason; 4] = [
+        Self::PlayerSteppedAway,
+        Self::HardwareIssue,
+        Self::PowerCut,
+        Self::Other,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PlayerSteppedAway => "player_stepped_away",
+            Self::HardwareIssue => "hardware_issue",
+            Self::PowerCut => "power_cut",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == s)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionPause {
+    pub session_id: String,
+    pub reason: PauseReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+impl SessionPause {
+    pub fn checked_note(&self) -> Result<Option<String>, AppError> {
+        let invalid = |m: &str| AppError::with_field(ErrorCode::ValidationFailed, "note", m);
+        match (self.reason, self.note.as_deref().map(str::trim)) {
+            (PauseReason::Other, Some(n))
+                if (1..=PAUSE_NOTE_MAX).contains(&n.chars().count())
+                    && !n.chars().any(char::is_control) =>
+            {
+                Ok(Some(n.to_owned()))
+            }
+            (PauseReason::Other, _) => Err(invalid("Say why in 1 to 140 characters.")),
+            (_, None) => Ok(None),
+            _ => Err(invalid("Only Other takes a note.")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionResume {
     pub session_id: String,
 }
 
@@ -190,6 +259,18 @@ pub struct SnapshotSession {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub guest_no: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub paused_at: Option<i64>,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub paused_total_ms: i64,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub pause_reason: Option<PauseReason>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub pause_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -240,6 +321,41 @@ mod tests {
         let s: SessionSettleReverted =
             serde_json::from_value(serde_json::json!({"order_id": "O"})).unwrap();
         assert_eq!(s.order_id, "O");
+    }
+
+    #[test]
+    fn a_pause_note_belongs_to_other_alone() {
+        let p = |reason, note: Option<&str>| SessionPause {
+            session_id: "S".into(),
+            reason,
+            note: note.map(str::to_owned),
+        };
+        assert_eq!(
+            p(PauseReason::Other, Some("  Fan noise ")).checked_note(),
+            Ok(Some("Fan noise".to_owned()))
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("   "),
+            Some(
+                "a
+b",
+            ),
+        ] {
+            assert!(p(PauseReason::Other, bad).checked_note().is_err());
+        }
+        assert!(
+            p(PauseReason::Other, Some(&"x".repeat(141)))
+                .checked_note()
+                .is_err()
+        );
+        assert_eq!(p(PauseReason::PowerCut, None).checked_note(), Ok(None));
+        assert!(p(PauseReason::PowerCut, Some("x")).checked_note().is_err());
+        assert_eq!(
+            PauseReason::parse("hardware_issue"),
+            Some(PauseReason::HardwareIssue)
+        );
     }
 
     #[test]

@@ -282,6 +282,14 @@ pub(super) fn mutate(
             Target::SessionSettleReverted(t) => super::session::mutate_settle_reverted(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionPause(p) => match target {
+            Target::SessionPause(t) => super::session::mutate_pause(tx, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::SessionResume(_) => match target {
+            Target::SessionResume(t) => super::session::mutate_resume(tx, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceMaintenance(m) => match target {
             Target::Maintenance(t) => maintenance::mutate(tx, m, t),
             _ => Err(mismatch()),

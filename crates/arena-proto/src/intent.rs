@@ -143,11 +143,15 @@ pub enum IntentKind {
     SessionEndReverted,
     #[serde(rename = "session.settle.reverted")]
     SessionSettleReverted,
+    #[serde(rename = "session.pause")]
+    SessionPause,
+    #[serde(rename = "session.resume")]
+    SessionResume,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 43] = [
+    pub const ALL: [IntentKind; 45] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -191,6 +195,8 @@ impl IntentKind {
         Self::SessionSettle,
         Self::SessionEndReverted,
         Self::SessionSettleReverted,
+        Self::SessionPause,
+        Self::SessionResume,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -239,6 +245,8 @@ impl IntentKind {
             Self::SessionSettle => "session.settle",
             Self::SessionEndReverted => "session.end.reverted",
             Self::SessionSettleReverted => "session.settle.reverted",
+            Self::SessionPause => "session.pause",
+            Self::SessionResume => "session.resume",
         }
     }
 
@@ -288,7 +296,9 @@ impl IntentKind {
             | Self::SessionEnd
             | Self::SessionSettle
             | Self::SessionEndReverted
-            | Self::SessionSettleReverted => IntentCategory::Session,
+            | Self::SessionSettleReverted
+            | Self::SessionPause
+            | Self::SessionResume => IntentCategory::Session,
         }
     }
 
@@ -337,6 +347,7 @@ impl IntentKind {
             Self::SessionSettle | Self::SessionSettleReverted => {
                 Requirement::Perm(Permission::PosSell)
             }
+            Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
         }
     }
 
@@ -402,7 +413,9 @@ impl IntentKind {
             | Self::SessionEnd
             | Self::SessionSettle
             | Self::SessionEndReverted
-            | Self::SessionSettleReverted => None,
+            | Self::SessionSettleReverted
+            | Self::SessionPause
+            | Self::SessionResume => None,
         }
     }
 
@@ -850,6 +863,10 @@ pub enum IntentPayload {
     SessionEndReverted(crate::SessionEndReverted),
     #[serde(rename = "session.settle.reverted")]
     SessionSettleReverted(crate::SessionSettleReverted),
+    #[serde(rename = "session.pause")]
+    SessionPause(crate::SessionPause),
+    #[serde(rename = "session.resume")]
+    SessionResume(crate::SessionResume),
 }
 
 impl IntentPayload {
@@ -898,6 +915,8 @@ impl IntentPayload {
             Self::SessionSettle(_) => IntentKind::SessionSettle,
             Self::SessionEndReverted(_) => IntentKind::SessionEndReverted,
             Self::SessionSettleReverted(_) => IntentKind::SessionSettleReverted,
+            Self::SessionPause(_) => IntentKind::SessionPause,
+            Self::SessionResume(_) => IntentKind::SessionResume,
         }
     }
 }
@@ -978,7 +997,6 @@ mod tests {
         Permission::WalletTopup,
         Permission::CreditManage,
         Permission::CreditCollect,
-        Permission::SessionPause,
         Permission::SessionExtend,
         Permission::SessionTransfer,
         Permission::SessionForceEnd,
@@ -1146,6 +1164,7 @@ mod tests {
                 "session.settle" | "session.settle.reverted" => {
                     Requirement::Perm(Permission::PosSell)
                 }
+                "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

@@ -1656,6 +1656,73 @@ async fn a_started_session_unlocks_ticks_and_locks_at_its_lock_time() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_session_covers_the_screen_keeps_its_session_and_resumes_on_a_start() {
+    let (hub, kiosk, _) = admin_setup().await;
+    let presence = hub.presence.as_ref().unwrap();
+    let mut app = kiosk.app().await;
+    let screen = |lock_after_ms| arena_proto::SessionScreen {
+        session_id: "S1".into(),
+        device_name: "PC 1".into(),
+        elapsed_ms: 0,
+        lock_after_ms,
+        time_up_mode: "clean_up".into(),
+    };
+    presence.push_session_started(&hub.device_id, "S1", screen(1_500));
+    app.until(|m| {
+        matches!(
+            m,
+            IpcMsg::PcScreen {
+                locked: false,
+                session: Some(_),
+                ..
+            }
+        )
+    })
+    .await;
+    presence.push_pc_command(
+        &hub.device_id,
+        "P1",
+        arena_proto::PcAction::Lock,
+        None,
+        Some(arena_proto::LockReason::Paused),
+    );
+    let covered = app
+        .until(|m| matches!(m, IpcMsg::PcScreen { locked: true, .. }))
+        .await;
+    let IpcMsg::PcScreen {
+        reason, session, ..
+    } = covered
+    else {
+        unreachable!()
+    };
+    assert_eq!(reason, Some(arena_proto::LockReason::Paused));
+    assert!(session.is_some(), "a pause keeps the session");
+    app.skipped.clear();
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    presence.push_session_started(&hub.device_id, "S1-resume", screen(60_000));
+    let resumed = app
+        .until(|m| matches!(m, IpcMsg::PcScreen { locked: false, .. }))
+        .await;
+    let IpcMsg::PcScreen {
+        reason, session, ..
+    } = resumed
+    else {
+        unreachable!()
+    };
+    assert!(reason.is_none() && session.is_some());
+    assert!(
+        app.skipped.iter().all(|m| !matches!(
+            m,
+            IpcMsg::PcScreen {
+                reason: Some(arena_proto::LockReason::TimesUp),
+                ..
+            }
+        )),
+        "the paused session never timed out"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_started_test_session_reaches_the_app_with_two_minutes_on_the_clock() {
     let mut hub = Hub::seeded().await;
     hub.up().await;

@@ -3,6 +3,7 @@
     BillBreakdown,
     Button,
     InlinePin,
+    ReasonPicker,
     StatusBadge,
     TextField,
     formatDateTime,
@@ -16,6 +17,7 @@
     SnapshotGroup,
     SnapshotLocale,
     SnapshotSession,
+    PauseReason,
     PaymentRow,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
@@ -27,13 +29,16 @@
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
   import {
     MESSAGE_MAX,
+    PAUSE_LABELS,
     adminUnlockJob,
     assignJob,
     cmds,
     endJob,
     maintenanceJob,
+    pauseJob,
     permissionFor,
     powerJob,
+    resumeJob,
     screenJob,
     send,
     settleJob,
@@ -42,9 +47,14 @@
   } from "./tile-actions.svelte";
 
   type Badge = {
-    state: "free" | "offline" | "in-session" | "reserved" | "maintenance";
+    state: "free" | "offline" | "in-session" | "paused" | "reserved" | "maintenance";
     label: MessageKey;
   };
+
+  const PAUSE_OPTIONS = (Object.keys(PAUSE_LABELS) as PauseReason[]).map((value) => ({
+    value,
+    label: PAUSE_LABELS[value],
+  }));
 
   let {
     device,
@@ -60,6 +70,7 @@
     unpaid,
     locale,
     names,
+    pauseText,
     onclose,
   }: {
     device: SnapshotDevice;
@@ -75,6 +86,7 @@
     unpaid: SnapshotBill | undefined;
     locale: SnapshotLocale | null;
     names: Record<string, string>;
+    pauseText: (session: SnapshotSession) => string;
     onclose: () => void;
   } = $props();
 
@@ -85,6 +97,7 @@
   let textError: MessageKey | null = $state(null);
   let pick = $state("");
   let picked: { id?: string; name?: string } | null = $state(null);
+  let pausing = $state(false);
   let approving: Job | null = $state(null);
   let approvalPrompt: MessageKey = $state("ui.pin.prompt");
 
@@ -183,6 +196,18 @@
     if (pick) void go(assignJob(device.device_id, pick, device.meta_rev ?? undefined));
   }
 
+  async function cancelPause() {
+    pausing = false;
+    await tick();
+    root?.querySelector<HTMLElement>('[data-testid="session-bill"] button')?.focus();
+  }
+
+  async function choosePause(value: string, note?: string) {
+    if (!session) return;
+    pausing = false;
+    await go(pauseJob(session.id, session.rev, value as PauseReason, note));
+  }
+
   function settle(payments: PaymentRow[]) {
     if (unpaid?.order_id && unpaid.order_rev != null) {
       void go(settleJob(unpaid.order_id, payments, unpaid.order_rev));
@@ -244,6 +269,12 @@
         />
       </dd>
     </div>
+    {#if session?.state === "paused"}
+      <div>
+        <dt>{t("hub.pause.paused_for")}</dt>
+        <dd data-testid="sheet-pause">{pauseText(session)}</dd>
+      </div>
+    {/if}
     {#if device.tv_number}
       <div>
         <dt>{t("hub.floor.tv", { n: device.tv_number })}</dt>
@@ -379,6 +410,31 @@
             {locale}
             {tz}
             {names}
+          />
+        {/if}
+        {#if session.state === "paused"}
+          <Button
+            label="hub.session.resume"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => void go(resumeJob(session.id, session.rev))}
+          />
+        {:else if pausing}
+          <ReasonPicker
+            options={PAUSE_OPTIONS}
+            legend="hub.pause.legend"
+            noteFor="other"
+            noteLabel="hub.pause.note"
+            onconfirm={choosePause}
+            oncancel={cancelPause}
+          />
+        {:else}
+          <Button
+            label="hub.session.pause"
+            variant="secondary"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => (pausing = true)}
           />
         {/if}
         <Button

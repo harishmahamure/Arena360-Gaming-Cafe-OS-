@@ -153,6 +153,8 @@ pub(crate) enum Target {
     SessionSettle(Box<session::SettleTarget>),
     SessionEndReverted(Box<session::EndRevertTarget>),
     SessionSettleReverted(Box<session::SettleRevertTarget>),
+    SessionPause(Box<session::PauseTarget>),
+    SessionResume(Box<session::PauseTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -205,6 +207,8 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::SessionSettleReverted(r) => {
             Target::SessionSettleReverted(Box::new(session::load_settle_reverted(tx, r, now)?))
         }
+        P::SessionPause(p) => Target::SessionPause(Box::new(session::load_pause(tx, p)?)),
+        P::SessionResume(r) => Target::SessionResume(Box::new(session::load_resume(tx, r)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

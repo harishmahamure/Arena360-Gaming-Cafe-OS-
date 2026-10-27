@@ -1,4 +1,10 @@
-import type { IntentPayload, PaymentRow, PcAction, Permission } from "@arena/ui/generated";
+import type {
+  IntentPayload,
+  PauseReason,
+  PaymentRow,
+  PcAction,
+  Permission,
+} from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { waitForAck } from "./admin-unlock";
 import { dropElevation, newIdempotencyKey, submitIntent } from "./auth";
@@ -39,6 +45,10 @@ const REFUSALS: Record<string, MessageKey> = {
   NO_RATE: "hub.session.no_rate",
   DEVICE_UNASSIGNED: "hub.session.unassigned",
   "STALE:session.end": "hub.session.end_stale",
+  "STALE:session.pause": "hub.session.pause_stale",
+  "STALE:session.resume": "hub.session.pause_stale",
+  "VALIDATION_FAILED:session.pause": "hub.session.pause_refused",
+  "VALIDATION_FAILED:session.resume": "hub.session.resume_refused",
   "VALIDATION_FAILED:session.end": "hub.session.ended",
   PAYMENT_SHORT: "hub.settle.short",
   REFERENCE_REQUIRED: "hub.settle.reference",
@@ -68,6 +78,18 @@ export const startJob = (device_id: string, player_id?: string, manual?: boolean
 export const endJob = (session_id: string, rev: number) =>
   job({ kind: "session.end", session_id }, { track: "none", rev, done: "hub.sheet.done.ended" });
 
+export const pauseJob = (session_id: string, rev: number, reason: PauseReason, note?: string) =>
+  job(
+    { kind: "session.pause", session_id, reason, note },
+    { track: "none", rev, done: "hub.sheet.done.paused" },
+  );
+
+export const resumeJob = (session_id: string, rev: number) =>
+  job(
+    { kind: "session.resume", session_id },
+    { track: "none", rev, done: "hub.sheet.done.resumed" },
+  );
+
 export const settleJob = (order_id: string, payments: PaymentRow[], rev: number) =>
   job(
     { kind: "session.settle", order_id, payments },
@@ -96,20 +118,29 @@ export const assignJob = (device_id: string, group_id: string, rev?: number) =>
     { track: "none", rev, done: "hub.sheet.done.saved" },
   );
 
+export const PAUSE_LABELS: Record<PauseReason, MessageKey> = {
+  player_stepped_away: "hub.pause.reason.player_stepped_away",
+  hardware_issue: "hub.pause.reason.hardware_issue",
+  power_cut: "hub.pause.reason.power_cut",
+  other: "hub.pause.reason.other",
+};
+
 export const MESSAGE_MAX = 140;
 
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
   kind === "session.start" || kind === "session.end"
     ? kind
-    : kind === "session.end.reverted"
-      ? "session.end"
-      : kind === "session.settle" || kind === "session.settle.reverted"
-        ? "pos.sell"
-        : kind === "device.screen"
-          ? "device.screen"
-          : kind === "device.power" || kind === "device.admin_unlock"
-            ? "device.remote"
-            : "device.manage";
+    : kind === "session.pause" || kind === "session.resume"
+      ? "session.pause"
+      : kind === "session.end.reverted"
+        ? "session.end"
+        : kind === "session.settle" || kind === "session.settle.reverted"
+          ? "pos.sell"
+          : kind === "device.screen"
+            ? "device.screen"
+            : kind === "device.power" || kind === "device.admin_unlock"
+              ? "device.remote"
+              : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 

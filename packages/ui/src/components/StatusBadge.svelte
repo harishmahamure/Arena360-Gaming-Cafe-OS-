@@ -7,7 +7,9 @@
 </script>
 
 <span class="badge type-hub-micro state-{state}" data-component="status-badge"
-  >{t(label ?? STATUS_LABELS[state])}</span
+  >{#if state === "paused"}<span aria-hidden="true">⏸</span>&nbsp;{/if}{t(
+    label ?? STATUS_LABELS[state],
+  )}</span
 >
 
 <style>

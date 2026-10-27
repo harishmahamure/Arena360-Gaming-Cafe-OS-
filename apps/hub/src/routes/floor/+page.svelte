@@ -13,13 +13,14 @@
     SessionStaff,
     SnapshotDevice,
     SnapshotGroup,
+    SnapshotSession,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { page } from "$app/state";
   import { tick } from "svelte";
   import { nextTile } from "../../lib/floor-nav";
   import TileSheet from "../../lib/TileSheet.svelte";
-  import { cmds } from "../../lib/tile-actions.svelte";
+  import { PAUSE_LABELS, cmds } from "../../lib/tile-actions.svelte";
   import { approveUndo, cancelApproval, runUndo, secondsLeft, undo } from "../../lib/undo.svelte";
   import type { PageData } from "./$types";
 
@@ -30,10 +31,11 @@
     return session?.state === "signed_in" ? (session.staff ?? null) : null;
   });
 
-  const BADGE: Record<
-    DeviceStatus,
-    { state: "free" | "offline" | "in-session" | "reserved" | "maintenance"; label: MessageKey }
-  > = {
+  type Badge = {
+    state: "free" | "offline" | "in-session" | "paused" | "reserved" | "maintenance";
+    label: MessageKey;
+  };
+  const BADGE: Record<DeviceStatus, Badge> = {
     online: { state: "free", label: "hub.floor.online" },
     offline: { state: "offline", label: "hub.floor.offline" },
     in_session: { state: "in-session", label: "ui.status.in_session" },
@@ -59,10 +61,24 @@
     return () => clearInterval(timer);
   });
   const two = (n: number) => String(n).padStart(2, "0");
-  const elapsed = (from: number) => {
-    const s = Math.max(0, Math.floor((now - from) / 1000));
+  const elapsed = (session: SnapshotSession) => {
+    const end = session.paused_at ?? now;
+    const s = Math.max(
+      0,
+      Math.floor((end - session.started_at - (session.paused_total_ms ?? 0)) / 1000),
+    );
     return [Math.floor(s / 3600), two(Math.floor(s / 60) % 60), two(s % 60)].join(":");
   };
+  const badgeOf = (d: SnapshotDevice, session: SnapshotSession | undefined): Badge =>
+    session?.state === "paused"
+      ? { state: "paused", label: "ui.status.paused" }
+      : (BADGE[d.status ?? "offline"] ?? BADGE.offline);
+  const pauseText = (session: SnapshotSession) =>
+    session.pause_reason === "other"
+      ? (session.pause_note ?? "")
+      : session.pause_reason
+        ? t(PAUSE_LABELS[session.pause_reason])
+        : "";
   const tz = $derived(snapshot?.locale?.tz);
   const groups = $derived(snapshot?.groups ?? []);
   const zones = $derived(snapshot?.zones ?? []);
@@ -96,6 +112,7 @@
   }
   const STATES = [
     "in-session",
+    "paused",
     "free",
     "reserved",
     "maintenance",
@@ -103,9 +120,7 @@
     "unassigned",
   ] as const;
   const stateOf = (d: SnapshotDevice) =>
-    groups.some((g) => g.id === d.group_id)
-      ? (BADGE[d.status ?? "offline"] ?? BADGE.offline).state
-      : "unassigned";
+    groups.some((g) => g.id === d.group_id) ? badgeOf(d, sessionOf(d)).state : "unassigned";
   const counts = (members: SnapshotDevice[]) =>
     STATES.map((s) => [s, members.filter((d) => stateOf(d) === s).length] as const)
       .filter(([, n]) => n > 0)
@@ -159,8 +174,8 @@
 </svelte:head>
 
 {#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined, cell = false)}
-  {@const badge = BADGE[device.status ?? "offline"] ?? BADGE.offline}
   {@const session = group ? sessionOf(device) : undefined}
+  {@const badge = badgeOf(device, session)}
   {@const owed = unpaid(device)}
   {@const rate =
     group?.rate_minor != null && snapshot?.locale
@@ -171,7 +186,7 @@
     name={device.label}
     state={group ? badge.state : "unassigned"}
     label={group ? badge.label : undefined}
-    time={session ? elapsed(session.started_at) : undefined}
+    time={session ? elapsed(session) : undefined}
     tabindex={tabStop === device.device_id ? 0 : -1}
     {group}
     onactivate={() => (activeId = device.device_id)}
@@ -196,6 +211,8 @@
         <span data-testid="device-last-seen"
           >{t("hub.floor.last_seen", { at: formatDateTime(device.last_seen_at, tz) })}</span
         >
+      {:else if session?.state === "paused"}
+        <span data-testid="pause-line">{pauseText(session)}</span>
       {:else if session}
         <span data-testid="session-line"
           >{session.username ?? t("hub.session.guest", { n: session.guest_no ?? 0 })}</span
@@ -342,7 +359,8 @@
         rate={group?.rate_minor != null && snapshot?.locale
           ? formatMoney(group.rate_minor, snapshot.locale)
           : null}
-        badge={BADGE[active.status ?? "offline"] ?? BADGE.offline}
+        badge={badgeOf(active, sessionOf(active))}
+        {pauseText}
         {staff}
         {tz}
         session={sessionOf(active)}

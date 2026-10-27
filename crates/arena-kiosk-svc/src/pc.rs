@@ -79,7 +79,7 @@ pub(crate) fn set_locked(ctx: &Ctx, locked: bool, reason: Option<LockReason>) {
             reason,
             Some(LockReason::PayAtCounter | LockReason::EndedByStaff | LockReason::TimesUp)
         );
-    if ends {
+    if ends || (locked && reason == Some(LockReason::Paused)) {
         ctx.pc.deadline.send_replace(None);
     }
     ctx.pc.screen.send_if_modified(|s| {

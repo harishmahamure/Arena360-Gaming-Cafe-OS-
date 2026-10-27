@@ -2017,9 +2017,17 @@ async fn run_intent(
         arena_proto::IntentPayload::SessionSettle(s) => Some(s.order_id.clone()),
         _ => None,
     };
+    let pausing = match &intent.payload {
+        arena_proto::IntentPayload::SessionPause(p) => Some((p.session_id.clone(), true)),
+        arena_proto::IntentPayload::SessionResume(r) => Some((r.session_id.clone(), false)),
+        _ => None,
+    };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
+            if let Some((session_id, paused)) = pausing {
+                push_pause_state(auth, &session_id, paused, &cmd_id).await;
+            }
             if ended && let Some(c) = applied.changes.iter().find(|c| c.tbl == "devices_meta") {
                 let sent = auth.presence.push_pc_command(
                     &c.row_id,
@@ -2099,6 +2107,47 @@ async fn run_intent(
             fail(ui_error(e))
         }
     }
+}
+
+/// The kiosk follows a pause (covered, "Session paused") or a resume (unlocked to the session
+/// screen like a start). The device is the one whose live session screen names the session.
+async fn push_pause_state(auth: &Arc<UiAuth>, session_id: &str, paused: bool, cmd_id: &str) {
+    let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
+    let screens = match tokio::task::spawn_blocking(move || reader.session_screens(now)).await {
+        Ok(Ok(screens)) => screens,
+        Ok(Err(e)) => {
+            tracing::warn!(session_id, error = %e, "could not read the session screen");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "the session screen read failed");
+            return;
+        }
+    };
+    let Some((device_id, screen)) = screens
+        .into_iter()
+        .find(|(_, s)| s.session_id == session_id)
+    else {
+        tracing::warn!(
+            session_id,
+            cmd_id,
+            "no live session to push a pause state for"
+        );
+        return;
+    };
+    let sent = if paused {
+        auth.presence.push_pc_command(
+            &device_id,
+            cmd_id,
+            arena_proto::PcAction::Lock,
+            None,
+            Some(arena_proto::LockReason::Paused),
+        )
+    } else {
+        auth.presence
+            .push_session_started(&device_id, cmd_id, screen)
+    };
+    tracing::info!(device_id = %device_id, cmd_id, paused, sessions = sent, "pause state pushed");
 }
 
 /// What a settle committed, read back from the order row so a retried key answers the same,

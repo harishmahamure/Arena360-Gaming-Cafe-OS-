@@ -1,0 +1,3 @@
+ALTER TABLE sessions ADD COLUMN pause_reason TEXT NULL;
+ALTER TABLE sessions ADD COLUMN pause_note TEXT NULL;
+ALTER TABLE session_segments ADD COLUMN paused_ms INTEGER NOT NULL DEFAULT 0;

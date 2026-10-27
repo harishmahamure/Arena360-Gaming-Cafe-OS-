@@ -74,7 +74,10 @@ pub fn session_screens(
             let screen = SessionScreen {
                 session_id: s.id,
                 device_name: name,
-                elapsed_ms: u64::try_from(now_ms - s.started_at).unwrap_or(0),
+                elapsed_ms: u64::try_from(
+                    s.paused_at.unwrap_or(now_ms) - s.started_at - s.paused_total_ms,
+                )
+                .unwrap_or(0),
                 lock_after_ms: lock_after,
                 time_up_mode: s.time_up_mode,
             };

@@ -53,7 +53,15 @@ const LINE = {
 const live = (): Pick<Hub, "devices" | "sessions" | "bills"> => ({
   devices: [BUSY, device(2, { status: "online" })],
   sessions: [
-    { id: "S1", device_id: BUSY.device_id, state: "active", started_at: T0, rev: 3, guest_no: 1 },
+    {
+      id: "S1",
+      device_id: BUSY.device_id,
+      state: "active",
+      started_at: T0,
+      paused_total_ms: 0,
+      rev: 3,
+      guest_no: 1,
+    },
   ],
   bills: [
     {

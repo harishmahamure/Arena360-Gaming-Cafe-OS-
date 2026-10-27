@@ -283,6 +283,8 @@ test("a paused session can be transferred and a free PC cannot", async ({ page }
   await open(page, {}, "paused");
   await openSheet(page);
   await expect(act(page, en["hub.session.transfer"])).toBeVisible();
+  // A phone's sheet covers the floor: close it before opening the next tile.
+  await page.keyboard.press("Escape");
   await tile(page, "PC 2").locator("[data-tile-face]").focus();
   await page.keyboard.press("Enter");
   await expect(sheet(page)).toHaveAccessibleName("PC 2");

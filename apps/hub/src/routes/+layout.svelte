@@ -14,6 +14,7 @@
   import LockOverlay from "../lib/LockOverlay.svelte";
   import { createIdleTracker } from "../lib/idle.js";
   import { setUiSettings, uiSettings } from "../lib/ui-settings.svelte";
+  import { viewport } from "../lib/viewport.svelte";
   import {
     BOTTOM_BAR,
     MORE,
@@ -219,6 +220,10 @@
       });
   });
 
+  /** Controls whose focus the on-screen keyboard follows (not checkboxes, radios or buttons). */
+  const TEXT_FIELD =
+    'input:not([type="checkbox"],[type="radio"],[type="button"],[type="submit"],[type="range"]),textarea,select,[contenteditable="true"]';
+
   const ruleChipList = $derived(
     data.hub.ok
       ? ruleChips(
@@ -286,6 +291,14 @@
   // The chip and its announcements need the live push stream (someone signed in); without it
   // the state could be stale indefinitely.
   const shownLink: ConnectivityState = $derived(streamToken ? link : "online");
+
+  /** Whether any chip has something to say (the phone shows them in a row under the header). */
+  const hasChips = $derived(
+    shownLink !== "online" ||
+      (data.hub.ok &&
+        (Boolean(data.hub.snapshot.lan?.no_lan) || data.hub.snapshot.pairing_revoked === true)) ||
+      ruleChipList.length > 0,
+  );
 
   // Each change of the WAN link is announced once through the polite region.
   $effect(() => {
@@ -523,12 +536,25 @@
       moreOpen = false;
       tick().then(() => focusEl(mainEl));
     };
+    // The on-screen keyboard shrinks the window: the focused field then scrolls into view (the
+    // nearest scroll container's scroll padding keeps it clear of sticky bars). Focus alone does
+    // not move the scroll: the browser already brings an unseen field into view.
+    const reveal = () => {
+      const field = document.activeElement;
+      if (field instanceof HTMLElement && field.matches(TEXT_FIELD)) {
+        field.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    };
+    window.addEventListener("resize", reveal);
+    window.visualViewport?.addEventListener("resize", reveal);
     window.addEventListener("focus", onFocus);
     window.addEventListener(HUB_READY, onReady);
     document.addEventListener("visibilitychange", onVisible);
     wide.addEventListener("change", onWide);
     return () => {
       clearTimeout(retryTimer);
+      window.removeEventListener("resize", reveal);
+      window.visualViewport?.removeEventListener("resize", reveal);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener(HUB_READY, onReady);
       document.removeEventListener("visibilitychange", onVisible);
@@ -565,6 +591,32 @@
   </section>
 {/snippet}
 
+{#snippet chips()}
+  {#if shownLink !== "online"}
+    <p class="chip-offline type-hub-label" data-testid="hub-chip-offline" data-link={shownLink}>
+      <span class="chip-glyph" aria-hidden="true">⚠</span>
+      {t(LINK_LABELS[shownLink])}
+    </p>
+  {/if}
+  {#if data.hub.ok && data.hub.snapshot.lan?.no_lan}
+    <a
+      class="no-lan ui-interactive type-hub-label"
+      href="/settings/devices-display"
+      data-testid="hub-no-lan"
+    >
+      <span class="chip-glyph" aria-hidden="true">⚠</span>
+      {t("hub.connectivity.no_lan")}
+    </a>
+  {/if}
+  {#if data.hub.ok && data.hub.snapshot.pairing_revoked}
+    <p class="chip-offline type-hub-label" role="status" data-testid="hub-revoked">
+      <span class="chip-glyph" aria-hidden="true">⚠</span>
+      {t("hub.pairing.revoked")}
+    </p>
+  {/if}
+  <RuleChips chips={ruleChipList} scope="hub" />
+{/snippet}
+
 {#if data.device.kind !== "ok"}
   <div class="pair-screen" data-theme="dark">
     <main class="hub-main" bind:this={mainEl}>
@@ -594,8 +646,13 @@
     </main>
   </div>
 {:else}
-  <div class="shell" inert={moreOpen || locked} aria-hidden={locked ? "true" : undefined}>
-    <header class="hub-header">
+  <div
+    class="shell"
+    class:has-chips={viewport.phone && hasChips}
+    inert={moreOpen || locked}
+    aria-hidden={locked ? "true" : undefined}
+  >
+    <header class="hub-header" inert={viewport.sheetFull}>
       <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
       <div class="header-end">
         {#if staff}
@@ -604,33 +661,7 @@
           </p>
           <Button label="hub.header.sign_out" variant="secondary" onclick={onSignOut} />
         {/if}
-        {#if shownLink !== "online"}
-          <p
-            class="chip-offline type-hub-label"
-            data-testid="hub-chip-offline"
-            data-link={shownLink}
-          >
-            <span class="chip-glyph" aria-hidden="true">⚠</span>
-            {t(LINK_LABELS[shownLink])}
-          </p>
-        {/if}
-        {#if data.hub.ok && data.hub.snapshot.lan?.no_lan}
-          <a
-            class="no-lan ui-interactive type-hub-label"
-            href="/settings/devices-display"
-            data-testid="hub-no-lan"
-          >
-            <span class="chip-glyph" aria-hidden="true">⚠</span>
-            {t("hub.connectivity.no_lan")}
-          </a>
-        {/if}
-        {#if data.hub.ok && data.hub.snapshot.pairing_revoked}
-          <p class="chip-offline type-hub-label" role="status" data-testid="hub-revoked">
-            <span class="chip-glyph" aria-hidden="true">⚠</span>
-            {t("hub.pairing.revoked")}
-          </p>
-        {/if}
-        <RuleChips chips={ruleChipList} scope="hub" />
+        {#if !viewport.phone}{@render chips()}{/if}
         {#if alertRows.length > 0}
           <button
             type="button"
@@ -641,7 +672,9 @@
             data-testid="hub-alerts"
             onclick={() => (alertsOpen = !alertsOpen)}
           >
-            <span class="type-hub-label">{t("hub.alerts.button")}</span>
+            <span class="type-hub-label" class:visually-hidden={viewport.phone}
+              >{t("hub.alerts.button")}</span
+            >
             <AlertBadge count={alertRows.length} live={false} />
           </button>
         {/if}
@@ -654,7 +687,7 @@
             <AlertBadge count={alertCount(service.access)} />
           </a>
         {/if}
-        <Clock />
+        {#if !viewport.phone}<Clock />{/if}
       </div>
       {#if alertsOpen}
         <AlertList
@@ -666,6 +699,12 @@
         />
       {/if}
     </header>
+
+    {#if viewport.phone && hasChips}
+      <div class="chip-row" data-testid="hub-chip-row" inert={viewport.sheetFull}>
+        {@render chips()}
+      </div>
+    {/if}
 
     <nav class="hub-rail" aria-label={t("hub.nav.label")}>
       <ul>
@@ -692,7 +731,7 @@
       {/if}
     </main>
 
-    <nav class="hub-bottom-bar" aria-label={t("hub.nav.label")}>
+    <nav class="hub-bottom-bar" aria-label={t("hub.nav.label")} inert={viewport.sheetFull}>
       <ul>
         {#each BOTTOM_BAR as screen (screen.id)}
           <li>
@@ -969,6 +1008,20 @@
     min-width: 0;
     overflow-y: auto;
     padding: var(--space-hub-gutter);
+    /* A focused field or a scrolled-to row clears a sticky bar (--sticky-bottom, in px, unitless). */
+    scroll-padding-block-end: calc(var(--sticky-bottom, 0) * 1px);
+  }
+
+  .chip-row {
+    grid-area: chips;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-2) var(--space-hub-gutter-phone);
+    border-bottom: 1px solid var(--hub-line);
+    background-color: var(--hub-header-background);
   }
 
   .unreachable {
@@ -999,15 +1052,40 @@
   @media (max-width: 839.98px) {
     .shell {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: var(--space-hub-header-height) minmax(0, 1fr) var(--space-9);
+      grid-template-rows: var(--space-9) minmax(0, 1fr) var(--space-9);
       grid-template-areas:
         "header"
         "main"
         "bar";
     }
 
+    .shell.has-chips {
+      grid-template-rows: var(--space-9) auto minmax(0, 1fr) var(--space-9);
+      grid-template-areas:
+        "header"
+        "chips"
+        "main"
+        "bar";
+    }
+
+    .gate {
+      grid-template-rows: var(--space-9) minmax(0, 1fr);
+    }
+
+    /* The phone header: 64px, branch, staff, alerts; the chips sit in a row below it. */
     .hub-header {
+      gap: var(--space-3);
       padding: 0 var(--space-hub-gutter-phone);
+    }
+
+    .header-end {
+      flex: 1 1 auto;
+      justify-content: flex-end;
+      gap: var(--space-2);
+    }
+
+    .branch {
+      flex: 0 1 auto;
     }
 
     .hub-main {

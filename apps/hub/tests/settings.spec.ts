@@ -448,7 +448,8 @@ test("another window's save refreshes untouched fields and keeps edits", async (
   }
 });
 
-test("the header clock shows the branch time zone", async ({ page }) => {
+test("the header clock shows the branch time zone", async ({ page }, info) => {
+  test.skip(info.project.name === "phone", "the phone header has no clock");
   // 2027-01-15 08:30 UTC: 14:00 in Kolkata, 12:30 in Dubai.
   await page.clock.setFixedTime(new Date(Date.UTC(2027, 0, 15, 8, 30)));
   const hub = newHub();
@@ -541,7 +542,8 @@ test("a refused stream (401) goes to sign-in without any action", async ({ page 
   await expect(page).toHaveURL(/\/sign-in(\?|$)/, { timeout: 5000 });
 });
 
-test("the header clock follows a live tz change", async ({ page }) => {
+test("the header clock follows a live tz change", async ({ page }, info) => {
+  test.skip(info.project.name === "phone", "the phone header has no clock");
   await page.clock.setFixedTime(new Date(Date.UTC(2027, 0, 15, 8, 30)));
   const hub = newHub();
   hub.retry = 150;

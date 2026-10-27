@@ -351,3 +351,11 @@
 - The "No LAN connection" badge is shown only on the Android Hub (`lan.no_lan`); the Windows Hub keeps showing "No network address yet" in Settings → Devices.
 - No Hub-level test injects a fake advertiser through `StartOptions`; `MdnsTask` is covered by unit tests with fakes. `arena-e2e` fails to compile on Windows (unix-only imports) and `test:scripts` has 12 kubectl-dependent failures, both independent of this story.
 - No R8 keep rule for `NsdBridge` (its JNI-called static methods); verify on the first minified release build.
+
+## Deferred from: Story 4.5
+
+- The Gradle/Kotlin build and every device-only criterion were not run (no Android SDK, emulator or device here): the real Back gesture and 3-button Back through `MainActivity`'s callback (including that it stays on top of the Tauri `AppPlugin` callback), system bars, display cutouts and the gesture bar as padding in portrait and landscape on a phone and a tablet, the on-screen keyboard resizing the WebView and revealing the focused field, the system font scale (130% cap through `WebSettings.textZoom`, a live `fontScale` change) and rotation on hardware. The browser tests simulate Back with the `arena:back` event, the keyboard with a short window, and rotation with a viewport resize.
+- On a phone the settle region is last in the sheet visually but stays in the middle of the markup (CSS `order`), so Tab reaches the settle bar before the actions drawn above it; a keyboard-only phone user is rare, so the markup was left alone.
+- During a transfer or grouping pick on a phone the sheet is a bottom card (Story 3.5 behaviour), not full height, so the floor targets stay reachable.
+- The Epic 5 phone POS (`phone-cart-bar`, full-height cart sheet) must register its own Back handler with `pushBack` and set `--sticky-bottom` on `.hub-main` for its sticky bar.
+- The 44 px audit covers Floor, the tile sheets, Players, the Shift placeholder and the More sheet only; other screens are not audited yet.

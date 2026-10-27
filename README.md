@@ -1750,6 +1750,23 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
   the address and the network name ("Wi-Fi", "Ethernet", or "Wi-Fi: name" when Android reveals
   the SSID; the Hub requests no location permission). Not runnable locally: the Gradle/Kotlin
   build, a kiosk finding the tablet on a real LAN, and the client-class tests on an emulator.
+- **Phone and tablet by touch (Story 4.5):** one UI. Below 840px (`viewport.phone` in
+  `src/lib/viewport.svelte.ts`, the same query as the CSS) the header is 64px (branch, staff,
+  alert count; no clock) with `chip-rule`/`chip-offline` in a row under it, the rail becomes the
+  bottom bar and a tile opens as a full-height sheet over an inert floor, its settle bar pinned at the
+  bottom of the sheet (during a transfer or grouping pick the sheet drops to a bottom card so the
+  floor is in reach). From 840px the sheet docks right as before. **Back:** `MainActivity` sends an
+  `arena:back` window event; `src/lib/back.ts` runs only the topmost registered handler (More
+  sheet, alert list, tile sheet, lock screen, which swallows it) and with nothing open Back does
+  nothing, never exits and never walks history. **Insets and keyboard:** `MainActivity` applies the
+  status bar, navigation bar, display cutout and keyboard as padding on the content view
+  (`windowSoftInputMode="adjustResize"`), and the UI scrolls a focused field into view. **Text
+  size** follows the system font scale up to 130% (`WebSettings.textZoom`); `fontScale` is in the
+  activity's `configChanges` (checked by `check-android.mjs`) so rotation, split-screen and a
+  font change keep the open screen, sheet and typed text. `tests/touch.spec.ts` audits every control
+  for 44 x 44 px and axe on a phone (412 x 915) and a tablet (1280 x 800). Not runnable locally:
+  the Gradle/Kotlin build, the real Back gesture, cutouts and gesture bar, the on-screen keyboard,
+  the system font scale and rotation on hardware.
 - **Build:** `pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64`
   (debug APK) and `... --aab --target aarch64 --target x86_64` (release AAB). Needs the Android SDK
   (platform 36), the NDK from the pin table (`NDK_HOME`), JDK 17 and the Rust Android targets.

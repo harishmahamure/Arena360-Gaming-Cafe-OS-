@@ -161,10 +161,12 @@ test("/ redirects to /floor", async ({ page }) => {
 
 test("seeded: the header names the branch and the floor lists Dev Kiosk as unassigned", async ({
   page,
-}) => {
+}, info) => {
   await open(page, "/floor");
   await expect(page.locator("header")).toContainText("Dev Branch");
-  await expect(page.locator("header time")).toHaveText(/\d{1,2}:\d{2}/);
+  // The phone header drops the clock.
+  if (isPhone(info)) await expect(page.locator("header time")).toHaveCount(0);
+  else await expect(page.locator("header time")).toHaveText(/\d{1,2}:\d{2}/);
   await expect(page.locator("main h1")).toHaveText(en["hub.nav.floor"]);
   await expect(page.locator("main")).toContainText(en["hub.floor.no_zones"]);
   const section = page.locator("section", {
@@ -305,7 +307,8 @@ for (const [name, answer] of [
   });
 }
 
-test("header clock advances across a minute boundary", async ({ page }) => {
+test("header clock advances across a minute boundary", async ({ page }, info) => {
+  test.skip(isPhone(info), "the phone header has no clock");
   await page.clock.install({ time: new Date(2026, 0, 1, 10, 59, 50) });
   await open(page, "/floor");
   const clock = page.locator("header time");

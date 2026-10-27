@@ -2,6 +2,7 @@
   import { t } from "@arena/ui";
   import { onMount } from "svelte";
   import { ageOf, type AlertRow } from "./alerts.svelte";
+  import { pushBack } from "./back";
 
   let {
     id,
@@ -24,7 +25,12 @@
   onMount(() => {
     const timer = setInterval(() => (now = Date.now()), 15_000);
     (list?.querySelector<HTMLElement>("button") ?? section)?.focus();
-    return () => clearInterval(timer);
+    // Android Back closes the list like Esc does.
+    const unback = pushBack(() => onclose());
+    return () => {
+      clearInterval(timer);
+      unback();
+    };
   });
 
   const where = (row: AlertRow) =>
@@ -81,6 +87,13 @@
     border-radius: var(--radius-md);
     background-color: var(--hub-header-background);
     color: var(--text);
+  }
+
+  /* Phone: the list sits inside the screen edges, under the 64px header. */
+  @media (max-width: 839.98px) {
+    .panel {
+      inset-inline-end: var(--space-3);
+    }
   }
 
   h2,

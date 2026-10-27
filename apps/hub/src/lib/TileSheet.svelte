@@ -26,6 +26,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
+  import { pushBack } from "./back";
   import {
     SESSION_DEPENDENCY,
     dropElevation,
@@ -135,6 +136,8 @@
   const groupChips = $derived(ruleChips(group ? [group] : [], locale, tz));
   let root: HTMLElement | undefined = $state();
   let settleBar: SettleBar | undefined = $state();
+  /** The pinned settle region's height: the sheet scrolls focused fields clear of it. */
+  let settleHeight = $state(0);
   let heading: HTMLElement | undefined = $state();
   let text = $state("");
   let textError: MessageKey | null = $state(null);
@@ -392,10 +395,17 @@
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
+    dismiss();
+  }
+
+  /** Esc and Android Back: ends a transfer or grouping pick first, else closes the sheet. */
+  function dismiss() {
     if (transferring) oncanceltransfer?.();
     else if (grouping) oncancelgroup?.();
     else onclose();
   }
+
+  $effect(() => pushBack(dismiss));
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -405,6 +415,7 @@
   data-testid="tile-sheet"
   aria-labelledby={titleId}
   bind:this={root}
+  style:--sticky-bottom={settleHeight}
   {onkeydown}
 >
   <div class="head">
@@ -529,19 +540,22 @@
         onpayer={setPayer}
       />
     {/if}
-    <SettleBar bind:this={settleBar} bill={unpaid} {locale} {busy} onsettle={settle}>
-      {#snippet extra()}
-        {#if unpaid.guest && unpaid.session_rev != null && !unpaid.group_bill_id}
-          <ConvertGuest
-            sessionId={unpaid.session_id}
-            rev={unpaid.session_rev}
-            {staff}
-            {busy}
-            ondone={converted}
-          />
-        {/if}
-      {/snippet}
-    </SettleBar>
+    <!-- On a phone this region stays pinned to the bottom of the sheet while the rest scrolls. -->
+    <div class="settle-region" data-testid="settle-region" bind:clientHeight={settleHeight}>
+      <SettleBar bind:this={settleBar} bill={unpaid} {locale} {busy} onsettle={settle}>
+        {#snippet extra()}
+          {#if unpaid.guest && unpaid.session_rev != null && !unpaid.group_bill_id}
+            <ConvertGuest
+              sessionId={unpaid.session_id}
+              rev={unpaid.session_rev}
+              {staff}
+              {busy}
+              ondone={converted}
+            />
+          {/if}
+        {/snippet}
+      </SettleBar>
+    </div>
   {:else if settled && locale}
     <p class="type-hub-numeric" role="status" data-testid="settle-done">
       {t("hub.settle.settled", {
@@ -967,5 +981,36 @@
 
   .note {
     color: var(--text-muted);
+  }
+
+  /* Phone: a column whose settle region is pinned to the bottom edge of the sheet (flush with
+     it), with scroll padding equal to the region's height. */
+  @media (max-width: 839.98px) {
+    .sheet {
+      display: flex;
+      flex-direction: column;
+      scroll-padding-block-end: calc(var(--sticky-bottom, 0) * 1px);
+    }
+
+    .sheet:has(> .settle-region) {
+      padding-block-end: 0;
+    }
+
+    .sheet > :global(*) {
+      flex-shrink: 0;
+    }
+
+    /* Last in the column whatever its place in the markup. */
+    .settle-region {
+      order: 1;
+      position: sticky;
+      inset-block-end: 0;
+      z-index: 1;
+      box-sizing: border-box;
+      max-height: 50dvh;
+      overflow-y: auto;
+      margin-block-start: auto;
+      margin-inline: calc(-1 * var(--space-hub-panel-padding));
+    }
   }
 </style>

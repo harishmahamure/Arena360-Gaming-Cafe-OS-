@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Button, InlinePin, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
+  import { pushBack } from "./back";
 
   type PinResult = { ok: true } | { ok: false; message: MessageKey; retryAfterS?: number };
 
@@ -25,6 +26,9 @@
 
   const id = $props.id();
   const titleId = id + "-title";
+
+  // Android Back is swallowed while locked: it neither closes a layer under the lock nor exits.
+  $effect(() => pushBack(() => {}));
 </script>
 
 <div class="lock" role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="hub-lock">

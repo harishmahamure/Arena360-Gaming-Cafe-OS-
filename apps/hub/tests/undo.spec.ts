@@ -236,6 +236,8 @@ test("the toast never blocks the floor and passes axe", async ({ page }) => {
   await endIt(page);
   const dock = toast(page).locator("xpath=..");
   await expect(dock).toHaveCSS("pointer-events", "none");
+  // A phone's sheet covers the floor: close it before opening the next tile.
+  await sheet(page).getByRole("button", { name: en["hub.sheet.close"] }).click();
   await tile(page, "PC 2").locator("[data-tile-face]").click();
   await expect(sheet(page)).toHaveAccessibleName("PC 2");
   await expect(toast(page)).toBeVisible();

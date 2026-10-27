@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import type { SessionStaff, SnapshotDevice, SnapshotSession } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { CORS, HUB, device, json, snapshot } from "./floor-fixture";
@@ -225,7 +225,9 @@ test("a tap or Enter opens a non-modal sheet with focus inside, and Esc returns 
 
 test("the floor stays live and operable beside the sheet: another tile swaps it", async ({
   page,
-}) => {
+}, info: TestInfo) => {
+  // On a phone the sheet covers an inert floor (touch.spec.ts); the swap is the docked sheet's.
+  test.skip(info.project.name === "phone", "a phone sheet is full height over the floor");
   await open(page, "counter-token");
   await face(page, "PC 1").focus();
   await page.keyboard.press("Enter");
@@ -282,6 +284,7 @@ test("an in-session PC shows the clock and the player on its tile and offers no 
   await face(page, "PC 2").focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("session-start")).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await face(page, "PC 1").focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("session-start")).toBeVisible();
@@ -320,6 +323,7 @@ test("an offline PC shows its last seen and no actions; a VR rig shows details o
   await expect(page.getByTestId("sheet-offline")).toBeVisible();
   await expect(sheet(page)).toContainText("3:00");
   await expect(sheet(page).getByRole("button")).toHaveCount(1);
+  await page.keyboard.press("Escape");
   await face(page, "PC 7").focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("sheet-details-only")).toBeVisible();

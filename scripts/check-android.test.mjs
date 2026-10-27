@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   checkAab,
+  checkActivity,
   checkDuplicates,
   checkKeystore,
   checkManifest,
@@ -321,4 +322,28 @@ test("the committed bridge and manifest satisfy the NsdManager rules", () => {
     checkRepoManifest(ROOT).filter((e) => e.startsWith("nsd:")),
     [],
   );
+});
+
+const ACTIVITY = (changes) =>
+  `<manifest><application><activity android:name=".MainActivity" android:configChanges="${changes}"></activity></application></manifest>`;
+
+test("an activity that handles rotation, split-screen and font scale itself passes", () => {
+  assert.deepEqual(
+    checkActivity(ACTIVITY("orientation|keyboardHidden|screenSize|screenLayout|fontScale")),
+    [],
+  );
+});
+
+test("an activity that drops fontScale (or another change) or is missing fails", () => {
+  assert.deepEqual(checkActivity(ACTIVITY("orientation|screenSize|screenLayout")), [
+    "manifest: .MainActivity configChanges must include fontScale",
+  ]);
+  assert.deepEqual(checkActivity(ACTIVITY("fontScale")), [
+    "manifest: .MainActivity configChanges must include orientation",
+    "manifest: .MainActivity configChanges must include screenSize",
+    "manifest: .MainActivity configChanges must include screenLayout",
+  ]);
+  assert.deepEqual(checkActivity("<manifest><application></application></manifest>"), [
+    "manifest: .MainActivity is not declared",
+  ]);
 });

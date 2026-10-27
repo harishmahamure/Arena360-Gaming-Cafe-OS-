@@ -185,6 +185,21 @@ export function checkNsd(manifest, source) {
   return errors;
 }
 
+/**
+ * The activity handles rotation, split-screen and a system font-size change itself (it is not
+ * recreated, so the open screen, sheet and typed text survive): `configChanges` must keep these.
+ */
+export const ACTIVITY_CONFIG_CHANGES = ["orientation", "screenSize", "screenLayout", "fontScale"];
+
+export function checkActivity(manifest) {
+  const activity = element(manifest, "activity", ".MainActivity");
+  if (activity === undefined) return ["manifest: .MainActivity is not declared"];
+  const changes = (attr(activity, "android:configChanges") ?? "").split("|");
+  return ACTIVITY_CONFIG_CHANGES.filter((c) => !changes.includes(c)).map(
+    (c) => `manifest: .MainActivity configChanges must include ${c}`,
+  );
+}
+
 export function checkRepoManifest(root) {
   const main = join(root, ANDROID_DIR);
   const res = {};
@@ -203,6 +218,7 @@ export function checkRepoManifest(root) {
     ...checkManifest(manifest, res),
     ...checkService(manifest),
     ...checkDuplicates(manifest),
+    ...checkActivity(manifest),
     ...checkKeystore(existsSync(bridge) ? readFileSync(bridge, "utf8") : undefined),
     ...checkNsd(manifest, existsSync(nsd) ? readFileSync(nsd, "utf8") : undefined),
   ];

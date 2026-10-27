@@ -1,16 +1,46 @@
 package `in`.arena360.hub
 
 import android.Manifest
+import android.content.res.Configuration
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import kotlin.math.roundToInt
 
 class MainActivity : TauriActivity() {
+  companion object {
+    /** The system font scale is followed up to this share of the normal text size. */
+    const val MAX_TEXT_ZOOM = 130
+
+    /** The window event the Hub UI listens for (`apps/hub/src/lib/back.ts`). */
+    private const val BACK_SCRIPT = "window.dispatchEvent(new Event('arena:back'))"
+
+    /** The text zoom (percent) for a system font scale: it follows the scale, capped at 130%. */
+    fun textZoomFor(fontScale: Float): Int = (fontScale * 100).roundToInt().coerceAtMost(MAX_TEXT_ZOOM)
+  }
+
   private var afterNotifications: () -> Unit = {}
   private val notifications =
     registerForActivityResult(ActivityResultContracts.RequestPermission()) { afterNotifications() }
+
+  private var webView: WebView? = null
+
+  // Back goes to the Hub UI, which closes the topmost sheet (or does nothing): it never leaves the
+  // app and never walks the WebView history.
+  private val back =
+    object : OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        webView?.evaluateJavascript(BACK_SCRIPT, null)
+      }
+    }
+
+  // The Hub UI handles Back itself (see `back`).
+  override val handleBackNavigation: Boolean = false
 
   fun askNotifications(done: () -> Unit) {
     afterNotifications = done
@@ -21,10 +51,58 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     super.onCreate(savedInstanceState)
+    applySystemInsets()
+    claimBack()
     if (HubService.hasDatabase(this)) HubService.start(this)
   }
 
+  override fun onResume() {
+    super.onResume()
+    // The last callback added is asked first: take the top again if a plugin added its own.
+    claimBack()
+  }
+
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    // The system font size changed (the activity is not recreated: `fontScale` is in configChanges).
+    webView?.let { applyTextZoom(it) }
+  }
+
   override fun onWebViewCreate(webView: WebView) {
-    runOnUiThread { webView.addJavascriptInterface(HubBridge(this), "ArenaHub") }
+    runOnUiThread {
+      this.webView = webView
+      applyTextZoom(webView)
+      webView.addJavascriptInterface(HubBridge(this), "ArenaHub")
+      claimBack()
+    }
+  }
+
+  private fun claimBack() {
+    back.remove()
+    onBackPressedDispatcher.addCallback(this, back)
+  }
+
+  private fun applyTextZoom(webView: WebView) {
+    webView.settings.textZoom = textZoomFor(resources.configuration.fontScale)
+  }
+
+  /**
+   * Edge-to-edge is enforced from Android 15: the content view gets the status bar, navigation
+   * bar (gesture or 3-button), display cutout and keyboard as padding, so no control sits under
+   * them and the WebView shrinks above the keyboard.
+   */
+  private fun applySystemInsets() {
+    val content = findViewById<android.view.View>(android.R.id.content)
+    ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+      val bars =
+        insets.getInsets(
+          WindowInsetsCompat.Type.systemBars() or
+            WindowInsetsCompat.Type.displayCutout() or
+            WindowInsetsCompat.Type.ime(),
+        )
+      view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      WindowInsetsCompat.CONSUMED
+    }
+    ViewCompat.requestApplyInsets(content)
   }
 }

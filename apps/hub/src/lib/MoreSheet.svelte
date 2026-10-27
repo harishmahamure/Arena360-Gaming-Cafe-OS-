@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Button, t } from "@arena/ui";
+  import { pushBack } from "./back";
   import Icon from "./Icon.svelte";
   import { MORE, type ScreenId } from "./nav";
 
@@ -32,6 +33,9 @@
   $effect(() => {
     focusables()[0]?.focus();
   });
+
+  // Android Back closes the sheet like Esc does.
+  $effect(() => pushBack(() => onclose("dismiss")));
 
   function onkeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {

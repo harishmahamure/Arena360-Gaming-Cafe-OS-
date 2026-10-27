@@ -16,6 +16,7 @@
   import TileSheet from "../../lib/TileSheet.svelte";
   import { PAUSE_LABELS, cmds, moved } from "../../lib/tile-actions.svelte";
   import UndoDock from "../../lib/UndoDock.svelte";
+  import { viewport } from "../../lib/viewport.svelte";
   import type { PageData } from "./$types";
 
   let { data }: { data: PageData } = $props();
@@ -179,6 +180,14 @@
     d.status === "online" &&
     groups.some((g) => g.id === d.group_id);
   let grouping = $state(false);
+  /** Picking a tile on the floor (a transfer or grouping) needs the floor in reach. */
+  const picking = $derived(transferring || grouping);
+  /** On a phone the sheet is full height over the floor, which is then inert. */
+  const full = $derived(viewport.phone && active !== undefined && !picking);
+  $effect(() => {
+    viewport.sheetFull = full;
+    return () => (viewport.sheetFull = false);
+  });
   $effect(() => {
     const s = activeSession;
     if (grouping && !(s && s.mode === "postpaid" && ["active", "paused"].includes(s.state))) {
@@ -395,8 +404,8 @@
 
 <UndoDock {staff} />
 
-<div class="stage" class:open={active !== undefined}>
-  <div class="floor">
+<div class="stage" class:open={active !== undefined} class:picking>
+  <div class="floor" inert={full}>
     <h1 class="type-hub-numeric">{t("hub.nav.floor")}</h1>
 
     {#if snapshot && !snapshot.branch}
@@ -554,12 +563,23 @@
     }
   }
 
-  @media (max-width: 839px) {
-    .stage > :global([data-component="tile-sheet"]) {
+  @media (max-width: 839.98px) {
+    /* A transfer or grouping pick keeps the floor in reach: the sheet is a card at the bottom. */
+    .stage.picking > :global([data-component="tile-sheet"]) {
       position: fixed;
       inset: auto var(--space-3) var(--space-3);
       z-index: 5;
       max-height: 60dvh;
+    }
+
+    /* Otherwise it covers the floor, full height; its settle region is pinned inside it. */
+    .stage.open:not(.picking) > :global([data-component="tile-sheet"]) {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      max-height: none;
+      border: 0;
+      border-radius: 0;
     }
   }
 

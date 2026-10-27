@@ -25,6 +25,7 @@ import type { GroupUpsert } from "./GroupUpsert";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { LicenceApply } from "./LicenceApply";
+import type { PlanUpsert } from "./PlanUpsert";
 import type { PlayerCreate } from "./PlayerCreate";
 import type { PlayerPasswordReset } from "./PlayerPasswordReset";
 import type { PlayerUpdate } from "./PlayerUpdate";
@@ -80,6 +81,7 @@ export type IntentPayload =
   | ({ kind: "device.place" } & DevicePlace)
   | ({ kind: "product.upsert" } & ProductUpsert)
   | ({ kind: "product.delete" } & ProductDelete)
+  | ({ kind: "plan.upsert" } & PlanUpsert)
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
   | ({ kind: "stock.in" } & StockIn)
   | ({ kind: "stock.in.reverted" } & StockInReverted)

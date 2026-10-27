@@ -85,7 +85,7 @@ development_status:
   3-18-enable-credit-for-a-player-and-settle-the-remainder-on-credi: done
   3-19-collect-credit-with-partial-payments-and-undo: done
   3-20-credit-aging-shown-first-and-auto-pause-at-15-days-overdue: done
-  3-21-time-packs-blocks-and-passes-per-device-group: backlog
+  3-21-time-packs-blocks-and-passes-per-device-group: review
   3-22-sell-a-pack-or-pass-at-the-counter-and-see-owned-plans-on-th: backlog
   3-23-session-timer-engine-with-time-warnings: backlog
   3-24-start-a-prepaid-session-on-a-pack-or-the-wallet: backlog

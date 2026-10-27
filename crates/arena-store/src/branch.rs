@@ -55,11 +55,13 @@ pub enum Table {
     Wallets,
     WalletTxns,
     CreditBalances,
+    Plans,
+    PlanGroups,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 28] = [
+    pub const ALL: [Table; 30] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -88,6 +90,8 @@ impl Table {
         Table::Wallets,
         Table::WalletTxns,
         Table::CreditBalances,
+        Table::Plans,
+        Table::PlanGroups,
     ];
 
     /// The SQL table name.
@@ -121,6 +125,8 @@ impl Table {
             Self::Wallets => "wallets",
             Self::WalletTxns => "wallet_txns",
             Self::CreditBalances => "credit_balances",
+            Self::Plans => "plans",
+            Self::PlanGroups => "plan_groups",
         }
     }
 
@@ -147,6 +153,8 @@ impl Table {
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
             Self::Wallets | Self::CreditBalances => &["player_id"],
+            Self::Plans => &["plan_id"],
+            Self::PlanGroups => &["plan_id", "group_id"],
             Self::Consents => &["consent_id"],
             Self::Sessions
             | Self::SessionSegments
@@ -184,15 +192,19 @@ impl Table {
             | Self::Payments
             | Self::Wallets
             | Self::WalletTxns
-            | Self::CreditBalances => true,
-            Self::Settings | Self::RolePerms | Self::BundleComponents => false,
+            | Self::CreditBalances
+            | Self::Plans => true,
+            Self::Settings | Self::RolePerms | Self::BundleComponents | Self::PlanGroups => false,
         }
     }
 
     /// Whether the table has `rev` and `updated_at` (stamped on every write). `role_perms`
     /// rows are versioned through their role's `rev`.
     pub fn is_versioned(self) -> bool {
-        !matches!(self, Self::RolePerms | Self::BundleComponents)
+        !matches!(
+            self,
+            Self::RolePerms | Self::BundleComponents | Self::PlanGroups
+        )
     }
 
     /// The table with this SQL name, if it is a change-log table.
@@ -291,6 +303,13 @@ pub enum RowKey {
     WalletTxns {
         id: String,
     },
+    Plans {
+        plan_id: String,
+    },
+    PlanGroups {
+        plan_id: String,
+        group_id: String,
+    },
 }
 
 impl RowKey {
@@ -314,6 +333,8 @@ impl RowKey {
             Self::StockLots { .. } => Table::StockLots,
             Self::StockMoves { .. } => Table::StockMoves,
             Self::Rates { .. } => Table::Rates,
+            Self::Plans { .. } => Table::Plans,
+            Self::PlanGroups { .. } => Table::PlanGroups,
             Self::Players { .. } => Table::Players,
             Self::Consents { .. } => Table::Consents,
             Self::Sessions { .. } => Table::Sessions,
@@ -354,6 +375,8 @@ impl RowKey {
             Self::StockLots { lot_id } => lot_id.clone(),
             Self::StockMoves { move_id } => move_id.clone(),
             Self::Rates { rate_id } => rate_id.clone(),
+            Self::Plans { plan_id } => plan_id.clone(),
+            Self::PlanGroups { plan_id, group_id } => format!("{plan_id}/{group_id}"),
             Self::Players { player_id } => player_id.clone(),
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
@@ -431,6 +454,13 @@ impl RowKey {
             Table::Rates => Self::Rates {
                 rate_id: text("rate_id")?,
             },
+            Table::Plans => Self::Plans {
+                plan_id: text("plan_id")?,
+            },
+            Table::PlanGroups => Self::PlanGroups {
+                plan_id: text("plan_id")?,
+                group_id: text("group_id")?,
+            },
             Table::Players => Self::Players {
                 player_id: text("player_id")?,
             },
@@ -478,6 +508,8 @@ impl RowKey {
             Self::StockLots { lot_id } => vec![lot_id],
             Self::StockMoves { move_id } => vec![move_id],
             Self::Rates { rate_id } => vec![rate_id],
+            Self::Plans { plan_id } => vec![plan_id],
+            Self::PlanGroups { plan_id, group_id } => vec![plan_id, group_id],
             Self::Players { player_id } => vec![player_id],
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],

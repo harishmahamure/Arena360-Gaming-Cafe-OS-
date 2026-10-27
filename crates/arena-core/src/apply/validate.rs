@@ -1,8 +1,8 @@
 //! **validate.** Payload checks; a failure is `VALIDATION_FAILED` naming the field.
 
 use super::{
-    Target, devices, groups, maintenance, players, products, rates, settings_set, staff_roles,
-    stock, zones,
+    Target, devices, groups, maintenance, plans, players, products, rates, settings_set,
+    staff_roles, stock, zones,
 };
 use arena_proto::{AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload};
 
@@ -154,6 +154,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
         },
         IntentPayload::ProductUpsert(u) => match target {
             Target::Product(t) => products::validate_upsert(u, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::PlanUpsert(u) => match target {
+            Target::Plan(t) => plans::validate(u, t),
             _ => Err(internal_target()),
         },
         IntentPayload::ProductDelete(_) => match target {

@@ -38,6 +38,7 @@ mod licence;
 mod maintenance;
 mod mutate;
 mod pc_command;
+mod plans;
 mod players;
 mod printer_status;
 mod products;
@@ -149,6 +150,7 @@ pub(crate) enum Target {
     Stock(Box<stock::StockTarget>),
     Maintenance(Box<maintenance::MaintenanceTarget>),
     Rate(Box<rates::RateTarget>),
+    Plan(Box<plans::PlanTarget>),
     TestSession(Box<test_session::SessionTarget>),
     Pc(Box<pc_command::PcTarget>),
     Player(Box<players::PlayerTarget>),
@@ -193,6 +195,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Maintenance(Box::new(maintenance::load(tx, &intent.payload)?))
         }
         P::RateUpsert(_) => Target::Rate(Box::new(rates::load(tx, &intent.payload)?)),
+        P::PlanUpsert(_) => Target::Plan(Box::new(plans::load(tx, &intent.payload)?)),
         P::DeviceTestSessionStart(_) | P::DeviceTestSessionCompleted(_) => {
             test_session::load(tx, &intent.payload)?
         }

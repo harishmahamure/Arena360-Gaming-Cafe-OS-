@@ -157,6 +157,8 @@ export type { PendingNumber } from "./PendingNumber";
 export type { PendingText } from "./PendingText";
 export type { PermEffect } from "./PermEffect";
 export type { Permission } from "./Permission";
+export type { PlanUpsert } from "./PlanUpsert";
+export type { PlanView } from "./PlanView";
 export type { PlayerConsent } from "./PlayerConsent";
 export type { PlayerCreate } from "./PlayerCreate";
 export type { PlayerEditForm } from "./PlayerEditForm";

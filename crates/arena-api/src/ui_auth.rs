@@ -2716,6 +2716,18 @@ async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
     }
 }
 
+async fn plans(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(&auth.reader);
+    match tokio::task::spawn_blocking(move || reader.plans()).await {
+        Ok(Ok(list)) => Json(list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 async fn settings(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -2758,6 +2770,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/players/password", post(player_password))
         .route("/ui/settings", get(settings))
         .route("/ui/products", get(products))
+        .route("/ui/plans", get(plans))
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/test", post(crate::ui_printer::test))
         .route("/ui/printer/test-kot", post(crate::ui_printer::test_kot))
@@ -4203,6 +4216,91 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::FORBIDDEN);
         let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
         assert_eq!(listed.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn plans_are_listed_for_a_session_and_written_with_catalog_edit() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/plans", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let group = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "o".into(),
+                },
+                IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                    id: None,
+                    name: "PCs".into(),
+                    group_kind: "pc".into(),
+                    colour: "teal".into(),
+                    sort_order: 1,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let body = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
+                id: None,
+                plan_kind: "pack".into(),
+                name: "5 h".into(),
+                price_minor: 30_000,
+                minutes: Some(300),
+                validity_days: Some(7),
+                window_start_min: None,
+                window_end_min: None,
+                group_ids: vec![group.clone()],
+                active: true,
+            }),
+            None,
+        ) });
+        let (status, denied) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&counter),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let (_, listed) = call(&hub, "GET", "/ui/plans", Some(&counter), None).await;
+        assert_eq!(listed, json!([]));
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&manager), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/plans", Some(&counter), None).await;
+        let p = &listed[0];
+        assert_eq!(
+            (
+                p["name"].as_str(),
+                p["plan_kind"].as_str(),
+                p["minutes"].as_i64(),
+                p["validity_days"].as_i64(),
+                p["price_minor"].as_i64(),
+                p["group_ids"].clone(),
+                p["active"].as_bool(),
+            ),
+            (
+                Some("5 h"),
+                Some("pack"),
+                Some(300),
+                Some(7),
+                Some(30_000),
+                json!([group]),
+                Some(true)
+            )
+        );
+        assert!(p.get("window_start_min").is_none());
     }
 
     #[tokio::test]

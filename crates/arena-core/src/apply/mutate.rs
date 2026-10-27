@@ -7,8 +7,8 @@ use arena_store::{
 };
 
 use super::{
-    Target, devices, groups, maintenance, players, products, rates, settings_set, staff_roles,
-    stock, zones,
+    Target, devices, groups, maintenance, plans, players, products, rates, settings_set,
+    staff_roles, stock, zones,
 };
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
@@ -228,6 +228,10 @@ pub(super) fn mutate(
         IntentPayload::StaffSetCredentials(c) => super::staff_credentials::mutate(tx, c),
         IntentPayload::ProductUpsert(u) => match target {
             Target::Product(t) => products::mutate_upsert(tx, u, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::PlanUpsert(u) => match target {
+            Target::Plan(t) => plans::mutate(tx, u, t),
             _ => Err(mismatch()),
         },
         IntentPayload::ProductDelete(p) => match target {

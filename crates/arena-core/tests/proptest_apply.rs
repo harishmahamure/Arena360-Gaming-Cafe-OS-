@@ -94,6 +94,18 @@ enum Op {
         bundle: bool,
         who: Index,
     },
+    /// `plan.upsert` of a pack, block or pass (valid or not) for a PC group, or for a PC and a
+    /// console group together, by a staff member of a built-in role (or an admin); or an edit of
+    /// the first plan with a fresh or stale `base_rev`.
+    Plan {
+        kind: u8,
+        price: i64,
+        minutes: i64,
+        mix: bool,
+        edit: bool,
+        stale: bool,
+        who: Index,
+    },
     /// `stock.in` of a quantity and cost (valid or not) into the first tracked product, then
     /// maybe `stock.in.reverted` straight after.
     Stock {
@@ -274,6 +286,24 @@ fn op() -> impl Strategy<Value = Op> {
                 who,
             },
         ),
+        2 => (
+            0..3u8,
+            prop_oneof![3 => 1..=100_000i64, 1 => -2..=2i64],
+            prop_oneof![3 => 1..=1_000i64, 1 => -2..=2i64],
+            prop::bool::weighted(0.2),
+            any::<bool>(),
+            prop::bool::weighted(0.3),
+            any::<Index>(),
+        )
+            .prop_map(|(kind, price, minutes, mix, edit, stale, who)| Op::Plan {
+                kind,
+                price,
+                minutes,
+                mix,
+                edit,
+                stale,
+                who,
+            }),
         3 => (
             prop_oneof![3 => 1..=1_000i64, 1 => -2..=2i64, 1 => 999_999..=1_000_002i64],
             prop_oneof![3 => 0..=100_000i64, 1 => -2..=2i64, 1 => Just(arena_proto::MAX_PRICE_MINOR), 1 => Just(arena_proto::MAX_PRICE_MINOR + 1)],
@@ -851,6 +881,90 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     hub.change_count(),
                     changes_before + 1 + usize::from(*bundle)
                 );
+            }
+        }
+        Op::Plan {
+            kind,
+            price,
+            minutes,
+            mix,
+            edit,
+            stale,
+            who,
+        } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let pc = group_of(hub, "pc")?;
+            let mut group_ids = vec![pc];
+            if *mix {
+                group_ids.push(group_of(hub, "console")?);
+            }
+            let existing = hub.reader.plans().unwrap().into_iter().next();
+            let editing = existing.as_ref().filter(|_| *edit);
+            let kind = match editing {
+                Some((p, _)) => p.kind.clone(),
+                None => ["pack", "block", "pass"][usize::from(*kind)].to_owned(),
+            };
+            let window = kind != "pack";
+            let upsert = arena_proto::PlanUpsert {
+                id: editing.map(|(p, _)| p.plan_id.clone()),
+                plan_kind: kind.clone(),
+                name: "Plan".into(),
+                price_minor: *price,
+                minutes: (kind == "pack").then_some(*minutes),
+                validity_days: (kind != "block").then_some(7),
+                window_start_min: window.then_some(1320),
+                window_end_min: window.then_some(360),
+                group_ids,
+                active: true,
+            };
+            let base_rev = editing.map(|(p, _)| if *stale { p.rev + 1 } else { p.rev });
+            let mut intent = hub.intent(IntentPayload::PlanUpsert(upsert), base_rev);
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len()) {
+                    Some(id) => Actor {
+                        kind: ActorKind::Staff,
+                        id: id.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            let bad_terms = *price < 1 || (kind == "pack" && *minutes < 1);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), before);
+            } else if bad_terms {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else if *mix {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::GroupKindMismatch, Some("group_ids")))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else if editing.is_some() && *stale {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale));
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+            }
+            for (plan, groups) in hub.reader.plans().unwrap() {
+                prop_assert!(!groups.is_empty(), "plan {} has no group", plan.plan_id);
+                prop_assert!(plan.price_minor > 0);
             }
         }
         Op::Stock {
@@ -1941,6 +2055,31 @@ fn int(row: &arena_store::Row, col: &str) -> i64 {
         RowValue::Integer(n) => *n,
         other => panic!("{col}: {other:?}"),
     }
+}
+
+fn group_of(hub: &mut Hub, kind: &str) -> Result<String, TestCaseError> {
+    let found = hub
+        .reader
+        .rows(Table::DeviceGroups)
+        .unwrap()
+        .iter()
+        .find(|g| text(g, "kind") == kind && g["deleted_at"] == RowValue::Null)
+        .map(|g| text(g, "group_id"));
+    if let Some(id) = found {
+        return Ok(id);
+    }
+    let out = hub.submit_new(hub.intent(
+        IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+            id: None,
+            name: format!("{kind} group"),
+            group_kind: kind.into(),
+            colour: "teal".into(),
+            sort_order: 1,
+        }),
+        None,
+    ));
+    prop_assert!(out.is_ok(), "{:?}", out);
+    Ok(out.unwrap().changes[0].row_id.clone())
 }
 
 fn text(row: &arena_store::Row, col: &str) -> String {

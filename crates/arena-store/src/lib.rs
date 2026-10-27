@@ -14,6 +14,7 @@ mod dedupe;
 mod devices;
 mod identity;
 mod migrations;
+mod plans;
 mod players;
 mod products;
 mod sessions;
@@ -74,6 +75,9 @@ pub use identity::{
     find_trusted_clock, insert_hub_identity, store_licence, store_trusted_clock,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
+pub use plans::{
+    PlanRow, find_plan, insert_plan, insert_plan_group, list_plan_groups, list_plans, update_plan,
+};
 pub use players::{
     PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
     latest_consent, list_player_revs, phone_holder, set_player_password, update_player,
@@ -804,6 +808,19 @@ impl Store {
             return Ok(Vec::new());
         }
         list_moves(&self.conn, product_id)
+    }
+
+    pub fn plans(&self) -> Result<Vec<(PlanRow, Vec<String>)>, AppError> {
+        if !self.table_exists("plans")? {
+            return Ok(Vec::new());
+        }
+        list_plans(&self.conn)?
+            .into_iter()
+            .map(|p| {
+                let groups = list_plan_groups(&self.conn, &p.plan_id)?;
+                Ok((p, groups))
+            })
+            .collect()
     }
 
     pub fn products(&self) -> Result<Vec<ProductRow>, AppError> {

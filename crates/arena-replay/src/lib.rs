@@ -309,8 +309,26 @@ mod tests {
             writer
                 .submit_intent(submit(
                     IntentPayload::RateUpsert(arena_proto::RateUpsert {
-                        group_id: group,
+                        group_id: group.clone(),
                         price_per_hour_minor: 12_000,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
+                        id: None,
+                        plan_kind: "pack".into(),
+                        name: "5 h".into(),
+                        price_minor: 30_000,
+                        minutes: Some(300),
+                        validity_days: Some(7),
+                        window_start_min: None,
+                        window_end_min: None,
+                        group_ids: vec![group],
+                        active: true,
                     }),
                     None,
                 ))

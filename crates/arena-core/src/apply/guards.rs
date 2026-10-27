@@ -8,8 +8,8 @@ use arena_proto::{
 use arena_store::{StoreTx, find_device, find_staff, read_lease};
 
 use super::{
-    ApplyCtx, Target, admin_exit, devices, groups, maintenance, players, products, settings_set,
-    staff_roles, zones,
+    ApplyCtx, Target, admin_exit, devices, groups, maintenance, plans, players, products,
+    settings_set, staff_roles, zones,
 };
 use crate::rbac;
 use crate::staff::pin_required;
@@ -168,6 +168,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::Stock(_)
             | Target::Maintenance(_)
             | Target::Rate(_)
+            | Target::Plan(_)
             | Target::Pc(_)
             | Target::Player(_)
             | Target::Session(_)
@@ -259,6 +260,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::Group(t) => groups::base_rev(intent, t),
         Target::Zone(t) => zones::base_rev(intent, t),
         Target::Product(t) => products::base_rev(intent, t),
+        Target::Plan(t) => plans::base_rev(intent, t),
         Target::Maintenance(t) => maintenance::base_rev(intent, t),
     }
 }

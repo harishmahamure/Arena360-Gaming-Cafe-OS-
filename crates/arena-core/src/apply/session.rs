@@ -1,13 +1,19 @@
-use arena_proto::{AppError, ErrorCode, Intent, SessionEnd, SessionMode, SessionStart};
+use arena_proto::{
+    AppError, CARD_REFERENCE_MAX, ErrorCode, Intent, PaymentMethod, PaymentRow, SessionEnd,
+    SessionMode, SessionSettle, SessionStart,
+};
 use arena_store::{
-    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewSession, RateRow, RowKey,
-    SegmentRow, StoreTx, close_segments, device_has_live_session, end_session, find_active_rate,
-    find_device_meta, find_player, find_session, insert_order, insert_order_line, insert_segment,
-    insert_session, list_segments, next_guest_no, set_device_state,
+    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OrderRow,
+    RateRow, RowKey, SegmentRow, StoreTx, close_segments, device_has_live_session, end_session,
+    find_active_rate, find_device_meta, find_order, find_player, find_session, insert_order,
+    insert_order_line, insert_payment, insert_segment, insert_session, list_segments,
+    next_guest_no, set_device_state, settle_order,
 };
 
 use super::mutate::Written;
 use crate::status::Epoch;
+
+const MAX_PAYMENTS: usize = 8;
 
 #[derive(Default)]
 pub(crate) struct SessionTarget {
@@ -325,5 +331,159 @@ pub(super) fn mutate_end(
             before: None,
         });
     }
+    Ok(written)
+}
+
+#[derive(Default)]
+pub(crate) struct SettleTarget {
+    order: Option<OrderRow>,
+}
+
+pub(super) fn load_settle(tx: &StoreTx<'_>, s: &SessionSettle) -> Result<SettleTarget, AppError> {
+    Ok(SettleTarget {
+        order: find_order(tx, &s.order_id)?,
+    })
+}
+
+pub(super) fn base_rev_settle(intent: &Intent, t: &SettleTarget) -> Result<(), AppError> {
+    let Some(o) = &t.order else {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "order_id",
+            "no such bill",
+        ));
+    };
+    match intent.base_rev {
+        None => Err(invalid("base_rev", "session.settle needs base_rev")),
+        Some(b) if b != o.rev => Err(AppError::with_field(
+            ErrorCode::Stale,
+            "base_rev",
+            "this changed since it was read",
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
+fn reference_error(i: usize, message: &str) -> AppError {
+    AppError::with_field(
+        ErrorCode::ReferenceRequired,
+        format!("payments[{i}].reference"),
+        message,
+    )
+}
+
+fn check_reference(i: usize, p: &PaymentRow) -> Result<(), AppError> {
+    let reference = p.reference.as_deref().map(str::trim);
+    match (p.method, reference) {
+        (PaymentMethod::Cash, None | Some("")) => Ok(()),
+        (PaymentMethod::Cash, Some(_)) => Err(invalid(
+            &format!("payments[{i}].reference"),
+            "a cash payment takes no reference",
+        )),
+        (PaymentMethod::Upi, Some(r)) if r.len() == 4 && r.bytes().all(|b| b.is_ascii_digit()) => {
+            Ok(())
+        }
+        (PaymentMethod::Upi, _) => Err(reference_error(
+            i,
+            "Enter the last 4 digits of the UPI reference",
+        )),
+        (PaymentMethod::Card, Some(r))
+            if !r.is_empty()
+                && r.chars().count() <= CARD_REFERENCE_MAX
+                && !r.chars().any(char::is_control) =>
+        {
+            Ok(())
+        }
+        (PaymentMethod::Card, _) => Err(reference_error(i, "Enter the card terminal reference")),
+    }
+}
+
+pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(), AppError> {
+    let Some(o) = &t.order else {
+        return Err(invalid("order_id", "no such bill"));
+    };
+    match o.status.as_str() {
+        "open" => {}
+        "settled" => {
+            return Err(AppError::with_field(
+                ErrorCode::Stale,
+                "order_id",
+                "this bill is already settled",
+            ));
+        }
+        _ => return Err(invalid("order_id", "this bill is void")),
+    }
+    if s.payments.len() > MAX_PAYMENTS {
+        return Err(invalid("payments", "too many payments"));
+    }
+    for (i, p) in s.payments.iter().enumerate() {
+        if p.amount_minor <= 0 {
+            return Err(invalid(
+                &format!("payments[{i}].amount_minor"),
+                "each payment must be above 0",
+            ));
+        }
+        check_reference(i, p)?;
+    }
+    let paid = s
+        .payments
+        .iter()
+        .try_fold(0i64, |sum, p| sum.checked_add(p.amount_minor))
+        .ok_or_else(|| invalid("payments", "the payments are too large"))?;
+    if paid != o.total_minor {
+        return Err(AppError::with_field(
+            ErrorCode::PaymentShort,
+            "payments",
+            "The payments must add up to the bill.",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn mutate_settle(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    s: &SessionSettle,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
+        AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
+    })?;
+    let mut written = Vec::with_capacity(s.payments.len() + 1);
+    for (i, p) in s.payments.iter().enumerate() {
+        let id = ulid::Ulid::generate().to_string();
+        let reference = p
+            .reference
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty());
+        insert_payment(
+            tx,
+            &NewPayment {
+                id: &id,
+                order_id: &s.order_id,
+                method: p.method.as_str(),
+                amount_minor: p.amount_minor,
+                reference,
+                staff_id: &intent.actor.id,
+                position: i as i64,
+                business_day: &business_day,
+                fy: &fy,
+            },
+        )?;
+        written.push(Written {
+            key: RowKey::Payments { id },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+    }
+    settle_order(tx, &s.order_id, now_ms, &intent.actor.id)?;
+    written.push(Written {
+        key: RowKey::Orders {
+            id: s.order_id.clone(),
+        },
+        op: ChangeOp::Update,
+        before: None,
+    });
     Ok(written)
 }

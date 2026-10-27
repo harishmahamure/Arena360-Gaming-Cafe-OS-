@@ -40,6 +40,62 @@ pub struct SessionEnd {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PaymentMethod {
+    Cash,
+    Upi,
+    Card,
+}
+
+impl PaymentMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cash => "cash",
+            Self::Upi => "upi",
+            Self::Card => "card",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PaymentRow {
+    pub method: PaymentMethod,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reference: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionSettle {
+    pub order_id: String,
+    pub payments: Vec<PaymentRow>,
+}
+
+pub const UNDO_WINDOW_MS: i64 = 8_000;
+pub const CARD_REFERENCE_MAX: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SettleOutcome {
+    pub order_id: String,
+    #[ts(type = "number")]
+    pub settled_at: i64,
+    #[ts(type = "number")]
+    pub undo_until: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BillSettledEvent {
+    pub order_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct BillLine {
@@ -64,6 +120,9 @@ pub struct SnapshotBill {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub order_id: Option<String>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub order_rev: Option<i64>,
     pub lines: Vec<BillLine>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,
@@ -116,6 +175,23 @@ pub struct SessionScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settle_round_trips_and_cash_omits_its_reference() {
+        let s: SessionSettle = serde_json::from_value(serde_json::json!({
+            "order_id": "O",
+            "payments": [{"method": "cash", "amount_minor": 100},
+                         {"method": "upi", "amount_minor": 50, "reference": "1234"}]
+        }))
+        .unwrap();
+        assert_eq!(s.payments[0].reference, None);
+        assert_eq!(s.payments[1].method.as_str(), "upi");
+        assert!(
+            serde_json::to_value(&s).unwrap()["payments"][0]
+                .get("reference")
+                .is_none()
+        );
+    }
 
     #[test]
     fn start_round_trips_and_guest_omits_player() {

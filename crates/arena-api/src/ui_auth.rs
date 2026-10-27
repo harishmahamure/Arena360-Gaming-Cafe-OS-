@@ -68,9 +68,9 @@ use arena_core::staff::{
 use arena_core::{Clock, SnapshotReader, StaffDirectory, WriterHandle};
 use arena_proto::{
     ActorKind, AppError, ElevateDrop, ElevateOk, ElevateRequest, ElevatedBy, ElevationItem,
-    ElevationKind, ElevationMode, ErrorCode, IntentKind, IntentResult, MAX_TICKET_USES, Permission,
-    Requirement, SessionStaff, SetupCodeRequest, SignInOk, SignInRequest, UiError, UiIntentRequest,
-    UiMe, UiPlayerRequest, UnlockOk, UnlockRequest,
+    ElevationKind, ElevationMode, ErrorCode, IntentKind, MAX_TICKET_USES, Permission, Requirement,
+    SessionStaff, SetupCodeRequest, SignInOk, SignInRequest, UiError, UiIntentRequest,
+    UiIntentResult, UiMe, UiPlayerRequest, UnlockOk, UnlockRequest,
 };
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -844,9 +844,10 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::BAD_REQUEST
         }
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
-        ErrorCode::ValidationFailed | ErrorCode::Expired | ErrorCode::HsnRequired => {
-            StatusCode::UNPROCESSABLE_ENTITY
-        }
+        ErrorCode::ValidationFailed
+        | ErrorCode::Expired
+        | ErrorCode::HsnRequired
+        | ErrorCode::ReferenceRequired => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Stale
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked
@@ -862,6 +863,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PcBusy
         | ErrorCode::PcUnavailable
         | ErrorCode::NoRate
+        | ErrorCode::PaymentShort
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -2002,6 +2004,10 @@ async fn run_intent(
         _ => None,
     };
     let ended = matches!(intent.payload, arena_proto::IntentPayload::SessionEnd(_));
+    let settling = match &intent.payload {
+        arena_proto::IntentPayload::SessionSettle(s) => Some(s.order_id.clone()),
+        _ => None,
+    };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
@@ -2051,8 +2057,13 @@ async fn run_intent(
                 );
                 tracing::info!(device_id = %device_id, cmd_id = %cmd_id, action = action.as_str(), sessions = sent, "pc command pushed");
             }
-            Json(IntentResult {
+            let settled = match settling {
+                Some(order_id) => settle_outcome(auth, &order_id, &cmd_id).await,
+                None => None,
+            };
+            Json(UiIntentResult {
                 applied: crate::lan::registry::summary(&applied),
+                settled,
             })
             .into_response()
         }
@@ -2068,6 +2079,53 @@ async fn run_intent(
             fail(ui_error(e))
         }
     }
+}
+
+/// What a settle committed, read back from the order row so a retried key answers the same,
+/// and the PC back to its idle locked screen unless a new session already runs on it.
+async fn settle_outcome(
+    auth: &Arc<UiAuth>,
+    order_id: &str,
+    cmd_id: &str,
+) -> Option<arena_proto::SettleOutcome> {
+    let (reader, id) = (Arc::clone(&auth.reader), order_id.to_owned());
+    let found = tokio::task::spawn_blocking(move || reader.settlement(&id)).await;
+    let settlement = match found {
+        Ok(Ok(Some(s))) => s,
+        Ok(Ok(None)) => return None,
+        Ok(Err(e)) => {
+            tracing::warn!(order_id, error = %e, "could not read the settlement");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(order_id, error = %e, "the settlement read failed");
+            return None;
+        }
+    };
+    if let Some(device_id) = settlement
+        .device_id
+        .as_deref()
+        .filter(|_| !settlement.device_busy)
+    {
+        let sent = auth.presence.push_pc_command(
+            device_id,
+            cmd_id,
+            arena_proto::PcAction::Lock,
+            None,
+            None,
+        );
+        tracing::info!(
+            device_id,
+            cmd_id,
+            sessions = sent,
+            "idle lock pushed after settle"
+        );
+    }
+    Some(arena_proto::SettleOutcome {
+        order_id: settlement.order_id,
+        settled_at: settlement.settled_at,
+        undo_until: settlement.settled_at + arena_proto::UNDO_WINDOW_MS,
+    })
 }
 
 async fn player_write<T: serde::de::DeserializeOwned>(
@@ -3257,6 +3315,105 @@ pub(crate) mod tests {
         assert_eq!(snapshot.bills.len(), 1);
         assert_eq!(snapshot.bills[0].subtotal_minor, 6_000);
         assert!(snapshot.bills[0].order_id.is_some());
+    }
+
+    fn settle_body(order_id: &str, rev: i64, payments: Value) -> Value {
+        let mut intent = serde_json::to_value(intent_as(
+            Actor {
+                kind: ActorKind::Staff,
+                id: "x".into(),
+            },
+            IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                order_id: order_id.into(),
+                payments: Vec::new(),
+            }),
+            Some(rev),
+        ))
+        .unwrap();
+        intent["payload"]["payments"] = payments;
+        json!({"intent": intent})
+    }
+
+    #[tokio::test]
+    async fn settling_a_bill_answers_with_the_undo_window_and_returns_the_pc_to_its_idle_lock() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (_, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        let session_id = reply["applied"]["changes"][0]["row_id"].as_str().unwrap();
+        rx.recv().await.unwrap();
+        let end = json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: session_id.into(),
+            }),
+            Some(1),
+        )).unwrap()});
+        let (_, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(end)).await;
+        let order = reply["applied"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["tbl"] == "orders")
+            .unwrap()["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        rx.recv().await.unwrap();
+
+        let bad = settle_body(
+            &order,
+            1,
+            json!([{"method": "upi", "amount_minor": 6000, "reference": "12"}]),
+        );
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(bad)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["code"], "REFERENCE_REQUIRED");
+        let short = settle_body(&order, 1, json!([{"method": "cash", "amount_minor": 10}]));
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(short)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "PAYMENT_SHORT");
+        assert!(rx.try_recv().is_err(), "a refusal pushes nothing");
+
+        hub.clock.advance(1_000);
+        let body = settle_body(&order, 1, json!([{"method": "cash", "amount_minor": 6000}]));
+        let (status, reply) =
+            call(&hub, "POST", "/ui/intent", Some(&token), Some(body.clone())).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let settled_at = reply["settled"]["settled_at"].as_i64().unwrap();
+        assert_eq!(settled_at, hub.clock.now_ms());
+        assert_eq!(reply["settled"]["undo_until"], settled_at + 8_000);
+        assert_eq!(reply["settled"]["order_id"], order.as_str());
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the idle lock pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::PcCommand { action, reason, .. },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a pc command")
+        };
+        assert_eq!((action, reason), (arena_proto::PcAction::Lock, None));
+
+        hub.clock.advance(5_000);
+        let (status, again) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(again["settled"]["settled_at"], settled_at);
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        assert!(snapshot.bills.is_empty());
     }
 
     #[tokio::test]

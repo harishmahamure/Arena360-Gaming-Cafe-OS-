@@ -245,6 +245,7 @@
         },
         onDevicesChanged: () => void refresh(),
         onSessionStarted: () => void refresh(),
+        onBillSettled: () => void refresh(),
         onGroupsChanged: (byOwner) => {
           void refresh();
           if (!byOwner) return;

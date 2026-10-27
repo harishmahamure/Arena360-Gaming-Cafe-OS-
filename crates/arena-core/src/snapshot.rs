@@ -123,12 +123,14 @@ fn bills(
     let bill = |session_id: String,
                 device_id: String,
                 order_id: Option<String>,
+                order_rev: Option<i64>,
                 lines: Vec<arena_proto::BillLine>| {
         let subtotal_minor = lines.iter().map(|l| l.amount_minor).sum();
         arena_proto::SnapshotBill {
             session_id,
             device_id,
             order_id,
+            order_rev,
             lines,
             subtotal_minor,
             paid_minor: 0,
@@ -148,7 +150,7 @@ fn bills(
             s.paused_total_ms,
             now_ms,
         );
-        bill(s.id.clone(), s.device_id.clone(), None, lines)
+        bill(s.id.clone(), s.device_id.clone(), None, None, lines)
     });
     let open = orders.into_iter().map(|o| {
         let lines = order_lines
@@ -167,6 +169,7 @@ fn bills(
             o.session_id.unwrap_or_default(),
             o.device_id,
             Some(o.id),
+            Some(o.rev),
             lines,
         )
     });
@@ -371,6 +374,14 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         crate::session_screen::session_screens(&store, now_ms)
+    }
+
+    pub fn settlement(&self, order_id: &str) -> Result<Option<arena_store::Settlement>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.settlement(order_id)
     }
 
     pub fn owner_wrote(&self, epoch: &str, seq: i64) -> bool {

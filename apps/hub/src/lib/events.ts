@@ -34,6 +34,8 @@ export type EventHandlers = {
   onAdminUnlockAck?: (event: AdminUnlockAckEvent) => void;
   onPcAck?: (event: PcAckEvent) => void;
   onSessionStarted?: () => void;
+  /** `bill.settled`: a bill was settled; reload the snapshot so its UNPAID line clears. */
+  onBillSettled?: () => void;
   onPairingCodeChanged?: (change: PairingChange) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
@@ -93,6 +95,7 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
     es.addEventListener("resync", () => handlers.onResync());
     es.addEventListener("devices.changed", () => handlers.onDevicesChanged?.());
     es.addEventListener("session.started", () => handlers.onSessionStarted?.());
+    es.addEventListener("bill.settled", () => handlers.onBillSettled?.());
     es.addEventListener("groups.changed", (ev) => {
       try {
         const data: unknown = JSON.parse((ev as MessageEvent<string>).data);

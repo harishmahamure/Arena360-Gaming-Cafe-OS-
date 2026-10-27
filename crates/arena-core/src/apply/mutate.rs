@@ -270,6 +270,10 @@ pub(super) fn mutate(
             Target::SessionEnd(t) => super::session::mutate_end(tx, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionSettle(s) => match target {
+            Target::SessionSettle(_) => super::session::mutate_settle(tx, intent, s, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceMaintenance(m) => match target {
             Target::Maintenance(t) => maintenance::mutate(tx, m, t),
             _ => Err(mismatch()),

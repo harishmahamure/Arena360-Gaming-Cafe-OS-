@@ -22,6 +22,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ReasonRequired
         | ErrorCode::Expired
         | ErrorCode::HsnRequired
+        | ErrorCode::ReferenceRequired
         | ErrorCode::PasswordTooShort
         | ErrorCode::PasswordCommon => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::AuthFailed | ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => {
@@ -59,6 +60,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PcBusy
         | ErrorCode::PcUnavailable
         | ErrorCode::NoRate
+        | ErrorCode::PaymentShort
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED

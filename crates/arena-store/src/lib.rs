@@ -80,10 +80,11 @@ pub use products::{
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
 pub use sessions::{
-    LiveSession, NewOrder, NewOrderLine, NewSession, OpenOrder, OrderLineRow, SegmentRow,
-    close_segments, device_has_live_session, end_session, find_session, insert_order,
-    insert_order_line, insert_segment, insert_session, list_live_sessions, list_open_order_lines,
-    list_open_orders, list_segments, next_guest_no,
+    LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OpenOrder, OrderLineRow, OrderRow,
+    SegmentRow, Settlement, close_segments, device_has_live_session, end_session, find_order,
+    find_session, find_settlement, insert_order, insert_order_line, insert_payment, insert_segment,
+    insert_session, list_live_sessions, list_open_order_lines, list_open_orders, list_segments,
+    next_guest_no, settle_order,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
@@ -680,6 +681,13 @@ impl Store {
             list_open_orders(&self.conn)?,
             list_open_order_lines(&self.conn)?,
         ))
+    }
+
+    pub fn settlement(&self, order_id: &str) -> Result<Option<Settlement>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        find_settlement(&self.conn, order_id)
     }
 
     pub fn latest_consent(

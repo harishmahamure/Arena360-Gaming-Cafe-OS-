@@ -9,6 +9,8 @@
 //! - `event: session.locked`, data `{}`, and `event: session.unlocked`, data
 //!   [`UnlockOk`](arena_proto::UnlockOk): this stream's own session was locked or unlocked (from
 //!   another window sharing the token), so every window locks and unlocks together.
+//! - `event: bill.settled`, data [`BillSettledEvent`]: a `session.settle` committed (the receipt hook);
+//!   the view reloads the snapshot, which no longer lists the bill.
 //! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN, or
 //!   the Hub's LAN addresses changed; the view reloads the snapshot (which carries each
 //!   device's `online` and the `lan` block).
@@ -39,7 +41,8 @@ use std::time::Duration;
 
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
 use arena_proto::{
-    AppliedEvent, SessionStartedEvent, SettingsChangedEvent, SnapshotLocale, SnapshotUi,
+    AppliedEvent, BillSettledEvent, SessionStartedEvent, SettingsChangedEvent, SnapshotLocale,
+    SnapshotUi,
 };
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -188,6 +191,17 @@ fn session_started(applied: &Applied) -> Option<SessionStartedEvent> {
     })
 }
 
+fn bill_settled(applied: &Applied) -> Option<BillSettledEvent> {
+    applied.changes.iter().find(|c| c.tbl == "payments")?;
+    let order = applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders" && c.op == arena_core::ChangeOp::Update)?;
+    Some(BillSettledEvent {
+        order_id: order.row_id.clone(),
+    })
+}
+
 fn role_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Role> {
     status.as_ref().map(|s| s.borrow().role)
 }
@@ -270,6 +284,10 @@ impl HubTask {
                             .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta"))
                         {
                             self.send("devices.changed", "{}".into(), false);
+                        }
+                        if let Some(settled) = bill_settled(&applied) {
+                            let data = serde_json::to_string(&settled).unwrap_or_default();
+                            self.send("bill.settled", data, false);
                         }
                         if let Some(started) = session_started(&applied) {
                             let data = serde_json::to_string(&started).unwrap_or_default();
@@ -930,6 +948,113 @@ mod tests {
             assert!(seen.len() < 6, "{seen:?}");
         }
         assert!(seen.contains(&"devices.changed".to_owned()), "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn a_settle_pushes_bill_settled_with_the_order() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let submit = |payload, rev| hub.writer.submit_intent(intent_as(owner(), payload, rev));
+        let device = submit(
+            IntentPayload::DeviceRegister(arena_proto::DeviceRegister::new(
+                arena_proto::ClientClass::Paired,
+                "PC-01",
+                arena_core::devices::hash_token_secret("s").unwrap(),
+            )),
+            None,
+        )
+        .await
+        .unwrap()
+        .changes[0]
+            .row_id
+            .clone();
+        let group = submit(
+            IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                id: None,
+                name: "PCs".into(),
+                group_kind: "pc".into(),
+                colour: "teal".into(),
+                sort_order: 1,
+            }),
+            None,
+        )
+        .await
+        .unwrap()
+        .changes[0]
+            .row_id
+            .clone();
+        submit(
+            IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                group_id: group.clone(),
+                price_per_hour_minor: 12_000,
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        submit(
+            IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                device_id: device.clone(),
+                group_id: Some(group),
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        let started = submit(
+            IntentPayload::SessionStart(arena_proto::SessionStart {
+                device_id: device,
+                mode: arena_proto::SessionMode::Postpaid,
+                player_id: None,
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        let ended = submit(
+            IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: started.changes[0].row_id.clone(),
+            }),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let order = ended
+            .changes
+            .iter()
+            .find(|c| c.tbl == "orders")
+            .unwrap()
+            .row_id
+            .clone();
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        submit(
+            IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                order_id: order.clone(),
+                payments: vec![arena_proto::PaymentRow {
+                    method: arena_proto::PaymentMethod::Cash,
+                    amount_minor: 6_000,
+                    reference: None,
+                }],
+            }),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            if event == "bill.settled" {
+                assert_eq!(data, serde_json::json!({"order_id": order}));
+                break;
+            }
+            seen.push(event);
+            assert!(seen.len() < 6, "{seen:?}");
+        }
     }
 
     #[tokio::test]

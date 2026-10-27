@@ -65,4 +65,6 @@ export type ErrorCode =
   | "PC_BUSY"
   | "PC_UNAVAILABLE"
   | "NO_RATE"
-  | "DEVICE_UNASSIGNED";
+  | "DEVICE_UNASSIGNED"
+  | "PAYMENT_SHORT"
+  | "REFERENCE_REQUIRED";

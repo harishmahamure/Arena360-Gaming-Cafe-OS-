@@ -51,11 +51,12 @@ pub enum Table {
     SessionSegments,
     Orders,
     OrderLines,
+    Payments,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 24] = [
+    pub const ALL: [Table; 25] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -80,6 +81,7 @@ impl Table {
         Table::SessionSegments,
         Table::Orders,
         Table::OrderLines,
+        Table::Payments,
     ];
 
     /// The SQL table name.
@@ -109,6 +111,7 @@ impl Table {
             Self::SessionSegments => "session_segments",
             Self::Orders => "orders",
             Self::OrderLines => "order_lines",
+            Self::Payments => "payments",
         }
     }
 
@@ -135,7 +138,11 @@ impl Table {
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
             Self::Consents => &["consent_id"],
-            Self::Sessions | Self::SessionSegments | Self::Orders | Self::OrderLines => &["id"],
+            Self::Sessions
+            | Self::SessionSegments
+            | Self::Orders
+            | Self::OrderLines
+            | Self::Payments => &["id"],
         }
     }
 
@@ -162,7 +169,8 @@ impl Table {
             | Self::Sessions
             | Self::SessionSegments
             | Self::Orders
-            | Self::OrderLines => true,
+            | Self::OrderLines
+            | Self::Payments => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -257,6 +265,9 @@ pub enum RowKey {
     OrderLines {
         id: String,
     },
+    Payments {
+        id: String,
+    },
 }
 
 impl RowKey {
@@ -286,6 +297,7 @@ impl RowKey {
             Self::SessionSegments { .. } => Table::SessionSegments,
             Self::Orders { .. } => Table::Orders,
             Self::OrderLines { .. } => Table::OrderLines,
+            Self::Payments { .. } => Table::Payments,
         }
     }
 
@@ -321,7 +333,8 @@ impl RowKey {
             Self::Sessions { id }
             | Self::SessionSegments { id }
             | Self::Orders { id }
-            | Self::OrderLines { id } => id.clone(),
+            | Self::OrderLines { id }
+            | Self::Payments { id } => id.clone(),
         }
     }
 
@@ -400,6 +413,7 @@ impl RowKey {
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
             Table::Orders => Self::Orders { id: text("id")? },
             Table::OrderLines => Self::OrderLines { id: text("id")? },
+            Table::Payments => Self::Payments { id: text("id")? },
         })
     }
 
@@ -434,7 +448,8 @@ impl RowKey {
             Self::Sessions { id }
             | Self::SessionSegments { id }
             | Self::Orders { id }
-            | Self::OrderLines { id } => vec![id],
+            | Self::OrderLines { id }
+            | Self::Payments { id } => vec![id],
         }
     }
 }

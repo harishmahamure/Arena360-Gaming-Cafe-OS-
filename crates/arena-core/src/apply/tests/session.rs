@@ -561,3 +561,202 @@ async fn a_database_allows_one_order_per_session() {
         .await
         .unwrap();
 }
+
+fn pay(
+    method: arena_proto::PaymentMethod,
+    amount: i64,
+    reference: Option<&str>,
+) -> arena_proto::PaymentRow {
+    arena_proto::PaymentRow {
+        method,
+        amount_minor: amount,
+        reference: reference.map(Into::into),
+    }
+}
+
+fn settle_intent(order: &str, rev: Option<i64>, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionSettle(arena_proto::SessionSettle {
+            order_id: order.into(),
+            payments,
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+async fn billed(f: &Fixture, rate: i64, minutes: i64) -> (String, String, i64) {
+    let d = pc(f, DeviceKind::Pc, "pc", Some(rate)).await;
+    start(f, &d, None).await.unwrap();
+    f.clock.advance(minutes * 60_000);
+    let s = sessions(f).pop().unwrap();
+    end(f, end_intent(&text(&s, "id"), Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let o = table(f, Table::Orders).pop().unwrap();
+    (text(&o, "id"), d, int(&o, "rev"))
+}
+
+#[tokio::test]
+async fn settling_writes_payments_and_closes_the_order() {
+    use arena_proto::PaymentMethod::{Cash, Upi};
+    let f = bootstrapped().await;
+    let (order, _, rev) = billed(&f, 10_000, 41).await;
+    let before = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(before.bills[0].order_rev, Some(rev));
+    let i = settle_intent(
+        &order,
+        Some(rev),
+        vec![pay(Cash, 5000, None), pay(Upi, 2500, Some("1234"))],
+    );
+    let a = end(&f, i.clone()).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["payments", "payments", "orders"]
+    );
+    let o = &table(&f, Table::Orders)[0];
+    assert_eq!(text(o, "status"), "settled");
+    assert_eq!(int(o, "settled_at"), f.clock.now_ms());
+    assert_eq!(int(o, "rev"), rev + 1);
+    let p = table(&f, Table::Payments);
+    assert_eq!(p.len(), 2);
+    let mut p = p;
+    p.sort_by_key(|r| int(r, "position"));
+    assert_eq!(
+        (text(&p[0], "method"), int(&p[0], "amount_minor")),
+        ("cash".into(), 5000)
+    );
+    assert_eq!(p[0]["reference"], RowValue::Null);
+    assert_eq!(text(&p[1], "reference"), "1234");
+    assert_eq!(text(&p[1], "order_id"), order);
+    assert_eq!(text(&p[1], "business_day"), text(o, "business_day"));
+    let after = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert!(after.bills.is_empty());
+    let s = reopen(&f).settlement(&order).unwrap().unwrap();
+    assert_eq!(s.settled_at, f.clock.now_ms());
+    assert!(!s.device_busy);
+
+    let again = end(&f, i).await.unwrap();
+    assert_eq!(again.intent_id, a.intent_id);
+    assert_eq!(table(&f, Table::Payments).len(), 2);
+}
+
+#[tokio::test]
+async fn a_settle_with_the_wrong_total_or_a_bad_reference_writes_nothing() {
+    use arena_proto::PaymentMethod::{Card, Cash, Upi};
+    let f = bootstrapped().await;
+    let (order, _, rev) = billed(&f, 10_000, 41).await;
+    let before = reopen(&f).changes().unwrap().len();
+    let field = |c, f: &str| (c, Some(f.to_owned()));
+    let try_settle = |payments| {
+        let f = &f;
+        let order = order.clone();
+        async move { refusal(end(f, settle_intent(&order, Some(rev), payments)).await) }
+    };
+    assert_eq!(
+        try_settle(vec![pay(Cash, 7000, None)]).await,
+        field(ErrorCode::PaymentShort, "payments")
+    );
+    assert_eq!(
+        try_settle(vec![pay(Cash, 8000, None)]).await,
+        field(ErrorCode::PaymentShort, "payments")
+    );
+    assert_eq!(
+        try_settle(vec![]).await,
+        field(ErrorCode::PaymentShort, "payments")
+    );
+    for bad in [None, Some("123"), Some("12a4"), Some("12345"), Some("  ")] {
+        assert_eq!(
+            try_settle(vec![pay(Cash, 5000, None), pay(Upi, 2500, bad)]).await,
+            field(ErrorCode::ReferenceRequired, "payments[1].reference"),
+            "{bad:?}"
+        );
+    }
+    assert_eq!(
+        try_settle(vec![pay(Card, 7500, None)]).await,
+        field(ErrorCode::ReferenceRequired, "payments[0].reference")
+    );
+    assert_eq!(
+        try_settle(vec![pay(Card, 7500, Some(&"x".repeat(65)))]).await,
+        field(ErrorCode::ReferenceRequired, "payments[0].reference")
+    );
+    assert_eq!(
+        try_settle(vec![pay(Cash, 7500, Some("12"))]).await,
+        field(ErrorCode::ValidationFailed, "payments[0].reference")
+    );
+    assert_eq!(
+        try_settle(vec![pay(Cash, 0, None), pay(Cash, 7500, None)]).await,
+        field(ErrorCode::ValidationFailed, "payments[0].amount_minor")
+    );
+    assert_eq!(
+        try_settle(vec![pay(Cash, -100, None), pay(Cash, 7600, None)]).await,
+        field(ErrorCode::ValidationFailed, "payments[0].amount_minor")
+    );
+    assert_eq!(reopen(&f).changes().unwrap().len(), before);
+    assert!(table(&f, Table::Payments).is_empty());
+    assert_eq!(text(&table(&f, Table::Orders)[0], "status"), "open");
+    end(
+        &f,
+        settle_intent(&order, Some(rev), vec![pay(Card, 7500, Some("TID-9"))]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(text(&table(&f, Table::Payments)[0], "reference"), "TID-9");
+}
+
+#[tokio::test]
+async fn settle_is_refused_for_an_unknown_missing_stale_or_settled_order() {
+    use arena_proto::PaymentMethod::Cash;
+    let f = bootstrapped().await;
+    let (order, _, rev) = billed(&f, 10_000, 41).await;
+    let field = |c, f: &str| (c, Some(f.to_owned()));
+    let all = || vec![pay(Cash, 7500, None)];
+    assert_eq!(
+        refusal(end(&f, settle_intent("nope", Some(1), all())).await),
+        field(ErrorCode::NotFound, "order_id")
+    );
+    assert_eq!(
+        refusal(end(&f, settle_intent(&order, None, all())).await),
+        field(ErrorCode::ValidationFailed, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, settle_intent(&order, Some(rev + 5), all())).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    let mut denied = settle_intent(&order, Some(rev), all());
+    denied.actor = staff(&f, "kit", ROLE_KITCHEN).await;
+    assert_eq!(
+        refusal(end(&f, denied).await).0,
+        ErrorCode::PermissionDenied
+    );
+    let mut by_counter = settle_intent(&order, Some(rev), all());
+    by_counter.actor = staff(&f, "ctr", ROLE_COUNTER).await;
+    let staff_id = by_counter.actor.id.clone();
+    end(&f, by_counter).await.unwrap();
+    assert_eq!(text(&table(&f, Table::Payments)[0], "staff_id"), staff_id);
+    assert_eq!(
+        refusal(end(&f, settle_intent(&order, Some(rev), all())).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, settle_intent(&order, Some(rev + 1), all())).await),
+        field(ErrorCode::Stale, "order_id")
+    );
+    assert_eq!(table(&f, Table::Payments).len(), 1);
+}
+
+#[tokio::test]
+async fn a_new_session_on_the_device_marks_the_settlement_busy() {
+    use arena_proto::PaymentMethod::Cash;
+    let f = bootstrapped().await;
+    let (order, device, rev) = billed(&f, 10_000, 10).await;
+    start(&f, &device, None).await.unwrap();
+    end(
+        &f,
+        settle_intent(&order, Some(rev), vec![pay(Cash, 5000, None)]),
+    )
+    .await
+    .unwrap();
+    assert!(reopen(&f).settlement(&order).unwrap().unwrap().device_busy);
+}

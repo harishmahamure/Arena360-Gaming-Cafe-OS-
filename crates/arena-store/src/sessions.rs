@@ -88,6 +88,7 @@ pub struct OrderLineRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenOrder {
     pub id: String,
+    pub rev: i64,
     pub session_id: Option<String>,
     pub device_id: String,
     pub subtotal_minor: i64,
@@ -303,7 +304,7 @@ pub fn insert_order_line(conn: &Connection, l: &NewOrderLine<'_>) -> Result<(), 
 pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, session_id, COALESCE(device_id, ''), subtotal_minor FROM orders
+            "SELECT id, session_id, COALESCE(device_id, ''), subtotal_minor, rev FROM orders
              WHERE status = 'open' ORDER BY created_at, id",
         )
         .map_err(db_error)?;
@@ -313,6 +314,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             session_id: r.get(1)?,
             device_id: r.get(2)?,
             subtotal_minor: r.get(3)?,
+            rev: r.get(4)?,
         })
     })
     .map_err(db_error)?
@@ -342,5 +344,105 @@ pub fn list_open_order_lines(conn: &Connection) -> Result<Vec<OrderLineRow>, App
     })
     .map_err(db_error)?
     .collect::<Result<_, _>>()
+    .map_err(db_error)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderRow {
+    pub id: String,
+    pub status: String,
+    pub total_minor: i64,
+    pub rev: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settlement {
+    pub order_id: String,
+    pub device_id: Option<String>,
+    pub settled_at: i64,
+    pub device_busy: bool,
+}
+
+pub struct NewPayment<'a> {
+    pub id: &'a str,
+    pub order_id: &'a str,
+    pub method: &'a str,
+    pub amount_minor: i64,
+    pub reference: Option<&'a str>,
+    pub staff_id: &'a str,
+    pub position: i64,
+    pub business_day: &'a str,
+    pub fy: &'a str,
+}
+
+pub fn find_order(conn: &Connection, id: &str) -> Result<Option<OrderRow>, AppError> {
+    conn.query_row(
+        "SELECT id, status, total_minor, rev FROM orders WHERE id = ?1",
+        [id],
+        |r| {
+            Ok(OrderRow {
+                id: r.get(0)?,
+                status: r.get(1)?,
+                total_minor: r.get(2)?,
+                rev: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn settle_order(
+    conn: &Connection,
+    id: &str,
+    settled_at: i64,
+    settled_by: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET status = 'settled', settled_at = ?2, settled_by = ?3 WHERE id = ?1",
+        params![id, settled_at, settled_by],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn insert_payment(conn: &Connection, p: &NewPayment<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO payments (id, order_id, method, amount_minor, reference, staff_id, position,
+                               business_day, fy, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 0)",
+        params![
+            p.id,
+            p.order_id,
+            p.method,
+            p.amount_minor,
+            p.reference,
+            p.staff_id,
+            p.position,
+            p.business_day,
+            p.fy
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settlement>, AppError> {
+    conn.query_row(
+        "SELECT o.id, o.device_id, o.settled_at,
+                EXISTS (SELECT 1 FROM sessions s
+                        WHERE s.device_id = o.device_id AND s.state IN ('active', 'paused', 'grace'))
+         FROM orders o WHERE o.id = ?1 AND o.status = 'settled' AND o.settled_at IS NOT NULL",
+        [order_id],
+        |r| {
+            Ok(Settlement {
+                order_id: r.get(0)?,
+                device_id: r.get(1)?,
+                settled_at: r.get(2)?,
+                device_busy: r.get(3)?,
+            })
+        },
+    )
+    .optional()
     .map_err(db_error)
 }

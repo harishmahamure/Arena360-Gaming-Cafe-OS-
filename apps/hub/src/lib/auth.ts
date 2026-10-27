@@ -8,7 +8,7 @@ import type {
   ElevationItem,
   Intent,
   IntentPayload,
-  IntentResult,
+  UiIntentResult,
   Permission,
   PlayerEditForm,
   PlayerForm,
@@ -293,7 +293,7 @@ export async function signOut() {
 }
 
 export type IntentOutcome =
-  | { kind: "applied"; result: IntentResult }
+  | { kind: "applied"; result: UiIntentResult }
   | { kind: "signed_out" }
   | { kind: "error"; error: UiError }
   | { kind: "unreachable" };
@@ -434,7 +434,7 @@ async function postIntent(
   }
   if (res.ok) {
     try {
-      return { kind: "applied", result: (await res.json()) as IntentResult };
+      return { kind: "applied", result: (await res.json()) as UiIntentResult };
     } catch {
       return { kind: "unreachable" };
     }

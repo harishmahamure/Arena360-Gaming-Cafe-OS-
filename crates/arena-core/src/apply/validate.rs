@@ -180,6 +180,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionEnd(t) => super::session::validate_end(t),
             _ => Err(internal_target()),
         },
+        IntentPayload::SessionSettle(s) => match target {
+            Target::SessionSettle(t) => super::session::validate_settle(s, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::StockIn(u) => match target {
             Target::Stock(t) => stock::validate_in(u, t),
             _ => Err(internal_target()),

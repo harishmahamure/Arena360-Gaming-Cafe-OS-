@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-27-2026 19:00
+last_updated: 10-27-2026 20:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -76,7 +76,7 @@ development_status:
   3-9-start-a-postpaid-session-for-a-player-or-a-guest: done
   3-10-the-pc-unlocks-to-a-session-screen-when-a-session-starts: done
   3-11-end-a-postpaid-session-and-see-the-bill-to-the-minute: done
-  3-12-settle-a-bill-into-payment-records-with-reference-rules: backlog
+  3-12-settle-a-bill-into-payment-records-with-reference-rules: review
   3-13-settle-bar-and-payment-split-at-the-counter: backlog
   3-14-undo-for-end-and-settle: backlog
   3-15-pause-and-resume-a-session-with-a-reason: backlog

@@ -72,6 +72,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PcBusy
         | ErrorCode::PcUnavailable
         | ErrorCode::NoRate
+        | ErrorCode::PaymentShort
+        | ErrorCode::ReferenceRequired
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame
         | ErrorCode::HsnRequired

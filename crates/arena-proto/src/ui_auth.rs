@@ -122,6 +122,17 @@ pub struct UiIntentRequest {
     pub elevation_ticket: Option<String>,
 }
 
+/// The reply to a successful `POST /ui/intent`: the applied rows and, for `session.settle`, when
+/// it settled and until when it can be undone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UiIntentResult {
+    pub applied: crate::frame::AppliedSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub settled: Option<crate::session::SettleOutcome>,
+}
+
 /// Most intents one elevation ticket may cover.
 pub const MAX_TICKET_USES: usize = 10;
 

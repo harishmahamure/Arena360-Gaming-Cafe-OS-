@@ -122,6 +122,11 @@ enum Op {
     SessionEnd {
         slot: u8,
     },
+    SessionSettle {
+        slot: u8,
+        short: bool,
+        split: bool,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -240,6 +245,11 @@ fn op() -> impl Strategy<Value = Op> {
         1 => prop::bool::weighted(0.8).prop_map(|known| Op::PlayerReset { known }),
         3 => (0..3u8, any::<bool>()).prop_map(|(slot, guest)| Op::Session { slot, guest }),
         2 => (0..3u8).prop_map(|slot| Op::SessionEnd { slot }),
+        2 => (0..3u8, any::<bool>(), any::<bool>()).prop_map(|(slot, short, split)| Op::SessionSettle {
+            slot,
+            short,
+            split
+        }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -1111,6 +1121,71 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(payload, Some(rev)));
             prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
             prop_assert_eq!(hub.change_count(), before + 5);
+        }
+        Op::SessionSettle { slot, short, split } => {
+            let open: Vec<_> = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .filter(|o| text(o, "status") == "open")
+                .collect();
+            let Some(order) = open.get(usize::from(*slot) % open.len().max(1)) else {
+                return Ok(());
+            };
+            let (id, rev, total) = (
+                text(order, "id"),
+                int(order, "rev"),
+                int(order, "total_minor"),
+            );
+            let before = hub.change_count();
+            let row = |method, amount_minor, reference: Option<&str>| arena_proto::PaymentRow {
+                method,
+                amount_minor,
+                reference: reference.map(Into::into),
+            };
+            let first = (total / 2).max(1).min(total);
+            let payments = match (*short, *split && total > 1) {
+                (true, _) => vec![row(arena_proto::PaymentMethod::Cash, total - 1, None)],
+                (false, true) => vec![
+                    row(arena_proto::PaymentMethod::Cash, first, None),
+                    row(arena_proto::PaymentMethod::Upi, total - first, Some("0042")),
+                ],
+                (false, false) => vec![row(arena_proto::PaymentMethod::Card, total, Some("T1"))],
+            };
+            let rows = payments.len();
+            let payload = IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                order_id: id.clone(),
+                payments,
+            });
+            let out = hub.submit_new(hub.intent(payload.clone(), Some(rev)));
+            if *short {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::PaymentShort, Some("payments")))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + rows + 1);
+                let again = hub.submit_new(hub.intent(payload, Some(rev + 1)));
+                prop_assert_eq!(code(&again), Some((ErrorCode::Stale, Some("order_id"))));
+                prop_assert_eq!(hub.change_count(), before + rows + 1);
+            }
+            for o in hub.reader.rows(Table::Orders).unwrap() {
+                if text(&o, "status") != "settled" {
+                    continue;
+                }
+                let paid: i64 = hub
+                    .reader
+                    .rows(Table::Payments)
+                    .unwrap()
+                    .iter()
+                    .filter(|p| text(p, "order_id") == text(&o, "id"))
+                    .map(|p| int(p, "amount_minor"))
+                    .sum();
+                prop_assert_eq!(paid, int(&o, "total_minor"));
+            }
         }
         Op::Advance { ms } => hub.clock.advance(*ms),
     }

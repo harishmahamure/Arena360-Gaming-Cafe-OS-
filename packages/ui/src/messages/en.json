@@ -1410,7 +1410,11 @@
   "hub.session.end": "End session",
   "hub.session.end_stale": "This session changed. Reopen the tile and try again.",
   "hub.session.ended": "Session already ended.",
+  "hub.settle.short": "The payments must add up to the bill.",
+  "hub.settle.reference": "Enter the UPI last 4 digits or the card reference.",
+  "hub.settle.stale": "This bill changed or is already settled. Reopen the tile.",
   "hub.sheet.done.ended": "Session ended. Pay at counter.",
   "hub.floor.unpaid": "UNPAID {amount}",
-  "hub.audit.intent.session.end": "Session end"
+  "hub.audit.intent.session.end": "Session end",
+  "hub.audit.intent.session.settle": "Bill settled"
 }

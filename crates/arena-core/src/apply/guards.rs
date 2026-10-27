@@ -129,7 +129,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::Pc(_)
             | Target::Player(_)
             | Target::Session(_)
-            | Target::SessionEnd(_),
+            | Target::SessionEnd(_)
+            | Target::SessionSettle(_),
             _,
         ) => Ok(()),
     }
@@ -183,6 +184,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         | Target::Session(_)
         | Target::Rate(_) => Ok(()),
         Target::SessionEnd(t) => super::session::base_rev_end(intent, t),
+        Target::SessionSettle(t) => super::session::base_rev_settle(intent, t),
         Target::Player(t) => players::base_rev(intent, t),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),

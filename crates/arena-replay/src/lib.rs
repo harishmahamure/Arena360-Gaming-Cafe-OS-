@@ -535,10 +535,38 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            writer
+            let ended = writer
                 .submit_intent(submit(
                     IntentPayload::SessionEnd(arena_proto::SessionEnd {
                         session_id: started.changes[0].row_id.clone(),
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
+            let order_id = ended
+                .changes
+                .iter()
+                .find(|c| c.tbl == "orders")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                        order_id,
+                        payments: vec![
+                            arena_proto::PaymentRow {
+                                method: arena_proto::PaymentMethod::Cash,
+                                amount_minor: 5_999,
+                                reference: None,
+                            },
+                            arena_proto::PaymentRow {
+                                method: arena_proto::PaymentMethod::Upi,
+                                amount_minor: 1,
+                                reference: Some("0042".into()),
+                            },
+                        ],
                     }),
                     Some(1),
                 ))

@@ -113,6 +113,10 @@ pub enum ErrorCode {
     PcUnavailable,
     NoRate,
     DeviceUnassigned,
+    /// The payments do not add up to the bill total.
+    PaymentShort,
+    /// A UPI or card payment is missing its reference.
+    ReferenceRequired,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -192,6 +196,8 @@ impl ErrorCode {
             Self::PcUnavailable => "PC_UNAVAILABLE",
             Self::NoRate => "NO_RATE",
             Self::DeviceUnassigned => "DEVICE_UNASSIGNED",
+            Self::PaymentShort => "PAYMENT_SHORT",
+            Self::ReferenceRequired => "REFERENCE_REQUIRED",
         }
     }
 }
@@ -329,6 +335,8 @@ mod tests {
             (ErrorCode::PcUnavailable, "PC_UNAVAILABLE"),
             (ErrorCode::NoRate, "NO_RATE"),
             (ErrorCode::DeviceUnassigned, "DEVICE_UNASSIGNED"),
+            (ErrorCode::PaymentShort, "PAYMENT_SHORT"),
+            (ErrorCode::ReferenceRequired, "REFERENCE_REQUIRED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

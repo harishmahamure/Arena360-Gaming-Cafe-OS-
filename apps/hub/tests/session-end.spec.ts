@@ -256,3 +256,19 @@ test("End works by keyboard", async ({ page }) => {
   await expect(status(page)).toHaveText(en["hub.sheet.done.ended"]);
   expect(hub.sent).toHaveLength(1);
 });
+
+test("a bill.settled event reloads the snapshot and the UNPAID line clears", async ({ page }) => {
+  const hub = await open(page, "ender");
+  await openSheet(page);
+  await endButton(page).click();
+  await expect(tile(page, "PC 1").getByTestId("tile-unpaid")).toHaveText("UNPAID ₹75.00");
+  const before = hub.snapshots;
+  hub.bills = [];
+  await page.evaluate(() =>
+    (window as unknown as { __emit: (n: string, d: unknown) => void }).__emit("bill.settled", {
+      order_id: "O1",
+    }),
+  );
+  await expect.poll(() => hub.snapshots).toBeGreaterThan(before);
+  await expect(tile(page, "PC 1").getByTestId("tile-unpaid")).toHaveCount(0);
+});

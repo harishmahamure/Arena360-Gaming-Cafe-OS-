@@ -39,6 +39,9 @@ const REFUSALS: Record<string, MessageKey> = {
   DEVICE_UNASSIGNED: "hub.session.unassigned",
   "STALE:session.end": "hub.session.end_stale",
   "VALIDATION_FAILED:session.end": "hub.session.ended",
+  PAYMENT_SHORT: "hub.settle.short",
+  REFERENCE_REQUIRED: "hub.settle.reference",
+  "STALE:session.settle": "hub.settle.stale",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -91,11 +94,13 @@ export const MESSAGE_MAX = 140;
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
   kind === "session.start" || kind === "session.end"
     ? kind
-    : kind === "device.screen"
-      ? "device.screen"
-      : kind === "device.power" || kind === "device.admin_unlock"
-        ? "device.remote"
-        : "device.manage";
+    : kind === "session.settle"
+      ? "pos.sell"
+      : kind === "device.screen"
+        ? "device.screen"
+        : kind === "device.power" || kind === "device.admin_unlock"
+          ? "device.remote"
+          : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 

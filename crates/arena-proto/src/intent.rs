@@ -137,11 +137,13 @@ pub enum IntentKind {
     SessionStart,
     #[serde(rename = "session.end")]
     SessionEnd,
+    #[serde(rename = "session.settle")]
+    SessionSettle,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 40] = [
+    pub const ALL: [IntentKind; 41] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -182,6 +184,7 @@ impl IntentKind {
         Self::PlayerPasswordReset,
         Self::SessionStart,
         Self::SessionEnd,
+        Self::SessionSettle,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -227,6 +230,7 @@ impl IntentKind {
             Self::PlayerPasswordReset => "player.password_reset",
             Self::SessionStart => "session.start",
             Self::SessionEnd => "session.end",
+            Self::SessionSettle => "session.settle",
         }
     }
 
@@ -272,7 +276,7 @@ impl IntentKind {
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
-            Self::SessionStart | Self::SessionEnd => IntentCategory::Session,
+            Self::SessionStart | Self::SessionEnd | Self::SessionSettle => IntentCategory::Session,
         }
     }
 
@@ -316,6 +320,7 @@ impl IntentKind {
             }
             Self::SessionStart => Requirement::Perm(Permission::SessionStart),
             Self::SessionEnd => Requirement::Perm(Permission::SessionEnd),
+            Self::SessionSettle => Requirement::Perm(Permission::PosSell),
         }
     }
 
@@ -378,7 +383,8 @@ impl IntentKind {
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
             | Self::SessionStart
-            | Self::SessionEnd => None,
+            | Self::SessionEnd
+            | Self::SessionSettle => None,
         }
     }
 
@@ -820,6 +826,8 @@ pub enum IntentPayload {
     SessionStart(crate::SessionStart),
     #[serde(rename = "session.end")]
     SessionEnd(crate::SessionEnd),
+    #[serde(rename = "session.settle")]
+    SessionSettle(crate::SessionSettle),
 }
 
 impl IntentPayload {
@@ -865,6 +873,7 @@ impl IntentPayload {
             Self::PlayerPasswordReset(_) => IntentKind::PlayerPasswordReset,
             Self::SessionStart(_) => IntentKind::SessionStart,
             Self::SessionEnd(_) => IntentKind::SessionEnd,
+            Self::SessionSettle(_) => IntentKind::SessionSettle,
         }
     }
 }
@@ -950,7 +959,6 @@ mod tests {
         Permission::SessionTransfer,
         Permission::SessionForceEnd,
         Permission::BookingManage,
-        Permission::PosSell,
         Permission::PosVoid,
         Permission::RefundIssue,
         Permission::DiscountManual,
@@ -1111,6 +1119,7 @@ mod tests {
                 }
                 "session.start" => Requirement::Perm(Permission::SessionStart),
                 "session.end" => Requirement::Perm(Permission::SessionEnd),
+                "session.settle" => Requirement::Perm(Permission::PosSell),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

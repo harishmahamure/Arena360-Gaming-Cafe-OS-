@@ -313,3 +313,10 @@
 - `paused_total_ms` is taken off the last segment only; per-segment pause records come with 3.15 and 3.31.
 - The pay-at-counter lock is fire-and-forget; an offline kiosk stays unlocked until a persisted lock exists.
 - Open orders are unbounded in the snapshot, and the sheet shows no itemised bill for an unpaid order (Story 3.12).
+
+## Deferred from: Story 3.12
+
+- `session.settle` takes cash, UPI and card only; wallet and credit rows come with 3.16 and 3.18 (the `payments.method` column has no CHECK so they need no table rebuild).
+- The settle bar and payment split UI is Story 3.13; Undo and `session.settle.reverted` are Story 3.14, which also needs the irreversible-effect guard. `SnapshotBill.paid_minor` stays 0 because only open orders are listed.
+- The idle lock after a settle is fire-and-forget like the pay-at-counter lock: an offline kiosk stays on "Pay at counter" until it reconnects or a new session starts.
+- The Windows-only `arena-kiosk-svc` tests (lockdown, DPAPI, pipes), `arena-tasks` timing tests and `arena-cloud` `binary` test fail in this environment independent of this story; `crates/arena-kiosk-svc/tests/discovery.rs` has unused-import lint errors on Windows.

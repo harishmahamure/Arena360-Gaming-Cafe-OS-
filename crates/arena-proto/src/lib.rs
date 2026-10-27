@@ -180,8 +180,9 @@ pub use process::{
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
-    BillLine, SessionEnd, SessionMode, SessionScreen, SessionStart, SessionStartedEvent,
-    SnapshotBill, SnapshotSession,
+    BillLine, BillSettledEvent, CARD_REFERENCE_MAX, PaymentMethod, PaymentRow, SessionEnd,
+    SessionMode, SessionScreen, SessionSettle, SessionStart, SessionStartedEvent, SettleOutcome,
+    SnapshotBill, SnapshotSession, UNDO_WINDOW_MS,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
@@ -223,7 +224,8 @@ pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use ui_auth::{
     ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_STAFF_PASSWORD_CHARS,
     MAX_TICKET_USES, MIN_STAFF_PASSWORD_CHARS, SessionStaff, SettingEntry, SetupCodeRequest,
-    SignInOk, SignInRequest, UiError, UiIntentRequest, UiMe, UnlockOk, UnlockRequest,
+    SignInOk, SignInRequest, UiError, UiIntentRequest, UiIntentResult, UiMe, UnlockOk,
+    UnlockRequest,
 };
 pub use wizard::{
     AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, COUNTRIES, CafeDetails,

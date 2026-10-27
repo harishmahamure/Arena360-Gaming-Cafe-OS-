@@ -871,6 +871,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::OverrideUsedToday
         | ErrorCode::CreditPaused
         | ErrorCode::PassAlreadyActive
+        | ErrorCode::PackExpired
+        | ErrorCode::PlanNotForGroup
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -3423,7 +3425,7 @@ pub(crate) mod tests {
         );
     }
 
-    async fn rated_pc(hub: &Hub, token_hash: String) -> String {
+    pub(crate) async fn rated_pc(hub: &Hub, token_hash: String) -> String {
         let owner = || Actor {
             kind: ActorKind::Owner,
             id: "owner".into(),
@@ -3491,6 +3493,7 @@ pub(crate) mod tests {
                 device_id: device.into(),
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,
+                pack_id: None,
             }),
             None,
         )).unwrap()})

@@ -39,6 +39,7 @@ async fn timed_session(f: &Fixture, ends_in_ms: i64) -> (String, String) {
             device_id: d.clone(),
             mode: SessionMode::Postpaid,
             player_id: Some(player),
+            pack_id: None,
         }),
     );
     i.issued_at = f.clock.now_ms();
@@ -177,6 +178,7 @@ async fn an_expired_session_lets_the_device_start_another() {
             device_id: d,
             mode: SessionMode::Postpaid,
             player_id: None,
+            pack_id: None,
         }),
     );
     i.issued_at = T0 + 2_000;

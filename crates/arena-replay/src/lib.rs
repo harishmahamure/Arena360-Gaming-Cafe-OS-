@@ -555,6 +555,7 @@ mod tests {
                         device_id: kiosk.clone(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: Some(player_id.clone()),
+                        pack_id: None,
                     }),
                     None,
                 ))
@@ -683,9 +684,10 @@ mod tests {
             let guest = writer
                 .submit_intent(submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
-                        device_id: kiosk,
+                        device_id: kiosk.clone(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: None,
+                        pack_id: None,
                     }),
                     None,
                 ))
@@ -794,7 +796,7 @@ mod tests {
                     None,
                 )
             };
-            writer.submit_intent(sell()).await.unwrap();
+            let first_sale = writer.submit_intent(sell()).await.unwrap();
             let second = writer.submit_intent(sell()).await.unwrap();
             let sale = second
                 .changes
@@ -812,6 +814,54 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            let owned_pack = first_sale
+                .changes
+                .iter()
+                .find(|c| c.tbl == "player_packs")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::WalletTopup(arena_proto::WalletTopup {
+                        player_id: player_id.clone(),
+                        amount_minor: 20_000,
+                        payments: vec![arena_proto::PaymentRow {
+                            method: arena_proto::PaymentMethod::Cash,
+                            amount_minor: 20_000,
+                            reference: None,
+                        }],
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            for (mode, pack_id) in [
+                (arena_proto::SessionMode::Pack, Some(owned_pack)),
+                (arena_proto::SessionMode::Wallet, None),
+            ] {
+                let prepaid = writer
+                    .submit_intent(submit(
+                        IntentPayload::SessionStart(arena_proto::SessionStart {
+                            device_id: kiosk.clone(),
+                            mode,
+                            player_id: Some(player_id.clone()),
+                            pack_id,
+                        }),
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+                writer
+                    .submit_intent(submit(
+                        IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                            session_id: prepaid.changes[0].row_id.clone(),
+                        }),
+                        Some(1),
+                    ))
+                    .await
+                    .unwrap();
+            }
             clock.advance(16 * 24 * 60 * 60 * 1000);
             writer
                 .credit_auto_pause(None)

@@ -10,8 +10,11 @@ pub struct NewSession<'a> {
     pub device_id: &'a str,
     pub group_id: &'a str,
     pub mode: &'a str,
-    pub rate_id: &'a str,
+    pub rate_id: Option<&'a str>,
+    pub pack_id: Option<&'a str>,
     pub started_at: i64,
+    pub ends_at: Option<i64>,
+    pub reserved_minor: i64,
     pub rounding_min: u32,
     pub minimum_min: u32,
     pub grace_min: u32,
@@ -44,6 +47,8 @@ pub struct LiveSession {
     pub paused_at: Option<i64>,
     pub pause_reason: Option<String>,
     pub pause_note: Option<String>,
+    pub pack_id: Option<String>,
+    pub reserved_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,9 +114,10 @@ pub fn insert_session(conn: &Connection, s: &NewSession<'_>) -> Result<(), AppEr
     conn.execute(
         "INSERT INTO sessions (id, player_id, guest_no, device_id, group_id, mode, rate_id, state,
                                started_at, rounding_min, minimum_min, grace_min, time_up_mode,
-                               epoch, business_day, fy, rev, created_at, updated_at)
+                               epoch, business_day, fy, rev, created_at, updated_at, pack_id,
+                               ends_at, reserved_minor)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                 0, 0, 0)",
+                 0, 0, 0, ?16, ?17, ?18)",
         params![
             s.id,
             s.player_id,
@@ -127,7 +133,10 @@ pub fn insert_session(conn: &Connection, s: &NewSession<'_>) -> Result<(), AppEr
             s.time_up_mode,
             s.epoch,
             s.business_day,
-            s.fy
+            s.fy,
+            s.pack_id,
+            s.ends_at,
+            s.reserved_minor
         ],
     )
     .map_err(db_error)?;
@@ -174,7 +183,7 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
         s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by, s.ends_at, s.paused_at,
-        s.pause_reason, s.pause_note";
+        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor";
 
 fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
@@ -199,6 +208,8 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         paused_at: r.get(18)?,
         pause_reason: r.get(19)?,
         pause_note: r.get(20)?,
+        pack_id: r.get(21)?,
+        reserved_minor: r.get(22)?,
     })
 }
 
@@ -613,22 +624,31 @@ pub fn effect_recorded(
 }
 
 pub fn find_ending(conn: &Connection, session_id: &str) -> Result<Option<Ending>, AppError> {
-    type Found = (String, String, i64, i64, i64);
+    type Found = (String, String, i64, i64, i64, String);
     let found: Option<Found> = conn
         .query_row(
-            "SELECT s.id, o.id, s.ended_at, s.rev, o.total_minor
+            "SELECT s.id, o.id, s.ended_at, s.rev, o.total_minor, s.mode
              FROM sessions s JOIN orders o ON o.session_id = s.id
              WHERE s.id = ?1 AND s.state = 'ended' AND s.ended_at IS NOT NULL",
             [session_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .optional()
         .map_err(db_error)?;
-    let Some((session_id, order_id, ended_at, session_rev, total_minor)) = found else {
+    let Some((session_id, order_id, ended_at, session_rev, total_minor, mode)) = found else {
         return Ok(None);
     };
     let forward = forward_intent_id(conn, "sessions", &session_id, "session.end")?;
-    let irreversible = effect_recorded(conn, forward.as_deref(), &order_id)?;
+    let irreversible = mode != "postpaid" || effect_recorded(conn, forward.as_deref(), &order_id)?;
     Ok(Some(Ending {
         session_id,
         order_id,
@@ -803,4 +823,15 @@ pub fn expire_session(conn: &Connection, id: &str, ended_at: i64) -> Result<(), 
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// The sum a player's live wallet sessions have set aside from the wallet balance.
+pub fn sum_reserved_minor(conn: &Connection, player_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(reserved_minor), 0) FROM sessions
+         WHERE player_id = ?1 AND mode = 'wallet' AND state IN ('active', 'paused', 'grace')",
+        [player_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
 }

@@ -41,6 +41,7 @@ mod pc_command;
 mod plan_sales;
 mod plans;
 mod players;
+mod prepaid;
 mod printer_status;
 mod products;
 mod rates;
@@ -217,7 +218,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::PlayerCreate(_) | P::PlayerUpdate(_) | P::PlayerPasswordReset(_) => {
             Target::Player(Box::new(players::load(tx, &intent.payload)?))
         }
-        P::SessionStart(s) => Target::Session(Box::new(session::load(tx, s)?)),
+        P::SessionStart(s) => Target::Session(Box::new(session::load(tx, s, now)?)),
         P::SessionEnd(e) => Target::SessionEnd(Box::new(session::load_end(tx, e)?)),
         P::SessionSettle(s) => Target::SessionSettle(Box::new(session::load_settle(tx, s, now)?)),
         P::SessionEndReverted(r) => {

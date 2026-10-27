@@ -4,7 +4,7 @@ use arena_proto::{
 use arena_store::{
     ChangeOp, CreditRow, NewPayment, NewTopupOrder, NewWalletTxn, OrderRow, OrderTxn, RowKey,
     StoreTx, Table, adjust_outstanding, adjust_wallet, credit_aging_with, delete_row,
-    effect_recorded, find_credit, find_order, find_wallet, forward_intent_id, insert_payment,
+    effect_recorded, find_credit, find_order, forward_intent_id, insert_payment,
     insert_topup_order, insert_wallet_txn, list_order_wallet_txns, list_payment_ids, read_row,
     set_credit_paused,
 };
@@ -26,7 +26,7 @@ pub(crate) struct CollectTarget {
 pub(super) fn load_collect(tx: &StoreTx<'_>, c: &CreditCollect) -> Result<CollectTarget, AppError> {
     Ok(CollectTarget {
         credit: find_credit(tx, &c.player_id)?,
-        wallet_minor: find_wallet(tx, &c.player_id)?.map_or(0, |w| w.balance_minor),
+        wallet_minor: super::session::available_wallet(tx, &c.player_id)?,
         pause_rule: super::credit_pause::rule_on(tx)?,
     })
 }

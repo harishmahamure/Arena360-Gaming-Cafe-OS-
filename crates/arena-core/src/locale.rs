@@ -328,6 +328,68 @@ pub fn snapshot_locale(rows: &[LocaleSetting], now_ms: i64) -> SnapshotLocale {
     }
 }
 
+/// `minor` units as the branch writes money at `now_ms`: the shared formatter of the UI
+/// (`₹1,23,456.78`, no decimals for a zero exponent, the symbol after the number when the branch
+/// puts it there).
+pub fn format_money(tx: &StoreTx<'_>, now_ms: i64, minor: i64) -> Result<String, AppError> {
+    let Some(rows) = read_rows(tx)? else {
+        return Ok(minor.to_string());
+    };
+    let (_, l) = resolve(&rows, now_ms);
+    let (exponent, symbol) = currency(&l.currency)
+        .map(|c| (usize::from(c.exponent), c.symbol.to_owned()))
+        .unwrap_or((2, l.currency.clone()));
+    Ok(format_minor(
+        minor,
+        exponent,
+        &symbol,
+        l.symbol_position,
+        l.number_format,
+    ))
+}
+
+fn format_minor(
+    minor: i64,
+    exponent: usize,
+    symbol: &str,
+    position: SymbolPosition,
+    format: NumberFormat,
+) -> String {
+    let digits = format!("{:0>width$}", minor.unsigned_abs(), width = exponent + 1);
+    let (whole, fraction) = digits.split_at(digits.len() - exponent);
+    let size = match format {
+        NumberFormat::Indian => 2,
+        NumberFormat::International => 3,
+    };
+    let grouped = if whole.len() <= 3 {
+        whole.to_owned()
+    } else {
+        let (head, tail) = whole.split_at(whole.len() - 3);
+        let mut groups: Vec<&str> = Vec::new();
+        let mut end = head.len();
+        while end > 0 {
+            groups.push(&head[end.saturating_sub(size)..end]);
+            end = end.saturating_sub(size);
+        }
+        groups.reverse();
+        format!("{},{tail}", groups.join(","))
+    };
+    let number = if exponent > 0 {
+        format!("{grouped}.{fraction}")
+    } else {
+        grouped
+    };
+    let amount = match position {
+        SymbolPosition::After => format!("{number} {symbol}"),
+        SymbolPosition::Before => format!("{symbol}{number}"),
+    };
+    if minor < 0 {
+        format!("\u{2212}{amount}")
+    } else {
+        amount
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,5 +595,18 @@ mod tests {
         assert_eq!(l.number_format, NumberFormat::International);
         assert_eq!(l.tz, Tz::America__New_York);
         assert_eq!((l.day_start_min, l.fy_start_month), (120, 1));
+    }
+
+    #[test]
+    fn money_groups_like_the_ui_formatter() {
+        let f = |m, e, p, n| format_minor(m, e, "₹", p, n);
+        let (before, after) = (SymbolPosition::Before, SymbolPosition::After);
+        let (indian, intl) = (NumberFormat::Indian, NumberFormat::International);
+        assert_eq!(f(12_345_678, 2, before, indian), "₹1,23,456.78");
+        assert_eq!(f(12_345_678, 2, after, intl), "123,456.78 ₹");
+        assert_eq!(f(4_000, 2, before, indian), "₹40.00");
+        assert_eq!(f(5, 2, before, indian), "₹0.05");
+        assert_eq!(f(1234, 0, before, intl), "₹1,234");
+        assert_eq!(f(-250, 2, before, indian), "\u{2212}₹2.50");
     }
 }

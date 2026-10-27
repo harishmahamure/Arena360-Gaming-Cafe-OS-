@@ -80,8 +80,9 @@ pub use plans::{
     PlanRow, find_plan, insert_plan, insert_plan_group, list_plan_groups, list_plans, update_plan,
 };
 pub use player_packs::{
-    NewPlanLine, NewPlayerPack, PlayerPackRow, find_pack_for_order, has_unexpired_pass,
-    insert_plan_line, insert_player_pack, list_player_packs,
+    NewPlanLine, NewPlayerPack, PlayerPackRow, deduct_pack_minutes, find_pack_for_order,
+    find_player_pack, has_unexpired_pass, insert_plan_line, insert_player_pack, list_player_packs,
+    pack_in_use,
 };
 pub use players::{
     PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
@@ -102,7 +103,7 @@ pub use sessions::{
     find_settlement, forward_intent_id, insert_effect, insert_order, insert_order_line,
     insert_payment, insert_segment, insert_session, list_live_sessions, list_open_order_lines,
     list_open_orders, list_order_line_ids, list_payment_ids, list_segments, next_guest_no,
-    reopen_order, reopen_segments, reopen_session, settle_order,
+    reopen_order, reopen_segments, reopen_session, settle_order, sum_reserved_minor,
 };
 pub use sessions::{
     SessionListing, assign_order_player, assign_session_player, fold_pause, list_sessions_for_day,

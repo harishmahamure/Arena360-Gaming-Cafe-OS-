@@ -13,7 +13,7 @@ use arena_store::{
     insert_segment, insert_session, insert_wallet_txn, list_order_line_ids, list_order_wallet_txns,
     list_payment_ids, list_segments, next_guest_no, pause_session, read_row, reopen_order,
     reopen_segments, reopen_session, resume_session, set_device_state, set_override_day,
-    settle_order,
+    settle_order, sum_reserved_minor,
 };
 
 use super::mutate::Written;
@@ -27,13 +27,18 @@ pub(crate) struct SessionTarget {
     busy: bool,
     rate: Option<RateRow>,
     player: bool,
+    prepaid: super::prepaid::StartExtras,
 }
 
 pub(super) fn invalid(field: &str, message: &str) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
 }
 
-pub(super) fn load(tx: &StoreTx<'_>, s: &SessionStart) -> Result<SessionTarget, AppError> {
+pub(super) fn load(
+    tx: &StoreTx<'_>,
+    s: &SessionStart,
+    now_ms: i64,
+) -> Result<SessionTarget, AppError> {
     let device = find_device_meta(tx, &s.device_id)?.filter(|d| d.deleted_at.is_none());
     let busy = match &device {
         Some(d) => d.state == "in_session" || device_has_live_session(tx, &d.device_id)?,
@@ -47,11 +52,17 @@ pub(super) fn load(tx: &StoreTx<'_>, s: &SessionStart) -> Result<SessionTarget, 
         Some(id) => find_player(tx, id)?.is_some(),
         None => false,
     };
+    let prepaid = if player {
+        super::prepaid::load_start(tx, s, rate.as_ref(), now_ms)?
+    } else {
+        super::prepaid::StartExtras::default()
+    };
     Ok(SessionTarget {
         device,
         busy,
         rate,
         player,
+        prepaid,
     })
 }
 
@@ -71,8 +82,18 @@ pub(super) fn validate(
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "session.start takes no base_rev"));
     }
-    if s.mode != SessionMode::Postpaid {
-        return Err(invalid("mode", "only a postpaid session can start here"));
+    if matches!(s.mode, SessionMode::Pass | SessionMode::Block) {
+        return Err(invalid(
+            "mode",
+            "only a postpaid, pack or wallet session can start here",
+        ));
+    }
+    let prepaid = s.mode != SessionMode::Postpaid;
+    if prepaid && s.player_id.is_none() {
+        return Err(invalid(
+            "player_id",
+            "a pack or wallet session needs a player profile",
+        ));
     }
     let Some(d) = &t.device else {
         return Err(AppError::with_field(
@@ -84,13 +105,13 @@ pub(super) fn validate(
     if d.kind != "pc" {
         return Err(invalid("device_id", "only a PC takes a session"));
     }
-    if d.group_id.is_none() {
+    let Some(group_id) = &d.group_id else {
         return Err(AppError::with_field(
             ErrorCode::DeviceUnassigned,
             "device_id",
             "Assign this PC to a group before starting a session.",
         ));
-    }
+    };
     if d.state == "maintenance" {
         return Err(AppError::with_field(
             ErrorCode::PcUnavailable,
@@ -105,7 +126,7 @@ pub(super) fn validate(
             "This PC already has a session.",
         ));
     }
-    if t.rate.is_none() {
+    if t.rate.is_none() && s.mode != SessionMode::Pack {
         return Err(AppError::with_field(
             ErrorCode::NoRate,
             "device_id",
@@ -119,7 +140,7 @@ pub(super) fn validate(
             "no such player",
         ));
     }
-    Ok(())
+    super::prepaid::check_start(s, group_id, &t.prepaid)
 }
 
 pub(super) fn mutate(
@@ -129,9 +150,8 @@ pub(super) fn mutate(
     epoch: &Epoch,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
-    let (Some(d), Some(rate), Some(group_id)) = (
+    let (Some(d), Some(group_id)) = (
         &t.device,
-        &t.rate,
         t.device.as_ref().and_then(|d| d.group_id.as_deref()),
     ) else {
         return Err(AppError::new(
@@ -139,6 +159,8 @@ pub(super) fn mutate(
             "a session validated without its target",
         ));
     };
+    let rate = t.rate.as_ref().filter(|_| s.mode != SessionMode::Pack);
+    let plan = super::prepaid::plan_start(s, &t.prepaid, now_ms)?;
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
         AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
     })?;
@@ -158,8 +180,11 @@ pub(super) fn mutate(
             device_id: &d.device_id,
             group_id,
             mode: s.mode.as_str(),
-            rate_id: &rate.rate_id,
+            rate_id: rate.map(|r| r.rate_id.as_str()),
+            pack_id: plan.pack_id.as_deref(),
             started_at: now_ms,
+            ends_at: plan.ends_at,
+            reserved_minor: plan.reserved_minor,
             rounding_min: rules.rounding_min,
             minimum_min: rules.minimum_min,
             grace_min: rules.grace_min,
@@ -175,7 +200,7 @@ pub(super) fn mutate(
         &id,
         now_ms,
         &d.device_id,
-        rate.price_per_hour_minor,
+        rate.map_or(0, |r| r.price_per_hour_minor),
     )?;
     set_device_state(tx, &d.device_id, "in_session", Some(&d.state), None)?;
     Ok(vec![
@@ -204,6 +229,7 @@ pub(crate) struct EndTarget {
     session: Option<LiveSession>,
     segments: Vec<SegmentRow>,
     device: Option<DeviceMetaRow>,
+    close: super::prepaid::CloseExtras,
 }
 
 pub(super) fn load_end(tx: &StoreTx<'_>, e: &SessionEnd) -> Result<EndTarget, AppError> {
@@ -213,6 +239,7 @@ pub(super) fn load_end(tx: &StoreTx<'_>, e: &SessionEnd) -> Result<EndTarget, Ap
     Ok(EndTarget {
         segments: list_segments(tx, Some(&session.id))?,
         device: find_device_meta(tx, &session.device_id)?,
+        close: super::prepaid::load_close(tx, &session)?,
         session: Some(session),
     })
 }
@@ -243,8 +270,11 @@ pub(super) fn validate_end(t: &EndTarget) -> Result<(), AppError> {
     if !["active", "paused", "grace"].contains(&s.state.as_str()) {
         return Err(invalid("session_id", "this session has already ended"));
     }
-    if s.mode != SessionMode::Postpaid.as_str() {
-        return Err(invalid("session_id", "only a postpaid session ends here"));
+    if !["postpaid", "pack", "wallet"].contains(&s.mode.as_str()) {
+        return Err(invalid(
+            "session_id",
+            "this kind of session cannot end here",
+        ));
     }
     Ok(())
 }
@@ -261,6 +291,21 @@ pub(super) fn mutate_end(
             "a session validated without its target",
         ));
     };
+    if super::prepaid::is_prepaid(s) {
+        return super::prepaid::close_out(
+            tx,
+            &super::prepaid::Closing {
+                session: s,
+                segments: &t.segments,
+                device: t.device.as_ref(),
+                extras: &t.close,
+                ending: super::prepaid::Ending::Staff,
+                ended_at: now_ms,
+                actor_id: &intent.actor.id,
+            },
+            now_ms,
+        );
+    }
     let lines = crate::billing::bill(
         &t.segments,
         s.rounding_min,
@@ -376,7 +421,7 @@ pub(super) fn load_payer(
     now_ms: i64,
 ) -> Result<SettleTarget, AppError> {
     let wallet_minor = match player_id {
-        Some(p) => find_wallet(tx, p)?.map_or(0, |w| w.balance_minor),
+        Some(p) => available_wallet(tx, p)?,
         None => 0,
     };
     let wants_credit = payments.iter().any(|p| p.method == PaymentMethod::Credit);
@@ -1310,4 +1355,11 @@ fn validate_credit(
         ));
     }
     Ok(())
+}
+
+/// The wallet balance a spend may use: the balance less what the player's running wallet
+/// sessions have set aside.
+pub(super) fn available_wallet(tx: &StoreTx<'_>, player_id: &str) -> Result<i64, AppError> {
+    let balance = find_wallet(tx, player_id)?.map_or(0, |w| w.balance_minor);
+    Ok((balance - sum_reserved_minor(tx, player_id)?).max(0))
 }

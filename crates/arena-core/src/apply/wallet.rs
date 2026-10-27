@@ -6,7 +6,7 @@ use arena_store::{
     ChangeOp, NewPayment, NewTopupOrder, NewWalletTxn, OrderRow, RowKey, StoreTx, Table,
     adjust_wallet, delete_row, effect_recorded, find_order, find_player, find_wallet,
     forward_intent_id, insert_payment, insert_topup_order, insert_wallet, insert_wallet_txn,
-    list_order_wallet_txns, list_payment_ids, read_row, wallet_balance,
+    list_order_wallet_txns, list_payment_ids, read_row,
 };
 
 use super::mutate::Written;
@@ -204,7 +204,7 @@ pub(super) fn load_topup_reverted(
     };
     let forward = forward_intent_id(tx, "orders", &order.id, "wallet.topup")?;
     let balance = match &order.player_id {
-        Some(p) => wallet_balance(tx, p)?,
+        Some(p) => super::session::available_wallet(tx, p)?,
         None => 0,
     };
     Ok(TopupRevertTarget {

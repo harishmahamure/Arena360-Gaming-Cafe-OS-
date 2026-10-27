@@ -131,6 +131,13 @@ enum Op {
         slot: u8,
         guest: bool,
     },
+    /// A pack or wallet start on an existing PC for the first player (or a guest), which must
+    /// either write exactly the session rows with an end time or write nothing.
+    PrepaidStart {
+        slot: u8,
+        wallet: bool,
+        guest: bool,
+    },
     SessionEnd {
         slot: u8,
     },
@@ -336,6 +343,11 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         1 => prop::bool::weighted(0.8).prop_map(|known| Op::PlayerReset { known }),
         3 => (0..3u8, any::<bool>()).prop_map(|(slot, guest)| Op::Session { slot, guest }),
+        2 => (0..3u8, any::<bool>(), prop::bool::weighted(0.2)).prop_map(|(slot, wallet, guest)| Op::PrepaidStart {
+            slot,
+            wallet,
+            guest
+        }),
         2 => (0..3u8).prop_map(|slot| Op::SessionEnd { slot }),
         2 => (0..3u8, any::<bool>(), any::<bool>()).prop_map(|(slot, short, split)| Op::SessionSettle {
             slot,
@@ -1296,6 +1308,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     device_id: device.clone(),
                     mode: arena_proto::SessionMode::Postpaid,
                     player_id: player,
+                    pack_id: None,
                 }),
                 None,
             ));
@@ -1307,6 +1320,83 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), before + 3);
             }
             prop_assert_eq!(live(hub), 1);
+        }
+        Op::PrepaidStart {
+            slot,
+            wallet,
+            guest,
+        } => {
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let player = hub
+                .reader
+                .rows(Table::Players)
+                .unwrap()
+                .first()
+                .map(|p| text(p, "player_id"))
+                .filter(|_| !*guest);
+            let pack = player.as_ref().and_then(|p| {
+                hub.reader
+                    .rows(Table::PlayerPacks)
+                    .unwrap()
+                    .iter()
+                    .find(|r| text(r, "player_id") == *p)
+                    .map(|r| text(r, "id"))
+            });
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionStart(arena_proto::SessionStart {
+                    device_id: device.clone(),
+                    mode: if *wallet {
+                        arena_proto::SessionMode::Wallet
+                    } else {
+                        arena_proto::SessionMode::Pack
+                    },
+                    player_id: player,
+                    pack_id: pack.filter(|_| !*wallet),
+                }),
+                None,
+            ));
+            match &out {
+                Ok(_) => {
+                    prop_assert_eq!(hub.change_count(), before + 3);
+                    let started = hub
+                        .reader
+                        .rows(Table::Sessions)
+                        .unwrap()
+                        .into_iter()
+                        .filter(|s| text(s, "device_id") == device && text(s, "state") == "active")
+                        .collect::<Vec<_>>();
+                    prop_assert_eq!(started.len(), 1);
+                    prop_assert!(matches!(started[0]["ends_at"], RowValue::Integer(_)));
+                    if *wallet {
+                        prop_assert!(int(&started[0], "reserved_minor") > 0);
+                    }
+                }
+                Err(e) => {
+                    prop_assert_eq!(hub.change_count(), before);
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::PcBusy
+                                | ErrorCode::ValidationFailed
+                                | ErrorCode::InsufficientBalance
+                                | ErrorCode::NotFound
+                                | ErrorCode::PackExpired
+                                | ErrorCode::PlanNotForGroup
+                        ),
+                        "{:?}",
+                        e
+                    );
+                }
+            }
         }
         Op::SessionEnd { slot } => {
             let Some(device) = hub
@@ -1337,20 +1427,27 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             });
             let out = hub.submit_new(hub.intent(payload.clone(), Some(rev)));
             prop_assert!(out.is_ok(), "{:?}", out);
-            prop_assert_eq!(hub.change_count(), before + 5);
+            let prepaid = text(&session, "mode") != "postpaid";
+            let wanted = if prepaid { "settled" } else { "open" };
+            if prepaid {
+                prop_assert!(hub.change_count() > before + 5);
+            } else {
+                prop_assert_eq!(hub.change_count(), before + 5);
+            }
+            let after = hub.change_count();
             let orders = hub.reader.rows(Table::Orders).unwrap();
             prop_assert_eq!(
                 orders
                     .iter()
                     .filter(|o| {
-                        o["session_id"] == RowValue::Text(id.clone()) && text(o, "status") == "open"
+                        o["session_id"] == RowValue::Text(id.clone()) && text(o, "status") == wanted
                     })
                     .count(),
                 1
             );
             let out = hub.submit_new(hub.intent(payload, Some(rev)));
             prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
-            prop_assert_eq!(hub.change_count(), before + 5);
+            prop_assert_eq!(hub.change_count(), after);
         }
         Op::SessionSettle { slot, short, split } => {
             let open: Vec<_> = hub

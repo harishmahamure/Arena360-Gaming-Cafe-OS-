@@ -948,3 +948,86 @@ async fn a_counter_sells_a_plan_and_the_wallet_route_lists_what_the_player_owns(
         owned["bought_at"].as_i64().unwrap() + 7 * 24 * 60 * 60 * 1000
     );
 }
+
+#[tokio::test]
+async fn ending_a_wallet_session_settles_at_once_and_offers_no_undo() {
+    use arena_proto::{IntentPayload, SessionEnd, SessionMode, SessionStart};
+
+    use crate::ui_auth::tests::{intent_as, rated_pc};
+
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    let (_, reply) = create(&hub, &token, body(form("Asha_9", "+91 98765 43210"), None)).await;
+    let player = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let _kiosk = hub
+        .lan
+        .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+    let actor = || arena_proto::Actor {
+        kind: arena_proto::ActorKind::Staff,
+        id: "x".into(),
+    };
+    let start = || {
+        json!({"intent": serde_json::to_value(intent_as(
+            actor(),
+            IntentPayload::SessionStart(SessionStart {
+                device_id: device.clone(),
+                mode: SessionMode::Wallet,
+                player_id: Some(player.clone()),
+                pack_id: None,
+            }),
+            None,
+        )).unwrap()})
+    };
+    let (status, refused) = call(&hub, "POST", "/ui/intent", Some(&token), Some(start())).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "INSUFFICIENT_BALANCE");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Balance ₹0.00. Top up at counter."),
+        "{refused}"
+    );
+
+    let topup = topup_body(
+        &hub,
+        &player,
+        20_000,
+        json!([{"method": "cash", "amount_minor": 20000}]),
+    );
+    let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(topup)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(start())).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let session_id = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    hub.clock.advance(41 * 60_000);
+    let end = json!({"intent": serde_json::to_value(intent_as(
+        actor(),
+        IntentPayload::SessionEnd(SessionEnd { session_id: session_id.clone() }),
+        Some(1),
+    )).unwrap()});
+    let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(end)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["ended"]["session_id"], session_id.as_str());
+    assert_eq!(reply["ended"]["total_minor"], 9_000);
+    assert_eq!(reply["ended"]["irreversible"], true);
+
+    let (_, wallet) = call(
+        &hub,
+        "GET",
+        &format!("/ui/players/wallet?id={player}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(wallet["balance_minor"], 11_000);
+    assert_eq!(wallet["txns"][0]["reason"], "bill");
+}

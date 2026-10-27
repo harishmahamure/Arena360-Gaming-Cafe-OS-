@@ -5,6 +5,7 @@ use arena_store::{
 };
 
 use super::mutate::Written;
+use super::prepaid::{self, CloseExtras, Closing, Ending};
 use super::session::invalid;
 
 #[derive(Default)]
@@ -12,6 +13,7 @@ pub(crate) struct ExpireTarget {
     session: Option<LiveSession>,
     segments: Vec<SegmentRow>,
     device: Option<DeviceMetaRow>,
+    close: CloseExtras,
 }
 
 pub(super) fn load(tx: &StoreTx<'_>, e: &SessionExpire) -> Result<ExpireTarget, AppError> {
@@ -21,6 +23,7 @@ pub(super) fn load(tx: &StoreTx<'_>, e: &SessionExpire) -> Result<ExpireTarget, 
     Ok(ExpireTarget {
         segments: list_segments(tx, Some(&session.id))?,
         device: find_device_meta(tx, &session.device_id)?,
+        close: prepaid::load_close(tx, &session)?,
         session: Some(session),
     })
 }
@@ -50,7 +53,11 @@ pub(super) fn validate(intent: &Intent, t: &ExpireTarget) -> Result<(), AppError
     }
 }
 
-pub(super) fn mutate(tx: &StoreTx<'_>, t: &ExpireTarget) -> Result<Vec<Written>, AppError> {
+pub(super) fn mutate(
+    tx: &StoreTx<'_>,
+    t: &ExpireTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
     let Some(s) = &t.session else {
         return Err(AppError::new(
             ErrorCode::Internal,
@@ -58,6 +65,21 @@ pub(super) fn mutate(tx: &StoreTx<'_>, t: &ExpireTarget) -> Result<Vec<Written>,
         ));
     };
     let ended_at = s.ends_at.unwrap_or(s.started_at);
+    if prepaid::is_prepaid(s) {
+        return prepaid::close_out(
+            tx,
+            &Closing {
+                session: s,
+                segments: &t.segments,
+                device: t.device.as_ref(),
+                extras: &t.close,
+                ending: Ending::Expired,
+                ended_at,
+                actor_id: "hub",
+            },
+            now_ms,
+        );
+    }
     close_segments(tx, &s.id, ended_at)?;
     expire_session(tx, &s.id, ended_at)?;
     let mut written = vec![Written {

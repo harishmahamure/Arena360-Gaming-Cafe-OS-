@@ -7,21 +7,25 @@ use arena_proto::{
     GroupUpsert, PcAction, RateUpsert, SessionMode, SessionStart,
 };
 
-fn text(row: &Row, col: &str) -> String {
+pub(super) fn text(row: &Row, col: &str) -> String {
     match &row[col] {
         RowValue::Text(t) => t.clone(),
         other => panic!("{col}: {other:?}"),
     }
 }
 
-fn int(row: &Row, col: &str) -> i64 {
+pub(super) fn int(row: &Row, col: &str) -> i64 {
     match &row[col] {
         RowValue::Integer(n) => *n,
         other => panic!("{col}: {other:?}"),
     }
 }
 
-async fn submit(f: &Fixture, actor: Actor, p: IntentPayload) -> Result<Applied, AppError> {
+pub(super) async fn submit(
+    f: &Fixture,
+    actor: Actor,
+    p: IntentPayload,
+) -> Result<Applied, AppError> {
     let mut i = intent(actor, p);
     i.issued_at = f.clock.now_ms();
     f.writer.submit_intent(i).await
@@ -86,28 +90,33 @@ pub(super) async fn pc(
     id
 }
 
-fn start_of(device: &str, player: Option<&str>) -> IntentPayload {
+pub(super) fn start_of(device: &str, player: Option<&str>) -> IntentPayload {
     IntentPayload::SessionStart(SessionStart {
         device_id: device.into(),
         mode: SessionMode::Postpaid,
         player_id: player.map(Into::into),
+        pack_id: None,
     })
 }
 
-async fn start(f: &Fixture, device: &str, player: Option<&str>) -> Result<Applied, AppError> {
+pub(super) async fn start(
+    f: &Fixture,
+    device: &str,
+    player: Option<&str>,
+) -> Result<Applied, AppError> {
     submit(f, owner(), start_of(device, player)).await
 }
 
-fn refusal(r: Result<Applied, AppError>) -> (ErrorCode, Option<String>) {
+pub(super) fn refusal(r: Result<Applied, AppError>) -> (ErrorCode, Option<String>) {
     let e = r.unwrap_err();
     (e.code, e.field)
 }
 
-fn sessions(f: &Fixture) -> Vec<Row> {
+pub(super) fn sessions(f: &Fixture) -> Vec<Row> {
     reopen(f).rows(Table::Sessions).unwrap()
 }
 
-fn state_of(f: &Fixture, device: &str) -> String {
+pub(super) fn state_of(f: &Fixture, device: &str) -> String {
     reopen(f)
         .rows(Table::DevicesMeta)
         .unwrap()
@@ -257,13 +266,14 @@ async fn refusals_name_the_code_and_write_nothing() {
         refusal(start(&f, &ok, Some("01JNOSUCHPLAYER")).await),
         field(ErrorCode::NotFound, "player_id")
     );
-    let pack = IntentPayload::SessionStart(SessionStart {
+    let pass = IntentPayload::SessionStart(SessionStart {
         device_id: ok.clone(),
-        mode: SessionMode::Pack,
+        mode: SessionMode::Pass,
         player_id: None,
+        pack_id: None,
     });
     assert_eq!(
-        refusal(submit(&f, owner(), pack).await),
+        refusal(submit(&f, owner(), pass).await),
         field(ErrorCode::ValidationFailed, "mode")
     );
     let mut with_rev = intent(owner(), start_of(&ok, None));
@@ -384,7 +394,7 @@ async fn two_simultaneous_starts_one_wins_and_the_other_is_busy() {
     assert_eq!(sessions(&f).len(), 1);
 }
 
-fn end_intent(session: &str, rev: Option<i64>) -> Intent {
+pub(super) fn end_intent(session: &str, rev: Option<i64>) -> Intent {
     let mut i = intent(
         owner(),
         IntentPayload::SessionEnd(arena_proto::SessionEnd {
@@ -395,13 +405,13 @@ fn end_intent(session: &str, rev: Option<i64>) -> Intent {
     i
 }
 
-async fn end(f: &Fixture, i: Intent) -> Result<Applied, AppError> {
+pub(super) async fn end(f: &Fixture, i: Intent) -> Result<Applied, AppError> {
     let mut i = i;
     i.issued_at = f.clock.now_ms();
     f.writer.submit_intent(i).await
 }
 
-fn table(f: &Fixture, t: Table) -> Vec<Row> {
+pub(super) fn table(f: &Fixture, t: Table) -> Vec<Row> {
     reopen(f).rows(t).unwrap()
 }
 
@@ -567,7 +577,7 @@ async fn a_database_allows_one_order_per_session() {
         .unwrap();
 }
 
-fn pay(
+pub(super) fn pay(
     method: arena_proto::PaymentMethod,
     amount: i64,
     reference: Option<&str>,
@@ -794,7 +804,7 @@ fn settle_revert_intent(order: &str, rev: Option<i64>) -> Intent {
     i
 }
 
-fn rev_of(f: &Fixture, t: Table, id: &str) -> i64 {
+pub(super) fn rev_of(f: &Fixture, t: Table, id: &str) -> i64 {
     int(
         table(f, t).iter().find(|r| text(r, "id") == id).unwrap(),
         "rev",
@@ -1356,7 +1366,7 @@ async fn resume(f: &Fixture, session: &str) -> Result<Applied, AppError> {
     end(f, resume_intent(session, Some(rev))).await
 }
 
-fn row_of(f: &Fixture, t: Table, id: &str) -> Row {
+pub(super) fn row_of(f: &Fixture, t: Table, id: &str) -> Row {
     table(f, t)
         .into_iter()
         .find(|r| text(r, "id") == id)
@@ -1608,7 +1618,7 @@ fn topup_intent(player: &str, amount: i64, payments: Vec<arena_proto::PaymentRow
     )
 }
 
-fn topup_revert_intent(order: &str, rev: Option<i64>) -> Intent {
+pub(super) fn topup_revert_intent(order: &str, rev: Option<i64>) -> Intent {
     let mut i = intent(
         owner(),
         IntentPayload::WalletTopupReverted(arena_proto::WalletTopupReverted {
@@ -1619,7 +1629,7 @@ fn topup_revert_intent(order: &str, rev: Option<i64>) -> Intent {
     i
 }
 
-fn balance(f: &Fixture, player: &str) -> i64 {
+pub(super) fn balance(f: &Fixture, player: &str) -> i64 {
     int(
         table(f, Table::Wallets)
             .iter()
@@ -1629,7 +1639,7 @@ fn balance(f: &Fixture, player: &str) -> i64 {
     )
 }
 
-fn ledger_sum(f: &Fixture, player: &str) -> i64 {
+pub(super) fn ledger_sum(f: &Fixture, player: &str) -> i64 {
     table(f, Table::WalletTxns)
         .iter()
         .filter(|t| text(t, "player_id") == player)
@@ -1637,11 +1647,11 @@ fn ledger_sum(f: &Fixture, player: &str) -> i64 {
         .sum()
 }
 
-async fn player(f: &Fixture, username: &str, phone: &str) -> String {
+pub(super) async fn player(f: &Fixture, username: &str, phone: &str) -> String {
     add(f, owner(), &form(username, phone)).await.unwrap().0
 }
 
-async fn topped_up(f: &Fixture, player: &str, amount: i64) -> String {
+pub(super) async fn topped_up(f: &Fixture, player: &str, amount: i64) -> String {
     end(
         f,
         topup_intent(
@@ -2312,7 +2322,7 @@ async fn creating_a_profile_in_a_conversion_needs_player_manage() {
     .unwrap();
 }
 
-fn credit_intent(player: &str, limit: i64, days: &[u16]) -> Intent {
+pub(super) fn credit_intent(player: &str, limit: i64, days: &[u16]) -> Intent {
     intent(
         owner(),
         IntentPayload::CreditSetLimit(arena_proto::CreditSetLimit {
@@ -2712,7 +2722,11 @@ async fn a_guest_bill_linked_to_a_credit_player_offers_credit() {
     assert_eq!(bill.credit.as_ref().unwrap().limit_minor, 50_000);
 }
 
-fn collect_intent(player: &str, amount: i64, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+pub(super) fn collect_intent(
+    player: &str,
+    amount: i64,
+    payments: Vec<arena_proto::PaymentRow>,
+) -> Intent {
     intent(
         owner(),
         IntentPayload::CreditCollect(arena_proto::CreditCollect {
@@ -3334,7 +3348,11 @@ async fn plan_of(f: &Fixture, kind: &str, price: i64, active: bool) -> String {
     .clone()
 }
 
-fn sell_intent(player: &str, plan: &str, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+pub(super) fn sell_intent(
+    player: &str,
+    plan: &str,
+    payments: Vec<arena_proto::PaymentRow>,
+) -> Intent {
     intent(
         owner(),
         IntentPayload::PlanSell(arena_proto::PlanSell {

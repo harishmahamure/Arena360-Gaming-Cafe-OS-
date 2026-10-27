@@ -1087,6 +1087,7 @@ mod tests {
             device_id: device.clone(),
             mode: arena_proto::SessionMode::Postpaid,
             player_id: None,
+            pack_id: None,
         }))
         .await
         .unwrap();
@@ -1169,6 +1170,7 @@ mod tests {
                 device_id: device,
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,
+                pack_id: None,
             }),
             None,
         )

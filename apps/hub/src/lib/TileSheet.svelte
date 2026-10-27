@@ -32,6 +32,7 @@
   } from "./auth";
   import ConvertGuest from "./players/ConvertGuest.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
+  import StartOptions from "./players/StartOptions.svelte";
   import SettleBar from "./SettleBar.svelte";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
   import {
@@ -51,6 +52,7 @@
     settleJob,
     startJob,
     type Job,
+    type StartChoice,
   } from "./tile-actions.svelte";
 
   type Badge = {
@@ -104,6 +106,7 @@
   let textError: MessageKey | null = $state(null);
   let pick = $state("");
   let picked: { id?: string; name?: string } | null = $state(null);
+  let choice: StartChoice = $state({ mode: "postpaid" });
   let pausing = $state(false);
   let approving: Job | null = $state(null);
   let approvalPrompt: MessageKey = $state("ui.pin.prompt");
@@ -124,6 +127,15 @@
   $effect(() => {
     if (!free) picked = null;
   });
+  $effect(() => {
+    void picked?.id;
+    choice = { mode: "postpaid" };
+  });
+  const START_LABEL: Record<StartChoice["mode"], MessageKey> = {
+    postpaid: "hub.session.start",
+    pack: "hub.session.start_pack",
+    wallet: "hub.session.start_wallet",
+  };
   const billing = $derived(session !== undefined);
   $effect(() => {
     if (!billing) return;
@@ -341,7 +353,7 @@
       {#if cmd.state === "failed"}<span aria-hidden="true">⚠</span>
         <span>{t("hub.floor.remote_unlock_failed")}</span>
       {:else if cmd.state === "refused"}<span aria-hidden="true">⚠</span>
-        <span>{t(cmd.refusal ?? "hub.settings.failed")}</span>
+        <span>{cmd.detail ?? t(cmd.refusal ?? "hub.settings.failed")}</span>
       {:else}<span>{t(cmd.state === "waiting" ? cmd.job.waiting : cmd.job.done)}</span>{/if}
     {/if}
   </p>
@@ -456,11 +468,22 @@
         <p class="type-hub-label" data-testid="start-rate">
           {rate ? t("hub.session.rate", { rate }) : t("hub.sheet.no_rate")}
         </p>
+        {#if picked?.id && group}
+          <StartOptions
+            playerId={picked.id}
+            groupId={group.id}
+            {locale}
+            {rate}
+            disabled={busy}
+            bind:value={choice}
+          />
+        {/if}
         <Button
-          label="hub.session.start"
+          label={START_LABEL[choice.mode]}
           disabled={busy || !picked}
           disabledReason={busy ? "hub.sheet.waiting" : "hub.session.pick_first"}
-          onclick={() => picked && void go(startJob(device.device_id, picked.id, device.manual))}
+          onclick={() =>
+            picked && void go(startJob(device.device_id, picked.id, device.manual, choice))}
         />
       </div>
     {:else if session}

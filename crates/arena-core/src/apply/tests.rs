@@ -21,6 +21,7 @@ use crate::writer::{Writer, WriterHandle};
 mod commands;
 mod plans;
 mod players;
+mod prepaid;
 mod rates;
 mod session;
 mod session_expire;

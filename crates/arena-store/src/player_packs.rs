@@ -164,3 +164,40 @@ pub fn insert_plan_line(conn: &Connection, l: &NewPlanLine<'_>) -> Result<(), Ap
     .map_err(db_error)?;
     Ok(())
 }
+
+/// The owned plan `id` when it belongs to `player_id`.
+pub fn find_player_pack(
+    conn: &Connection,
+    player_id: &str,
+    id: &str,
+) -> Result<Option<PlayerPackRow>, AppError> {
+    conn.query_row(
+        &format!("SELECT {COLUMNS} FROM player_packs WHERE id = ?1 AND player_id = ?2"),
+        params![id, player_id],
+        from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Whether a live session is already playing on the owned plan `id`.
+pub fn pack_in_use(conn: &Connection, id: &str) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sessions
+                        WHERE pack_id = ?1 AND state IN ('active', 'paused', 'grace'))",
+        [id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// Takes `minutes` off the owned pack's balance, never below 0.
+pub fn deduct_pack_minutes(conn: &Connection, id: &str, minutes: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE player_packs SET minutes_left = MAX(COALESCE(minutes_left, 0) - ?2, 0)
+         WHERE id = ?1",
+        params![id, minutes],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}

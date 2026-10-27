@@ -1668,5 +1668,18 @@
   "hub.undo.plan_sold": "Plan sold · {amount}",
   "hub.undo.done.plan": "Sale undone. The plan is removed.",
   "hub.audit.intent.plan.sell": "Plan sold",
-  "hub.audit.intent.plan.sell.reverted": "Plan sale undone"
+  "hub.audit.intent.plan.sell.reverted": "Plan sale undone",
+  "hub.session.opt.title": "Play on",
+  "hub.session.opt.postpaid": "Pay later",
+  "hub.session.opt.pack": "{name} · {time} left · expires {date}",
+  "hub.session.opt.pack_expired": "{name} · Expired {date}",
+  "hub.session.opt.wallet": "Wallet · balance {balance} · {rate}/hr",
+  "hub.session.opt.wallet_no_rate": "Wallet · balance {balance}",
+  "hub.session.opt.loading": "Loading this player's packs and wallet.",
+  "hub.session.start_pack": "Start on pack",
+  "hub.session.start_wallet": "Start on wallet",
+  "hub.session.pack_expired": "This pack has expired or has no time left. Pick another.",
+  "hub.session.pack_group": "This pack is not valid for this PC's group.",
+  "hub.session.pack_refused": "This pack can't start a session now. It may already be running one.",
+  "hub.session.wallet_short": "The wallet balance is too low for the first bill. Top up at counter."
 }

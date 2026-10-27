@@ -23,7 +23,11 @@ export type Cmd = {
   job: Job;
   state: "waiting" | "done" | "failed" | "refused";
   refusal?: MessageKey;
+  detail?: string;
 };
+
+export type StartChoice =
+  { mode: "postpaid" } | { mode: "pack"; pack_id: string } | { mode: "wallet" };
 
 export const cmds: Record<string, Cmd | undefined> = $state({});
 
@@ -56,6 +60,9 @@ const REFUSALS: Record<string, MessageKey> = {
   OVERRIDE_USED_TODAY: "hub.settle.override_used",
   REFERENCE_REQUIRED: "hub.settle.reference",
   "STALE:session.settle": "hub.settle.stale",
+  PACK_EXPIRED: "hub.session.pack_expired",
+  PLAN_NOT_FOR_GROUP: "hub.session.pack_group",
+  "INSUFFICIENT_BALANCE:session.start": "hub.session.wallet_short",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -72,9 +79,20 @@ export const screenJob = (device_id: string, action: PcAction, text?: string) =>
 export const powerJob = (device_id: string, action: PcAction) =>
   job({ kind: "device.power", device_id, action }, { done: DONE[action] });
 
-export const startJob = (device_id: string, player_id?: string, manual?: boolean) =>
+export const startJob = (
+  device_id: string,
+  player_id?: string,
+  manual?: boolean,
+  choice: StartChoice = { mode: "postpaid" },
+) =>
   job(
-    { kind: "session.start", device_id, mode: "postpaid", player_id },
+    {
+      kind: "session.start",
+      device_id,
+      mode: choice.mode,
+      player_id,
+      pack_id: choice.mode === "pack" ? choice.pack_id : undefined,
+    },
     { track: manual ? "none" : "cmd", done: "hub.sheet.done.started" },
   );
 
@@ -163,8 +181,8 @@ export async function send(
     return "sent";
   }
   cmds[deviceId] = { job: j, state: "waiting" };
-  const settle = (state: Cmd["state"], refusal?: MessageKey) => {
-    if (cmds[deviceId]?.job.key === j.key) cmds[deviceId] = { job: j, state, refusal };
+  const settle = (state: Cmd["state"], refusal?: MessageKey, detail?: string) => {
+    if (cmds[deviceId]?.job.key === j.key) cmds[deviceId] = { job: j, state, refusal, detail };
   };
   const outcome = await submitIntent(j.payload, j.key, j.rev, { elevationTicket: ticket });
   if (outcome.kind === "signed_out") {
@@ -177,10 +195,15 @@ export async function send(
   }
   if (outcome.kind === "unreachable") settle("failed");
   else if (outcome.kind === "error") {
-    const { code, field } = outcome.error;
+    const { code, field, message } = outcome.error;
     const offline = code === "VALIDATION_FAILED" && field === "device_id";
-    const text = REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code];
-    settle(offline ? "failed" : "refused", text ?? "hub.settings.failed");
+    const text =
+      code === "VALIDATION_FAILED" && field === "pack_id"
+        ? "hub.session.pack_refused"
+        : (REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code]);
+    const detail =
+      code === "INSUFFICIENT_BALANCE" && j.payload.kind === "session.start" ? message : undefined;
+    settle(offline ? "failed" : "refused", text ?? "hub.settings.failed", detail);
   } else if (j.track === "none") {
     offerUndo(outcome.result);
     settle("done");

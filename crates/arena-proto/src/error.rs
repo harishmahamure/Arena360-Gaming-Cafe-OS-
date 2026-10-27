@@ -132,6 +132,10 @@ pub enum ErrorCode {
     CreditPaused,
     /// A second pass sold to a player who already holds an unexpired one.
     PassAlreadyActive,
+    /// A pack session started on a pack past its expiry or with no minutes left.
+    PackExpired,
+    /// A pack session started on a device group the pack does not allow.
+    PlanNotForGroup,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -220,6 +224,8 @@ impl ErrorCode {
             Self::OverrideUsedToday => "OVERRIDE_USED_TODAY",
             Self::CreditPaused => "CREDIT_PAUSED",
             Self::PassAlreadyActive => "PASS_ALREADY_ACTIVE",
+            Self::PackExpired => "PACK_EXPIRED",
+            Self::PlanNotForGroup => "PLAN_NOT_FOR_GROUP",
         }
     }
 }
@@ -369,6 +375,8 @@ mod tests {
             (ErrorCode::OverrideUsedToday, "OVERRIDE_USED_TODAY"),
             (ErrorCode::CreditPaused, "CREDIT_PAUSED"),
             (ErrorCode::PassAlreadyActive, "PASS_ALREADY_ACTIVE"),
+            (ErrorCode::PackExpired, "PACK_EXPIRED"),
+            (ErrorCode::PlanNotForGroup, "PLAN_NOT_FOR_GROUP"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

@@ -10,6 +10,8 @@
     type?: "button" | "submit" | "reset";
     onclick?: HTMLButtonAttributes["onclick"];
     forceState?: ForceState;
+    /** Values for the `{placeholders}` of `disabledReason`. */
+    reasonParams?: Record<string, string | number>;
   };
   /** A disabled button always says why, as inline text linked by `aria-describedby`. */
   type Props = Common &
@@ -24,6 +26,7 @@
     type = "button",
     onclick,
     forceState,
+    reasonParams,
     disabled = false,
     disabledReason,
   }: Props = $props();
@@ -58,7 +61,7 @@
     data-force-state={forceState}>{t(label)}</button
   >
   {#if disabled && disabledReason}
-    <span class="reason" id={reasonId}>{t(disabledReason)}</span>
+    <span class="reason" id={reasonId}>{t(disabledReason, reasonParams)}</span>
   {/if}
 </span>
 

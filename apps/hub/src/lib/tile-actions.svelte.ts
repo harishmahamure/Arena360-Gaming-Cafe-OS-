@@ -1,4 +1,4 @@
-import type { IntentPayload, PcAction, Permission } from "@arena/ui/generated";
+import type { IntentPayload, PaymentRow, PcAction, Permission } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { waitForAck } from "./admin-unlock";
 import { dropElevation, newIdempotencyKey, submitIntent } from "./auth";
@@ -66,6 +66,12 @@ export const startJob = (device_id: string, player_id?: string, manual?: boolean
 
 export const endJob = (session_id: string, rev: number) =>
   job({ kind: "session.end", session_id }, { track: "none", rev, done: "hub.sheet.done.ended" });
+
+export const settleJob = (order_id: string, payments: PaymentRow[], rev: number) =>
+  job(
+    { kind: "session.settle", order_id, payments },
+    { track: "none", rev, done: "hub.sheet.done.settled" },
+  );
 
 export const adminUnlockJob = (device_id: string) =>
   job(

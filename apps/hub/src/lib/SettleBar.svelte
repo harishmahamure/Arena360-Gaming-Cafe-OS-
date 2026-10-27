@@ -1,0 +1,279 @@
+<script lang="ts">
+  import { Button, TextField, focusFirstInvalid, formatMoney, t } from "@arena/ui";
+  import type {
+    PaymentMethod,
+    PaymentRow,
+    SnapshotBill,
+    SnapshotLocale,
+  } from "@arena/ui/generated";
+  import type { MessageKey } from "@arena/ui/messages";
+  import { tick } from "svelte";
+  import { METHODS, amountText, rowErrors, rowsValid, tally, toPayments, type Row } from "./settle";
+
+  let {
+    bill,
+    locale,
+    busy,
+    onsettle,
+  }: {
+    bill: SnapshotBill;
+    locale: SnapshotLocale;
+    busy: boolean;
+    onsettle: (payments: PaymentRow[]) => void;
+  } = $props();
+
+  let root: HTMLElement | undefined = $state();
+  let rows: Row[] = $state([]);
+  let attempted = $state(false);
+
+  const id = $props.id();
+  const exponent = $derived(locale.exponent);
+  const total = $derived(bill.remaining_minor);
+  const sums = $derived(tally(total, rows, exponent));
+  const closed = $derived(sums.remaining === 0 && !sums.overpaid);
+  const money = (minor: number) => formatMoney(minor, locale);
+
+  const errorOf = (row: Row, field: "amount" | "reference"): MessageKey | null =>
+    attempted ? (rowErrors(row, exponent)[field] ?? null) : null;
+
+  const AMOUNT: Record<PaymentMethod, MessageKey> = {
+    cash: "hub.settle.amount.cash",
+    upi: "hub.settle.amount.upi",
+    card: "hub.settle.amount.card",
+  };
+  const REFERENCE: Record<PaymentMethod, MessageKey> = {
+    cash: "hub.settle.reference.upi",
+    upi: "hub.settle.reference.upi",
+    card: "hub.settle.reference.card",
+  };
+  const NAME: Record<PaymentMethod, MessageKey> = {
+    cash: "hub.settle.method.cash",
+    upi: "hub.settle.method.upi",
+    card: "hub.settle.method.card",
+  };
+
+  async function choose(method: PaymentMethod) {
+    if (!rows.some((r) => r.method === method)) {
+      rows.push({ method, amount: amountText(sums.remaining, exponent), reference: "" });
+    }
+    await tick();
+    const input = root?.querySelector<HTMLInputElement>(`[data-row="${method}"] input`);
+    input?.focus();
+    input?.select();
+  }
+
+  function drop(method: PaymentMethod) {
+    rows = rows.filter((r) => r.method !== method);
+  }
+
+  function arrows(event: KeyboardEvent) {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (step === 0) return;
+    const buttons = [...(root?.querySelectorAll<HTMLElement>("[data-method]") ?? [])];
+    const at = buttons.indexOf(document.activeElement as HTMLElement);
+    if (at < 0) return;
+    event.preventDefault();
+    buttons[(at + step + buttons.length) % buttons.length]?.focus();
+  }
+
+  export async function submit() {
+    if (busy || !closed) return;
+    attempted = true;
+    if (!rowsValid(rows, exponent)) {
+      await tick();
+      focusFirstInvalid(root);
+      return;
+    }
+    onsettle(toPayments(rows, sums.change, exponent));
+  }
+</script>
+
+<section
+  class="bar"
+  data-component="settle-bar"
+  data-testid="settle-bar"
+  aria-labelledby="{id}-title"
+  bind:this={root}
+>
+  <h3 class="type-hub-title" id="{id}-title">{t("hub.settle.title")}</h3>
+  <p class="total">
+    <span class="type-hub-label">{t("hub.settle.total")}</span>
+    <span class="type-hub-numeric tabular-nums" data-testid="settle-total">{money(total)}</span>
+  </p>
+
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="methods"
+    role="group"
+    aria-label={t("hub.settle.methods")}
+    onkeydown={arrows}
+    data-testid="settle-methods"
+  >
+    {#each METHODS as method (method)}
+      <button
+        type="button"
+        class="ui-interactive method type-hub-label"
+        data-method={method}
+        aria-pressed={rows.some((r) => r.method === method)}
+        disabled={busy}
+        onclick={() => void choose(method)}>{t(NAME[method])}</button
+      >
+    {/each}
+  </div>
+
+  {#if rows.length > 0}
+    <div class="split" data-component="payment-split" data-testid="payment-split">
+      {#each rows as row (row.method)}
+        <div class="row" data-row={row.method} data-testid="split-row">
+          <TextField
+            label={AMOUNT[row.method]}
+            bind:value={row.amount}
+            inputmode="decimal"
+            autocomplete="off"
+            error={errorOf(row, "amount")}
+          />
+          {#if row.method !== "cash"}
+            <div data-reference>
+              <TextField
+                label={REFERENCE[row.method]}
+                bind:value={row.reference}
+                inputmode={row.method === "upi" ? "numeric" : "text"}
+                autocomplete="off"
+                error={errorOf(row, "reference")}
+              />
+            </div>
+          {/if}
+          <button
+            type="button"
+            class="ui-interactive remove type-hub-label"
+            disabled={busy}
+            onclick={() => drop(row.method)}
+            >{t("hub.settle.remove", { method: t(NAME[row.method]) })}</button
+          >
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  <div class="remainder type-hub-numeric tabular-nums" role="status" data-testid="settle-remainder">
+    {#if sums.overpaid}
+      <span class="open">⚠ {t("hub.settle.over")}</span>
+    {:else if sums.remaining > 0}
+      <span class="open">⚠ {t("hub.settle.remaining", { amount: money(sums.remaining) })}</span>
+    {:else}
+      <span class="zero">✓ {t("hub.settle.paid_full")}</span>
+    {/if}
+    {#if sums.change > 0}
+      <span data-testid="settle-change"
+        >{t("hub.settle.change", { amount: money(sums.change) })}</span
+      >
+    {/if}
+  </div>
+
+  <Button
+    label="hub.settle.submit"
+    disabled={busy || !closed}
+    disabledReason={busy
+      ? "hub.sheet.waiting"
+      : sums.overpaid
+        ? "hub.settle.over"
+        : "hub.settle.remaining"}
+    reasonParams={{ amount: money(sums.remaining) }}
+    onclick={() => void submit()}
+  />
+</section>
+
+<style>
+  .bar {
+    display: grid;
+    gap: var(--space-3);
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--space-4) var(--space-hub-panel-padding);
+    border-top: var(--settle-bar-border-top);
+    background-color: var(--settle-bar-background);
+    color: var(--text);
+  }
+
+  :global([data-theme="hc"]) .bar {
+    border-top: var(--settle-bar-border-top-hc);
+    background-color: var(--settle-bar-background-hc);
+  }
+
+  h3,
+  p {
+    margin: 0;
+  }
+
+  .total {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .methods {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .method,
+  .remove {
+    --ui-bg: var(--button-secondary-background);
+    min-height: var(--space-touch-min);
+    min-width: var(--space-touch-min);
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    color: var(--button-secondary-foreground);
+    font-weight: var(--type-hub-title-weight);
+    cursor: pointer;
+  }
+
+  .method[aria-pressed="true"] {
+    border-width: 2px;
+    border-color: var(--accent);
+  }
+
+  .split {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10em, 1fr));
+    align-items: start;
+    gap: var(--space-3);
+  }
+
+  .remove {
+    justify-self: start;
+    align-self: center;
+  }
+
+  .remainder {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .open {
+    color: var(--payment-split-remainder-open);
+  }
+
+  .zero {
+    color: var(--payment-split-remainder-zero);
+  }
+
+  :global([data-theme="hc"]) .open {
+    color: var(--payment-split-remainder-open-hc);
+  }
+
+  :global([data-theme="hc"]) .zero {
+    color: var(--payment-split-remainder-zero-hc);
+  }
+</style>

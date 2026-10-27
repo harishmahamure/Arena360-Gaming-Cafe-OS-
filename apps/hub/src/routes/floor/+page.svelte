@@ -314,6 +314,7 @@
         {tz}
         session={sessionOf(active)}
         bill={snapshot?.bills?.find((b) => b.device_id === active.device_id && !b.order_id)}
+        unpaid={snapshot?.bills?.find((b) => b.device_id === active.device_id && b.order_id)}
         locale={snapshot?.locale ?? null}
         {names}
         onclose={closeSheet}

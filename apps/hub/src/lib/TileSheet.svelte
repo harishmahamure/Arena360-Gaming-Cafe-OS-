@@ -6,6 +6,7 @@
     StatusBadge,
     TextField,
     formatDateTime,
+    formatMoney,
     t,
   } from "@arena/ui";
   import type {
@@ -15,12 +16,14 @@
     SnapshotGroup,
     SnapshotLocale,
     SnapshotSession,
+    PaymentRow,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
   import { SESSION_DEPENDENCY, dropElevation, elevate, hasPermission } from "./auth";
   import PlayerLookup from "./players/PlayerLookup.svelte";
+  import SettleBar from "./SettleBar.svelte";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
   import {
     MESSAGE_MAX,
@@ -33,6 +36,7 @@
     powerJob,
     screenJob,
     send,
+    settleJob,
     startJob,
     type Job,
   } from "./tile-actions.svelte";
@@ -53,6 +57,7 @@
     tz,
     session,
     bill,
+    unpaid,
     locale,
     names,
     onclose,
@@ -67,12 +72,14 @@
     tz: string | undefined;
     session: SnapshotSession | undefined;
     bill: SnapshotBill | undefined;
+    unpaid: SnapshotBill | undefined;
     locale: SnapshotLocale | null;
     names: Record<string, string>;
     onclose: () => void;
   } = $props();
 
   let root: HTMLElement | undefined = $state();
+  let settleBar: SettleBar | undefined = $state();
   let heading: HTMLElement | undefined = $state();
   let text = $state("");
   let textError: MessageKey | null = $state(null);
@@ -176,7 +183,22 @@
     if (pick) void go(assignJob(device.device_id, pick, device.meta_rev ?? undefined));
   }
 
+  function settle(payments: PaymentRow[]) {
+    if (unpaid?.order_id && unpaid.order_rev != null) {
+      void go(settleJob(unpaid.order_id, payments, unpaid.order_rev));
+    }
+  }
+
+  const settled = $derived(
+    cmd?.state === "done" && cmd.job.payload.kind === "session.settle" ? cmd.job.payload : null,
+  );
+
   function onkeydown(event: KeyboardEvent) {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && settleBar) {
+      event.preventDefault();
+      void settleBar.submit();
+      return;
+    }
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
@@ -269,6 +291,19 @@
 
   {#if approving}
     <InlinePin message={approvalPrompt} onsubmit={approve} oncancel={() => (approving = null)} />
+  {/if}
+
+  {#if unpaid && locale}
+    <SettleBar bind:this={settleBar} bill={unpaid} {locale} {busy} onsettle={settle} />
+  {:else if settled && locale}
+    <p class="type-hub-numeric" role="status" data-testid="settle-done">
+      {t("hub.settle.settled", {
+        amount: formatMoney(
+          settled.payments.reduce((sum, p) => sum + p.amount_minor, 0),
+          locale,
+        ),
+      })}
+    </p>
   {/if}
 
   {#if !isPc}

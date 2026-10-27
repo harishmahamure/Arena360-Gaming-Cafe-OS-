@@ -320,3 +320,11 @@
 - The settle bar and payment split UI is Story 3.13; Undo and `session.settle.reverted` are Story 3.14, which also needs the irreversible-effect guard. `SnapshotBill.paid_minor` stays 0 because only open orders are listed.
 - The idle lock after a settle is fire-and-forget like the pay-at-counter lock: an offline kiosk stays on "Pay at counter" until it reconnects or a new session starts.
 - The Windows-only `arena-kiosk-svc` tests (lockdown, DPAPI, pipes), `arena-tasks` timing tests and `arena-cloud` `binary` test fail in this environment independent of this story; `crates/arena-kiosk-svc/tests/discovery.rs` has unused-import lint errors on Windows.
+
+## Deferred from: Story 3.13
+
+- The bar offers cash, UPI and card only; wallet and credit rows come with 3.16 and 3.18. The POS screen reuses `SettleBar` in Epic 5.
+- The 10 s "two-method split from opening the bar" run on reference hardware is not measured here (only the functional keyboard flow is tested).
+- Inline reference and amount errors appear on a Settle attempt, not on blur of the field.
+- `apps/hub/src/routes/players/+page.svelte` fails `prettier --check` on master independent of this story; `audit.spec.ts`, `players.spec.ts`, `shell.spec.ts` and `session-end.spec.ts` have intermittent failures under parallel load on master.
+- The Playwright headless-shell download is blocked in this environment; the suite was run with the full Chromium channel.

@@ -174,7 +174,7 @@
       approving = job;
       return;
     }
-    const reachable = job.moves_to !== undefined && job.moves_to !== device.device_id;
+    const reachable = job.moves_to !== undefined;
     const result = await send(device.device_id, job, reachable || device.online, ticket);
     if (result === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (result === "pin_required") {
@@ -213,7 +213,7 @@
 
   /** Moves this tile's session to the PC `targetId` (a floor pick while transferring). */
   export function moveTo(targetId: string) {
-    if (session) void go(transferJob(session.id, targetId, session.rev));
+    if (session && !busy) void go(transferJob(session.id, targetId, session.rev));
   }
 
   function sendMessage(event: SubmitEvent) {

@@ -253,8 +253,10 @@ pub(super) fn mutate(
         }
     }
     if let Some(src) = &t.source {
-        let state = src.prior_state.as_deref().filter(|p| *p != "in_session");
-        set_device_state(tx, &src.device_id, state.unwrap_or("online"), None, None)?;
+        if src.state != "maintenance" {
+            let state = src.prior_state.as_deref().filter(|p| *p != "in_session");
+            set_device_state(tx, &src.device_id, state.unwrap_or("online"), None, None)?;
+        }
         written.push(Written {
             key: RowKey::DevicesMeta {
                 device_id: src.device_id.clone(),

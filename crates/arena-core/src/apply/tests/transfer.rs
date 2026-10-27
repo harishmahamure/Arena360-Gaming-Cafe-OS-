@@ -208,6 +208,31 @@ async fn the_old_pc_returns_to_its_prior_state_and_the_new_pc_remembers_its_own(
 }
 
 #[tokio::test]
+async fn a_broken_pc_left_in_maintenance_stays_in_maintenance_after_the_move() {
+    let f = bootstrapped().await;
+    let a = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;
+    let b = spare(&f, Some(&group_of(&f, &a)), DeviceKind::Pc).await;
+    online(&f, &[&a, &b]).await;
+    let id = postpaid(&f, &a, "2027-01-15 15:30").await;
+    sql(
+        &f,
+        format!("UPDATE devices_meta SET state = 'maintenance' WHERE device_id = '{a}'"),
+    )
+    .await;
+    let applied = transfer(&f, &id, &b).await.unwrap();
+    assert_eq!(state_of(&f, &a), "maintenance");
+    assert_eq!(state_of(&f, &b), "in_session");
+    assert_eq!(
+        applied
+            .changes
+            .iter()
+            .filter(|c| c.tbl == "devices_meta")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn another_group_prices_the_new_segment_at_its_rate_and_rule_and_the_session_follows() {
     let f = bootstrapped().await;
     let a = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;

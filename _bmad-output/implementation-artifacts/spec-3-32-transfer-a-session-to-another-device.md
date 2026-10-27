@@ -2,7 +2,7 @@
 title: 'Story 3.32: Transfer a Session to Another Device'
 type: 'feature'
 created: '2026-10-27'
-status: 'in-review'
+status: 'done'
 baseline_revision: '7a64a9c436f3e4b4950d6fda5c4f9d3b5e1145dd'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -106,6 +106,11 @@ The wallet re-size is the 3.31 flip with `flip.at = now`: `wallet_end_after_flip
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 Verified: fmt, clippy, arena-core/arena-api/arena-store/arena-proto tests (14 `transfer` apply tests, 2 `ui_auth` push tests, proptest `Transfer` op), hub check, `check:strings`; implementation run also passed kiosk check, token/contrast/protocol/layer checks, prettier and Playwright `transfer tile-sheet floor` (88). Known unrelated failures as before: arena-cloud (2) and arena-tasks (2). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: a wallet session past its own end is not re-sized on transfer; the old PC locks as `LockedByStaff`; below 840 px the fixed sheet can cover a target tile.
+
+## Code Review (2026-10-27)
+
+Fixed: transfer no longer resets a source PC left in `maintenance` to `online` (test added); `TileSheet.moveTo` ignores a pick while a command is waiting; a self-pick with an offline source now shows the server's refusal instead of "Failed — retry".
+Deferred (matches `session.start` behaviour or low risk): `reserved`/unpaired targets accepted server-side; wallet past-end and paused-wallet re-size untested; `push_transfer` busy-old-PC guard untested; retry of a committed key after the new PC drops offline returns `PC_UNAVAILABLE`.

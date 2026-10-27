@@ -227,6 +227,33 @@ pub struct SnapshotGroup {
     #[serde(default)]
     #[ts(type = "number | null", optional)]
     pub rate_minor: Option<i64>,
+    /// The pricing rule that sets this group's rate now, when one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_rule: Option<SnapshotActiveRule>,
+    /// The earliest instant in the next 24 hours at which a rule of this group begins or ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub next_change_at: Option<i64>,
+}
+
+/// The pricing rule in effect for a group: what the header chip and the live rate show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotActiveRule {
+    pub rule_id: String,
+    pub name: String,
+    /// `override_minor` or `percent_bp`.
+    pub adjust_kind: String,
+    #[ts(type = "number")]
+    pub adjust_value: i64,
+    /// The hourly rate in minor units while the rule applies.
+    #[ts(type = "number")]
+    pub rate_minor: i64,
+    /// When another rule, or the base rate, takes over (within the next 24 hours).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub until: Option<i64>,
 }
 
 /// One floor zone.

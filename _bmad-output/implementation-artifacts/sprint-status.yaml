@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-28-2026 05:00
+last_updated: 10-28-2026 06:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -94,7 +94,7 @@ development_status:
   3-27-pass-and-block-sessions-with-fixed-windows: done
   3-28-extend-a-session-from-the-hub-charged-to-wallet-pack-or-cred: done
   3-29-dynamic-pricing-rules-by-weekday-hours-and-by-date: done
-  3-30-the-active-rule-prices-new-sessions-and-shows-in-the-header: backlog
+  3-30-the-active-rule-prices-new-sessions-and-shows-in-the-header: review
   3-31-a-rule-change-mid-session-opens-a-new-rate-segment: backlog
   3-32-transfer-a-session-to-another-device: backlog
   3-33-group-sessions-under-one-bill-and-one-payer: backlog

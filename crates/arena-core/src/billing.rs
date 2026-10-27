@@ -121,6 +121,7 @@ mod tests {
             device_id: "D".into(),
             rate_minor_per_hour: rate,
             paused_ms,
+            rule_id: None,
         }
     }
 

@@ -222,8 +222,8 @@ pub use signup::{
 };
 pub use snapshot::{
     AppliedEvent, DeviceStatus, HubSnapshot, LocalePending, NumberFormat, PendingNumber,
-    PendingText, SettingsChangedEvent, SnapshotBranch, SnapshotDevice, SnapshotGroup, SnapshotLan,
-    SnapshotLocale, SnapshotUi, SnapshotZone, SymbolPosition,
+    PendingText, SettingsChangedEvent, SnapshotActiveRule, SnapshotBranch, SnapshotDevice,
+    SnapshotGroup, SnapshotLan, SnapshotLocale, SnapshotUi, SnapshotZone, SymbolPosition,
 };
 pub use staff_invite::{
     InviteRole, InviteStatus, StaffInvite, StaffInviteView, StaffInvited, StaffInvites,

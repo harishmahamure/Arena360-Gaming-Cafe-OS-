@@ -60,6 +60,8 @@ pub fn build_snapshot(
                 sort_order: g.sort_order,
                 rev: g.rev,
                 rate_minor: None,
+                active_rule: None,
+                next_change_at: None,
             })
             .collect(),
         zones: zones
@@ -220,6 +222,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         segments,
         orders,
         alerts,
+        rules,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -235,6 +238,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.live_segments()?,
             s.open_orders()?,
             s.alerts()?,
+            s.pricing_rules()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
@@ -278,11 +282,31 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             pack_id: s.pack_id,
         })
         .collect();
+    let tz = snapshot
+        .locale
+        .as_ref()
+        .and_then(|l| l.tz.parse::<chrono_tz::Tz>().ok());
     for g in &mut snapshot.groups {
         g.rate_minor = rates
             .iter()
             .find(|r| r.group_id == g.id)
             .map(|r| r.price_per_hour_minor);
+        let (Some(base), Some(tz)) = (g.rate_minor, tz) else {
+            continue;
+        };
+        let resolved = crate::pricing::resolve(&rules, &g.id, base, tz, now_ms);
+        g.next_change_at = resolved.next_change_at;
+        g.active_rule = resolved
+            .rule_id
+            .and_then(|id| rules.iter().find(|r| r.rule_id == id))
+            .map(|r| arena_proto::SnapshotActiveRule {
+                rule_id: r.rule_id.clone(),
+                name: r.name.clone(),
+                adjust_kind: r.adjust_kind.clone(),
+                adjust_value: r.adjust_value,
+                rate_minor: resolved.rate_minor,
+                until: resolved.until,
+            });
     }
     snapshot.device_cap = Some(read_device_cap(&store.settings()?));
     Ok(snapshot)

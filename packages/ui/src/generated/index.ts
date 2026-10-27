@@ -251,6 +251,7 @@ export type { SignupStart } from "./SignupStart";
 export type { SignupVerified } from "./SignupVerified";
 export type { SignupVerify } from "./SignupVerify";
 export type { SmsFallback } from "./SmsFallback";
+export type { SnapshotActiveRule } from "./SnapshotActiveRule";
 export type { SnapshotAlert } from "./SnapshotAlert";
 export type { SnapshotBill } from "./SnapshotBill";
 export type { SnapshotBranch } from "./SnapshotBranch";

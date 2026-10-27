@@ -1,5 +1,6 @@
 import { t } from "@arena/ui";
-import type { RuleView } from "@arena/ui/generated";
+import { formatMoney, formatTime } from "@arena/ui/format";
+import type { RuleView, SnapshotGroup, SnapshotLocale } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { authHeaders, getToken, setToken } from "./auth";
 import { clock } from "./plans";
@@ -86,4 +87,53 @@ export function scheduleText(r: RuleView): string {
   return from === to
     ? t("hub.rules.schedule.day", { date: from })
     : t("hub.rules.schedule.range", { from, to });
+}
+
+/** The hourly rate a new session or extension of `group` is priced at now (the rule's, else the base). */
+export function liveRate(group: SnapshotGroup | undefined): number | null {
+  return group?.active_rule?.rate_minor ?? group?.rate_minor ?? null;
+}
+
+export type RuleChip = { key: string; text: string };
+
+/**
+ * One header chip per group with a pricing rule in effect: its name, what it does and when it
+ * ends. With several groups affected each chip names its group.
+ */
+export function ruleChips(
+  groups: SnapshotGroup[],
+  locale: SnapshotLocale | null,
+  tz: string | undefined,
+): RuleChip[] {
+  const active = groups.filter((g) => g.active_rule);
+  return active.flatMap((g) => {
+    const rule = g.active_rule;
+    if (!rule || !locale) return [];
+    const change =
+      rule.adjust_kind === "percent_bp"
+        ? percentText(rule.adjust_value)
+        : t("hub.rules.chip.rate", { rate: formatMoney(rule.adjust_value, locale) });
+    const named = active.length > 1;
+    const open = rule.until == null;
+    const params = {
+      name: rule.name,
+      change,
+      group: g.name,
+      time: open ? "" : formatTime(rule.until ?? 0, tz),
+    };
+    const key = named
+      ? open
+        ? "hub.rules.chip.group_open"
+        : "hub.rules.chip.group_until"
+      : open
+        ? "hub.rules.chip.open"
+        : "hub.rules.chip.until";
+    return [{ key: rule.rule_id, text: t(key, params) }];
+  });
+}
+
+/** The soonest instant at which a rule of any group begins or ends, in epoch ms. */
+export function nextRuleChange(groups: SnapshotGroup[]): number | null {
+  const times = groups.flatMap((g) => (g.next_change_at != null ? [g.next_change_at] : []));
+  return times.length > 0 ? Math.min(...times) : null;
 }

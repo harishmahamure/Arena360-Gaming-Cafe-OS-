@@ -19,13 +19,14 @@ pub const ADJUST_OVERRIDE: &str = "override_minor";
 pub const ADJUST_PERCENT: &str = "percent_bp";
 
 /// The outcome of [`resolve`]: the rate per hour in minor units, the rule that set it (none:
-/// the base rate), and the earliest instant in the next 24 hours at which any of the group's
-/// rules begins or ends.
+/// the base rate), the earliest instant in the next 24 hours at which any of the group's rules
+/// begins or ends, and the first instant in that span at which the rate's rule changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
     pub rate_minor: i64,
     pub rule_id: Option<String>,
     pub next_change_at: Option<i64>,
+    pub until: Option<i64>,
 }
 
 /// A canonical local date, `YYYY-MM-DD`.
@@ -119,6 +120,16 @@ fn boundaries(r: &PricingRuleRow, day: NaiveDate, tz: Tz, at_ms: i64, out: &mut 
     }
 }
 
+fn winner_at<'a>(rules: &[&'a PricingRuleRow], tz: Tz, at_ms: i64) -> Option<&'a PricingRuleRow> {
+    let local = local_of(at_ms, tz)?;
+    let minute = i64::from(local.time().num_seconds_from_midnight() / 60);
+    rules
+        .iter()
+        .copied()
+        .filter(|r| applies(r, local.date(), minute))
+        .max_by(|a, b| rank(a).cmp(&rank(b)))
+}
+
 /// The rate of `group_id` at `at_ms`, given every pricing rule and the group's base rate per
 /// hour. Inactive rules and other groups' rules are ignored.
 pub fn resolve(
@@ -137,13 +148,10 @@ pub fn resolve(
             rate_minor: base_minor,
             rule_id: None,
             next_change_at: None,
+            until: None,
         };
     };
-    let minute = i64::from(local.time().num_seconds_from_midnight() / 60);
-    let winner = mine
-        .iter()
-        .filter(|r| applies(r, local.date(), minute))
-        .max_by(|a, b| rank(a).cmp(&rank(b)));
+    let winner = winner_at(&mine, tz, at_ms);
     let mut edges = Vec::new();
     for offset in -1..=2 {
         let day = local.date() + Duration::days(offset);
@@ -151,14 +159,54 @@ pub fn resolve(
             boundaries(r, day, tz, at_ms, &mut edges);
         }
     }
+    edges.retain(|t| *t > at_ms && *t <= at_ms + DAY_MS);
+    edges.sort_unstable();
+    edges.dedup();
+    let until = winner.and_then(|w| {
+        edges
+            .iter()
+            .copied()
+            .find(|t| winner_at(&mine, tz, *t).map(|n| &n.rule_id) != Some(&w.rule_id))
+    });
     Resolved {
         rate_minor: winner.map_or(base_minor, |r| adjusted(base_minor, r)),
         rule_id: winner.map(|r| r.rule_id.clone()),
-        next_change_at: edges
-            .into_iter()
-            .filter(|t| *t > at_ms && *t <= at_ms + DAY_MS)
-            .min(),
+        next_change_at: edges.first().copied(),
+        until,
     }
+}
+
+/// `rate` repriced at `now_ms` by the pricing rules in effect for its group, with the
+/// resolution (the rule that set the price, if any).
+pub(crate) fn priced(
+    tx: &arena_store::StoreTx<'_>,
+    rate: arena_store::RateRow,
+    now_ms: i64,
+) -> Result<(arena_store::RateRow, Resolved), arena_proto::AppError> {
+    let base = Resolved {
+        rate_minor: rate.price_per_hour_minor,
+        rule_id: None,
+        next_change_at: None,
+        until: None,
+    };
+    let Some(tz) = crate::locale::tz_at(tx, now_ms)? else {
+        return Ok((rate, base));
+    };
+    let rules = arena_store::list_pricing_rules(tx)?;
+    let resolved = resolve(
+        &rules,
+        &rate.group_id,
+        rate.price_per_hour_minor,
+        tz,
+        now_ms,
+    );
+    Ok((
+        arena_store::RateRow {
+            price_per_hour_minor: resolved.rate_minor,
+            ..rate
+        },
+        resolved,
+    ))
 }
 
 fn week_spans(mask: i64, start: i64, end: i64) -> Vec<(i64, i64)> {

@@ -1776,6 +1776,12 @@
   "hub.rules.invalid.window": "Pick a start and an end that differ.",
   "hub.rules.invalid.dates": "Enter the first date, and a last date that is not before it (within one year).",
   "hub.rules.invalid.adjust": "Enter a rate above zero, or a percentage of -100 or more.",
+  "hub.rules.chip.label": "Pricing rules in effect",
+  "hub.rules.chip.rate": "{rate} an hour",
+  "hub.rules.chip.until": "{name} {change} · until {time}",
+  "hub.rules.chip.open": "{name} {change}",
+  "hub.rules.chip.group_until": "{name} {change} · {group} · until {time}",
+  "hub.rules.chip.group_open": "{name} {change} · {group}",
   "hub.rules.invalid.priority": "Use a whole number from 0 to 1000.",
   "hub.audit.intent.rule.upsert": "Pricing rule saved"
 }

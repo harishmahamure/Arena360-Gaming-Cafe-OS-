@@ -62,6 +62,7 @@ pub struct SegmentRow {
     pub device_id: String,
     pub rate_minor_per_hour: i64,
     pub paused_ms: i64,
+    pub rule_id: Option<String>,
 }
 
 pub struct NewOrder<'a> {
@@ -152,12 +153,20 @@ pub fn insert_segment(
     from_at: i64,
     device_id: &str,
     rate_minor_per_hour: i64,
+    rule_id: Option<&str>,
 ) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO session_segments (id, session_id, from_at, device_id, rate_minor_per_hour,
-                                       rev, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0)",
-        params![id, session_id, from_at, device_id, rate_minor_per_hour],
+                                       rule_id, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, 0)",
+        params![
+            id,
+            session_id,
+            from_at,
+            device_id,
+            rate_minor_per_hour,
+            rule_id
+        ],
     )
     .map_err(db_error)?;
     Ok(())
@@ -254,7 +263,7 @@ pub fn list_segments(
     let mut stmt = conn
         .prepare(
             "SELECT g.id, g.session_id, g.from_at, g.to_at, g.device_id, g.rate_minor_per_hour,
-                    g.paused_ms
+                    g.paused_ms, g.rule_id
              FROM session_segments g JOIN sessions s ON s.id = g.session_id
              WHERE (?1 IS NOT NULL AND g.session_id = ?1)
                 OR (?1 IS NULL AND (s.state IN ('active', 'paused', 'grace')
@@ -271,6 +280,7 @@ pub fn list_segments(
             device_id: r.get(4)?,
             rate_minor_per_hour: r.get(5)?,
             paused_ms: r.get(6)?,
+            rule_id: r.get(7)?,
         })
     })
     .map_err(db_error)?

@@ -365,7 +365,7 @@ impl HubTask {
                         if let Some(c) = applied
                             .changes
                             .iter()
-                            .find(|c| matches!(c.tbl.as_str(), "device_groups" | "floor_zones" | "devices_meta" | "rates"))
+                            .find(|c| matches!(c.tbl.as_str(), "device_groups" | "floor_zones" | "devices_meta" | "rates" | "pricing_rules"))
                         {
                             let (reader, epoch, seq) =
                                 (Arc::clone(&self.reader), c.epoch.clone(), c.seq);

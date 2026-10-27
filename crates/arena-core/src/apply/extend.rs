@@ -75,7 +75,10 @@ pub(super) fn load(
     };
     t.group_id = find_device_meta(tx, &session.device_id)?.and_then(|d| d.group_id);
     t.rate = match &t.group_id {
-        Some(g) => find_active_rate(tx, g)?,
+        Some(g) => match find_active_rate(tx, g)? {
+            Some(base) => Some(crate::pricing::priced(tx, base, now_ms)?.0),
+            None => None,
+        },
         None => None,
     };
     t.segment_id = list_segments(tx, Some(&session.id))?

@@ -34,6 +34,8 @@
   import ExtendOptions from "./players/ExtendOptions.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
   import StartOptions from "./players/StartOptions.svelte";
+  import RuleChips from "./RuleChips.svelte";
+  import { liveRate, ruleChips } from "./rules";
   import SettleBar from "./SettleBar.svelte";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
   import {
@@ -102,6 +104,7 @@
     onclose: () => void;
   } = $props();
 
+  const groupChips = $derived(ruleChips(group ? [group] : [], locale, tz));
   let root: HTMLElement | undefined = $state();
   let settleBar: SettleBar | undefined = $state();
   let heading: HTMLElement | undefined = $state();
@@ -497,6 +500,7 @@
         <p class="type-hub-label" data-testid="start-rate">
           {rate ? t("hub.session.rate", { rate }) : t("hub.sheet.no_rate")}
         </p>
+        <RuleChips chips={groupChips} scope="start" />
         {#if picked && group}
           <StartOptions
             playerId={picked.id ?? null}
@@ -554,11 +558,12 @@
           />
         {/if}
         {#if canExtend && extending && session.player_id && group}
+          <RuleChips chips={groupChips} scope="extend" />
           <ExtendOptions
             playerId={session.player_id}
             groupId={group.id}
             ownPackId={session.pack_id ?? null}
-            rateMinor={group.rate_minor ?? null}
+            rateMinor={liveRate(group)}
             {locale}
             disabled={busy}
             onconfirm={extend}

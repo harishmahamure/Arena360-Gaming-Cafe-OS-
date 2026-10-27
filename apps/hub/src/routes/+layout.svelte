@@ -6,6 +6,8 @@
   import { page } from "$app/state";
   import AlertList from "../lib/AlertList.svelte";
   import Clock from "../lib/Clock.svelte";
+  import RuleChips from "../lib/RuleChips.svelte";
+  import { nextRuleChange, ruleChips } from "../lib/rules";
   import DeviceGate from "../lib/DeviceGate.svelte";
   import Icon from "../lib/Icon.svelte";
   import MoreSheet from "../lib/MoreSheet.svelte";
@@ -215,6 +217,26 @@
         setUiSettings(ui);
         if (connectivity) takeLink(connectivity);
       });
+  });
+
+  const ruleChipList = $derived(
+    data.hub.ok
+      ? ruleChips(
+          data.hub.snapshot.groups,
+          data.hub.snapshot.locale ?? null,
+          data.hub.snapshot.locale?.tz,
+        )
+      : [],
+  );
+
+  // A pricing rule begins or ends on the Hub's own clock: re-read the snapshot at the next
+  // boundary, so the chip and every rate change on time with the WAN down.
+  $effect(() => {
+    const at = data.hub.ok && staff ? nextRuleChange(data.hub.snapshot.groups) : null;
+    if (at === null) return;
+    const wait = Math.min(Math.max(at - Date.now() + 500, 1000), 2_000_000_000);
+    const timer = setTimeout(() => void refresh(), wait);
+    return () => clearTimeout(timer);
   });
 
   // Open alerts and the branch conditions come from each (re)loaded snapshot; the sound loop and
@@ -598,6 +620,7 @@
             {t("hub.pairing.revoked")}
           </p>
         {/if}
+        <RuleChips chips={ruleChipList} scope="hub" />
         {#if alertRows.length > 0}
           <button
             type="button"

@@ -12,6 +12,7 @@
   import { tick, untrack } from "svelte";
   import { ackDevice, openFor, sheetRequest, tagOf } from "../../lib/alerts.svelte";
   import { nextTile } from "../../lib/floor-nav";
+  import { liveRate } from "../../lib/rules";
   import TileSheet from "../../lib/TileSheet.svelte";
   import { PAUSE_LABELS, cmds } from "../../lib/tile-actions.svelte";
   import UndoDock from "../../lib/UndoDock.svelte";
@@ -200,10 +201,8 @@
   {@const session = group ? sessionOf(device) : undefined}
   {@const badge = badgeOf(device, session)}
   {@const owed = unpaid(device)}
-  {@const rate =
-    group?.rate_minor != null && snapshot?.locale
-      ? formatMoney(group.rate_minor, snapshot.locale)
-      : null}
+  {@const live = liveRate(group)}
+  {@const rate = live != null && snapshot?.locale ? formatMoney(live, snapshot.locale) : null}
   <FloorTile
     tag="li"
     name={device.label}
@@ -365,8 +364,8 @@
         {group}
         {groups}
         zone={zones.find((z) => z.id === active.zone)?.name}
-        rate={group?.rate_minor != null && snapshot?.locale
-          ? formatMoney(group.rate_minor, snapshot.locale)
+        rate={liveRate(group) != null && snapshot?.locale
+          ? formatMoney(liveRate(group) ?? 0, snapshot.locale)
           : null}
         badge={badgeOf(active, sessionOf(active))}
         {pauseText}

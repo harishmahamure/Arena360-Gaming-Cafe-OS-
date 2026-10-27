@@ -26,6 +26,7 @@ pub(crate) struct SessionTarget {
     device: Option<DeviceMetaRow>,
     busy: bool,
     rate: Option<RateRow>,
+    rule_id: Option<String>,
     player: bool,
     prepaid: super::prepaid::StartExtras,
 }
@@ -44,9 +45,15 @@ pub(super) fn load(
         Some(d) => d.state == "in_session" || device_has_live_session(tx, &d.device_id)?,
         None => false,
     };
-    let rate = match device.as_ref().and_then(|d| d.group_id.as_deref()) {
-        Some(g) => find_active_rate(tx, g)?,
-        None => None,
+    let (rate, rule_id) = match device.as_ref().and_then(|d| d.group_id.as_deref()) {
+        Some(g) => match find_active_rate(tx, g)? {
+            Some(base) => {
+                let (rate, resolved) = crate::pricing::priced(tx, base, now_ms)?;
+                (Some(rate), resolved.rule_id)
+            }
+            None => (None, None),
+        },
+        None => (None, None),
     };
     let player = match &s.player_id {
         Some(id) => find_player(tx, id)?.is_some(),
@@ -61,6 +68,7 @@ pub(super) fn load(
         device,
         busy,
         rate,
+        rule_id,
         player,
         prepaid,
     })
@@ -204,6 +212,7 @@ pub(super) fn mutate(
         now_ms,
         &d.device_id,
         rate.map_or(0, |r| r.price_per_hour_minor),
+        rate.and(t.rule_id.as_deref()),
     )?;
     set_device_state(tx, &d.device_id, "in_session", Some(&d.state), None)?;
     let mut written = vec![

@@ -328,3 +328,36 @@ fn date_rules_conflict_by_range_and_with_weekly_rules_by_weekday() {
     assert_eq!(who(&found, 0), vec![("sat", true)]);
     assert!(found[1].is_empty());
 }
+
+#[test]
+fn until_is_when_the_winning_rule_gives_way() {
+    let rules = [happy()];
+    let r = price(&rules, "2027-03-10 16:30");
+    assert_eq!(r.until, Some(at("2027-03-10 18:00")));
+    assert_eq!(r.next_change_at, Some(at("2027-03-10 18:00")));
+    let before = price(&rules, "2027-03-10 15:00");
+    assert_eq!(before.until, None);
+    assert_eq!(before.next_change_at, Some(at("2027-03-10 16:00")));
+}
+
+#[test]
+fn until_skips_boundaries_that_do_not_change_the_winner() {
+    let mut top = weekly("top", WEEKDAYS, 15 * 60, 19 * 60, (ADJUST_OVERRIDE, 3000));
+    top.priority = 5;
+    let rules = [happy(), top];
+    let r = price(&rules, "2027-03-10 15:30");
+    assert_eq!(r.rule_id.as_deref(), Some("top"));
+    assert_eq!(r.next_change_at, Some(at("2027-03-10 16:00")));
+    assert_eq!(r.until, Some(at("2027-03-10 19:00")));
+}
+
+#[test]
+fn until_hands_over_to_the_next_rule() {
+    let a = weekly("a", WEEKDAYS, 10 * 60, 12 * 60, (ADJUST_PERCENT, -1000));
+    let b = weekly("b", WEEKDAYS, 12 * 60, 14 * 60, (ADJUST_PERCENT, -3000));
+    let r = price(&[a, b], "2027-03-10 11:00");
+    assert_eq!(
+        (r.rate_minor, r.until),
+        (9000, Some(at("2027-03-10 12:00")))
+    );
+}

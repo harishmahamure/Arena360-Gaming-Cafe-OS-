@@ -302,6 +302,14 @@ pub(super) fn mutate(
             Target::SessionExtend(t) => super::extend::mutate(tx, intent, e, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionGroup(g) => match target {
+            Target::SessionGroup(t) => super::group_bill::mutate(tx, g, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::GroupPayer(p) => match target {
+            Target::GroupPayer(t) => super::group_bill::mutate_payer(tx, p, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::SessionTransfer(tr) => match target {
             Target::SessionTransfer(t) => super::transfer::mutate(tx, tr, t, now_ms),
             _ => Err(mismatch()),

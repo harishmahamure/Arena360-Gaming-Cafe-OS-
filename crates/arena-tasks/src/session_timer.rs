@@ -442,6 +442,7 @@ mod tests {
             f,
             owner(),
             IntentPayload::SessionStart(SessionStart {
+                group_with: None,
                 device_id: f.device.clone(),
                 mode: SessionMode::Postpaid,
                 player_id: None,

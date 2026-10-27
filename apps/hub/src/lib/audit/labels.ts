@@ -60,6 +60,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "session.expire": "hub.audit.intent.session.expire",
   "session.rate_flip": "hub.audit.intent.session.rate_flip",
   "session.transfer": "hub.audit.intent.session.transfer",
+  "session.group": "hub.audit.intent.session.group",
+  "group.payer": "hub.audit.intent.group.payer",
   "alert.raise": "hub.audit.intent.alert.raise",
   "alert.ack": "hub.audit.intent.alert.ack",
   "session.end.reverted": "hub.audit.intent.session.end.reverted",

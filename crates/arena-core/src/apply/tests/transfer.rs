@@ -16,7 +16,7 @@ use arena_proto::{
 
 const MIN: i64 = 60_000;
 
-async fn spare(f: &Fixture, group: Option<&str>, kind: DeviceKind) -> String {
+pub(super) async fn spare(f: &Fixture, group: Option<&str>, kind: DeviceKind) -> String {
     let mut d = DeviceRegister::new(
         ClientClass::Paired,
         "PC",
@@ -44,7 +44,7 @@ async fn spare(f: &Fixture, group: Option<&str>, kind: DeviceKind) -> String {
     id
 }
 
-async fn online(f: &Fixture, ids: &[&str]) {
+pub(super) async fn online(f: &Fixture, ids: &[&str]) {
     for id in ids {
         sql(
             f,
@@ -91,7 +91,7 @@ fn to_at(g: &Row) -> Option<i64> {
     }
 }
 
-async fn postpaid(f: &Fixture, d: &str, at: &str) -> String {
+pub(super) async fn postpaid(f: &Fixture, d: &str, at: &str) -> String {
     f.clock.set(ist(at));
     begin(f, d, None, SessionMode::Postpaid, None)
         .await

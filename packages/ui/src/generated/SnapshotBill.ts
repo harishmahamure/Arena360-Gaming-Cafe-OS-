@@ -11,6 +11,10 @@ export type SnapshotBill = {
   credit?: CreditView | null;
   session_rev?: number | null;
   guest?: boolean;
+  /**
+   * The group bill an open order settles for every member of.
+   */
+  group_bill_id?: string;
   lines: Array<BillLine>;
   subtotal_minor: number;
   paid_minor: number;

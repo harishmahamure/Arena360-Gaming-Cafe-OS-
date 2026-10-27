@@ -7,4 +7,9 @@ export type SessionStart = {
   player_id?: string;
   pack_id?: string;
   plan_id?: string;
+  /**
+   * A running postpaid session whose group bill this new postpaid session joins (a new group
+   * is made when it has none).
+   */
+  group_with?: string;
 };

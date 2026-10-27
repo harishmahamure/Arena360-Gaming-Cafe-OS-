@@ -11,6 +11,7 @@
     locale,
     tz,
     names,
+    group = false,
   }: {
     lines: BillLine[];
     subtotal: number;
@@ -19,9 +20,15 @@
     locale: SnapshotLocale;
     tz: string | undefined;
     names: Record<string, string>;
+    group?: boolean;
   } = $props();
 
   const money = (n: number) => formatMoney(n, locale);
+  const perDevice = $derived.by(() => {
+    const totals = new Map<string, number>();
+    for (const l of lines) totals.set(l.device_id, (totals.get(l.device_id) ?? 0) + l.amount_minor);
+    return totals.size > 1 ? [...totals] : [];
+  });
 </script>
 
 <section class="bill" data-component="bill-breakdown" data-testid="bill-breakdown">
@@ -42,9 +49,19 @@
       </li>
     {/each}
   </ul>
+  {#if perDevice.length > 0}
+    <ul class="lines type-hub-label" data-testid="bill-device-subtotals">
+      {#each perDevice as [device, amount] (device)}
+        <li data-testid="bill-device-subtotal">
+          <span>{t("hub.bill.device_subtotal", { device: names[device] ?? "" })}</span>
+          <span class="amount tabular-nums">{money(amount)}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
   <dl class="totals type-hub-label">
     <div data-testid="bill-subtotal">
-      <dt>{t("hub.bill.subtotal")}</dt>
+      <dt>{t(group ? "hub.bill.group_total" : "hub.bill.subtotal")}</dt>
       <dd class="tabular-nums">{money(subtotal)}</dd>
     </div>
     <div data-testid="bill-paid">

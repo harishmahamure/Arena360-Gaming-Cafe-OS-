@@ -573,6 +573,7 @@ mod tests {
             let started = writer
                 .submit_intent(submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
+                        group_with: None,
                         device_id: kiosk.clone(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: Some(player_id.clone()),
@@ -706,6 +707,7 @@ mod tests {
             let guest = writer
                 .submit_intent(submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
+                        group_with: None,
                         device_id: kiosk.clone(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: None,
@@ -866,6 +868,7 @@ mod tests {
                 let prepaid = writer
                     .submit_intent(submit(
                         IntentPayload::SessionStart(arena_proto::SessionStart {
+                            group_with: None,
                             device_id: kiosk.clone(),
                             mode,
                             player_id: Some(player_id.clone()),
@@ -886,6 +889,71 @@ mod tests {
                     .await
                     .unwrap();
             }
+            let second_pc = writer
+                .submit_intent(submit(
+                    IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                        device_id: None,
+                        device_kind: Default::default(),
+                        class: arena_proto::ClientClass::Paired,
+                        label: "Kiosk 2".into(),
+                        token_hash: arena_core::devices::hash_token_secret("k2").unwrap(),
+                        tv_number: None,
+                        group_id: None,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                        device_id: second_pc.clone(),
+                        group_id: Some(group.clone()),
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
+            let host = |device_id: &str, group_with: Option<String>| {
+                submit(
+                    IntentPayload::SessionStart(arena_proto::SessionStart {
+                        group_with,
+                        device_id: device_id.to_owned(),
+                        mode: arena_proto::SessionMode::Postpaid,
+                        player_id: None,
+                        pack_id: None,
+                        plan_id: None,
+                    }),
+                    None,
+                )
+            };
+            let first = writer
+                .submit_intent(host(&kiosk, None))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            let friend = writer
+                .submit_intent(host(&second_pc, Some(first.clone())))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            let end_of = |session_id: &String, rev: i64| {
+                submit(
+                    IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                        session_id: session_id.clone(),
+                    }),
+                    Some(rev),
+                )
+            };
+            writer.submit_intent(end_of(&first, 2)).await.unwrap();
+            writer.submit_intent(end_of(&friend, 1)).await.unwrap();
             let raise = |kind: arena_proto::AlertKind| {
                 let mut intent = submit(
                     IntentPayload::AlertRaise(arena_proto::AlertRaise::new(

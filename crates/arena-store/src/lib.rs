@@ -13,6 +13,7 @@ pub mod control;
 mod credit;
 mod dedupe;
 mod devices;
+mod group_bills;
 mod identity;
 mod migrations;
 mod plans;
@@ -75,6 +76,11 @@ pub use devices::{
     set_device_label, set_device_meta_deleted, set_device_place, set_device_reported_version,
     set_device_revoked, set_device_state, set_group_deleted, set_zone_deleted, tv_number_taken,
     update_device_meta, update_group, update_zone,
+};
+pub use group_bills::{
+    GroupBillRow, find_group_bill, find_group_order, insert_group_bill, list_active_group_bills,
+    list_ended_group_segments, list_ended_group_sessions, list_group_sessions, set_group_payer,
+    set_group_state, set_order_group, set_order_payer, set_session_group,
 };
 pub use identity::{
     CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
@@ -852,6 +858,25 @@ impl Store {
 
     pub fn find_pack_for_order(&self, order_id: &str) -> Result<Option<PlayerPackRow>, AppError> {
         find_pack_for_order(&self.conn, order_id)
+    }
+
+    /// Group bills still open or unsettled.
+    pub fn group_bills(&self) -> Result<Vec<GroupBillRow>, AppError> {
+        if !self.table_exists("group_bills")? {
+            return Ok(Vec::new());
+        }
+        list_active_group_bills(&self.conn)
+    }
+
+    /// Ended sessions of open group bills, with their segments.
+    pub fn ended_group_sessions(&self) -> Result<(Vec<LiveSession>, Vec<SegmentRow>), AppError> {
+        if !self.table_exists("group_bills")? {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        Ok((
+            list_ended_group_sessions(&self.conn)?,
+            list_ended_group_segments(&self.conn)?,
+        ))
     }
 
     pub fn pricing_rules(&self) -> Result<Vec<PricingRuleRow>, AppError> {

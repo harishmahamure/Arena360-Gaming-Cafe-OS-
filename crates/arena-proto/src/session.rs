@@ -40,6 +40,11 @@ pub struct SessionStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plan_id: Option<String>,
+    /// A running postpaid session whose group bill this new postpaid session joins (a new group
+    /// is made when it has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub group_with: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -167,6 +172,29 @@ pub struct SessionExtend {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub credit_override: Option<bool>,
+}
+
+/// Puts `session_id` and each of `member_ids` into one group bill: the group of `session_id`, or
+/// a new one paid by its player. Only running postpaid sessions share a bill.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionGroup {
+    pub session_id: String,
+    pub member_ids: Vec<String>,
+}
+
+/// Names who pays a group bill: a profile (a member's or a looked-up player) or one guest
+/// member by guest number. Exactly one of the two is given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct GroupPayer {
+    pub group_bill_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub player_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub guest_no: Option<i64>,
 }
 
 /// Moves a running or paused session to another free PC.
@@ -552,6 +580,10 @@ pub struct SnapshotBill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub guest: Option<bool>,
+    /// The group bill an open order settles for every member of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub group_bill_id: Option<String>,
     pub lines: Vec<BillLine>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,
@@ -607,6 +639,32 @@ pub struct SnapshotSession {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub pack_id: Option<String>,
+    /// The group bill this session shares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub group_bill_id: Option<String>,
+}
+
+/// A group bill: who pays, which running sessions share it and what the ended members owe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotGroupBill {
+    pub id: String,
+    #[ts(type = "number")]
+    pub rev: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub payer_player_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub payer_username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub payer_guest_no: Option<i64>,
+    /// The sessions still running on the bill.
+    pub member_ids: Vec<String>,
+    /// What the members that already ended owe, line by line.
+    pub ended_lines: Vec<BillLine>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

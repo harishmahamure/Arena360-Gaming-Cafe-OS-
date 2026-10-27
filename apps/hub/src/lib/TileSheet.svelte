@@ -11,10 +11,12 @@
     t,
   } from "@arena/ui";
   import type {
+    BillLine,
     SessionStaff,
     SnapshotBill,
     SnapshotDevice,
     SnapshotGroup,
+    SnapshotGroupBill,
     SnapshotLocale,
     SnapshotSession,
     PauseReason,
@@ -30,6 +32,7 @@
     hasPermission,
     newIdempotencyKey,
   } from "./auth";
+  import GroupPanel, { type Payer } from "./GroupPanel.svelte";
   import ConvertGuest from "./players/ConvertGuest.svelte";
   import ExtendOptions from "./players/ExtendOptions.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
@@ -46,7 +49,9 @@
     cmds,
     endJob,
     extendJob,
+    groupJob,
     maintenanceJob,
+    payerJob,
     pauseJob,
     permissionFor,
     powerJob,
@@ -86,9 +91,13 @@
     locale,
     names,
     pauseText,
+    groupView,
     transferring = false,
     ontransfer,
     oncanceltransfer,
+    grouping = false,
+    ongroup,
+    oncancelgroup,
     onclose,
   }: {
     device: SnapshotDevice;
@@ -105,9 +114,13 @@
     locale: SnapshotLocale | null;
     names: Record<string, string>;
     pauseText: (session: SnapshotSession) => string;
+    groupView?: { group: SnapshotGroupBill; members: SnapshotSession[]; lines: BillLine[] };
     transferring?: boolean;
     ontransfer?: () => void;
     oncanceltransfer?: () => void;
+    grouping?: boolean;
+    ongroup?: () => void;
+    oncancelgroup?: () => void;
     onclose: () => void;
   } = $props();
 
@@ -174,7 +187,9 @@
       approving = job;
       return;
     }
-    const reachable = job.moves_to !== undefined;
+    const startsElsewhere =
+      job.payload.kind === "session.start" && job.payload.device_id !== device.device_id;
+    const reachable = job.moves_to !== undefined || startsElsewhere;
     const result = await send(device.device_id, job, reachable || device.online, ticket);
     if (result === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (result === "pin_required") {
@@ -215,6 +230,27 @@
   export function moveTo(targetId: string) {
     if (session && !busy) void go(transferJob(session.id, targetId, session.rev));
   }
+
+  /** Adds the running session `sessionId` to this session's group bill (a floor pick while grouping). */
+  export function groupWith(sessionId: string) {
+    if (session && !busy) void go(groupJob(session.id, [sessionId], session.rev));
+  }
+
+  /** Starts a guest postpaid session on the free PC `targetId` in this session's group bill. */
+  export function startInGroup(target: SnapshotDevice) {
+    if (!session || busy) return;
+    void go(startJob(target.device_id, undefined, target.manual, { mode: "postpaid" }, session.id));
+  }
+
+  function setPayer(payer: Payer) {
+    if (groupView) void go(payerJob(groupView.group.id, payer, groupView.group.rev));
+  }
+
+  const groupLines = $derived(groupView?.lines ?? []);
+  const groupTotal = $derived(groupLines.reduce((sum, l) => sum + l.amount_minor, 0));
+  const canGroup = $derived(
+    session?.mode === "postpaid" && ["active", "paused"].includes(session.state),
+  );
 
   function sendMessage(event: SubmitEvent) {
     event.preventDefault();
@@ -320,6 +356,7 @@
     event.preventDefault();
     event.stopPropagation();
     if (transferring) oncanceltransfer?.();
+    else if (grouping) oncancelgroup?.();
     else onclose();
   }
 </script>
@@ -435,9 +472,29 @@
   {/if}
 
   {#if unpaid && locale}
+    {#if unpaid.group_bill_id && groupView}
+      <BillBreakdown
+        lines={unpaid.lines}
+        subtotal={unpaid.subtotal_minor}
+        paid={unpaid.paid_minor}
+        remaining={unpaid.remaining_minor}
+        {locale}
+        {tz}
+        {names}
+        group
+      />
+      <GroupPanel
+        group={groupView.group}
+        members={groupView.members}
+        {names}
+        {canLookup}
+        {busy}
+        onpayer={setPayer}
+      />
+    {/if}
     <SettleBar bind:this={settleBar} bill={unpaid} {locale} {busy} onsettle={settle}>
       {#snippet extra()}
-        {#if unpaid.guest && unpaid.session_rev != null}
+        {#if unpaid.guest && unpaid.session_rev != null && !unpaid.group_bill_id}
           <ConvertGuest
             sessionId={unpaid.session_id}
             rev={unpaid.session_rev}
@@ -535,7 +592,26 @@
       </div>
     {:else if session}
       <div class="section" data-testid="session-bill">
-        {#if bill && locale}
+        {#if groupView && locale}
+          <BillBreakdown
+            lines={groupLines}
+            subtotal={groupTotal}
+            paid={0}
+            remaining={groupTotal}
+            {locale}
+            {tz}
+            {names}
+            group
+          />
+          <GroupPanel
+            group={groupView.group}
+            members={groupView.members}
+            {names}
+            {canLookup}
+            {busy}
+            onpayer={setPayer}
+          />
+        {:else if bill && locale}
           <BillBreakdown
             lines={bill.lines}
             subtotal={bill.subtotal_minor}
@@ -545,6 +621,22 @@
             {tz}
             {names}
           />
+        {/if}
+        {#if canGroup}
+          {#if grouping}
+            <p class="type-hub-label" role="status" data-testid="group-hint">
+              {t("hub.group.hint")}
+            </p>
+            <Button label="hub.group.done" variant="secondary" onclick={() => oncancelgroup?.()} />
+          {:else if ongroup}
+            <Button
+              label="hub.group.add"
+              variant="secondary"
+              disabled={busy}
+              disabledReason="hub.sheet.waiting"
+              onclick={ongroup}
+            />
+          {/if}
         {/if}
         {#if session.state === "paused"}
           <Button

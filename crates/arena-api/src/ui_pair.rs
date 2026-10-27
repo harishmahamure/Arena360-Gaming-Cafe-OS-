@@ -38,6 +38,7 @@ pub fn unpaired_snapshot(full: HubSnapshot) -> HubSnapshot {
         zones: Vec::new(),
         sessions: Vec::new(),
         bills: Vec::new(),
+        group_bills: Vec::new(),
         alerts: Vec::new(),
         devices: Vec::new(),
         locale: None,
@@ -237,6 +238,7 @@ mod tests {
             zones: vec![],
             sessions: vec![],
             bills: vec![],
+            group_bills: vec![],
             alerts: vec![arena_proto::SnapshotAlert {
                 id: "A1".into(),
                 kind: arena_proto::AlertKind::Fixture,

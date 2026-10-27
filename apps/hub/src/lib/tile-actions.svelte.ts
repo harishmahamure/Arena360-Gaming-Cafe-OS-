@@ -91,6 +91,12 @@ const REFUSALS: Record<string, MessageKey> = {
   "DEVICE_UNASSIGNED:session.transfer": "hub.transfer.unassigned",
   "GROUP_KIND_MISMATCH:session.transfer": "hub.transfer.kind_mismatch",
   "PLAN_NOT_FOR_GROUP:session.transfer": "hub.transfer.plan_group",
+  "STALE:session.group": "hub.group.stale",
+  "VALIDATION_FAILED:session.group": "hub.group.refused",
+  "NOT_FOUND:session.group": "hub.group.refused",
+  "STALE:group.payer": "hub.group.stale",
+  "VALIDATION_FAILED:group.payer": "hub.group.payer_refused",
+  "NOT_FOUND:group.payer": "hub.group.payer_refused",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -112,12 +118,14 @@ export const startJob = (
   player_id?: string,
   manual?: boolean,
   choice: StartChoice = { mode: "postpaid" },
+  group_with?: string,
 ) =>
   job(
     {
       kind: "session.start",
       device_id,
       mode: choice.mode,
+      group_with,
       player_id,
       pack_id: choice.mode === "pack" || choice.mode === "pass" ? choice.pack_id : undefined,
       plan_id: choice.mode === "block" ? choice.plan_id : undefined,
@@ -141,6 +149,22 @@ export const transferJob = (session_id: string, device_id: string, rev: number) 
   job(
     { kind: "session.transfer", session_id, device_id },
     { track: "cmd", rev, moves_to: device_id, done: "hub.sheet.done.transferred" },
+  );
+
+export const groupJob = (session_id: string, member_ids: string[], rev: number) =>
+  job(
+    { kind: "session.group", session_id, member_ids },
+    { track: "none", rev, done: "hub.sheet.done.grouped" },
+  );
+
+export const payerJob = (
+  group_bill_id: string,
+  payer: { player_id?: string; guest_no?: number },
+  rev: number,
+) =>
+  job(
+    { kind: "group.payer", group_bill_id, ...payer },
+    { track: "none", rev, done: "hub.sheet.done.payer" },
   );
 
 export const endJob = (session_id: string, rev: number) =>
@@ -198,25 +222,29 @@ export const MESSAGE_MAX = 140;
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
   kind === "session.start" || kind === "session.end"
     ? kind
-    : kind === "session.pause" || kind === "session.resume"
-      ? "session.pause"
-      : kind === "session.extend"
-        ? "session.extend"
-        : kind === "session.transfer"
-          ? "session.transfer"
-          : kind === "session.end.reverted"
-            ? "session.end"
-            : kind === "session.settle" || kind === "session.settle.reverted"
-              ? "pos.sell"
-              : kind === "credit.collect" || kind === "credit.collect.reverted"
-                ? "credit.collect"
-                : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-                  ? "wallet.topup"
-                  : kind === "device.screen"
-                    ? "device.screen"
-                    : kind === "device.power" || kind === "device.admin_unlock"
-                      ? "device.remote"
-                      : "device.manage";
+    : kind === "session.group"
+      ? "session.start"
+      : kind === "group.payer"
+        ? "pos.sell"
+        : kind === "session.pause" || kind === "session.resume"
+          ? "session.pause"
+          : kind === "session.extend"
+            ? "session.extend"
+            : kind === "session.transfer"
+              ? "session.transfer"
+              : kind === "session.end.reverted"
+                ? "session.end"
+                : kind === "session.settle" || kind === "session.settle.reverted"
+                  ? "pos.sell"
+                  : kind === "credit.collect" || kind === "credit.collect.reverted"
+                    ? "credit.collect"
+                    : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+                      ? "wallet.topup"
+                      : kind === "device.screen"
+                        ? "device.screen"
+                        : kind === "device.power" || kind === "device.admin_unlock"
+                          ? "device.remote"
+                          : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 
@@ -257,7 +285,11 @@ export async function send(
       !extend
         ? "hub.session.pack_refused"
         : (REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code]);
+    const grouping =
+      (code === "VALIDATION_FAILED" || code === "NOT_FOUND") &&
+      (field === "group_with" || field === "member_ids");
     const detail =
+      grouping ||
       ((code === "INSUFFICIENT_BALANCE" || code === "PASS_OUTSIDE_WINDOW") &&
         j.payload.kind === "session.start") ||
       (extend &&

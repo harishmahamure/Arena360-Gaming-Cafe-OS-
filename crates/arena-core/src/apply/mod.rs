@@ -33,6 +33,7 @@ pub(crate) mod credit_pause;
 mod devices;
 mod extend;
 mod frame;
+mod group_bill;
 mod groups;
 mod guards;
 mod kiosk_log;
@@ -172,6 +173,8 @@ pub(crate) enum Target {
     SessionResume(Box<session::PauseTarget>),
     SessionExtend(Box<extend::ExtendTarget>),
     SessionTransfer(Box<transfer::TransferTarget>),
+    SessionGroup(Box<group_bill::GroupTarget>),
+    GroupPayer(Box<group_bill::PayerTarget>),
     SessionAssign(Box<session::AssignTarget>),
     WalletTopup(Box<wallet::TopupTarget>),
     WalletTopupReverted(Box<wallet::TopupRevertTarget>),
@@ -242,6 +245,8 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::SessionResume(r) => Target::SessionResume(Box::new(session::load_resume(tx, r)?)),
         P::SessionExtend(e) => Target::SessionExtend(Box::new(extend::load(tx, e, now)?)),
         P::SessionTransfer(t) => Target::SessionTransfer(Box::new(transfer::load(tx, t, now)?)),
+        P::SessionGroup(g) => Target::SessionGroup(Box::new(group_bill::load(tx, g)?)),
+        P::GroupPayer(p) => Target::GroupPayer(Box::new(group_bill::load_payer(tx, p)?)),
         P::SessionAssignPlayer(a) => Target::SessionAssign(Box::new(session::load_assign(tx, a)?)),
         P::WalletTopup(t) => Target::WalletTopup(Box::new(wallet::load_topup(tx, t)?)),
         P::WalletTopupReverted(r) => {

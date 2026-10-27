@@ -92,6 +92,7 @@ pub(super) async fn pc(
 
 pub(super) fn start_of(device: &str, player: Option<&str>) -> IntentPayload {
     IntentPayload::SessionStart(SessionStart {
+        group_with: None,
         device_id: device.into(),
         mode: SessionMode::Postpaid,
         player_id: player.map(Into::into),
@@ -268,6 +269,7 @@ async fn refusals_name_the_code_and_write_nothing() {
         field(ErrorCode::NotFound, "player_id")
     );
     let pass = IntentPayload::SessionStart(SessionStart {
+        group_with: None,
         device_id: ok.clone(),
         mode: SessionMode::Pass,
         player_id: None,
@@ -788,7 +790,7 @@ fn with_actor(mut i: Intent, actor: Actor) -> Intent {
     i
 }
 
-fn end_revert_intent(session: &str, rev: Option<i64>) -> Intent {
+pub(super) fn end_revert_intent(session: &str, rev: Option<i64>) -> Intent {
     let mut i = intent(
         owner(),
         IntentPayload::SessionEndReverted(arena_proto::SessionEndReverted {
@@ -799,7 +801,7 @@ fn end_revert_intent(session: &str, rev: Option<i64>) -> Intent {
     i
 }
 
-fn settle_revert_intent(order: &str, rev: Option<i64>) -> Intent {
+pub(super) fn settle_revert_intent(order: &str, rev: Option<i64>) -> Intent {
     let mut i = intent(
         owner(),
         IntentPayload::SessionSettleReverted(arena_proto::SessionSettleReverted {

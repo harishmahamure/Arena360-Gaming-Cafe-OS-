@@ -221,6 +221,13 @@ enum Op {
         slot: u8,
         target: u8,
     },
+    /// Staff put a session and another into one group bill, or are refused and nothing is
+    /// written; a payer is then named, or refused the same way.
+    Group {
+        slot: u8,
+        other: u8,
+        guest: u8,
+    },
     /// The system raises an alert on a device (a repeat is `STALE`), then staff acknowledge it
     /// (a repeat is `STALE`, an unknown id `NOT_FOUND`).
     Alert {
@@ -462,6 +469,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
         2 => (0..3u8, 0..4u8).prop_map(|(slot, target)| Op::Transfer { slot, target }),
+        2 => (0..3u8, 0..3u8, 0..4u8).prop_map(|(slot, other, guest)| Op::Group { slot, other, guest }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -1469,6 +1477,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let before = hub.change_count();
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionStart(arena_proto::SessionStart {
+                    group_with: None,
                     device_id: device.clone(),
                     mode: arena_proto::SessionMode::Postpaid,
                     player_id: player,
@@ -1521,6 +1530,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let before = hub.change_count();
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionStart(arena_proto::SessionStart {
+                    group_with: None,
                     device_id: device.clone(),
                     mode: if *pass {
                         arena_proto::SessionMode::Pass
@@ -1596,6 +1606,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let before = hub.change_count();
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionStart(arena_proto::SessionStart {
+                    group_with: None,
                     device_id: device.clone(),
                     mode: if *wallet {
                         arena_proto::SessionMode::Wallet
@@ -2464,6 +2475,64 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     | ErrorCode::PlanNotForGroup,
                     _,
                 )) => prop_assert_eq!(hub.change_count(), before),
+                Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
+            }
+        }
+        Op::Group { slot, other, guest } => {
+            let sessions = hub.reader.rows(Table::Sessions).unwrap();
+            let live: Vec<_> = sessions
+                .iter()
+                .filter(|s| matches!(text(s, "state").as_str(), "active" | "paused"))
+                .collect();
+            let (Some(host), Some(member)) =
+                (live.get(usize::from(*slot)), live.get(usize::from(*other)))
+            else {
+                return Ok(());
+            };
+            let (host_id, member_id) = (text(host, "id"), text(member, "id"));
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionGroup(arena_proto::SessionGroup {
+                    session_id: host_id.clone(),
+                    member_ids: vec![member_id.clone()],
+                }),
+                Some(int(host, "rev")),
+            ));
+            match code(&out) {
+                None => {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    let after = hub.reader.rows(Table::Sessions).unwrap();
+                    let group_of = |id: &str| {
+                        after
+                            .iter()
+                            .find(|s| text(s, "id") == id)
+                            .map(|s| s["group_bill_id"].clone())
+                    };
+                    prop_assert!(group_of(&host_id) != Some(RowValue::Null));
+                    prop_assert_eq!(group_of(&host_id), group_of(&member_id));
+                }
+                Some((ErrorCode::ValidationFailed | ErrorCode::NotFound, _)) => {
+                    prop_assert_eq!(hub.change_count(), before)
+                }
+                Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
+            }
+            let Some(group) = hub.reader.rows(Table::GroupBills).unwrap().pop() else {
+                return Ok(());
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::GroupPayer(arena_proto::GroupPayer {
+                    group_bill_id: text(&group, "id"),
+                    player_id: None,
+                    guest_no: Some(i64::from(*guest)),
+                }),
+                Some(int(&group, "rev")),
+            ));
+            match code(&out) {
+                None => prop_assert!(out.is_ok(), "{:?}", out),
+                Some((ErrorCode::ValidationFailed | ErrorCode::Stale, _)) => {
+                    prop_assert_eq!(hub.change_count(), before)
+                }
                 Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
             }
         }

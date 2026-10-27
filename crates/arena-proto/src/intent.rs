@@ -161,6 +161,12 @@ pub enum IntentKind {
     /// opening the next on the new device at that group's rate.
     #[serde(rename = "session.transfer")]
     SessionTransfer,
+    /// Puts a running postpaid session and others into one group bill with one payer.
+    #[serde(rename = "session.group")]
+    SessionGroup,
+    /// Names who pays a group bill.
+    #[serde(rename = "group.payer")]
+    GroupPayer,
     #[serde(rename = "wallet.topup")]
     WalletTopup,
     #[serde(rename = "wallet.topup.reverted")]
@@ -197,7 +203,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 62] = [
+    pub const ALL: [IntentKind; 64] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -249,6 +255,8 @@ impl IntentKind {
         Self::SessionResume,
         Self::SessionExtend,
         Self::SessionTransfer,
+        Self::SessionGroup,
+        Self::GroupPayer,
         Self::WalletTopup,
         Self::WalletTopupReverted,
         Self::SessionAssignPlayer,
@@ -316,6 +324,8 @@ impl IntentKind {
             Self::SessionResume => "session.resume",
             Self::SessionExtend => "session.extend",
             Self::SessionTransfer => "session.transfer",
+            Self::SessionGroup => "session.group",
+            Self::GroupPayer => "group.payer",
             Self::WalletTopup => "wallet.topup",
             Self::WalletTopupReverted => "wallet.topup.reverted",
             Self::CreditSetLimit => "credit.set_limit",
@@ -384,6 +394,8 @@ impl IntentKind {
             | Self::SessionResume
             | Self::SessionExtend
             | Self::SessionTransfer
+            | Self::SessionGroup
+            | Self::GroupPayer
             | Self::WalletTopup
             | Self::PlanSell
             | Self::PlanSellReverted
@@ -444,13 +456,14 @@ impl IntentKind {
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 Requirement::Perm(Permission::PlayerManage)
             }
-            Self::SessionStart | Self::SessionAssignPlayer | Self::AlertAck => {
-                Requirement::Perm(Permission::SessionStart)
-            }
+            Self::SessionStart
+            | Self::SessionAssignPlayer
+            | Self::SessionGroup
+            | Self::AlertAck => Requirement::Perm(Permission::SessionStart),
             Self::SessionEnd | Self::SessionEndReverted => {
                 Requirement::Perm(Permission::SessionEnd)
             }
-            Self::SessionSettle | Self::SessionSettleReverted => {
+            Self::SessionSettle | Self::SessionSettleReverted | Self::GroupPayer => {
                 Requirement::Perm(Permission::PosSell)
             }
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
@@ -538,6 +551,8 @@ impl IntentKind {
             | Self::SessionResume
             | Self::SessionExtend
             | Self::SessionTransfer
+            | Self::SessionGroup
+            | Self::GroupPayer
             | Self::WalletTopup
             | Self::WalletTopupReverted
             | Self::CreditSetLimit
@@ -1012,6 +1027,10 @@ pub enum IntentPayload {
     SessionExtend(crate::SessionExtend),
     #[serde(rename = "session.transfer")]
     SessionTransfer(crate::SessionTransfer),
+    #[serde(rename = "session.group")]
+    SessionGroup(crate::SessionGroup),
+    #[serde(rename = "group.payer")]
+    GroupPayer(crate::GroupPayer),
     #[serde(rename = "wallet.topup")]
     WalletTopup(crate::WalletTopup),
     #[serde(rename = "wallet.topup.reverted")]
@@ -1090,6 +1109,8 @@ impl IntentPayload {
             Self::SessionResume(_) => IntentKind::SessionResume,
             Self::SessionExtend(_) => IntentKind::SessionExtend,
             Self::SessionTransfer(_) => IntentKind::SessionTransfer,
+            Self::SessionGroup(_) => IntentKind::SessionGroup,
+            Self::GroupPayer(_) => IntentKind::GroupPayer,
             Self::WalletTopup(_) => IntentKind::WalletTopup,
             Self::WalletTopupReverted(_) => IntentKind::WalletTopupReverted,
             Self::CreditSetLimit(_) => IntentKind::CreditSetLimit,
@@ -1344,11 +1365,11 @@ mod tests {
                 "player.create" | "player.update" | "player.password_reset" => {
                     Requirement::Perm(Permission::PlayerManage)
                 }
-                "session.start" | "session.assign_player" | "alert.ack" => {
+                "session.start" | "session.assign_player" | "session.group" | "alert.ack" => {
                     Requirement::Perm(Permission::SessionStart)
                 }
                 "session.end" | "session.end.reverted" => Requirement::Perm(Permission::SessionEnd),
-                "session.settle" | "session.settle.reverted" => {
+                "session.settle" | "session.settle.reverted" | "group.payer" => {
                     Requirement::Perm(Permission::PosSell)
                 }
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),

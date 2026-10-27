@@ -623,7 +623,7 @@ mod tests {
                 body,
                 json!({
                     "branch": {"name": "Dev Branch", "branch_code": "DEV01"},
-                    "groups": [], "zones": [], "sessions": [], "bills": [], "alerts": [],
+                    "groups": [], "zones": [], "sessions": [], "bills": [], "group_bills": [], "alerts": [],
                     "devices": [{"device_id": "D1", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": false, "kind": null, "group_id": null, "meta_rev": null, "tv_number": null, "floor_x": null, "floor_y": null, "status": "offline", "last_seen_at": null, "maintenance_note": null}],
                     "locale": {
                         "currency": "INR",
@@ -658,7 +658,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body,
-                json!({"branch": null, "groups": [], "zones": [], "sessions": [], "bills": [], "alerts": [], "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32)}, "paired": true, "device_cap": 20})
+                json!({"branch": null, "groups": [], "zones": [], "sessions": [], "bills": [], "group_bills": [], "alerts": [], "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32)}, "paired": true, "device_cap": 20})
             );
         }
 

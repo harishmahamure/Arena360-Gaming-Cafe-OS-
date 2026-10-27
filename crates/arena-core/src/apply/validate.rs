@@ -212,6 +212,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionExtend(t) => super::extend::validate(intent, e, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::SessionGroup(g) => match target {
+            Target::SessionGroup(t) => super::group_bill::validate(g, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::GroupPayer(p) => match target {
+            Target::GroupPayer(t) => super::group_bill::validate_payer(p, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::SessionTransfer(_) => match target {
             Target::SessionTransfer(t) => super::transfer::validate(t),
             _ => Err(internal_target()),

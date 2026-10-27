@@ -121,7 +121,8 @@
     color: var(--warning);
   }
 
-  .tile[data-transfer-target] {
+  .tile[data-transfer-target],
+  .tile[data-group-target] {
     outline: 3px dashed var(--accent);
     outline-offset: -3px;
   }

@@ -26,6 +26,9 @@ pub struct HubSnapshot {
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<crate::SnapshotBill>>")]
     pub bills: Vec<crate::SnapshotBill>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<crate::SnapshotGroupBill>>")]
+    pub group_bills: Vec<crate::SnapshotGroupBill>,
     /// Every open alert, oldest first.
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<crate::SnapshotAlert>>")]
@@ -368,6 +371,7 @@ mod tests {
             zones: vec![],
             sessions: vec![],
             bills: vec![],
+            group_bills: vec![],
             alerts: vec![],
             devices: vec![SnapshotDevice {
                 device_id: "D".into(),
@@ -405,6 +409,7 @@ mod tests {
                 "zones": [],
                 "sessions": [],
                 "bills": [],
+                "group_bills": [],
                 "alerts": [],
                 "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null, "floor_x": null, "floor_y": null, "status": "online", "last_seen_at": null, "maintenance_note": null}],
                 "locale": null,

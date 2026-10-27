@@ -27,4 +27,8 @@ export type SnapshotSession = {
    * The owned pack a pack or pass session plays on.
    */
   pack_id?: string | null;
+  /**
+   * The group bill this session shares.
+   */
+  group_bill_id?: string;
 };

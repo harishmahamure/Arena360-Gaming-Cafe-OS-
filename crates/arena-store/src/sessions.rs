@@ -53,6 +53,7 @@ pub struct LiveSession {
     pub extended_min: i64,
     pub rate_id: Option<String>,
     pub group_id: String,
+    pub group_bill_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +115,7 @@ pub struct OpenOrder {
     pub session_rev: Option<i64>,
     pub device_id: String,
     pub subtotal_minor: i64,
+    pub group_bill_id: Option<String>,
 }
 
 pub fn insert_session(conn: &Connection, s: &NewSession<'_>) -> Result<(), AppError> {
@@ -195,12 +197,13 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
     .map_err(db_error)
 }
 
-const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
+pub(crate) const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
         s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by, s.ends_at, s.paused_at,
-        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min, s.extended_min, s.rate_id, s.group_id";
+        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min, s.extended_min, s.rate_id, s.group_id,
+        s.group_bill_id";
 
-fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
+pub(crate) fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
         id: r.get(0)?,
         device_id: r.get(1)?,
@@ -229,6 +232,7 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         extended_min: r.get(24)?,
         rate_id: r.get(25)?,
         group_id: r.get(26)?,
+        group_bill_id: r.get(27)?,
     })
 }
 
@@ -430,7 +434,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             "SELECT o.id, o.session_id, COALESCE(o.device_id, ''), o.subtotal_minor, o.rev, o.player_id,
                     w.balance_minor, s.rev,
                     c.player_id, c.limit_minor, c.outstanding_minor, c.reminder_days, c.credit_paused,
-                    c.last_override_day, c.rev
+                    c.last_override_day, c.rev, o.group_bill_id
              FROM orders o LEFT JOIN wallets w ON w.player_id = o.player_id
                   LEFT JOIN credit_balances c ON c.player_id = o.player_id
                   LEFT JOIN sessions s ON s.id = o.session_id
@@ -451,6 +455,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
                 Some(_) => Some(crate::credit::credit_from(r, 8)?),
                 None => None,
             },
+            group_bill_id: r.get(15)?,
         })
     })
     .map_err(db_error)?
@@ -496,6 +501,7 @@ pub struct OrderRow {
     pub settled_by: Option<String>,
     pub player_id: Option<String>,
     pub kind: String,
+    pub group_bill_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -541,10 +547,9 @@ pub fn find_order(conn: &Connection, id: &str) -> Result<Option<OrderRow>, AppEr
     .map_err(db_error)
 }
 
-const ORDER_COLUMNS: &str =
-    "id, status, total_minor, rev, session_id, settled_at, settled_by, player_id, kind";
+pub(crate) const ORDER_COLUMNS: &str = "id, status, total_minor, rev, session_id, settled_at, settled_by, player_id, kind, group_bill_id";
 
-fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
+pub(crate) fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
     Ok(OrderRow {
         id: r.get(0)?,
         status: r.get(1)?,
@@ -555,6 +560,7 @@ fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
         settled_by: r.get(6)?,
         player_id: r.get(7)?,
         kind: r.get(8)?,
+        group_bill_id: r.get(9)?,
     })
 }
 

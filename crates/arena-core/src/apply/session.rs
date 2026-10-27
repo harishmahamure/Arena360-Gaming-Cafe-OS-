@@ -12,8 +12,8 @@ use arena_store::{
     find_wallet, fold_pause, forward_intent_id, insert_order, insert_order_line, insert_payment,
     insert_segment, insert_session, insert_wallet_txn, list_order_line_ids, list_order_wallet_txns,
     list_payment_ids, list_segments, next_guest_no, pause_session, read_row, reopen_order,
-    reopen_segments, reopen_session, resume_session, set_device_state, set_override_day,
-    settle_order, sum_reserved_minor,
+    reopen_segments, reopen_session, resume_session, set_device_state, set_group_state,
+    set_order_group, set_override_day, settle_order, sum_reserved_minor,
 };
 
 use super::mutate::Written;
@@ -29,6 +29,7 @@ pub(crate) struct SessionTarget {
     rule_id: Option<String>,
     player: bool,
     prepaid: super::prepaid::StartExtras,
+    group_host: Option<LiveSession>,
 }
 
 pub(super) fn invalid(field: &str, message: &str) -> AppError {
@@ -64,6 +65,10 @@ pub(super) fn load(
     } else {
         super::prepaid::StartExtras::default()
     };
+    let group_host = match &s.group_with {
+        Some(id) => find_session(tx, id)?,
+        None => None,
+    };
     Ok(SessionTarget {
         device,
         busy,
@@ -71,6 +76,7 @@ pub(super) fn load(
         rule_id,
         player,
         prepaid,
+        group_host,
     })
 }
 
@@ -150,6 +156,9 @@ pub(super) fn validate(
             "player_id",
             "no such player",
         ));
+    }
+    if s.group_with.is_some() {
+        super::group_bill::check_start(s.mode, t.group_host.as_ref())?;
     }
     super::prepaid::check_start(s, group_id, &t.prepaid)
 }
@@ -253,6 +262,9 @@ pub(super) fn mutate(
             now_ms,
         )?);
     }
+    if let Some(host) = &t.group_host {
+        super::group_bill::join_new(tx, host, &id, &mut written)?;
+    }
     Ok(written)
 }
 
@@ -262,6 +274,7 @@ pub(crate) struct EndTarget {
     segments: Vec<SegmentRow>,
     device: Option<DeviceMetaRow>,
     close: super::prepaid::CloseExtras,
+    group: Option<super::group_bill::GroupEnd>,
 }
 
 pub(super) fn load_end(tx: &StoreTx<'_>, e: &SessionEnd) -> Result<EndTarget, AppError> {
@@ -272,6 +285,7 @@ pub(super) fn load_end(tx: &StoreTx<'_>, e: &SessionEnd) -> Result<EndTarget, Ap
         segments: list_segments(tx, Some(&session.id))?,
         device: find_device_meta(tx, &session.device_id)?,
         close: super::prepaid::load_close(tx, &session)?,
+        group: super::group_bill::load_end(tx, &session)?,
         session: Some(session),
     })
 }
@@ -347,74 +361,119 @@ pub(super) fn mutate_end(
             now_ms,
         );
     }
-    let lines = crate::billing::bill(
+    let own_lines = crate::billing::bill(
         &t.segments,
         s.rounding_min,
         s.minimum_min,
         s.paused_at,
         now_ms,
     );
-    let subtotal: i64 = lines.iter().map(|l| l.amount_minor).sum();
-    let order_id = ulid::Ulid::generate().to_string();
+    let billed = match &t.group {
+        Some(g) if !g.is_last() => None,
+        other => Some(other.as_ref()),
+    };
+    let mut entries: Vec<(&SegmentRow, arena_proto::BillLine)> = Vec::new();
+    if let Some(group) = billed {
+        let mut members: Vec<(&LiveSession, &[SegmentRow], Vec<arena_proto::BillLine>)> =
+            vec![(s, t.segments.as_slice(), own_lines)];
+        if let Some(g) = group {
+            for (m, segs) in &g.others {
+                let lines = crate::billing::bill(segs, m.rounding_min, m.minimum_min, None, now_ms);
+                members.push((m, segs.as_slice(), lines));
+            }
+        }
+        members.sort_by(|x, y| (x.0.started_at, &x.0.id).cmp(&(y.0.started_at, &y.0.id)));
+        for (_, segs, lines) in members {
+            entries.extend(segs.iter().zip(lines));
+        }
+    }
+    let subtotal: i64 = entries.iter().map(|(_, l)| l.amount_minor).sum();
     if let Some(paused_at) = s.paused_at {
         fold_pause(tx, &s.id, (now_ms - paused_at).max(0))?;
     }
     close_segments(tx, &s.id, now_ms)?;
     end_session(tx, &s.id, now_ms, &intent.actor.id)?;
-    insert_order(
-        tx,
-        &NewOrder {
-            id: &order_id,
-            session_id: &s.id,
-            player_id: s.player_id.as_deref(),
-            guest_no: s.guest_no,
-            device_id: &s.device_id,
-            subtotal_minor: subtotal,
-            business_day: &s.business_day,
-            fy: &s.fy,
-        },
-    )?;
-    let mut written = vec![
-        Written {
-            key: RowKey::Sessions { id: s.id.clone() },
-            op: ChangeOp::Update,
-            before: None,
-        },
-        Written {
+    let mut written = vec![Written {
+        key: RowKey::Sessions { id: s.id.clone() },
+        op: ChangeOp::Update,
+        before: None,
+    }];
+    let segment_written = |id: &str| Written {
+        key: RowKey::SessionSegments { id: id.to_owned() },
+        op: ChangeOp::Update,
+        before: None,
+    };
+    let interleave = t.group.is_none();
+    if billed.is_none() {
+        written.extend(t.segments.iter().map(|seg| segment_written(&seg.id)));
+    }
+    if billed.is_some() {
+        let order_id = ulid::Ulid::generate().to_string();
+        let group = billed.flatten();
+        let (player_id, guest_no) = match group {
+            Some(g) => (g.group.payer_player_id.as_deref(), g.group.payer_guest_no),
+            None => (s.player_id.as_deref(), s.guest_no),
+        };
+        insert_order(
+            tx,
+            &NewOrder {
+                id: &order_id,
+                session_id: &s.id,
+                player_id,
+                guest_no,
+                device_id: &s.device_id,
+                subtotal_minor: subtotal,
+                business_day: &s.business_day,
+                fy: &s.fy,
+            },
+        )?;
+        written.push(Written {
             key: RowKey::Orders {
                 id: order_id.clone(),
             },
             op: ChangeOp::Insert,
             before: None,
-        },
-    ];
-    for (i, (seg, line)) in t.segments.iter().zip(&lines).enumerate() {
-        let id = ulid::Ulid::generate().to_string();
-        insert_order_line(
-            tx,
-            &NewOrderLine {
-                id: &id,
-                order_id: &order_id,
-                segment_id: &seg.id,
-                device_id: &line.device_id,
-                from_at: line.from_at,
-                to_at: line.to_at,
-                minutes: line.minutes,
-                rate_minor_per_hour: line.rate_minor_per_hour,
-                amount_minor: line.amount_minor,
-                position: i as i64,
-            },
-        )?;
-        written.push(Written {
-            key: RowKey::SessionSegments { id: seg.id.clone() },
-            op: ChangeOp::Update,
-            before: None,
         });
-        written.push(Written {
-            key: RowKey::OrderLines { id },
-            op: ChangeOp::Insert,
-            before: None,
-        });
+        if let Some(g) = group {
+            set_order_group(tx, &order_id, &g.group.id)?;
+            set_group_state(tx, &g.group.id, "closed")?;
+            written.push(Written {
+                key: RowKey::GroupBills {
+                    id: g.group.id.clone(),
+                },
+                op: ChangeOp::Update,
+                before: None,
+            });
+        }
+        if !interleave {
+            written.extend(t.segments.iter().map(|seg| segment_written(&seg.id)));
+        }
+        for (i, (seg, line)) in entries.iter().enumerate() {
+            if interleave {
+                written.push(segment_written(&seg.id));
+            }
+            let id = ulid::Ulid::generate().to_string();
+            insert_order_line(
+                tx,
+                &NewOrderLine {
+                    id: &id,
+                    order_id: &order_id,
+                    segment_id: &seg.id,
+                    device_id: &line.device_id,
+                    from_at: line.from_at,
+                    to_at: line.to_at,
+                    minutes: line.minutes,
+                    rate_minor_per_hour: line.rate_minor_per_hour,
+                    amount_minor: line.amount_minor,
+                    position: i as i64,
+                },
+            )?;
+            written.push(Written {
+                key: RowKey::OrderLines { id },
+                op: ChangeOp::Insert,
+                before: None,
+            });
+        }
     }
     if let Some(d) = &t.device {
         let state = d.prior_state.as_deref().filter(|p| *p != "in_session");
@@ -1089,6 +1148,16 @@ pub(super) fn mutate_end_reverted(
         op: ChangeOp::Delete,
         before: Some(before),
     });
+    if let Some(group_id) = &o.group_bill_id {
+        set_group_state(tx, group_id, "open")?;
+        written.push(Written {
+            key: RowKey::GroupBills {
+                id: group_id.clone(),
+            },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
     set_device_state(tx, &d.device_id, "in_session", Some(&d.state), None)?;
     written.push(Written {
         key: RowKey::DevicesMeta {

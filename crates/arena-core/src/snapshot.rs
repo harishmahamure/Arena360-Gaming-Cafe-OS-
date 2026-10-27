@@ -32,6 +32,7 @@ pub fn build_snapshot(
     HubSnapshot {
         sessions: Vec::new(),
         bills: Vec::new(),
+        group_bills: Vec::new(),
         alerts: Vec::new(),
         locale,
         ui,
@@ -141,6 +142,7 @@ fn bills(
                 credit: Option<arena_proto::CreditView>,
                 session_rev: Option<i64>,
                 guest: Option<bool>,
+                group_bill_id: Option<String>,
                 lines: Vec<arena_proto::BillLine>| {
         let subtotal_minor = lines.iter().map(|l| l.amount_minor).sum();
         arena_proto::SnapshotBill {
@@ -152,6 +154,7 @@ fn bills(
             credit,
             session_rev,
             guest,
+            group_bill_id,
             lines,
             subtotal_minor,
             paid_minor: 0,
@@ -182,6 +185,7 @@ fn bills(
             None,
             Some(s.rev),
             s.player_id.is_none().then_some(true),
+            s.group_bill_id.clone(),
             lines,
         )
     });
@@ -209,10 +213,59 @@ fn bills(
             o.credit.as_ref().map(credit_view),
             o.session_rev,
             guest.then_some(true),
+            o.group_bill_id,
             lines,
         )
     });
     live.chain(open).collect()
+}
+
+fn group_bills(
+    rows: Vec<arena_store::GroupBillRow>,
+    sessions: &[arena_store::LiveSession],
+    (ended, segments): (Vec<arena_store::LiveSession>, Vec<arena_store::SegmentRow>),
+    rules: &[arena_store::PricingRuleRow],
+    now_ms: i64,
+) -> Vec<arena_proto::SnapshotGroupBill> {
+    rows.into_iter()
+        .map(|g| {
+            let member_ids = sessions
+                .iter()
+                .filter(|s| s.group_bill_id.as_deref() == Some(g.id.as_str()))
+                .map(|s| s.id.clone())
+                .collect();
+            let mut ended_lines = Vec::new();
+            for m in ended
+                .iter()
+                .filter(|m| m.group_bill_id.as_deref() == Some(g.id.as_str()))
+            {
+                let own: Vec<_> = segments
+                    .iter()
+                    .filter(|seg| seg.session_id == m.id)
+                    .cloned()
+                    .collect();
+                let mut lines =
+                    crate::billing::bill(&own, m.rounding_min, m.minimum_min, None, now_ms);
+                for (line, seg) in lines.iter_mut().zip(&own) {
+                    line.rule_name = seg
+                        .rule_id
+                        .as_deref()
+                        .and_then(|id| rules.iter().find(|r| r.rule_id == id))
+                        .map(|r| r.name.clone());
+                }
+                ended_lines.extend(lines);
+            }
+            arena_proto::SnapshotGroupBill {
+                id: g.id,
+                rev: g.rev,
+                payer_player_id: g.payer_player_id,
+                payer_username: g.payer_username,
+                payer_guest_no: g.payer_guest_no,
+                member_ids,
+                ended_lines,
+            }
+        })
+        .collect()
 }
 
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
@@ -233,6 +286,8 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         orders,
         alerts,
         rules,
+        group_rows,
+        ended_group,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -249,11 +304,14 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.open_orders()?,
             s.alerts()?,
             s.pricing_rules()?,
+            s.group_bills()?,
+            s.ended_group_sessions()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
     snapshot.bills = bills(&sessions, &segments, orders, &rules, now_ms);
+    snapshot.group_bills = group_bills(group_rows, &sessions, ended_group, &rules, now_ms);
     snapshot.alerts = alerts
         .into_iter()
         .filter_map(|a| {
@@ -290,6 +348,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             ends_at: s.ends_at,
             mode: Some(s.mode),
             pack_id: s.pack_id,
+            group_bill_id: s.group_bill_id,
         })
         .collect();
     let tz = snapshot
@@ -964,6 +1023,7 @@ mod tests {
                 zones: vec![],
                 sessions: vec![],
                 bills: vec![],
+                group_bills: vec![],
                 alerts: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
@@ -1043,6 +1103,7 @@ mod tests {
                 zones: vec![],
                 sessions: vec![],
                 bills: vec![],
+                group_bills: vec![],
                 alerts: vec![],
                 devices: vec![],
                 locale: None,

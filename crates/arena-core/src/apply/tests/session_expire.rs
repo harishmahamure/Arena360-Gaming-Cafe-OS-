@@ -40,6 +40,7 @@ async fn timed_with(f: &Fixture, ends_in_ms: i64, grace_min: u32, mode: &str) ->
     let mut i = intent(
         owner(),
         IntentPayload::SessionStart(SessionStart {
+            group_with: None,
             device_id: d.clone(),
             mode: SessionMode::Postpaid,
             player_id: Some(player),
@@ -181,6 +182,7 @@ async fn an_expired_session_lets_the_device_start_another() {
     let mut i = intent(
         owner(),
         IntentPayload::SessionStart(SessionStart {
+            group_with: None,
             device_id: d,
             mode: SessionMode::Postpaid,
             player_id: None,
@@ -307,6 +309,7 @@ async fn staff_handles_holds_the_session_expired_with_a_time_up_alert_until_staf
     let mut start = intent(
         owner(),
         IntentPayload::SessionStart(SessionStart {
+            group_with: None,
             device_id: d.clone(),
             mode: SessionMode::Postpaid,
             player_id: None,

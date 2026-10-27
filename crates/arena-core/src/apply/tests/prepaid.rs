@@ -80,6 +80,7 @@ fn start_as(device: &str, player: Option<&str>, mode: SessionMode, pack: Option<
     let mut i = intent(
         owner(),
         IntentPayload::SessionStart(SessionStart {
+            group_with: None,
             device_id: device.into(),
             mode,
             player_id: player.map(Into::into),
@@ -113,6 +114,7 @@ pub(super) async fn begin_block(
     let mut i = intent(
         owner(),
         IntentPayload::SessionStart(SessionStart {
+            group_with: None,
             device_id: device.into(),
             mode,
             player_id: player.map(Into::into),

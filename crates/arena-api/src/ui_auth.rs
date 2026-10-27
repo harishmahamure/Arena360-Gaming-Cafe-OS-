@@ -3570,6 +3570,7 @@ pub(crate) mod tests {
         json!({"intent": serde_json::to_value(intent_as(
             Actor { kind: ActorKind::Staff, id: "x".into() },
             IntentPayload::SessionStart(arena_proto::SessionStart {
+        group_with: None,
                 device_id: device.into(),
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,

@@ -1084,6 +1084,7 @@ mod tests {
         let (_, mut frames) = open(&hub, Some(&token)).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         let applied = submit(IntentPayload::SessionStart(arena_proto::SessionStart {
+            group_with: None,
             device_id: device.clone(),
             mode: arena_proto::SessionMode::Postpaid,
             player_id: None,
@@ -1239,6 +1240,7 @@ mod tests {
         .unwrap();
         let started = submit(
             IntentPayload::SessionStart(arena_proto::SessionStart {
+                group_with: None,
                 device_id: device,
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,

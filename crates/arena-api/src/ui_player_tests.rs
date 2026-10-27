@@ -975,6 +975,7 @@ async fn ending_a_wallet_session_settles_at_once_and_offers_no_undo() {
         json!({"intent": serde_json::to_value(intent_as(
             actor(),
             IntentPayload::SessionStart(SessionStart {
+        group_with: None,
                 device_id: device.clone(),
                 mode: SessionMode::Wallet,
                 player_id: Some(player.clone()),

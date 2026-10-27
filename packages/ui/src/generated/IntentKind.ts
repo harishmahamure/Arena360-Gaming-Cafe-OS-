@@ -55,6 +55,8 @@ export type IntentKind =
   | "session.resume"
   | "session.extend"
   | "session.transfer"
+  | "session.group"
+  | "group.payer"
   | "wallet.topup"
   | "wallet.topup.reverted"
   | "credit.set_limit"

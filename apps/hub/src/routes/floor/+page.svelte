@@ -164,6 +164,59 @@
     d.kind === active.kind &&
     d.status === "online" &&
     groups.some((g) => g.id === d.group_id);
+  let grouping = $state(false);
+  $effect(() => {
+    const s = activeSession;
+    if (grouping && !(s && s.mode === "postpaid" && ["active", "paused"].includes(s.state))) {
+      grouping = false;
+    }
+  });
+  const groupKind = (d: SnapshotDevice): "add" | "start" | null => {
+    if (!grouping || !active || d.device_id === active.device_id) return null;
+    const s = sessionOf(d);
+    if (s) {
+      const open = s.mode === "postpaid" && ["active", "paused"].includes(s.state);
+      const joined = s.group_bill_id != null && s.group_bill_id === activeSession?.group_bill_id;
+      return open && !joined ? "add" : null;
+    }
+    return d.kind === "pc" && d.status === "online" && groups.some((g) => g.id === d.group_id)
+      ? "start"
+      : null;
+  };
+  function pickForGroup(d: SnapshotDevice) {
+    const s = sessionOf(d);
+    if (s) sheet?.groupWith(s.id);
+    else if (groupKind(d) === "start") sheet?.startInGroup(d);
+  }
+  async function startGrouping() {
+    grouping = true;
+    await tick();
+    document.querySelector<HTMLElement>("[data-group-target] [data-tile-face]")?.focus();
+  }
+  async function stopGrouping() {
+    grouping = false;
+    await tick();
+    document.querySelector<HTMLElement>(`[data-device-id="${activeId}"] [data-tile-face]`)?.focus();
+  }
+  const payerOf = (id: string | undefined) => {
+    const g = snapshot?.group_bills?.find((x) => x.id === id);
+    return g?.payer_username ?? t("hub.session.guest", { n: g?.payer_guest_no ?? 0 });
+  };
+  const groupViewOf = (id: string | undefined) => {
+    const g = snapshot?.group_bills?.find((x) => x.id === id);
+    if (!g) return undefined;
+    const members = (snapshot?.sessions ?? []).filter((s) => s.group_bill_id === g.id);
+    const bills = snapshot?.bills ?? [];
+    const lines = [
+      ...g.ended_lines,
+      ...bills
+        .filter((b) => !b.order_id && members.some((m) => m.id === b.session_id))
+        .flatMap((b) => b.lines),
+    ];
+    return { group: g, members, lines };
+  };
+  const unpaidBill = (d: SnapshotDevice) =>
+    snapshot?.bills?.find((b) => b.device_id === d.device_id && b.order_id);
   let seenMove = moved.n;
   $effect(() => {
     const n = moved.n;
@@ -218,6 +271,11 @@
       void cancelTransfer();
       return;
     }
+    if (e.key === "Escape" && grouping) {
+      e.preventDefault();
+      void stopGrouping();
+      return;
+    }
     const current = e.key.startsWith("Arrow") && face(e);
     if (!current || e.target !== current) return;
     const faces = [...document.querySelectorAll<HTMLElement>("[data-tile-face]")];
@@ -253,10 +311,19 @@
     alertTag={tagOf(device.device_id)}
     tabindex={tabStop === device.device_id ? 0 : -1}
     {group}
-    note={isTarget(device) ? t("hub.transfer.move_here") : undefined}
+    note={isTarget(device)
+      ? t("hub.transfer.move_here")
+      : groupKind(device)
+        ? t(groupKind(device) === "add" ? "hub.group.add_here" : "hub.group.start_here")
+        : undefined}
     onactivate={() =>
-      transferring ? sheet?.moveTo(device.device_id) : (activeId = device.device_id)}
+      transferring
+        ? sheet?.moveTo(device.device_id)
+        : grouping
+          ? pickForGroup(device)
+          : (activeId = device.device_id)}
     data-transfer-target={isTarget(device) ? "" : undefined}
+    data-group-target={groupKind(device) ? "" : undefined}
     style={cell ? `--x:${(device.floor_x ?? 0) + 1};--y:${(device.floor_y ?? 0) + 1}` : undefined}
     aria-current={activeId === device.device_id ? "true" : undefined}
     data-device-id={device.device_id}
@@ -266,6 +333,10 @@
       {#if !group}<span data-testid="device-presence">{t(badge.label)}</span>{/if}
       {#if isTarget(device)}
         <span data-testid="transfer-move-here">{t("hub.transfer.move_here")}</span>
+      {:else if groupKind(device)}
+        <span data-testid="group-pick-here"
+          >{t(groupKind(device) === "add" ? "hub.group.add_here" : "hub.group.start_here")}</span
+        >
       {:else if cmds[device.device_id]?.state === "failed"}
         <span data-testid="tile-failed"
           ><span aria-hidden="true">⚠</span> {t("hub.floor.remote_unlock_failed")}</span
@@ -286,6 +357,11 @@
         <span data-testid="session-line"
           >{session.username ?? t("hub.session.guest", { n: session.guest_no ?? 0 })}</span
         >
+        {#if session.group_bill_id}
+          <span data-testid="group-marker"
+            >{t("hub.group.marker", { payer: payerOf(session.group_bill_id) })}</span
+          >
+        {/if}
       {:else if device.status === "online" && group && owed > 0 && snapshot?.locale}
         <span data-testid="tile-unpaid"
           >{t("hub.floor.unpaid", { amount: formatMoney(owed, snapshot.locale) })}</span
@@ -409,6 +485,12 @@
         {transferring}
         ontransfer={startTransfer}
         oncanceltransfer={cancelTransfer}
+        {grouping}
+        ongroup={startGrouping}
+        oncancelgroup={stopGrouping}
+        groupView={groupViewOf(
+          sessionOf(active)?.group_bill_id ?? unpaidBill(active)?.group_bill_id,
+        )}
         device={active}
         {group}
         {groups}

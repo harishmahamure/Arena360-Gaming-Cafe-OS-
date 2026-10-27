@@ -23,6 +23,7 @@ import type { DeviceTestSessionCompleted } from "./DeviceTestSessionCompleted";
 import type { DeviceTestSessionStart } from "./DeviceTestSessionStart";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
 import type { GroupDelete } from "./GroupDelete";
+import type { GroupPayer } from "./GroupPayer";
 import type { GroupUpsert } from "./GroupUpsert";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
@@ -44,6 +45,7 @@ import type { SessionEnd } from "./SessionEnd";
 import type { SessionEndReverted } from "./SessionEndReverted";
 import type { SessionExpire } from "./SessionExpire";
 import type { SessionExtend } from "./SessionExtend";
+import type { SessionGroup } from "./SessionGroup";
 import type { SessionPause } from "./SessionPause";
 import type { SessionRateFlip } from "./SessionRateFlip";
 import type { SessionResume } from "./SessionResume";
@@ -115,6 +117,8 @@ export type IntentPayload =
   | ({ kind: "session.resume" } & SessionResume)
   | ({ kind: "session.extend" } & SessionExtend)
   | ({ kind: "session.transfer" } & SessionTransfer)
+  | ({ kind: "session.group" } & SessionGroup)
+  | ({ kind: "group.payer" } & GroupPayer)
   | ({ kind: "wallet.topup" } & WalletTopup)
   | ({ kind: "wallet.topup.reverted" } & WalletTopupReverted)
   | ({ kind: "credit.set_limit" } & CreditSetLimit)

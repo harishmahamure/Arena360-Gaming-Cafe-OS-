@@ -6,6 +6,7 @@ import type { SnapshotBill } from "./SnapshotBill";
 import type { SnapshotBranch } from "./SnapshotBranch";
 import type { SnapshotDevice } from "./SnapshotDevice";
 import type { SnapshotGroup } from "./SnapshotGroup";
+import type { SnapshotGroupBill } from "./SnapshotGroupBill";
 import type { SnapshotLan } from "./SnapshotLan";
 import type { SnapshotLocale } from "./SnapshotLocale";
 import type { SnapshotSession } from "./SnapshotSession";
@@ -34,6 +35,7 @@ export type HubSnapshot = {
   zones: Array<SnapshotZone>;
   sessions?: Array<SnapshotSession>;
   bills?: Array<SnapshotBill>;
+  group_bills?: Array<SnapshotGroupBill>;
   /**
    * Every open alert, oldest first.
    */

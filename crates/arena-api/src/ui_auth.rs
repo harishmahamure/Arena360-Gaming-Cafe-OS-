@@ -2001,9 +2001,20 @@ async fn run_intent(
         arena_proto::IntentPayload::SessionStart(s) => Some(s.device_id.clone()),
         _ => None,
     };
+    let ended = matches!(intent.payload, arena_proto::IntentPayload::SessionEnd(_));
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
+            if ended && let Some(c) = applied.changes.iter().find(|c| c.tbl == "devices_meta") {
+                let sent = auth.presence.push_pc_command(
+                    &c.row_id,
+                    &cmd_id,
+                    arena_proto::PcAction::Lock,
+                    None,
+                    Some(arena_proto::LockReason::PayAtCounter),
+                );
+                tracing::info!(device_id = %c.row_id, cmd_id = %cmd_id, sessions = sent, "pay at counter lock pushed");
+            }
             if let Some(device_id) = started {
                 let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
                 let screens =
@@ -2030,9 +2041,14 @@ async fn run_intent(
                 }
             }
             if let Some((device_id, action, text)) = command {
-                let sent = auth
-                    .presence
-                    .push_pc_command(&device_id, &cmd_id, action, text);
+                let sent = auth.presence.push_pc_command(
+                    &device_id,
+                    &cmd_id,
+                    action,
+                    text,
+                    (action == arena_proto::PcAction::Lock)
+                        .then_some(arena_proto::LockReason::LockedByStaff),
+                );
                 tracing::info!(device_id = %device_id, cmd_id = %cmd_id, action = action.as_str(), sessions = sent, "pc command pushed");
             }
             Json(IntentResult {
@@ -3175,6 +3191,72 @@ pub(crate) mod tests {
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{reply}");
         assert_eq!(reply["code"], "PC_BUSY");
+    }
+
+    #[tokio::test]
+    async fn ending_a_session_locks_the_kiosk_with_pay_at_counter_and_the_snapshot_bills_it() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let session_id = reply["applied"]["changes"][0]["row_id"].as_str().unwrap();
+        rx.recv().await.unwrap();
+        let mut body = json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: session_id.into(),
+            }),
+            Some(1),
+        )).unwrap()});
+        let key = body["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, reply) =
+            call(&hub, "POST", "/ui/intent", Some(&token), Some(body.take())).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the lock pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event:
+                arena_proto::HubEvent::PcCommand {
+                    cmd_id,
+                    action,
+                    reason,
+                    ..
+                },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a pc command")
+        };
+        assert_eq!(
+            (cmd_id, action, reason),
+            (
+                key,
+                arena_proto::PcAction::Lock,
+                Some(arena_proto::LockReason::PayAtCounter)
+            )
+        );
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        assert!(snapshot.sessions.is_empty());
+        assert_eq!(snapshot.bills.len(), 1);
+        assert_eq!(snapshot.bills[0].subtotal_minor, 6_000);
+        assert!(snapshot.bills[0].order_id.is_some());
     }
 
     #[tokio::test]

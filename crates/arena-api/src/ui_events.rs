@@ -1103,7 +1103,7 @@ mod tests {
             .lan
             .register(arena_proto::ClientClass::Paired, Some("D1".into()), tx);
         hub.lan
-            .push_pc_command("D1", "C1", arena_proto::PcAction::Lock, None);
+            .push_pc_command("D1", "C1", arena_proto::PcAction::Lock, None, None);
         assert!(hub.lan.ack_pc("D1", "C1"));
         let (event, data) = loop {
             let (event, data) = next_event(&mut frames).await.unwrap();

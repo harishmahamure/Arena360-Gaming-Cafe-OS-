@@ -1515,7 +1515,8 @@ async fn a_pc_command_reaches_the_kiosk_and_only_a_pending_ack_reaches_the_hub_u
             &hub.paired_id,
             cmd_id,
             arena_proto::PcAction::Message,
-            Some("hello".into())
+            Some("hello".into()),
+            None
         ),
         1
     );

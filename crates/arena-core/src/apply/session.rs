@@ -1,8 +1,9 @@
-use arena_proto::{AppError, ErrorCode, Intent, SessionMode, SessionStart};
+use arena_proto::{AppError, ErrorCode, Intent, SessionEnd, SessionMode, SessionStart};
 use arena_store::{
-    ChangeOp, DeviceMetaRow, NewSession, RateRow, RowKey, StoreTx, device_has_live_session,
-    find_active_rate, find_device_meta, find_player, insert_segment, insert_session, next_guest_no,
-    set_device_state,
+    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewSession, RateRow, RowKey,
+    SegmentRow, StoreTx, close_segments, device_has_live_session, end_session, find_active_rate,
+    find_device_meta, find_player, find_session, insert_order, insert_order_line, insert_segment,
+    insert_session, list_segments, next_guest_no, set_device_state,
 };
 
 use super::mutate::Written;
@@ -184,4 +185,145 @@ pub(super) fn mutate(
             before: None,
         },
     ])
+}
+
+#[derive(Default)]
+pub(crate) struct EndTarget {
+    session: Option<LiveSession>,
+    segments: Vec<SegmentRow>,
+    device: Option<DeviceMetaRow>,
+}
+
+pub(super) fn load_end(tx: &StoreTx<'_>, e: &SessionEnd) -> Result<EndTarget, AppError> {
+    let Some(session) = find_session(tx, &e.session_id)? else {
+        return Ok(EndTarget::default());
+    };
+    Ok(EndTarget {
+        segments: list_segments(tx, Some(&session.id))?,
+        device: find_device_meta(tx, &session.device_id)?,
+        session: Some(session),
+    })
+}
+
+pub(super) fn base_rev_end(intent: &Intent, t: &EndTarget) -> Result<(), AppError> {
+    let Some(s) = &t.session else {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "session_id",
+            "no such session",
+        ));
+    };
+    match intent.base_rev {
+        None => Err(invalid("base_rev", "session.end needs base_rev")),
+        Some(b) if b != s.rev => Err(AppError::with_field(
+            ErrorCode::Stale,
+            "base_rev",
+            "this changed since it was read",
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
+pub(super) fn validate_end(t: &EndTarget) -> Result<(), AppError> {
+    let Some(s) = &t.session else {
+        return Err(invalid("session_id", "no such session"));
+    };
+    if !["active", "paused", "grace"].contains(&s.state.as_str()) {
+        return Err(invalid("session_id", "this session has already ended"));
+    }
+    if s.mode != SessionMode::Postpaid.as_str() {
+        return Err(invalid("session_id", "only a postpaid session ends here"));
+    }
+    Ok(())
+}
+
+pub(super) fn mutate_end(
+    tx: &StoreTx<'_>,
+    t: &EndTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let Some(s) = &t.session else {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "a session validated without its target",
+        ));
+    };
+    let lines = crate::billing::bill(
+        &t.segments,
+        s.rounding_min,
+        s.minimum_min,
+        s.paused_total_ms,
+        now_ms,
+    );
+    let subtotal: i64 = lines.iter().map(|l| l.amount_minor).sum();
+    let order_id = ulid::Ulid::generate().to_string();
+    close_segments(tx, &s.id, now_ms)?;
+    end_session(tx, &s.id, now_ms)?;
+    insert_order(
+        tx,
+        &NewOrder {
+            id: &order_id,
+            session_id: &s.id,
+            player_id: s.player_id.as_deref(),
+            guest_no: s.guest_no,
+            device_id: &s.device_id,
+            subtotal_minor: subtotal,
+            business_day: &s.business_day,
+            fy: &s.fy,
+        },
+    )?;
+    let mut written = vec![
+        Written {
+            key: RowKey::Sessions { id: s.id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        },
+        Written {
+            key: RowKey::Orders {
+                id: order_id.clone(),
+            },
+            op: ChangeOp::Insert,
+            before: None,
+        },
+    ];
+    for (i, (seg, line)) in t.segments.iter().zip(&lines).enumerate() {
+        let id = ulid::Ulid::generate().to_string();
+        insert_order_line(
+            tx,
+            &NewOrderLine {
+                id: &id,
+                order_id: &order_id,
+                segment_id: &seg.id,
+                device_id: &line.device_id,
+                from_at: line.from_at,
+                to_at: line.to_at,
+                minutes: line.minutes,
+                rate_minor_per_hour: line.rate_minor_per_hour,
+                amount_minor: line.amount_minor,
+                position: i as i64,
+            },
+        )?;
+        written.push(Written {
+            key: RowKey::SessionSegments { id: seg.id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        });
+        written.push(Written {
+            key: RowKey::OrderLines { id },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+    }
+    if let Some(d) = &t.device {
+        let state = d.prior_state.as_deref().filter(|p| *p != "in_session");
+        set_device_state(tx, &d.device_id, state.unwrap_or("online"), None, None)?;
+        written.push(Written {
+            key: RowKey::DevicesMeta {
+                device_id: d.device_id.clone(),
+            },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    Ok(written)
 }

@@ -149,6 +149,7 @@ pub(crate) enum Target {
     Pc(Box<pc_command::PcTarget>),
     Player(Box<players::PlayerTarget>),
     Session(Box<session::SessionTarget>),
+    SessionEnd(Box<session::EndTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -193,6 +194,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Player(Box::new(players::load(tx, &intent.payload)?))
         }
         P::SessionStart(s) => Target::Session(Box::new(session::load(tx, s)?)),
+        P::SessionEnd(e) => Target::SessionEnd(Box::new(session::load_end(tx, e)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

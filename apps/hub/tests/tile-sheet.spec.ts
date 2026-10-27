@@ -43,6 +43,7 @@ const sessions = (): SnapshotSession[] => [
     device_id: device(2, {}).device_id,
     state: "active",
     started_at: Date.now() - 3_725_000,
+    rev: 1,
     player_id: "P1",
     username: "asha",
   },

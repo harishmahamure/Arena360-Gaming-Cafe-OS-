@@ -1,6 +1,21 @@
 <script lang="ts">
-  import { Button, InlinePin, StatusBadge, TextField, formatDateTime, t } from "@arena/ui";
-  import type { SessionStaff, SnapshotDevice, SnapshotGroup } from "@arena/ui/generated";
+  import {
+    BillBreakdown,
+    Button,
+    InlinePin,
+    StatusBadge,
+    TextField,
+    formatDateTime,
+    t,
+  } from "@arena/ui";
+  import type {
+    SessionStaff,
+    SnapshotBill,
+    SnapshotDevice,
+    SnapshotGroup,
+    SnapshotLocale,
+    SnapshotSession,
+  } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
@@ -12,6 +27,7 @@
     adminUnlockJob,
     assignJob,
     cmds,
+    endJob,
     maintenanceJob,
     permissionFor,
     powerJob,
@@ -35,6 +51,10 @@
     badge,
     staff,
     tz,
+    session,
+    bill,
+    locale,
+    names,
     onclose,
   }: {
     device: SnapshotDevice;
@@ -45,6 +65,10 @@
     badge: Badge;
     staff: SessionStaff | null;
     tz: string | undefined;
+    session: SnapshotSession | undefined;
+    bill: SnapshotBill | undefined;
+    locale: SnapshotLocale | null;
+    names: Record<string, string>;
     onclose: () => void;
   } = $props();
 
@@ -72,6 +96,12 @@
 
   $effect(() => {
     if (!free) picked = null;
+  });
+  const billing = $derived(session !== undefined);
+  $effect(() => {
+    if (!billing) return;
+    const timer = setInterval(() => void invalidate(SNAPSHOT_DEPENDENCY), 10_000);
+    return () => clearInterval(timer);
   });
   const canLookup = $derived(hasPermission(staff, "player.view"));
   const unassignedRefusal = $derived(
@@ -301,6 +331,26 @@
           disabled={busy || !picked}
           disabledReason={busy ? "hub.sheet.waiting" : "hub.session.pick_first"}
           onclick={() => picked && void go(startJob(device.device_id, picked.id, device.manual))}
+        />
+      </div>
+    {:else if session}
+      <div class="section" data-testid="session-bill">
+        {#if bill && locale}
+          <BillBreakdown
+            lines={bill.lines}
+            subtotal={bill.subtotal_minor}
+            paid={bill.paid_minor}
+            remaining={bill.remaining_minor}
+            {locale}
+            {tz}
+            {names}
+          />
+        {/if}
+        <Button
+          label="hub.session.end"
+          disabled={busy}
+          disabledReason="hub.sheet.waiting"
+          onclick={() => void go(endJob(session.id, session.rev))}
         />
       </div>
     {/if}

@@ -80,8 +80,10 @@ pub use products::{
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
 pub use sessions::{
-    LiveSession, NewSession, device_has_live_session, insert_segment, insert_session,
-    list_live_sessions, next_guest_no,
+    LiveSession, NewOrder, NewOrderLine, NewSession, OpenOrder, OrderLineRow, SegmentRow,
+    close_segments, device_has_live_session, end_session, find_session, insert_order,
+    insert_order_line, insert_segment, insert_session, list_live_sessions, list_open_order_lines,
+    list_open_orders, list_segments, next_guest_no,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
@@ -661,6 +663,23 @@ impl Store {
             return Ok(Vec::new());
         }
         list_live_sessions(&self.conn)
+    }
+
+    pub fn live_segments(&self) -> Result<Vec<SegmentRow>, AppError> {
+        if !self.table_exists("session_segments")? {
+            return Ok(Vec::new());
+        }
+        list_segments(&self.conn, None)
+    }
+
+    pub fn open_orders(&self) -> Result<(Vec<OpenOrder>, Vec<OrderLineRow>), AppError> {
+        if !self.table_exists("orders")? {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        Ok((
+            list_open_orders(&self.conn)?,
+            list_open_order_lines(&self.conn)?,
+        ))
     }
 
     pub fn latest_consent(

@@ -23,6 +23,9 @@ pub struct HubSnapshot {
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<crate::SnapshotSession>>")]
     pub sessions: Vec<crate::SnapshotSession>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<crate::SnapshotBill>>")]
+    pub bills: Vec<crate::SnapshotBill>,
     /// The branch locale in effect now, or `null` before the branch is set up.
     pub locale: Option<SnapshotLocale>,
     /// Hub UI behaviour settings.
@@ -333,6 +336,7 @@ mod tests {
             groups: vec![],
             zones: vec![],
             sessions: vec![],
+            bills: vec![],
             devices: vec![SnapshotDevice {
                 device_id: "D".into(),
                 label: "Dev Kiosk".into(),
@@ -368,6 +372,7 @@ mod tests {
                 "groups": [],
                 "zones": [],
                 "sessions": [],
+                "bills": [],
                 "devices": [{"device_id": "D", "label": "Dev Kiosk", "class": "paired", "zone": null, "online": true, "kind": "pc", "group_id": null, "meta_rev": 1, "tv_number": null, "floor_x": null, "floor_y": null, "status": "online", "last_seen_at": null, "maintenance_note": null}],
                 "locale": null,
                 "ui": {"idle_lock_minutes": 5, "hc": false},

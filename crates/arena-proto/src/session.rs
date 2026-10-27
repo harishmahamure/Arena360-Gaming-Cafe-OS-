@@ -36,12 +36,53 @@ pub struct SessionStart {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionEnd {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BillLine {
+    pub device_id: String,
+    #[ts(type = "number")]
+    pub from_at: i64,
+    #[ts(type = "number")]
+    pub to_at: i64,
+    #[ts(type = "number")]
+    pub minutes: i64,
+    #[ts(type = "number")]
+    pub rate_minor_per_hour: i64,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SnapshotBill {
+    pub session_id: String,
+    pub device_id: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub order_id: Option<String>,
+    pub lines: Vec<BillLine>,
+    #[ts(type = "number")]
+    pub subtotal_minor: i64,
+    #[ts(type = "number")]
+    pub paid_minor: i64,
+    #[ts(type = "number")]
+    pub remaining_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SnapshotSession {
     pub id: String,
     pub device_id: String,
     pub state: String,
     #[ts(type = "number")]
     pub started_at: i64,
+    #[ts(type = "number")]
+    pub rev: i64,
     #[serde(default)]
     #[ts(optional = nullable)]
     pub player_id: Option<String>,

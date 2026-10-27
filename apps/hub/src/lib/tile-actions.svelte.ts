@@ -37,6 +37,8 @@ const REFUSALS: Record<string, MessageKey> = {
   PC_UNAVAILABLE: "hub.session.unavailable",
   NO_RATE: "hub.session.no_rate",
   DEVICE_UNASSIGNED: "hub.session.unassigned",
+  "STALE:session.end": "hub.session.end_stale",
+  "VALIDATION_FAILED:session.end": "hub.session.ended",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -58,6 +60,9 @@ export const startJob = (device_id: string, player_id?: string, manual?: boolean
     { kind: "session.start", device_id, mode: "postpaid", player_id },
     { track: manual ? "none" : "cmd", done: "hub.sheet.done.started" },
   );
+
+export const endJob = (session_id: string, rev: number) =>
+  job({ kind: "session.end", session_id }, { track: "none", rev, done: "hub.sheet.done.ended" });
 
 export const adminUnlockJob = (device_id: string) =>
   job(
@@ -84,8 +89,8 @@ export const assignJob = (device_id: string, group_id: string, rev?: number) =>
 export const MESSAGE_MAX = 140;
 
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
-  kind === "session.start"
-    ? "session.start"
+  kind === "session.start" || kind === "session.end"
+    ? kind
     : kind === "device.screen"
       ? "device.screen"
       : kind === "device.power" || kind === "device.admin_unlock"

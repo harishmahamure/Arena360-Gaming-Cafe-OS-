@@ -5,6 +5,7 @@ export type SnapshotSession = {
   device_id: string;
   state: string;
   started_at: number;
+  rev: number;
   player_id?: string | null;
   username?: string | null;
   guest_no?: number | null;

@@ -1490,7 +1490,13 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
     let mut app = kiosk.app().await;
     let send = |cmd: &str, action, text: Option<&str>| {
         assert_eq!(
-            presence.push_pc_command(&hub.device_id, cmd, action, text.map(Into::into)),
+            presence.push_pc_command(
+                &hub.device_id,
+                cmd,
+                action,
+                text.map(Into::into),
+                (action == PcAction::Lock).then_some(arena_proto::LockReason::LockedByStaff)
+            ),
             1
         );
     };
@@ -1589,7 +1595,13 @@ async fn a_started_session_unlocks_ticks_and_locks_at_its_lock_time() {
         time_up_mode: "clean_up".into(),
     };
     assert_eq!(
-        presence.push_pc_command(&hub.device_id, "L1", arena_proto::PcAction::Lock, None),
+        presence.push_pc_command(
+            &hub.device_id,
+            "L1",
+            arena_proto::PcAction::Lock,
+            None,
+            Some(arena_proto::LockReason::LockedByStaff)
+        ),
         1
     );
     app.until(|m| matches!(m, IpcMsg::PcScreen { locked: true, .. }))

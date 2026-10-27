@@ -179,7 +179,10 @@ pub use process::{
     is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
-pub use session::{SessionMode, SessionScreen, SessionStart, SessionStartedEvent, SnapshotSession};
+pub use session::{
+    BillLine, SessionEnd, SessionMode, SessionScreen, SessionStart, SessionStartedEvent,
+    SnapshotBill, SnapshotSession,
+};
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
     SetupDevicesView, SetupGroup,

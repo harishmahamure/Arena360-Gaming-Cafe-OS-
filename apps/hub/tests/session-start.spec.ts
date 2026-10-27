@@ -154,6 +154,7 @@ async function open(page: Page, who: keyof typeof STAFF, over: Partial<Hub> = {}
             device_id: id,
             state: "active",
             started_at: Date.now() - 65_000,
+            rev: 1,
             player_id: player?.player_id ?? null,
             username: player?.username ?? null,
             guest_no: player ? null : hub.sessions.length + 1,
@@ -338,7 +339,13 @@ test("Restart on a PC in session is refused with PC_BUSY inline", async ({ page 
   await open(page, "manager", {
     devices: [busy],
     sessions: [
-      { id: "S1", device_id: busy.device_id, state: "active", started_at: Date.now() - 1000 },
+      {
+        id: "S1",
+        device_id: busy.device_id,
+        state: "active",
+        started_at: Date.now() - 1000,
+        rev: 1,
+      },
     ],
     fail: { status: 409, code: "PC_BUSY" },
   });

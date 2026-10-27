@@ -1402,5 +1402,15 @@
   "hub.devices.note": "Note (optional)",
   "hub.devices.note_invalid": "Use up to 200 characters.",
   "hub.devices.maintenance_confirm": "Set to maintenance",
-  "hub.devices.cancel_maintenance": "Cancel"
+  "hub.devices.cancel_maintenance": "Cancel",
+  "hub.bill.line": "{device} · {from}–{to} · {minutes} min × {rate}/hr",
+  "hub.bill.subtotal": "Subtotal",
+  "hub.bill.paid": "Paid so far",
+  "hub.bill.remaining": "Remaining",
+  "hub.session.end": "End session",
+  "hub.session.end_stale": "This session changed. Reopen the tile and try again.",
+  "hub.session.ended": "Session already ended.",
+  "hub.sheet.done.ended": "Session ended. Pay at counter.",
+  "hub.floor.unpaid": "UNPAID {amount}",
+  "hub.audit.intent.session.end": "Session end"
 }

@@ -49,11 +49,13 @@ pub enum Table {
     Consents,
     Sessions,
     SessionSegments,
+    Orders,
+    OrderLines,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 22] = [
+    pub const ALL: [Table; 24] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -76,6 +78,8 @@ impl Table {
         Table::Consents,
         Table::Sessions,
         Table::SessionSegments,
+        Table::Orders,
+        Table::OrderLines,
     ];
 
     /// The SQL table name.
@@ -103,6 +107,8 @@ impl Table {
             Self::Consents => "consents",
             Self::Sessions => "sessions",
             Self::SessionSegments => "session_segments",
+            Self::Orders => "orders",
+            Self::OrderLines => "order_lines",
         }
     }
 
@@ -129,7 +135,7 @@ impl Table {
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
             Self::Consents => &["consent_id"],
-            Self::Sessions | Self::SessionSegments => &["id"],
+            Self::Sessions | Self::SessionSegments | Self::Orders | Self::OrderLines => &["id"],
         }
     }
 
@@ -154,7 +160,9 @@ impl Table {
             | Self::Players
             | Self::Consents
             | Self::Sessions
-            | Self::SessionSegments => true,
+            | Self::SessionSegments
+            | Self::Orders
+            | Self::OrderLines => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -243,6 +251,12 @@ pub enum RowKey {
     SessionSegments {
         id: String,
     },
+    Orders {
+        id: String,
+    },
+    OrderLines {
+        id: String,
+    },
 }
 
 impl RowKey {
@@ -270,6 +284,8 @@ impl RowKey {
             Self::Consents { .. } => Table::Consents,
             Self::Sessions { .. } => Table::Sessions,
             Self::SessionSegments { .. } => Table::SessionSegments,
+            Self::Orders { .. } => Table::Orders,
+            Self::OrderLines { .. } => Table::OrderLines,
         }
     }
 
@@ -302,7 +318,10 @@ impl RowKey {
             Self::Rates { rate_id } => rate_id.clone(),
             Self::Players { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
-            Self::Sessions { id } | Self::SessionSegments { id } => id.clone(),
+            Self::Sessions { id }
+            | Self::SessionSegments { id }
+            | Self::Orders { id }
+            | Self::OrderLines { id } => id.clone(),
         }
     }
 
@@ -379,6 +398,8 @@ impl RowKey {
             },
             Table::Sessions => Self::Sessions { id: text("id")? },
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
+            Table::Orders => Self::Orders { id: text("id")? },
+            Table::OrderLines => Self::OrderLines { id: text("id")? },
         })
     }
 
@@ -410,7 +431,10 @@ impl RowKey {
             Self::Rates { rate_id } => vec![rate_id],
             Self::Players { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],
-            Self::Sessions { id } | Self::SessionSegments { id } => vec![id],
+            Self::Sessions { id }
+            | Self::SessionSegments { id }
+            | Self::Orders { id }
+            | Self::OrderLines { id } => vec![id],
         }
     }
 }

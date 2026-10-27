@@ -378,3 +378,170 @@ async fn two_simultaneous_starts_one_wins_and_the_other_is_busy() {
     assert_eq!(codes[1], Err(ErrorCode::PcBusy));
     assert_eq!(sessions(&f).len(), 1);
 }
+
+fn end_intent(session: &str, rev: Option<i64>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionEnd(arena_proto::SessionEnd {
+            session_id: session.into(),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+async fn end(f: &Fixture, i: Intent) -> Result<Applied, AppError> {
+    let mut i = i;
+    i.issued_at = f.clock.now_ms();
+    f.writer.submit_intent(i).await
+}
+
+fn table(f: &Fixture, t: Table) -> Vec<Row> {
+    reopen(f).rows(t).unwrap()
+}
+
+#[tokio::test]
+async fn ending_a_session_writes_an_open_order_one_line_and_frees_the_device() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(10_000)).await;
+    let (player, _) = add(&f, owner(), &form("asha", "+919876543210"))
+        .await
+        .unwrap();
+    let free = state_of(&f, &d);
+    start(&f, &d, Some(&player)).await.unwrap();
+    f.clock.advance(41 * 60_000);
+    let s = sessions(&f)[0].clone();
+    let i = end_intent(&text(&s, "id"), Some(int(&s, "rev")));
+    let a = end(&f, i.clone()).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        [
+            "sessions",
+            "orders",
+            "session_segments",
+            "order_lines",
+            "devices_meta"
+        ]
+    );
+    let s = &sessions(&f)[0];
+    assert_eq!(text(s, "state"), "ended");
+    assert_eq!(text(s, "end_reason"), "staff");
+    assert_eq!(int(s, "ended_at"), T0 + 41 * 60_000);
+    assert_eq!(int(s, "rev"), 2);
+    let o = &table(&f, Table::Orders)[0];
+    assert_eq!(text(o, "status"), "open");
+    assert_eq!(text(o, "session_id"), text(s, "id"));
+    assert_eq!(text(o, "player_id"), player);
+    assert_eq!(text(o, "device_id"), d);
+    assert_eq!(
+        (int(o, "subtotal_minor"), int(o, "total_minor")),
+        (7500, 7500)
+    );
+    assert_eq!(text(o, "business_day"), text(s, "business_day"));
+    let seg = &table(&f, Table::SessionSegments)[0];
+    assert_eq!(int(seg, "to_at"), T0 + 41 * 60_000);
+    let l = &table(&f, Table::OrderLines);
+    assert_eq!(l.len(), 1);
+    assert_eq!(text(&l[0], "order_id"), text(o, "id"));
+    assert_eq!(text(&l[0], "session_segment_id"), text(seg, "id"));
+    assert_eq!(
+        (
+            int(&l[0], "minutes"),
+            int(&l[0], "rate_minor_per_hour"),
+            int(&l[0], "amount_minor"),
+            int(&l[0], "position")
+        ),
+        (45, 10_000, 7500, 0)
+    );
+    assert_eq!(state_of(&f, &d), free);
+
+    let again = end(&f, i).await.unwrap();
+    assert_eq!(again.intent_id, a.intent_id);
+    assert_eq!(table(&f, Table::Orders).len(), 1);
+    assert_eq!(table(&f, Table::OrderLines).len(), 1);
+}
+
+#[tokio::test]
+async fn a_short_guest_session_bills_the_minimum_and_a_new_session_can_start() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(10_000)).await;
+    start(&f, &d, None).await.unwrap();
+    f.clock.advance(10 * 60_000);
+    let s = sessions(&f)[0].clone();
+    end(&f, end_intent(&text(&s, "id"), Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let o = &table(&f, Table::Orders)[0];
+    assert_eq!(int(o, "subtotal_minor"), 5000);
+    assert_eq!(int(o, "guest_no"), 1);
+    assert_eq!(o["player_id"], RowValue::Null);
+    assert_eq!(int(&table(&f, Table::OrderLines)[0], "minutes"), 30);
+    start(&f, &d, None).await.unwrap();
+}
+
+#[tokio::test]
+async fn ending_is_refused_without_writing_for_each_bad_case() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(10_000)).await;
+    start(&f, &d, None).await.unwrap();
+    let s = sessions(&f)[0].clone();
+    let id = text(&s, "id");
+    let before = reopen(&f).changes().unwrap().len();
+    let field = |c, f: &str| (c, Some(f.to_owned()));
+    assert_eq!(
+        refusal(end(&f, end_intent("nope", Some(1))).await),
+        field(ErrorCode::NotFound, "session_id")
+    );
+    assert_eq!(
+        refusal(end(&f, end_intent(&id, None)).await),
+        field(ErrorCode::ValidationFailed, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, end_intent(&id, Some(9))).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    let counter = staff(&f, "ctr", ROLE_COUNTER).await;
+    let kitchen = staff(&f, "kit", ROLE_KITCHEN).await;
+    let mut denied = end_intent(&id, Some(1));
+    denied.actor = kitchen;
+    assert_eq!(
+        refusal(end(&f, denied).await).0,
+        ErrorCode::PermissionDenied
+    );
+    assert_eq!(reopen(&f).changes().unwrap().len(), before + 2);
+    let mut by_counter = end_intent(&id, Some(1));
+    by_counter.actor = counter;
+    end(&f, by_counter).await.unwrap();
+    assert_eq!(
+        refusal(end(&f, end_intent(&id, Some(1))).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, end_intent(&id, Some(2))).await),
+        field(ErrorCode::ValidationFailed, "session_id")
+    );
+    assert_eq!(table(&f, Table::Orders).len(), 1);
+}
+
+#[tokio::test]
+async fn a_database_allows_one_order_per_session() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;
+    start(&f, &d, None).await.unwrap();
+    let sid = text(&sessions(&f)[0], "id");
+    f.writer
+        .submit(move |tx| {
+            let sql = |id: &str| {
+                format!(
+                    "INSERT INTO orders (id, session_id, status, subtotal_minor, total_minor,
+                         business_day, fy, rev, created_at, updated_at)
+                     VALUES ('{id}', '{sid}', 'open', 0, 0, 'd', 'fy', 0, 0, 0)"
+                )
+            };
+            tx.execute_batch(&sql("A")).unwrap();
+            assert!(tx.execute_batch(&sql("B")).is_err());
+            Ok(())
+        })
+        .await
+        .unwrap();
+}

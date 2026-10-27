@@ -126,10 +126,11 @@ impl Presence {
         cmd_id: &str,
         action: arena_proto::PcAction,
         text: Option<String>,
+        reason: Option<arena_proto::LockReason>,
     ) -> usize {
-        self.0
-            .as_ref()
-            .map_or(0, |r| r.push_pc_command(device_id, cmd_id, action, text))
+        self.0.as_ref().map_or(0, |r| {
+            r.push_pc_command(device_id, cmd_id, action, text, reason)
+        })
     }
 
     pub fn push_session_started(

@@ -524,7 +524,7 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            writer
+            let started = writer
                 .submit_intent(submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
                         device_id: kiosk,
@@ -532,6 +532,15 @@ mod tests {
                         player_id: Some(player_id),
                     }),
                     None,
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                        session_id: started.changes[0].row_id.clone(),
+                    }),
+                    Some(1),
                 ))
                 .await
                 .unwrap();

@@ -29,6 +29,7 @@ import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
 import type { RateUpsert } from "./RateUpsert";
 import type { RoleUpsert } from "./RoleUpsert";
+import type { SessionEnd } from "./SessionEnd";
 import type { SessionStart } from "./SessionStart";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffSetCredentials } from "./StaffSetCredentials";
@@ -79,4 +80,5 @@ export type IntentPayload =
   | ({ kind: "player.create" } & PlayerCreate)
   | ({ kind: "player.update" } & PlayerUpdate)
   | ({ kind: "player.password_reset" } & PlayerPasswordReset)
-  | ({ kind: "session.start" } & SessionStart);
+  | ({ kind: "session.start" } & SessionStart)
+  | ({ kind: "session.end" } & SessionEnd);

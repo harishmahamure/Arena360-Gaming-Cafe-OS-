@@ -6,6 +6,7 @@ export { default as StatusBadge } from "./components/StatusBadge.svelte";
 export { default as AlertBadge } from "./components/AlertBadge.svelte";
 export { default as FloorTile } from "./components/FloorTile.svelte";
 export { default as Card } from "./components/Card.svelte";
+export { default as BillBreakdown } from "./components/BillBreakdown.svelte";
 export { default as TierLock } from "./components/TierLock.svelte";
 export { billingEnabled } from "./billing.js";
 export { default as TabControl } from "./components/TabControl.svelte";

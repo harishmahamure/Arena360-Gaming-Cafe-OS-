@@ -119,6 +119,9 @@ enum Op {
         slot: u8,
         guest: bool,
     },
+    SessionEnd {
+        slot: u8,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -236,6 +239,7 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         1 => prop::bool::weighted(0.8).prop_map(|known| Op::PlayerReset { known }),
         3 => (0..3u8, any::<bool>()).prop_map(|(slot, guest)| Op::Session { slot, guest }),
+        2 => (0..3u8).prop_map(|slot| Op::SessionEnd { slot }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -1066,9 +1070,58 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             }
             prop_assert_eq!(live(hub), 1);
         }
+        Op::SessionEnd { slot } => {
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let Some(session) = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .find(|s| {
+                    text(s, "device_id") == device
+                        && ["active", "paused", "grace"].contains(&text(s, "state").as_str())
+                })
+            else {
+                return Ok(());
+            };
+            let (id, rev) = (text(&session, "id"), int(&session, "rev"));
+            let before = hub.change_count();
+            let payload = IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: id.clone(),
+            });
+            let out = hub.submit_new(hub.intent(payload.clone(), Some(rev)));
+            prop_assert!(out.is_ok(), "{:?}", out);
+            prop_assert_eq!(hub.change_count(), before + 5);
+            let orders = hub.reader.rows(Table::Orders).unwrap();
+            prop_assert_eq!(
+                orders
+                    .iter()
+                    .filter(|o| text(o, "session_id") == id && text(o, "status") == "open")
+                    .count(),
+                1
+            );
+            let out = hub.submit_new(hub.intent(payload, Some(rev)));
+            prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
+            prop_assert_eq!(hub.change_count(), before + 5);
+        }
         Op::Advance { ms } => hub.clock.advance(*ms),
     }
     assert_gap_free(hub)
+}
+
+fn int(row: &arena_store::Row, col: &str) -> i64 {
+    match &row[col] {
+        RowValue::Integer(n) => *n,
+        other => panic!("{col}: {other:?}"),
+    }
 }
 
 fn text(row: &arena_store::Row, col: &str) -> String {

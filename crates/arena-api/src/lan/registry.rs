@@ -303,6 +303,7 @@ impl Registry {
         cmd_id: &str,
         action: PcAction,
         text: Option<String>,
+        reason: Option<LockReason>,
     ) -> usize {
         self.track(device_id, cmd_id);
         let msg = event_frame(
@@ -311,7 +312,7 @@ impl Registry {
                 cmd_id: cmd_id.to_owned(),
                 action,
                 text,
-                reason: (action == PcAction::Lock).then_some(LockReason::LockedByStaff),
+                reason,
             },
         );
         self.push_paired(&msg, Some(device_id))
@@ -1233,7 +1234,7 @@ mod tests {
         let (k_tx, mut k_rx) = mpsc::channel(8);
         let _k = reg.register(ClientClass::Kds, Some("K".into()), k_tx);
         assert_eq!(
-            reg.push_pc_command("A", "C1", PcAction::Message, Some("hi".into())),
+            reg.push_pc_command("A", "C1", PcAction::Message, Some("hi".into()), None),
             1
         );
         let Some(Message::Text(t)) = a_rx.recv().await else {
@@ -1251,14 +1252,20 @@ mod tests {
             })
         );
         assert!(b_rx.try_recv().is_err() && k_rx.try_recv().is_err());
-        assert_eq!(reg.push_pc_command("K", "C2", PcAction::Lock, None), 0);
+        assert_eq!(
+            reg.push_pc_command("K", "C2", PcAction::Lock, None, None),
+            0
+        );
         let mut acks = reg.pc_acks();
         assert!(!reg.ack_pc("B", "C1"), "another device's ack");
         assert!(!reg.ack_pc("A", "nope"), "no such command");
         assert!(reg.ack_pc("A", "C1"));
         assert!(!reg.ack_pc("A", "C1"), "acked once per push");
         assert_eq!(acks.recv().await.unwrap().device_id, "A");
-        assert_eq!(reg.push_pc_command("A", "C1", PcAction::Message, None), 1);
+        assert_eq!(
+            reg.push_pc_command("A", "C1", PcAction::Message, None, None),
+            1
+        );
         assert!(reg.ack_pc("A", "C1"), "a retry's push is pending again");
     }
 

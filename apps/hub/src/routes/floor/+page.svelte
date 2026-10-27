@@ -35,6 +35,13 @@
   const snapshot = $derived(data.hub.ok ? data.hub.snapshot : null);
   const sessionOf = (d: SnapshotDevice) =>
     snapshot?.sessions?.find((s) => s.device_id === d.device_id);
+  const names = $derived(
+    Object.fromEntries((snapshot?.devices ?? []).map((d) => [d.device_id, d.label])),
+  );
+  const unpaid = (d: SnapshotDevice) =>
+    (snapshot?.bills ?? [])
+      .filter((b) => b.device_id === d.device_id && b.order_id)
+      .reduce((sum, b) => sum + b.remaining_minor, 0);
   let now = $state(Date.now());
   $effect(() => {
     if (!snapshot?.sessions?.length) return;
@@ -145,6 +152,7 @@
 {#snippet tile(device: SnapshotDevice, group: SnapshotGroup | undefined, cell = false)}
   {@const badge = BADGE[device.status ?? "offline"] ?? BADGE.offline}
   {@const session = group ? sessionOf(device) : undefined}
+  {@const owed = unpaid(device)}
   {@const rate =
     group?.rate_minor != null && snapshot?.locale
       ? formatMoney(group.rate_minor, snapshot.locale)
@@ -182,6 +190,10 @@
       {:else if session}
         <span data-testid="session-line"
           >{session.username ?? t("hub.session.guest", { n: session.guest_no ?? 0 })}</span
+        >
+      {:else if device.status === "online" && group && owed > 0 && snapshot?.locale}
+        <span data-testid="tile-unpaid"
+          >{t("hub.floor.unpaid", { amount: formatMoney(owed, snapshot.locale) })}</span
         >
       {:else if device.status === "online" && group}
         <span>{rate ? t("hub.floor.free_rate", { rate }) : t("hub.floor.tap_to_start")}</span>
@@ -300,6 +312,10 @@
         badge={BADGE[active.status ?? "offline"] ?? BADGE.offline}
         {staff}
         {tz}
+        session={sessionOf(active)}
+        bill={snapshot?.bills?.find((b) => b.device_id === active.device_id && !b.order_id)}
+        locale={snapshot?.locale ?? null}
+        {names}
         onclose={closeSheet}
       />
     {/key}

@@ -31,6 +31,7 @@ pub fn build_snapshot(
         .collect();
     HubSnapshot {
         sessions: Vec::new(),
+        bills: Vec::new(),
         locale,
         ui,
         // The probe's state is the Hub status's, not the database's: the snapshot handler
@@ -113,26 +114,100 @@ pub fn build_snapshot(
     }
 }
 
+fn bills(
+    sessions: &[arena_store::LiveSession],
+    segments: &[arena_store::SegmentRow],
+    (orders, order_lines): (Vec<arena_store::OpenOrder>, Vec<arena_store::OrderLineRow>),
+    now_ms: i64,
+) -> Vec<arena_proto::SnapshotBill> {
+    let bill = |session_id: String,
+                device_id: String,
+                order_id: Option<String>,
+                lines: Vec<arena_proto::BillLine>| {
+        let subtotal_minor = lines.iter().map(|l| l.amount_minor).sum();
+        arena_proto::SnapshotBill {
+            session_id,
+            device_id,
+            order_id,
+            lines,
+            subtotal_minor,
+            paid_minor: 0,
+            remaining_minor: subtotal_minor,
+        }
+    };
+    let live = sessions.iter().map(|s| {
+        let own: Vec<_> = segments
+            .iter()
+            .filter(|g| g.session_id == s.id)
+            .cloned()
+            .collect();
+        let lines = crate::billing::bill(
+            &own,
+            s.rounding_min,
+            s.minimum_min,
+            s.paused_total_ms,
+            now_ms,
+        );
+        bill(s.id.clone(), s.device_id.clone(), None, lines)
+    });
+    let open = orders.into_iter().map(|o| {
+        let lines = order_lines
+            .iter()
+            .filter(|l| l.order_id == o.id)
+            .map(|l| arena_proto::BillLine {
+                device_id: l.device_id.clone(),
+                from_at: l.from_at,
+                to_at: l.to_at,
+                minutes: l.minutes,
+                rate_minor_per_hour: l.rate_minor_per_hour,
+                amount_minor: l.amount_minor,
+            })
+            .collect();
+        bill(
+            o.session_id.unwrap_or_default(),
+            o.device_id,
+            Some(o.id),
+            lines,
+        )
+    });
+    live.chain(open).collect()
+}
+
 /// Reads the snapshot from `store` at `now_ms`: the branch, the devices and the locale in one
 /// read transaction.
 pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError> {
-    let (branch, devices, meta, groups, rates, zones, locale, ui, setup, sessions) = store
-        .read_consistent(|s| {
-            Ok((
-                s.branch_summary()?,
-                s.devices()?,
-                s.devices_meta()?,
-                s.groups()?,
-                s.rates()?,
-                s.zones()?,
-                read_locale(s, now_ms)?,
-                read_ui(s)?,
-                read_setup(s)?,
-                s.live_sessions()?,
-            ))
-        })?;
+    let (
+        branch,
+        devices,
+        meta,
+        groups,
+        rates,
+        zones,
+        locale,
+        ui,
+        setup,
+        sessions,
+        segments,
+        orders,
+    ) = store.read_consistent(|s| {
+        Ok((
+            s.branch_summary()?,
+            s.devices()?,
+            s.devices_meta()?,
+            s.groups()?,
+            s.rates()?,
+            s.zones()?,
+            read_locale(s, now_ms)?,
+            read_ui(s)?,
+            read_setup(s)?,
+            s.live_sessions()?,
+            s.live_segments()?,
+            s.open_orders()?,
+        ))
+    })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
+    snapshot.bills = bills(&sessions, &segments, orders, now_ms);
     snapshot.sessions = sessions
         .into_iter()
         .map(|s| arena_proto::SnapshotSession {
@@ -140,6 +215,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             device_id: s.device_id,
             state: s.state,
             started_at: s.started_at,
+            rev: s.rev,
             player_id: s.player_id,
             username: s.username,
             guest_no: s.guest_no,
@@ -519,6 +595,7 @@ mod tests {
                 groups: vec![],
                 zones: vec![],
                 sessions: vec![],
+                bills: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
                     label: "Front PC".into(),
@@ -596,6 +673,7 @@ mod tests {
                 groups: vec![],
                 zones: vec![],
                 sessions: vec![],
+                bills: vec![],
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),

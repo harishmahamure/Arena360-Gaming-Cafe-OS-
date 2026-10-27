@@ -14,7 +14,7 @@
   import { nextTile } from "../../lib/floor-nav";
   import { liveRate } from "../../lib/rules";
   import TileSheet from "../../lib/TileSheet.svelte";
-  import { PAUSE_LABELS, cmds } from "../../lib/tile-actions.svelte";
+  import { PAUSE_LABELS, cmds, moved } from "../../lib/tile-actions.svelte";
   import UndoDock from "../../lib/UndoDock.svelte";
   import type { PageData } from "./$types";
 
@@ -149,6 +149,41 @@
   $effect(() => {
     if (activeId && !active) activeId = null;
   });
+  let sheet: TileSheet | undefined = $state();
+  let transferring = $state(false);
+  const activeSession = $derived(active ? sessionOf(active) : undefined);
+  $effect(() => {
+    if (transferring && !(activeSession && ["active", "paused"].includes(activeSession.state))) {
+      transferring = false;
+    }
+  });
+  const isTarget = (d: SnapshotDevice) =>
+    transferring &&
+    active !== undefined &&
+    d.device_id !== active.device_id &&
+    d.kind === active.kind &&
+    d.status === "online" &&
+    groups.some((g) => g.id === d.group_id);
+  let seenMove = moved.n;
+  $effect(() => {
+    const n = moved.n;
+    if (n === seenMove) return;
+    seenMove = n;
+    if (moved.deviceId) {
+      activeId = moved.deviceId;
+      transferring = false;
+    }
+  });
+  async function startTransfer() {
+    transferring = true;
+    await tick();
+    document.querySelector<HTMLElement>("[data-transfer-target] [data-tile-face]")?.focus();
+  }
+  async function cancelTransfer() {
+    transferring = false;
+    await tick();
+    document.querySelector<HTMLElement>(`[data-device-id="${activeId}"] [data-tile-face]`)?.focus();
+  }
   let seenRequest = sheetRequest.n;
   $effect(() => {
     const n = sheetRequest.n;
@@ -178,6 +213,11 @@
   const face = (e: Event) => (e.target as HTMLElement).closest<HTMLElement>("[data-tile-face]");
 
   function onkeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && transferring) {
+      e.preventDefault();
+      void cancelTransfer();
+      return;
+    }
     const current = e.key.startsWith("Arrow") && face(e);
     if (!current || e.target !== current) return;
     const faces = [...document.querySelectorAll<HTMLElement>("[data-tile-face]")];
@@ -213,7 +253,10 @@
     alertTag={tagOf(device.device_id)}
     tabindex={tabStop === device.device_id ? 0 : -1}
     {group}
-    onactivate={() => (activeId = device.device_id)}
+    note={isTarget(device) ? t("hub.transfer.move_here") : undefined}
+    onactivate={() =>
+      transferring ? sheet?.moveTo(device.device_id) : (activeId = device.device_id)}
+    data-transfer-target={isTarget(device) ? "" : undefined}
     style={cell ? `--x:${(device.floor_x ?? 0) + 1};--y:${(device.floor_y ?? 0) + 1}` : undefined}
     aria-current={activeId === device.device_id ? "true" : undefined}
     data-device-id={device.device_id}
@@ -221,7 +264,9 @@
   >
     {#snippet secondary()}
       {#if !group}<span data-testid="device-presence">{t(badge.label)}</span>{/if}
-      {#if cmds[device.device_id]?.state === "failed"}
+      {#if isTarget(device)}
+        <span data-testid="transfer-move-here">{t("hub.transfer.move_here")}</span>
+      {:else if cmds[device.device_id]?.state === "failed"}
         <span data-testid="tile-failed"
           ><span aria-hidden="true">⚠</span> {t("hub.floor.remote_unlock_failed")}</span
         >
@@ -360,6 +405,10 @@
     {@const group = groups.find((g) => g.id === active.group_id)}
     {#key active.device_id}
       <TileSheet
+        bind:this={sheet}
+        {transferring}
+        ontransfer={startTransfer}
+        oncanceltransfer={cancelTransfer}
         device={active}
         {group}
         {groups}

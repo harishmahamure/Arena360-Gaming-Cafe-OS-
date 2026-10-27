@@ -117,7 +117,8 @@ pub use sessions::{
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
-    list_sessions_for_day, pause_session, reprice_wallet_session, resume_session,
+    list_sessions_for_day, move_open_orders, move_session, pause_session, reprice_wallet_session,
+    resume_session,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,

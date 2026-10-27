@@ -509,6 +509,18 @@ impl SnapshotReader {
             .any(|d| d.device_id == device_id && !d.token_hash.is_empty()))
     }
 
+    /// Whether the live session `session_id` is paused (`false` when it is not live).
+    pub fn session_paused(&self, session_id: &str) -> Result<bool, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store
+            .live_sessions()?
+            .iter()
+            .any(|s| s.id == session_id && s.state == "paused"))
+    }
+
     pub fn session_screens(
         &self,
         now_ms: i64,

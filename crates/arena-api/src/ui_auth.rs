@@ -1983,10 +1983,15 @@ async fn run_intent(
             "the device is offline",
         )));
     }
-    if let arena_proto::IntentPayload::SessionStart(s) = &intent.payload
-        && !auth.presence.online(&s.device_id)
+    let seated = match &intent.payload {
+        arena_proto::IntentPayload::SessionStart(s) => Some(s.device_id.clone()),
+        arena_proto::IntentPayload::SessionTransfer(t) => Some(t.device_id.clone()),
+        _ => None,
+    };
+    if let Some(id) = seated
+        && !auth.presence.online(&id)
     {
-        let (reader, id) = (Arc::clone(&auth.reader), s.device_id.clone());
+        let reader = Arc::clone(&auth.reader);
         match tokio::task::spawn_blocking(move || reader.paired_device(&id)).await {
             Ok(Ok(true)) => {
                 return fail(ui_error(AppError::with_field(
@@ -2036,6 +2041,12 @@ async fn run_intent(
         arena_proto::IntentPayload::SessionStart(s) => Some(s.device_id.clone()),
         _ => None,
     };
+    let transferring = match &intent.payload {
+        arena_proto::IntentPayload::SessionTransfer(t) => {
+            Some((t.session_id.clone(), t.device_id.clone()))
+        }
+        _ => None,
+    };
     let ended = matches!(intent.payload, arena_proto::IntentPayload::SessionEnd(_));
     let ending = match &intent.payload {
         arena_proto::IntentPayload::SessionEnd(e) => Some(e.session_id.clone()),
@@ -2066,6 +2077,9 @@ async fn run_intent(
         Ok(applied) => {
             if let Some((session_id, paused)) = pausing {
                 push_pause_state(auth, &session_id, paused, &cmd_id).await;
+            }
+            if let Some((session_id, to_device)) = transferring {
+                push_transfer(auth, &session_id, &to_device, &applied, &cmd_id).await;
             }
             if ended && let Some(c) = applied.changes.iter().find(|c| c.tbl == "devices_meta") {
                 let sent = auth.presence.push_pc_command(
@@ -2157,6 +2171,56 @@ async fn run_intent(
             fail(ui_error(e))
         }
     }
+}
+
+/// After a transfer commits: the old PC locks (`<cmd_id>:old`, so its ack cannot satisfy the wait on
+/// the new PC) and the new PC unlocks to the session screen, or locks as Paused when the session is
+/// paused. The old PC is the other `devices_meta` row the intent wrote, and is left alone when a
+/// session has since started on it.
+async fn push_transfer(
+    auth: &Arc<UiAuth>,
+    session_id: &str,
+    to_device: &str,
+    applied: &arena_core::Applied,
+    cmd_id: &str,
+) {
+    let from_device = applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "devices_meta" && c.row_id != to_device)
+        .map(|c| c.row_id.clone());
+    if let Some(from_device) = from_device {
+        let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
+        let busy = match tokio::task::spawn_blocking(move || reader.session_screens(now)).await {
+            Ok(Ok(screens)) => screens.iter().any(|(d, _)| *d == from_device),
+            _ => false,
+        };
+        if busy {
+            tracing::warn!(device_id = %from_device, cmd_id, "the old PC already has a session, not locked");
+        } else {
+            let sent = auth.presence.push_pc_command(
+                &from_device,
+                &format!("{cmd_id}:old"),
+                arena_proto::PcAction::Lock,
+                None,
+                Some(arena_proto::LockReason::LockedByStaff),
+            );
+            tracing::info!(device_id = %from_device, cmd_id, sessions = sent, "old PC lock pushed");
+        }
+    }
+    let (reader, id) = (Arc::clone(&auth.reader), session_id.to_owned());
+    let paused = match tokio::task::spawn_blocking(move || reader.session_paused(&id)).await {
+        Ok(Ok(paused)) => paused,
+        Ok(Err(e)) => {
+            tracing::warn!(session_id, error = %e, "could not read the session state");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "the session state read failed");
+            return;
+        }
+    };
+    push_pause_state(auth, session_id, paused, cmd_id).await;
 }
 
 /// The kiosk follows a pause (covered, "Session paused"), or a resume or an extend (unlocked to the
@@ -3632,6 +3696,242 @@ pub(crate) mod tests {
         assert_eq!(snapshot.bills.len(), 1);
         assert_eq!(snapshot.bills[0].subtotal_minor, 6_000);
         assert!(snapshot.bills[0].order_id.is_some());
+    }
+
+    async fn second_pc(hub: &Hub, first: &str) -> String {
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let store = Store::open_reader(&hub.path).unwrap();
+        let group = store
+            .rows(arena_store::Table::DevicesMeta)
+            .unwrap()
+            .iter()
+            .find(|r| r["device_id"] == arena_store::RowValue::Text(first.to_owned()))
+            .and_then(|r| match &r["group_id"] {
+                arena_store::RowValue::Text(g) => Some(g.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let device = hub
+            .writer
+            .submit_intent(intent_as(
+                owner(),
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
+                    device_id: None,
+                    device_kind: Default::default(),
+                    class: arena_proto::ClientClass::Paired,
+                    label: "PC 2".into(),
+                    token_hash: arena_core::devices::hash_token_secret("t").unwrap(),
+                    tv_number: None,
+                    group_id: None,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        hub.writer
+            .submit_intent(intent_as(
+                owner(),
+                IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                    device_id: device.clone(),
+                    group_id: Some(group),
+                }),
+                None,
+            ))
+            .await
+            .unwrap();
+        device
+    }
+
+    fn session_rev(hub: &Hub, id: &str) -> i64 {
+        let store = Store::open_reader(&hub.path).unwrap();
+        store
+            .rows(arena_store::Table::Sessions)
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == arena_store::RowValue::Text(id.to_owned()))
+            .map(|r| match r["rev"] {
+                arena_store::RowValue::Integer(n) => n,
+                _ => panic!("rev"),
+            })
+            .unwrap()
+    }
+
+    fn transfer_body(session_id: &str, device: &str, rev: i64) -> Value {
+        plain_body(
+            IntentPayload::SessionTransfer(arena_proto::SessionTransfer {
+                session_id: session_id.into(),
+                device_id: device.into(),
+            }),
+            Some(rev),
+        )
+    }
+
+    async fn pc_event(
+        rx: &mut tokio::sync::mpsc::Receiver<tokio_tungstenite::tungstenite::Message>,
+    ) -> arena_proto::HubEvent {
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("a push to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame { event }) =
+            arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("an event")
+        };
+        event
+    }
+
+    #[tokio::test]
+    async fn a_transfer_needs_the_target_online_then_locks_the_old_pc_and_unlocks_the_new_one() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let old = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let new = second_pc(&hub, &old).await;
+        let (old_tx, mut old_rx) = tokio::sync::mpsc::channel(8);
+        let _old = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(old.clone()), old_tx);
+        let (_, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&old)),
+        )
+        .await;
+        let session_id = reply["applied"]["changes"][0]["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        old_rx.recv().await.unwrap();
+        let rev = session_rev(&hub, &session_id);
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(transfer_body(&session_id, &new, rev)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "PC_UNAVAILABLE");
+        assert!(old_rx.try_recv().is_err(), "a refusal pushes nothing");
+        let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(8);
+        let _new = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(new.clone()), new_tx);
+        let body = transfer_body(&session_id, &new, rev);
+        let key = body["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, reply) =
+            call(&hub, "POST", "/ui/intent", Some(&token), Some(body.clone())).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let arena_proto::HubEvent::PcCommand {
+            cmd_id,
+            action,
+            reason,
+            ..
+        } = pc_event(&mut old_rx).await
+        else {
+            panic!("the old PC locks")
+        };
+        assert_eq!(
+            (cmd_id, action, reason),
+            (
+                format!("{key}:old"),
+                arena_proto::PcAction::Lock,
+                Some(arena_proto::LockReason::LockedByStaff)
+            )
+        );
+        let arena_proto::HubEvent::SessionStarted { cmd_id, session } = pc_event(&mut new_rx).await
+        else {
+            panic!("the new PC unlocks to the session screen")
+        };
+        assert_eq!(
+            (cmd_id.as_str(), session.device_name.as_str()),
+            (key.as_str(), "PC 2")
+        );
+        assert_eq!(session.session_id, session_id);
+        let (status, _) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(matches!(
+            pc_event(&mut old_rx).await,
+            arena_proto::HubEvent::PcCommand { .. }
+        ));
+        assert!(matches!(
+            pc_event(&mut new_rx).await,
+            arena_proto::HubEvent::SessionStarted { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_paused_session_moves_with_the_new_pc_locked_as_paused() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let old = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let new = second_pc(&hub, &old).await;
+        let (old_tx, mut old_rx) = tokio::sync::mpsc::channel(8);
+        let _old = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(old.clone()), old_tx);
+        let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(8);
+        let _new = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(new.clone()), new_tx);
+        let (_, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&old)),
+        )
+        .await;
+        let session_id = reply["applied"]["changes"][0]["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        old_rx.recv().await.unwrap();
+        let pause = plain_body(
+            IntentPayload::SessionPause(arena_proto::SessionPause {
+                session_id: session_id.clone(),
+                reason: arena_proto::PauseReason::HardwareIssue,
+                note: None,
+            }),
+            Some(session_rev(&hub, &session_id)),
+        );
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(pause)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        old_rx.recv().await.unwrap();
+        hub.clock.advance(60_000);
+        let body = transfer_body(&session_id, &new, session_rev(&hub, &session_id));
+        let key = body["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let arena_proto::HubEvent::PcCommand { cmd_id, reason, .. } = pc_event(&mut new_rx).await
+        else {
+            panic!("the new PC locks as paused")
+        };
+        assert_eq!(
+            (cmd_id, reason),
+            (key, Some(arena_proto::LockReason::Paused))
+        );
+        assert!(matches!(
+            pc_event(&mut old_rx).await,
+            arena_proto::HubEvent::PcCommand {
+                reason: Some(arena_proto::LockReason::LockedByStaff),
+                ..
+            }
+        ));
     }
 
     fn settle_body(order_id: &str, rev: i64, payments: Value) -> Value {

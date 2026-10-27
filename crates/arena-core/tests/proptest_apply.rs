@@ -215,6 +215,12 @@ enum Op {
     RateFlip {
         slot: u8,
     },
+    /// A staff transfer of a running or paused session to an existing device: it either moves
+    /// the session, closing its segment and opening one on the target, or writes nothing.
+    Transfer {
+        slot: u8,
+        target: u8,
+    },
     /// The system raises an alert on a device (a repeat is `STALE`), then staff acknowledge it
     /// (a repeat is `STALE`, an unknown id `NOT_FOUND`).
     Alert {
@@ -455,6 +461,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => Just(Op::CreditAutoPause),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
+        2 => (0..3u8, 0..4u8).prop_map(|(slot, target)| Op::Transfer { slot, target }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -2392,6 +2399,72 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         prop_assert!(int(s, "reserved_minor") <= int(&session, "reserved_minor"));
                     }
                 }
+            }
+        }
+        Op::Transfer { slot, target } => {
+            let Some(session) = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .filter(|s| matches!(text(s, "state").as_str(), "active" | "paused"))
+                .nth(usize::from(*slot))
+            else {
+                return Ok(());
+            };
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*target))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let (id, rev) = (text(&session, "id"), int(&session, "rev"));
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionTransfer(arena_proto::SessionTransfer {
+                    session_id: id.clone(),
+                    device_id: device.clone(),
+                }),
+                Some(rev),
+            ));
+            match code(&out) {
+                None => {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert!(hub.change_count() > before);
+                    let after = hub
+                        .reader
+                        .rows(Table::Sessions)
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| text(s, "id") == id)
+                        .unwrap();
+                    prop_assert_eq!(text(&after, "device_id"), device.clone());
+                    prop_assert_eq!(text(&after, "state"), text(&session, "state"));
+                    let open: Vec<_> = hub
+                        .reader
+                        .rows(Table::SessionSegments)
+                        .unwrap()
+                        .into_iter()
+                        .filter(|g| text(g, "session_id") == id && g["to_at"] == RowValue::Null)
+                        .collect();
+                    prop_assert_eq!(open.len(), 1);
+                    prop_assert_eq!(text(&open[0], "device_id"), device);
+                }
+                Some((
+                    ErrorCode::ValidationFailed
+                    | ErrorCode::NotFound
+                    | ErrorCode::DeviceUnassigned
+                    | ErrorCode::GroupKindMismatch
+                    | ErrorCode::PcUnavailable
+                    | ErrorCode::PcBusy
+                    | ErrorCode::NoRate
+                    | ErrorCode::PlanNotForGroup,
+                    _,
+                )) => prop_assert_eq!(hub.change_count(), before),
+                Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
             }
         }
         Op::CreditAutoPause => {

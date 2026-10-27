@@ -157,6 +157,10 @@ pub enum IntentKind {
     SessionResume,
     #[serde(rename = "session.extend")]
     SessionExtend,
+    /// Moves a running or paused PC session to another free PC, closing its open rate segment and
+    /// opening the next on the new device at that group's rate.
+    #[serde(rename = "session.transfer")]
+    SessionTransfer,
     #[serde(rename = "wallet.topup")]
     WalletTopup,
     #[serde(rename = "wallet.topup.reverted")]
@@ -193,7 +197,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 61] = [
+    pub const ALL: [IntentKind; 62] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -244,6 +248,7 @@ impl IntentKind {
         Self::SessionPause,
         Self::SessionResume,
         Self::SessionExtend,
+        Self::SessionTransfer,
         Self::WalletTopup,
         Self::WalletTopupReverted,
         Self::SessionAssignPlayer,
@@ -310,6 +315,7 @@ impl IntentKind {
             Self::SessionPause => "session.pause",
             Self::SessionResume => "session.resume",
             Self::SessionExtend => "session.extend",
+            Self::SessionTransfer => "session.transfer",
             Self::WalletTopup => "wallet.topup",
             Self::WalletTopupReverted => "wallet.topup.reverted",
             Self::CreditSetLimit => "credit.set_limit",
@@ -377,6 +383,7 @@ impl IntentKind {
             | Self::SessionPause
             | Self::SessionResume
             | Self::SessionExtend
+            | Self::SessionTransfer
             | Self::WalletTopup
             | Self::PlanSell
             | Self::PlanSellReverted
@@ -448,6 +455,7 @@ impl IntentKind {
             }
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
             Self::SessionExtend => Requirement::Perm(Permission::SessionExtend),
+            Self::SessionTransfer => Requirement::Perm(Permission::SessionTransfer),
             Self::WalletTopup
             | Self::WalletTopupReverted
             | Self::PlanSell
@@ -529,6 +537,7 @@ impl IntentKind {
             | Self::SessionPause
             | Self::SessionResume
             | Self::SessionExtend
+            | Self::SessionTransfer
             | Self::WalletTopup
             | Self::WalletTopupReverted
             | Self::CreditSetLimit
@@ -1001,6 +1010,8 @@ pub enum IntentPayload {
     SessionResume(crate::SessionResume),
     #[serde(rename = "session.extend")]
     SessionExtend(crate::SessionExtend),
+    #[serde(rename = "session.transfer")]
+    SessionTransfer(crate::SessionTransfer),
     #[serde(rename = "wallet.topup")]
     WalletTopup(crate::WalletTopup),
     #[serde(rename = "wallet.topup.reverted")]
@@ -1078,6 +1089,7 @@ impl IntentPayload {
             Self::SessionPause(_) => IntentKind::SessionPause,
             Self::SessionResume(_) => IntentKind::SessionResume,
             Self::SessionExtend(_) => IntentKind::SessionExtend,
+            Self::SessionTransfer(_) => IntentKind::SessionTransfer,
             Self::WalletTopup(_) => IntentKind::WalletTopup,
             Self::WalletTopupReverted(_) => IntentKind::WalletTopupReverted,
             Self::CreditSetLimit(_) => IntentKind::CreditSetLimit,
@@ -1166,7 +1178,6 @@ mod tests {
     /// Permissions no intent requires yet: views, ops and the modules later stories build.
     const USED_BY_LATER_STORIES: &[Permission] = &[
         Permission::PlayerView,
-        Permission::SessionTransfer,
         Permission::SessionForceEnd,
         Permission::BookingManage,
         Permission::PosVoid,
@@ -1342,6 +1353,7 @@ mod tests {
                 }
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "session.extend" => Requirement::Perm(Permission::SessionExtend),
+                "session.transfer" => Requirement::Perm(Permission::SessionTransfer),
                 "wallet.topup" | "wallet.topup.reverted" | "plan.sell" | "plan.sell.reverted" => {
                     Requirement::Perm(Permission::WalletTopup)
                 }

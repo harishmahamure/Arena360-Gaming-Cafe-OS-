@@ -28,12 +28,12 @@ pub(crate) struct FlipTarget {
 }
 
 /// The open segment of `segments`, if the session has one.
-fn open_of(segments: &[SegmentRow]) -> Option<&SegmentRow> {
+pub(super) fn open_of(segments: &[SegmentRow]) -> Option<&SegmentRow> {
     segments.iter().rev().find(|g| g.to_at.is_none())
 }
 
 /// Where a wallet session's own time stops: its end less the minutes extended since.
-fn own_end(s: &LiveSession) -> Option<i64> {
+pub(super) fn own_end(s: &LiveSession) -> Option<i64> {
     s.ends_at.map(|end| end - s.extended_min * MIN_MS)
 }
 
@@ -160,35 +160,7 @@ pub(super) fn mutate(tx: &StoreTx<'_>, t: &FlipTarget) -> Result<Vec<Written>, A
         flip.rule_id.as_deref(),
     )?;
     if s.mode == SessionMode::Wallet.as_str() {
-        let closed: Vec<SegmentRow> = t
-            .segments
-            .iter()
-            .map(|g| {
-                if g.id == open.id {
-                    SegmentRow {
-                        to_at: Some(flip.at),
-                        paused_ms: g.paused_ms + split,
-                        ..g.clone()
-                    }
-                } else {
-                    g.clone()
-                }
-            })
-            .collect();
-        let sized = crate::billing::wallet_end_after_flip(
-            &closed,
-            flip.at,
-            flip.rate_minor,
-            s.rounding_min,
-            s.minimum_min,
-            s.reserved_minor,
-        );
-        reprice_wallet_session(
-            tx,
-            &s.id,
-            sized.ends_at + s.extended_min * MIN_MS,
-            sized.reserved_minor,
-        )?;
+        resize_wallet(tx, s, &t.segments, open, split, flip.at, flip.rate_minor)?;
     }
     let mut written = Vec::new();
     if s.mode == SessionMode::Wallet.as_str() {
@@ -211,4 +183,45 @@ pub(super) fn mutate(tx: &StoreTx<'_>, t: &FlipTarget) -> Result<Vec<Written>, A
         before: None,
     });
     Ok(written)
+}
+
+/// Re-sizes a wallet session's end and set-aside for a new segment at `rate_minor` opening at
+/// `at`. `open` is the segment that closes there with `split` ms of the current pause.
+pub(super) fn resize_wallet(
+    tx: &StoreTx<'_>,
+    s: &LiveSession,
+    segments: &[SegmentRow],
+    open: &SegmentRow,
+    split: i64,
+    at: i64,
+    rate_minor: i64,
+) -> Result<(), AppError> {
+    let closed: Vec<SegmentRow> = segments
+        .iter()
+        .map(|g| {
+            if g.id == open.id {
+                SegmentRow {
+                    to_at: Some(at),
+                    paused_ms: g.paused_ms + split,
+                    ..g.clone()
+                }
+            } else {
+                g.clone()
+            }
+        })
+        .collect();
+    let sized = crate::billing::wallet_end_after_flip(
+        &closed,
+        at,
+        rate_minor,
+        s.rounding_min,
+        s.minimum_min,
+        s.reserved_minor,
+    );
+    reprice_wallet_session(
+        tx,
+        &s.id,
+        sized.ends_at + s.extended_min * MIN_MS,
+        sized.reserved_minor,
+    )
 }

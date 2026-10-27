@@ -201,9 +201,9 @@ pub use session::{
     SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionExpire, SessionExtend,
     SessionListRow, SessionListState, SessionListView, SessionMode, SessionPause, SessionRateFlip,
     SessionResume, SessionScreen, SessionSettle, SessionSettleReverted, SessionStart,
-    SessionStartedEvent, SettleOutcome, SnapshotBill, SnapshotSession, UNDO_WINDOW_MS,
-    UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup,
-    WalletTopupReverted, WalletTxnView, WalletView,
+    SessionStartedEvent, SessionTransfer, SettleOutcome, SnapshotBill, SnapshotSession,
+    UNDO_WINDOW_MS, UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent,
+    WalletTopup, WalletTopupReverted, WalletTxnView, WalletView,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,

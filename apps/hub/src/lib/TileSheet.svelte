@@ -55,6 +55,7 @@
     send,
     settleJob,
     startJob,
+    transferJob,
     type ExtendChoice,
     type Job,
     type StartChoice,
@@ -85,6 +86,9 @@
     locale,
     names,
     pauseText,
+    transferring = false,
+    ontransfer,
+    oncanceltransfer,
     onclose,
   }: {
     device: SnapshotDevice;
@@ -101,6 +105,9 @@
     locale: SnapshotLocale | null;
     names: Record<string, string>;
     pauseText: (session: SnapshotSession) => string;
+    transferring?: boolean;
+    ontransfer?: () => void;
+    oncanceltransfer?: () => void;
     onclose: () => void;
   } = $props();
 
@@ -167,7 +174,8 @@
       approving = job;
       return;
     }
-    const result = await send(device.device_id, job, device.online, ticket);
+    const reachable = job.moves_to !== undefined && job.moves_to !== device.device_id;
+    const result = await send(device.device_id, job, reachable || device.online, ticket);
     if (result === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (result === "pin_required") {
       approvalPrompt = "ui.pin.again";
@@ -201,6 +209,11 @@
     await tick();
     heading?.focus();
     return { ok: true } as const;
+  }
+
+  /** Moves this tile's session to the PC `targetId` (a floor pick while transferring). */
+  export function moveTo(targetId: string) {
+    if (session) void go(transferJob(session.id, targetId, session.rev));
   }
 
   function sendMessage(event: SubmitEvent) {
@@ -306,7 +319,8 @@
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
-    onclose();
+    if (transferring) oncanceltransfer?.();
+    else onclose();
   }
 </script>
 
@@ -577,6 +591,26 @@
             disabledReason="hub.sheet.waiting"
             onclick={() => (extending = true)}
           />
+        {/if}
+        {#if ["active", "paused"].includes(session.state)}
+          {#if transferring}
+            <p class="type-hub-label" role="status" data-testid="transfer-hint">
+              {t("hub.transfer.hint")}
+            </p>
+            <Button
+              label="hub.transfer.cancel"
+              variant="secondary"
+              onclick={() => oncanceltransfer?.()}
+            />
+          {:else if ontransfer}
+            <Button
+              label="hub.session.transfer"
+              variant="secondary"
+              disabled={busy}
+              disabledReason="hub.sheet.waiting"
+              onclick={ontransfer}
+            />
+          {/if}
         {/if}
         <Button
           label="hub.session.end"

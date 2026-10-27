@@ -219,6 +219,7 @@ export type { SessionSettleReverted } from "./SessionSettleReverted";
 export type { SessionStaff } from "./SessionStaff";
 export type { SessionStart } from "./SessionStart";
 export type { SessionStartedEvent } from "./SessionStartedEvent";
+export type { SessionTransfer } from "./SessionTransfer";
 export type { SetBranchCode } from "./SetBranchCode";
 export type { SetPassword } from "./SetPassword";
 export type { SettingEntry } from "./SettingEntry";

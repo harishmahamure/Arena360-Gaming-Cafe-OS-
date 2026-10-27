@@ -184,6 +184,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionPause(_)
             | Target::SessionResume(_)
             | Target::SessionExtend(_)
+            | Target::SessionTransfer(_)
             | Target::SessionAssign(_)
             | Target::WalletTopup(_)
             | Target::WalletTopupReverted(_)
@@ -255,6 +256,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionPause(t) => super::session::base_rev_pause(intent, t, "session.pause"),
         Target::SessionResume(t) => super::session::base_rev_pause(intent, t, "session.resume"),
         Target::SessionExtend(_) => Ok(()),
+        Target::SessionTransfer(t) => super::transfer::base_rev(intent, t),
         Target::SessionAssign(t) => super::session::base_rev_assign(intent, t),
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),

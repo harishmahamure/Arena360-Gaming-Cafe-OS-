@@ -212,6 +212,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionExtend(t) => super::extend::validate(intent, e, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::SessionTransfer(_) => match target {
+            Target::SessionTransfer(t) => super::transfer::validate(t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::SessionAssignPlayer(a) => match target {
             Target::SessionAssign(t) => super::session::validate_assign(a, t),
             _ => Err(internal_target()),

@@ -15,6 +15,7 @@ export type Job = {
   key: string;
   rev?: number;
   track: "cmd" | "exit" | "none";
+  moves_to?: string;
   waiting: MessageKey;
   done: MessageKey;
 };
@@ -40,6 +41,9 @@ export type ExtendChoice = {
 };
 
 export const cmds: Record<string, Cmd | undefined> = $state({});
+
+/** Set when a transfer is filed under its new device, so the floor opens that tile's sheet. */
+export const moved: { n: number; deviceId: string | null } = $state({ n: 0, deviceId: null });
 
 const DONE: Record<PcAction, MessageKey> = {
   lock: "hub.sheet.done.lock",
@@ -79,6 +83,14 @@ const REFUSALS: Record<string, MessageKey> = {
   "STALE:session.extend": "hub.session.pause_stale",
   "VALIDATION_FAILED:session.extend": "hub.extend.refused",
   "NOT_FOUND:session.extend": "hub.extend.refused",
+  "STALE:session.transfer": "hub.session.pause_stale",
+  "VALIDATION_FAILED:session.transfer": "hub.transfer.refused",
+  "NOT_FOUND:session.transfer": "hub.transfer.refused",
+  "PC_UNAVAILABLE:session.transfer": "hub.transfer.unavailable",
+  "NO_RATE:session.transfer": "hub.transfer.no_rate",
+  "DEVICE_UNASSIGNED:session.transfer": "hub.transfer.unassigned",
+  "GROUP_KIND_MISMATCH:session.transfer": "hub.transfer.kind_mismatch",
+  "PLAN_NOT_FOR_GROUP:session.transfer": "hub.transfer.plan_group",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -123,6 +135,12 @@ export const extendJob = (session_id: string, choice: ExtendChoice) =>
       pack_id: choice.source === "pack" ? choice.pack_id : undefined,
     },
     { track: "none", done: "hub.sheet.done.extended" },
+  );
+
+export const transferJob = (session_id: string, device_id: string, rev: number) =>
+  job(
+    { kind: "session.transfer", session_id, device_id },
+    { track: "cmd", rev, moves_to: device_id, done: "hub.sheet.done.transferred" },
   );
 
 export const endJob = (session_id: string, rev: number) =>
@@ -184,19 +202,21 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
       ? "session.pause"
       : kind === "session.extend"
         ? "session.extend"
-        : kind === "session.end.reverted"
-          ? "session.end"
-          : kind === "session.settle" || kind === "session.settle.reverted"
-            ? "pos.sell"
-            : kind === "credit.collect" || kind === "credit.collect.reverted"
-              ? "credit.collect"
-              : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-                ? "wallet.topup"
-                : kind === "device.screen"
-                  ? "device.screen"
-                  : kind === "device.power" || kind === "device.admin_unlock"
-                    ? "device.remote"
-                    : "device.manage";
+        : kind === "session.transfer"
+          ? "session.transfer"
+          : kind === "session.end.reverted"
+            ? "session.end"
+            : kind === "session.settle" || kind === "session.settle.reverted"
+              ? "pos.sell"
+              : kind === "credit.collect" || kind === "credit.collect.reverted"
+                ? "credit.collect"
+                : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+                  ? "wallet.topup"
+                  : kind === "device.screen"
+                    ? "device.screen"
+                    : kind === "device.power" || kind === "device.admin_unlock"
+                      ? "device.remote"
+                      : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 
@@ -211,23 +231,25 @@ export async function send(
     cmds[deviceId] = { job: j, state: "failed" };
     return "sent";
   }
-  cmds[deviceId] = { job: j, state: "waiting" };
+  let at = deviceId;
+  cmds[at] = { job: j, state: "waiting" };
   const settle = (state: Cmd["state"], refusal?: MessageKey, detail?: string) => {
-    if (cmds[deviceId]?.job.key === j.key) cmds[deviceId] = { job: j, state, refusal, detail };
+    if (cmds[at]?.job.key === j.key) cmds[at] = { job: j, state, refusal, detail };
   };
   const outcome = await submitIntent(j.payload, j.key, j.rev, { elevationTicket: ticket });
   if (outcome.kind === "signed_out") {
-    delete cmds[deviceId];
+    delete cmds[at];
     return "signed_out";
   }
   if (outcome.kind === "error" && outcome.error.code === "PIN_REQUIRED") {
-    delete cmds[deviceId];
+    delete cmds[at];
     return "pin_required";
   }
   if (outcome.kind === "unreachable") settle("failed");
   else if (outcome.kind === "error") {
     const { code, field, message } = outcome.error;
-    const offline = code === "VALIDATION_FAILED" && field === "device_id";
+    const transfer = j.payload.kind === "session.transfer";
+    const offline = code === "VALIDATION_FAILED" && field === "device_id" && !transfer;
     const extend = j.payload.kind === "session.extend";
     const text =
       (code === "VALIDATION_FAILED" || code === "NOT_FOUND") &&
@@ -248,6 +270,13 @@ export async function send(
     offerUndo(outcome.result);
     settle("done");
   } else {
+    if (j.moves_to && j.moves_to !== at) {
+      delete cmds[at];
+      at = j.moves_to;
+      cmds[at] = { job: j, state: "waiting" };
+      moved.deviceId = at;
+      moved.n += 1;
+    }
     const id =
       j.track === "cmd"
         ? j.key

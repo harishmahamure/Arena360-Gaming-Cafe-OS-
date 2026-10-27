@@ -302,6 +302,10 @@ pub(super) fn mutate(
             Target::SessionExtend(t) => super::extend::mutate(tx, intent, e, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionTransfer(tr) => match target {
+            Target::SessionTransfer(t) => super::transfer::mutate(tx, tr, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::SessionAssignPlayer(a) => match target {
             Target::SessionAssign(t) => super::session::mutate_assign(tx, a, t, now_ms),
             _ => Err(mismatch()),

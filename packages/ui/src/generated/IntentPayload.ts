@@ -50,6 +50,7 @@ import type { SessionResume } from "./SessionResume";
 import type { SessionSettle } from "./SessionSettle";
 import type { SessionSettleReverted } from "./SessionSettleReverted";
 import type { SessionStart } from "./SessionStart";
+import type { SessionTransfer } from "./SessionTransfer";
 import type { SettingsSet } from "./SettingsSet";
 import type { StaffSetCredentials } from "./StaffSetCredentials";
 import type { StaffUpsert } from "./StaffUpsert";
@@ -113,6 +114,7 @@ export type IntentPayload =
   | ({ kind: "session.pause" } & SessionPause)
   | ({ kind: "session.resume" } & SessionResume)
   | ({ kind: "session.extend" } & SessionExtend)
+  | ({ kind: "session.transfer" } & SessionTransfer)
   | ({ kind: "wallet.topup" } & WalletTopup)
   | ({ kind: "wallet.topup.reverted" } & WalletTopupReverted)
   | ({ kind: "credit.set_limit" } & CreditSetLimit)

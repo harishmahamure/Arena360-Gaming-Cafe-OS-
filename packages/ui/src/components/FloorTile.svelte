@@ -16,6 +16,7 @@
     group,
     alerts,
     alertTag,
+    note,
     tag = "div",
     tabindex = 0,
     onactivate,
@@ -31,6 +32,7 @@
     group?: { name: string; colour: string };
     alerts?: number;
     alertTag?: AlertTag;
+    note?: string;
     tag?: string;
     tabindex?: number;
     onactivate?: () => void;
@@ -45,6 +47,7 @@
       name,
       t(label ?? STATUS_LABELS[state]),
       alertTag ? t(ALERT_TAGS[alertTag]) : "",
+      note,
       time,
       warning ? t("ui.floor_tile.time_warning") : "",
     ]
@@ -116,6 +119,11 @@
   .glyph {
     margin-inline-end: var(--space-1);
     color: var(--warning);
+  }
+
+  .tile[data-transfer-target] {
+    outline: 3px dashed var(--accent);
+    outline-offset: -3px;
   }
 
   .tile.state-unassigned {

@@ -103,7 +103,7 @@ pub(super) async fn begin(
     f.writer.submit_intent(i).await
 }
 
-async fn begin_block(
+pub(super) async fn begin_block(
     f: &Fixture,
     device: &str,
     player: Option<&str>,
@@ -657,7 +657,7 @@ pub(super) fn ist(local: &str) -> i64 {
         .timestamp_millis()
 }
 
-async fn window_plan(f: &Fixture, kind: &str, groups: &[String], price: i64) -> String {
+pub(super) async fn window_plan(f: &Fixture, kind: &str, groups: &[String], price: i64) -> String {
     submit(
         f,
         owner(),

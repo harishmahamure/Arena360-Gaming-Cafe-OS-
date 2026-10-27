@@ -52,6 +52,7 @@ pub struct LiveSession {
     pub grace_min: u32,
     pub extended_min: i64,
     pub rate_id: Option<String>,
+    pub group_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +198,7 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
         s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by, s.ends_at, s.paused_at,
-        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min, s.extended_min, s.rate_id";
+        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min, s.extended_min, s.rate_id, s.group_id";
 
 fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
@@ -227,6 +228,7 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         grace_min: r.get(23)?,
         extended_min: r.get(24)?,
         rate_id: r.get(25)?,
+        group_id: r.get(26)?,
     })
 }
 
@@ -985,4 +987,44 @@ pub fn reprice_wallet_session(
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// Moves a live session to another device and its group; `rate_id` is the new base rate of a
+/// postpaid or wallet session and is left alone when `None`.
+pub fn move_session(
+    conn: &Connection,
+    session_id: &str,
+    device_id: &str,
+    group_id: &str,
+    rate_id: Option<&str>,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET device_id = ?2, group_id = ?3, rate_id = COALESCE(?4, rate_id)
+         WHERE id = ?1",
+        params![session_id, device_id, group_id, rate_id],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Points a session's open bills at the device it moved to, returning their ids.
+pub fn move_open_orders(
+    conn: &Connection,
+    session_id: &str,
+    device_id: &str,
+) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM orders WHERE session_id = ?1 AND status = 'open' ORDER BY id")
+        .map_err(db_error)?;
+    let ids: Vec<String> = stmt
+        .query_map([session_id], |r| r.get(0))
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)?;
+    conn.execute(
+        "UPDATE orders SET device_id = ?2 WHERE session_id = ?1 AND status = 'open'",
+        params![session_id, device_id],
+    )
+    .map_err(db_error)?;
+    Ok(ids)
 }

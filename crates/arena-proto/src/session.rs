@@ -169,6 +169,14 @@ pub struct SessionExtend {
     pub credit_override: Option<bool>,
 }
 
+/// Moves a running or paused session to another free PC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionTransfer {
+    pub session_id: String,
+    pub device_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SessionEndReverted {

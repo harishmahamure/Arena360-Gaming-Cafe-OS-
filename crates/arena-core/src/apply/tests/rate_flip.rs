@@ -9,7 +9,7 @@ use arena_proto::{DeviceKind, PauseReason, RuleUpsert, SessionMode, SessionRateF
 
 const MIN: i64 = 60_000;
 
-async fn rule(f: &Fixture, group: &str, start: i64, end: i64, adjust: i64) -> String {
+pub(super) async fn rule(f: &Fixture, group: &str, start: i64, end: i64, adjust: i64) -> String {
     submit(
         f,
         owner(),
@@ -36,7 +36,7 @@ async fn rule(f: &Fixture, group: &str, start: i64, end: i64, adjust: i64) -> St
         .clone()
 }
 
-async fn flip(f: &Fixture, session: &str) -> Result<Applied, AppError> {
+pub(super) async fn flip(f: &Fixture, session: &str) -> Result<Applied, AppError> {
     submit(
         f,
         system(),

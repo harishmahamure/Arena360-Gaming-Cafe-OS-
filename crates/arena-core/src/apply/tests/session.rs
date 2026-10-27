@@ -411,8 +411,24 @@ async fn ending_a_session_writes_an_open_order_one_line_and_frees_the_device() {
     start(&f, &d, Some(&player)).await.unwrap();
     f.clock.advance(41 * 60_000);
     let s = sessions(&f)[0].clone();
+    let live = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(live.bills.len(), 1);
+    let (b, l) = (&live.bills[0], &live.bills[0].lines[0]);
+    assert_eq!(
+        (b.session_id.as_str(), b.order_id.as_deref()),
+        (text(&s, "id").as_str(), None)
+    );
+    assert_eq!((l.minutes, l.amount_minor), (45, 7500));
+    assert_eq!(
+        (b.subtotal_minor, b.paid_minor, b.remaining_minor),
+        (7500, 0, 7500)
+    );
     let i = end_intent(&text(&s, "id"), Some(int(&s, "rev")));
     let a = end(&f, i.clone()).await.unwrap();
+    let after = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(after.bills.len(), 1);
+    assert!(after.bills[0].order_id.is_some());
+    assert_eq!(after.bills[0].lines, b.lines);
     assert_eq!(
         a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
         [

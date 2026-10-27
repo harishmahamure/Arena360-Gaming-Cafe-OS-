@@ -2,7 +2,7 @@
 title: 'Story 3.11: End a postpaid session and see the bill to the minute'
 type: 'feature'
 created: '2026-10-27'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'da323fb7dc818e1bebd30880560186a8fe577e88'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -83,6 +83,24 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### Review Findings
+
+- [x] [Review][Patch] Live in-session snapshot bill had no test [crates/arena-core/src/apply/tests/session.rs] — fixed: asserts live bill (45 min, 7500) and that the ended order carries the same lines
+- [x] [Review][Defer] A paused session's in-progress pause is billed as play time [crates/arena-core/src/billing.rs] — deferred: pause lands in 3.15; paused_total_ms is the spec'd input until then
+- [x] [Review][Defer] paused_total_ms is taken off the last segment only [crates/arena-core/src/billing.rs] — deferred: spec'd in Design Notes; per-segment pause records arrive in 3.15/3.31
+- [x] [Review][Defer] Pay-at-counter lock is fire-and-forget; an offline kiosk stays unlocked [crates/arena-api/src/ui_auth.rs] — deferred: persisted kiosk lock is out of scope (spec Never), same as 3.10
+- [x] [Review][Defer] Open orders are unbounded in the snapshot and the sheet shows no itemised bill for an unpaid order [crates/arena-core/src/snapshot.rs] — deferred: settlement and the order view land in 3.12
+
+#### Rejected
+
+- Replayed End re-pushes the lock: low; same pattern as session.start replay, needs a retry after a new session starts on the same PC, fix adds a branch.
+- "Session already ended" shown for every session.end VALIDATION_FAILED: low; base_rev is always sent and only postpaid sessions exist, so unreachable from the UI.
+- Empty-segments session writes a zero order: false; session.start always writes a segment.
+- UNPAID hidden for offline or ungrouped tiles: low; floor tiles are grouped and an ended device returns to its prior state.
+- Device state restore overwrites maintenance: false; a device in session cannot be set to maintenance (busy refusal).
+- No confirmation on End: low; End is gated by permission and PIN elevation, spec'd as a single button.
+- Quadratic order-line scan, wire `rev` without serde default, proptest change count, rounding wording: low; no everyday harm.
 
 ## Design Notes
 

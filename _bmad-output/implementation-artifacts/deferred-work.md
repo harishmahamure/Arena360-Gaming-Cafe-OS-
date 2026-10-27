@@ -306,3 +306,10 @@
 - Paused and grace sessions are ticked as active (Story 3.15).
 - No test drives `Registry::tick_sessions`, a same-key `session.start` replay, or the 24 h `lock_after_ms` fallback.
 - `time_up_mode` is carried to the kiosk but unused.
+
+## Deferred from: code review of spec-3-11 (2026-10-27)
+
+- A paused session's in-progress pause is billed as play time (Story 3.15).
+- `paused_total_ms` is taken off the last segment only; per-segment pause records come with 3.15 and 3.31.
+- The pay-at-counter lock is fire-and-forget; an offline kiosk stays unlocked until a persisted lock exists.
+- Open orders are unbounded in the snapshot, and the sheet shows no itemised bill for an unpaid order (Story 3.12).

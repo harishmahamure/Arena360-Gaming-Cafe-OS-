@@ -2008,13 +2008,25 @@ async fn run_intent(
                 let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
                 let screens =
                     tokio::task::spawn_blocking(move || reader.session_screens(now)).await;
-                if let Ok(Ok(screens)) = screens
-                    && let Some((_, screen)) = screens.into_iter().find(|(d, _)| *d == device_id)
-                {
-                    let sent = auth
-                        .presence
-                        .push_session_started(&device_id, &cmd_id, screen);
-                    tracing::info!(device_id = %device_id, cmd_id = %cmd_id, sessions = sent, "session start pushed");
+                match screens {
+                    Ok(Ok(screens)) => {
+                        if let Some((_, screen)) =
+                            screens.into_iter().find(|(d, _)| *d == device_id)
+                        {
+                            let sent = auth
+                                .presence
+                                .push_session_started(&device_id, &cmd_id, screen);
+                            tracing::info!(device_id = %device_id, cmd_id = %cmd_id, sessions = sent, "session start pushed");
+                        } else {
+                            tracing::warn!(device_id = %device_id, cmd_id = %cmd_id, "no live session to push");
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(device_id = %device_id, error = %e, "could not read the session screen");
+                    }
+                    Err(e) => {
+                        tracing::warn!(device_id = %device_id, error = %e, "the session screen read failed");
+                    }
                 }
             }
             if let Some((device_id, action, text)) = command {

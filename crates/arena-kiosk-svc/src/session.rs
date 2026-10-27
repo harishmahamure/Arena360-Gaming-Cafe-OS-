@@ -9,6 +9,9 @@ use crate::pc::{ScreenSession, set_locked};
 use crate::runtime::Ctx;
 
 pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
+    if !started && ctx.pc.screen.borrow().locked {
+        return;
+    }
     let now = Instant::now();
     ctx.pc
         .deadline
@@ -19,7 +22,9 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
     ctx.pc.screen.send_modify(|v| {
         v.session = Some(ScreenSession {
             device_name: s.device_name,
-            started: now - Duration::from_millis(s.elapsed_ms),
+            started: now
+                .checked_sub(Duration::from_millis(s.elapsed_ms))
+                .unwrap_or(now),
         });
     });
 }

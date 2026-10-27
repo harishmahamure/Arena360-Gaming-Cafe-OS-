@@ -2,7 +2,7 @@
 title: 'Story 3.10: The PC unlocks to a session screen when a session starts'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_commit: 'f7fdf85'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-3-context.md'
@@ -34,3 +34,23 @@ deferred:
 - `cargo fmt --check && cargo clippy --locked --workspace --all-targets -- -D warnings && cargo test --locked --workspace`
 - `pnpm run check:protocol && pnpm run check:strings`; `pnpm --filter @arena/hub check`, `pnpm --filter @arena/kiosk check`
 - `playwright test` in `apps/kiosk` and `tests/session-start.spec.ts tests/tile-sheet.spec.ts` in `apps/hub`
+
+### Review Findings
+
+- [x] [Review][Patch] A tick after a time's-up or staff lock re-armed the deadline and re-attached the session — ticks are now ignored while the PC is locked [crates/arena-kiosk-svc/src/session.rs:11]
+- [x] [Review][Patch] `now - elapsed` could panic when the Hub's elapsed time exceeds the PC's uptime — now `checked_sub` [crates/arena-kiosk-svc/src/session.rs:25]
+- [x] [Review][Patch] A session start that could not be pushed left no trace — the read error and missing session are now logged [crates/arena-api/src/ui_auth.rs:2008]
+- [x] [Review][Defer] Lock reason is not persisted across a kiosk service restart — deferred: reason lives in memory by design since 3.5
+- [x] [Review][Defer] A tick cannot unlock a PC that missed `session.started`; Retry recovers it — deferred: needs a reconcile design, belongs with 3.23 timer engine
+- [x] [Review][Defer] Paused and grace sessions keep ticking as active — deferred: pause is Story 3.15
+- [x] [Review][Defer] No test drives `tick_sessions` or the same-key replay of `session.start`, and the 24 h fallback is not pinned — deferred: Story 3.23 replaces the tick
+- [x] [Review][Defer] `time_up_mode` travels but is unused — deferred: consumed by the time's-up stories
+
+#### Rejected
+
+- Lock persisted by `set_locked` violates "without writing anything" — the spec means no Hub record is written; a persisted lock is the existing staff-lock behaviour.
+- Stale ack resolves a Retry — the ack only exists after the PC really unlocked, so "done" is correct.
+- Ack means received, not applied — a failed lock-state save is logged and the screen still changes.
+- Tick re-bases the clock and re-emits every 5 s — cosmetic, sub-second jitter.
+- Time's up overwrites a staff-lock reason — still locked; cosmetic.
+- Empty `device_name`, tick cost and flaky clock regexes — not reachable or negligible.

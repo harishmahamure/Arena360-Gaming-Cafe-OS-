@@ -298,3 +298,11 @@
 ## Deferred from: Story 3.3
 
 - `arena-hub dev seed` fails with `USER_LIMIT` on master (it upserts 4 staff before the licence is recorded, Free cap is 3). `release-bench` `hub-idle` seeding and `tests/dev_seed.rs` (2 tests) fail until the seed records its licence first or caps staff. A 60-device seed for the Hub service memory budget (Story 3.3 AC4) also needs it.
+
+## Deferred from: code review of spec-3-10 (2026-10-27)
+
+- Lock reason is not persisted across a kiosk service restart; the cover falls back to "Locked by staff".
+- A `session.tick` does not unlock a PC that missed `session.started` (offline or restarted); only Retry recovers it.
+- Paused and grace sessions are ticked as active (Story 3.15).
+- No test drives `Registry::tick_sessions`, a same-key `session.start` replay, or the 24 h `lock_after_ms` fallback.
+- `time_up_mode` is carried to the kiosk but unused.

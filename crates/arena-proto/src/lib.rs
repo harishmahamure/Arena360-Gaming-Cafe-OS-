@@ -140,7 +140,8 @@ pub use operating::{
     FULFILMENT_MODES, KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT,
     KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_SETUP_LIVE, KIOSK_OPERATING_KEYS,
     KIOSK_VOLUME_MAX, LAST_MINUTE, OpeningDay, OpeningHoursError, SetupStatus, TestSessionState,
-    has_open_day, is_absolute_path, opening_hours_json, parse_opening_hours,
+    has_open_day, is_absolute_path, is_backup_location, is_backup_tree_uri, opening_hours_json,
+    parse_opening_hours,
 };
 pub use pairing::{
     ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,

@@ -13,6 +13,10 @@ export type Bridge = {
   /** Asks for the Bluetooth permission; the page gets `arena:bluetooth` when the user answers. */
   requestBluetooth?(): void;
   openAppSettings?(): void;
+  /** Opens the system folder picker; the page gets `arena:backup-folder` with `detail.uri` (null if cancelled). */
+  pickBackupFolder?(): void;
+  /** After the Hub accepted the folder as the backup location, drops the grants for other folders. */
+  keepBackupFolder?(tree: string): void;
 };
 
 export const service: { access: Access | null } = $state({ access: null });

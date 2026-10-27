@@ -4830,6 +4830,75 @@ mod operating {
             .unwrap();
         job.abort();
     }
+
+    struct ScriptedFolder(std::sync::Mutex<Option<arena_proto::BackupDirProblem>>);
+
+    impl crate::setup::BackupFolder for ScriptedFolder {
+        fn probe(&self, _location: &str) -> Result<(), arena_proto::BackupDirProblem> {
+            self.0.lock().unwrap().map_or(Ok(()), Err)
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unplugged_backup_folder_unsets_the_location_until_it_is_back() {
+        const TREE: &str = "content://com.android.externalstorage.documents/tree/1A2B-3C4D%3ABk";
+        let f = bootstrapped().await;
+        let reader = std::sync::Arc::new(SnapshotReader::open(&f.path).unwrap());
+        let folder = std::sync::Arc::new(ScriptedFolder(std::sync::Mutex::new(None)));
+        let job = tokio::spawn(crate::setup::publish_setup(
+            std::sync::Arc::clone(&reader),
+            Some(f.writer.subscribe()),
+            f.status.clone(),
+        ));
+        let watch = tokio::spawn(crate::setup::watch_backup_folder(
+            std::sync::Arc::clone(&reader),
+            Some(f.writer.subscribe()),
+            f.status.clone(),
+            std::sync::Arc::clone(&folder) as std::sync::Arc<dyn crate::setup::BackupFolder>,
+            std::time::Duration::from_millis(50),
+        ));
+        let mut rx = f.status.subscribe();
+        let located = |rx: &mut watch::Receiver<HubStatus>, want: bool| {
+            let mut rx = rx.clone();
+            async move {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    rx.wait_for(|s| s.setup.is_some_and(|x| x.backup_location_set == want)),
+                )
+                .await
+                .expect("published")
+                .unwrap();
+            }
+        };
+        save(&f, "system.backup_dir", TREE).await.unwrap();
+        located(&mut rx, true).await;
+        *folder.0.lock().unwrap() = Some(arena_proto::BackupDirProblem::NotFound);
+        located(&mut rx, false).await;
+        assert!(
+            reader
+                .snapshot(0)
+                .unwrap()
+                .setup
+                .is_some_and(|s| !s.backup_location_set)
+        );
+        assert!(setup(&f).backup_location_set, "the setting is kept");
+        *folder.0.lock().unwrap() = None;
+        located(&mut rx, true).await;
+        // Choosing a folder again is checked at once, not at the next tick.
+        *folder.0.lock().unwrap() = Some(arena_proto::BackupDirProblem::NotWritable);
+        located(&mut rx, false).await;
+        *folder.0.lock().unwrap() = None;
+        save(
+            &f,
+            "system.backup_dir",
+            "content://com.android.providers.downloads.documents/tree/downloads",
+        )
+        .await
+        .unwrap();
+        located(&mut rx, true).await;
+        watch.abort();
+        job.abort();
+    }
 }
 
 mod printer {

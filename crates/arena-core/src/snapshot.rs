@@ -3,6 +3,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arena_proto::{
     AppError, ClientClass, DeviceStatus, ErrorCode, HubSnapshot, SettingEntry, SetupStatus,
@@ -545,6 +546,9 @@ fn rate_flips_in(store: &Store, now_ms: i64) -> Result<RateFlips, AppError> {
 /// A read-only connection that serves [`HubSnapshot`]s on a primary or a follower.
 pub struct SnapshotReader {
     reader: Mutex<Store>,
+    /// Set by the backup-folder watch while the chosen folder cannot be written; setup status
+    /// then reports the backup location as not set.
+    backup_unavailable: AtomicBool,
 }
 
 impl std::fmt::Debug for SnapshotReader {
@@ -558,6 +562,7 @@ impl SnapshotReader {
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self, AppError> {
         Ok(Self {
             reader: Mutex::new(Store::open_reader(db_path)?),
+            backup_unavailable: AtomicBool::new(false),
         })
     }
 
@@ -815,7 +820,34 @@ impl SnapshotReader {
             .reader
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
-        read_snapshot(&store, now_ms)
+        let mut snapshot = read_snapshot(&store, now_ms)?;
+        if let Some(setup) = snapshot.setup.as_mut() {
+            setup.backup_location_set &= !self.backup_unavailable.load(Ordering::Relaxed);
+        }
+        Ok(snapshot)
+    }
+
+    /// Whether the chosen backup folder was last found unavailable.
+    pub fn backup_unavailable(&self) -> bool {
+        self.backup_unavailable.load(Ordering::Relaxed)
+    }
+
+    /// Records whether the chosen backup folder is unavailable; `true` when that changed.
+    pub fn set_backup_unavailable(&self, unavailable: bool) -> bool {
+        self.backup_unavailable.swap(unavailable, Ordering::Relaxed) != unavailable
+    }
+
+    /// The value of one setting; `None` when the row does not exist. Blocking (SQLite).
+    pub fn setting_value(&self, key: &str) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store
+            .settings()?
+            .into_iter()
+            .find(|s| s.key == key)
+            .map(|s| s.value))
     }
 
     /// The branch locale in effect at `now_ms` and when its next deferred change takes effect
@@ -936,7 +968,11 @@ impl SnapshotReader {
             .reader
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
-        store.read_consistent(read_setup)
+        let mut setup = store.read_consistent(read_setup)?;
+        if let Some(s) = setup.as_mut() {
+            s.backup_location_set &= !self.backup_unavailable.load(Ordering::Relaxed);
+        }
+        Ok(setup)
     }
 
     pub fn setting_rev_and_replay(

@@ -123,6 +123,23 @@ pub fn is_absolute_path(value: &str) -> bool {
             && matches!(b[2], b'\\' | b'/'))
 }
 
+/// The scheme of a folder the Android folder picker returned (a document tree URI).
+pub const BACKUP_TREE_SCHEME: &str = "content://";
+
+/// A folder chosen through the Android folder picker (`content://…/tree/…`), kept as the backup
+/// location in place of a path.
+pub fn is_backup_tree_uri(value: &str) -> bool {
+    value.len() > BACKUP_TREE_SCHEME.len()
+        && value.starts_with(BACKUP_TREE_SCHEME)
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+/// What `system.backup_dir` may hold when set: an absolute path, or an Android tree URI.
+pub fn is_backup_location(value: &str) -> bool {
+    is_absolute_path(value) || is_backup_tree_uri(value)
+}
+
 pub fn opening_hours_json(week: &[OpeningDay; DAYS_PER_WEEK]) -> String {
     let days: Vec<String> = week.iter().map(|d| d.to_json()).collect();
     format!("[{}]", days.join(","))
@@ -340,6 +357,17 @@ mod tests {
         }
         for bad in ["", "backups", "./b", r"D:Backups", r"\single", "C:"] {
             assert!(!is_absolute_path(bad), "{bad}");
+        }
+        let tree = "content://com.android.externalstorage.documents/tree/1A2B-3C4D%3ABackups";
+        assert!(is_backup_tree_uri(tree) && is_backup_location(tree));
+        for bad in [
+            "content://",
+            "content:/x",
+            "https://a/b",
+            " content://a/b",
+            "content://a\n",
+        ] {
+            assert!(!is_backup_tree_uri(bad), "{bad:?}");
         }
         assert!(!has_open_day(&[OpeningDay::Closed; 7]));
         let mut w = [OpeningDay::Closed; 7];

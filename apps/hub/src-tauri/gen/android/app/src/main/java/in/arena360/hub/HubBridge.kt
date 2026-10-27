@@ -66,6 +66,14 @@ class HubBridge(private val activity: MainActivity) {
   @JavascriptInterface
   fun requestBluetooth() = activity.runOnUiThread { activity.askBluetooth() }
 
+  /** Opens the system folder picker; the page gets `arena:backup-folder` when it closes. */
+  @JavascriptInterface
+  fun pickBackupFolder() = activity.runOnUiThread { activity.pickBackupFolder() }
+
+  /** After the Hub accepted [tree] as the backup location, gives up the grants for other folders. */
+  @JavascriptInterface
+  fun keepBackupFolder(tree: String) = BackupFolderBridge.keepOnly(activity, Uri.parse(tree))
+
   @JavascriptInterface
   fun openAppSettings() {
     activity.runOnUiThread {

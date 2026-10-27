@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkAab,
   checkActivity,
+  checkBackupFolder,
   checkBluetooth,
   checkDuplicates,
   checkKeystore,
@@ -401,4 +402,34 @@ test("an activity that drops fontScale (or another change) or is missing fails",
   assert.deepEqual(checkActivity("<manifest><application></application></manifest>"), [
     "manifest: .MainActivity is not declared",
   ]);
+});
+
+const BACKUP_BRIDGE =
+  "takePersistableUriPermission(tree, f); createDocument(r, d, m, n); deleteDocument(r, u)";
+
+test("a bridge that keeps the grant and probes with a document, with no storage permission, passes", () => {
+  assert.deepEqual(checkBackupFolder(BT_MANIFEST, BACKUP_BRIDGE), []);
+});
+
+test("a storage permission, a lost grant or a probe that writes no file fails", () => {
+  const storage = '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />';
+  assert.deepEqual(checkBackupFolder(BT_MANIFEST + storage, BACKUP_BRIDGE), [
+    "manifest: permission WRITE_EXTERNAL_STORAGE must not be requested",
+  ]);
+  assert.deepEqual(checkBackupFolder(BT_MANIFEST, undefined), [
+    "backup: BackupFolderBridge.kt is missing",
+  ]);
+  assert.deepEqual(checkBackupFolder(BT_MANIFEST, "createDocument(); deleteDocument()"), [
+    "backup: the bridge must keep the picked folder's grant across restarts",
+  ]);
+  assert.deepEqual(checkBackupFolder(BT_MANIFEST, "takePersistableUriPermission()"), [
+    "backup: the bridge must probe by creating and deleting a file",
+  ]);
+});
+
+test("the committed bridge and manifest satisfy the backup folder rules", () => {
+  assert.deepEqual(
+    checkRepoManifest(ROOT).filter((e) => /^backup:|STORAGE/.test(e)),
+    [],
+  );
 });

@@ -42,6 +42,7 @@ class HubService : Service() {
     acquireLocks()
     NsdBridge.attach(this)
     BluetoothBridge.attach(this)
+    BackupFolderBridge.attach(this)
     Thread { begin() }.start()
     return START_STICKY
   }

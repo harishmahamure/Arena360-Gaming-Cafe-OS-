@@ -70,3 +70,14 @@ export function snapshotOf(data: unknown): HubSnapshot | null {
 export function adsNeeded(snapshot: HubSnapshot | null): boolean {
   return snapshot?.setup?.ad_consent !== "not_needed";
 }
+
+/** The folder chosen on Android is a document tree URI; this is its readable part, e.g. `1A2B-3C4D:Backups`. */
+export function folderLabel(location: string): string {
+  const tree = /\/tree\/([^/?#]+)/.exec(location)?.[1];
+  if (!tree) return location;
+  try {
+    return decodeURIComponent(tree);
+  } catch {
+    return tree;
+  }
+}

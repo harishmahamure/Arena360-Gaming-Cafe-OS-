@@ -234,6 +234,34 @@ export function checkBluetooth(manifest, source) {
 }
 
 /**
+ * The backup folder is a document tree the owner picks with the system picker and the Hub keeps a
+ * persistable grant for: no storage permission is ever requested (so no broad file access), the
+ * grant is kept across restarts, and the bridge probes by creating and deleting a file.
+ */
+export const STORAGE_FORBIDDEN = [
+  "READ_EXTERNAL_STORAGE",
+  "WRITE_EXTERNAL_STORAGE",
+  "MANAGE_EXTERNAL_STORAGE",
+];
+
+export function checkBackupFolder(manifest, source) {
+  const errors = [];
+  for (const p of STORAGE_FORBIDDEN) {
+    if (new RegExp(String.raw`android\.permission\.${p}\b`).test(manifest)) {
+      errors.push(`manifest: permission ${p} must not be requested`);
+    }
+  }
+  if (source === undefined) return [...errors, "backup: BackupFolderBridge.kt is missing"];
+  if (!/\btakePersistableUriPermission\s*\(/.test(source)) {
+    errors.push("backup: the bridge must keep the picked folder's grant across restarts");
+  }
+  if (!/\bcreateDocument\s*\(/.test(source) || !/\bdeleteDocument\s*\(/.test(source)) {
+    errors.push("backup: the bridge must probe by creating and deleting a file");
+  }
+  return errors;
+}
+
+/**
  * The activity handles rotation, split-screen and a system font-size change itself (it is not
  * recreated, so the open screen, sheet and typed text survive): `configChanges` must keep these.
  */
@@ -263,6 +291,7 @@ export function checkRepoManifest(root) {
   const bridge = join(main, "java", "in", "arena360", "hub", "KeystoreBridge.kt");
   const nsd = join(main, "java", "in", "arena360", "hub", "NsdBridge.kt");
   const bt = join(main, "java", "in", "arena360", "hub", "BluetoothBridge.kt");
+  const backup = join(main, "java", "in", "arena360", "hub", "BackupFolderBridge.kt");
   return [
     ...checkManifest(manifest, res),
     ...checkService(manifest),
@@ -271,6 +300,7 @@ export function checkRepoManifest(root) {
     ...checkKeystore(existsSync(bridge) ? readFileSync(bridge, "utf8") : undefined),
     ...checkNsd(manifest, existsSync(nsd) ? readFileSync(nsd, "utf8") : undefined),
     ...checkBluetooth(manifest, existsSync(bt) ? readFileSync(bt, "utf8") : undefined),
+    ...checkBackupFolder(manifest, existsSync(backup) ? readFileSync(backup, "utf8") : undefined),
   ];
 }
 

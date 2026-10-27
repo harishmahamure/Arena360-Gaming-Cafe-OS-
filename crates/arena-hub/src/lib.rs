@@ -33,6 +33,8 @@ use arena_tasks::{
 use tokio::sync::{Notify, oneshot};
 use tracing_subscriber::EnvFilter;
 
+pub use arena_core::setup::BackupFolder;
+
 static STOP: std::sync::Mutex<Option<Arc<Notify>>> = std::sync::Mutex::new(None);
 
 pub fn stop() {
@@ -45,6 +47,9 @@ pub fn stop() {
 const EXIT_FAILURE: u8 = 1;
 const EXIT_SCHEMA_TOO_NEW: u8 = 2;
 const EXIT_USAGE: u8 = 64;
+
+/// How often the Hub re-checks that the chosen backup folder can still be written.
+const BACKUP_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// What the host process injects into the Hub.
 #[derive(Default)]
@@ -62,6 +67,9 @@ pub struct StartOptions {
     /// The Android shell's Bluetooth SPP bridge. With it the Hub prints through Bluetooth and
     /// LAN (no USB); without it the platform adapter is used.
     pub bluetooth: Option<Arc<dyn arena_tasks::printer::BluetoothLink>>,
+    /// The Android shell's folder access (the document tree the owner picked). With it the Hub
+    /// accepts a picked folder as the backup location and checks it at start and hourly.
+    pub backup_folder: Option<Arc<dyn BackupFolder>>,
 }
 
 pub async fn start(args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
@@ -382,26 +390,29 @@ async fn run(
         },
     };
     tracing::info!(adapter = ?cfg.printer, "printer adapter ready");
-    let ui_auth = Arc::new(
-        arena_api::UiAuth::new(
-            Arc::clone(&staff),
-            Arc::clone(&snapshots),
-            writer.clone(),
-            Arc::clone(&clock),
-        )
-        .with_status(status_rx.clone())
-        .with_presence(lan_hub.presence())
-        .with_printer(printer)
-        .with_pairing(pairing)
-        .with_pair_gate(pair_gate.clone())
-        .with_player_kek(Arc::new(
-            arena_tasks::KeystoreKek::new(match &secrets {
-                Some(s) => Box::new(Arc::clone(&s.kek)),
-                None => arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
-            })
-            .refusing_while_lost(pair_gate.clone()),
-        )),
-    );
+    let backup_folder = options.backup_folder.take();
+    let mut ui_auth = arena_api::UiAuth::new(
+        Arc::clone(&staff),
+        Arc::clone(&snapshots),
+        writer.clone(),
+        Arc::clone(&clock),
+    )
+    .with_status(status_rx.clone())
+    .with_presence(lan_hub.presence())
+    .with_printer(printer)
+    .with_pairing(pairing)
+    .with_pair_gate(pair_gate.clone())
+    .with_player_kek(Arc::new(
+        arena_tasks::KeystoreKek::new(match &secrets {
+            Some(s) => Box::new(Arc::clone(&s.kek)),
+            None => arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
+        })
+        .refusing_while_lost(pair_gate.clone()),
+    ));
+    if let Some(folder) = &backup_folder {
+        ui_auth = ui_auth.with_backup_folder(Arc::clone(folder));
+    }
+    let ui_auth = Arc::new(ui_auth);
     let cloud = CloudClient::new(&CloudEndpoint {
         host: cfg.cloud_host.clone(),
         plain_http: cfg.cloud_plain_http,
@@ -505,6 +516,15 @@ async fn run(
         writer.as_ref().map(|w| w.subscribe()),
         status_tx.clone(),
     ));
+    let backup_job = backup_folder.map(|folder| {
+        tokio::spawn(arena_core::setup::watch_backup_folder(
+            Arc::clone(&snapshots),
+            writer.as_ref().map(|w| w.subscribe()),
+            status_tx.clone(),
+            folder,
+            BACKUP_CHECK_EVERY,
+        ))
+    });
     let router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
         .merge(arena_api::ui_router(
             snapshots,
@@ -619,6 +639,10 @@ async fn run(
     let _ = command_job.await;
     setup_job.abort();
     let _ = setup_job.await;
+    if let Some(job) = backup_job {
+        job.abort();
+        let _ = job.await;
+    }
     if let Some(job) = test_session_job {
         job.abort();
         let _ = job.await;

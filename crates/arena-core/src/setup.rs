@@ -85,6 +85,83 @@ pub fn backup_dir_error(problem: BackupDirProblem) -> AppError {
     )
 }
 
+/// A folder the platform grants access to by a URI rather than a path (the Android folder picker
+/// returns `content://` tree URIs). The Android shell supplies one; the Hub never reads a URI
+/// itself.
+pub trait BackupFolder: Send + Sync {
+    /// Creates and deletes a probe file in the folder. Blocking.
+    fn probe(&self, location: &str) -> Result<(), BackupDirProblem>;
+}
+
+/// Checks a stored backup location: a tree URI through `folder`, anything else as a path.
+pub fn probe_location(
+    folder: Option<&dyn BackupFolder>,
+    location: &str,
+) -> Result<(), BackupDirProblem> {
+    if arena_proto::is_backup_tree_uri(location) {
+        return folder.map_or(Err(BackupDirProblem::NotFound), |f| f.probe(location));
+    }
+    probe_backup_dir(Path::new(location))
+}
+
+/// How long one check of the chosen folder may take before it counts as unavailable.
+const BACKUP_WATCH_PROBE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Checks the chosen backup folder at start, whenever the backup location changes and then every
+/// `every`. While it cannot be written, setup status reports the location as not set (the System
+/// screen then offers "Choose again"); the next good check restores it. Runs until aborted.
+pub async fn watch_backup_folder(
+    reader: Arc<SnapshotReader>,
+    events: Option<broadcast::Receiver<Applied>>,
+    status: watch::Sender<HubStatus>,
+    folder: Arc<dyn BackupFolder>,
+    every: std::time::Duration,
+) {
+    let mut events = events;
+    loop {
+        let r = Arc::clone(&reader);
+        let f = Arc::clone(&folder);
+        let job = tokio::task::spawn_blocking(move || match r.setting_value(KEY_BACKUP_DIR) {
+            Ok(Some(v)) if !v.trim().is_empty() => probe_location(Some(&*f), &v).is_err(),
+            Ok(_) => false,
+            // A read failure says nothing about the folder: keep the last answer.
+            Err(_) => r.backup_unavailable(),
+        });
+        let unavailable = match tokio::time::timeout(BACKUP_WATCH_PROBE, job).await {
+            Ok(Ok(unavailable)) => unavailable,
+            Ok(Err(_)) => false,
+            Err(_) => {
+                tracing::warn!("the backup folder check timed out");
+                true
+            }
+        };
+        if reader.set_backup_unavailable(unavailable) {
+            tracing::info!(unavailable, "the backup folder changed availability");
+            refresh(&reader, &status).await;
+        }
+        let wait = tokio::time::sleep(every);
+        tokio::pin!(wait);
+        loop {
+            let Some(rx) = events.as_mut() else {
+                (&mut wait).await;
+                break;
+            };
+            tokio::select! {
+                () = &mut wait => break,
+                got = rx.recv() => match got {
+                    Ok(applied) => {
+                        if applied.changes.iter().any(|c| c.tbl == "settings") {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => break,
+                    Err(broadcast::error::RecvError::Closed) => events = None,
+                },
+            }
+        }
+    }
+}
+
 async fn refresh(reader: &Arc<SnapshotReader>, status: &watch::Sender<HubStatus>) {
     let r = Arc::clone(reader);
     match tokio::task::spawn_blocking(move || r.setup()).await {
@@ -256,6 +333,28 @@ mod tests {
             .collect()
     }
 
+    struct Folder(Result<(), BackupDirProblem>);
+
+    impl BackupFolder for Folder {
+        fn probe(&self, _location: &str) -> Result<(), BackupDirProblem> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_tree_uri_goes_to_the_platform_folder_and_a_path_to_the_disk() {
+        let tree = "content://com.android.externalstorage.documents/tree/primary%3ABk";
+        assert_eq!(probe_location(Some(&Folder(Ok(()))), tree), Ok(()));
+        assert_eq!(
+            probe_location(Some(&Folder(Err(BackupDirProblem::NotWritable))), tree),
+            Err(BackupDirProblem::NotWritable)
+        );
+        assert_eq!(probe_location(None, tree), Err(BackupDirProblem::NotFound));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let refusing = Folder(Err(BackupDirProblem::NotFound));
+        assert_eq!(probe_location(Some(&refusing), &path), Ok(()));
+    }
     #[test]
     fn a_writable_dir_passes_and_the_probe_is_removed() {
         let dir = tempfile::tempdir().unwrap();

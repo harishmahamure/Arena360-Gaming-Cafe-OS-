@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import kotlin.math.roundToInt
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   companion object {
@@ -23,6 +24,11 @@ class MainActivity : TauriActivity() {
 
     /** Tells the Settings → Printer page the Bluetooth permission prompt was answered. */
     private const val BLUETOOTH_SCRIPT = "window.dispatchEvent(new Event('arena:bluetooth'))"
+
+    /** Tells Settings → System the folder picker closed; `detail.uri` is the chosen tree or null. */
+    private fun backupFolderScript(uri: String?) =
+      "window.dispatchEvent(new CustomEvent('arena:backup-folder', { detail: { uri: " +
+        (if (uri == null) "null" else JSONObject.quote(uri)) + " } }))"
 
     /** The text zoom (percent) for a system font scale: it follows the scale, capped at 130%. */
     fun textZoomFor(fontScale: Float): Int = (fontScale * 100).roundToInt().coerceAtMost(MAX_TEXT_ZOOM)
@@ -59,6 +65,16 @@ class MainActivity : TauriActivity() {
       webView?.evaluateJavascript(BLUETOOTH_SCRIPT, null)
     }
   }
+
+  // Asked from Settings → System; the page waits for the `arena:backup-folder` event. The grant is
+  // kept here, before the page sees the folder, so the Hub can write there after a restart.
+  private val backupFolder =
+    registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+      val kept = tree != null && BackupFolderBridge.keep(this, tree)
+      webView?.evaluateJavascript(backupFolderScript(if (kept) tree.toString() else null), null)
+    }
+
+  fun pickBackupFolder() = backupFolder.launch(null)
 
   fun askNotifications(done: () -> Unit) {
     afterNotifications = done

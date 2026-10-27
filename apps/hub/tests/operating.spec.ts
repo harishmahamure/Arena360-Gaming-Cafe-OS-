@@ -35,6 +35,7 @@ type Sent = {
   given?: boolean;
   policy_version?: number;
   base_rev?: number;
+  ticket?: string;
 };
 type Hub = {
   settings: Map<string, { value: string; rev: number }>;
@@ -43,6 +44,8 @@ type Hub = {
   hc: boolean;
   refuse: { status: number; body: unknown } | null;
   queues: Set<string[]>;
+  backupUnavailable: boolean;
+  elevations: number;
 };
 
 function newHub(): Hub {
@@ -61,6 +64,8 @@ function newHub(): Hub {
     hc: false,
     refuse: null,
     queues: new Set(),
+    backupUnavailable: false,
+    elevations: 0,
   };
 }
 
@@ -85,7 +90,8 @@ function snapshot(hub: Hub): HubSnapshot {
     connectivity: { state: "online", checked_at: null },
     setup: {
       opening_hours_set: hub.settings.get("branch.opening_hours_set")!.value === "true",
-      backup_location_set: hub.settings.get("system.backup_dir")!.value !== "",
+      backup_location_set:
+        hub.settings.get("system.backup_dir")!.value !== "" && !hub.backupUnavailable,
       ad_consent: hub.adConsent,
       printer: "unset",
       products_count: 0,
@@ -138,6 +144,15 @@ async function stub(page: Page, hub: Hub, token: string) {
           200,
           [...hub.settings].map(([key, row]) => ({ key, ...row })),
         );
+      case "/ui/elevate": {
+        if (!STAFF[auth]) return json(route, 401, AUTH_FAILED);
+        const body = req.postDataJSON() as { items: unknown[]; pin: string };
+        if (body.pin !== "2222") {
+          return json(route, 403, { code: "PIN_REJECTED", message: "that PIN can't approve this" });
+        }
+        hub.elevations++;
+        return json(route, 200, { ticket: "T1", items: body.items, expires_in_s: 60 });
+      }
       case "/ui/events": {
         const t = url.searchParams.get("token") ?? "";
         if (!STAFF[t]) return json(route, 401, AUTH_FAILED);
@@ -150,20 +165,21 @@ async function stub(page: Page, hub: Hub, token: string) {
       }
       case "/ui/intent": {
         if (!STAFF[auth]) return json(route, 401, AUTH_FAILED);
-        const { intent } = req.postDataJSON() as {
+        const { intent, elevation_ticket: ticket } = req.postDataJSON() as {
+          elevation_ticket?: string;
           intent: {
             base_rev?: number;
             payload: { kind: string; key?: string; value?: string; given?: boolean };
           };
         };
         const p = intent.payload;
-        hub.intents.push({ ...p, base_rev: intent.base_rev });
+        hub.intents.push({ ...p, base_rev: intent.base_rev, ...(ticket ? { ticket } : {}) });
         if (hub.refuse) {
           const answer = hub.refuse;
           hub.refuse = null;
           return json(route, answer.status, answer.body);
         }
-        if (!STAFF[auth].permissions.includes("settings.edit")) {
+        if (!ticket && !STAFF[auth].permissions.includes("settings.edit")) {
           return json(route, 403, { code: "PERMISSION_DENIED", message: "denied" });
         }
         const key = p.kind === "ads.consent" ? "branch.ads_consent" : p.key!;
@@ -574,4 +590,135 @@ test("Ads withdraws a given consent and records it", async ({ page }) => {
     en["hub.settings.ads.withdrawn"].split("{date}")[0],
   );
   await expect(tick).not.toBeChecked();
+});
+
+const TREE = "content://com.android.externalstorage.documents/tree/1A2B-3C4D%3ABackups";
+
+type Folders = { picked: string[]; kept: string[]; next: string | null };
+
+/** The Android shell's folder picker: it answers with `arena:backup-folder` and a tree URI. */
+async function androidFolders(page: Page, next: string | null = TREE) {
+  await page.addInitScript((initial) => {
+    const w = window as unknown as { __folders: Folders };
+    w.__folders = { picked: [], kept: [], next: initial };
+    (window as unknown as { ArenaHub: unknown }).ArenaHub = {
+      state: () => JSON.stringify({ notifications: true, battery_exempt: true, asked: true }),
+      pickBackupFolder: () => {
+        w.__folders.picked.push("opened");
+        setTimeout(
+          () =>
+            window.dispatchEvent(
+              new CustomEvent("arena:backup-folder", { detail: { uri: w.__folders.next } }),
+            ),
+          200,
+        );
+      },
+      keepBackupFolder: (tree: string) => w.__folders.kept.push(tree),
+    };
+  }, next);
+}
+
+const folders = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __folders: Folders }).__folders);
+
+test("on Android, System picks the backup folder with the system picker and keeps its grant", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await androidFolders(page);
+  await open(page, hub, "/settings/system");
+  await expect(page.getByTestId("system-backup-folder")).toHaveText(
+    en["hub.settings.system.not_set"],
+  );
+  await expect(page.getByLabel(en["hub.settings.system.backup_dir"])).toHaveCount(0);
+  await expect(save(page)).toHaveCount(0);
+  const choose = page.getByRole("button", { name: en["hub.settings.system.choose"] });
+  await expectTarget(choose);
+  await expectNoSeriousAxe(page);
+  await choose.click();
+  await expect(page.getByTestId("system-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents).toEqual([
+    { kind: "settings.set", key: "system.backup_dir", value: TREE, base_rev: 1 },
+  ]);
+  expect((await folders(page)).kept).toEqual([TREE]);
+  await expect(page.getByTestId("system-backup-folder")).toHaveText("1A2B-3C4D:Backups");
+  await expect(page.getByTestId("system-backup-unavailable")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: en["hub.settings.system.change"] })).toBeVisible();
+});
+
+test("on Android, a cancelled picker changes nothing and a folder the Hub cannot write shows its reason", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await androidFolders(page, null);
+  await open(page, hub, "/settings/system");
+  await page.getByRole("button", { name: en["hub.settings.system.choose"] }).click();
+  await expect.poll(async () => (await folders(page)).picked.length).toBe(1);
+  await expect(page.getByRole("button", { name: en["hub.settings.system.choose"] })).toBeEnabled();
+  expect(hub.intents).toEqual([]);
+  await page.evaluate((tree) => {
+    (window as unknown as { __folders: Folders }).__folders.next = tree;
+  }, TREE);
+  hub.refuse = {
+    status: 422,
+    body: { code: "VALIDATION_FAILED", message: "not_writable", field: "system.backup_dir" },
+  };
+  await page.getByRole("button", { name: en["hub.settings.system.choose"] }).click();
+  await expect(page.getByTestId("system-backup-error")).toContainText(
+    en["hub.settings.system.invalid.not_writable"],
+  );
+  expect((await folders(page)).kept).toEqual([]);
+  await expect(page.getByTestId("system-backup-folder")).toHaveText(
+    en["hub.settings.system.not_set"],
+  );
+});
+
+test("on Android, an unplugged or revoked folder shows 'Backup folder not available' with Choose again", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.settings.set("system.backup_dir", { value: TREE, rev: 2 });
+  hub.backupUnavailable = true;
+  await androidFolders(page);
+  await open(page, hub, "/settings/system");
+  const alert = page.getByTestId("system-backup-unavailable");
+  await expect(alert).toContainText(en["hub.settings.system.unavailable"]);
+  await expect(page.getByTestId("system-backup-folder")).toHaveText("1A2B-3C4D:Backups");
+  await expectNoSeriousAxe(page);
+  hub.backupUnavailable = false;
+  await page.getByRole("button", { name: en["hub.settings.system.choose_again"] }).click();
+  await expect(page.getByTestId("system-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents.at(-1)).toEqual({
+    kind: "settings.set",
+    key: "system.backup_dir",
+    value: TREE,
+    base_rev: 2,
+  });
+  await expect(alert).toHaveCount(0);
+});
+
+test("on Android, a Counter needs a manager's PIN before the picker opens, and the change carries the ticket", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await androidFolders(page);
+  await open(page, hub, "/settings/system", "counter-token");
+  await page.getByRole("button", { name: en["hub.settings.system.choose"] }).click();
+  const approval = page.getByTestId("system-approval");
+  await expect(approval).toBeVisible();
+  expect((await folders(page)).picked).toEqual([]);
+  await approval.getByLabel(en["ui.pin.label"]).focus();
+  await page.keyboard.type("9999");
+  await page.keyboard.press("Enter");
+  await expect(approval).toContainText(en["ui.pin.rejected"]);
+  expect((await folders(page)).picked).toEqual([]);
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("system-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.elevations).toBe(1);
+  expect((await folders(page)).picked).toEqual(["opened"]);
+  expect(hub.intents).toEqual([
+    { kind: "settings.set", key: "system.backup_dir", value: TREE, base_rev: 1, ticket: "T1" },
+  ]);
+  await expect(approval).toHaveCount(0);
 });

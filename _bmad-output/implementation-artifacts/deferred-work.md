@@ -376,3 +376,10 @@
 - No `arena-hub` test starts the Hub with `StartOptions.bluetooth = Some(FakeBluetooth)`; blocked by the `USER_LIMIT` integration test failures on master.
 - `arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::tests::a_printer_that_stops_reading_times_out` fail on master too (checked at the commit before this story).
 - Bluetooth list is not filtered by device class; discovery and `access` are read separately in `find`.
+
+## Deferred from: Story 4.7
+
+- Nothing writes backups yet; the folder is only chosen, checked and watched. The export (Story 9.4/9.5) must write through `DocumentsContract` for a `content://` location (the bridge has the probe only), and raise the header `alert-badge` "Backup folder not available" (Story 9.16) from the same availability flag.
+- The availability watch runs only when the shell supplies a `BackupFolder` (Android); a Windows path that goes missing after it was saved is not rechecked.
+- A `PIN_REQUIRED` answer to a Manager-less save after the picker closed drops the picked folder (the page asks for the PIN, then opens the picker again); the Counter path asks for the PIN first, so this only happens if permissions change mid-flow.
+- `backup_jni.rs`, `BackupFolderBridge.kt`, the folder picker, a USB OTG drive and an unplug are not exercised here (no Android build or device).

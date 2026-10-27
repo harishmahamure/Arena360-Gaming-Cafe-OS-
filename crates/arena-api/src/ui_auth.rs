@@ -408,6 +408,7 @@ pub struct UiAuth {
     presence: crate::lan::Presence,
     backup_probe: BackupProbe,
     backup_probe_timeout: std::time::Duration,
+    backup_folder: Option<Arc<dyn arena_core::setup::BackupFolder>>,
     printer: Option<Arc<dyn arena_core::printer::Printer>>,
     printer_find: tokio::sync::Mutex<()>,
     printer_job: tokio::sync::Mutex<()>,
@@ -462,6 +463,7 @@ impl UiAuth {
             presence: crate::lan::Presence::none(),
             backup_probe: Arc::new(arena_core::setup::probe_backup_dir),
             backup_probe_timeout: BACKUP_PROBE_TIMEOUT,
+            backup_folder: None,
             printer: None,
             printer_find: tokio::sync::Mutex::new(()),
             printer_job: tokio::sync::Mutex::new(()),
@@ -551,6 +553,13 @@ impl UiAuth {
         self
     }
 
+    /// Checks a folder chosen through the platform picker (a tree URI) with `folder` instead of the
+    /// disk; without it such a location is refused.
+    pub fn with_backup_folder(mut self, folder: Arc<dyn arena_core::setup::BackupFolder>) -> Self {
+        self.backup_folder = Some(folder);
+        self
+    }
+
     async fn probe_backup_dir(
         &self,
         intent: &arena_proto::Intent,
@@ -562,7 +571,7 @@ impl UiAuth {
         if set.key != arena_proto::KEY_BACKUP_DIR
             || !authorized
             || intent.kind != intent.payload.kind()
-            || !arena_proto::is_absolute_path(&set.value)
+            || !arena_proto::is_backup_location(&set.value)
         {
             return Ok(());
         }
@@ -577,9 +586,17 @@ impl UiAuth {
         if replay || rev.is_none() || rev != intent.base_rev {
             return Ok(());
         }
-        let probe = Arc::clone(&self.backup_probe);
-        let path = std::path::PathBuf::from(&set.value);
-        let job = tokio::task::spawn_blocking(move || probe(&path));
+        let job = if arena_proto::is_backup_tree_uri(&set.value) {
+            let folder = self.backup_folder.clone();
+            let location = set.value.clone();
+            tokio::task::spawn_blocking(move || {
+                arena_core::setup::probe_location(folder.as_deref(), &location)
+            })
+        } else {
+            let probe = Arc::clone(&self.backup_probe);
+            let path = std::path::PathBuf::from(&set.value);
+            tokio::task::spawn_blocking(move || probe(&path))
+        };
         match tokio::time::timeout(self.backup_probe_timeout, job).await {
             Ok(Ok(Ok(()))) => Ok(()),
             Ok(Ok(Err(problem))) => Err(ui_error(arena_core::setup::backup_dir_error(problem))),
@@ -6823,6 +6840,99 @@ pub(crate) mod tests {
         assert_eq!(calls_now(), 1, "a replay never probes");
     }
 
+    struct ScriptedFolder(Option<arena_proto::BackupDirProblem>);
+
+    impl arena_core::setup::BackupFolder for ScriptedFolder {
+        fn probe(&self, _location: &str) -> Result<(), arena_proto::BackupDirProblem> {
+            self.0.map_or(Ok(()), Err)
+        }
+    }
+
+    fn with_folder(hub: &mut Hub, folder: Option<ScriptedFolder>) {
+        let mut auth = UiAuth::new(
+            Arc::new(StaffDirectory::open(&hub.path).unwrap()),
+            Arc::new(SnapshotReader::open(&hub.path).unwrap()),
+            Some(hub.writer.clone()),
+            hub.clock.clone(),
+        );
+        if let Some(folder) = folder {
+            auth = auth.with_backup_folder(Arc::new(folder));
+        }
+        let auth = Arc::new(auth);
+        hub.app = ui_auth_router(Arc::clone(&auth));
+        hub.auth = auth;
+    }
+
+    const TREE: &str = "content://com.android.externalstorage.documents/tree/1A2B-3C4D%3ABk";
+
+    #[tokio::test]
+    async fn a_folder_the_picker_chose_is_saved_after_the_platform_probe() {
+        let mut hub = hub().await;
+        with_folder(&mut hub, Some(ScriptedFolder(None)));
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (status, body) = post_intent(
+            &hub,
+            &token,
+            set_body(&hub, "system.backup_dir", TREE, None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(setting_value(&hub, "system.backup_dir"), TREE);
+    }
+
+    #[tokio::test]
+    async fn a_folder_the_platform_cannot_write_is_refused_with_its_reason() {
+        for (problem, reason) in [
+            (arena_proto::BackupDirProblem::NotWritable, "not_writable"),
+            (arena_proto::BackupDirProblem::NotFound, "not_found"),
+        ] {
+            let mut hub = hub().await;
+            with_folder(&mut hub, Some(ScriptedFolder(Some(problem))));
+            let token = token_for(&hub, "manager", "m-pass").await;
+            let before = change_count(&hub);
+            let (status, body) = post_intent(
+                &hub,
+                &token,
+                set_body(&hub, "system.backup_dir", TREE, None),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert_eq!(body["field"], "system.backup_dir");
+            assert_eq!(body["message"], reason);
+            assert_eq!(change_count(&hub), before);
+            assert_eq!(setting_value(&hub, "system.backup_dir"), "");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_picker_folder_is_refused_on_a_hub_with_no_platform_folder() {
+        let mut hub = hub().await;
+        with_folder(&mut hub, None);
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (status, body) = post_intent(
+            &hub,
+            &token,
+            set_body(&hub, "system.backup_dir", TREE, None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["message"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn a_counter_changes_the_folder_only_with_a_manager_ticket() {
+        let mut hub = hub().await;
+        with_folder(&mut hub, Some(ScriptedFolder(None)));
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, body) = post_intent(
+            &hub,
+            &counter,
+            set_body(&hub, "system.backup_dir", TREE, None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(setting_value(&hub, "system.backup_dir"), "");
+    }
     #[tokio::test]
     async fn a_probe_that_hangs_times_out_as_not_writable() {
         let mut hub = hub().await;

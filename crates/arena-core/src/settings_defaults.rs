@@ -323,7 +323,7 @@ impl SettingRule {
             Self::OpeningHours => arena_proto::parse_opening_hours(value).is_ok(),
             Self::Path => {
                 value.is_empty()
-                    || (arena_proto::is_absolute_path(value)
+                    || (arena_proto::is_backup_location(value)
                         && value.trim() == value
                         && !value.chars().any(char::is_control))
             }
@@ -524,6 +524,8 @@ mod tests {
         assert!(dir.accepts("") && dir.accepts("/mnt/backup") && dir.accepts(r"D:\Backups"));
         assert!(!dir.accepts("/mnt/x\n") && !dir.accepts(" /mnt") && !dir.accepts("/mnt\u{7}"));
         assert!(!dir.accepts("backups") && !dir.accepts("./b"));
+        assert!(dir.accepts("content://com.android.externalstorage.documents/tree/primary%3ABk"));
+        assert!(!dir.accepts("content://") && !dir.accepts("content://a\n"));
         let consent = rule("branch.ads_consent");
         assert!(consent.accepts(DEFAULT_ADS_CONSENT));
         assert!(!consent.accepts("yes"));

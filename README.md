@@ -1789,6 +1789,25 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   (`printer.status`) still records test prints only. CI runs the adapter against `FakeBluetooth`.
   Not runnable locally: the Gradle/Kotlin build, `bt_jni.rs` on the Android target, the permission
   prompt and a real SPP printer.
+- **Backup folder (Story 4.7):** Settings → System on the Android Hub has no path field: **Choose
+  folder** opens the system folder picker (`ACTION_OPEN_DOCUMENT_TREE`, so Downloads, internal
+  storage and a USB OTG drive) through `ArenaHub.pickBackupFolder()`, and `MainActivity` keeps the
+  read/write grant (`takePersistableUriPermission`) before answering the page with an
+  `arena:backup-folder` event (`detail.uri`, null if cancelled). The URI (`content://…/tree/…`) is
+  saved as `system.backup_dir` (`arena_proto::is_backup_tree_uri`); no storage permission is ever
+  requested (`check-android.mjs` rejects `READ/WRITE/MANAGE_EXTERNAL_STORAGE`). Before saving, the
+  Hub probes the folder through the `BackupFolder` trait (`StartOptions.backup_folder`, `backup_jni.rs`
+  over the Kotlin `BackupFolderBridge`): it creates and deletes `.arena360-write-test-…` through
+  `DocumentsContract`, and a failure is `VALIDATION_FAILED` `not_found|not_dir|not_writable` shown
+  inline. After the Hub accepts a folder, `ArenaHub.keepBackupFolder()` releases the grants for any
+  other folder. **Availability:** `arena_core::setup::watch_backup_folder` rechecks the stored
+  location at start, whenever settings change and then hourly (10 s bound); while it cannot be
+  written, `SnapshotReader` reports `setup.backup_location_set = false` (the setting is kept) and
+  System shows "Backup folder not available" with **Choose again**. A Counter (no `settings.edit`)
+  gets `inline-pin` first; the manager's ticket rides the `settings.set` intent, so the audit row
+  carries both actors. The Windows Hub keeps the typed path and Browse. Not runnable locally: the
+  Gradle/Kotlin build, `backup_jni.rs` on the Android target, the real picker, a USB OTG drive and
+  an unplug.
 - **Build:** `pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64`
   (debug APK) and `... --aab --target aarch64 --target x86_64` (release AAB). Needs the Android SDK
   (platform 36), the NDK from the pin table (`NDK_HOME`), JDK 17 and the Rust Android targets.

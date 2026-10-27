@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+use arena_hub::BackupFolder;
 use arena_proto::DeviceSpec;
 use arena_tasks::printer::BluetoothLink;
 use arena_tasks::{Advertiser, NetworkName, SecretWrapper};
@@ -11,6 +12,7 @@ use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
 use tauri::{AppHandle, Manager};
 
+use crate::backup_jni;
 use crate::bt_jni;
 use crate::keystore_jni::JniWrapper;
 use crate::nsd_jni;
@@ -56,6 +58,7 @@ struct Services {
     advertiser: Box<dyn Advertiser>,
     network: Arc<dyn NetworkName>,
     bluetooth: Option<Arc<dyn BluetoothLink>>,
+    backup_folder: Option<Arc<dyn BackupFolder>>,
 }
 
 fn run_hub(dir: PathBuf, services: Services) {
@@ -66,6 +69,7 @@ fn run_hub(dir: PathBuf, services: Services) {
         network_wake: Some(nsd_jni::network_wake()),
         network_name: Some(services.network),
         bluetooth: services.bluetooth,
+        backup_folder: services.backup_folder,
     };
     let spawned = std::thread::Builder::new()
         .name("arena-hub".into())
@@ -168,11 +172,21 @@ pub extern "system" fn Java_in_arena360_hub_HubService_nativeStart(
             None
         }
     };
+    // Without the bridge a picked folder is refused and the backup location stays unset.
+    let backup_folder = match backup_jni::connect(&mut env) {
+        Ok(folder) => Some(folder),
+        Err(e) => {
+            let _ = env.exception_clear();
+            eprintln!("arena-hub: the backup folder bridge is unavailable: {e}");
+            None
+        }
+    };
     let services = Services {
         wrapper,
         advertiser,
         network,
         bluetooth,
+        backup_folder,
     };
     jboolean::from(ensure(&dir, services).ok())
 }

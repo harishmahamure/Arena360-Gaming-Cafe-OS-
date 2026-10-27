@@ -110,7 +110,10 @@ fn highest_id(conn: &Connection, kind: AdKind) -> Result<i64, AppError> {
 /// cursor. An acknowledgement beyond any id this table has given is held to the highest id (a
 /// cursor never points past what exists).
 pub fn ad_acknowledge(conn: &Connection, kind: AdKind, through: i64) -> Result<i64, AppError> {
-    let cursor = through.clamp(0, highest_id(conn, kind)?);
+    // Monotonic: a stale or lower answer never moves the cursor back over rows already dropped.
+    let cursor = through
+        .clamp(0, highest_id(conn, kind)?)
+        .max(ad_cursor(conn, kind)?);
     conn.execute(
         &format!(
             "UPDATE {} SET through_id = ?1 WHERE id = 1",
@@ -202,6 +205,9 @@ mod tests {
         assert_eq!(ad_rows_after(c, AdKind::Request, 0, 10).unwrap().len(), 2);
         // Beyond anything given: held to the highest id; the other table is untouched.
         assert_eq!(ad_acknowledge(c, AdKind::Request, 900).unwrap(), 5);
+        // A lower (stale) answer never moves the cursor back.
+        assert_eq!(ad_acknowledge(c, AdKind::Request, 2).unwrap(), 5);
+        assert_eq!(ad_cursor(c, AdKind::Request).unwrap(), 5);
         assert_eq!(ad_cursor(c, AdKind::Impression).unwrap(), 0);
         // An id is never used twice, even after its rows were dropped.
         assert_eq!(insert_ad(c, AdKind::Request, "banner", T).unwrap(), 6);

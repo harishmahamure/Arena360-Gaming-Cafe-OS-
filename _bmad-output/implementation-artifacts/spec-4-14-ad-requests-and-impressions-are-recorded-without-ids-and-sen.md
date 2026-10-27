@@ -2,7 +2,7 @@
 title: 'Story 4.14: Ad requests and impressions are recorded without ids and sent with the heartbeat only'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_revision: '08d33084290ab4817a522f6cbff3ece956d72dd2'
 review_loop_iteration: 0
 context:

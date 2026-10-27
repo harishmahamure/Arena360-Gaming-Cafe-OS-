@@ -525,13 +525,8 @@ impl WriterHandle {
         .await
     }
 
-    /// Brings an upgraded branch up to the current defaults (and the manager verifier's history
-    /// up to date with the staff rows): when the branch exists and lacks
-    /// default settings, built-in roles or their permission rows, submits `branch.seed_defaults`
-    /// (system actor) through `apply()` in the same transaction as the check, then emits. With
-    /// nothing missing (or no branch) it writes nothing, submits no intent and answers `None`.
     /// The ad rows after the cursors, as the totals the next Free heartbeat carries (Story 4.14).
-    /// Reads only; `NOT_PRIMARY` unless this writer still holds its epoch.
+    /// Writes nothing; `NOT_PRIMARY` unless this writer still holds its epoch.
     pub async fn ad_pending(&self) -> Result<crate::AdPending, AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();
@@ -564,6 +559,11 @@ impl WriterHandle {
         .await
     }
 
+    /// Brings an upgraded branch up to the current defaults (and the manager verifier's history
+    /// up to date with the staff rows): when the branch exists and lacks
+    /// default settings, built-in roles or their permission rows, submits `branch.seed_defaults`
+    /// (system actor) through `apply()` in the same transaction as the check, then emits. With
+    /// nothing missing (or no branch) it writes nothing, submits no intent and answers `None`.
     pub async fn seed_defaults(&self) -> Result<Option<Applied>, AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();

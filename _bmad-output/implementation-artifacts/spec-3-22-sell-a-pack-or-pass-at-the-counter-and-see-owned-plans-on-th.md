@@ -2,7 +2,7 @@
 title: 'Story 3.22: Sell a Pack or Pass at the Counter and See Owned Plans on the Profile'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'ea44c4f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -77,6 +77,8 @@ deferred: []
 
 ## Review Triage Log
 
+Review 2026-10-27: no blocking findings. fmt, clippy, arena-core/store/api/replay/proto tests, hub check, check:strings and prettier pass.
+
 ## Verification
 
 **Commands:**
@@ -86,6 +88,6 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: fmt, clippy, hub check, string/token/contrast/protocol/layer checks and prettier pass; arena-core, arena-store, arena-api and arena-replay tests pass (proptest at 400 cases); `plan-sales.spec.ts` passes on desktop and phone. Unrelated timing tests fail in arena-tasks (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reading_times_out`) and arena-cloud (`a_double_submitted_code_signs_in_once_and_counts_no_failure`, `unreachable_at_start_retries_then_exits_1_without_logging_the_token`), crates this story only touched for one match arm; `arena-kiosk-svc` test targets do not compile for unrelated unused imports, as before.
 Left for later: spending packs and windows at session start (3.24, 3.27), expiry handling, receipts and invoice numbers (Epic 5), Owner-app views of owned plans.

@@ -46,6 +46,7 @@ mod players;
 mod prepaid;
 mod printer_status;
 mod products;
+pub(crate) mod rate_flip;
 mod rates;
 mod read_grants;
 mod rules;
@@ -179,6 +180,7 @@ pub(crate) enum Target {
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
     CreditAutoPause(Box<credit_pause::PauseTarget>),
     SessionExpire(Box<session_expire::ExpireTarget>),
+    SessionRateFlip(Box<rate_flip::FlipTarget>),
     Alert(Box<alert::AlertTarget>),
 }
 
@@ -255,6 +257,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         )),
         P::CreditAutoPause(p) => Target::CreditAutoPause(Box::new(credit_pause::load(tx, p, now)?)),
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
+        P::SessionRateFlip(f) => Target::SessionRateFlip(Box::new(rate_flip::load(tx, f, now)?)),
         P::AlertRaise(_) | P::AlertAck(_) => {
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }

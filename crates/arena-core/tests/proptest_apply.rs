@@ -210,6 +210,11 @@ enum Op {
     SessionExpire {
         slot: u8,
     },
+    /// The system flips the rate of a running session when a rule boundary has passed (nothing
+    /// due is `STALE`).
+    RateFlip {
+        slot: u8,
+    },
     /// The system raises an alert on a device (a repeat is `STALE`), then staff acknowledge it
     /// (a repeat is `STALE`, an unknown id `NOT_FOUND`).
     Alert {
@@ -449,6 +454,7 @@ fn op() -> impl Strategy<Value = Op> {
             }),
         1 => Just(Op::CreditAutoPause),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
+        2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -2343,6 +2349,50 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 _ => prop_assert_eq!(code(&out), Some((ErrorCode::Stale, None))),
             }
             prop_assert_eq!(hub.change_count(), before);
+        }
+        Op::RateFlip { slot } => {
+            let Some(session) = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .filter(|s| matches!(text(s, "state").as_str(), "active" | "paused"))
+                .nth(usize::from(*slot))
+            else {
+                return Ok(());
+            };
+            let id = text(&session, "id");
+            let before = hub.change_count();
+            let mut intent = hub.intent(
+                IntentPayload::SessionRateFlip(arena_proto::SessionRateFlip {
+                    session_id: id.clone(),
+                }),
+                None,
+            );
+            intent.actor.kind = ActorKind::System;
+            let out = hub.submit_new(intent);
+            match code(&out) {
+                Some((ErrorCode::Stale, _)) => prop_assert_eq!(hub.change_count(), before),
+                Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
+                None => {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert!(hub.change_count() > before);
+                    let open: Vec<_> = hub
+                        .reader
+                        .rows(Table::SessionSegments)
+                        .unwrap()
+                        .into_iter()
+                        .filter(|g| text(g, "session_id") == id && g["to_at"] == RowValue::Null)
+                        .collect();
+                    prop_assert_eq!(open.len(), 1);
+                    if text(&session, "mode") == "wallet" {
+                        let now = hub.reader.rows(Table::Sessions).unwrap();
+                        let s = now.iter().find(|s| text(s, "id") == id).unwrap();
+                        prop_assert!(int(s, "ends_at") >= int(&open[0], "from_at"));
+                        prop_assert!(int(s, "reserved_minor") <= int(&session, "reserved_minor"));
+                    }
+                }
+            }
         }
         Op::CreditAutoPause => {
             let before = hub.change_count();

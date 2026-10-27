@@ -29,12 +29,13 @@
     {#each lines as l, i (i)}
       <li data-testid="bill-line">
         <span
-          >{t("hub.bill.line", {
+          >{t(l.rule_name ? "hub.bill.line_rule" : "hub.bill.line", {
             device: names[l.device_id] ?? "",
             from: formatTime(l.from_at, tz),
             to: formatTime(l.to_at, tz),
             minutes: l.minutes,
             rate: money(l.rate_minor_per_hour),
+            rule: l.rule_name ?? "",
           })}</span
         >
         <span class="amount tabular-nums">{money(l.amount_minor)}</span>

@@ -54,6 +54,12 @@ pub struct SessionExpire {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionRateFlip {
+    pub session_id: String,
+}
+
 /// Minutes before a session's end at which the Hub warns the kiosk, longest first.
 pub const SESSION_WARNING_MARKS_MIN: [u8; 3] = [10, 5, 1];
 
@@ -509,6 +515,10 @@ pub struct BillLine {
     pub rate_minor_per_hour: i64,
     #[ts(type = "number")]
     pub amount_minor: i64,
+    /// The pricing rule that set this line's rate, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rule_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

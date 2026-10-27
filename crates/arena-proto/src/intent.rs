@@ -175,6 +175,11 @@ pub enum IntentKind {
     /// submits it once per session).
     #[serde(rename = "session.expire")]
     SessionExpire,
+    /// Closes a postpaid or wallet session's open rate segment and opens one at the rate its
+    /// group's pricing rules now give (system only; the Hub's timer submits it when a rule
+    /// begins, ends or is edited). Nothing due is `STALE`.
+    #[serde(rename = "session.rate_flip")]
+    SessionRateFlip,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
     /// Opens an alert on a device or the branch (system only; any feature supplies the kind). One
@@ -188,7 +193,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 60] = [
+    pub const ALL: [IntentKind; 61] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -247,6 +252,7 @@ impl IntentKind {
         Self::CreditCollectReverted,
         Self::CreditAutoPause,
         Self::SessionExpire,
+        Self::SessionRateFlip,
         Self::AlertRaise,
         Self::AlertAck,
     ];
@@ -311,6 +317,7 @@ impl IntentKind {
             Self::CreditCollectReverted => "credit.collect.reverted",
             Self::CreditAutoPause => "credit.auto_pause",
             Self::SessionExpire => "session.expire",
+            Self::SessionRateFlip => "session.rate_flip",
             Self::SessionAssignPlayer => "session.assign_player",
             Self::AlertRaise => "alert.raise",
             Self::AlertAck => "alert.ack",
@@ -379,6 +386,7 @@ impl IntentKind {
             | Self::CreditCollectReverted
             | Self::CreditAutoPause
             | Self::SessionExpire
+            | Self::SessionRateFlip
             | Self::AlertRaise
             | Self::AlertAck
             | Self::SessionAssignPlayer => IntentCategory::Session,
@@ -410,7 +418,8 @@ impl IntentKind {
             | Self::StaffSetCredentials
             | Self::CreditAutoPause
             | Self::AlertRaise
-            | Self::SessionExpire => Requirement::System,
+            | Self::SessionExpire
+            | Self::SessionRateFlip => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
@@ -527,6 +536,7 @@ impl IntentKind {
             | Self::CreditCollectReverted
             | Self::CreditAutoPause
             | Self::SessionExpire
+            | Self::SessionRateFlip
             | Self::AlertRaise
             | Self::AlertAck
             | Self::SessionAssignPlayer => None,
@@ -1005,6 +1015,8 @@ pub enum IntentPayload {
     CreditAutoPause(crate::CreditAutoPause),
     #[serde(rename = "session.expire")]
     SessionExpire(crate::SessionExpire),
+    #[serde(rename = "session.rate_flip")]
+    SessionRateFlip(crate::SessionRateFlip),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
     #[serde(rename = "alert.raise")]
@@ -1073,6 +1085,7 @@ impl IntentPayload {
             Self::CreditCollectReverted(_) => IntentKind::CreditCollectReverted,
             Self::CreditAutoPause(_) => IntentKind::CreditAutoPause,
             Self::SessionExpire(_) => IntentKind::SessionExpire,
+            Self::SessionRateFlip(_) => IntentKind::SessionRateFlip,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
             Self::AlertRaise(_) => IntentKind::AlertRaise,
             Self::AlertAck(_) => IntentKind::AlertAck,
@@ -1291,7 +1304,8 @@ mod tests {
                 | "audit.read_granted"
                 | "credit.auto_pause"
                 | "alert.raise"
-                | "session.expire" => Requirement::System,
+                | "session.expire"
+                | "session.rate_flip" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }

@@ -61,6 +61,7 @@ export type IntentKind =
   | "credit.collect.reverted"
   | "credit.auto_pause"
   | "session.expire"
+  | "session.rate_flip"
   | "session.assign_player"
   | "alert.raise"
   | "alert.ack";

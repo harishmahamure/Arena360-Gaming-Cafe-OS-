@@ -2,16 +2,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arena_core::{
-    Applied, Clock, SnapshotReader, TimedSession, TimerAction, TimerEngine, TimerEvent,
+    Applied, Clock, RateFlips, SnapshotReader, TimedSession, TimerAction, TimerEngine, TimerEvent,
     WriterHandle,
 };
-use arena_proto::{Actor, ActorKind, ErrorCode, Intent, IntentKind, IntentPayload, SessionExpire};
+use arena_proto::{
+    Actor, ActorKind, ErrorCode, Intent, IntentKind, IntentPayload, SessionExpire, SessionRateFlip,
+};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
 pub const TIMER_TICK: Duration = Duration::from_secs(1);
 pub const TIMER_RESYNC_TICKS: u32 = 30;
 pub const TIMER_EVENTS_DEPTH: usize = 1024;
+/// The most rounds of rate flips one scan runs: a session found after a long outage takes one
+/// flip per missed rule boundary.
+pub const RATE_FLIP_ROUNDS: u32 = 64;
 
 pub struct SessionTimerTask {
     writer: WriterHandle,
@@ -22,6 +27,14 @@ pub struct SessionTimerTask {
 
 fn touches(applied: &Applied) -> bool {
     applied.changes.iter().any(|c| c.tbl == "sessions")
+}
+
+/// Whether a write may change what a running session should be priced at.
+fn reprices(applied: &Applied) -> bool {
+    applied
+        .changes
+        .iter()
+        .any(|c| matches!(c.tbl.as_str(), "sessions" | "pricing_rules"))
 }
 
 fn expire_intent(session_id: String, now: i64) -> Intent {
@@ -38,6 +51,23 @@ fn expire_intent(session_id: String, now: i64) -> Intent {
         elevated_by: None,
         reason: None,
         payload: IntentPayload::SessionExpire(SessionExpire { session_id }),
+    }
+}
+
+fn flip_intent(session_id: String, now: i64) -> Intent {
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::SessionRateFlip,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: now,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::System,
+            id: "hub".into(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::SessionRateFlip(SessionRateFlip { session_id }),
     }
 }
 
@@ -77,6 +107,51 @@ impl SessionTimerTask {
         }
     }
 
+    async fn scan_flips(&self) -> Option<RateFlips> {
+        let (reader, now) = (Arc::clone(&self.reader), self.clock.now_ms());
+        match tokio::task::spawn_blocking(move || reader.rate_flips(now)).await {
+            Ok(Ok(flips)) => Some(flips),
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), "rate changes not read");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rate change read panicked");
+                None
+            }
+        }
+    }
+
+    /// Applies every rate change due on a running session, one boundary at a time in order, and
+    /// returns when the next rule boundary falls (`None` when none is near or a read failed).
+    async fn flip_rates(&self) -> Option<i64> {
+        for _ in 0..RATE_FLIP_ROUNDS {
+            let flips = self.scan_flips().await?;
+            if flips.due.is_empty() {
+                return flips.next_at;
+            }
+            let mut flipped = false;
+            for session_id in flips.due {
+                match self
+                    .writer
+                    .submit_intent(flip_intent(session_id, self.clock.now_ms()))
+                    .await
+                {
+                    Ok(_) => flipped = true,
+                    Err(e) if e.code == ErrorCode::Stale || e.code == ErrorCode::NotFound => {}
+                    Err(e) => {
+                        tracing::warn!(code = e.code.as_str(), "rate change not recorded");
+                        return None;
+                    }
+                }
+            }
+            if !flipped {
+                break;
+            }
+        }
+        None
+    }
+
     async fn expire(&self, engine: &mut TimerEngine, s: TimedSession) {
         let intent = expire_intent(s.session_id.clone(), self.clock.now_ms());
         match self.writer.submit_intent(intent).await {
@@ -113,6 +188,8 @@ impl SessionTimerTask {
         let mut applied = self.writer.subscribe();
         let mut engine = TimerEngine::new();
         self.sync(&mut engine).await;
+        let mut next_flip_at = None;
+        let mut rescan = true;
         let mut ticks = 0u32;
         let mut tick = tokio::time::interval(TIMER_TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -122,6 +199,11 @@ impl SessionTimerTask {
                     ticks += 1;
                     if ticks.is_multiple_of(TIMER_RESYNC_TICKS) {
                         self.sync(&mut engine).await;
+                        rescan = true;
+                    }
+                    if rescan || next_flip_at.is_some_and(|at| self.clock.now_ms() >= at) {
+                        rescan = false;
+                        next_flip_at = self.flip_rates().await;
                     }
                     for action in engine.tick(self.clock.now_ms()) {
                         match action {
@@ -137,8 +219,16 @@ impl SessionTimerTask {
                     }
                 }
                 ev = applied.recv() => match ev {
-                    Ok(a) if !touches(&a) => {}
-                    Ok(_) | Err(RecvError::Lagged(_)) => self.sync(&mut engine).await,
+                    Ok(a) => {
+                        rescan |= reprices(&a);
+                        if touches(&a) {
+                            self.sync(&mut engine).await;
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        rescan = true;
+                        self.sync(&mut engine).await;
+                    }
                     Err(RecvError::Closed) => return,
                 },
             }
@@ -152,6 +242,7 @@ mod tests {
     use arena_core::{LeaseInfo, ManualClock, Role, Writer, status_channel};
     use arena_proto::{
         BranchBootstrap, ClientClass, DeviceAssign, DeviceRegister, GroupUpsert, PAIR_SYSTEM_ACTOR,
+        RateUpsert, RuleUpsert, SessionMode, SessionStart,
     };
     use arena_store::{LeaseRow, Store, write_lease};
 
@@ -304,6 +395,152 @@ mod tests {
             f.clock.clone(),
             tx,
         )
+    }
+
+    async fn send(f: &Fixture, actor: Actor, payload: IntentPayload) -> Applied {
+        f.writer
+            .submit_intent(intent(actor, payload))
+            .await
+            .unwrap()
+    }
+
+    async fn rule(f: &Fixture, start_min: i64, end_min: i64) {
+        send(
+            f,
+            who(ActorKind::Owner, "o"),
+            IntentPayload::RuleUpsert(RuleUpsert {
+                id: None,
+                name: "Happy hour".into(),
+                group_id: f.group.clone(),
+                rule_kind: "weekly".into(),
+                days_mask: Some(0b111_1111),
+                start_min: Some(start_min),
+                end_min: Some(end_min),
+                date_from: None,
+                date_to: None,
+                adjust_kind: "percent_bp".into(),
+                adjust_value: -5000,
+                priority: 0,
+                active: true,
+            }),
+        )
+        .await;
+    }
+
+    async fn running_postpaid(f: &Fixture) {
+        let owner = || who(ActorKind::Owner, "o");
+        send(
+            f,
+            owner(),
+            IntentPayload::RateUpsert(RateUpsert {
+                group_id: f.group.clone(),
+                price_per_hour_minor: 12_000,
+            }),
+        )
+        .await;
+        send(
+            f,
+            owner(),
+            IntentPayload::SessionStart(SessionStart {
+                device_id: f.device.clone(),
+                mode: SessionMode::Postpaid,
+                player_id: None,
+                pack_id: None,
+                plan_id: None,
+            }),
+        )
+        .await;
+    }
+
+    fn open_segments(f: &Fixture) -> Vec<(i64, i64, bool)> {
+        arena_store::Store::open_reader(&f.path)
+            .unwrap()
+            .live_segments()
+            .unwrap()
+            .into_iter()
+            .map(|g| (g.from_at, g.rate_minor_per_hour, g.rule_id.is_some()))
+            .collect()
+    }
+
+    async fn until_segments(f: &Fixture, n: usize) {
+        for _ in 0..100 {
+            if open_segments(f).len() >= n {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[test]
+    fn a_flip_is_a_system_intent_without_a_base_rev() {
+        let i = flip_intent("S".into(), T0);
+        assert_eq!(i.kind, IntentKind::SessionRateFlip);
+        assert_eq!(i.actor.kind, ActorKind::System);
+        assert!(i.base_rev.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_restart_applies_every_missed_boundary_in_order_at_its_true_time() {
+        let f = fixture().await;
+        running_postpaid(&f).await;
+        rule(&f, 8 * 60 + 30, 9 * 60).await;
+        f.clock.set(T0 + 100 * 60_000);
+        let (tx, _rx) = broadcast::channel(8);
+        let job = tokio::spawn(task(&f, tx).run());
+        until_segments(&f, 3).await;
+        assert_eq!(
+            open_segments(&f),
+            [
+                (T0, 12_000, false),
+                (T0 + 30 * 60_000, 6_000, true),
+                (T0 + 60 * 60_000, 12_000, false)
+            ]
+        );
+        job.abort();
+    }
+
+    #[tokio::test]
+    async fn a_rule_written_mid_session_flips_the_running_session() {
+        let f = fixture().await;
+        running_postpaid(&f).await;
+        f.clock.set(T0 + 10 * 60_000);
+        let (tx, _rx) = broadcast::channel(8);
+        let job = tokio::spawn(task(&f, tx).run());
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert_eq!(open_segments(&f).len(), 1);
+        rule(&f, 8 * 60 + 5, 9 * 60).await;
+        until_segments(&f, 2).await;
+        assert_eq!(
+            open_segments(&f),
+            [(T0, 12_000, false), (T0 + 5 * 60_000, 6_000, true)]
+        );
+        job.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_boundary_that_passes_while_running_flips_on_the_clock() {
+        let f = fixture().await;
+        running_postpaid(&f).await;
+        rule(&f, 8 * 60 + 1, 8 * 60 + 3).await;
+        let (tx, _rx) = broadcast::channel(8);
+        let job = tokio::spawn(task(&f, tx).run());
+        tokio::task::yield_now().await;
+        for _ in 0..200 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            f.clock.advance(1_000);
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        }
+        assert_eq!(
+            open_segments(&f),
+            [
+                (T0, 12_000, false),
+                (T0 + 60_000, 6_000, true),
+                (T0 + 180_000, 12_000, false)
+            ]
+        );
+        job.abort();
     }
 
     #[test]

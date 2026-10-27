@@ -411,6 +411,28 @@ pub fn find_active_rate(conn: &Connection, group_id: &str) -> Result<Option<Rate
     .map_err(db_error)
 }
 
+/// A rate by id, active or not: a running session keeps pricing off the rate it started on.
+pub fn find_rate(conn: &Connection, rate_id: &str) -> Result<Option<RateRow>, AppError> {
+    conn.query_row(
+        "SELECT rate_id, group_id, price_per_hour_minor FROM rates WHERE rate_id = ?1",
+        [rate_id],
+        rate_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Every rate, active or not, by group then id.
+pub fn list_rates(conn: &Connection) -> Result<Vec<RateRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT rate_id, group_id, price_per_hour_minor FROM rates ORDER BY group_id, rate_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], rate_from).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 pub fn list_active_rates(conn: &Connection) -> Result<Vec<RateRow>, AppError> {
     let mut stmt = conn
         .prepare(

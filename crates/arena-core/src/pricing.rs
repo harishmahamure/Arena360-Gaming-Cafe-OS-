@@ -176,6 +176,83 @@ pub fn resolve(
     }
 }
 
+/// A rate change due on a running session: when it takes effect, the rule behind it (none: the
+/// session's base rate) and the rate per hour it sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Flip {
+    pub at: i64,
+    pub rule_id: Option<String>,
+    pub rate_minor: i64,
+}
+
+/// The open segment of a running session: when it began, the rule that set its rate (none: the
+/// base rate) and the rate per hour.
+#[derive(Debug, Clone, Copy)]
+pub struct OpenSegment<'a> {
+    pub from_at: i64,
+    pub rule_id: Option<&'a str>,
+    pub rate_minor: i64,
+}
+
+/// The farthest back, in days, a rate change is looked for.
+const FLIP_LOOKBACK_DAYS: i64 = 400;
+
+/// The next rate change due on a session whose open segment began at `open.from_at` at
+/// `open.rate_minor` under `open.rule_id`, given `base_minor` (the rate the session started on).
+///
+/// It is the first rule boundary in `(from_at, now_ms]` at which the winning rule differs from
+/// the open segment's, at that boundary's own instant. Failing that it is `now_ms` itself when
+/// the rule or rate in effect now differs (a rule was edited or switched off). Otherwise there is
+/// none. Applying it and asking again walks every missed boundary in order.
+pub fn due_flip(
+    rules: &[PricingRuleRow],
+    group_id: &str,
+    base_minor: i64,
+    tz: Tz,
+    open: &OpenSegment<'_>,
+    now_ms: i64,
+) -> Option<Flip> {
+    let (from_at, open_rule_id, open_rate_minor) = (open.from_at, open.rule_id, open.rate_minor);
+    let mine: Vec<&PricingRuleRow> = rules
+        .iter()
+        .filter(|r| r.active && r.group_id == group_id)
+        .collect();
+    let rule_at = |at: i64| {
+        let winner = winner_at(&mine, tz, at);
+        Flip {
+            at,
+            rule_id: winner.map(|r| r.rule_id.clone()),
+            rate_minor: winner.map_or(base_minor, |r| adjusted(base_minor, r)),
+        }
+    };
+    if now_ms > from_at {
+        let first = local_of(from_at, tz)?
+            .date()
+            .max(local_of(now_ms, tz)?.date() - Duration::days(FLIP_LOOKBACK_DAYS));
+        let last = local_of(now_ms, tz)?.date();
+        let mut edges = Vec::new();
+        let mut day = first - Duration::days(1);
+        while day <= last + Duration::days(1) {
+            for r in &mine {
+                boundaries(r, day, tz, now_ms, &mut edges);
+            }
+            day += Duration::days(1);
+        }
+        edges.retain(|t| *t > from_at && *t <= now_ms);
+        edges.sort_unstable();
+        edges.dedup();
+        if let Some(flip) = edges
+            .into_iter()
+            .map(rule_at)
+            .find(|f| f.rule_id.as_deref() != open_rule_id)
+        {
+            return Some(flip);
+        }
+    }
+    let now = rule_at(now_ms);
+    (now.rule_id.as_deref() != open_rule_id || now.rate_minor != open_rate_minor).then_some(now)
+}
+
 /// `rate` repriced at `now_ms` by the pricing rules in effect for its group, with the
 /// resolution (the rule that set the price, if any).
 pub(crate) fn priced(

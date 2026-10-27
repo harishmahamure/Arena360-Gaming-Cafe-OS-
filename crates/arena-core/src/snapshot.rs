@@ -130,6 +130,7 @@ fn bills(
     sessions: &[arena_store::LiveSession],
     segments: &[arena_store::SegmentRow],
     (orders, order_lines): (Vec<arena_store::OpenOrder>, Vec<arena_store::OrderLineRow>),
+    rules: &[arena_store::PricingRuleRow],
     now_ms: i64,
 ) -> Vec<arena_proto::SnapshotBill> {
     let bill = |session_id: String,
@@ -157,13 +158,21 @@ fn bills(
             remaining_minor: subtotal_minor,
         }
     };
+    let rule_name = |id: Option<&str>| {
+        id.and_then(|id| rules.iter().find(|r| r.rule_id == id))
+            .map(|r| r.name.clone())
+    };
     let live = sessions.iter().map(|s| {
         let own: Vec<_> = segments
             .iter()
             .filter(|g| g.session_id == s.id)
             .cloned()
             .collect();
-        let lines = crate::billing::bill(&own, s.rounding_min, s.minimum_min, s.paused_at, now_ms);
+        let mut lines =
+            crate::billing::bill(&own, s.rounding_min, s.minimum_min, s.paused_at, now_ms);
+        for (line, seg) in lines.iter_mut().zip(&own) {
+            line.rule_name = rule_name(seg.rule_id.as_deref());
+        }
         bill(
             s.id.clone(),
             s.device_id.clone(),
@@ -188,6 +197,7 @@ fn bills(
                 minutes: l.minutes,
                 rate_minor_per_hour: l.rate_minor_per_hour,
                 amount_minor: l.amount_minor,
+                rule_name: rule_name(l.rule_id.as_deref()),
             })
             .collect();
         bill(
@@ -243,7 +253,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
-    snapshot.bills = bills(&sessions, &segments, orders, now_ms);
+    snapshot.bills = bills(&sessions, &segments, orders, &rules, now_ms);
     snapshot.alerts = alerts
         .into_iter()
         .filter_map(|a| {
@@ -404,6 +414,62 @@ fn read_locale(store: &Store, now_ms: i64) -> Result<Option<SnapshotLocale>, App
     Ok(Some(snapshot_locale(&rows, now_ms)))
 }
 
+/// What the timer owes running sessions for rule changes: the sessions with a rate change due
+/// now, and the earliest upcoming rule boundary for the others (`None` when no rule is near).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RateFlips {
+    pub due: Vec<String>,
+    pub next_at: Option<i64>,
+}
+
+fn rate_flips_in(store: &Store, now_ms: i64) -> Result<RateFlips, AppError> {
+    let (sessions, segments, rates, rules, branch, settings) = store.read_consistent(|s| {
+        Ok((
+            s.live_sessions()?,
+            s.live_segments()?,
+            s.all_rates()?,
+            s.pricing_rules()?,
+            s.branch_locale()?,
+            s.settings()?,
+        ))
+    })?;
+    let Some(branch) = branch else {
+        return Ok(RateFlips::default());
+    };
+    let tz = crate::locale::resolve(&locale_rows(&branch, &settings), now_ms)
+        .1
+        .tz;
+    let mut out = RateFlips::default();
+    for s in &sessions {
+        let Some(base) = s
+            .rate_id
+            .as_deref()
+            .and_then(|id| rates.iter().find(|r| r.rate_id == id))
+        else {
+            continue;
+        };
+        let own: Vec<_> = segments
+            .iter()
+            .filter(|g| g.session_id == s.id)
+            .cloned()
+            .collect();
+        if crate::apply::rate_flip::pending(s, &own, base, &rules, tz, now_ms).is_some() {
+            out.due.push(s.id.clone());
+        } else if let Some(at) = crate::pricing::resolve(
+            &rules,
+            &base.group_id,
+            base.price_per_hour_minor,
+            tz,
+            now_ms,
+        )
+        .next_change_at
+        {
+            out.next_at = Some(out.next_at.map_or(at, |n| n.min(at)));
+        }
+    }
+    Ok(out)
+}
+
 /// A read-only connection that serves [`HubSnapshot`]s on a primary or a follower.
 pub struct SnapshotReader {
     reader: Mutex<Store>,
@@ -460,6 +526,15 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         crate::session_screen::timed_sessions(&store, now_ms)
+    }
+
+    /// The rate changes due on running sessions at `now_ms`, and when to look again.
+    pub fn rate_flips(&self, now_ms: i64) -> Result<RateFlips, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        rate_flips_in(&store, now_ms)
     }
 
     pub fn settlement(&self, order_id: &str) -> Result<Option<arena_store::Settlement>, AppError> {

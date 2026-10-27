@@ -69,12 +69,12 @@ pub use devices::{
     DeviceMetaRow, DeviceRow, GroupRow, NewDevice, RateRow, ZoneRow, cell_taken,
     count_group_devices, count_groups_without_rate, count_live_devices, count_zone_devices,
     deactivate_rate, devices_meta_exists, find_active_rate, find_device, find_device_meta,
-    find_group, find_group_by_name, find_zone, find_zone_by_name, insert_device,
+    find_group, find_group_by_name, find_rate, find_zone, find_zone_by_name, insert_device,
     insert_device_meta, insert_group, insert_rate, insert_zone, list_active_rates,
-    list_device_meta, list_devices, list_groups, list_zones, set_device_group, set_device_label,
-    set_device_meta_deleted, set_device_place, set_device_reported_version, set_device_revoked,
-    set_device_state, set_group_deleted, set_zone_deleted, tv_number_taken, update_device_meta,
-    update_group, update_zone,
+    list_device_meta, list_devices, list_groups, list_rates, list_zones, set_device_group,
+    set_device_label, set_device_meta_deleted, set_device_place, set_device_reported_version,
+    set_device_revoked, set_device_state, set_group_deleted, set_zone_deleted, tv_number_taken,
+    update_device_meta, update_group, update_zone,
 };
 pub use identity::{
     CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
@@ -116,8 +116,8 @@ pub use sessions::{
     settle_order, sum_reserved_minor,
 };
 pub use sessions::{
-    SessionListing, assign_order_player, assign_session_player, fold_pause, list_sessions_for_day,
-    pause_session, resume_session,
+    SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
+    list_sessions_for_day, pause_session, reprice_wallet_session, resume_session,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
@@ -627,6 +627,14 @@ impl Store {
             return Ok(Vec::new());
         }
         list_active_rates(&self.conn)
+    }
+
+    /// Every rate, active or not.
+    pub fn all_rates(&self) -> Result<Vec<RateRow>, AppError> {
+        if !self.table_exists("rates")? {
+            return Ok(Vec::new());
+        }
+        list_rates(&self.conn)
     }
 
     pub fn groups_without_rate(&self) -> Result<i64, AppError> {

@@ -45,6 +45,7 @@ import type { SessionEndReverted } from "./SessionEndReverted";
 import type { SessionExpire } from "./SessionExpire";
 import type { SessionExtend } from "./SessionExtend";
 import type { SessionPause } from "./SessionPause";
+import type { SessionRateFlip } from "./SessionRateFlip";
 import type { SessionResume } from "./SessionResume";
 import type { SessionSettle } from "./SessionSettle";
 import type { SessionSettleReverted } from "./SessionSettleReverted";
@@ -119,6 +120,7 @@ export type IntentPayload =
   | ({ kind: "credit.collect.reverted" } & CreditCollectReverted)
   | ({ kind: "credit.auto_pause" } & CreditAutoPause)
   | ({ kind: "session.expire" } & SessionExpire)
+  | ({ kind: "session.rate_flip" } & SessionRateFlip)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer)
   | ({ kind: "alert.raise" } & AlertRaise)
   | ({ kind: "alert.ack" } & AlertAck);

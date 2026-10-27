@@ -211,6 +211,7 @@ export type { SessionListView } from "./SessionListView";
 export type { SessionMode } from "./SessionMode";
 export type { SessionOwner } from "./SessionOwner";
 export type { SessionPause } from "./SessionPause";
+export type { SessionRateFlip } from "./SessionRateFlip";
 export type { SessionResume } from "./SessionResume";
 export type { SessionScreen } from "./SessionScreen";
 export type { SessionSettle } from "./SessionSettle";

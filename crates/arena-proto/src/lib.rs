@@ -199,11 +199,11 @@ pub use session::{
     CreditView, DEFAULT_REMINDER_DAYS, EXTEND_OPTIONS_MIN, EndOutcome, ExtendSource,
     PAUSE_NOTE_MAX, PauseReason, PaymentMethod, PaymentRow, SESSION_WARNING_MARKS_MIN,
     SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionExpire, SessionExtend,
-    SessionListRow, SessionListState, SessionListView, SessionMode, SessionPause, SessionResume,
-    SessionScreen, SessionSettle, SessionSettleReverted, SessionStart, SessionStartedEvent,
-    SettleOutcome, SnapshotBill, SnapshotSession, UNDO_WINDOW_MS, UiSessionConvertRequest,
-    WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup, WalletTopupReverted, WalletTxnView,
-    WalletView,
+    SessionListRow, SessionListState, SessionListView, SessionMode, SessionPause, SessionRateFlip,
+    SessionResume, SessionScreen, SessionSettle, SessionSettleReverted, SessionStart,
+    SessionStartedEvent, SettleOutcome, SnapshotBill, SnapshotSession, UNDO_WINDOW_MS,
+    UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup,
+    WalletTopupReverted, WalletTxnView, WalletView,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,

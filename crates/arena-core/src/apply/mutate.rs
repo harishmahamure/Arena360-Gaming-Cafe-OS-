@@ -344,6 +344,10 @@ pub(super) fn mutate(
             Target::SessionExpire(t) => super::session_expire::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionRateFlip(_) => match target {
+            Target::SessionRateFlip(t) => super::rate_flip::mutate(tx, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditCollectReverted(_) => match target {
             Target::CreditCollectReverted(t) => {
                 super::credit_collect::mutate_collect_reverted(tx, t)

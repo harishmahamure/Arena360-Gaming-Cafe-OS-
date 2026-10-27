@@ -51,6 +51,7 @@ pub struct LiveSession {
     pub reserved_minor: i64,
     pub grace_min: u32,
     pub extended_min: i64,
+    pub rate_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,7 @@ pub struct OrderLineRow {
     pub minutes: i64,
     pub rate_minor_per_hour: i64,
     pub amount_minor: i64,
+    pub rule_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +197,7 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
         s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by, s.ends_at, s.paused_at,
-        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min, s.extended_min";
+        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min, s.extended_min, s.rate_id";
 
 fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
@@ -224,6 +226,7 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         reserved_minor: r.get(22)?,
         grace_min: r.get(23)?,
         extended_min: r.get(24)?,
+        rate_id: r.get(25)?,
     })
 }
 
@@ -304,9 +307,13 @@ pub fn pause_session(
     Ok(())
 }
 
+/// Folds a finished pause into a session: the whole pause moves `ends_at` and the session's paused
+/// total, and the open segment takes only the part of it after that segment began.
 pub fn fold_pause(conn: &Connection, id: &str, paused_ms: i64) -> Result<(), AppError> {
     conn.execute(
-        "UPDATE session_segments SET paused_ms = paused_ms + ?2
+        "UPDATE session_segments
+         SET paused_ms = paused_ms + ?2 - MAX(0, from_at - COALESCE(
+                 (SELECT paused_at FROM sessions WHERE id = ?1), from_at))
          WHERE session_id = ?1 AND to_at IS NULL",
         params![id, paused_ms],
     )
@@ -453,8 +460,9 @@ pub fn list_open_order_lines(conn: &Connection) -> Result<Vec<OrderLineRow>, App
     let mut stmt = conn
         .prepare(
             "SELECT l.order_id, COALESCE(l.device_id, ''), l.from_at, l.to_at, l.minutes,
-                    l.rate_minor_per_hour, l.amount_minor
+                    l.rate_minor_per_hour, l.amount_minor, g.rule_id
              FROM order_lines l JOIN orders o ON o.id = l.order_id
+                  LEFT JOIN session_segments g ON g.id = l.session_segment_id
              WHERE o.status = 'open' ORDER BY l.order_id, l.position",
         )
         .map_err(db_error)?;
@@ -467,6 +475,7 @@ pub fn list_open_order_lines(conn: &Connection) -> Result<Vec<OrderLineRow>, App
             minutes: r.get(4)?,
             rate_minor_per_hour: r.get(5)?,
             amount_minor: r.get(6)?,
+            rule_id: r.get(7)?,
         })
     })
     .map_err(db_error)?
@@ -946,6 +955,33 @@ pub fn hold_session_expired(conn: &Connection, id: &str) -> Result<(), AppError>
     conn.execute(
         "UPDATE sessions SET state = 'expired', end_reason = 'expired' WHERE id = ?1",
         [id],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Adds `paused_ms` to the paused time of a session's open segment, so a pause that spans a rate
+/// change is split between the segment it closes and the one that opens.
+pub fn add_segment_pause(conn: &Connection, id: &str, paused_ms: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE session_segments SET paused_ms = paused_ms + ?2
+         WHERE session_id = ?1 AND to_at IS NULL",
+        params![id, paused_ms],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Sets a wallet session's end and the amount set aside from the wallet after a rate change.
+pub fn reprice_wallet_session(
+    conn: &Connection,
+    id: &str,
+    ends_at: i64,
+    reserved_minor: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET ends_at = ?2, reserved_minor = ?3 WHERE id = ?1",
+        params![id, ends_at, reserved_minor],
     )
     .map_err(db_error)?;
     Ok(())

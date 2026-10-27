@@ -7,4 +7,8 @@ export type BillLine = {
   minutes: number;
   rate_minor_per_hour: number;
   amount_minor: number;
+  /**
+   * The pricing rule that set this line's rate, when one did.
+   */
+  rule_name?: string;
 };

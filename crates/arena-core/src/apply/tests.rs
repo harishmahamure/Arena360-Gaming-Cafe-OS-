@@ -24,6 +24,7 @@ mod extend;
 mod plans;
 mod players;
 mod prepaid;
+mod rate_flip;
 mod rates;
 mod rule_pricing;
 mod rules;

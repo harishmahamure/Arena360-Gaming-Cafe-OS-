@@ -20,7 +20,7 @@
 //!   printed receipt, a drawer kick, an invoice number) recorded against a bill, which closes its
 //!   undo toast. Nothing records an effect before Epic 5, so the Hub does not send it yet.
 //! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN, or
-//!   the Hub's LAN addresses changed, or an alert was raised or acknowledged; the view reloads
+//!   the Hub's LAN addresses changed, an alert was raised or acknowledged, or a session's rate segment changed; the view reloads
 //!   the snapshot (which carries each device's `online`, the `lan` block and the open alerts).
 //! - `event: groups.changed`, data `{"by_owner": bool}`: a device group, floor zone or a device's
 //!   group or place changed (`by_owner`: an owner setup command wrote it); sent with `devices.changed`.
@@ -331,7 +331,7 @@ impl HubTask {
                         if applied
                             .changes
                             .iter()
-                            .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta" | "alerts"))
+                            .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta" | "alerts" | "session_segments"))
                         {
                             self.send("devices.changed", "{}".into(), false);
                         }

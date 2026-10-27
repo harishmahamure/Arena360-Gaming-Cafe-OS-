@@ -361,3 +361,211 @@ fn until_hands_over_to_the_next_rule() {
         (9000, Some(at("2027-03-10 12:00")))
     );
 }
+
+fn flip(
+    rules: &[PricingRuleRow],
+    from: &str,
+    open: (Option<&str>, i64),
+    now: &str,
+) -> Option<(i64, Option<String>, i64)> {
+    let open = OpenSegment {
+        from_at: at(from),
+        rule_id: open.0,
+        rate_minor: open.1,
+    };
+    due_flip(rules, "G", 10_000, IST, &open, at(now)).map(|f| (f.at, f.rule_id, f.rate_minor))
+}
+
+#[test]
+fn a_rule_that_begins_flips_at_its_own_boundary_not_at_the_scan() {
+    let rules = [happy()];
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 15:30",
+            (None, 10_000),
+            "2027-03-10 16:00"
+        ),
+        Some((at("2027-03-10 16:00"), Some("happy".into()), 8000))
+    );
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 15:30",
+            (None, 10_000),
+            "2027-03-10 16:07"
+        ),
+        Some((at("2027-03-10 16:00"), Some("happy".into()), 8000))
+    );
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 15:30",
+            (None, 10_000),
+            "2027-03-10 15:59"
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_rule_that_ends_flips_back_to_the_base_rate() {
+    let rules = [happy()];
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 16:10",
+            (Some("happy"), 8000),
+            "2027-03-10 18:02"
+        ),
+        Some((at("2027-03-10 18:00"), None, 10_000))
+    );
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 16:10",
+            (Some("happy"), 8000),
+            "2027-03-10 17:59"
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_boundary_at_the_segment_start_is_not_a_flip() {
+    let rules = [happy()];
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 16:00",
+            (Some("happy"), 8000),
+            "2027-03-10 16:30"
+        ),
+        None
+    );
+}
+
+#[test]
+fn an_edited_rule_flips_at_now_with_the_same_rule() {
+    let rules = [weekly(
+        "happy",
+        WEEKDAYS,
+        16 * 60,
+        18 * 60,
+        (ADJUST_PERCENT, -3000),
+    )];
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 16:10",
+            (Some("happy"), 8000),
+            "2027-03-10 16:45"
+        ),
+        Some((at("2027-03-10 16:45"), Some("happy".into()), 7000))
+    );
+}
+
+#[test]
+fn a_deactivated_rule_flips_at_now_to_the_base_rate() {
+    let mut off = happy();
+    off.active = false;
+    assert_eq!(
+        flip(
+            &[off],
+            "2027-03-10 16:10",
+            (Some("happy"), 8000),
+            "2027-03-10 16:45"
+        ),
+        Some((at("2027-03-10 16:45"), None, 10_000))
+    );
+}
+
+#[test]
+fn missed_boundaries_come_one_at_a_time_in_order_at_their_true_times() {
+    let rules = [happy()];
+    let now = "2027-03-10 19:00";
+    let first = flip(&rules, "2027-03-10 15:30", (None, 10_000), now).unwrap();
+    assert_eq!(first.0, at("2027-03-10 16:00"));
+    let open = OpenSegment {
+        from_at: first.0,
+        rule_id: first.1.as_deref(),
+        rate_minor: first.2,
+    };
+    let second = due_flip(&rules, "G", 10_000, IST, &open, at(now)).unwrap();
+    assert_eq!(
+        (second.at, second.rule_id.clone()),
+        (at("2027-03-10 18:00"), None)
+    );
+    let open = OpenSegment {
+        from_at: second.at,
+        rule_id: None,
+        rate_minor: second.rate_minor,
+    };
+    assert_eq!(due_flip(&rules, "G", 10_000, IST, &open, at(now)), None);
+}
+
+#[test]
+fn a_window_wrapping_midnight_flips_at_both_edges() {
+    let night = weekly(
+        "night",
+        0b111_1111,
+        22 * 60,
+        6 * 60,
+        (ADJUST_OVERRIDE, 5000),
+    );
+    let rules = [night];
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 21:00",
+            (None, 10_000),
+            "2027-03-11 02:00"
+        ),
+        Some((at("2027-03-10 22:00"), Some("night".into()), 5000))
+    );
+    assert_eq!(
+        flip(
+            &rules,
+            "2027-03-10 23:00",
+            (Some("night"), 5000),
+            "2027-03-11 07:00"
+        ),
+        Some((at("2027-03-11 06:00"), None, 10_000))
+    );
+}
+
+#[test]
+fn another_group_or_no_rules_never_flip() {
+    let mut other = happy();
+    other.group_id = "H".into();
+    assert_eq!(
+        flip(
+            &[other],
+            "2027-03-10 15:30",
+            (None, 10_000),
+            "2027-03-10 17:00"
+        ),
+        None
+    );
+    assert_eq!(
+        flip(&[], "2027-03-10 15:30", (None, 10_000), "2027-03-10 17:00"),
+        None
+    );
+}
+
+#[test]
+fn a_rule_that_wins_over_another_flips_by_rule_even_at_the_same_rate() {
+    let mut a = happy();
+    a.rule_id = "a".into();
+    let mut b = weekly("b", WEEKDAYS, 17 * 60, 18 * 60, (ADJUST_PERCENT, -2000));
+    b.priority = 5;
+    assert_eq!(
+        flip(
+            &[a, b],
+            "2027-03-10 16:30",
+            (Some("a"), 8000),
+            "2027-03-10 17:30"
+        ),
+        Some((at("2027-03-10 17:00"), Some("b".into()), 8000))
+    );
+}

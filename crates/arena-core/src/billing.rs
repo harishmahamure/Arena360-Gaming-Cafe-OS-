@@ -18,7 +18,10 @@ pub fn bill(
     now_ms: i64,
 ) -> Vec<BillLine> {
     let last = segments.len().saturating_sub(1);
-    let open_pause = paused_since.map_or(0, |at| (now_ms - at).max(0));
+    let open_pause = paused_since.map_or(0, |at| {
+        let from = segments.last().map_or(at, |s| s.from_at);
+        (now_ms - at.max(from)).max(0)
+    });
     let mut minutes: Vec<i64> = segments
         .iter()
         .enumerate()
@@ -48,6 +51,7 @@ pub fn bill(
             minutes: m,
             rate_minor_per_hour: s.rate_minor_per_hour,
             amount_minor: (m * s.rate_minor_per_hour + 30) / 60,
+            rule_name: None,
         })
         .collect()
 }
@@ -88,6 +92,62 @@ pub fn wallet_horizon(
         minutes: i64::try_from(minutes).ok()?,
         cost_minor: i64::try_from(cost(minutes)).ok()?,
     })
+}
+
+/// A wallet session's end and set-aside amount once a rate change has split its time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalletFlip {
+    pub ends_at: i64,
+    pub reserved_minor: i64,
+}
+
+/// Re-sizes a wallet session at a rate change: `closed` are its segments up to `flip_at`, and a
+/// new segment at `rate_minor_per_hour` opens there. The new segment runs the largest whole
+/// minutes `k` for which [`bill`] of all the segments stays within `reserved_minor`, rounded down
+/// so the total minutes are a whole rounding unit, and never fewer than none: the session ends at
+/// `flip_at + k` minutes, not before the flip. The set-aside becomes that bill (never more than it
+/// was).
+pub fn wallet_end_after_flip(
+    closed: &[SegmentRow],
+    flip_at: i64,
+    rate_minor_per_hour: i64,
+    rounding_min: u32,
+    minimum_min: u32,
+    reserved_minor: i64,
+) -> WalletFlip {
+    let before = bill(closed, 0, minimum_min, None, flip_at);
+    let closed_min: i64 = before.iter().map(|l| l.minutes).sum();
+    let closed_minor: i64 = before.iter().map(|l| l.amount_minor).sum();
+    let unit = i128::from(rounding_min.max(1));
+    let rate = i128::from(rate_minor_per_hour.max(0));
+    let left = i128::from((reserved_minor - closed_minor).max(0));
+    let reachable = if rate == 0 {
+        HORIZON_CAP_MIN
+    } else {
+        ((left * 60 + 29) / rate).min(HORIZON_CAP_MIN)
+    };
+    let total = (i128::from(closed_min) + reachable) / unit * unit;
+    let k = i64::try_from((total - i128::from(closed_min)).max(0)).unwrap_or(0);
+    let mut all = closed.to_vec();
+    if let Some(first) = closed.first() {
+        all.push(SegmentRow {
+            id: String::new(),
+            from_at: flip_at,
+            to_at: Some(flip_at + k * MIN_MS),
+            rate_minor_per_hour,
+            paused_ms: 0,
+            rule_id: None,
+            ..first.clone()
+        });
+    }
+    let cost: i64 = bill(&all, rounding_min, minimum_min, None, flip_at + k * MIN_MS)
+        .iter()
+        .map(|l| l.amount_minor)
+        .sum();
+    WalletFlip {
+        ends_at: flip_at + k * MIN_MS,
+        reserved_minor: cost.min(reserved_minor),
+    }
 }
 
 /// The cost of the first (minimum) bill on a single segment, in minutes and money.
@@ -250,6 +310,74 @@ mod tests {
     fn a_free_rate_is_capped_not_endless() {
         let h = wallet_horizon(0, 15, 30, 10).unwrap();
         assert_eq!((h.minutes, h.cost_minor), (366 * 24 * 60, 0));
+    }
+
+    #[test]
+    fn a_pause_open_at_a_boundary_counts_only_from_the_new_segment() {
+        let s = [
+            paused_seg(0, Some(10 * MIN_MS), 6_000, 2 * MIN_MS),
+            seg(10 * MIN_MS, None, 12_000),
+        ];
+        assert_eq!(
+            amounts(&bill(&s, 0, 0, Some(8 * MIN_MS), 30 * MIN_MS)),
+            [(8, 800), (0, 0)]
+        );
+        let s = [
+            paused_seg(0, Some(10 * MIN_MS), 6_000, 5 * MIN_MS),
+            seg(10 * MIN_MS, None, 12_000),
+        ];
+        assert_eq!(
+            amounts(&bill(&s, 0, 0, Some(5 * MIN_MS), 30 * MIN_MS)),
+            [(5, 500), (0, 0)]
+        );
+    }
+
+    fn flipped(first: (i64, i64), flip_min: i64, rate: i64, reserved: i64) -> (i64, i64) {
+        let closed = [seg(0, Some(flip_min * MIN_MS), first.1)];
+        let f = wallet_end_after_flip(&closed, flip_min * MIN_MS, rate, 15, 30, reserved);
+        (f.ends_at / MIN_MS, f.reserved_minor)
+    }
+
+    #[test]
+    fn a_rate_that_rises_ends_the_wallet_session_sooner() {
+        assert_eq!(flipped((0, 6_000), 30, 12_000, 9_000), (60, 9_000));
+    }
+
+    #[test]
+    fn a_rate_that_drops_lets_the_reserve_play_longer() {
+        assert_eq!(flipped((0, 6_000), 30, 3_000, 9_000), (150, 9_000));
+    }
+
+    #[test]
+    fn the_reservation_shrinks_to_the_bill_of_the_new_end() {
+        assert_eq!(flipped((0, 6_000), 30, 7_000, 9_000), (75, 8_250));
+    }
+
+    #[test]
+    fn a_session_never_ends_before_the_flip_and_never_costs_more_than_reserved() {
+        assert_eq!(flipped((0, 6_000), 30, 12_000, 3_000), (30, 3_000));
+        assert_eq!(flipped((0, 6_000), 45, 60_000, 4_500), (45, 4_500));
+    }
+
+    #[test]
+    fn the_new_end_bills_within_the_reserve_to_the_unit() {
+        for (rate, reserved) in [
+            (7_700, 9_000),
+            (3_333, 12_345),
+            (12_000, 20_000),
+            (0, 5_000),
+        ] {
+            let closed = [seg(0, Some(30 * MIN_MS), 6_000)];
+            let f = wallet_end_after_flip(&closed, 30 * MIN_MS, rate, 15, 30, reserved);
+            let all = [closed[0].clone(), seg(30 * MIN_MS, Some(f.ends_at), rate)];
+            let lines = bill(&all, 15, 30, None, f.ends_at);
+            let total: i64 = lines.iter().map(|l| l.amount_minor).sum();
+            let minutes: i64 = lines.iter().map(|l| l.minutes).sum();
+            assert!(total <= reserved, "{rate} {reserved}");
+            assert_eq!(total, f.reserved_minor);
+            assert_eq!(minutes % 15, 0);
+            assert!(f.ends_at >= 30 * MIN_MS);
+        }
     }
 
     #[test]

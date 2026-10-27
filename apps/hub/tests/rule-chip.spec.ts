@@ -1,6 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { HubSnapshot, SessionStaff, SnapshotActiveRule } from "@arena/ui/generated";
+import type {
+  HubSnapshot,
+  SessionStaff,
+  SnapshotActiveRule,
+  SnapshotBill,
+  SnapshotSession,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { CORS, HUB, device, json, snapshot } from "./floor-fixture";
 
@@ -23,7 +29,12 @@ const HAPPY: SnapshotActiveRule = {
   until: SIX_PM,
 };
 
-type Hub = { rule: SnapshotActiveRule | null; nextChange: number | null; loads: number };
+type Hub = {
+  rule: SnapshotActiveRule | null;
+  nextChange: number | null;
+  loads: number;
+  live?: { session: SnapshotSession; bill: SnapshotBill };
+};
 
 async function open(page: Page, hub: Hub, groups = 1) {
   await page.addInitScript(() => {
@@ -42,7 +53,14 @@ async function open(page: Page, hub: Hub, groups = 1) {
     switch (new URL(req.url()).pathname) {
       case "/ui/snapshot": {
         hub.loads++;
-        const snap: HubSnapshot = snapshot([device(1, {}), device(2, { group_id: "G2" })], 10000);
+        const snap: HubSnapshot = snapshot(
+          [device(1, hub.live ? { status: "in_session" } : {}), device(2, { group_id: "G2" })],
+          10000,
+        );
+        if (hub.live) {
+          snap.sessions = [hub.live.session];
+          snap.bills = [hub.live.bill];
+        }
         snap.groups[0] = {
           ...snap.groups[0],
           ...(hub.rule ? { active_rule: hub.rule } : {}),
@@ -128,4 +146,52 @@ test("the chip and the rates change at the rule boundary without a reload", asyn
   await expect(page.locator("[data-component=floor-tile]", { hasText: "PC 1" })).toContainText(
     "₹100.00",
   );
+});
+
+test("a bill that crossed a rule boundary shows one line per segment naming the rule", async ({
+  page,
+}) => {
+  const base = Date.UTC(2027, 2, 10, 10, 0);
+  const line = (from: number, to: number, minutes: number, rate: number, extra = {}) => ({
+    device_id: device(1, {}).device_id,
+    from_at: base + from * 60_000,
+    to_at: base + to * 60_000,
+    minutes,
+    rate_minor_per_hour: rate,
+    amount_minor: Math.round((minutes * rate) / 60),
+    ...extra,
+  });
+  const hub: Hub = {
+    rule: null,
+    nextChange: null,
+    loads: 0,
+    live: {
+      session: {
+        id: "S1",
+        device_id: device(1, {}).device_id,
+        state: "active",
+        started_at: base,
+        paused_total_ms: 0,
+        rev: 3,
+        guest_no: 1,
+      },
+      bill: {
+        session_id: "S1",
+        device_id: device(1, {}).device_id,
+        lines: [line(0, 19, 30, 10000), line(19, 30, 11, 8000, { rule_name: "Happy hour" })],
+        subtotal_minor: 6467,
+        paid_minor: 0,
+        remaining_minor: 6467,
+      },
+    },
+  };
+  await open(page, hub);
+  const tile = page.locator("[data-component=floor-tile]", { hasText: "PC 1" });
+  await tile.locator("[data-tile-face]").focus();
+  await page.keyboard.press("Enter");
+  const lines = page.getByTestId("bill-breakdown").getByTestId("bill-line");
+  await expect(lines).toHaveCount(2);
+  await expect(lines.nth(0)).toContainText("30 min × ₹100.00/hr");
+  await expect(lines.nth(0)).not.toContainText("(");
+  await expect(lines.nth(1)).toContainText("11 min × ₹80.00/hr (Happy hour)");
 });

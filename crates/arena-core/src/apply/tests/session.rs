@@ -3364,7 +3364,7 @@ pub(super) fn sell_intent(
     )
 }
 
-fn sell_revert_intent(order: &str, rev: Option<i64>) -> Intent {
+pub(super) fn sell_revert_intent(order: &str, rev: Option<i64>) -> Intent {
     let mut i = intent(
         owner(),
         IntentPayload::PlanSellReverted(arena_proto::PlanSellReverted {
@@ -3375,7 +3375,7 @@ fn sell_revert_intent(order: &str, rev: Option<i64>) -> Intent {
     i
 }
 
-fn sale_order(f: &Fixture) -> Row {
+pub(super) fn sale_order(f: &Fixture) -> Row {
     table(f, Table::Orders)
         .into_iter()
         .rev()

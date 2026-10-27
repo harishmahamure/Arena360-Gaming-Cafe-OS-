@@ -1,7 +1,7 @@
 use super::session::{
     balance, collect_intent, credit_intent, end, end_intent, int, ledger_sum, pay, pc, player,
-    refusal, rev_of, row_of, sell_intent, sessions, state_of, submit, table, text, topped_up,
-    topup_revert_intent,
+    refusal, rev_of, row_of, sale_order, sell_intent, sell_revert_intent, sessions, state_of,
+    submit, table, text, topped_up, topup_revert_intent,
 };
 use super::stock::{intent, owner};
 use super::*;
@@ -598,4 +598,19 @@ async fn a_top_up_cannot_be_undone_out_from_under_a_running_wallet_session() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::UndoNotAllowed);
     assert_eq!(balance(&f, &p), 13_000);
+}
+
+#[tokio::test]
+async fn a_pack_sale_cannot_be_undone_while_a_session_runs_on_it() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pack = owned_pack(&f, &p, &[group_of(&f, &d)], 60).await;
+    pack_session(&f, &d, &p, &pack).await;
+    let order = text(&sale_order(&f), "id");
+    let rev = rev_of(&f, Table::Orders, &order);
+    assert_eq!(
+        refusal(end(&f, sell_revert_intent(&order, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
 }

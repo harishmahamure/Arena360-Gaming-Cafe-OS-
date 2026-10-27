@@ -198,7 +198,7 @@ export async function send(
     const { code, field, message } = outcome.error;
     const offline = code === "VALIDATION_FAILED" && field === "device_id";
     const text =
-      code === "VALIDATION_FAILED" && field === "pack_id"
+      (code === "VALIDATION_FAILED" || code === "NOT_FOUND") && field === "pack_id"
         ? "hub.session.pack_refused"
         : (REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code]);
     const detail =

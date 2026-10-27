@@ -44,9 +44,10 @@
       balance = null;
     }
     const current = value;
-    if (current.mode === "pack" && !packs.some((p) => p.id === current.pack_id && !p.expired)) {
+    if (current.mode === "pack" && !packs.some((p) => p.id === current.pack_id && usable(p))) {
       value = { mode: "postpaid" };
     }
+    if (current.mode === "wallet" && (balance === null || !locale)) value = { mode: "postpaid" };
     loaded = true;
   }
 
@@ -58,6 +59,7 @@
   });
 
   const date = (at: number) => (locale ? formatDateTime(at, locale.tz) : "");
+  const usable = (p: OwnedPlanView) => !p.expired && (p.minutes_left ?? 0) > 0;
   const chosen = (p: OwnedPlanView) => value.mode === "pack" && value.pack_id === p.id;
 
   function choose(next: StartChoice) {
@@ -83,12 +85,12 @@
     <button
       type="button"
       class="ui-interactive option type-hub-body"
-      class:expired={p.expired}
+      class:expired={!usable(p)}
       aria-pressed={chosen(p)}
-      aria-disabled={p.expired}
+      aria-disabled={!usable(p)}
       data-testid="start-option-pack"
-      data-expired={p.expired}
-      onclick={() => !p.expired && choose({ mode: "pack", pack_id: p.id })}
+      data-expired={!usable(p)}
+      onclick={() => usable(p) && choose({ mode: "pack", pack_id: p.id })}
     >
       {#if p.expired}
         <span aria-hidden="true">⚠</span>

@@ -5,7 +5,7 @@ use arena_store::{
     effect_recorded, find_credit, find_order, find_pack_for_order, find_plan, find_player,
     forward_intent_id, has_unexpired_pass, insert_plan_line, insert_player_pack,
     insert_topup_order, list_order_line_ids, list_order_wallet_txns, list_payment_ids,
-    list_plan_groups, read_row, set_override_day,
+    list_plan_groups, pack_in_use, read_row, set_override_day,
 };
 
 use super::mutate::Written;
@@ -200,6 +200,7 @@ pub(crate) struct SellRevertTarget {
     lines: Vec<String>,
     txns: Vec<OrderTxn>,
     pack: Option<PlayerPackRow>,
+    pack_busy: bool,
     credit_blocked: bool,
     effect: bool,
     now: i64,
@@ -223,10 +224,16 @@ pub(super) fn load_sell_reverted(
         let owed = find_credit(tx, &txn.player_id)?.map_or(0, |c| c.outstanding_minor);
         credit_blocked |= owed < txn.delta_minor;
     }
+    let pack = find_pack_for_order(tx, &order.id)?;
+    let pack_busy = match &pack {
+        Some(p) => pack_in_use(tx, &p.id)?,
+        None => false,
+    };
     Ok(SellRevertTarget {
         payments: list_payment_ids(tx, &order.id)?,
         lines: list_order_line_ids(tx, &order.id)?,
-        pack: find_pack_for_order(tx, &order.id)?,
+        pack,
+        pack_busy,
         txns,
         credit_blocked,
         effect: effect_recorded(tx, forward.as_deref(), &order.id)?,
@@ -282,7 +289,7 @@ pub(super) fn validate_sell_reverted(
         .pack
         .as_ref()
         .is_some_and(|p| p.minutes_left != p.minutes_total);
-    if used {
+    if used || t.pack_busy {
         return Err(undo_denied("the plan has already been used"));
     }
     Ok(())

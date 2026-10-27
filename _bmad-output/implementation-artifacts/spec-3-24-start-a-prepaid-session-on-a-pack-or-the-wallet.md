@@ -2,7 +2,7 @@
 title: 'Story 3.24: Start a Prepaid Session on a Pack or the Wallet'
 type: 'feature'
 created: '2026-10-27'
-status: 'in-review'
+status: 'done'
 baseline_revision: '7afb346b5d2d6233d2516bcb435f03d459a32710'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -91,7 +91,12 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 Verified: fmt, clippy, hub and kiosk check, string/token/contrast/protocol/layer checks and prettier pass; arena-core, arena-store, arena-proto, arena-api, arena-replay and arena-kiosk-core tests pass (apply matrix in `apply/tests/prepaid.rs`, proptest `PrepaidStart`, API outcome test); `prepaid-start`, `session-start` Playwright specs pass on desktop and phone. Unrelated timing failures as before: arena-cloud (`a_hung_run_times_out_with_its_own_code`, `unreachable_at_start_retries_then_exits_1_without_logging_the_token`), arena-tasks (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reads_times_out`). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: a wallet debit short of the bill is taken off the last order line so lines, total and payment agree; a wallet needs at least one rounding unit of balance; a wallet top-up Undo is refused when it would cut into a running reservation; a prepaid close-out emits no `bill.settled` event (Epic 5 hook).
 Left for later: pass and block starts (3.27), grace at time-up (3.26), extend (3.28).
+
+## Review Triage Log (code review)
+
+Fixed: a pack sale Undo is refused while a live session runs on the pack (`pack_busy` in `plan_sales.rs`, test added); exhausted packs (0 minutes) are greyed and unselectable in `StartOptions`; a stale wallet choice resets to Pay later when the wallet disappears; `NOT_FOUND` on `pack_id` shows the pack-refused reason.
+Deferred (by design or out of scope): `ends_at` not clamped to pack expiry (spec says start + minutes left); shortfall trimmed on under-funded close-out (recorded decision); Hub showing gross wallet balance rather than available; English server-side balance message; missing indexes; extra Playwright cases.

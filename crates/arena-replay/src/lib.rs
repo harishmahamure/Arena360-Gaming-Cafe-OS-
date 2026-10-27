@@ -595,6 +595,7 @@ mod tests {
                 submit(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         order_id: order_id.clone(),
+                        credit_override: None,
                         payments: vec![
                             arena_proto::PaymentRow {
                                 method: arena_proto::PaymentMethod::Cash,
@@ -676,6 +677,19 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            for limit in [50_000, 80_000] {
+                writer
+                    .submit_intent(submit(
+                        IntentPayload::CreditSetLimit(arena_proto::CreditSetLimit {
+                            player_id: player_id.clone(),
+                            limit_minor: limit,
+                            reminder_days: vec![3, 7, 14],
+                        }),
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+            }
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

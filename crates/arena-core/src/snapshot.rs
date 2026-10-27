@@ -114,6 +114,15 @@ pub fn build_snapshot(
     }
 }
 
+pub(crate) fn credit_view(c: &arena_store::CreditRow) -> arena_proto::CreditView {
+    arena_proto::CreditView {
+        limit_minor: c.limit_minor,
+        outstanding_minor: c.outstanding_minor,
+        reminder_days: c.reminder_days.clone(),
+        paused: c.paused,
+    }
+}
+
 fn bills(
     sessions: &[arena_store::LiveSession],
     segments: &[arena_store::SegmentRow],
@@ -125,6 +134,7 @@ fn bills(
                 order_id: Option<String>,
                 order_rev: Option<i64>,
                 wallet_minor: Option<i64>,
+                credit: Option<arena_proto::CreditView>,
                 session_rev: Option<i64>,
                 guest: Option<bool>,
                 lines: Vec<arena_proto::BillLine>| {
@@ -135,6 +145,7 @@ fn bills(
             order_id,
             order_rev,
             wallet_minor,
+            credit,
             session_rev,
             guest,
             lines,
@@ -153,6 +164,7 @@ fn bills(
         bill(
             s.id.clone(),
             s.device_id.clone(),
+            None,
             None,
             None,
             None,
@@ -181,6 +193,7 @@ fn bills(
             Some(o.id),
             Some(o.rev),
             o.player_id.as_ref().map(|_| o.wallet_minor.unwrap_or(0)),
+            o.credit.as_ref().map(credit_view),
             o.session_rev,
             guest.then_some(true),
             lines,
@@ -424,6 +437,7 @@ impl SnapshotReader {
         Ok(arena_proto::WalletView {
             player_id: player_id.to_owned(),
             balance_minor: store.wallet_balance(player_id)?,
+            credit: store.credit(player_id)?.as_ref().map(credit_view),
             txns,
         })
     }

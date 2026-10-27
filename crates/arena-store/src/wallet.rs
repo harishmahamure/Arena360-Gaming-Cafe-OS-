@@ -33,6 +33,15 @@ pub struct WalletTxnRow {
     pub staff: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderTxn {
+    pub id: String,
+    pub player_id: String,
+    pub delta_minor: i64,
+    pub reason: String,
+    pub method: Option<String>,
+}
+
 pub struct NewTopupOrder<'a> {
     pub id: &'a str,
     pub player_id: &'a str,
@@ -135,16 +144,25 @@ pub fn order_player_and_kind(
 pub fn list_order_wallet_txns(
     conn: &Connection,
     order_id: &str,
-) -> Result<Vec<(String, String, i64)>, AppError> {
+) -> Result<Vec<OrderTxn>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, player_id, delta_minor FROM wallet_txns WHERE order_id = ?1 ORDER BY id",
+            "SELECT id, player_id, delta_minor, reason, method FROM wallet_txns
+             WHERE order_id = ?1 ORDER BY id",
         )
         .map_err(db_error)?;
-    stmt.query_map([order_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .map_err(db_error)?
-        .collect::<Result<_, _>>()
-        .map_err(db_error)
+    stmt.query_map([order_id], |r| {
+        Ok(OrderTxn {
+            id: r.get(0)?,
+            player_id: r.get(1)?,
+            delta_minor: r.get(2)?,
+            reason: r.get(3)?,
+            method: r.get(4)?,
+        })
+    })
+    .map_err(db_error)?
+    .collect::<Result<_, _>>()
+    .map_err(db_error)
 }
 
 pub fn list_wallet_txns(conn: &Connection, player_id: &str) -> Result<Vec<WalletTxnRow>, AppError> {
@@ -153,7 +171,7 @@ pub fn list_wallet_txns(conn: &Connection, player_id: &str) -> Result<Vec<Wallet
             "SELECT t.id, t.player_id, t.created_at, t.delta_minor, t.reason, t.method,
                     COALESCE(s.display_name, t.staff_id)
              FROM wallet_txns t LEFT JOIN staff s ON s.staff_id = t.staff_id
-             WHERE t.player_id = ?1 ORDER BY t.created_at DESC, t.id DESC",
+             WHERE t.player_id = ?1 AND t.reason <> 'credit' ORDER BY t.created_at DESC, t.id DESC",
         )
         .map_err(db_error)?;
     stmt.query_map([player_id], |r| {

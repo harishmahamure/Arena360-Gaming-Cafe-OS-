@@ -212,6 +212,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::WalletTopupReverted(t) => super::wallet::validate_topup_reverted(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::CreditSetLimit(c) => match target {
+            Target::CreditSetLimit(t) => super::credit::validate_set_limit(intent, c, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::StockIn(u) => match target {
             Target::Stock(t) => stock::validate_in(u, t),
             _ => Err(internal_target()),

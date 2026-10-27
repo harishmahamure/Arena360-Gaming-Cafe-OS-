@@ -54,11 +54,12 @@ pub enum Table {
     Payments,
     Wallets,
     WalletTxns,
+    CreditBalances,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 27] = [
+    pub const ALL: [Table; 28] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -86,6 +87,7 @@ impl Table {
         Table::Payments,
         Table::Wallets,
         Table::WalletTxns,
+        Table::CreditBalances,
     ];
 
     /// The SQL table name.
@@ -118,6 +120,7 @@ impl Table {
             Self::Payments => "payments",
             Self::Wallets => "wallets",
             Self::WalletTxns => "wallet_txns",
+            Self::CreditBalances => "credit_balances",
         }
     }
 
@@ -143,7 +146,7 @@ impl Table {
             Self::StockMoves => &["move_id"],
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
-            Self::Wallets => &["player_id"],
+            Self::Wallets | Self::CreditBalances => &["player_id"],
             Self::Consents => &["consent_id"],
             Self::Sessions
             | Self::SessionSegments
@@ -180,7 +183,8 @@ impl Table {
             | Self::OrderLines
             | Self::Payments
             | Self::Wallets
-            | Self::WalletTxns => true,
+            | Self::WalletTxns
+            | Self::CreditBalances => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -281,6 +285,9 @@ pub enum RowKey {
     Wallets {
         player_id: String,
     },
+    CreditBalances {
+        player_id: String,
+    },
     WalletTxns {
         id: String,
     },
@@ -316,6 +323,7 @@ impl RowKey {
             Self::Payments { .. } => Table::Payments,
             Self::Wallets { .. } => Table::Wallets,
             Self::WalletTxns { .. } => Table::WalletTxns,
+            Self::CreditBalances { .. } => Table::CreditBalances,
         }
     }
 
@@ -347,7 +355,7 @@ impl RowKey {
             Self::StockMoves { move_id } => move_id.clone(),
             Self::Rates { rate_id } => rate_id.clone(),
             Self::Players { player_id } => player_id.clone(),
-            Self::Wallets { player_id } => player_id.clone(),
+            Self::Wallets { player_id } | Self::CreditBalances { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
             Self::Sessions { id }
             | Self::SessionSegments { id }
@@ -438,6 +446,9 @@ impl RowKey {
                 player_id: text("player_id")?,
             },
             Table::WalletTxns => Self::WalletTxns { id: text("id")? },
+            Table::CreditBalances => Self::CreditBalances {
+                player_id: text("player_id")?,
+            },
         })
     }
 
@@ -468,7 +479,7 @@ impl RowKey {
             Self::StockMoves { move_id } => vec![move_id],
             Self::Rates { rate_id } => vec![rate_id],
             Self::Players { player_id } => vec![player_id],
-            Self::Wallets { player_id } => vec![player_id],
+            Self::Wallets { player_id } | Self::CreditBalances { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],
             Self::Sessions { id }
             | Self::SessionSegments { id }

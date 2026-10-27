@@ -139,6 +139,16 @@ enum Op {
         slot: u8,
         over: bool,
     },
+    /// Sets a player's credit limit (below what they owe is refused).
+    CreditSet {
+        player: u8,
+        limit: u16,
+    },
+    /// A Settle of an open bill wholly on credit, maybe with the manager override.
+    CreditPay {
+        slot: u8,
+        over_ride: bool,
+    },
     /// A Pause of a running session or a Resume of a paused one, maybe stale, then the repeat.
     SessionPause {
         slot: u8,
@@ -290,6 +300,11 @@ fn op() -> impl Strategy<Value = Op> {
             }
         ),
         2 => (0..3u8, prop::bool::weighted(0.3)).prop_map(|(slot, over)| Op::WalletPay { slot, over }),
+        2 => (any::<u8>(), 0..3000u16).prop_map(|(player, limit)| Op::CreditSet { player, limit }),
+        2 => (0..3u8, prop::bool::weighted(0.5)).prop_map(|(slot, over_ride)| Op::CreditPay {
+            slot,
+            over_ride
+        }),
         3 => (0..3u8, 0..4u8, prop::bool::weighted(0.25)).prop_map(|(slot, reason, stale)| {
             Op::SessionPause { slot, reason, stale }
         }),
@@ -1211,6 +1226,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let rows = payments.len();
             let payload = IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 order_id: id.clone(),
+                credit_override: None,
                 payments,
             });
             let out = hub.submit_new(hub.intent(payload.clone(), Some(rev)));
@@ -1359,6 +1375,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionSettle(arena_proto::SessionSettle {
                     order_id: id,
+                    credit_override: None,
                     payments,
                 }),
                 Some(rev),
@@ -1380,6 +1397,114 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
+            }
+        }
+        Op::CreditSet { player, limit } => {
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let Some(p) = players.get(usize::from(*player) % players.len().max(1)) else {
+                return Ok(());
+            };
+            let id = text(p, "player_id");
+            let owed = hub
+                .reader
+                .rows(Table::CreditBalances)
+                .unwrap()
+                .iter()
+                .find(|c| text(c, "player_id") == id)
+                .map_or(0, |c| int(c, "outstanding_minor"));
+            let limit = i64::from(*limit);
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::CreditSetLimit(arena_proto::CreditSetLimit {
+                    player_id: id,
+                    limit_minor: limit,
+                    reminder_days: vec![3, 7, 14],
+                }),
+                None,
+            ));
+            if limit < owed {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::CreditBelowOutstanding, Some("limit_minor")))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+            }
+        }
+        Op::CreditPay { slot, over_ride } => {
+            let open: Vec<_> = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .filter(|o| text(o, "status") == "open")
+                .collect();
+            let Some(order) = open.get(usize::from(*slot) % open.len().max(1)) else {
+                return Ok(());
+            };
+            let (id, rev, total) = (
+                text(order, "id"),
+                int(order, "rev"),
+                int(order, "total_minor"),
+            );
+            if total == 0 {
+                return Ok(());
+            }
+            let credit = match &order["player_id"] {
+                RowValue::Text(p) => hub
+                    .reader
+                    .rows(Table::CreditBalances)
+                    .unwrap()
+                    .into_iter()
+                    .find(|c| text(c, "player_id") == *p)
+                    .filter(|c| int(c, "limit_minor") > 0),
+                _ => None,
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                    order_id: id,
+                    credit_override: over_ride.then_some(true),
+                    payments: vec![arena_proto::PaymentRow {
+                        method: arena_proto::PaymentMethod::Credit,
+                        amount_minor: total,
+                        reference: None,
+                    }],
+                }),
+                Some(rev),
+            ));
+            match credit {
+                None => {
+                    prop_assert_eq!(
+                        code(&out),
+                        Some((ErrorCode::ValidationFailed, Some("payments[0].method")))
+                    );
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+                Some(c) if int(&c, "outstanding_minor") + total <= int(&c, "limit_minor") => {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                }
+                Some(_) if !over_ride => {
+                    prop_assert_eq!(
+                        code(&out),
+                        Some((ErrorCode::CreditLimit, Some("payments[0].amount_minor")))
+                    );
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+                Some(_) => match code(&out) {
+                    None => prop_assert!(out.is_ok(), "{:?}", out),
+                    Some(refused) => {
+                        prop_assert_eq!(
+                            refused,
+                            (
+                                ErrorCode::OverrideUsedToday,
+                                Some("payments[0].amount_minor")
+                            )
+                        );
+                        prop_assert_eq!(hub.change_count(), before);
+                    }
+                },
             }
         }
         Op::SessionAssign {
@@ -1542,6 +1667,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 let out = hub.submit_new(hub.intent(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         order_id: id.clone(),
+                        credit_override: None,
                         payments: vec![arena_proto::PaymentRow {
                             method: arena_proto::PaymentMethod::Card,
                             amount_minor: total,
@@ -1701,11 +1827,30 @@ fn assert_wallets_hold(hub: &Hub) -> Result<(), TestCaseError> {
         let id = text(&w, "player_id");
         let sum: i64 = txns
             .iter()
-            .filter(|t| text(t, "player_id") == id)
+            .filter(|t| text(t, "player_id") == id && text(t, "reason") != "credit")
             .map(|t| int(t, "delta_minor"))
             .sum();
         prop_assert!(int(&w, "balance_minor") >= 0);
         prop_assert_eq!(int(&w, "balance_minor"), sum);
+    }
+    Ok(())
+}
+
+fn assert_credit_holds(hub: &Hub) -> Result<(), TestCaseError> {
+    let txns = hub.reader.rows(Table::WalletTxns).unwrap();
+    for c in hub.reader.rows(Table::CreditBalances).unwrap() {
+        let id = text(&c, "player_id");
+        let sum: i64 = txns
+            .iter()
+            .filter(|t| text(t, "player_id") == id && text(t, "reason") == "credit")
+            .map(|t| int(t, "delta_minor"))
+            .sum();
+        let owed = int(&c, "outstanding_minor");
+        prop_assert!(owed >= 0);
+        prop_assert_eq!(owed, sum);
+        if owed > int(&c, "limit_minor") {
+            prop_assert!(c["last_override_day"] != RowValue::Null);
+        }
     }
     Ok(())
 }
@@ -1730,6 +1875,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
             for op in &ops {
                 step(&mut hub, op)?;
                 assert_wallets_hold(&hub)?;
+                assert_credit_holds(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

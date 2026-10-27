@@ -6,6 +6,7 @@
   import { page } from "$app/state";
   import { SESSION_DEPENDENCY, hasPermission, loadPlayer, loadWallet } from "../../lib/auth";
   import type { MessageKey } from "@arena/ui/messages";
+  import CreditBlock from "../../lib/players/CreditBlock.svelte";
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
   import EditProfile from "../../lib/players/EditProfile.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
@@ -190,6 +191,9 @@
         </div>
       {/if}
     </section>
+    {#key p.player_id}
+      <CreditBlock playerId={p.player_id} {staff} />
+    {/key}
     {#if toppingUp}
       <TopUp
         playerId={p.player_id}

@@ -10,6 +10,8 @@
   import { tick, type Snippet } from "svelte";
   import {
     amountText,
+    creditOffered,
+    headroomOf,
     methodsFor,
     rowErrors,
     rowsValid,
@@ -43,7 +45,8 @@
   const total = $derived(bill.remaining_minor);
   const sums = $derived(tally(total, rows, exponent));
   const wallet = $derived(bill.wallet_minor ?? 0);
-  const methods = $derived(methodsFor(bill.wallet_minor));
+  const methods = $derived(methodsFor(bill.wallet_minor, bill.credit));
+  const credit = $derived(creditOffered(bill.credit) ? bill.credit : null);
   const closed = $derived(sums.remaining === 0 && !sums.overpaid);
   const money = (minor: number) => formatMoney(minor, locale);
 
@@ -55,23 +58,31 @@
     upi: "hub.settle.amount.upi",
     card: "hub.settle.amount.card",
     wallet: "hub.settle.amount.wallet",
+    credit: "hub.settle.amount.credit",
   };
   const REFERENCE: Record<PaymentMethod, MessageKey> = {
     cash: "hub.settle.reference.upi",
     upi: "hub.settle.reference.upi",
     card: "hub.settle.reference.card",
     wallet: "hub.settle.reference.upi",
+    credit: "hub.settle.reference.upi",
   };
   const NAME: Record<PaymentMethod, MessageKey> = {
     cash: "hub.settle.method.cash",
     upi: "hub.settle.method.upi",
     card: "hub.settle.method.card",
     wallet: "hub.settle.method.wallet",
+    credit: "hub.settle.method.credit",
   };
 
   async function choose(method: PaymentMethod) {
     if (!rows.some((r) => r.method === method)) {
-      const suggested = method === "wallet" ? Math.min(wallet, sums.remaining) : sums.remaining;
+      const suggested =
+        method === "wallet"
+          ? Math.min(wallet, sums.remaining)
+          : method === "credit" && credit && headroomOf(credit) > 0
+            ? Math.min(headroomOf(credit), sums.remaining)
+            : sums.remaining;
       rows.push({ method, amount: amountText(suggested, exponent), reference: "" });
     }
     await tick();
@@ -155,6 +166,14 @@
           {#if row.method === "wallet"}
             <p class="type-hub-label wallet-balance tabular-nums" data-testid="wallet-balance">
               {t("hub.settle.wallet_balance", { amount: money(wallet) })}
+            </p>
+          {:else if row.method === "credit" && credit}
+            <p class="type-hub-label wallet-balance tabular-nums" data-testid="credit-info">
+              {t("hub.settle.credit_info", {
+                outstanding: money(credit.outstanding_minor),
+                limit: money(credit.limit_minor),
+                headroom: money(headroomOf(credit)),
+              })}
             </p>
           {:else if row.method !== "cash"}
             <div data-reference>

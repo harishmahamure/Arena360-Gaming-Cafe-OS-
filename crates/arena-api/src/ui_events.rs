@@ -11,7 +11,7 @@
 //!   another window sharing the token), so every window locks and unlocks together.
 //! - `event: bill.settled`, data [`BillSettledEvent`]: a `session.settle` committed (the receipt hook);
 //!   the view reloads the snapshot, which no longer lists the bill.
-//! - `event: wallet.changed`, data [`WalletChangedEvent`]: a wallet balance moved (a top-up, a
+//! - `event: wallet.changed`, data [`WalletChangedEvent`]: a wallet balance moved (a top-up, a credit spend, a
 //!   wallet payment or an undo of either); open profiles and bills reload.
 //! - `event: bill.reverted`, data [`BillRevertedEvent`]: a `session.end.reverted` or
 //!   `session.settle.reverted` committed; the view reloads the snapshot, which lists the bill again
@@ -217,7 +217,7 @@ fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
     applied
         .changes
         .iter()
-        .find(|c| c.tbl == "wallets")
+        .find(|c| c.tbl == "wallets" || c.tbl == "credit_balances")
         .map(|c| WalletChangedEvent {
             player_id: c.row_id.clone(),
         })
@@ -708,6 +708,12 @@ mod tests {
         ]);
         assert_eq!(wallet_changed(&topup).unwrap().player_id, "P1");
         assert!(bill_settled(&topup).is_none());
+        let credit = applied(&[
+            ("orders", "O", Update),
+            ("wallet_txns", "T", Insert),
+            ("credit_balances", "P2", Update),
+        ]);
+        assert_eq!(wallet_changed(&credit).unwrap().player_id, "P2");
         let other = applied(&[("orders", "O", Update)]);
         assert!(wallet_changed(&other).is_none());
     }
@@ -1127,6 +1133,7 @@ mod tests {
         submit(
             IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 order_id: order.clone(),
+                credit_override: None,
                 payments: vec![arena_proto::PaymentRow {
                     method: arena_proto::PaymentMethod::Cash,
                     amount_minor: 6_000,

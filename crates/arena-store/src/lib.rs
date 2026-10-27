@@ -9,6 +9,7 @@ mod branch;
 mod commands;
 #[cfg(feature = "control")]
 pub mod control;
+mod credit;
 mod dedupe;
 mod devices;
 mod identity;
@@ -47,6 +48,10 @@ pub use branch::{
 pub use commands::{
     AppliedCommand, find_applied_command, insert_applied_command, mark_command_reported,
     max_applied_command_id, unreported_commands,
+};
+pub use credit::{
+    CreditRow, adjust_outstanding, decode_days, encode_days, find_credit, insert_credit,
+    set_override_day, update_credit_limit,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
@@ -104,7 +109,7 @@ pub use stock::{
     insert_stock, latest_move_id, list_lots, list_moves, set_lot_remaining, update_stock,
 };
 pub use wallet::{
-    NewTopupOrder, NewWalletTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
+    NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
     insert_topup_order, insert_wallet, insert_wallet_txn, list_order_wallet_txns, list_wallet_txns,
     order_player_and_kind, wallet_balance,
 };
@@ -720,6 +725,13 @@ impl Store {
             return Ok(Vec::new());
         }
         list_wallet_txns(&self.conn, player_id)
+    }
+
+    pub fn credit(&self, player_id: &str) -> Result<Option<CreditRow>, AppError> {
+        if !self.table_exists("credit_balances")? {
+            return Ok(None);
+        }
+        find_credit(&self.conn, player_id)
     }
 
     pub fn wallet_balance(&self, player_id: &str) -> Result<i64, AppError> {

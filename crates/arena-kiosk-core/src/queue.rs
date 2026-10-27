@@ -76,6 +76,9 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::ReferenceRequired
         | ErrorCode::UndoNotAllowed
         | ErrorCode::InsufficientBalance
+        | ErrorCode::CreditLimit
+        | ErrorCode::CreditBelowOutstanding
+        | ErrorCode::OverrideUsedToday
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame
         | ErrorCode::HsnRequired

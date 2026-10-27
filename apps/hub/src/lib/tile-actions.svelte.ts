@@ -52,6 +52,8 @@ const REFUSALS: Record<string, MessageKey> = {
   "VALIDATION_FAILED:session.end": "hub.session.ended",
   PAYMENT_SHORT: "hub.settle.short",
   INSUFFICIENT_BALANCE: "hub.settle.insufficient",
+  CREDIT_LIMIT: "hub.settle.credit_limit",
+  OVERRIDE_USED_TODAY: "hub.settle.override_used",
   REFERENCE_REQUIRED: "hub.settle.reference",
   "STALE:session.settle": "hub.settle.stale",
 };

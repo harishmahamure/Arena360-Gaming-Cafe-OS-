@@ -658,3 +658,66 @@ async fn a_top_up_answers_with_the_undo_window_and_the_wallet_route_lists_it() {
     .await;
     assert_eq!(profile["wallet_minor"], 500);
 }
+
+fn credit_body(hub: &Hub, player: &str, limit: i64) -> Value {
+    json!({"intent": {
+        "intent_id": ulid::Ulid::generate().to_string(),
+        "kind": "credit.set_limit",
+        "idempotency_key": ulid::Ulid::generate().to_string(),
+        "issued_at": hub.clock.now_ms(),
+        "actor": {"kind": "staff", "id": "x"},
+        "payload": {
+            "kind": "credit.set_limit",
+            "player_id": player,
+            "limit_minor": limit,
+            "reminder_days": [3, 7, 14],
+        },
+    }})
+}
+
+#[tokio::test]
+async fn a_manager_enables_credit_and_the_wallet_route_shows_it() {
+    let hub = hub().await;
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let manager = token_for(&hub, "manager", "m-pass").await;
+    let (_, reply) = create(
+        &hub,
+        &counter,
+        body(form("Asha_9", "+91 98765 43210"), None),
+    )
+    .await;
+    let player = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let wallet = format!("/ui/players/wallet?id={player}");
+
+    let (_, none) = call(&hub, "GET", &wallet, Some(&counter), None).await;
+    assert!(none["credit"].is_null());
+
+    let (status, refused) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&counter),
+        Some(credit_body(&hub, &player, 50_000)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "PERMISSION_DENIED");
+
+    let (status, ok) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&manager),
+        Some(credit_body(&hub, &player, 50_000)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+    let (_, shown) = call(&hub, "GET", &wallet, Some(&counter), None).await;
+    assert_eq!(shown["credit"]["limit_minor"], 50_000);
+    assert_eq!(shown["credit"]["outstanding_minor"], 0);
+    assert_eq!(shown["credit"]["reminder_days"], json!([3, 7, 14]));
+    assert_eq!(shown["credit"]["paused"], false);
+}

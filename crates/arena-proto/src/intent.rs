@@ -151,13 +151,15 @@ pub enum IntentKind {
     WalletTopup,
     #[serde(rename = "wallet.topup.reverted")]
     WalletTopupReverted,
+    #[serde(rename = "credit.set_limit")]
+    CreditSetLimit,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 48] = [
+    pub const ALL: [IntentKind; 49] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -206,6 +208,7 @@ impl IntentKind {
         Self::WalletTopup,
         Self::WalletTopupReverted,
         Self::SessionAssignPlayer,
+        Self::CreditSetLimit,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -258,6 +261,7 @@ impl IntentKind {
             Self::SessionResume => "session.resume",
             Self::WalletTopup => "wallet.topup",
             Self::WalletTopupReverted => "wallet.topup.reverted",
+            Self::CreditSetLimit => "credit.set_limit",
             Self::SessionAssignPlayer => "session.assign_player",
         }
     }
@@ -313,6 +317,7 @@ impl IntentKind {
             | Self::SessionResume
             | Self::WalletTopup
             | Self::WalletTopupReverted
+            | Self::CreditSetLimit
             | Self::SessionAssignPlayer => IntentCategory::Session,
         }
     }
@@ -368,6 +373,7 @@ impl IntentKind {
             Self::WalletTopup | Self::WalletTopupReverted => {
                 Requirement::Perm(Permission::WalletTopup)
             }
+            Self::CreditSetLimit => Requirement::Perm(Permission::CreditManage),
         }
     }
 
@@ -438,6 +444,7 @@ impl IntentKind {
             | Self::SessionResume
             | Self::WalletTopup
             | Self::WalletTopupReverted
+            | Self::CreditSetLimit
             | Self::SessionAssignPlayer => None,
         }
     }
@@ -894,6 +901,8 @@ pub enum IntentPayload {
     WalletTopup(crate::WalletTopup),
     #[serde(rename = "wallet.topup.reverted")]
     WalletTopupReverted(crate::WalletTopupReverted),
+    #[serde(rename = "credit.set_limit")]
+    CreditSetLimit(crate::CreditSetLimit),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
 }
@@ -948,6 +957,7 @@ impl IntentPayload {
             Self::SessionResume(_) => IntentKind::SessionResume,
             Self::WalletTopup(_) => IntentKind::WalletTopup,
             Self::WalletTopupReverted(_) => IntentKind::WalletTopupReverted,
+            Self::CreditSetLimit(_) => IntentKind::CreditSetLimit,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
         }
     }
@@ -1026,7 +1036,6 @@ mod tests {
     /// Permissions no intent requires yet: views, ops and the modules later stories build.
     const USED_BY_LATER_STORIES: &[Permission] = &[
         Permission::PlayerView,
-        Permission::CreditManage,
         Permission::CreditCollect,
         Permission::SessionExtend,
         Permission::SessionTransfer,
@@ -1201,6 +1210,7 @@ mod tests {
                 "wallet.topup" | "wallet.topup.reverted" => {
                     Requirement::Perm(Permission::WalletTopup)
                 }
+                "credit.set_limit" => Requirement::Perm(Permission::CreditManage),
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

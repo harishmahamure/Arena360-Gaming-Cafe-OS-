@@ -49,10 +49,10 @@ pub(super) fn validate_topup(
         return Err(invalid("payments", "add one to eight payments"));
     }
     for (i, p) in t.payments.iter().enumerate() {
-        if p.method == PaymentMethod::Wallet {
+        if matches!(p.method, PaymentMethod::Wallet | PaymentMethod::Credit) {
             return Err(invalid(
                 &format!("payments[{i}].method"),
-                "a top-up cannot be paid from the wallet",
+                "a top-up cannot be paid from the wallet or on credit",
             ));
         }
         if p.amount_minor <= 0 {
@@ -184,7 +184,7 @@ pub(super) fn mutate_topup(
 pub(crate) struct TopupRevertTarget {
     order: Option<OrderRow>,
     payments: Vec<String>,
-    txns: Vec<(String, String, i64)>,
+    txns: Vec<arena_store::OrderTxn>,
     balance: i64,
     effect: bool,
     now: i64,
@@ -284,11 +284,11 @@ pub(super) fn mutate_topup_reverted(
             before: Some(before),
         });
     }
-    for (id, _, delta) in &t.txns {
-        let key = RowKey::WalletTxns { id: id.clone() };
+    for txn in &t.txns {
+        let key = RowKey::WalletTxns { id: txn.id.clone() };
         let before = read_row(tx, &key)?;
         delete_row(tx, Table::WalletTxns, &before)?;
-        adjust_wallet(tx, &player_id, -delta)?;
+        adjust_wallet(tx, &player_id, -txn.delta_minor)?;
         written.push(Written {
             key,
             op: ChangeOp::Delete,

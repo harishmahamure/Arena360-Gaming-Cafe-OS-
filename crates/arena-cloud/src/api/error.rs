@@ -63,6 +63,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PaymentShort
         | ErrorCode::UndoNotAllowed
         | ErrorCode::InsufficientBalance
+        | ErrorCode::CreditLimit
+        | ErrorCode::CreditBelowOutstanding
+        | ErrorCode::OverrideUsedToday
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED

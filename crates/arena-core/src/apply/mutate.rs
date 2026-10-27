@@ -302,6 +302,10 @@ pub(super) fn mutate(
             Target::WalletTopupReverted(t) => super::wallet::mutate_topup_reverted(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::CreditSetLimit(c) => match target {
+            Target::CreditSetLimit(t) => super::credit::mutate_set_limit(tx, c, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceMaintenance(m) => match target {
             Target::Maintenance(t) => maintenance::mutate(tx, m, t),
             _ => Err(mismatch()),

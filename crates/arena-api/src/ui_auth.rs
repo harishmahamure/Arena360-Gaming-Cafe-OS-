@@ -866,6 +866,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PaymentShort
         | ErrorCode::UndoNotAllowed
         | ErrorCode::InsufficientBalance
+        | ErrorCode::CreditLimit
+        | ErrorCode::CreditBelowOutstanding
+        | ErrorCode::OverrideUsedToday
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -3552,6 +3555,7 @@ pub(crate) mod tests {
             },
             IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 order_id: order_id.into(),
+                credit_override: None,
                 payments: Vec::new(),
             }),
             Some(rev),

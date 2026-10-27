@@ -3,6 +3,7 @@ import type { AdsConsentSet } from "./AdsConsentSet";
 import type { AuditReadGranted } from "./AuditReadGranted";
 import type { BranchBootstrap } from "./BranchBootstrap";
 import type { BranchSeedDefaults } from "./BranchSeedDefaults";
+import type { CreditSetLimit } from "./CreditSetLimit";
 import type { DeviceAdminExit } from "./DeviceAdminExit";
 import type { DeviceAdminRelock } from "./DeviceAdminRelock";
 import type { DeviceAdminUnlock } from "./DeviceAdminUnlock";
@@ -97,4 +98,5 @@ export type IntentPayload =
   | ({ kind: "session.resume" } & SessionResume)
   | ({ kind: "wallet.topup" } & WalletTopup)
   | ({ kind: "wallet.topup.reverted" } & WalletTopupReverted)
+  | ({ kind: "credit.set_limit" } & CreditSetLimit)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer);

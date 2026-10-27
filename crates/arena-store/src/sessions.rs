@@ -97,6 +97,7 @@ pub struct OpenOrder {
     pub id: String,
     pub player_id: Option<String>,
     pub wallet_minor: Option<i64>,
+    pub credit: Option<crate::CreditRow>,
     pub rev: i64,
     pub session_id: Option<String>,
     pub session_rev: Option<i64>,
@@ -390,8 +391,11 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
     let mut stmt = conn
         .prepare(
             "SELECT o.id, o.session_id, COALESCE(o.device_id, ''), o.subtotal_minor, o.rev, o.player_id,
-                    w.balance_minor, s.rev
+                    w.balance_minor, s.rev,
+                    c.player_id, c.limit_minor, c.outstanding_minor, c.reminder_days, c.credit_paused,
+                    c.last_override_day, c.rev
              FROM orders o LEFT JOIN wallets w ON w.player_id = o.player_id
+                  LEFT JOIN credit_balances c ON c.player_id = o.player_id
                   LEFT JOIN sessions s ON s.id = o.session_id
              WHERE o.status = 'open' ORDER BY o.created_at, o.id",
         )
@@ -406,6 +410,10 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             player_id: r.get(5)?,
             wallet_minor: r.get(6)?,
             session_rev: r.get(7)?,
+            credit: match r.get::<_, Option<String>>(8)? {
+                Some(_) => Some(crate::credit::credit_from(r, 8)?),
+                None => None,
+            },
         })
     })
     .map_err(db_error)?

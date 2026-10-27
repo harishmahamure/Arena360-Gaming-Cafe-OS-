@@ -4,15 +4,16 @@ use arena_proto::{
     SessionSettle, SessionSettleReverted, SessionStart, UNDO_WINDOW_MS,
 };
 use arena_store::{
-    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession,
-    NewWalletTxn, OrderRow, RateRow, RowKey, SegmentRow, StoreTx, Table, adjust_wallet,
-    assign_order_player, assign_session_player, close_segments, delete_row,
-    device_has_live_session, effect_recorded, end_session, find_active_rate, find_device_meta,
-    find_order, find_order_for_session, find_player, find_session, find_wallet, fold_pause,
-    forward_intent_id, insert_order, insert_order_line, insert_payment, insert_segment,
-    insert_session, insert_wallet_txn, list_order_line_ids, list_order_wallet_txns,
+    ChangeOp, CreditRow, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment,
+    NewSession, NewWalletTxn, OrderRow, OrderTxn, RateRow, RowKey, SegmentRow, StoreTx, Table,
+    adjust_outstanding, adjust_wallet, assign_order_player, assign_session_player, close_segments,
+    delete_row, device_has_live_session, effect_recorded, end_session, find_active_rate,
+    find_credit, find_device_meta, find_order, find_order_for_session, find_player, find_session,
+    find_wallet, fold_pause, forward_intent_id, insert_order, insert_order_line, insert_payment,
+    insert_segment, insert_session, insert_wallet_txn, list_order_line_ids, list_order_wallet_txns,
     list_payment_ids, list_segments, next_guest_no, pause_session, read_row, reopen_order,
-    reopen_segments, reopen_session, resume_session, set_device_state, settle_order,
+    reopen_segments, reopen_session, resume_session, set_device_state, set_override_day,
+    settle_order,
 };
 
 use super::mutate::Written;
@@ -347,17 +348,37 @@ pub(super) fn mutate_end(
 pub(crate) struct SettleTarget {
     order: Option<OrderRow>,
     wallet_minor: i64,
+    credit: Option<CreditRow>,
+    business_day: String,
 }
 
-pub(super) fn load_settle(tx: &StoreTx<'_>, s: &SessionSettle) -> Result<SettleTarget, AppError> {
+pub(super) fn load_settle(
+    tx: &StoreTx<'_>,
+    s: &SessionSettle,
+    now_ms: i64,
+) -> Result<SettleTarget, AppError> {
     let order = find_order(tx, &s.order_id)?;
     let wallet_minor = match order.as_ref().and_then(|o| o.player_id.as_deref()) {
         Some(p) => find_wallet(tx, p)?.map_or(0, |w| w.balance_minor),
         None => 0,
     };
+    let wants_credit = s.payments.iter().any(|p| p.method == PaymentMethod::Credit);
+    let credit = match order.as_ref().and_then(|o| o.player_id.as_deref()) {
+        Some(p) if wants_credit => find_credit(tx, p)?,
+        _ => None,
+    };
+    let business_day = if wants_credit {
+        crate::locale::stamp(tx, now_ms)?
+            .map(|(day, _)| day)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     Ok(SettleTarget {
         order,
         wallet_minor,
+        credit,
+        business_day,
     })
 }
 
@@ -392,10 +413,10 @@ pub(super) fn check_reference(i: usize, p: &PaymentRow) -> Result<(), AppError> 
     let reference = p.reference.as_deref().map(str::trim);
     match (p.method, reference) {
         (PaymentMethod::Cash, None | Some("")) => Ok(()),
-        (PaymentMethod::Wallet, None | Some("")) => Ok(()),
-        (PaymentMethod::Wallet, Some(_)) => Err(invalid(
+        (PaymentMethod::Wallet | PaymentMethod::Credit, None | Some("")) => Ok(()),
+        (PaymentMethod::Wallet | PaymentMethod::Credit, Some(_)) => Err(invalid(
             &format!("payments[{i}].reference"),
-            "a wallet payment takes no reference",
+            "a wallet or credit payment takes no reference",
         )),
         (PaymentMethod::Cash, Some(_)) => Err(invalid(
             &format!("payments[{i}].reference"),
@@ -467,6 +488,7 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
             ));
         }
     }
+    validate_credit(s, t, o.player_id.is_some())?;
     let paid = s
         .payments
         .iter()
@@ -558,6 +580,46 @@ pub(super) fn mutate_settle(
         });
         written.push(Written {
             key: RowKey::Wallets {
+                player_id: player_id.to_owned(),
+            },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    if let (Some(player_id), Some(c), Some(credit)) = (
+        player_id,
+        s.payments
+            .iter()
+            .find(|p| p.method == PaymentMethod::Credit),
+        t.credit.as_ref(),
+    ) {
+        let over = credit.outstanding_minor + c.amount_minor > credit.limit_minor;
+        let txn_id = ulid::Ulid::generate().to_string();
+        insert_wallet_txn(
+            tx,
+            &NewWalletTxn {
+                id: &txn_id,
+                player_id,
+                delta_minor: c.amount_minor,
+                reason: "credit",
+                method: over.then_some("override"),
+                staff_id: &intent.actor.id,
+                order_id: &s.order_id,
+                business_day: &business_day,
+                fy: &fy,
+            },
+        )?;
+        adjust_outstanding(tx, player_id, c.amount_minor)?;
+        if over {
+            set_override_day(tx, player_id, Some(&business_day))?;
+        }
+        written.push(Written {
+            key: RowKey::WalletTxns { id: txn_id },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+        written.push(Written {
+            key: RowKey::CreditBalances {
                 player_id: player_id.to_owned(),
             },
             op: ChangeOp::Update,
@@ -878,7 +940,8 @@ pub(super) fn mutate_end_reverted(
 pub(crate) struct SettleRevertTarget {
     order: Option<OrderRow>,
     payments: Vec<String>,
-    txns: Vec<(String, String, i64)>,
+    txns: Vec<OrderTxn>,
+    credit_blocked: bool,
     effect: bool,
     now: i64,
 }
@@ -895,9 +958,16 @@ pub(super) fn load_settle_reverted(
         });
     };
     let forward = forward_intent_id(tx, "orders", &order.id, "session.settle")?;
+    let txns = list_order_wallet_txns(tx, &order.id)?;
+    let mut credit_blocked = false;
+    for txn in txns.iter().filter(|t| t.reason == "credit") {
+        let owed = find_credit(tx, &txn.player_id)?.map_or(0, |c| c.outstanding_minor);
+        credit_blocked |= owed < txn.delta_minor;
+    }
     Ok(SettleRevertTarget {
         payments: list_payment_ids(tx, &order.id)?,
-        txns: list_order_wallet_txns(tx, &order.id)?,
+        txns,
+        credit_blocked,
         effect: effect_recorded(tx, forward.as_deref(), &order.id)?,
         order: Some(order),
         now,
@@ -941,6 +1011,9 @@ pub(super) fn validate_settle_reverted(
     if t.effect {
         return Err(undo_denied("a receipt, drawer or invoice already happened"));
     }
+    if t.credit_blocked {
+        return Err(undo_denied("the credit has already been collected"));
+    }
     Ok(())
 }
 
@@ -965,23 +1038,37 @@ pub(super) fn mutate_settle_reverted(
             before: Some(before),
         });
     }
-    for (id, player_id, delta) in &t.txns {
-        let key = RowKey::WalletTxns { id: id.clone() };
+    for txn in &t.txns {
+        let key = RowKey::WalletTxns { id: txn.id.clone() };
         let before = read_row(tx, &key)?;
         delete_row(tx, Table::WalletTxns, &before)?;
-        adjust_wallet(tx, player_id, -delta)?;
         written.push(Written {
             key,
             op: ChangeOp::Delete,
             before: Some(before),
         });
-        written.push(Written {
-            key: RowKey::Wallets {
-                player_id: player_id.clone(),
-            },
-            op: ChangeOp::Update,
-            before: None,
-        });
+        if txn.reason == "credit" {
+            adjust_outstanding(tx, &txn.player_id, -txn.delta_minor)?;
+            if txn.method.as_deref() == Some("override") {
+                set_override_day(tx, &txn.player_id, None)?;
+            }
+            written.push(Written {
+                key: RowKey::CreditBalances {
+                    player_id: txn.player_id.clone(),
+                },
+                op: ChangeOp::Update,
+                before: None,
+            });
+        } else {
+            adjust_wallet(tx, &txn.player_id, -txn.delta_minor)?;
+            written.push(Written {
+                key: RowKey::Wallets {
+                    player_id: txn.player_id.clone(),
+                },
+                op: ChangeOp::Update,
+                before: None,
+            });
+        }
     }
     reopen_order(tx, &o.id)?;
     written.push(Written {
@@ -1087,4 +1174,51 @@ pub(super) fn mutate_assign(
         });
     }
     Ok(written)
+}
+
+fn validate_credit(s: &SessionSettle, t: &SettleTarget, has_player: bool) -> Result<(), AppError> {
+    let mut rows = s
+        .payments
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.method == PaymentMethod::Credit);
+    let Some((i, p)) = rows.next() else {
+        return Ok(());
+    };
+    let method = format!("payments[{i}].method");
+    if !has_player {
+        return Err(invalid(&method, "a guest bill has no credit"));
+    }
+    if rows.next().is_some() {
+        return Err(invalid(&method, "use credit once on a bill"));
+    }
+    let Some(credit) = t.credit.as_ref().filter(|c| c.limit_minor > 0) else {
+        return Err(invalid(&method, "credit is not enabled for this player"));
+    };
+    if credit.paused {
+        return Err(invalid(&method, "credit is paused for this player"));
+    }
+    let owed = credit
+        .outstanding_minor
+        .checked_add(p.amount_minor)
+        .ok_or_else(|| invalid("payments", "the payments are too large"))?;
+    if owed <= credit.limit_minor {
+        return Ok(());
+    }
+    let amount = format!("payments[{i}].amount_minor");
+    if s.credit_override != Some(true) {
+        return Err(AppError::with_field(
+            ErrorCode::CreditLimit,
+            amount,
+            "Credit limit reached, see counter.",
+        ));
+    }
+    if credit.last_override_day.as_deref() == Some(t.business_day.as_str()) {
+        return Err(AppError::with_field(
+            ErrorCode::OverrideUsedToday,
+            amount,
+            "A manager already overrode this limit today.",
+        ));
+    }
+    Ok(())
 }

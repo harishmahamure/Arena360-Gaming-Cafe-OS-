@@ -26,6 +26,7 @@ mod admin_exit;
 mod ads_consent;
 mod branch_code;
 mod changes;
+mod credit;
 mod devices;
 mod frame;
 mod groups;
@@ -159,6 +160,7 @@ pub(crate) enum Target {
     SessionAssign(Box<session::AssignTarget>),
     WalletTopup(Box<wallet::TopupTarget>),
     WalletTopupReverted(Box<wallet::TopupRevertTarget>),
+    CreditSetLimit(Box<credit::LimitTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -204,7 +206,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         }
         P::SessionStart(s) => Target::Session(Box::new(session::load(tx, s)?)),
         P::SessionEnd(e) => Target::SessionEnd(Box::new(session::load_end(tx, e)?)),
-        P::SessionSettle(s) => Target::SessionSettle(Box::new(session::load_settle(tx, s)?)),
+        P::SessionSettle(s) => Target::SessionSettle(Box::new(session::load_settle(tx, s, now)?)),
         P::SessionEndReverted(r) => {
             Target::SessionEndReverted(Box::new(session::load_end_reverted(tx, r, now)?))
         }
@@ -218,6 +220,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::WalletTopupReverted(r) => {
             Target::WalletTopupReverted(Box::new(wallet::load_topup_reverted(tx, r, now)?))
         }
+        P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

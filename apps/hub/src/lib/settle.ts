@@ -1,10 +1,21 @@
-import type { PaymentMethod, PaymentRow } from "@arena/ui/generated";
+import type { CreditView, PaymentMethod, PaymentRow } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 
 export const METHODS: readonly PaymentMethod[] = ["cash", "upi", "card"];
 
-export const methodsFor = (walletMinor: number | null | undefined): readonly PaymentMethod[] =>
-  typeof walletMinor === "number" ? [...METHODS, "wallet"] : METHODS;
+export const creditOffered = (credit: CreditView | null | undefined): credit is CreditView =>
+  credit != null && !credit.paused && credit.limit_minor > 0;
+
+export const headroomOf = (credit: CreditView): number =>
+  Math.max(0, credit.limit_minor - credit.outstanding_minor);
+
+export function methodsFor(
+  walletMinor: number | null | undefined,
+  credit?: CreditView | null,
+): readonly PaymentMethod[] {
+  if (typeof walletMinor !== "number") return METHODS;
+  return creditOffered(credit) ? [...METHODS, "wallet", "credit"] : [...METHODS, "wallet"];
+}
 
 export type Row = { method: PaymentMethod; amount: string; reference: string };
 
@@ -78,7 +89,7 @@ export function toPayments(rows: Row[], change: number, exponent: number): Payme
     if (amount === 0) continue;
     const reference = row.reference.trim();
     payments.push(
-      row.method === "cash" || row.method === "wallet"
+      row.method === "cash" || row.method === "wallet" || row.method === "credit"
         ? { method: row.method, amount_minor: amount }
         : { method: row.method, amount_minor: amount, reference },
     );

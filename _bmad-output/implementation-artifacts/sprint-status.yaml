@@ -82,7 +82,7 @@ development_status:
   3-15-pause-and-resume-a-session-with-a-reason: done
   3-16-wallet-top-up-and-paying-from-the-wallet: done
   3-17-convert-a-guest-to-a-profile-including-at-settle-and-list-se: done
-  3-18-enable-credit-for-a-player-and-settle-the-remainder-on-credi: backlog
+  3-18-enable-credit-for-a-player-and-settle-the-remainder-on-credi: review
   3-19-collect-credit-with-partial-payments-and-undo: backlog
   3-20-credit-aging-shown-first-and-auto-pause-at-15-days-overdue: backlog
   3-21-time-packs-blocks-and-passes-per-device-group: backlog

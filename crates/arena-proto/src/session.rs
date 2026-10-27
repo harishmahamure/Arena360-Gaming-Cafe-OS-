@@ -205,6 +205,7 @@ pub enum PaymentMethod {
     Upi,
     Card,
     Wallet,
+    Credit,
 }
 
 impl PaymentMethod {
@@ -214,6 +215,7 @@ impl PaymentMethod {
             Self::Upi => "upi",
             Self::Card => "card",
             Self::Wallet => "wallet",
+            Self::Credit => "credit",
         }
     }
 }
@@ -234,11 +236,38 @@ pub struct PaymentRow {
 pub struct SessionSettle {
     pub order_id: String,
     pub payments: Vec<PaymentRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub credit_override: Option<bool>,
 }
 
 pub const UNDO_WINDOW_MS: i64 = 8_000;
 pub const CARD_REFERENCE_MAX: usize = 64;
 pub const WALLET_TOPUP_MAX_MINOR: i64 = 10_000_000;
+pub const CREDIT_LIMIT_MAX_MINOR: i64 = 10_000_000;
+pub const CREDIT_DAYS_MAX: usize = 10;
+pub const CREDIT_DAY_MAX: u16 = 365;
+pub const DEFAULT_REMINDER_DAYS: [u16; 3] = [3, 7, 14];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditSetLimit {
+    pub player_id: String,
+    #[ts(type = "number")]
+    pub limit_minor: i64,
+    pub reminder_days: Vec<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditView {
+    #[ts(type = "number")]
+    pub limit_minor: i64,
+    #[ts(type = "number")]
+    pub outstanding_minor: i64,
+    pub reminder_days: Vec<u16>,
+    pub paused: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -283,6 +312,9 @@ pub struct WalletView {
     #[ts(type = "number")]
     pub balance_minor: i64,
     pub txns: Vec<WalletTxnView>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub credit: Option<CreditView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -358,6 +390,9 @@ pub struct SnapshotBill {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub wallet_minor: Option<i64>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub credit: Option<CreditView>,
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub session_rev: Option<i64>,

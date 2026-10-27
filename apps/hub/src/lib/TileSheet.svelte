@@ -23,7 +23,13 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
-  import { SESSION_DEPENDENCY, dropElevation, elevate, hasPermission } from "./auth";
+  import {
+    SESSION_DEPENDENCY,
+    dropElevation,
+    elevate,
+    hasPermission,
+    newIdempotencyKey,
+  } from "./auth";
   import ConvertGuest from "./players/ConvertGuest.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
   import SettleBar from "./SettleBar.svelte";
@@ -209,6 +215,27 @@
     await go(pauseJob(session.id, session.rev, value as PauseReason, note));
   }
 
+  const creditRefused = $derived(
+    cmd?.state === "refused" &&
+      cmd.refusal === "hub.settle.credit_limit" &&
+      cmd.job.payload.kind === "session.settle"
+      ? cmd.job
+      : null,
+  );
+
+  function overrideCredit() {
+    const refused = creditRefused;
+    if (!refused || refused.payload.kind !== "session.settle") return;
+    const job: Job = {
+      ...refused,
+      key: newIdempotencyKey(),
+      payload: { ...refused.payload, credit_override: true },
+    };
+    if (hasPermission(staff, "credit.manage")) return void go(job);
+    approvalPrompt = "ui.pin.prompt";
+    approving = job;
+  }
+
   function settle(payments: PaymentRow[]) {
     if (unpaid?.order_id && unpaid.order_rev != null) {
       void go(settleJob(unpaid.order_id, payments, unpaid.order_rev));
@@ -318,6 +345,17 @@
       {:else}<span>{t(cmd.state === "waiting" ? cmd.job.waiting : cmd.job.done)}</span>{/if}
     {/if}
   </p>
+  {#if creditRefused}
+    <div>
+      <Button
+        label="hub.settle.credit_override"
+        variant="secondary"
+        disabled={busy}
+        disabledReason="hub.sheet.waiting"
+        onclick={overrideCredit}
+      />
+    </div>
+  {/if}
   {#if unassignedRefusal}
     <div>
       <Button label="hub.sheet.assign" variant="secondary" onclick={() => void focusAssign()} />

@@ -44,7 +44,28 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
         Some(e) => elevation(tx, intent, e)?,
         None => rbac::check(tx, intent)?,
     }
-    creating_player(tx, intent)
+    creating_player(tx, intent)?;
+    overriding_credit(tx, intent)
+}
+
+/// A credit override needs `credit.manage` on top of the settle: the actor's own, or the
+/// elevating manager's.
+fn overriding_credit(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    let IntentPayload::SessionSettle(s) = &intent.payload else {
+        return Ok(());
+    };
+    if s.credit_override != Some(true) || intent.actor.kind == ActorKind::Owner {
+        return Ok(());
+    }
+    let holder = intent
+        .elevated_by
+        .as_ref()
+        .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+    if rbac::staff_allows(tx, holder, arena_proto::Permission::CreditManage)? {
+        Ok(())
+    } else {
+        Err(rbac::denied())
+    }
 }
 
 /// A conversion that also creates the profile needs `player.manage` on top of the kind's
@@ -158,7 +179,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionResume(_)
             | Target::SessionAssign(_)
             | Target::WalletTopup(_)
-            | Target::WalletTopupReverted(_),
+            | Target::WalletTopupReverted(_)
+            | Target::CreditSetLimit(_),
             _,
         ) => Ok(()),
     }
@@ -220,6 +242,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionAssign(t) => super::session::base_rev_assign(intent, t),
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
+        Target::CreditSetLimit(_) => Ok(()),
         Target::Player(t) => players::base_rev(intent, t),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),

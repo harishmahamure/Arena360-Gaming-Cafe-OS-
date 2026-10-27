@@ -122,6 +122,12 @@ pub enum ErrorCode {
     UndoNotAllowed,
     /// A wallet payment above the player's balance.
     InsufficientBalance,
+    /// A credit spend above the player's limit.
+    CreditLimit,
+    /// A credit limit set below what the player already owes.
+    CreditBelowOutstanding,
+    /// A second credit override for the same player on one business day.
+    OverrideUsedToday,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -205,6 +211,9 @@ impl ErrorCode {
             Self::ReferenceRequired => "REFERENCE_REQUIRED",
             Self::UndoNotAllowed => "UNDO_NOT_ALLOWED",
             Self::InsufficientBalance => "INSUFFICIENT_BALANCE",
+            Self::CreditLimit => "CREDIT_LIMIT",
+            Self::CreditBelowOutstanding => "CREDIT_BELOW_OUTSTANDING",
+            Self::OverrideUsedToday => "OVERRIDE_USED_TODAY",
         }
     }
 }
@@ -346,6 +355,12 @@ mod tests {
             (ErrorCode::ReferenceRequired, "REFERENCE_REQUIRED"),
             (ErrorCode::UndoNotAllowed, "UNDO_NOT_ALLOWED"),
             (ErrorCode::InsufficientBalance, "INSUFFICIENT_BALANCE"),
+            (ErrorCode::CreditLimit, "CREDIT_LIMIT"),
+            (
+                ErrorCode::CreditBelowOutstanding,
+                "CREDIT_BELOW_OUTSTANDING",
+            ),
+            (ErrorCode::OverrideUsedToday, "OVERRIDE_USED_TODAY"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

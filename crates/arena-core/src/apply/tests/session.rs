@@ -579,6 +579,7 @@ fn settle_intent(order: &str, rev: Option<i64>, payments: Vec<arena_proto::Payme
         owner(),
         IntentPayload::SessionSettle(arena_proto::SessionSettle {
             order_id: order.into(),
+            credit_override: None,
             payments,
         }),
     );
@@ -2304,4 +2305,404 @@ async fn creating_a_profile_in_a_conversion_needs_player_manage() {
     )
     .await
     .unwrap();
+}
+
+fn credit_intent(player: &str, limit: i64, days: &[u16]) -> Intent {
+    intent(
+        owner(),
+        IntentPayload::CreditSetLimit(arena_proto::CreditSetLimit {
+            player_id: player.into(),
+            limit_minor: limit,
+            reminder_days: days.to_vec(),
+        }),
+    )
+}
+
+fn credit_row(f: &Fixture, player: &str) -> Row {
+    table(f, Table::CreditBalances)
+        .into_iter()
+        .find(|c| text(c, "player_id") == player)
+        .unwrap()
+}
+
+fn owed(f: &Fixture, player: &str) -> i64 {
+    int(&credit_row(f, player), "outstanding_minor")
+}
+
+async fn credit_player(f: &Fixture, username: &str, phone: &str, limit: i64) -> String {
+    let p = player(f, username, phone).await;
+    end(f, credit_intent(&p, limit, &[3, 7, 14])).await.unwrap();
+    p
+}
+
+async fn billed_for(f: &Fixture, player: &str, rate: i64, minutes: i64) -> (String, i64) {
+    let d = pc(f, DeviceKind::Pc, "pc", Some(rate)).await;
+    start(f, &d, Some(player)).await.unwrap();
+    f.clock.advance(minutes * 60_000);
+    let s = sessions(f).pop().unwrap();
+    end(f, end_intent(&text(&s, "id"), Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let o = table(f, Table::Orders).pop().unwrap();
+    (text(&o, "id"), int(&o, "rev"))
+}
+
+fn settle_on_credit(order: &str, rev: i64, amount: i64, over: bool) -> Intent {
+    let mut i = settle_intent(
+        order,
+        Some(rev),
+        vec![pay(arena_proto::PaymentMethod::Credit, amount, None)],
+    );
+    if let IntentPayload::SessionSettle(s) = &mut i.payload {
+        s.credit_override = over.then_some(true);
+    }
+    i
+}
+
+#[tokio::test]
+async fn setting_a_credit_limit_creates_then_edits_the_row() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let a = end(&f, credit_intent(&p, 50_000, &[3, 7, 14]))
+        .await
+        .unwrap();
+    assert_eq!(a.changes.len(), 1);
+    assert_eq!(a.changes[0].tbl, "credit_balances");
+    assert_eq!(a.changes[0].op, ChangeOp::Insert);
+    let row = credit_row(&f, &p);
+    assert_eq!(int(&row, "limit_minor"), 50_000);
+    assert_eq!(int(&row, "outstanding_minor"), 0);
+    assert_eq!(int(&row, "credit_paused"), 0);
+    assert_eq!(row["last_override_day"], RowValue::Null);
+    assert_eq!(text(&row, "reminder_days"), "3,7,14");
+    let b = end(&f, credit_intent(&p, 80_000, &[2, 10])).await.unwrap();
+    assert_eq!(b.changes[0].op, ChangeOp::Update);
+    let row = credit_row(&f, &p);
+    assert_eq!(int(&row, "limit_minor"), 80_000);
+    assert_eq!(text(&row, "reminder_days"), "2,10");
+    assert_eq!(table(&f, Table::CreditBalances).len(), 1);
+}
+
+#[tokio::test]
+async fn a_bad_credit_limit_is_refused_and_writes_nothing() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let ctr = staff(&f, "ctr", ROLE_COUNTER).await;
+    let before = reopen(&f).changes().unwrap().len();
+    let field = |c, s: &str| (c, Some(s.to_owned()));
+    let cases = vec![
+        (
+            credit_intent("nobody", 100, &[3]),
+            field(ErrorCode::NotFound, "player_id"),
+        ),
+        (
+            credit_intent(&p, -1, &[3]),
+            field(ErrorCode::ValidationFailed, "limit_minor"),
+        ),
+        (
+            credit_intent(&p, 10_000_001, &[3]),
+            field(ErrorCode::ValidationFailed, "limit_minor"),
+        ),
+        (
+            credit_intent(&p, 100, &[]),
+            field(ErrorCode::ValidationFailed, "reminder_days"),
+        ),
+        (
+            credit_intent(&p, 100, &[7, 3]),
+            field(ErrorCode::ValidationFailed, "reminder_days"),
+        ),
+        (
+            credit_intent(&p, 100, &[3, 3]),
+            field(ErrorCode::ValidationFailed, "reminder_days"),
+        ),
+        (
+            credit_intent(&p, 100, &[0]),
+            field(ErrorCode::ValidationFailed, "reminder_days"),
+        ),
+        (
+            credit_intent(&p, 100, &[366]),
+            field(ErrorCode::ValidationFailed, "reminder_days"),
+        ),
+        (
+            credit_intent(&p, 100, &(1..=11).collect::<Vec<u16>>()),
+            field(ErrorCode::ValidationFailed, "reminder_days"),
+        ),
+    ];
+    for (i, want) in cases {
+        assert_eq!(refusal(end(&f, i).await), want);
+    }
+    let mut with_rev = credit_intent(&p, 100, &[3]);
+    with_rev.base_rev = Some(1);
+    assert_eq!(
+        refusal(end(&f, with_rev).await),
+        field(ErrorCode::ValidationFailed, "base_rev")
+    );
+    let mut counter = credit_intent(&p, 100, &[3]);
+    counter.actor = ctr;
+    assert_eq!(
+        refusal(end(&f, counter).await).0,
+        ErrorCode::PermissionDenied
+    );
+    assert_eq!(reopen(&f).changes().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn a_limit_below_what_is_owed_is_refused() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    let (order, rev) = billed_for(&f, &p, 12_000, 60).await;
+    end(&f, settle_on_credit(&order, rev, 12_000, false))
+        .await
+        .unwrap();
+    assert_eq!(owed(&f, &p), 12_000);
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, credit_intent(&p, 11_999, &[3])).await),
+        (
+            ErrorCode::CreditBelowOutstanding,
+            Some("limit_minor".into())
+        )
+    );
+    assert_eq!(reopen(&f).changes().unwrap().len(), before);
+    end(&f, credit_intent(&p, 12_000, &[3])).await.unwrap();
+}
+
+#[tokio::test]
+async fn settling_on_credit_appends_a_ledger_row_and_raises_outstanding() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    topped_up(&f, &p, 5_000).await;
+    let (order, rev) = billed_for(&f, &p, 12_000, 60).await;
+    let snapshot = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    let credit = snapshot.bills[0].credit.clone().unwrap();
+    assert_eq!(
+        (credit.limit_minor, credit.outstanding_minor, credit.paused),
+        (50_000, 0, false)
+    );
+    assert_eq!(credit.reminder_days, vec![3, 7, 14]);
+    let a = end(
+        &f,
+        settle_intent(
+            &order,
+            Some(rev),
+            vec![
+                pay(arena_proto::PaymentMethod::Wallet, 2_000, None),
+                pay(arena_proto::PaymentMethod::Credit, 10_000, None),
+            ],
+        ),
+    )
+    .await
+    .unwrap();
+    let tables: Vec<_> = a.changes.iter().map(|c| c.tbl.as_str()).collect();
+    assert!(tables.contains(&"credit_balances") && tables.contains(&"wallets"));
+    assert_eq!(owed(&f, &p), 10_000);
+    assert_eq!(balance(&f, &p), 3_000);
+    let credit_rows: Vec<_> = table(&f, Table::WalletTxns)
+        .into_iter()
+        .filter(|t| text(t, "reason") == "credit")
+        .collect();
+    assert_eq!(credit_rows.len(), 1);
+    assert_eq!(int(&credit_rows[0], "delta_minor"), 10_000);
+    assert_eq!(credit_rows[0]["method"], RowValue::Null);
+    assert_eq!(text(&credit_rows[0], "order_id"), order);
+    let ledger: i64 = table(&f, Table::WalletTxns)
+        .iter()
+        .filter(|t| text(t, "reason") != "credit")
+        .map(|t| int(t, "delta_minor"))
+        .sum();
+    assert_eq!(ledger, balance(&f, &p));
+    let methods: Vec<_> = table(&f, Table::Payments)
+        .iter()
+        .map(|p| text(p, "method"))
+        .collect();
+    assert!(methods.contains(&"credit".to_owned()));
+    let txns = reopen(&f).wallet_txns(&p).unwrap();
+    assert!(txns.iter().all(|t| t.reason != "credit"));
+}
+
+#[tokio::test]
+async fn credit_is_refused_for_guests_and_players_without_credit() {
+    let f = bootstrapped().await;
+    let (guest_order, _, guest_rev) = billed(&f, 10_000, 41).await;
+    let method = || {
+        (
+            ErrorCode::ValidationFailed,
+            Some("payments[0].method".to_owned()),
+        )
+    };
+    assert_eq!(
+        refusal(end(&f, settle_on_credit(&guest_order, guest_rev, 7_500, false)).await),
+        method()
+    );
+    let plain = player(&f, "ravi", "+919876543211").await;
+    let (order, rev) = billed_for(&f, &plain, 12_000, 60).await;
+    assert_eq!(
+        refusal(end(&f, settle_on_credit(&order, rev, 12_000, false)).await),
+        method()
+    );
+    let zero = credit_player(&f, "zed", "+919876543212", 0).await;
+    let (zero_order, zero_rev) = billed_for(&f, &zero, 12_000, 60).await;
+    assert_eq!(
+        refusal(end(&f, settle_on_credit(&zero_order, zero_rev, 12_000, false)).await),
+        method()
+    );
+    let full = credit_player(&f, "full", "+919876543213", 50_000).await;
+    let (full_order, full_rev) = billed_for(&f, &full, 12_000, 60).await;
+    let twice = settle_intent(
+        &full_order,
+        Some(full_rev),
+        vec![
+            pay(arena_proto::PaymentMethod::Credit, 6_000, None),
+            pay(arena_proto::PaymentMethod::Credit, 6_000, None),
+        ],
+    );
+    assert_eq!(refusal(end(&f, twice).await), method());
+    let referenced = settle_intent(
+        &full_order,
+        Some(full_rev),
+        vec![pay(arena_proto::PaymentMethod::Credit, 12_000, Some("x"))],
+    );
+    assert_eq!(
+        refusal(end(&f, referenced).await),
+        (
+            ErrorCode::ValidationFailed,
+            Some("payments[0].reference".into())
+        )
+    );
+    assert!(table(&f, Table::Payments).is_empty());
+    assert!(table(&f, Table::WalletTxns).is_empty());
+}
+
+#[tokio::test]
+async fn a_top_up_cannot_be_paid_on_credit() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                topup_intent(
+                    &p,
+                    100,
+                    vec![pay(arena_proto::PaymentMethod::Credit, 100, None)]
+                )
+            )
+            .await
+        ),
+        (
+            ErrorCode::ValidationFailed,
+            Some("payments[0].method".into())
+        )
+    );
+}
+
+#[tokio::test]
+async fn going_over_the_limit_needs_a_manager_override_once_a_day() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 20_000).await;
+    let (first, first_rev) = billed_for(&f, &p, 12_000, 60).await;
+    end(&f, settle_on_credit(&first, first_rev, 12_000, false))
+        .await
+        .unwrap();
+    let (second, second_rev) = billed_for(&f, &p, 12_000, 60).await;
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, settle_on_credit(&second, second_rev, 12_000, false)).await),
+        (
+            ErrorCode::CreditLimit,
+            Some("payments[0].amount_minor".into())
+        )
+    );
+    assert_eq!(reopen(&f).changes().unwrap().len(), before);
+    let mut counter = settle_on_credit(&second, second_rev, 12_000, true);
+    counter.actor = staff(&f, "ctr", ROLE_COUNTER).await;
+    assert_eq!(
+        refusal(end(&f, counter).await).0,
+        ErrorCode::PermissionDenied
+    );
+    end(&f, settle_on_credit(&second, second_rev, 12_000, true))
+        .await
+        .unwrap();
+    assert_eq!(owed(&f, &p), 24_000);
+    assert!(!text(&credit_row(&f, &p), "last_override_day").is_empty());
+    let override_rows = table(&f, Table::WalletTxns)
+        .into_iter()
+        .filter(|t| {
+            text(t, "reason") == "credit" && t["method"] == RowValue::Text("override".into())
+        })
+        .count();
+    assert_eq!(override_rows, 1);
+
+    let (third, third_rev) = billed_for(&f, &p, 12_000, 60).await;
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, settle_on_credit(&third, third_rev, 12_000, true)).await),
+        (
+            ErrorCode::OverrideUsedToday,
+            Some("payments[0].amount_minor".into())
+        )
+    );
+    assert_eq!(reopen(&f).changes().unwrap().len(), before);
+    assert_eq!(owed(&f, &p), 24_000);
+}
+
+#[tokio::test]
+async fn an_override_inside_the_limit_is_not_spent() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    let (order, rev) = billed_for(&f, &p, 12_000, 60).await;
+    end(&f, settle_on_credit(&order, rev, 12_000, true))
+        .await
+        .unwrap();
+    assert_eq!(credit_row(&f, &p)["last_override_day"], RowValue::Null);
+    assert_eq!(owed(&f, &p), 12_000);
+}
+
+#[tokio::test]
+async fn undoing_a_credit_settle_restores_outstanding_and_the_override() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 10_000).await;
+    let (order, rev) = billed_for(&f, &p, 12_000, 60).await;
+    end(&f, settle_on_credit(&order, rev, 12_000, true))
+        .await
+        .unwrap();
+    assert_eq!(owed(&f, &p), 12_000);
+    assert_ne!(credit_row(&f, &p)["last_override_day"], RowValue::Null);
+    let settled_rev = rev_of(&f, Table::Orders, &order);
+    let a = end(&f, settle_revert_intent(&order, Some(settled_rev)))
+        .await
+        .unwrap();
+    assert!(a.changes.iter().any(|c| c.tbl == "credit_balances"));
+    assert_eq!(owed(&f, &p), 0);
+    assert_eq!(credit_row(&f, &p)["last_override_day"], RowValue::Null);
+    assert!(table(&f, Table::WalletTxns).is_empty());
+    assert_eq!(balance(&f, &p), 0);
+    let order_rev = rev_of(&f, Table::Orders, &order);
+    end(&f, settle_on_credit(&order, order_rev, 12_000, true))
+        .await
+        .unwrap();
+    assert_eq!(owed(&f, &p), 12_000);
+}
+
+#[tokio::test]
+async fn a_guest_bill_linked_to_a_credit_player_offers_credit() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    let (id, _) = running(&f, 6_000).await;
+    let s = session_row(&f, &id);
+    end(&f, assign_intent(&id, &p, None, Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    f.clock.advance(60 * 60_000);
+    let s = session_row(&f, &id);
+    end(&f, end_intent(&id, Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let snapshot = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    let bill = snapshot
+        .bills
+        .iter()
+        .find(|b| b.order_id.is_some())
+        .unwrap();
+    assert_eq!(bill.credit.as_ref().unwrap().limit_minor, 50_000);
 }

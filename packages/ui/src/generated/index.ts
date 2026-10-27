@@ -55,6 +55,8 @@ export type { ComponentView } from "./ComponentView";
 export type { Connectivity } from "./Connectivity";
 export type { ConnectivityState } from "./ConnectivityState";
 export type { Country } from "./Country";
+export type { CreditSetLimit } from "./CreditSetLimit";
+export type { CreditView } from "./CreditView";
 export type { DeviceAdminExit } from "./DeviceAdminExit";
 export type { DeviceAdminRelock } from "./DeviceAdminRelock";
 export type { DeviceAdminUnlock } from "./DeviceAdminUnlock";

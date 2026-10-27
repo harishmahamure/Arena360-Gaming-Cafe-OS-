@@ -387,3 +387,10 @@
 ## Deferred from: code review of Story 4.7
 
 - A picked folder the Hub refuses (probe failed) keeps its persisted grant until the next accepted save calls `keepBackupFolder`; repeated failed picks could accumulate grants (Android caps them). The page could call `keepBackupFolder(current)` after a refusal.
+
+## Deferred from: Story 4.8
+
+- The first AC asks for an Android emulator or device-farm run with a Windows kiosk VM on the same virtual LAN. Nothing here can drive the Android UI or a Windows VM, so the full path runs on the host: the real cloud, the real `arena-hub` binary with `--platform android` and a kiosk that speaks the LAN protocol (`free_android_golive.rs`). The `android-e2e.yml` emulator job only installs the debug APK and checks that it starts. A UI-driven run (Appium or Maestro through the WebView, plus a Windows kiosk VM that locks at zero for real) is still to be built. The workflow itself and the emulator job were not run here.
+- The kiosk "locks at zero" step is the protocol client reporting `locked` after the `test_session` event, not a real lock screen (the kiosk lock is covered by Story 2.29).
+- The test waits on the Hub's 10 s boot heartbeat between steps, so it takes about a minute; a `--heartbeat-interval` override would shorten it but is a product change.
+- The ad-consent item is checked on the Free tier only; nothing here checks the banner (Stories 4.10 to 4.15).

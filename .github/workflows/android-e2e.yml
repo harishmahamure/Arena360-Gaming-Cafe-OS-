@@ -1,0 +1,110 @@
+name: Android end-to-end
+
+# Story 4.8: a Free café goes from sign-up to go-live on an Android Hub with no comp entitlement.
+# Runs nightly and on every release candidate (`v*-rc*` tags); not part of ci-ok. A failing step
+# fails the run and the summary names the step; the emulator job also keeps a screenshot.
+#
+# - `free-cafe`: the real cloud, the real arena-hub binary started with `--platform android` and
+#   a kiosk over the real LAN protocol, walking sign-up -> Free -> pair -> owner sign-in -> pair a
+#   kiosk -> group -> rate -> skip printer -> backup folder -> ad consent -> 2-minute test session
+#   -> go live (crates/arena-hub/tests/free_android_golive.rs).
+# - `emulator`: installs the debug APK on an x86_64 emulator and checks it starts; a failure keeps
+#   a screenshot. The Windows kiosk VM on the same virtual LAN is not wired yet (see
+#   deferred-work.md), so the kiosk in `free-cafe` is the protocol client.
+
+on:
+  schedule:
+    - cron: "30 21 * * *"
+  push:
+    tags: ["v*-rc*"]
+  workflow_dispatch:
+
+concurrency:
+  group: android-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  free-cafe:
+    name: free café sign-up to go-live (android hub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-e2e
+      - name: Run the end-to-end test
+        run: |
+          set -o pipefail
+          cargo test --locked -p arena-hub --features dev-fixtures --test free_android_golive -- --nocapture 2>&1 | tee e2e.log
+      - name: Name the failing step
+        if: failure()
+        run: node scripts/android-e2e.mjs failed-step e2e.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-e2e-log
+          path: e2e.log
+          if-no-files-found: ignore
+
+  emulator:
+    name: android hub starts on an emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANDROID_NDK_VERSION: 28.2.13676358
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-e2e-emulator
+      - name: Install the pinned NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "ndk;${ANDROID_NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - name: Build the debug APK
+        run: pnpm --filter @arena/hub exec tauri android build --apk --debug --target x86_64 -- --locked
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install and launch on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          ram-size: 4096M
+          disk-size: 24G
+          script: |
+            adb install -r $(find apps/hub/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -n 1)
+            adb shell monkey -p in.arena360.hub -c android.intent.category.LAUNCHER 1
+            sleep 20
+            adb exec-out screencap -p > screenshot.png
+            adb shell dumpsys activity activities | grep -q in.arena360.hub
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-e2e-screenshot
+          path: screenshot.png
+          if-no-files-found: ignore

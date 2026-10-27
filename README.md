@@ -1820,6 +1820,20 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   policy, duplicate manifest entries and that `KeystoreBridge.kt` uses `AndroidKeyStore` with
   AES-GCM and never reads the key out; `node scripts/check-android.mjs aab <dir>` checks an extracted AAB for 16 KB ELF
   alignment and the `arm64-v8a` and `x86_64` libraries.
+- **Free café end to end (Story 4.8).** `crates/arena-hub/tests/free_android_golive.rs` (feature
+  `dev-fixtures`) starts a real cloud and the real `arena-hub` binary with `--platform android`,
+  with a kiosk speaking the LAN protocol, and walks sign-up → Free (no comp entitlement) → a
+  Windows Hub refused `FEATURE_NOT_ENTITLED` with the code left unconsumed → the same code pairs
+  the Android Hub → owner first sign-in → kiosk pairing → group → rate → printer skipped →
+  opening hours → backup folder → ad consent → 2-minute test session → go live. It then checks the
+  go-live items (standby unset and not blocking) and that `onboarding_progress` holds every step
+  time and no personal data. Run it with
+  `cargo test -p arena-hub --features dev-fixtures --test free_android_golive -- --nocapture`
+  (about a minute: the Hub heartbeats every 10 s until live). `.github/workflows/android-e2e.yml`
+  runs it nightly and on `v*-rc*` tags; a failure is summarised by
+  `node scripts/android-e2e.mjs failed-step <log>` ("failed at step: …"), and the emulator job keeps
+  a screenshot. The emulator job only installs and starts the debug APK; the Windows kiosk VM and a
+  device-farm run of the full path are not wired yet.
 
 ## Generated protocol types and the message catalogue
 

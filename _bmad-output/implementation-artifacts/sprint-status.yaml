@@ -99,7 +99,7 @@ development_status:
   3-32-transfer-a-session-to-another-device: done
   3-33-group-sessions-under-one-bill-and-one-payer: done
   3-34-forced-end-with-manager-pin-and-reason: done
-  3-35-console-sessions-timed-from-the-hub-with-warnings-on-the-til: review
+  3-35-console-sessions-timed-from-the-hub-with-warnings-on-the-til: done
   3-36-console-time-up-alert-and-controller-check: backlog
   3-37-floor-invariants-throughput-and-offline-proof: backlog
   epic-3-retrospective: optional

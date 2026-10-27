@@ -2,7 +2,7 @@
 title: 'Story 3.35: Console Sessions Timed from the Hub, with Warnings on the Tile'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_revision: '14583c0'
 review_loop_iteration: 0
 followup_review_recommended: false

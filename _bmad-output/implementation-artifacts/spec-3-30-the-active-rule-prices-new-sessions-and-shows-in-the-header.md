@@ -2,7 +2,7 @@
 title: 'Story 3.30: The Active Rule Prices New Sessions and Shows in the Header'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'f0ab3f7'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -68,7 +68,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: fmt, clippy, hub and kiosk check, string/token/contrast/protocol/layer/hex/secrets checks and prettier pass; arena-core (587 incl. 5 new `rule_pricing` apply tests, 3 new `until` golden tests, snapshot test) and the other workspace tests pass; `rule-chip`, `rules`, `extend`, `settings`, `tile-sheet`, `floor` Playwright specs pass on desktop and phone (132). Known unrelated failures as before: arena-cloud (`a_hung_run_times_out_with_its_own_code`, `unreachable_at_start_retries_then_exits_1_without_logging_the_token`) and arena-tasks (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reading_times_out`). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: no migration (`session_segments.rule_id` already exists); the extension order line does not record a rule (no segment is opened); the snapshot keeps the base `rate_minor` and adds `active_rule` so Settings → Layout still edits the base; the chip names the group only when more than one group has a rule in effect; the layout re-reads the snapshot at `min(next_change_at)` (at least 1 s, 0.5 s after the boundary) rather than polling.
 Left for later: mid-session rate segments and bill lines per rule (3.31); kiosk/attract screens showing the active rule (6.7).

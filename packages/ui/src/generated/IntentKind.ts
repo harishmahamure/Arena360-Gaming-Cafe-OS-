@@ -48,4 +48,6 @@ export type IntentKind =
   | "session.end.reverted"
   | "session.settle.reverted"
   | "session.pause"
-  | "session.resume";
+  | "session.resume"
+  | "wallet.topup"
+  | "wallet.topup.reverted";

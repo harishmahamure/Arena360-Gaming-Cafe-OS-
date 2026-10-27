@@ -127,6 +127,18 @@ enum Op {
         short: bool,
         split: bool,
     },
+    /// A cash top-up for a player, then maybe its Undo (late or in time).
+    WalletTopup {
+        player: u8,
+        amount: u16,
+        undo: bool,
+        late: bool,
+    },
+    /// A Settle that pays an open bill from the wallet (or too much from it, or on a guest bill).
+    WalletPay {
+        slot: u8,
+        over: bool,
+    },
     /// A Pause of a running session or a Resume of a paused one, maybe stale, then the repeat.
     SessionPause {
         slot: u8,
@@ -263,6 +275,15 @@ fn op() -> impl Strategy<Value = Op> {
             short,
             split
         }),
+        2 => (any::<u8>(), 0..5000u16, any::<bool>(), prop::bool::weighted(0.3)).prop_map(
+            |(player, amount, undo, late)| Op::WalletTopup {
+                player,
+                amount,
+                undo,
+                late
+            }
+        ),
+        2 => (0..3u8, prop::bool::weighted(0.3)).prop_map(|(slot, over)| Op::WalletPay { slot, over }),
         3 => (0..3u8, 0..4u8, prop::bool::weighted(0.25)).prop_map(|(slot, reason, stale)| {
             Op::SessionPause { slot, reason, stale }
         }),
@@ -922,7 +943,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), changes_before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
-                prop_assert_eq!(hub.change_count(), changes_before + 2);
+                prop_assert_eq!(hub.change_count(), changes_before + 3);
                 let consents = hub.reader.rows(Table::Consents).unwrap();
                 let last = consents.last().unwrap();
                 prop_assert_eq!(&last["granted"], &RowValue::Integer(i64::from(*consent)));
@@ -1137,7 +1158,9 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert_eq!(
                 orders
                     .iter()
-                    .filter(|o| text(o, "session_id") == id && text(o, "status") == "open")
+                    .filter(|o| {
+                        o["session_id"] == RowValue::Text(id.clone()) && text(o, "status") == "open"
+                    })
                     .count(),
                 1
             );
@@ -1208,6 +1231,146 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .map(|p| int(p, "amount_minor"))
                     .sum();
                 prop_assert_eq!(paid, int(&o, "total_minor"));
+            }
+        }
+        Op::WalletTopup {
+            player,
+            amount,
+            undo,
+            late,
+        } => {
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let Some(p) = players.get(usize::from(*player) % players.len().max(1)) else {
+                return Ok(());
+            };
+            let player_id = text(p, "player_id");
+            let amount_minor = 100 + i64::from(*amount);
+            let before = hub.change_count();
+            let held = |hub: &Hub| {
+                hub.reader
+                    .rows(Table::Wallets)
+                    .unwrap()
+                    .iter()
+                    .find(|w| text(w, "player_id") == player_id)
+                    .map_or(0, |w| int(w, "balance_minor"))
+            };
+            let balance = held(hub);
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::WalletTopup(arena_proto::WalletTopup {
+                    player_id: player_id.clone(),
+                    amount_minor,
+                    payments: vec![arena_proto::PaymentRow {
+                        method: arena_proto::PaymentMethod::Cash,
+                        amount_minor,
+                        reference: None,
+                    }],
+                }),
+                None,
+            ));
+            prop_assert!(out.is_ok(), "{:?}", out);
+            prop_assert_eq!(hub.change_count(), before + 4);
+            prop_assert_eq!(held(hub), balance + amount_minor);
+            if *undo {
+                let order = hub
+                    .reader
+                    .rows(Table::Orders)
+                    .unwrap()
+                    .into_iter()
+                    .rfind(|o| text(o, "kind") == "topup")
+                    .unwrap();
+                if *late {
+                    hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
+                }
+                let after_forward = hub.change_count();
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::WalletTopupReverted(arena_proto::WalletTopupReverted {
+                        order_id: text(&order, "id"),
+                    }),
+                    Some(int(&order, "rev")),
+                ));
+                if *late {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::UndoNotAllowed, None)));
+                    prop_assert_eq!(hub.change_count(), after_forward);
+                    prop_assert_eq!(held(hub), balance + amount_minor);
+                } else {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert_eq!(hub.change_count(), after_forward + 4);
+                    prop_assert_eq!(held(hub), balance);
+                }
+            }
+        }
+        Op::WalletPay { slot, over } => {
+            let open: Vec<_> = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .filter(|o| text(o, "status") == "open")
+                .collect();
+            let Some(order) = open.get(usize::from(*slot) % open.len().max(1)) else {
+                return Ok(());
+            };
+            let (id, rev, total) = (
+                text(order, "id"),
+                int(order, "rev"),
+                int(order, "total_minor"),
+            );
+            let balance = match &order["player_id"] {
+                RowValue::Text(p) => hub
+                    .reader
+                    .rows(Table::Wallets)
+                    .unwrap()
+                    .iter()
+                    .find(|w| text(w, "player_id") == *p)
+                    .map_or(0, |w| int(w, "balance_minor")),
+                _ => 0,
+            };
+            let guest = order["player_id"] == RowValue::Null;
+            let wallet = if *over {
+                balance + 1
+            } else {
+                balance.min(total)
+            };
+            if wallet == 0 {
+                return Ok(());
+            }
+            let mut payments = vec![arena_proto::PaymentRow {
+                method: arena_proto::PaymentMethod::Wallet,
+                amount_minor: wallet,
+                reference: None,
+            }];
+            if total > wallet {
+                payments.push(arena_proto::PaymentRow {
+                    method: arena_proto::PaymentMethod::Cash,
+                    amount_minor: total - wallet,
+                    reference: None,
+                });
+            }
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                    order_id: id,
+                    payments,
+                }),
+                Some(rev),
+            ));
+            if guest {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("payments[0].method")))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else if *over {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((
+                        ErrorCode::InsufficientBalance,
+                        Some("payments[0].amount_minor")
+                    ))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
             }
         }
         Op::SessionPause {
@@ -1419,7 +1582,11 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     );
                 } else {
                     prop_assert_eq!(hub.change_count(), after_forward + 5);
-                    prop_assert!(orders.iter().all(|o| text(o, "session_id") != target));
+                    prop_assert!(
+                        orders
+                            .iter()
+                            .all(|o| o["session_id"] != RowValue::Text(target.clone()))
+                    );
                     let s = hub
                         .reader
                         .rows(Table::Sessions)
@@ -1471,6 +1638,21 @@ fn assert_replay_reproduces(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+fn assert_wallets_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let txns = hub.reader.rows(Table::WalletTxns).unwrap();
+    for w in hub.reader.rows(Table::Wallets).unwrap() {
+        let id = text(&w, "player_id");
+        let sum: i64 = txns
+            .iter()
+            .filter(|t| text(t, "player_id") == id)
+            .map(|t| int(t, "delta_minor"))
+            .sum();
+        prop_assert!(int(&w, "balance_minor") >= 0);
+        prop_assert_eq!(int(&w, "balance_minor"), sum);
+    }
+    Ok(())
+}
+
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()
@@ -1490,6 +1672,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
             let mut hub = Hub::new();
             for op in &ops {
                 step(&mut hub, op)?;
+                assert_wallets_hold(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

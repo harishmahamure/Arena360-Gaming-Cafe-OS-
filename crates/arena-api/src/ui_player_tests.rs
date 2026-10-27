@@ -1,3 +1,4 @@
+use arena_core::Clock;
 use arena_store::{Store, Table};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -56,7 +57,7 @@ async fn a_counter_creates_a_profile_and_only_ciphertext_is_stored() {
         .iter()
         .map(|c| c["tbl"].as_str().unwrap())
         .collect();
-    assert_eq!(tables, ["players", "consents"]);
+    assert_eq!(tables, ["players", "consents", "wallets"]);
 
     let s = store(&hub);
     let players = s.rows(Table::Players).unwrap();
@@ -569,4 +570,91 @@ async fn edit_and_reset_need_the_permission_or_a_managers_pin() {
         last.elevated_by_id.as_deref(),
         Some(hub.manager_id.as_str())
     );
+}
+
+fn topup_body(hub: &Hub, player: &str, amount: i64, payments: Value) -> Value {
+    json!({"intent": {
+        "intent_id": ulid::Ulid::generate().to_string(),
+        "kind": "wallet.topup",
+        "idempotency_key": ulid::Ulid::generate().to_string(),
+        "issued_at": hub.clock.now_ms(),
+        "actor": {"kind": "staff", "id": "x"},
+        "payload": {
+            "kind": "wallet.topup",
+            "player_id": player,
+            "amount_minor": amount,
+            "payments": payments,
+        },
+    }})
+}
+
+#[tokio::test]
+async fn a_top_up_answers_with_the_undo_window_and_the_wallet_route_lists_it() {
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    let (_, reply) = create(&hub, &token, body(form("Asha_9", "+91 98765 43210"), None)).await;
+    let player = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let (status, empty) = call(
+        &hub,
+        "GET",
+        &format!("/ui/players/wallet?id={player}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["balance_minor"], 0);
+    assert_eq!(empty["txns"].as_array().unwrap().len(), 0);
+
+    let short = topup_body(
+        &hub,
+        &player,
+        500,
+        json!([{"method": "cash", "amount_minor": 100}]),
+    );
+    let (status, refused) = call(&hub, "POST", "/ui/intent", Some(&token), Some(short)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "PAYMENT_SHORT");
+
+    hub.clock.advance(1_000);
+    let ok = topup_body(
+        &hub,
+        &player,
+        500,
+        json!([{"method": "upi", "amount_minor": 500, "reference": "1234"}]),
+    );
+    let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(ok)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let settled_at = reply["settled"]["settled_at"].as_i64().unwrap();
+    assert_eq!(reply["settled"]["undo_until"], settled_at + 8_000);
+    assert_eq!(reply["settled"]["total_minor"], 500);
+    assert_eq!(reply["settled"]["order_rev"], 1);
+    assert_eq!(reply["settled"]["irreversible"], false);
+
+    let (_, wallet) = call(
+        &hub,
+        "GET",
+        &format!("/ui/players/wallet?id={player}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(wallet["balance_minor"], 500);
+    assert_eq!(wallet["txns"][0]["delta_minor"], 500);
+    assert_eq!(wallet["txns"][0]["reason"], "topup");
+    assert_eq!(wallet["txns"][0]["method"], "upi");
+
+    let (_, profile) = call(
+        &hub,
+        "GET",
+        &format!("/ui/players/profile?id={player}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(profile["wallet_minor"], 500);
 }

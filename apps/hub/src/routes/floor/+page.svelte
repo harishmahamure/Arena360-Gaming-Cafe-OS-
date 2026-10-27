@@ -1,13 +1,5 @@
 <script lang="ts">
-  import {
-    FloorTile,
-    InlinePin,
-    STATUS_LABELS,
-    UndoToast,
-    formatDateTime,
-    formatMoney,
-    t,
-  } from "@arena/ui";
+  import { FloorTile, STATUS_LABELS, formatDateTime, formatMoney, t } from "@arena/ui";
   import type {
     DeviceStatus,
     SessionStaff,
@@ -21,7 +13,7 @@
   import { nextTile } from "../../lib/floor-nav";
   import TileSheet from "../../lib/TileSheet.svelte";
   import { PAUSE_LABELS, cmds } from "../../lib/tile-actions.svelte";
-  import { approveUndo, cancelApproval, runUndo, secondsLeft, undo } from "../../lib/undo.svelte";
+  import UndoDock from "../../lib/UndoDock.svelte";
   import type { PageData } from "./$types";
 
   let { data }: { data: PageData } = $props();
@@ -231,29 +223,7 @@
   </FloorTile>
 {/snippet}
 
-{#if undo.current && snapshot?.locale}
-  {@const u = undo.current}
-  <div class="undo-dock">
-    <UndoToast
-      message={u.kind === "end" ? "hub.undo.ended" : "hub.undo.settled"}
-      params={{ amount: formatMoney(u.amountMinor, snapshot.locale) }}
-      seconds={secondsLeft(u)}
-      busy={u.phase === "sending"}
-      notice={u.notice}
-      refused={u.refused}
-      error={u.error}
-      onundo={() => void runUndo(staff)}
-    >
-      {#if u.phase === "approving"}
-        <InlinePin
-          message="ui.pin.prompt"
-          onsubmit={(pin) => approveUndo(staff, pin)}
-          oncancel={cancelApproval}
-        />
-      {/if}
-    </UndoToast>
-  </div>
-{/if}
+<UndoDock {staff} />
 
 <div class="stage" class:open={active !== undefined}>
   <div class="floor">
@@ -375,21 +345,6 @@
 </div>
 
 <style>
-  .undo-dock {
-    position: fixed;
-    inset: auto 0 var(--space-4);
-    z-index: 12;
-    display: flex;
-    justify-content: center;
-    pointer-events: none;
-  }
-
-  @media (max-width: 839px) {
-    .undo-dock {
-      bottom: calc(var(--space-9) + var(--space-3));
-    }
-  }
-
   .stage {
     display: grid;
     gap: var(--space-5);

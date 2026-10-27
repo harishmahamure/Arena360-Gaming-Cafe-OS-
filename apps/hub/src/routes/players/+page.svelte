@@ -1,14 +1,19 @@
 <script lang="ts">
-  import { Button, t } from "@arena/ui";
-  import type { PlayerProfile } from "@arena/ui/generated";
-  import { onMount, tick } from "svelte";
+  import { Button, formatMoney, t } from "@arena/ui";
+  import type { PlayerProfile, WalletView } from "@arena/ui/generated";
+  import { onMount, tick, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
-  import { SESSION_DEPENDENCY, hasPermission, loadPlayer } from "../../lib/auth";
+  import { SESSION_DEPENDENCY, hasPermission, loadPlayer, loadWallet } from "../../lib/auth";
   import type { MessageKey } from "@arena/ui/messages";
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
   import EditProfile from "../../lib/players/EditProfile.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
+  import TopUp from "../../lib/players/TopUp.svelte";
+  import WalletList from "../../lib/players/WalletList.svelte";
+  import UndoDock from "../../lib/UndoDock.svelte";
+  import { branchLocale } from "../../lib/locale.svelte";
+  import { walletEvents } from "../../lib/wallet.svelte";
   import { sessionStaff } from "../../lib/operating";
 
   let open = $state(false);
@@ -22,10 +27,38 @@
   let edited: MessageKey | null = $state(null);
   let stale = $state(false);
   let trigger: HTMLElement | undefined = $state();
+  let wallet: WalletView | null = $state(null);
+  let walletOpen = $state(false);
+  let walletFailed = $state(false);
+  let toppingUp = $state(false);
 
   const staff = $derived(sessionStaff(page.data));
 
   let turn = 0;
+  let walletTurn = 0;
+
+  async function refreshWallet(id: string) {
+    const mine = ++walletTurn;
+    const outcome = await loadWallet(id);
+    if (mine !== walletTurn) return;
+    if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    walletFailed = outcome.kind !== "ok";
+    if (outcome.kind === "ok") wallet = outcome.value;
+  }
+
+  async function reloadBalance(id: string) {
+    void refreshWallet(id);
+    const outcome = await loadPlayer(id);
+    if (outcome.kind === "ok" && profile?.player.player_id === id) profile = outcome.value;
+  }
+
+  $effect(() => {
+    const changed = walletEvents.version;
+    const id = untrack(() => profile?.player.player_id);
+    if (changed > 0 && id && walletEvents.playerId === id) {
+      void reloadBalance(id);
+    }
+  });
 
   async function pick(id: string) {
     guest = false;
@@ -33,6 +66,9 @@
     editing = false;
     edited = null;
     stale = false;
+    toppingUp = false;
+    walletOpen = false;
+    wallet = null;
     const mine = ++turn;
     const outcome = await loadPlayer(id);
     if (mine !== turn) return;
@@ -65,6 +101,8 @@
     trigger?.querySelector("button")?.focus();
   }
 </script>
+
+<UndoDock {staff} />
 
 <svelte:head>
   <title>{t("hub.page_title", { screen: t("hub.nav.players") })}</title>
@@ -107,6 +145,10 @@
         <dd>{p.username}</dd>
         <dt>{t("hub.players.phone")}</dt>
         <dd>{p.phone}</dd>
+        <dt>{t("hub.wallet.balance")}</dt>
+        <dd class="tabular-nums" data-testid="wallet-balance">
+          {branchLocale.current ? formatMoney(profile.wallet_minor ?? 0, branchLocale.current) : ""}
+        </dd>
         <dt>{t("hub.players.profile.tags")}</dt>
         <dd>{p.tags.length ? p.tags.join(", ") : t("hub.players.profile.no_tags")}</dd>
         <dt>{t("hub.players.profile.consent")}</dt>
@@ -120,16 +162,57 @@
           {/if}
         </dd>
       </dl>
+      {#if !toppingUp}
+        <div class="actions" data-testid="wallet-actions">
+          {#if hasPermission(staff, "wallet.topup")}
+            <Button label="hub.wallet.topup" onclick={() => (toppingUp = true)} />
+          {/if}
+          <Button
+            label={walletOpen ? "hub.wallet.list.hide" : "hub.wallet.list.show"}
+            variant="secondary"
+            onclick={() => {
+              walletOpen = !walletOpen;
+              if (walletOpen) void refreshWallet(p.player_id);
+            }}
+          />
+        </div>
+      {/if}
       {#if !editing}
         <div class="actions" data-testid="player-edit">
-          <Button label="hub.players.edit" onclick={() => {
+          <Button
+            label="hub.players.edit"
+            onclick={() => {
               edited = null;
               stale = false;
               editing = true;
-            }} />
+            }}
+          />
         </div>
       {/if}
     </section>
+    {#if toppingUp}
+      <TopUp
+        playerId={p.player_id}
+        ondone={() => {
+          toppingUp = false;
+          void reloadBalance(p.player_id);
+        }}
+        oncancel={() => (toppingUp = false)}
+      />
+    {/if}
+    {#if walletOpen}
+      <section aria-labelledby="wallet-title" data-testid="wallet">
+        <h2 class="type-hub-title" id="wallet-title">{t("hub.wallet.title")}</h2>
+        {#if walletFailed}
+          <p class="type-hub-label" role="alert">
+            <span aria-hidden="true">⚠</span>
+            {t("hub.wallet.list.failed")}
+          </p>
+        {:else if wallet && branchLocale.current}
+          <WalletList {wallet} locale={branchLocale.current} />
+        {/if}
+      </section>
+    {/if}
     {#if editing}
       {#key profile.rev}
         {#if stale}<p class="type-hub-label" role="alert">

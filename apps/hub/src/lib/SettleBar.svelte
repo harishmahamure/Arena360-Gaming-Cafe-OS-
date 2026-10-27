@@ -8,18 +8,28 @@
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { tick } from "svelte";
-  import { METHODS, amountText, rowErrors, rowsValid, tally, toPayments, type Row } from "./settle";
+  import {
+    amountText,
+    methodsFor,
+    rowErrors,
+    rowsValid,
+    tally,
+    toPayments,
+    type Row,
+  } from "./settle";
 
   let {
     bill,
     locale,
     busy,
     onsettle,
+    title = "hub.settle.title",
   }: {
     bill: SnapshotBill;
     locale: SnapshotLocale;
     busy: boolean;
     onsettle: (payments: PaymentRow[]) => void;
+    title?: MessageKey;
   } = $props();
 
   let root: HTMLElement | undefined = $state();
@@ -30,31 +40,37 @@
   const exponent = $derived(locale.exponent);
   const total = $derived(bill.remaining_minor);
   const sums = $derived(tally(total, rows, exponent));
+  const wallet = $derived(bill.wallet_minor ?? 0);
+  const methods = $derived(methodsFor(bill.wallet_minor));
   const closed = $derived(sums.remaining === 0 && !sums.overpaid);
   const money = (minor: number) => formatMoney(minor, locale);
 
   const errorOf = (row: Row, field: "amount" | "reference"): MessageKey | null =>
-    attempted ? (rowErrors(row, exponent)[field] ?? null) : null;
+    attempted ? (rowErrors(row, exponent, wallet)[field] ?? null) : null;
 
   const AMOUNT: Record<PaymentMethod, MessageKey> = {
     cash: "hub.settle.amount.cash",
     upi: "hub.settle.amount.upi",
     card: "hub.settle.amount.card",
+    wallet: "hub.settle.amount.wallet",
   };
   const REFERENCE: Record<PaymentMethod, MessageKey> = {
     cash: "hub.settle.reference.upi",
     upi: "hub.settle.reference.upi",
     card: "hub.settle.reference.card",
+    wallet: "hub.settle.reference.upi",
   };
   const NAME: Record<PaymentMethod, MessageKey> = {
     cash: "hub.settle.method.cash",
     upi: "hub.settle.method.upi",
     card: "hub.settle.method.card",
+    wallet: "hub.settle.method.wallet",
   };
 
   async function choose(method: PaymentMethod) {
     if (!rows.some((r) => r.method === method)) {
-      rows.push({ method, amount: amountText(sums.remaining, exponent), reference: "" });
+      const suggested = method === "wallet" ? Math.min(wallet, sums.remaining) : sums.remaining;
+      rows.push({ method, amount: amountText(suggested, exponent), reference: "" });
     }
     await tick();
     const input = root?.querySelector<HTMLInputElement>(`[data-row="${method}"] input`);
@@ -79,7 +95,7 @@
   export async function submit() {
     if (busy || !closed) return;
     attempted = true;
-    if (!rowsValid(rows, exponent)) {
+    if (!rowsValid(rows, exponent, wallet)) {
       await tick();
       focusFirstInvalid(root);
       return;
@@ -95,7 +111,7 @@
   aria-labelledby="{id}-title"
   bind:this={root}
 >
-  <h3 class="type-hub-title" id="{id}-title">{t("hub.settle.title")}</h3>
+  <h3 class="type-hub-title" id="{id}-title">{t(title)}</h3>
   <p class="total">
     <span class="type-hub-label">{t("hub.settle.total")}</span>
     <span class="type-hub-numeric tabular-nums" data-testid="settle-total">{money(total)}</span>
@@ -109,7 +125,7 @@
     onkeydown={arrows}
     data-testid="settle-methods"
   >
-    {#each METHODS as method (method)}
+    {#each methods as method (method)}
       <button
         type="button"
         class="ui-interactive method type-hub-label"
@@ -132,7 +148,11 @@
             autocomplete="off"
             error={errorOf(row, "amount")}
           />
-          {#if row.method !== "cash"}
+          {#if row.method === "wallet"}
+            <p class="type-hub-label wallet-balance tabular-nums" data-testid="wallet-balance">
+              {t("hub.settle.wallet_balance", { amount: money(wallet) })}
+            </p>
+          {:else if row.method !== "cash"}
             <div data-reference>
               <TextField
                 label={REFERENCE[row.method]}
@@ -252,6 +272,12 @@
   .remove {
     justify-self: start;
     align-self: center;
+  }
+
+  .wallet-balance {
+    margin: 0;
+    align-self: center;
+    color: var(--text-muted);
   }
 
   .remainder {

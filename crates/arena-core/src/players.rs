@@ -306,6 +306,7 @@ pub fn profile(
         player: hit(kek, row, &wrapped)?,
         consent,
         rev,
+        wallet_minor: reader.wallet_balance(player_id)?,
         email,
         dob,
         notes,

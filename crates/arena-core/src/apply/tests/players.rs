@@ -62,9 +62,9 @@ async fn a_profile_writes_player_consent_and_key_with_no_plaintext_in_the_log() 
             .iter()
             .map(|c| c.tbl.as_str())
             .collect::<Vec<_>>(),
-        ["players", "consents"]
+        ["players", "consents", "wallets"]
     );
-    assert_eq!(counts(&f), (1, 1, before.2 + 2));
+    assert_eq!(counts(&f), (1, 1, before.2 + 3));
 
     let store = reopen(&f);
     let player = &store.rows(Table::Players).unwrap()[0];

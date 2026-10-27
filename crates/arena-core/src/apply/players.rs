@@ -4,8 +4,8 @@ use arena_proto::{
 };
 use arena_store::{
     ChangeOp, PlayerRow, RowKey, StoreTx, find_player, insert_consent, insert_player,
-    insert_player_key, latest_consent, phone_holder, set_player_password, update_player,
-    username_taken,
+    insert_player_key, insert_wallet, latest_consent, phone_holder, set_player_password,
+    update_player, username_taken,
 };
 
 use super::mutate::Written;
@@ -229,6 +229,7 @@ pub(super) fn mutate(
         now_ms,
     )?;
     insert_player_key(tx, &p.player_id, &p.wrapped_key)?;
+    insert_wallet(tx, &p.player_id)?;
     Ok(vec![
         Written {
             key: RowKey::Players {
@@ -239,6 +240,13 @@ pub(super) fn mutate(
         },
         Written {
             key: RowKey::Consents { consent_id },
+            op: ChangeOp::Insert,
+            before: None,
+        },
+        Written {
+            key: RowKey::Wallets {
+                player_id: p.player_id.clone(),
+            },
             op: ChangeOp::Insert,
             before: None,
         },

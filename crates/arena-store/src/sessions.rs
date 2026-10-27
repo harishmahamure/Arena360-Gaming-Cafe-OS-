@@ -95,6 +95,8 @@ pub struct OrderLineRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenOrder {
     pub id: String,
+    pub player_id: Option<String>,
+    pub wallet_minor: Option<i64>,
     pub rev: i64,
     pub session_id: Option<String>,
     pub device_id: String,
@@ -386,8 +388,10 @@ pub fn insert_order_line(conn: &Connection, l: &NewOrderLine<'_>) -> Result<(), 
 pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, session_id, COALESCE(device_id, ''), subtotal_minor, rev FROM orders
-             WHERE status = 'open' ORDER BY created_at, id",
+            "SELECT o.id, o.session_id, COALESCE(o.device_id, ''), o.subtotal_minor, o.rev, o.player_id,
+                    w.balance_minor
+             FROM orders o LEFT JOIN wallets w ON w.player_id = o.player_id
+             WHERE o.status = 'open' ORDER BY o.created_at, o.id",
         )
         .map_err(db_error)?;
     stmt.query_map([], |r| {
@@ -397,6 +401,8 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             device_id: r.get(2)?,
             subtotal_minor: r.get(3)?,
             rev: r.get(4)?,
+            player_id: r.get(5)?,
+            wallet_minor: r.get(6)?,
         })
     })
     .map_err(db_error)?
@@ -438,6 +444,8 @@ pub struct OrderRow {
     pub session_id: Option<String>,
     pub settled_at: Option<i64>,
     pub settled_by: Option<String>,
+    pub player_id: Option<String>,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -483,7 +491,8 @@ pub fn find_order(conn: &Connection, id: &str) -> Result<Option<OrderRow>, AppEr
     .map_err(db_error)
 }
 
-const ORDER_COLUMNS: &str = "id, status, total_minor, rev, session_id, settled_at, settled_by";
+const ORDER_COLUMNS: &str =
+    "id, status, total_minor, rev, session_id, settled_at, settled_by, player_id, kind";
 
 fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
     Ok(OrderRow {
@@ -494,6 +503,8 @@ fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
         session_id: r.get(4)?,
         settled_at: r.get(5)?,
         settled_by: r.get(6)?,
+        player_id: r.get(7)?,
+        kind: r.get(8)?,
     })
 }
 
@@ -659,27 +670,35 @@ pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settl
                     EXISTS (SELECT 1 FROM sessions s
                             WHERE s.device_id = o.device_id
                               AND s.state IN ('active', 'paused', 'grace')),
-                    o.rev, o.total_minor
+                    o.rev, o.total_minor, o.kind
              FROM orders o WHERE o.id = ?1 AND o.status = 'settled' AND o.settled_at IS NOT NULL",
             [order_id],
             |r| {
-                Ok(Settlement {
-                    order_id: r.get(0)?,
-                    device_id: r.get(1)?,
-                    settled_at: r.get(2)?,
-                    device_busy: r.get(3)?,
-                    rev: r.get(4)?,
-                    total_minor: r.get(5)?,
-                    irreversible: false,
-                })
+                Ok((
+                    Settlement {
+                        order_id: r.get(0)?,
+                        device_id: r.get(1)?,
+                        settled_at: r.get(2)?,
+                        device_busy: r.get(3)?,
+                        rev: r.get(4)?,
+                        total_minor: r.get(5)?,
+                        irreversible: false,
+                    },
+                    r.get::<_, String>(6)?,
+                ))
             },
         )
         .optional()
         .map_err(db_error)?;
-    let Some(mut settlement) = found else {
+    let Some((mut settlement, kind)) = found else {
         return Ok(None);
     };
-    let forward = forward_intent_id(conn, "orders", order_id, "session.settle")?;
+    let intent_kind = if kind == "topup" {
+        "wallet.topup"
+    } else {
+        "session.settle"
+    };
+    let forward = forward_intent_id(conn, "orders", order_id, intent_kind)?;
     settlement.irreversible = effect_recorded(conn, forward.as_deref(), order_id)?;
     Ok(Some(settlement))
 }

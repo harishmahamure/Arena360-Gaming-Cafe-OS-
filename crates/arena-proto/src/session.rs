@@ -128,6 +128,7 @@ pub enum PaymentMethod {
     Cash,
     Upi,
     Card,
+    Wallet,
 }
 
 impl PaymentMethod {
@@ -136,6 +137,7 @@ impl PaymentMethod {
             Self::Cash => "cash",
             Self::Upi => "upi",
             Self::Card => "card",
+            Self::Wallet => "wallet",
         }
     }
 }
@@ -160,6 +162,52 @@ pub struct SessionSettle {
 
 pub const UNDO_WINDOW_MS: i64 = 8_000;
 pub const CARD_REFERENCE_MAX: usize = 64;
+pub const WALLET_TOPUP_MAX_MINOR: i64 = 10_000_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct WalletTopup {
+    pub player_id: String,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    pub payments: Vec<PaymentRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct WalletTopupReverted {
+    pub order_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct WalletChangedEvent {
+    pub player_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct WalletTxnView {
+    pub id: String,
+    #[ts(type = "number")]
+    pub at: i64,
+    #[ts(type = "number")]
+    pub delta_minor: i64,
+    pub reason: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub method: Option<String>,
+    pub staff: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct WalletView {
+    pub player_id: String,
+    #[ts(type = "number")]
+    pub balance_minor: i64,
+    pub txns: Vec<WalletTxnView>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -231,6 +279,9 @@ pub struct SnapshotBill {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub order_rev: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub wallet_minor: Option<i64>,
     pub lines: Vec<BillLine>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,

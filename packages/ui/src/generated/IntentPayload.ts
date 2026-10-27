@@ -41,6 +41,8 @@ import type { StaffSetCredentials } from "./StaffSetCredentials";
 import type { StaffUpsert } from "./StaffUpsert";
 import type { StockIn } from "./StockIn";
 import type { StockInReverted } from "./StockInReverted";
+import type { WalletTopup } from "./WalletTopup";
+import type { WalletTopupReverted } from "./WalletTopupReverted";
 import type { ZoneDelete } from "./ZoneDelete";
 import type { ZoneUpsert } from "./ZoneUpsert";
 
@@ -91,4 +93,6 @@ export type IntentPayload =
   | ({ kind: "session.end.reverted" } & SessionEndReverted)
   | ({ kind: "session.settle.reverted" } & SessionSettleReverted)
   | ({ kind: "session.pause" } & SessionPause)
-  | ({ kind: "session.resume" } & SessionResume);
+  | ({ kind: "session.resume" } & SessionResume)
+  | ({ kind: "wallet.topup" } & WalletTopup)
+  | ({ kind: "wallet.topup.reverted" } & WalletTopupReverted);

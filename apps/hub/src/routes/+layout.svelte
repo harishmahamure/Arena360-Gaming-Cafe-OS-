@@ -40,6 +40,7 @@
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
   import { effectRecorded } from "../lib/undo.svelte";
+  import { applyWalletChanged } from "../lib/wallet.svelte";
   import { notePairingCode } from "../lib/pairing";
   import type { Connectivity, ConnectivityState, UnlockOk } from "@arena/ui/generated";
   import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
@@ -248,6 +249,10 @@
         onSessionStarted: () => void refresh(),
         onBillSettled: () => void refresh(),
         onBillReverted: () => void refresh(),
+        onWalletChanged: (playerId) => {
+          applyWalletChanged(playerId);
+          void refresh();
+        },
         onEffectRecorded: (orderId) => effectRecorded(orderId),
         onGroupsChanged: (byOwner) => {
           void refresh();

@@ -147,11 +147,15 @@ pub enum IntentKind {
     SessionPause,
     #[serde(rename = "session.resume")]
     SessionResume,
+    #[serde(rename = "wallet.topup")]
+    WalletTopup,
+    #[serde(rename = "wallet.topup.reverted")]
+    WalletTopupReverted,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 45] = [
+    pub const ALL: [IntentKind; 47] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -197,6 +201,8 @@ impl IntentKind {
         Self::SessionSettleReverted,
         Self::SessionPause,
         Self::SessionResume,
+        Self::WalletTopup,
+        Self::WalletTopupReverted,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -247,6 +253,8 @@ impl IntentKind {
             Self::SessionSettleReverted => "session.settle.reverted",
             Self::SessionPause => "session.pause",
             Self::SessionResume => "session.resume",
+            Self::WalletTopup => "wallet.topup",
+            Self::WalletTopupReverted => "wallet.topup.reverted",
         }
     }
 
@@ -298,7 +306,9 @@ impl IntentKind {
             | Self::SessionEndReverted
             | Self::SessionSettleReverted
             | Self::SessionPause
-            | Self::SessionResume => IntentCategory::Session,
+            | Self::SessionResume
+            | Self::WalletTopup
+            | Self::WalletTopupReverted => IntentCategory::Session,
         }
     }
 
@@ -348,6 +358,9 @@ impl IntentKind {
                 Requirement::Perm(Permission::PosSell)
             }
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
+            Self::WalletTopup | Self::WalletTopupReverted => {
+                Requirement::Perm(Permission::WalletTopup)
+            }
         }
     }
 
@@ -415,7 +428,9 @@ impl IntentKind {
             | Self::SessionEndReverted
             | Self::SessionSettleReverted
             | Self::SessionPause
-            | Self::SessionResume => None,
+            | Self::SessionResume
+            | Self::WalletTopup
+            | Self::WalletTopupReverted => None,
         }
     }
 
@@ -867,6 +882,10 @@ pub enum IntentPayload {
     SessionPause(crate::SessionPause),
     #[serde(rename = "session.resume")]
     SessionResume(crate::SessionResume),
+    #[serde(rename = "wallet.topup")]
+    WalletTopup(crate::WalletTopup),
+    #[serde(rename = "wallet.topup.reverted")]
+    WalletTopupReverted(crate::WalletTopupReverted),
 }
 
 impl IntentPayload {
@@ -917,6 +936,8 @@ impl IntentPayload {
             Self::SessionSettleReverted(_) => IntentKind::SessionSettleReverted,
             Self::SessionPause(_) => IntentKind::SessionPause,
             Self::SessionResume(_) => IntentKind::SessionResume,
+            Self::WalletTopup(_) => IntentKind::WalletTopup,
+            Self::WalletTopupReverted(_) => IntentKind::WalletTopupReverted,
         }
     }
 }
@@ -994,7 +1015,6 @@ mod tests {
     /// Permissions no intent requires yet: views, ops and the modules later stories build.
     const USED_BY_LATER_STORIES: &[Permission] = &[
         Permission::PlayerView,
-        Permission::WalletTopup,
         Permission::CreditManage,
         Permission::CreditCollect,
         Permission::SessionExtend,
@@ -1165,6 +1185,9 @@ mod tests {
                     Requirement::Perm(Permission::PosSell)
                 }
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
+                "wallet.topup" | "wallet.topup.reverted" => {
+                    Requirement::Perm(Permission::WalletTopup)
+                }
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

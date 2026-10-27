@@ -271,7 +271,7 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::SessionSettle(s) => match target {
-            Target::SessionSettle(_) => super::session::mutate_settle(tx, intent, s, now_ms),
+            Target::SessionSettle(t) => super::session::mutate_settle(tx, intent, s, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::SessionEndReverted(_) => match target {
@@ -288,6 +288,14 @@ pub(super) fn mutate(
         },
         IntentPayload::SessionResume(_) => match target {
             Target::SessionResume(t) => super::session::mutate_resume(tx, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::WalletTopup(p) => match target {
+            Target::WalletTopup(t) => super::wallet::mutate_topup(tx, intent, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::WalletTopupReverted(_) => match target {
+            Target::WalletTopupReverted(t) => super::wallet::mutate_topup_reverted(tx, t),
             _ => Err(mismatch()),
         },
         IntentPayload::DeviceMaintenance(m) => match target {

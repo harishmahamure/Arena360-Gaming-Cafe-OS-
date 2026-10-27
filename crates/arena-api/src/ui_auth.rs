@@ -865,6 +865,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::NoRate
         | ErrorCode::PaymentShort
         | ErrorCode::UndoNotAllowed
+        | ErrorCode::InsufficientBalance
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -2013,6 +2014,7 @@ async fn run_intent(
         intent.payload,
         arena_proto::IntentPayload::SessionEndReverted(_)
     );
+    let topping_up = matches!(intent.payload, arena_proto::IntentPayload::WalletTopup(_));
     let settling = match &intent.payload {
         arena_proto::IntentPayload::SessionSettle(s) => Some(s.order_id.clone()),
         _ => None,
@@ -2080,6 +2082,17 @@ async fn run_intent(
                 );
                 tracing::info!(device_id = %device_id, cmd_id = %cmd_id, action = action.as_str(), sessions = sent, "pc command pushed");
             }
+            let settling = settling.or_else(|| {
+                topping_up
+                    .then(|| {
+                        applied
+                            .changes
+                            .iter()
+                            .find(|c| c.tbl == "orders" && c.op == arena_core::ChangeOp::Insert)
+                    })
+                    .flatten()
+                    .map(|c| c.row_id.clone())
+            });
             let settled = match settling {
                 Some(order_id) => settle_outcome(auth, &order_id, &cmd_id).await,
                 None => None,
@@ -2523,6 +2536,35 @@ async fn player_profile(
     .await
 }
 
+async fn player_wallet(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(token) = bearer(&headers) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    if !me.permissions.contains(&Permission::PlayerView) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            "reading a wallet needs the player.view permission",
+        )));
+    }
+    let (reader, id) = (
+        Arc::clone(&auth.reader),
+        q.get("id").cloned().unwrap_or_default(),
+    );
+    match tokio::task::spawn_blocking(move || reader.wallet(&id)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -2570,6 +2612,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/intent", post(intent))
         .route("/ui/players", post(players).get(player_search))
         .route("/ui/players/profile", get(player_profile))
+        .route("/ui/players/wallet", get(player_wallet))
         .route("/ui/players/update", post(player_update))
         .route("/ui/players/password", post(player_password))
         .route("/ui/settings", get(settings))

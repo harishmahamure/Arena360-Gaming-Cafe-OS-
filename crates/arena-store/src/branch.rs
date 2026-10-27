@@ -52,11 +52,13 @@ pub enum Table {
     Orders,
     OrderLines,
     Payments,
+    Wallets,
+    WalletTxns,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 25] = [
+    pub const ALL: [Table; 27] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -82,6 +84,8 @@ impl Table {
         Table::Orders,
         Table::OrderLines,
         Table::Payments,
+        Table::Wallets,
+        Table::WalletTxns,
     ];
 
     /// The SQL table name.
@@ -112,6 +116,8 @@ impl Table {
             Self::Orders => "orders",
             Self::OrderLines => "order_lines",
             Self::Payments => "payments",
+            Self::Wallets => "wallets",
+            Self::WalletTxns => "wallet_txns",
         }
     }
 
@@ -137,12 +143,14 @@ impl Table {
             Self::StockMoves => &["move_id"],
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
+            Self::Wallets => &["player_id"],
             Self::Consents => &["consent_id"],
             Self::Sessions
             | Self::SessionSegments
             | Self::Orders
             | Self::OrderLines
-            | Self::Payments => &["id"],
+            | Self::Payments
+            | Self::WalletTxns => &["id"],
         }
     }
 
@@ -170,7 +178,9 @@ impl Table {
             | Self::SessionSegments
             | Self::Orders
             | Self::OrderLines
-            | Self::Payments => true,
+            | Self::Payments
+            | Self::Wallets
+            | Self::WalletTxns => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents => false,
         }
     }
@@ -268,6 +278,12 @@ pub enum RowKey {
     Payments {
         id: String,
     },
+    Wallets {
+        player_id: String,
+    },
+    WalletTxns {
+        id: String,
+    },
 }
 
 impl RowKey {
@@ -298,6 +314,8 @@ impl RowKey {
             Self::Orders { .. } => Table::Orders,
             Self::OrderLines { .. } => Table::OrderLines,
             Self::Payments { .. } => Table::Payments,
+            Self::Wallets { .. } => Table::Wallets,
+            Self::WalletTxns { .. } => Table::WalletTxns,
         }
     }
 
@@ -329,12 +347,14 @@ impl RowKey {
             Self::StockMoves { move_id } => move_id.clone(),
             Self::Rates { rate_id } => rate_id.clone(),
             Self::Players { player_id } => player_id.clone(),
+            Self::Wallets { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
             Self::Sessions { id }
             | Self::SessionSegments { id }
             | Self::Orders { id }
             | Self::OrderLines { id }
-            | Self::Payments { id } => id.clone(),
+            | Self::Payments { id }
+            | Self::WalletTxns { id } => id.clone(),
         }
     }
 
@@ -414,6 +434,10 @@ impl RowKey {
             Table::Orders => Self::Orders { id: text("id")? },
             Table::OrderLines => Self::OrderLines { id: text("id")? },
             Table::Payments => Self::Payments { id: text("id")? },
+            Table::Wallets => Self::Wallets {
+                player_id: text("player_id")?,
+            },
+            Table::WalletTxns => Self::WalletTxns { id: text("id")? },
         })
     }
 
@@ -444,12 +468,14 @@ impl RowKey {
             Self::StockMoves { move_id } => vec![move_id],
             Self::Rates { rate_id } => vec![rate_id],
             Self::Players { player_id } => vec![player_id],
+            Self::Wallets { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],
             Self::Sessions { id }
             | Self::SessionSegments { id }
             | Self::Orders { id }
             | Self::OrderLines { id }
-            | Self::Payments { id } => vec![id],
+            | Self::Payments { id }
+            | Self::WalletTxns { id } => vec![id],
         }
     }
 }

@@ -120,6 +120,8 @@ pub enum ErrorCode {
     /// An Undo that is late, from other staff, or blocked by an irreversible effect or a changed
     /// state.
     UndoNotAllowed,
+    /// A wallet payment above the player's balance.
+    InsufficientBalance,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -202,6 +204,7 @@ impl ErrorCode {
             Self::PaymentShort => "PAYMENT_SHORT",
             Self::ReferenceRequired => "REFERENCE_REQUIRED",
             Self::UndoNotAllowed => "UNDO_NOT_ALLOWED",
+            Self::InsufficientBalance => "INSUFFICIENT_BALANCE",
         }
     }
 }
@@ -342,6 +345,7 @@ mod tests {
             (ErrorCode::PaymentShort, "PAYMENT_SHORT"),
             (ErrorCode::ReferenceRequired, "REFERENCE_REQUIRED"),
             (ErrorCode::UndoNotAllowed, "UNDO_NOT_ALLOWED"),
+            (ErrorCode::InsufficientBalance, "INSUFFICIENT_BALANCE"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

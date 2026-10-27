@@ -124,6 +124,7 @@ fn bills(
                 device_id: String,
                 order_id: Option<String>,
                 order_rev: Option<i64>,
+                wallet_minor: Option<i64>,
                 lines: Vec<arena_proto::BillLine>| {
         let subtotal_minor = lines.iter().map(|l| l.amount_minor).sum();
         arena_proto::SnapshotBill {
@@ -131,6 +132,7 @@ fn bills(
             device_id,
             order_id,
             order_rev,
+            wallet_minor,
             lines,
             subtotal_minor,
             paid_minor: 0,
@@ -144,7 +146,7 @@ fn bills(
             .cloned()
             .collect();
         let lines = crate::billing::bill(&own, s.rounding_min, s.minimum_min, s.paused_at, now_ms);
-        bill(s.id.clone(), s.device_id.clone(), None, None, lines)
+        bill(s.id.clone(), s.device_id.clone(), None, None, None, lines)
     });
     let open = orders.into_iter().map(|o| {
         let lines = order_lines
@@ -164,6 +166,7 @@ fn bills(
             o.device_id,
             Some(o.id),
             Some(o.rev),
+            o.player_id.map(|_| o.wallet_minor.unwrap_or(0)),
             lines,
         )
     });
@@ -383,6 +386,37 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.settlement(order_id)
+    }
+
+    pub fn wallet(&self, player_id: &str) -> Result<arena_proto::WalletView, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let txns = store
+            .wallet_txns(player_id)?
+            .into_iter()
+            .map(|t| arena_proto::WalletTxnView {
+                id: t.id,
+                at: t.at,
+                delta_minor: t.delta_minor,
+                reason: t.reason,
+                method: t.method,
+                staff: t.staff,
+            })
+            .collect();
+        Ok(arena_proto::WalletView {
+            player_id: player_id.to_owned(),
+            balance_minor: store.wallet_balance(player_id)?,
+            txns,
+        })
+    }
+
+    pub fn wallet_balance(&self, player_id: &str) -> Result<i64, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?
+            .wallet_balance(player_id)
     }
 
     pub fn ending(&self, session_id: &str) -> Result<Option<arena_store::Ending>, AppError> {

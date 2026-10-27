@@ -36,6 +36,8 @@ export type EventHandlers = {
   onSessionStarted?: () => void;
   /** `bill.settled`: a bill was settled; reload the snapshot so its UNPAID line clears. */
   onBillSettled?: () => void;
+  /** `wallet.changed`: a wallet balance moved; open profiles and bills reload. */
+  onWalletChanged?: (playerId: string) => void;
   /** `bill.reverted`: an End or a Settle was undone; reload the snapshot. */
   onBillReverted?: () => void;
   /** `effect.recorded`: a receipt, drawer kick or invoice number was recorded for a bill. */
@@ -101,6 +103,16 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
     es.addEventListener("session.started", () => handlers.onSessionStarted?.());
     es.addEventListener("bill.settled", () => handlers.onBillSettled?.());
     es.addEventListener("bill.reverted", () => handlers.onBillReverted?.());
+    es.addEventListener("wallet.changed", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        if (isObject(data) && typeof data.player_id === "string") {
+          handlers.onWalletChanged?.(data.player_id);
+        }
+      } catch {
+        return;
+      }
+    });
     es.addEventListener("effect.recorded", (ev) => {
       try {
         const data: unknown = JSON.parse((ev as MessageEvent<string>).data);

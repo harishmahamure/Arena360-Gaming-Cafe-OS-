@@ -11,7 +11,7 @@ import {
 } from "./auth";
 import { SNAPSHOT_DEPENDENCY } from "./snapshot";
 
-export type UndoKind = "end" | "settle";
+export type UndoKind = "end" | "settle" | "topup";
 
 export type Undo = {
   kind: UndoKind;
@@ -38,12 +38,24 @@ const NOTICE_MS = 3000;
 let tick: ReturnType<typeof setInterval> | undefined;
 let closer: ReturnType<typeof setTimeout> | undefined;
 
-const PERMISSION: Record<UndoKind, Permission> = { end: "session.end", settle: "pos.sell" };
+const PERMISSION: Record<UndoKind, Permission> = {
+  end: "session.end",
+  settle: "pos.sell",
+  topup: "wallet.topup",
+};
 
 const payloadOf = (u: Undo): IntentPayload =>
   u.kind === "end"
     ? { kind: "session.end.reverted", session_id: u.id }
-    : { kind: "session.settle.reverted", order_id: u.id };
+    : u.kind === "topup"
+      ? { kind: "wallet.topup.reverted", order_id: u.id }
+      : { kind: "session.settle.reverted", order_id: u.id };
+
+const DONE: Record<UndoKind, MessageKey> = {
+  end: "hub.undo.done.end",
+  settle: "hub.undo.done.settle",
+  topup: "hub.undo.done.topup",
+};
 
 export const undoPermission = (u: Undo): Permission => PERMISSION[u.kind];
 
@@ -81,7 +93,10 @@ function open(next: Omit<Undo, "key" | "phase">): void {
  * A committed End or Settle replaces whatever toast was open; the earlier action is final in
  * the UI. With an irreversible effect already recorded for it no toast shows at all.
  */
-export function offerUndo(result: UiIntentResult): void {
+export function offerUndo(
+  result: UiIntentResult,
+  settledKind: "settle" | "topup" = "settle",
+): void {
   const { ended, settled } = result;
   const now = Date.now();
   if (ended) {
@@ -97,7 +112,7 @@ export function offerUndo(result: UiIntentResult): void {
   } else if (settled && typeof settled.order_rev === "number") {
     if (settled.irreversible) return closeUndo();
     open({
-      kind: "settle",
+      kind: settledKind,
       id: settled.order_id,
       orderId: settled.order_id,
       rev: settled.order_rev,
@@ -135,7 +150,7 @@ export async function runUndo(staff: SessionStaff | null, ticket?: string): Prom
     undo.current = {
       ...now,
       phase: "closing",
-      notice: u.kind === "end" ? "hub.undo.done.end" : "hub.undo.done.settle",
+      notice: DONE[u.kind],
       refused: false,
     };
     closeSoon();

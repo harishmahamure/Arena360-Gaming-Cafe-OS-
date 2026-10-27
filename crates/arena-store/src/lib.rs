@@ -18,6 +18,7 @@ mod products;
 mod sessions;
 mod staff;
 mod stock;
+mod wallet;
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -98,6 +99,11 @@ pub use staff::{
 pub use stock::{
     LotRow, MoveRow, StockRow, find_lot, find_move, find_stock, insert_lot, insert_move,
     insert_stock, latest_move_id, list_lots, list_moves, set_lot_remaining, update_stock,
+};
+pub use wallet::{
+    NewTopupOrder, NewWalletTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
+    insert_topup_order, insert_wallet, insert_wallet_txn, list_order_wallet_txns, list_wallet_txns,
+    order_player_and_kind, wallet_balance,
 };
 
 /// The transaction `apply()` and the replayer run in.
@@ -697,6 +703,20 @@ impl Store {
             list_open_orders(&self.conn)?,
             list_open_order_lines(&self.conn)?,
         ))
+    }
+
+    pub fn wallet_txns(&self, player_id: &str) -> Result<Vec<WalletTxnRow>, AppError> {
+        if !self.table_exists("wallet_txns")? {
+            return Ok(Vec::new());
+        }
+        list_wallet_txns(&self.conn, player_id)
+    }
+
+    pub fn wallet_balance(&self, player_id: &str) -> Result<i64, AppError> {
+        if !self.table_exists("wallets")? {
+            return Ok(0);
+        }
+        wallet_balance(&self.conn, player_id)
     }
 
     pub fn settlement(&self, order_id: &str) -> Result<Option<Settlement>, AppError> {

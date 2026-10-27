@@ -6,6 +6,7 @@ export type PlayerProfile = {
   player: PlayerHit;
   consent: PlayerConsent | null;
   rev: number;
+  wallet_minor: number;
   email: string;
   dob: string;
   notes: string;

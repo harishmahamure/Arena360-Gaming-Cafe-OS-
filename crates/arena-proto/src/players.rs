@@ -189,6 +189,9 @@ pub struct PlayerProfile {
     pub consent: Option<PlayerConsent>,
     #[ts(type = "number")]
     pub rev: i64,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub wallet_minor: i64,
     pub email: String,
     pub dob: String,
     pub notes: String,

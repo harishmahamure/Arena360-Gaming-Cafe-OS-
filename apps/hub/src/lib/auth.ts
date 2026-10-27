@@ -15,6 +15,7 @@ import type {
   PlayerHit,
   PlayerPasswordForm,
   PlayerProfile,
+  WalletView,
   ReasonCode,
   SessionStaff,
   SettingEntry,
@@ -31,6 +32,7 @@ export const ME_URL = "http://127.0.0.1:7409/ui/me";
 export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
 export const PLAYERS_URL = "http://127.0.0.1:7409/ui/players";
 export const PLAYER_PROFILE_URL = "http://127.0.0.1:7409/ui/players/profile";
+export const PLAYER_WALLET_URL = "http://127.0.0.1:7409/ui/players/wallet";
 export const PLAYER_UPDATE_URL = "http://127.0.0.1:7409/ui/players/update";
 export const PLAYER_PASSWORD_URL = "http://127.0.0.1:7409/ui/players/password";
 export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
@@ -410,6 +412,8 @@ export const findPlayers = (q: string) => getJson<PlayerHit[]>(withQuery(PLAYERS
 
 export const loadPlayer = (id: string) =>
   getJson<PlayerProfile>(withQuery(PLAYER_PROFILE_URL, { id }));
+
+export const loadWallet = (id: string) => getJson<WalletView>(withQuery(PLAYER_WALLET_URL, { id }));
 
 async function postIntent(
   url: string,

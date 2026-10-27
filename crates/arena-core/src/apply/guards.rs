@@ -134,7 +134,9 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionEndReverted(_)
             | Target::SessionSettleReverted(_)
             | Target::SessionPause(_)
-            | Target::SessionResume(_),
+            | Target::SessionResume(_)
+            | Target::WalletTopup(_)
+            | Target::WalletTopupReverted(_),
             _,
         ) => Ok(()),
     }
@@ -193,6 +195,8 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionSettleReverted(t) => super::session::base_rev_settle_reverted(intent, t),
         Target::SessionPause(t) => super::session::base_rev_pause(intent, t, "session.pause"),
         Target::SessionResume(t) => super::session::base_rev_pause(intent, t, "session.resume"),
+        Target::WalletTopup(_) => Ok(()),
+        Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
         Target::Player(t) => players::base_rev(intent, t),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),

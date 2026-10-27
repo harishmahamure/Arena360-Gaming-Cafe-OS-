@@ -185,6 +185,8 @@ pub use session::{
     PauseReason, PaymentMethod, PaymentRow, SessionEnd, SessionEndReverted, SessionMode,
     SessionPause, SessionResume, SessionScreen, SessionSettle, SessionSettleReverted, SessionStart,
     SessionStartedEvent, SettleOutcome, SnapshotBill, SnapshotSession, UNDO_WINDOW_MS,
+    WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup, WalletTopupReverted, WalletTxnView,
+    WalletView,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,

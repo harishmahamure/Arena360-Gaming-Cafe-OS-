@@ -529,7 +529,7 @@ mod tests {
                     IntentPayload::SessionStart(arena_proto::SessionStart {
                         device_id: kiosk,
                         mode: arena_proto::SessionMode::Postpaid,
-                        player_id: Some(player_id),
+                        player_id: Some(player_id.clone()),
                     }),
                     None,
                 ))
@@ -622,6 +622,38 @@ mod tests {
                 .await
                 .unwrap();
             writer.submit_intent(settle(3)).await.unwrap();
+            let topup = |amount: i64| {
+                submit(
+                    IntentPayload::WalletTopup(arena_proto::WalletTopup {
+                        player_id: player_id.clone(),
+                        amount_minor: amount,
+                        payments: vec![arena_proto::PaymentRow {
+                            method: arena_proto::PaymentMethod::Cash,
+                            amount_minor: amount,
+                            reference: None,
+                        }],
+                    }),
+                    None,
+                )
+            };
+            writer.submit_intent(topup(1_000)).await.unwrap();
+            let second = writer.submit_intent(topup(500)).await.unwrap();
+            let topup_order = second
+                .changes
+                .iter()
+                .find(|c| c.tbl == "orders")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::WalletTopupReverted(arena_proto::WalletTopupReverted {
+                        order_id: topup_order,
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

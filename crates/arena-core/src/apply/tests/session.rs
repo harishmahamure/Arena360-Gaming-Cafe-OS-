@@ -1590,3 +1590,487 @@ async fn ending_a_paused_session_folds_the_pause_and_bills_to_the_end_time() {
     assert_eq!(s["paused_at"], RowValue::Null);
     assert_eq!(state_of(&f, &d), "in_session");
 }
+
+fn topup_intent(player: &str, amount: i64, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+    intent(
+        owner(),
+        IntentPayload::WalletTopup(arena_proto::WalletTopup {
+            player_id: player.into(),
+            amount_minor: amount,
+            payments,
+        }),
+    )
+}
+
+fn topup_revert_intent(order: &str, rev: Option<i64>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::WalletTopupReverted(arena_proto::WalletTopupReverted {
+            order_id: order.into(),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+fn balance(f: &Fixture, player: &str) -> i64 {
+    int(
+        table(f, Table::Wallets)
+            .iter()
+            .find(|w| text(w, "player_id") == player)
+            .unwrap(),
+        "balance_minor",
+    )
+}
+
+fn ledger_sum(f: &Fixture, player: &str) -> i64 {
+    table(f, Table::WalletTxns)
+        .iter()
+        .filter(|t| text(t, "player_id") == player)
+        .map(|t| int(t, "delta_minor"))
+        .sum()
+}
+
+async fn player(f: &Fixture, username: &str, phone: &str) -> String {
+    add(f, owner(), &form(username, phone)).await.unwrap().0
+}
+
+async fn topped_up(f: &Fixture, player: &str, amount: i64) -> String {
+    end(
+        f,
+        topup_intent(
+            player,
+            amount,
+            vec![pay(arena_proto::PaymentMethod::Cash, amount, None)],
+        ),
+    )
+    .await
+    .unwrap();
+    table(f, Table::Orders)
+        .iter()
+        .rev()
+        .find(|o| text(o, "kind") == "topup")
+        .map(|o| text(o, "id"))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_new_player_gets_a_zero_wallet_in_the_same_transaction() {
+    let f = bootstrapped().await;
+    let (id, applied) = add(&f, owner(), &form("asha", "+919876543210"))
+        .await
+        .unwrap();
+    assert!(
+        applied
+            .changes
+            .iter()
+            .any(|c| c.tbl == "wallets" && c.op == ChangeOp::Insert && c.row_id == id)
+    );
+    assert_eq!(balance(&f, &id), 0);
+}
+
+#[tokio::test]
+async fn a_top_up_writes_the_order_payments_ledger_row_and_balance() {
+    use arena_proto::PaymentMethod::{Cash, Upi};
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let split = || {
+        topup_intent(
+            &p,
+            50_000,
+            vec![pay(Cash, 30_000, None), pay(Upi, 20_000, Some("4321"))],
+        )
+    };
+    let a = end(&f, split()).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["orders", "payments", "payments", "wallets", "wallet_txns"]
+    );
+    assert_eq!(balance(&f, &p), 50_000);
+    let o = &table(&f, Table::Orders)[0];
+    assert_eq!(text(o, "kind"), "topup");
+    assert_eq!(text(o, "status"), "settled");
+    assert_eq!(text(o, "player_id"), p);
+    assert_eq!(o["session_id"], RowValue::Null);
+    assert_eq!(int(o, "total_minor"), 50_000);
+    assert_eq!(int(o, "settled_at"), f.clock.now_ms());
+    let txns = table(&f, Table::WalletTxns);
+    assert_eq!(txns.len(), 1);
+    assert_eq!(int(&txns[0], "delta_minor"), 50_000);
+    assert_eq!(text(&txns[0], "reason"), "topup");
+    assert_eq!(text(&txns[0], "method"), "mixed");
+    assert_eq!(text(&txns[0], "order_id"), text(o, "id"));
+    assert_eq!(table(&f, Table::Payments).len(), 2);
+    assert_eq!(ledger_sum(&f, &p), balance(&f, &p));
+    let s = reopen(&f).settlement(&text(o, "id")).unwrap().unwrap();
+    assert_eq!(s.total_minor, 50_000);
+    assert!(
+        crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms())
+            .unwrap()
+            .bills
+            .is_empty()
+    );
+
+    let second = end(&f, split()).await.unwrap();
+    assert_ne!(second.intent_id, a.intent_id);
+    assert_eq!(balance(&f, &p), 100_000);
+}
+
+#[tokio::test]
+async fn a_single_method_top_up_records_that_method() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    topped_up(&f, &p, 10_000).await;
+    assert_eq!(text(&table(&f, Table::WalletTxns)[0], "method"), "cash");
+}
+
+#[tokio::test]
+async fn a_bad_top_up_is_refused_and_writes_nothing() {
+    use arena_proto::PaymentMethod::{Card, Cash, Upi, Wallet};
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let before = reopen(&f).changes().unwrap().len();
+    let mut with_rev = topup_intent(&p, 100, vec![pay(Cash, 100, None)]);
+    with_rev.base_rev = Some(1);
+    let cases: Vec<(Intent, ErrorCode, &str)> = vec![
+        (
+            topup_intent("nobody", 100, vec![pay(Cash, 100, None)]),
+            ErrorCode::NotFound,
+            "player_id",
+        ),
+        (
+            topup_intent(&p, 0, vec![pay(Cash, 1, None)]),
+            ErrorCode::ValidationFailed,
+            "amount_minor",
+        ),
+        (
+            topup_intent(&p, 10_000_001, vec![pay(Cash, 10_000_001, None)]),
+            ErrorCode::ValidationFailed,
+            "amount_minor",
+        ),
+        (
+            topup_intent(&p, 100, vec![]),
+            ErrorCode::ValidationFailed,
+            "payments",
+        ),
+        (
+            topup_intent(&p, 100, vec![pay(Wallet, 100, None)]),
+            ErrorCode::ValidationFailed,
+            "payments[0].method",
+        ),
+        (
+            topup_intent(&p, 100, vec![pay(Cash, 60, None)]),
+            ErrorCode::PaymentShort,
+            "payments",
+        ),
+        (
+            topup_intent(&p, 100, vec![pay(Upi, 100, Some("12"))]),
+            ErrorCode::ReferenceRequired,
+            "payments[0].reference",
+        ),
+        (
+            topup_intent(&p, 100, vec![pay(Card, 100, None)]),
+            ErrorCode::ReferenceRequired,
+            "payments[0].reference",
+        ),
+        (with_rev, ErrorCode::ValidationFailed, "base_rev"),
+    ];
+    for (i, code, field) in cases {
+        let (got, at) = refusal(end(&f, i).await);
+        assert_eq!((got, at.as_deref()), (code, Some(field)));
+    }
+    nothing_changed(&f, before);
+    assert_eq!(balance(&f, &p), 0);
+}
+
+#[tokio::test]
+async fn a_top_up_needs_the_wallet_permission() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let cash = || vec![pay(arena_proto::PaymentMethod::Cash, 100, None)];
+    let kitchen = staff(&f, "kit", ROLE_KITCHEN).await;
+    assert_eq!(
+        refusal(end(&f, with_actor(topup_intent(&p, 100, cash()), kitchen)).await),
+        (ErrorCode::PermissionDenied, None)
+    );
+    let counter = staff(&f, "cnt", ROLE_COUNTER).await;
+    end(&f, with_actor(topup_intent(&p, 100, cash()), counter))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn undoing_a_top_up_deletes_its_rows_and_lowers_the_balance() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let order = topped_up(&f, &p, 20_000).await;
+    let rev = rev_of(&f, Table::Orders, &order);
+    f.clock.advance(3_000);
+    let i = topup_revert_intent(&order, Some(rev));
+    let a = end(&f, i.clone()).await.unwrap();
+    assert_eq!(
+        a.changes
+            .iter()
+            .map(|c| (c.tbl.as_str(), c.op))
+            .collect::<Vec<_>>(),
+        [
+            ("payments", ChangeOp::Delete),
+            ("wallet_txns", ChangeOp::Delete),
+            ("wallets", ChangeOp::Update),
+            ("orders", ChangeOp::Delete),
+        ]
+    );
+    assert!(table(&f, Table::Orders).is_empty());
+    assert!(table(&f, Table::Payments).is_empty());
+    assert!(table(&f, Table::WalletTxns).is_empty());
+    assert_eq!(balance(&f, &p), 0);
+    let again = end(&f, i).await.unwrap();
+    assert_eq!(again.intent_id, a.intent_id);
+}
+
+#[tokio::test]
+async fn a_top_up_undo_is_refused_when_late_by_other_staff_stale_effected_or_spent() {
+    use arena_proto::PaymentMethod::{Cash, Wallet};
+    let f = bootstrapped().await;
+    let asha = staff(&f, "asha", ROLE_COUNTER).await;
+    let ravi = staff(&f, "ravi", ROLE_COUNTER).await;
+    let p = player(&f, "kid", "+919876543211").await;
+    end(
+        &f,
+        with_actor(
+            topup_intent(&p, 20_000, vec![pay(Cash, 20_000, None)]),
+            asha.clone(),
+        ),
+    )
+    .await
+    .unwrap();
+    let order = text(&table(&f, Table::Orders)[0], "id");
+    let rev = rev_of(&f, Table::Orders, &order);
+    let before = reopen(&f).changes().unwrap().len();
+    let revert =
+        |rev: i64, actor: &Actor| with_actor(topup_revert_intent(&order, Some(rev)), actor.clone());
+    assert_eq!(
+        refusal(end(&f, revert(rev, &ravi)).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    assert_eq!(
+        refusal(end(&f, revert(rev + 5, &asha)).await),
+        (ErrorCode::Stale, Some("base_rev".into()))
+    );
+    record_effect(&f, arena_proto::EffectKind::ReceiptPrinted, "", &order).await;
+    assert_eq!(
+        refusal(end(&f, revert(rev, &asha)).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    nothing_changed(&f, before);
+
+    let g = bootstrapped().await;
+    let p = player(&g, "kid", "+919876543211").await;
+    let order = topped_up(&g, &p, 20_000).await;
+    let rev = rev_of(&g, Table::Orders, &order);
+    let (bill, bill_rev) = player_bill(&g, &p, 60_000, 60).await;
+    end(
+        &g,
+        settle_intent(
+            &bill,
+            Some(bill_rev),
+            vec![pay(Wallet, 20_000, None), pay(Cash, 40_000, None)],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(balance(&g, &p), 0);
+    assert_eq!(
+        refusal(end(&g, topup_revert_intent(&order, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+
+    let h = bootstrapped().await;
+    let p = player(&h, "kid", "+919876543211").await;
+    let order = topped_up(&h, &p, 20_000).await;
+    let rev = rev_of(&h, Table::Orders, &order);
+    h.clock.advance(9_000);
+    assert_eq!(
+        refusal(end(&h, topup_revert_intent(&order, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+}
+
+async fn player_bill(f: &Fixture, player: &str, rate: i64, minutes: i64) -> (String, i64) {
+    let d = pc(f, DeviceKind::Pc, "pc", Some(rate)).await;
+    start(f, &d, Some(player)).await.unwrap();
+    f.clock.advance(minutes * 60_000);
+    let s = sessions(f).pop().unwrap();
+    end(f, end_intent(&text(&s, "id"), Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let o = table(f, Table::Orders)
+        .into_iter()
+        .rfind(|o| text(o, "kind") == "session" && text(o, "status") == "open")
+        .unwrap();
+    (text(&o, "id"), int(&o, "rev"))
+}
+
+async fn billed_guest(f: &Fixture) -> (String, i64) {
+    let d = pc(f, DeviceKind::Pc, "pc", Some(10_000)).await;
+    start(f, &d, None).await.unwrap();
+    f.clock.advance(30 * 60_000);
+    let s = sessions(f).pop().unwrap();
+    end(f, end_intent(&text(&s, "id"), Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let o = table(f, Table::Orders)
+        .into_iter()
+        .rfind(|o| o["player_id"] == RowValue::Null)
+        .unwrap();
+    (text(&o, "id"), int(&o, "rev"))
+}
+
+#[tokio::test]
+async fn a_bill_is_paid_partly_from_the_wallet_and_the_ledger_follows() {
+    use arena_proto::PaymentMethod::{Cash, Wallet};
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    topped_up(&f, &p, 20_000).await;
+    f.clock.advance(60_000);
+    let (order, rev) = player_bill(&f, &p, 12_000, 60).await;
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(snap.bills[0].wallet_minor, Some(20_000));
+    let a = end(
+        &f,
+        settle_intent(
+            &order,
+            Some(rev),
+            vec![pay(Wallet, 7_000, None), pay(Cash, 5_000, None)],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["payments", "payments", "orders", "wallet_txns", "wallets"]
+    );
+    assert_eq!(balance(&f, &p), 13_000);
+    assert_eq!(ledger_sum(&f, &p), 13_000);
+    let spend = table(&f, Table::WalletTxns)
+        .into_iter()
+        .find(|t| text(t, "reason") == "bill")
+        .unwrap();
+    assert_eq!(int(&spend, "delta_minor"), -7_000);
+    assert_eq!(text(&spend, "order_id"), order);
+    assert_eq!(spend["method"], RowValue::Null);
+    let wp = table(&f, Table::Payments)
+        .into_iter()
+        .find(|r| text(r, "method") == "wallet")
+        .unwrap();
+    assert_eq!(wp["reference"], RowValue::Null);
+
+    f.clock.advance(2_000);
+    end(&f, settle_revert_intent(&order, Some(rev + 1)))
+        .await
+        .unwrap();
+    assert_eq!(balance(&f, &p), 20_000);
+    assert_eq!(ledger_sum(&f, &p), 20_000);
+    assert_eq!(table(&f, Table::WalletTxns).len(), 1);
+}
+
+#[tokio::test]
+async fn a_wallet_payment_above_the_balance_or_on_a_guest_bill_is_refused() {
+    use arena_proto::PaymentMethod::{Cash, Wallet};
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    topped_up(&f, &p, 5_000).await;
+    f.clock.advance(60_000);
+    let (order, rev) = player_bill(&f, &p, 12_000, 60).await;
+    let before = reopen(&f).changes().unwrap().len();
+    let settle = |payments| settle_intent(&order, Some(rev), payments);
+    assert_eq!(
+        refusal(end(&f, settle(vec![pay(Wallet, 12_000, None)])).await),
+        (
+            ErrorCode::InsufficientBalance,
+            Some("payments[0].amount_minor".into())
+        )
+    );
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                settle(vec![
+                    pay(Wallet, 3_000, None),
+                    pay(Wallet, 3_000, None),
+                    pay(Cash, 6_000, None)
+                ])
+            )
+            .await
+        ),
+        (
+            ErrorCode::ValidationFailed,
+            Some("payments[0].method".into())
+        )
+    );
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                settle(vec![
+                    pay(Wallet, 5_000, Some("1234")),
+                    pay(Cash, 7_000, None)
+                ])
+            )
+            .await
+        ),
+        (
+            ErrorCode::ValidationFailed,
+            Some("payments[0].reference".into())
+        )
+    );
+    nothing_changed(&f, before);
+    assert_eq!(balance(&f, &p), 5_000);
+
+    let (guest_order, guest_rev) = billed_guest(&f).await;
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                settle_intent(
+                    &guest_order,
+                    Some(guest_rev),
+                    vec![pay(Wallet, 100, None), pay(Cash, 4_900, None)]
+                )
+            )
+            .await
+        ),
+        (
+            ErrorCode::ValidationFailed,
+            Some("payments[0].method".into())
+        )
+    );
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    let guest_bill = snap
+        .bills
+        .iter()
+        .find(|b| b.order_id.as_deref() == Some(guest_order.as_str()))
+        .unwrap();
+    assert_eq!(guest_bill.wallet_minor, None);
+}
+
+#[tokio::test]
+async fn a_wallet_never_goes_negative_when_two_bills_race_for_the_same_balance() {
+    use arena_proto::PaymentMethod::{Cash, Wallet};
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    topped_up(&f, &p, 6_000).await;
+    f.clock.advance(60_000);
+    let (one, one_rev) = player_bill(&f, &p, 10_000, 60).await;
+    let (two, two_rev) = player_bill(&f, &p, 10_000, 60).await;
+    let both = || vec![pay(Wallet, 6_000, None), pay(Cash, 4_000, None)];
+    end(&f, settle_intent(&one, Some(one_rev), both()))
+        .await
+        .unwrap();
+    assert_eq!(
+        refusal(end(&f, settle_intent(&two, Some(two_rev), both())).await).0,
+        ErrorCode::InsufficientBalance
+    );
+    assert_eq!(balance(&f, &p), 0);
+    assert_eq!(ledger_sum(&f, &p), 0);
+}

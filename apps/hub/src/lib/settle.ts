@@ -3,6 +3,9 @@ import type { MessageKey } from "@arena/ui/messages";
 
 export const METHODS: readonly PaymentMethod[] = ["cash", "upi", "card"];
 
+export const methodsFor = (walletMinor: number | null | undefined): readonly PaymentMethod[] =>
+  typeof walletMinor === "number" ? [...METHODS, "wallet"] : METHODS;
+
 export type Row = { method: PaymentMethod; amount: string; reference: string };
 
 export type Tally = {
@@ -46,9 +49,11 @@ export function tally(total: number, rows: Row[], exponent: number): Tally {
   return { paid, remaining: 0, change: 0, overpaid: true };
 }
 
-export function rowErrors(row: Row, exponent: number): RowErrors {
+export function rowErrors(row: Row, exponent: number, walletMinor = 0): RowErrors {
   const errors: RowErrors = {};
-  if (parseAmount(row.amount, exponent) === null) errors.amount = "hub.settle.err.amount";
+  const amount = parseAmount(row.amount, exponent);
+  if (amount === null) errors.amount = "hub.settle.err.amount";
+  else if (row.method === "wallet" && amount > walletMinor) errors.amount = "hub.settle.err.wallet";
   const reference = row.reference.trim();
   if (row.method === "upi" && !/^\d{4}$/.test(reference)) errors.reference = "hub.settle.err.upi";
   if (row.method === "card" && (reference === "" || [...reference].length > CARD_REFERENCE_MAX)) {
@@ -57,8 +62,8 @@ export function rowErrors(row: Row, exponent: number): RowErrors {
   return errors;
 }
 
-export const rowsValid = (rows: Row[], exponent: number): boolean =>
-  rows.every((row) => Object.keys(rowErrors(row, exponent)).length === 0);
+export const rowsValid = (rows: Row[], exponent: number, walletMinor = 0): boolean =>
+  rows.every((row) => Object.keys(rowErrors(row, exponent, walletMinor)).length === 0);
 
 export function toPayments(rows: Row[], change: number, exponent: number): PaymentRow[] {
   let giveBack = change;
@@ -73,8 +78,8 @@ export function toPayments(rows: Row[], change: number, exponent: number): Payme
     if (amount === 0) continue;
     const reference = row.reference.trim();
     payments.push(
-      row.method === "cash"
-        ? { method: "cash", amount_minor: amount }
+      row.method === "cash" || row.method === "wallet"
+        ? { method: row.method, amount_minor: amount }
         : { method: row.method, amount_minor: amount, reference },
     );
   }

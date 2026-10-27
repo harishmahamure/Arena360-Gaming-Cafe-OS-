@@ -51,6 +51,7 @@ const REFUSALS: Record<string, MessageKey> = {
   "VALIDATION_FAILED:session.resume": "hub.session.resume_refused",
   "VALIDATION_FAILED:session.end": "hub.session.ended",
   PAYMENT_SHORT: "hub.settle.short",
+  INSUFFICIENT_BALANCE: "hub.settle.insufficient",
   REFERENCE_REQUIRED: "hub.settle.reference",
   "STALE:session.settle": "hub.settle.stale",
 };
@@ -136,11 +137,13 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
         ? "session.end"
         : kind === "session.settle" || kind === "session.settle.reverted"
           ? "pos.sell"
-          : kind === "device.screen"
-            ? "device.screen"
-            : kind === "device.power" || kind === "device.admin_unlock"
-              ? "device.remote"
-              : "device.manage";
+          : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+            ? "wallet.topup"
+            : kind === "device.screen"
+              ? "device.screen"
+              : kind === "device.power" || kind === "device.admin_unlock"
+                ? "device.remote"
+                : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 

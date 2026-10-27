@@ -11,6 +11,8 @@
 //!   another window sharing the token), so every window locks and unlocks together.
 //! - `event: bill.settled`, data [`BillSettledEvent`]: a `session.settle` committed (the receipt hook);
 //!   the view reloads the snapshot, which no longer lists the bill.
+//! - `event: wallet.changed`, data [`WalletChangedEvent`]: a wallet balance moved (a top-up, a
+//!   wallet payment or an undo of either); open profiles and bills reload.
 //! - `event: bill.reverted`, data [`BillRevertedEvent`]: a `session.end.reverted` or
 //!   `session.settle.reverted` committed; the view reloads the snapshot, which lists the bill again
 //!   as unpaid (a settle undone) or no longer (an end undone).
@@ -48,7 +50,7 @@ use std::time::Duration;
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
 use arena_proto::{
     AppliedEvent, BillRevertedEvent, BillSettledEvent, SessionStartedEvent, SettingsChangedEvent,
-    SnapshotLocale, SnapshotUi,
+    SnapshotLocale, SnapshotUi, WalletChangedEvent,
 };
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -211,6 +213,16 @@ fn bill_settled(applied: &Applied) -> Option<BillSettledEvent> {
     })
 }
 
+fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
+    applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "wallets")
+        .map(|c| WalletChangedEvent {
+            player_id: c.row_id.clone(),
+        })
+}
+
 fn bill_reverted(applied: &Applied) -> Option<BillRevertedEvent> {
     let order = applied.changes.iter().find(|c| c.tbl == "orders")?;
     let reopened = order.op == arena_core::ChangeOp::Delete
@@ -313,6 +325,10 @@ impl HubTask {
                         if let Some(reverted) = bill_reverted(&applied) {
                             let data = serde_json::to_string(&reverted).unwrap_or_default();
                             self.send("bill.reverted", data, false);
+                        }
+                        if let Some(changed) = wallet_changed(&applied) {
+                            let data = serde_json::to_string(&changed).unwrap_or_default();
+                            self.send("wallet.changed", data, false);
                         }
                         if let Some(started) = session_started(&applied) {
                             let data = serde_json::to_string(&started).unwrap_or_default();
@@ -679,6 +695,21 @@ mod tests {
         assert_eq!(bill_reverted(&unend).unwrap().order_id, "O");
         let end = applied(&[("sessions", "S", Update), ("orders", "O", Insert)]);
         assert!(bill_reverted(&end).is_none());
+    }
+
+    #[test]
+    fn a_wallet_change_names_the_player_and_a_top_up_is_not_a_settle() {
+        use arena_core::ChangeOp::{Insert, Update};
+        let topup = applied(&[
+            ("orders", "TO", Insert),
+            ("payments", "P", Insert),
+            ("wallets", "P1", Update),
+            ("wallet_txns", "T", Insert),
+        ]);
+        assert_eq!(wallet_changed(&topup).unwrap().player_id, "P1");
+        assert!(bill_settled(&topup).is_none());
+        let other = applied(&[("orders", "O", Update)]);
+        assert!(wallet_changed(&other).is_none());
     }
     use tower::ServiceExt;
 

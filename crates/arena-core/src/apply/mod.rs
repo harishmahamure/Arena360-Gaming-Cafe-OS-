@@ -50,6 +50,7 @@ mod test_session;
 mod ttl_dedupe;
 mod validate;
 pub(crate) mod verifier;
+mod wallet;
 mod zones;
 
 #[cfg(test)]
@@ -155,6 +156,8 @@ pub(crate) enum Target {
     SessionSettleReverted(Box<session::SettleRevertTarget>),
     SessionPause(Box<session::PauseTarget>),
     SessionResume(Box<session::PauseTarget>),
+    WalletTopup(Box<wallet::TopupTarget>),
+    WalletTopupReverted(Box<wallet::TopupRevertTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -209,6 +212,10 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         }
         P::SessionPause(p) => Target::SessionPause(Box::new(session::load_pause(tx, p)?)),
         P::SessionResume(r) => Target::SessionResume(Box::new(session::load_resume(tx, r)?)),
+        P::WalletTopup(t) => Target::WalletTopup(Box::new(wallet::load_topup(tx, t)?)),
+        P::WalletTopupReverted(r) => {
+            Target::WalletTopupReverted(Box::new(wallet::load_topup_reverted(tx, r, now)?))
+        }
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

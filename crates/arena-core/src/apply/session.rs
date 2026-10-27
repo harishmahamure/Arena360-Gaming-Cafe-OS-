@@ -4,19 +4,21 @@ use arena_proto::{
     SessionSettleReverted, SessionStart, UNDO_WINDOW_MS,
 };
 use arena_store::{
-    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OrderRow,
-    RateRow, RowKey, SegmentRow, StoreTx, Table, close_segments, delete_row,
-    device_has_live_session, effect_recorded, end_session, find_active_rate, find_device_meta,
-    find_order, find_order_for_session, find_player, find_session, fold_pause, forward_intent_id,
-    insert_order, insert_order_line, insert_payment, insert_segment, insert_session,
-    list_order_line_ids, list_payment_ids, list_segments, next_guest_no, pause_session, read_row,
-    reopen_order, reopen_segments, reopen_session, resume_session, set_device_state, settle_order,
+    ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession,
+    NewWalletTxn, OrderRow, RateRow, RowKey, SegmentRow, StoreTx, Table, adjust_wallet,
+    close_segments, delete_row, device_has_live_session, effect_recorded, end_session,
+    find_active_rate, find_device_meta, find_order, find_order_for_session, find_player,
+    find_session, find_wallet, fold_pause, forward_intent_id, insert_order, insert_order_line,
+    insert_payment, insert_segment, insert_session, insert_wallet_txn, list_order_line_ids,
+    list_order_wallet_txns, list_payment_ids, list_segments, next_guest_no, pause_session,
+    read_row, reopen_order, reopen_segments, reopen_session, resume_session, set_device_state,
+    settle_order,
 };
 
 use super::mutate::Written;
 use crate::status::Epoch;
 
-const MAX_PAYMENTS: usize = 8;
+pub(super) const MAX_PAYMENTS: usize = 8;
 
 #[derive(Default)]
 pub(crate) struct SessionTarget {
@@ -26,7 +28,7 @@ pub(crate) struct SessionTarget {
     player: bool,
 }
 
-fn invalid(field: &str, message: &str) -> AppError {
+pub(super) fn invalid(field: &str, message: &str) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
 }
 
@@ -344,11 +346,18 @@ pub(super) fn mutate_end(
 #[derive(Default)]
 pub(crate) struct SettleTarget {
     order: Option<OrderRow>,
+    wallet_minor: i64,
 }
 
 pub(super) fn load_settle(tx: &StoreTx<'_>, s: &SessionSettle) -> Result<SettleTarget, AppError> {
+    let order = find_order(tx, &s.order_id)?;
+    let wallet_minor = match order.as_ref().and_then(|o| o.player_id.as_deref()) {
+        Some(p) => find_wallet(tx, p)?.map_or(0, |w| w.balance_minor),
+        None => 0,
+    };
     Ok(SettleTarget {
-        order: find_order(tx, &s.order_id)?,
+        order,
+        wallet_minor,
     })
 }
 
@@ -379,10 +388,15 @@ fn reference_error(i: usize, message: &str) -> AppError {
     )
 }
 
-fn check_reference(i: usize, p: &PaymentRow) -> Result<(), AppError> {
+pub(super) fn check_reference(i: usize, p: &PaymentRow) -> Result<(), AppError> {
     let reference = p.reference.as_deref().map(str::trim);
     match (p.method, reference) {
         (PaymentMethod::Cash, None | Some("")) => Ok(()),
+        (PaymentMethod::Wallet, None | Some("")) => Ok(()),
+        (PaymentMethod::Wallet, Some(_)) => Err(invalid(
+            &format!("payments[{i}].reference"),
+            "a wallet payment takes no reference",
+        )),
         (PaymentMethod::Cash, Some(_)) => Err(invalid(
             &format!("payments[{i}].reference"),
             "a cash payment takes no reference",
@@ -432,6 +446,27 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
         }
         check_reference(i, p)?;
     }
+    let mut wallet_rows = s
+        .payments
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.method == PaymentMethod::Wallet);
+    if let Some((i, p)) = wallet_rows.next() {
+        let field = format!("payments[{i}].method");
+        if o.player_id.is_none() {
+            return Err(invalid(&field, "a guest bill has no wallet"));
+        }
+        if wallet_rows.next().is_some() {
+            return Err(invalid(&field, "use the wallet once on a bill"));
+        }
+        if p.amount_minor > t.wallet_minor {
+            return Err(AppError::with_field(
+                ErrorCode::InsufficientBalance,
+                format!("payments[{i}].amount_minor"),
+                "The wallet balance is too low.",
+            ));
+        }
+    }
     let paid = s
         .payments
         .iter()
@@ -451,6 +486,7 @@ pub(super) fn mutate_settle(
     tx: &StoreTx<'_>,
     intent: &Intent,
     s: &SessionSettle,
+    t: &SettleTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
@@ -492,6 +528,42 @@ pub(super) fn mutate_settle(
         op: ChangeOp::Update,
         before: None,
     });
+    let player_id = t.order.as_ref().and_then(|o| o.player_id.as_deref());
+    if let (Some(player_id), Some(w)) = (
+        player_id,
+        s.payments
+            .iter()
+            .find(|p| p.method == PaymentMethod::Wallet),
+    ) {
+        let txn_id = ulid::Ulid::generate().to_string();
+        insert_wallet_txn(
+            tx,
+            &NewWalletTxn {
+                id: &txn_id,
+                player_id,
+                delta_minor: -w.amount_minor,
+                reason: "bill",
+                method: None,
+                staff_id: &intent.actor.id,
+                order_id: &s.order_id,
+                business_day: &business_day,
+                fy: &fy,
+            },
+        )?;
+        adjust_wallet(tx, player_id, -w.amount_minor)?;
+        written.push(Written {
+            key: RowKey::WalletTxns { id: txn_id },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+        written.push(Written {
+            key: RowKey::Wallets {
+                player_id: player_id.to_owned(),
+            },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
     Ok(written)
 }
 
@@ -626,19 +698,19 @@ pub(super) fn mutate_resume(
     Ok(written)
 }
 
-fn undo_denied(message: &str) -> AppError {
+pub(super) fn undo_denied(message: &str) -> AppError {
     AppError::new(ErrorCode::UndoNotAllowed, message)
 }
 
-fn in_window(now_ms: i64, at: Option<i64>) -> bool {
+pub(super) fn in_window(now_ms: i64, at: Option<i64>) -> bool {
     at.is_some_and(|a| now_ms - a <= UNDO_WINDOW_MS)
 }
 
-fn same_staff(intent: &Intent, by: Option<&str>) -> bool {
+pub(super) fn same_staff(intent: &Intent, by: Option<&str>) -> bool {
     by == Some(intent.actor.id.as_str())
 }
 
-fn check_rev(intent: &Intent, current: i64, what: &str) -> Result<(), AppError> {
+pub(super) fn check_rev(intent: &Intent, current: i64, what: &str) -> Result<(), AppError> {
     match intent.base_rev {
         None => Err(invalid("base_rev", &format!("{what} needs base_rev"))),
         Some(b) if b != current => Err(AppError::with_field(
@@ -806,6 +878,7 @@ pub(super) fn mutate_end_reverted(
 pub(crate) struct SettleRevertTarget {
     order: Option<OrderRow>,
     payments: Vec<String>,
+    txns: Vec<(String, String, i64)>,
     effect: bool,
     now: i64,
 }
@@ -824,6 +897,7 @@ pub(super) fn load_settle_reverted(
     let forward = forward_intent_id(tx, "orders", &order.id, "session.settle")?;
     Ok(SettleRevertTarget {
         payments: list_payment_ids(tx, &order.id)?,
+        txns: list_order_wallet_txns(tx, &order.id)?,
         effect: effect_recorded(tx, forward.as_deref(), &order.id)?,
         order: Some(order),
         now,
@@ -889,6 +963,24 @@ pub(super) fn mutate_settle_reverted(
             key,
             op: ChangeOp::Delete,
             before: Some(before),
+        });
+    }
+    for (id, player_id, delta) in &t.txns {
+        let key = RowKey::WalletTxns { id: id.clone() };
+        let before = read_row(tx, &key)?;
+        delete_row(tx, Table::WalletTxns, &before)?;
+        adjust_wallet(tx, player_id, -delta)?;
+        written.push(Written {
+            key,
+            op: ChangeOp::Delete,
+            before: Some(before),
+        });
+        written.push(Written {
+            key: RowKey::Wallets {
+                player_id: player_id.clone(),
+            },
+            op: ChangeOp::Update,
+            before: None,
         });
     }
     reopen_order(tx, &o.id)?;

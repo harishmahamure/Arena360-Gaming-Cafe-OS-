@@ -71,6 +71,8 @@ deferred: []
 
 ## Review Triage Log
 
+Re-run 2026-10-27: no open findings; fmt, clippy, hub check, strings, protocol, prettier and the proto/store/core/replay/api tests pass. `arena-api` `ui_events::a_component_change_also_reports_the_bundles_that_hold_it` failed once under load and passes alone and on rerun (50 ms sleep; not touched by this story).
+
 ## Verification
 
 **Commands:**

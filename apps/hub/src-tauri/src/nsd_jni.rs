@@ -46,7 +46,14 @@ impl Bridge {
             .map_err(|e| format!("attach: {e}"))?;
         // SAFETY: the global ref holds the `NsdBridge` class object found in `connect`.
         let class = unsafe { JClass::from_raw(self.class.as_obj().as_raw()) };
-        let result = f(&mut env, &class);
+        // A native thread never returns to Java, so its local references would pile up; a
+        // frame frees them after every call.
+        let mut result = None;
+        let _ = env.with_local_frame(32, |env| -> Result<(), jni::errors::Error> {
+            result = Some(f(env, &class));
+            Ok(())
+        });
+        let result = result.unwrap_or_else(|| Err("no local frame".to_string()));
         if env.exception_check().unwrap_or(false) {
             // The bridge threw: never leave it pending on this thread.
             let _ = env.exception_clear();
@@ -65,13 +72,13 @@ pub fn connect(env: &mut JNIEnv) -> Result<(NsdAdvertiser, NsdNetwork), String> 
         .new_global_ref(class)
         .map_err(|e| format!("global ref: {e}"))?;
     let vm = env.get_java_vm().map_err(|e| format!("java vm: {e}"))?;
-    let second = env.get_java_vm().map_err(|e| format!("java vm: {e}"))?;
     let bridge = Arc::new(Bridge { vm, class });
-    let namer = Arc::new(Bridge {
-        vm: second,
-        class: bridge.class.clone(),
-    });
-    Ok((NsdAdvertiser { bridge }, NsdNetwork { bridge: namer }))
+    Ok((
+        NsdAdvertiser {
+            bridge: Arc::clone(&bridge),
+        },
+        NsdNetwork { bridge },
+    ))
 }
 
 pub struct NsdAdvertiser {

@@ -1729,6 +1729,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_lan_network_name_change_alone_pushes_devices_changed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        hub._status
+            .send_modify(|s| s.lan_network = Some("Ethernet".into()));
+        assert_eq!(
+            next_event(&mut frames).await.unwrap(),
+            ("devices.changed".to_owned(), serde_json::json!({}))
+        );
+    }
+
+    #[tokio::test]
     async fn a_role_change_sends_resync_and_closes_the_stream() {
         let hub = hub().await;
         let token = token_for(&hub, "manager", "m-pass").await;

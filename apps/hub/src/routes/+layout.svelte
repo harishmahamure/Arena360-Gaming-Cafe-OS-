@@ -620,7 +620,7 @@
             href="/settings/devices-display"
             data-testid="hub-no-lan"
           >
-            <AlertBadge count={1} />
+            <span class="chip-glyph" aria-hidden="true">⚠</span>
             {t("hub.connectivity.no_lan")}
           </a>
         {/if}

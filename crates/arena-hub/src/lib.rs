@@ -276,6 +276,11 @@ async fn run(
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
     initial.tier = identity.map(|i| i.tier);
     initial.platform = cfg.platform;
+    if cfg.platform == arena_proto::HubPlatform::Android {
+        // Read the addresses before the first snapshot, so the header does not flash
+        // "No LAN connection" while the mDNS task starts.
+        initial.lan_addresses = arena_tasks::lan_ipv4_addresses();
+    }
     let (status_tx, status_rx) = status_channel(initial);
     let listener = bind_health(cfg.health_port)
         .await

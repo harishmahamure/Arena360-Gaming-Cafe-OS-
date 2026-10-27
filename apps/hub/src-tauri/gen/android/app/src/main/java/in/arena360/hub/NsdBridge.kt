@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -26,6 +27,7 @@ object NsdBridge {
   private const val SERVICE_TYPE = "_arena360-hub._tcp"
   private const val REREGISTER_DELAY_MS = 500L
   private const val RETRY_DELAY_MS = 5000L
+  private const val STOP_TIMEOUT_MS = 5000L
 
   private class Advert(val instance: String, val port: Int, val txt: Map<String, String>) {
     override fun equals(other: Any?) =
@@ -35,8 +37,8 @@ object NsdBridge {
   }
 
   private val main = Handler(Looper.getMainLooper())
-  private var context: Context? = null
-  private var callback: ConnectivityManager.NetworkCallback? = null
+  @Volatile private var context: Context? = null
+  private val callbacks = mutableListOf<ConnectivityManager.NetworkCallback>()
   private var wanted: Advert? = null
   private var active: Listener? = null
   private var stopping = false
@@ -50,30 +52,45 @@ object NsdBridge {
   @JvmStatic
   @Synchronized
   fun attach(app: Context) {
-    if (callback != null) return
+    if (callbacks.isNotEmpty()) return
     context = app.applicationContext
-    val cb = object : ConnectivityManager.NetworkCallback() {
-      override fun onAvailable(network: Network) = changed()
-
-      override fun onLost(network: Network) = changed()
-
-      override fun onLinkPropertiesChanged(network: Network, props: LinkProperties) = changed()
-    }
+    val cm = connectivity() ?: return
     try {
-      connectivity()?.registerDefaultNetworkCallback(cb)
-      callback = cb
+      val default = newCallback()
+      cm.registerDefaultNetworkCallback(default)
+      callbacks.add(default)
+      // A cafe Wi-Fi with no internet is not the default network while mobile data is on, so
+      // watch the LAN transports as well.
+      val lan = newCallback()
+      val request = NetworkRequest.Builder()
+        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+        .build()
+      cm.registerNetworkCallback(request, lan)
+      callbacks.add(lan)
     } catch (e: RuntimeException) {
       Log.w(TAG, "cannot watch the network", e)
     }
+  }
+
+  private fun newCallback() = object : ConnectivityManager.NetworkCallback() {
+    override fun onAvailable(network: Network) = changed()
+
+    override fun onLost(network: Network) = changed()
+
+    override fun onLinkPropertiesChanged(network: Network, props: LinkProperties) = changed()
   }
 
   /** Stops watching and withdraws the service. Called when the service stops. */
   @JvmStatic
   @Synchronized
   fun detach() {
-    callback?.let { runCatching { connectivity()?.unregisterNetworkCallback(it) } }
-    callback = null
+    callbacks.forEach { cb -> runCatching { connectivity()?.unregisterNetworkCallback(cb) } }
+    callbacks.clear()
+    // Nothing queued may run against the next service instance.
+    main.removeCallbacksAndMessages(null)
     wanted = null
+    restart = false
     reconcile()
   }
 
@@ -98,12 +115,24 @@ object NsdBridge {
   @JvmStatic
   fun networkName(): String? {
     val cm = connectivity() ?: return null
-    val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } ?: return null
+    val caps = lanCapabilities(cm) ?: return null
     return when {
       caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
       caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> wifiName()?.let { "Wi-Fi: $it" } ?: "Wi-Fi"
       else -> null
     }
+  }
+
+  /** The active network when it is a LAN transport, else any connected Wi-Fi or Ethernet one. */
+  @Suppress("DEPRECATION")
+  private fun lanCapabilities(cm: ConnectivityManager): NetworkCapabilities? {
+    fun isLan(c: NetworkCapabilities?) = c != null &&
+      (c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+        c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
+    val active = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+    if (isLan(active)) return active
+    return runCatching { cm.allNetworks.map { cm.getNetworkCapabilities(it) }.firstOrNull(::isLan) }
+      .getOrNull()
   }
 
   @Suppress("DEPRECATION")
@@ -145,6 +174,16 @@ object NsdBridge {
     if (current != null && (want == null || current.advert != want || restart)) {
       stopping = true
       restart = false
+      // If the stop is never reported, do not stay blocked for good.
+      main.postDelayed({
+        synchronized(this) {
+          if (stopping && active === current) {
+            stopping = false
+            active = null
+            reconcile()
+          }
+        }
+      }, STOP_TIMEOUT_MS)
       try {
         nsd.unregisterService(current)
       } catch (e: IllegalArgumentException) {
@@ -175,8 +214,11 @@ object NsdBridge {
     }
   }
 
+  private val retry = Runnable { synchronized(this) { reconcile() } }
+
   private fun retryLater() {
-    main.postDelayed({ synchronized(this) { reconcile() } }, RETRY_DELAY_MS)
+    main.removeCallbacks(retry)
+    main.postDelayed(retry, RETRY_DELAY_MS)
   }
 
   private class Listener(val advert: Advert) : NsdManager.RegistrationListener {
@@ -187,8 +229,10 @@ object NsdBridge {
     override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
       Log.w(TAG, "registration failed: $errorCode")
       synchronized(NsdBridge) {
-        if (active === this) active = null
-        retryLater()
+        if (active === this) {
+          active = null
+          retryLater()
+        }
       }
     }
 

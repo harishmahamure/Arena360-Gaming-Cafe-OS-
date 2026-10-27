@@ -146,6 +146,8 @@ pub extern "system" fn Java_in_arena360_hub_HubService_nativeStart(
             Arc::new(network) as Arc<dyn NetworkName>,
         ),
         Err(e) => {
+            // A failed class lookup leaves a ClassNotFoundException pending.
+            let _ = env.exception_clear();
             eprintln!("arena-hub: the NsdManager bridge is unavailable: {e}");
             (
                 Box::new(arena_tasks::MdnsAdvertiser::default()) as Box<dyn Advertiser>,

@@ -2,7 +2,7 @@
 title: 'Story 4.4: Kiosks find and pair with an Android Hub on the LAN'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '29d0a1d'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -68,7 +68,7 @@ deferred: []
 
 - [x] `arena-tasks`: boxed advertiser, wake hook, network-name hook, Android offline withdraw; tests with fakes.
 - [x] `arena-core`/`arena-proto`/`arena-api`: status field, snapshot `network` and `no_lan`; regenerate types; tests.
-- [x] `arena-hub`: `StartOptions` carry the advertiser, wake and network name into `MdnsTask`; Hub-level test.
+- [x] `arena-hub`: `StartOptions` carry the advertiser, wake and network name into `MdnsTask` (the Hub-level injection test is deferred, see `deferred-work.md`).
 - [x] Android shell: `NsdBridge.kt`, `nsd_jni.rs`, `android.rs` wiring, manifest permission; `check-android.mjs` rule.
 - [x] `apps/hub`: snapshot normaliser, header "No LAN connection" badge, Settings → Devices network line; en.json; Playwright tests including axe.
 - [x] README and deferred-work notes.
@@ -82,3 +82,7 @@ deferred: []
 ## Verification Log
 
 Pass: `cargo fmt`, clippy `-D warnings` for arena-tasks/hub/api/core/proto (incl. `dev-fixtures`), `arena-tasks` mdns tests (new: Android withdraw and re-advertise on wake, Windows keeps its advert), `arena-api` lib tests (new `no_lan`/`network` snapshot test), `arena-proto`/`arena-core` tests, `pnpm gen:types`, `check:strings`, `check:layers`, `format:check`, `check-android` script tests and `node scripts/check-android.mjs manifest` (new NsdManager rule), `@arena/hub` svelte-check, Playwright `devices-display` and `pair-kiosk` (new network and No LAN connection test with axe). Not run: Gradle/Kotlin build, `android.rs` on the Android target (`nsd_jni.rs` type-checked on the host), emulator and real-LAN criteria (see `deferred-work.md`). Pre-existing failures: `arena-e2e` (unix-only imports on Windows), 12 kubectl-dependent `test:scripts` cases.
+
+## Code Review (2026-10-28)
+
+Fixed: JNI local-frame per bridge call and one shared bridge; pending exception cleared when the bridge class is missing; Kotlin watches Wi-Fi/Ethernet transports as well as the default network, stop timeout, de-duplicated retry, `detach` clears queued callbacks and flags, `context` volatile, network name from any connected LAN transport; Android Hub reads its addresses before the first snapshot (no startup "No LAN connection" flash); badge uses the warning glyph instead of a count; added a `devices.changed` test for a network-name-only change. Left as deferred/not blocking: Hub-level `StartOptions` injection test, R8 keep rules (release minify is not enabled), SSID/transport label localisation, fallback advertiser not re-registering on IP change.

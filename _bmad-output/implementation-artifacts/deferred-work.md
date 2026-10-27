@@ -368,3 +368,11 @@
 - The last job failure is held in memory and is lost on a Hub restart; there is no job queue yet (receipts and KOTs arrive in Epics 5 and 7), so "the next print retries the connection" is a fresh connection per job, not a queued retry.
 - A Bluetooth printer is matched by its device address; renaming it in Android settings changes the listed name, not the saved selection.
 - `dev_seed`, `lan` and `printer` integration tests in `arena-hub` fail on master with `USER_LIMIT: the staff limit for this branch is reached` (checked with the work stashed), and `pnpm run check:tokens-used` fails on `--sticky-bottom` in `+layout.svelte` (Story 4.5); both are independent of this story.
+
+## Deferred from: code review of Story 4.6
+
+- `AndroidPrinter` is chosen only when the JNI bridge connects; if `bt_jni::connect` fails the Hub falls back to `SystemPrinter` and lists USB. A degraded Android start should still use `AndroidPrinter` with an `Unavailable` link.
+- A `printer_offline` alert stays open after the printer recovers until staff acknowledge it; no per-printer job lock yet (jobs are single test prints until Epics 5 and 7).
+- No `arena-hub` test starts the Hub with `StartOptions.bluetooth = Some(FakeBluetooth)`; blocked by the `USER_LIMIT` integration test failures on master.
+- `arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::tests::a_printer_that_stops_reading_times_out` fail on master too (checked at the commit before this story).
+- Bluetooth list is not filtered by device class; discovery and `access` are read separately in `find`.

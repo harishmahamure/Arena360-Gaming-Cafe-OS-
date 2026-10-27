@@ -1,6 +1,11 @@
 <script lang="ts">
   import { Button, InlinePin, t } from "@arena/ui";
-  import type { FoundPrinter, PrinterErrorKind, PrinterSelected } from "@arena/ui/generated";
+  import type {
+    BluetoothAccess,
+    FoundPrinter,
+    PrinterErrorKind,
+    PrinterSelected,
+  } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
@@ -26,6 +31,7 @@
     PAPER_WIDTHS,
     askBluetooth,
     findPrinters,
+    openAppSettings,
     parseSelected,
     sameSelection,
     selectionOf,
@@ -61,6 +67,9 @@
   let paper = $state("80");
   let chosen: PrinterSelected | null = $state(null);
   let found: FoundPrinter[] | null = $state(null);
+  let bluetooth: BluetoothAccess | null = $state(null);
+  let usbSupported = $state(true);
+  let askingBluetooth = $state(false);
   let ip = $state("");
   let approving = $state(false);
   let approvalPrompt: MessageKey = $state("ui.pin.prompt");
@@ -87,6 +96,11 @@
         : v !== rows[k]?.value,
     ),
   );
+  const BLUETOOTH_NOTES: Record<Exclude<BluetoothAccess, "granted">, MessageKey> = {
+    denied: "hub.settings.printer.bluetooth.denied",
+    off: "hub.settings.printer.bluetooth.off",
+    unavailable: "hub.settings.printer.bluetooth.unavailable",
+  };
   const refuse = (message: MessageKey) => (status = { tone: "refusal", text: t(message) });
 
   async function load(quiet = false, keepEdits = false) {
@@ -116,12 +130,18 @@
     busy = true;
     status = null;
     try {
+      askingBluetooth = true;
       await askBluetooth();
+      askingBluetooth = false;
       const r = await findPrinters();
       if (r.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
-      if (r.kind === "ok") found = r.body.printers;
-      else refuse("hub.settings.printer.find_failed");
+      if (r.kind === "ok") {
+        found = r.body.printers;
+        bluetooth = r.body.bluetooth ?? null;
+        usbSupported = r.body.usb_supported;
+      } else refuse("hub.settings.printer.find_failed");
     } finally {
+      askingBluetooth = false;
       busy = false;
     }
   }
@@ -292,6 +312,35 @@
             onclick={() => void find()}
           />
         </div>
+        {#if askingBluetooth}
+          <p class="type-hub-label" data-testid="kitchen-bluetooth-reason">
+            {t("hub.settings.printer.bluetooth.reason")}
+          </p>
+        {/if}
+        {#if bluetooth && bluetooth !== "granted"}
+          <div class="bluetooth-note" data-testid="kitchen-bluetooth-note">
+            <p class="type-hub-label status refusal">
+              <span aria-hidden="true">⚠</span>
+              <span>{t(BLUETOOTH_NOTES[bluetooth])}</span>
+            </p>
+            {#if bluetooth === "denied"}
+              <Button
+                label="hub.settings.printer.bluetooth.open_settings"
+                variant="secondary"
+                onclick={openAppSettings}
+              />
+            {/if}
+          </div>
+        {:else if bluetooth === "granted" && found && !found.some((p) => p.kind === "bluetooth")}
+          <p class="type-hub-label" data-testid="kitchen-bluetooth-none">
+            {t("hub.settings.printer.bluetooth.none_paired")}
+          </p>
+        {/if}
+        {#if found && !usbSupported}
+          <p class="type-hub-label" data-testid="kitchen-usb-unsupported">
+            {t("hub.settings.printer.usb_unsupported")}
+          </p>
+        {/if}
         {#if found}
           <fieldset class="group" data-testid="kitchen-found">
             <legend class="type-hub-label label">{t("hub.settings.printer.found")}</legend>
@@ -514,6 +563,13 @@
     border-width: 2px;
     border-color: var(--accent);
     padding: 0 calc(var(--space-3) - 1px);
+  }
+
+  .bluetooth-note {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
   }
 
   .status {

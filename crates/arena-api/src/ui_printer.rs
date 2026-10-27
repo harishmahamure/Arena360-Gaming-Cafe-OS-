@@ -202,7 +202,12 @@ async fn dispatch(
         .printer_failure()
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = failure;
-    if failed && matches!(target, PrinterTarget::Bluetooth(_)) {
+    // Only a link failure means the printer is offline; a refused permission or a switched-off
+    // radio is the phone's state, which the settings page explains.
+    if failed
+        && matches!(target, PrinterTarget::Bluetooth(_))
+        && matches!(sent, Err(PrinterError::Bluetooth(..)))
+    {
         raise_offline(auth).await;
     }
     sent
@@ -702,6 +707,18 @@ mod tests {
         assert_eq!(body["status"]["error_kind"], "bluetooth_permission");
     }
 
+    #[tokio::test]
+    async fn a_refused_bluetooth_permission_is_kept_as_a_failure_but_raises_no_offline_alert() {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        select_bluetooth(&r, &token).await;
+        fake.fail_with(Some(PrinterError::BluetoothPermission));
+        let (_, body) = post(&r, "/ui/printer/test", &token, None).await;
+        assert_eq!(body["status"]["error_kind"], "bluetooth_permission");
+        assert!(open_alert_kinds(&r).is_empty());
+    }
+
     struct Probe {
         delay: std::time::Duration,
         running: AtomicUsize,
@@ -1008,6 +1025,41 @@ mod tests {
         let counter = sign_in(&r, "counter", "c-pass").await;
         let (status, _) = post(&r, "/ui/printer/test-kot", &counter, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_bluetooth_kot_test_goes_through_the_same_dispatch() {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        Store::open(&r.hub.path, T0)
+            .unwrap()
+            .write_tx(|tx| {
+                tx.execute_batch(
+                    "UPDATE settings SET value = 'kitchen' WHERE key = 'licence.flags'",
+                )
+                .map_err(arena_store::db_error)
+            })
+            .unwrap();
+        let value = json!({"kind": "bluetooth", "id_or_addr": "00:11:22:AA:BB:CC", "name": "KOT"})
+            .to_string();
+        let (status, body) = set(&r, &token, "kitchen.kot_printer", &value).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        fake.fail_with(Some(PrinterError::Bluetooth(
+            "00:11:22:AA:BB:CC".into(),
+            "the printer dropped the connection".into(),
+        )));
+        let (status, body) = post(&r, "/ui/printer/test-kot", &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"]["state"], "failed");
+        assert_eq!(open_alert_kinds(&r), ["printer_offline"]);
+        let (_, health) = call_app(&r.app, "GET", "/ui/printer/health", Some(&token), None).await;
+        assert_eq!(health["last_job_failure"]["error_kind"], "bluetooth");
+        fake.fail_with(None);
+        let (_, body) = post(&r, "/ui/printer/test-kot", &token, None).await;
+        assert_eq!(body["status"]["state"], "ok");
+        let (_, health) = call_app(&r.app, "GET", "/ui/printer/health", Some(&token), None).await;
+        assert_eq!(health, json!({"last_job_failure": null}));
     }
 
     #[tokio::test]

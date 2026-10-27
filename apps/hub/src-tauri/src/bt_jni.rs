@@ -88,11 +88,14 @@ impl BluetoothLink for BluetoothJni {
                     let item = env
                         .get_object_array_element(&array, i)
                         .map_err(|e| format!("paired: {e}"))?;
+                    let name = JString::from(item);
                     let text: String = env
-                        .get_string(&JString::from(item))
+                        .get_string(&name)
                         .map_err(|e| format!("paired: {e}"))?
                         .into();
                     items.push(text);
+                    // The frame holds a bounded number of references: free each as we go.
+                    let _ = env.delete_local_ref(name);
                 }
                 Ok(Some(items))
             })

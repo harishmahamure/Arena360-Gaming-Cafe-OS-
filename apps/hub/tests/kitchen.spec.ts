@@ -182,3 +182,43 @@ test("a stale save says so and keeps the edit", async ({ page }) => {
   await expect(page.getByTestId("kitchen-status")).toContainText(en["hub.settings.branch.stale"]);
   await expect(page.getByLabel(en["hub.settings.kitchen.mode.none"])).toBeChecked();
 });
+
+test("on Android, the KOT picker says why Bluetooth printers are missing and links to settings", async ({
+  page,
+}) => {
+  let asked = 0;
+  let settingsOpened = 0;
+  await page.exposeFunction("__asked", () => asked++);
+  await page.exposeFunction("__settings", () => settingsOpened++);
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, () => void>;
+    (window as unknown as { ArenaHub: unknown }).ArenaHub = {
+      state: () => JSON.stringify({ notifications: true, battery_exempt: true, asked: true }),
+      bluetoothState: () => "ask",
+      requestBluetooth: () => {
+        w.__asked();
+        setTimeout(() => window.dispatchEvent(new Event("arena:bluetooth")), 100);
+      },
+      openAppSettings: () => w.__settings(),
+    };
+  });
+  await open(page, "kitchen");
+  await page.route(`${HUB}/ui/printer/find`, (route) =>
+    route.request().method() === "OPTIONS"
+      ? route.fulfill({ status: 204, headers: CORS })
+      : json(route, 200, { printers: [], bluetooth: "denied", usb_supported: false }),
+  );
+  await page.getByLabel(en["hub.settings.kitchen.mode.another"]).check();
+  await page.getByRole("button", { name: en["hub.settings.printer.find"] }).click();
+  const note = page.getByTestId("kitchen-bluetooth-note");
+  await expect(note).toContainText(en["hub.settings.printer.bluetooth.denied"]);
+  await expect(page.getByTestId("kitchen-usb-unsupported")).toHaveText(
+    en["hub.settings.printer.usb_unsupported"],
+  );
+  expect(asked).toBe(1);
+  await page
+    .getByRole("button", { name: en["hub.settings.printer.bluetooth.open_settings"] })
+    .click();
+  await expect.poll(() => settingsOpened).toBe(1);
+  await expectNoSeriousAxe(page);
+});

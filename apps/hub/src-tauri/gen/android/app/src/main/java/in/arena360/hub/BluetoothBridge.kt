@@ -64,7 +64,7 @@ object BluetoothBridge {
     if (access() != GRANTED) return null
     val adapter = adapter() ?: return null
     return try {
-      adapter.bondedDevices
+      (adapter.bondedDevices ?: return null)
         .flatMap { listOf(it.address, it.name ?: it.address) }
         .toTypedArray()
     } catch (e: SecurityException) {
@@ -91,17 +91,20 @@ object BluetoothBridge {
         return "permission"
       } catch (e: IllegalArgumentException) {
         return "link:this is not a Bluetooth address"
-      } catch (e: IOException) {
+      } catch (e: Exception) {
         return "link:could not open a Bluetooth connection"
       }
     val outcome = AtomicReference<String?>(null)
     val worker = Thread({ outcome.set(write(socket, bytes)) }, "arena-bt-print")
     worker.start()
-    worker.join(timeoutMs.toLong())
+    // The whole call, including the wait after closing, stays within [timeoutMs].
+    worker.join((timeoutMs.toLong() - CLOSE_WAIT_MS).coerceAtLeast(1L))
     if (worker.isAlive) {
       // connect() has no timeout of its own: closing the socket is what makes it give up.
       runCatching { socket.close() }
       worker.join(CLOSE_WAIT_MS)
+      // The page may have finished while the socket closed: report what the worker reports.
+      if (!worker.isAlive) return outcome.get()
       return "link:the printer did not answer within ${(timeoutMs / 1000).coerceAtLeast(1)} s"
     }
     return outcome.get()

@@ -2,7 +2,7 @@
 title: 'Story 4.6: The Android Hub prints over Bluetooth or LAN'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: 'a3d73fdacdbc06b1497b793d50f27ba63e4b774f'
 review_loop_iteration: 0
 followup_review_recommended: false

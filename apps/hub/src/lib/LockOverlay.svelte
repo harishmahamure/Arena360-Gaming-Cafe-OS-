@@ -55,7 +55,8 @@
 <style>
   .lock {
     position: fixed;
-    inset: 0;
+    /* Stops above the ad-banner slot, which no overlay covers (--ad-reserved is 0 without ads). */
+    inset: 0 0 var(--ad-reserved);
     z-index: 100;
     display: grid;
     place-items: center;

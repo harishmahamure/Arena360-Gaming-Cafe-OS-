@@ -989,11 +989,12 @@
     .sheet {
       display: flex;
       flex-direction: column;
-      scroll-padding-block-end: calc(var(--sticky-bottom, 0) * 1px);
+      scroll-padding-block-end: calc(var(--sticky-bottom, 0) * 1px + var(--ad-gap, 0px));
     }
 
+    /* With ads on, the settle region keeps --ad-gap (24px) of clear space above the ad-banner slot. */
     .sheet:has(> .settle-region) {
-      padding-block-end: 0;
+      padding-block-end: var(--ad-gap, 0px);
     }
 
     .sheet > :global(*) {
@@ -1004,7 +1005,7 @@
     .settle-region {
       order: 1;
       position: sticky;
-      inset-block-end: 0;
+      inset-block-end: var(--ad-gap, 0px);
       z-index: 1;
       box-sizing: border-box;
       max-height: 50dvh;

@@ -44,7 +44,8 @@
 <style>
   .undo-dock {
     position: fixed;
-    inset: auto 0 var(--space-4);
+    /* Above the ad-banner slot (--ad-slot-height is 0 without ads). */
+    inset: auto 0 calc(var(--space-4) + var(--ad-slot-height));
     z-index: 12;
     display: flex;
     justify-content: center;
@@ -53,7 +54,7 @@
 
   @media (max-width: 839px) {
     .undo-dock {
-      bottom: calc(var(--space-9) + var(--space-3));
+      bottom: calc(var(--space-9) + var(--ad-slot-height) + var(--space-3));
     }
   }
 </style>

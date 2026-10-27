@@ -418,3 +418,12 @@
 - The Kotlin unit test (`AdsConfigTest`) is not run by CI: add `./gradlew :tauri-plugin-arena-ads:testDebugUnitTest` once the module has been built on a real toolchain.
 - Gate-off clears the banner only; a preloaded interstitial survives until the activity is destroyed (the page cannot show it once the gate is off). The SDK's manifest components and `APPLICATION_ID` meta-data ship in paid Android builds; `DELAY_APP_MEASUREMENT_INIT` is worth checking on the first device run.
 - `check-ads.mjs` skips any directory named `build`, `dist` or `target`, also nested ones; no consent (UMP) or child-directed treatment yet (Story 4.16 release checklist).
+
+
+## Deferred from: Story 4.11
+
+- `ArenaAds.pause()`, `resume()` and the deferred banner request in `ArenaAds.kt`, and the `MainActivity` hooks, are uncompiled and unrun (no Android toolchain). Check on a device that the banner stops requesting with the screen off, that a banner tap returns to the same screen with its state kept (the activity must not be recreated), and that the 60px strip fits the anchored adaptive banner at 412 and 800 dp (a taller adaptive size is not clamped yet).
+- The layout test runs in desktop Chromium with a fake `ArenaAds`: it checks geometry, not the native banner view over the strip.
+- The phone More sheet, lock screen and full-height tile sheet now end at the slot, so the bottom bar stays visible (inert) beneath them instead of being covered.
+- The strip is drawn on the sign-in screen and the unreachable state of a Free Android Hub, not on the pairing or device-check screens (the gate is off there).
+- The bottom-bar items were 1px taller than the bar, which let the page scroll 1px; they are now 63px (`min-height: calc(var(--space-9) - 1px)`).

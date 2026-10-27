@@ -96,6 +96,13 @@ class MainActivity : TauriActivity() {
     super.onResume()
     // The last callback added is asked first: take the top again if a plugin added its own.
     claimBack()
+    ads?.resume()
+  }
+
+  override fun onPause() {
+    // Background or screen off: the banner stops refreshing and makes no request.
+    ads?.pause()
+    super.onPause()
   }
 
   override fun onDestroy() {

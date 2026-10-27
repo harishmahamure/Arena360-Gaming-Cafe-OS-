@@ -1908,5 +1908,6 @@
   "hub.dev_ads.interstitial_preload": "Load test interstitial",
   "hub.dev_ads.interstitial_show": "Show test interstitial",
   "hub.dev_ads.events": "Events",
-  "hub.dev_ads.no_events": "No events yet."
+  "hub.dev_ads.no_events": "No events yet.",
+  "hub.ads.label": "Ad"
 }

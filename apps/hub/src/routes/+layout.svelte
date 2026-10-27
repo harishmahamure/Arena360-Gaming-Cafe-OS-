@@ -4,6 +4,7 @@
   import { onMount, tick, untrack, type Snippet } from "svelte";
   import { goto, invalidate } from "$app/navigation";
   import { page } from "$app/state";
+  import AdSlot from "../lib/AdSlot.svelte";
   import AlertList from "../lib/AlertList.svelte";
   import Clock from "../lib/Clock.svelte";
   import RuleChips from "../lib/RuleChips.svelte";
@@ -87,6 +88,22 @@
   const branchName = $derived(
     data.hub.ok ? (data.hub.snapshot.branch?.name ?? t("hub.header.no_branch")) : t("app.name"),
   );
+
+  /** The ads gate is on: the layout reserves the permanent `ad-banner` slot (Story 4.11). */
+  let adsOn = $state(ads.state.enabled);
+  // Declared before the effect that evaluates the gate, so its first change is never missed.
+  $effect(() => {
+    adsOn = ads.state.enabled;
+    return ads.onChange((s) => (adsOn = s.enabled));
+  });
+  // Overlays outside the shell (the lock screen, the More sheet, the phone tile sheet) stop above
+  // the slot through these two properties; both are 0 while the gate is off.
+  $effect(() => {
+    const root = document.documentElement;
+    if (adsOn) root.dataset.ads = "on";
+    else delete root.dataset.ads;
+    return () => delete root.dataset.ads;
+  });
 
   let moreOpen = $state(false);
   /** The header's alert list is open. */
@@ -642,7 +659,7 @@
     </main>
   </div>
 {:else if gated}
-  <div class="gate" inert={locked} aria-hidden={locked ? "true" : undefined}>
+  <div class="gate" class:has-ads={adsOn} inert={locked} aria-hidden={locked ? "true" : undefined}>
     <header class="hub-header">
       <p class="branch type-hub-title" data-testid="hub-branch">{branchName}</p>
       <Clock />
@@ -654,11 +671,15 @@
         {@render children()}
       {/if}
     </main>
+    {#if adsOn}
+      <div class="ad-area"><AdSlot /></div>
+    {/if}
   </div>
 {:else}
   <div
     class="shell"
     class:has-chips={viewport.phone && hasChips}
+    class:has-ads={adsOn}
     inert={moreOpen || locked}
     aria-hidden={locked ? "true" : undefined}
   >
@@ -741,6 +762,10 @@
       {/if}
     </main>
 
+    {#if adsOn}
+      <div class="ad-area"><AdSlot /></div>
+    {/if}
+
     <nav class="hub-bottom-bar" aria-label={t("hub.nav.label")} inert={viewport.sheetFull}>
       <ul>
         {#each BOTTOM_BAR as screen (screen.id)}
@@ -802,6 +827,38 @@
     background-color: var(--hub-bg);
   }
 
+  /* The ad-banner slot (Story 4.11). `--ad-slot-height` is the strip; `--ad-reserved` is how far
+     its top edge is from the bottom of the window (on a phone the bottom bar is below it), which
+     every overlay leaves free; `--ad-gap` is the clear space the slot keeps from a settle bar. All
+     are 0 or unset while the gate is off. */
+  :global(:root) {
+    --ad-slot-height: 0px;
+    --ad-reserved: 0px;
+  }
+
+  :global(:root[data-ads="on"]) {
+    --ad-slot-height: 60px;
+    --ad-gap: 24px;
+    --ad-reserved: var(--ad-slot-height);
+    /* What the slot takes from the height the wide tile sheet may use (header, strip and gap). */
+    --ad-shrink: calc(var(--space-hub-header-height) + var(--ad-slot-height) + var(--ad-gap));
+    /* A focused element is never left behind the slot, even when the document itself scrolls. */
+    scroll-padding-bottom: var(--ad-reserved);
+  }
+
+  :global(:root[data-ads="on"]) .ad-area {
+    padding-top: var(--ad-gap);
+  }
+
+  .ad-area {
+    grid-area: ad;
+    min-width: 0;
+  }
+
+  .gate .ad-area {
+    grid-area: auto;
+  }
+
   .toast {
     position: fixed;
     right: var(--space-4);
@@ -825,6 +882,16 @@
     height: 100dvh;
     background-color: var(--hub-bg);
     color: var(--text);
+  }
+
+  /* Wide: the slot spans the bottom of the window under the main content and the tile-sheet
+     column, never under the rail. */
+  .shell.has-ads {
+    grid-template-rows: var(--space-hub-header-height) minmax(0, 1fr) auto;
+    grid-template-areas:
+      "header header"
+      "rail main"
+      "rail ad";
   }
 
   ul {
@@ -918,6 +985,10 @@
     height: 100dvh;
     background-color: var(--hub-bg);
     color: var(--text);
+  }
+
+  .gate.has-ads {
+    grid-template-rows: var(--space-hub-header-height) minmax(0, 1fr) auto;
   }
 
   .pair-screen {
@@ -1060,6 +1131,15 @@
   }
 
   @media (max-width: 839.98px) {
+    :global(:root[data-ads="on"]) {
+      --ad-reserved: calc(var(--ad-slot-height) + var(--space-9));
+    }
+
+    /* The slot sits between the main content and the bottom bar, with no gap row. */
+    :global(:root[data-ads="on"]) .ad-area {
+      padding-top: 0;
+    }
+
     .shell {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: var(--space-9) minmax(0, 1fr) var(--space-9);
@@ -1078,8 +1158,31 @@
         "bar";
     }
 
+    .shell.has-ads {
+      grid-template-rows: var(--space-9) minmax(0, 1fr) auto var(--space-9);
+      grid-template-areas:
+        "header"
+        "main"
+        "ad"
+        "bar";
+    }
+
+    .shell.has-ads.has-chips {
+      grid-template-rows: var(--space-9) auto minmax(0, 1fr) auto var(--space-9);
+      grid-template-areas:
+        "header"
+        "chips"
+        "main"
+        "ad"
+        "bar";
+    }
+
     .gate {
       grid-template-rows: var(--space-9) minmax(0, 1fr);
+    }
+
+    .gate.has-ads {
+      grid-template-rows: var(--space-9) minmax(0, 1fr) auto;
     }
 
     /* The phone header: 64px, branch, staff, alerts; the chips sit in a row below it. */
@@ -1120,10 +1223,12 @@
       height: 100%;
     }
 
+    /* The bar is 64px with a 1px top border: items taller than the rest would push the page
+       1px past the window, which moves the ad-banner slot against the overlays. */
     .bar-item {
       width: 100%;
       height: 100%;
-      min-height: var(--space-9);
+      min-height: calc(var(--space-9) - 1px);
       border-radius: 0;
     }
   }

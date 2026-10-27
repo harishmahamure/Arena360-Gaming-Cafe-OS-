@@ -86,6 +86,9 @@ async function open(page: Page, tier: Tier | null, { debug = true, path = "/floo
 }
 
 const calls = (page: Page) => page.evaluate(() => (window as unknown as { __ads: string[] }).__ads);
+/** The plugin calls without banner placements (the permanent slot places it on every resize). */
+const lifecycle = async (page: Page) =>
+  (await calls(page)).filter((c) => !c.startsWith("bannerPlace"));
 /** The Hub's tier moved: the snapshot says so and the stream pushes the change. */
 const entitlement = (hub: Hub, tier: Tier | null, { snapshot = true } = {}) => {
   if (snapshot) hub.tier = tier;
@@ -182,15 +185,15 @@ test.describe("android", () => {
 
   test("a Free Hub starts the plugin once", async ({ page }) => {
     await open(page, "free");
-    await expect.poll(() => calls(page)).toEqual(['init {"rating":"PG"}']);
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}']);
     await page.waitForTimeout(800);
-    expect(await calls(page)).toEqual(['init {"rating":"PG"}']);
+    expect(await lifecycle(page)).toEqual(['init {"rating":"PG"}']);
   });
 
   test("a paid Hub never starts it and renders no ad slot", async ({ page }) => {
     await open(page, "basic", { path: "/dev/ads" });
     await expect(page.getByTestId("dev-ads-unavailable")).toBeVisible();
-    await expect(page.getByTestId("dev-ads-slot")).toHaveCount(0);
+    await expect(page.getByTestId("ad-banner")).toHaveCount(0);
     expect(await calls(page)).toEqual([]);
   });
 
@@ -204,20 +207,23 @@ test.describe("android", () => {
     page,
   }) => {
     const hub = await open(page, "free");
-    await expect.poll(() => calls(page)).toEqual(['init {"rating":"PG"}']);
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}']);
+    await expect(page.getByTestId("ad-banner")).toBeVisible();
     entitlement(hub, "basic");
-    await expect.poll(() => calls(page)).toEqual(['init {"rating":"PG"}', "bannerDestroy"]);
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}', "bannerDestroy"]);
+    await expect(page.getByTestId("ad-banner")).toHaveCount(0);
     entitlement(hub, "free");
     await expect
-      .poll(() => calls(page))
+      .poll(() => lifecycle(page))
       .toEqual(['init {"rating":"PG"}', "bannerDestroy", 'init {"rating":"PG"}']);
+    await expect(page.getByTestId("ad-banner")).toBeVisible();
   });
 
   test("the stream event alone stops ads, with the snapshot still saying Free", async ({
     page,
   }) => {
     const hub = await open(page, "free");
-    await expect.poll(() => calls(page)).toEqual(['init {"rating":"PG"}']);
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}']);
     // The snapshot keeps its old tier, so only the `entitlement.changed` event can destroy the banner.
     entitlement(hub, "premium", { snapshot: false });
     await expect.poll(() => calls(page)).toContain("bannerDestroy");
@@ -227,16 +233,20 @@ test.describe("android", () => {
     page,
   }) => {
     await open(page, "free", { path: "/dev/ads" });
-    await expect(page.getByTestId("dev-ads-slot")).toBeVisible();
+    await expect(page.getByTestId("ad-banner")).toBeVisible();
+    // The permanent slot placed the banner on its own; the button puts it there again.
+    await expect.poll(async () => (await calls(page)).length).toBe(2);
     await page.getByRole("button", { name: en["hub.dev_ads.banner_place"] }).click();
     await page.getByRole("button", { name: en["hub.dev_ads.interstitial_preload"] }).click();
     await page.getByRole("button", { name: en["hub.dev_ads.interstitial_show"] }).click();
     await page.getByRole("button", { name: en["hub.dev_ads.banner_hide"] }).click();
     const log = await calls(page);
-    expect(log[1]).toMatch(
-      /^bannerPlace \{"x":[\d.]+,"y":[\d.]+,"width":[\d.]+,"height":[\d.]+\}$/,
-    );
-    expect(log.slice(2)).toEqual(["interstitialPreload", "interstitialShow", "bannerHide"]);
+    for (const i of [1, 2]) {
+      expect(log[i]).toMatch(
+        /^bannerPlace \{"x":[\d.]+,"y":[\d.]+,"width":[\d.]+,"height":[\d.]+\}$/,
+      );
+    }
+    expect(log.slice(3)).toEqual(["interstitialPreload", "interstitialShow", "bannerHide"]);
     await page.evaluate(() => {
       for (const [event, slot] of [
         ["ad.requested", "banner"],
@@ -258,7 +268,6 @@ test.describe("android", () => {
   test("the dev gallery stays closed on a release build", async ({ page }) => {
     await open(page, "free", { debug: false, path: "/dev/ads" });
     await expect(page.getByTestId("dev-ads-unavailable")).toHaveText(en["hub.dev_ads.unavailable"]);
-    await expect(page.getByTestId("dev-ads-slot")).toHaveCount(0);
   });
 });
 

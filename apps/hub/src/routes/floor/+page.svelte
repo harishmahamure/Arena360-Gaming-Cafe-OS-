@@ -553,7 +553,8 @@
   .stage > :global([data-component="tile-sheet"]) {
     position: sticky;
     top: var(--space-4);
-    max-height: calc(100dvh - 2 * var(--space-4));
+    /* --ad-shrink is set only with the ad-banner slot, which the sheet must stop above. */
+    max-height: calc(100dvh - 2 * var(--space-4) - var(--ad-shrink, 0px));
     overflow-y: auto;
   }
 
@@ -567,15 +568,17 @@
     /* A transfer or grouping pick keeps the floor in reach: the sheet is a card at the bottom. */
     .stage.picking > :global([data-component="tile-sheet"]) {
       position: fixed;
-      inset: auto var(--space-3) var(--space-3);
+      /* Above the ad-banner slot, with its clear space (--ad-reserved and --ad-gap: ads only). */
+      inset: auto var(--space-3) calc(var(--ad-reserved) + var(--ad-gap, var(--space-3)));
       z-index: 5;
-      max-height: 60dvh;
+      max-height: calc(60dvh - var(--ad-reserved));
     }
 
     /* Otherwise it covers the floor, full height; its settle region is pinned inside it. */
     .stage.open:not(.picking) > :global([data-component="tile-sheet"]) {
       position: fixed;
-      inset: 0;
+      /* Ends at the top edge of the ad-banner slot (--ad-reserved is 0 without ads). */
+      inset: 0 0 var(--ad-reserved);
       z-index: 5;
       max-height: none;
       border: 0;

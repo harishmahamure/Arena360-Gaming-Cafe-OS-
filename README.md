@@ -1847,6 +1847,18 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   `check-ads.mjs artefact <path>…` inspects built files. **Dev gallery:** `/dev/ads` on a debug
   Android build loads and shows a test banner and a test interstitial and lists each event. Not
   runnable locally: the Gradle/Kotlin build, the SDK, StrictMode and the gallery on a device.
+- **Banner slot (Story 4.11).** While the gate is on, `apps/hub/src/lib/AdSlot.svelte` draws the
+  permanent `ad-banner` strip (60px, `surface` with a 1px `line` edge and an "Ad" label) and hands
+  its rectangle to `banner.place` on mount, resize and orientation change. Below 840px it sits between
+  the main content and the bottom bar; at 840px and wider it spans the bottom of the window under the
+  main content and the tile-sheet column (never the rail), with 24px above it. The root element
+  carries `data-ads="on"` and the properties `--ad-slot-height`, `--ad-reserved` (the strip's top edge
+  from the window bottom) and `--ad-gap`; the lock screen, the More sheet, the phone tile sheet and
+  the Undo dock stop above the slot through them, and all are 0 or unset with the gate off. No ad
+  keeps the strip and its label. `MainActivity` calls `ArenaAds.pause()` and `resume()` from
+  `onPause` and `onResume`: a paused banner refreshes nothing and a placement made meanwhile is
+  requested on resume. `apps/hub/tests/ad-slot.spec.ts` checks the slot rectangle against every tile,
+  sheet, dialog, settle bar and bar at 412 x 915, 800 x 1280 and 1280 x 800.
 - **Free café end to end (Story 4.8).** `crates/arena-hub/tests/free_android_golive.rs` (feature
   `dev-fixtures`) starts a real cloud and the real `arena-hub` binary with `--platform android`,
   with a kiosk speaking the LAN protocol, and walks sign-up → Free (no comp entitlement) → a

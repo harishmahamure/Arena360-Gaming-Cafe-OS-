@@ -45,6 +45,8 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
   private var banner: AdView? = null
   private var bannerRequested = false
   private var bannerWidth = 0
+  /** The activity is paused (in the background or the screen is off): no banner request is made. */
+  private var paused = false
   private var interstitial: InterstitialAd? = null
   private var loadingInterstitial = false
 
@@ -95,14 +97,41 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
       if (view.parent == null) host.addView(view, params) else view.layoutParams = params
       view.visibility = View.VISIBLE
       val width = r.width.toInt()
-      if (!bannerRequested || width != bannerWidth) {
+      if (width != bannerWidth) {
         // A new width (rotation, resize) gets a new adaptive size, and so a new request.
         bannerWidth = width
-        bannerRequested = true
-        view.setAdSize(AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(activity, width))
-        emit(AdEvents.REQUESTED, AdEvents.BANNER)
-        view.loadAd(AdRequest.Builder().build())
+        bannerRequested = false
       }
+      requestBanner(view)
+    }
+  }
+
+  /** Requests the banner once per width, and never while the activity is paused (main thread). */
+  private fun requestBanner(view: AdView) {
+    if (paused || bannerRequested || bannerWidth <= 0) return
+    bannerRequested = true
+    view.setAdSize(
+      AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(activity, bannerWidth)
+    )
+    emit(AdEvents.REQUESTED, AdEvents.BANNER)
+    view.loadAd(AdRequest.Builder().build())
+  }
+
+  /**
+   * Called from the activity's `onPause` (background or screen off): the banner stops refreshing
+   * and a placement made meanwhile waits for [resume] before it requests anything.
+   */
+  fun pause() {
+    paused = true
+    banner?.pause()
+  }
+
+  /** Called from the activity's `onResume`: the banner refreshes again; a waiting placement is requested. */
+  fun resume() {
+    paused = false
+    banner?.let {
+      it.resume()
+      requestBanner(it)
     }
   }
 

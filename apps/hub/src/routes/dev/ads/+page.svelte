@@ -8,7 +8,6 @@
 
   let current = $state(ads.state);
   let events: AdEvent[] = $state([]);
-  let box: HTMLDivElement | undefined = $state();
 
   onMount(() => {
     const stopState = ads.onChange((s) => (current = s));
@@ -17,15 +16,15 @@
     return () => {
       stopState();
       stopEvents();
-      ads.banner.destroy();
     };
   });
 
   // The dev gallery works only where the plugin runs and was built for debugging.
   const open = $derived(current.enabled && current.debug);
 
+  /** The banner lives in the Hub's permanent slot (Story 4.11): this puts it there again. */
   function placeBanner() {
-    const r = box?.getBoundingClientRect();
+    const r = document.querySelector("[data-component=ad-banner]")?.getBoundingClientRect();
     if (r) ads.banner.place({ x: r.left, y: r.top, width: r.width, height: r.height });
   }
 </script>
@@ -45,7 +44,6 @@
       <Button label="hub.dev_ads.interstitial_preload" onclick={ads.interstitial.preload} />
       <Button label="hub.dev_ads.interstitial_show" onclick={ads.interstitial.show} />
     </div>
-    <div class="slot" bind:this={box} data-testid="dev-ads-slot"></div>
     <h2 class="type-hub-title">{t("hub.dev_ads.events")}</h2>
     {#if events.length === 0}
       <p class="type-hub-body">{t("hub.dev_ads.no_events")}</p>
@@ -76,12 +74,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-  }
-
-  .slot {
-    min-block-size: 3.5rem;
-    border: 1px solid var(--line);
-    background-color: var(--surface);
   }
 
   .events {

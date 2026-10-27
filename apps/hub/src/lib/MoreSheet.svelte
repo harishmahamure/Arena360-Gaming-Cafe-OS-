@@ -100,7 +100,8 @@
 <style>
   .sheet-layer {
     position: fixed;
-    inset: 0;
+    /* Stops above the ad-banner slot, which no overlay covers (--ad-reserved is 0 without ads). */
+    inset: 0 0 var(--ad-reserved);
     z-index: 10;
     display: flex;
     flex-direction: column;
@@ -121,7 +122,7 @@
   .sheet {
     --ring-gap: var(--surface);
     position: relative;
-    max-height: 85dvh;
+    max-height: calc(85dvh - var(--ad-reserved));
     overflow-y: auto;
     padding: var(--space-hub-panel-padding) var(--space-hub-gutter-phone);
     border-top: 1px solid var(--border-strong);

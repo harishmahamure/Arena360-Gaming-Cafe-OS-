@@ -762,6 +762,53 @@ async fn a_free_cafe_goes_from_sign_up_to_go_live_on_android_with_no_comp_entitl
     let b = cloud.db.branch(&branch).await.unwrap().unwrap();
     assert!(b.live_at.is_some(), "the branch shows Live");
 
+    step("Settings → Staff on the Android Hub: the Owner is 1 of the 3 Free users");
+    let r = staff.call("GET", "/ui/staff", None).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        (r.body["used"].as_i64(), r.body["limit"].as_i64()),
+        (Some(1), Some(3)),
+        "{}",
+        r.body
+    );
+    assert_eq!(r.body["staff"][0]["role"], "Owner");
+    assert_eq!(r.body["staff"][0]["status"], "active");
+
+    step("DEVICE_LIMIT applies unchanged on the Android Hub");
+    {
+        // The Free cap is 20; lower it to the one kiosk already paired, as a licence would.
+        let db = rusqlite::Connection::open(data.path().join("branch.db")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        let n = db
+            .execute(
+                "UPDATE settings SET value = '1' WHERE key = 'licence.device_cap'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(n, 1, "the licence wrote the device cap");
+    }
+    let r = staff.call("POST", "/ui/pairing-code", None).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let full = arena_kiosk_core::pair(
+        "127.0.0.1",
+        hub.web,
+        &hub.fingerprint,
+        &arena_proto::PairRequest {
+            code: Some(r.body["code"].as_str().unwrap().to_owned()),
+            pin: None,
+            pc_name: "PC-02".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        Duration::from_secs(20),
+    )
+    .await;
+    match full {
+        Err(arena_kiosk_core::PairError::Hub { error, .. }) => {
+            assert_eq!(error.code, arena_proto::ErrorCode::DeviceLimit);
+        }
+        other => panic!("expected DEVICE_LIMIT, got {other:?}"),
+    }
+
     step("onboarding_progress holds every step time and no personal data");
     let progress = cloud.db.onboarding_progress(&branch).await.unwrap();
     for s in arena_proto::WizardStep::ALL {

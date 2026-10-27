@@ -341,12 +341,68 @@ pub fn count_active_staff_with_role(conn: &Connection, role_id: &str) -> Result<
     .map_err(db_error)
 }
 
-/// How many staff members are active.
+/// How many people count against the licence's `users` limit: active staff (the Owner and
+/// invited members who have not used their setup code yet included), never a member holding the
+/// built-in Kiosk-device role.
 pub fn count_active_staff(conn: &Connection) -> Result<i64, AppError> {
-    conn.query_row("SELECT COUNT(*) FROM staff WHERE active = 1", [], |r| {
-        r.get(0)
-    })
+    conn.query_row(
+        "SELECT COUNT(*) FROM staff s JOIN roles r ON r.role_id = s.role_id
+         WHERE s.active = 1 AND NOT (r.builtin = 1 AND r.name = 'Kiosk-device')",
+        [],
+        |r| r.get(0),
+    )
     .map_err(db_error)
+}
+
+/// Marks a staff member inactive (their Hub sign-in ends with the next request).
+pub fn deactivate_staff(conn: &Connection, staff_id: &str) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE staff SET active = 0 WHERE staff_id = ?1",
+            params![staff_id],
+        )
+        .map_err(db_error)?;
+    expect_one(n, "staff", staff_id)
+}
+
+/// A staff member as the Settings → Staff list shows them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaffListing {
+    pub staff_id: String,
+    pub display_name: String,
+    pub login: String,
+    pub role_name: String,
+    pub active: bool,
+    /// No password yet: the member was invited and has not used the setup code.
+    pub invited: bool,
+    pub rev: i64,
+}
+
+/// Every staff member except Kiosk-device rows, active ones first and oldest first within each.
+pub fn list_staff(conn: &Connection) -> Result<Vec<StaffListing>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.staff_id, s.display_name, s.login, r.name, s.active,
+                    s.password_hash IS NULL, s.rev
+             FROM staff s JOIN roles r ON r.role_id = s.role_id
+             WHERE NOT (r.builtin = 1 AND r.name = 'Kiosk-device')
+             ORDER BY s.active DESC, s.created_at, s.staff_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(StaffListing {
+                staff_id: r.get(0)?,
+                display_name: r.get(1)?,
+                login: r.get(2)?,
+                role_name: r.get(3)?,
+                active: r.get::<_, i64>(4)? != 0,
+                invited: r.get::<_, i64>(5)? != 0,
+                rev: r.get(6)?,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
 /// Inserts a staff member with `rev = 0` and zero timestamps, for the stamp step to set.

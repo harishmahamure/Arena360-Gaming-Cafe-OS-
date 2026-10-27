@@ -394,3 +394,11 @@
 - The kiosk "locks at zero" step is the protocol client reporting `locked` after the `test_session` event, not a real lock screen (the kiosk lock is covered by Story 2.29).
 - The test waits on the Hub's 10 s boot heartbeat between steps, so it takes about a minute; a `--heartbeat-interval` override would shorten it but is a product change.
 - The ad-consent item is checked on the Free tier only; nothing here checks the banner (Stories 4.10 to 4.15).
+
+## Deferred from: Story 4.9
+
+- `staff.deactivate` is Owner-only and takes the Owner's own PIN at `POST /ui/staff/deactivate`, not the ticket flow of Story 1.13 (that flow refuses a member who already holds the permission). A Manager sees the list but has no button. The cloud's owner command mailbox cannot deactivate staff yet (Story 8.26).
+- Nothing reactivates a deactivated member; `staff.upsert` with `active: true` would, and counts against the limit, but no screen offers it. Deactivated members are not listed.
+- The Staff screen does not invite members: invites come from the wizard (Story 2.16) and the owner app (Story 8.26). The "Upgrade" link stays hidden behind `billingEnabled` until Story 10.5.
+- The `DEVICE_LIMIT` check on Android runs against the in-process Hub on the host (the cap lowered in `branch.db` to the one paired kiosk); no Android device or emulator ran it.
+- A deactivated member's open `/ui/events` stream ends with their next request or heartbeat, not by a push.

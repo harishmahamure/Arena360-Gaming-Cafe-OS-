@@ -268,6 +268,28 @@ impl StaffDirectory {
             .is_some_and(|(s, _)| s.pin_hash.is_some()))
     }
 
+    /// Whether `pin` is the active member `staff_id`'s own PIN (a member with no PIN, an
+    /// inactive one and a malformed PIN all still cost one argon2id check). Blocking.
+    pub fn verify_own_pin(&self, staff_id: &str, pin: &str) -> Result<bool, AppError> {
+        let hash = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
+            store
+                .staff_by_id_with_role(staff_id)?
+                .filter(|(s, _)| s.active)
+                .and_then(|(s, _)| s.pin_hash)
+        };
+        match hash {
+            Some(h) if is_pin_shaped(pin) => Ok(verify_secret(pin, &h)),
+            _ => {
+                let _ = verify_secret(pin, dummy_hash());
+                Ok(false)
+            }
+        }
+    }
+
     /// Whose PIN `pin` is, for unlocking an idle-locked session of `current`: `current` is
     /// checked first, then the other active staff with a PIN (at most [`MAX_PIN_CANDIDATES`]
     /// checks in all), one by one with argon2id. A PIN that is not 4–6 digits, or no candidate,

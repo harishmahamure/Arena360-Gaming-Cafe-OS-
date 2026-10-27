@@ -119,6 +119,8 @@ pub enum IntentKind {
     PlanSellReverted,
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials,
+    #[serde(rename = "staff.deactivate")]
+    StaffDeactivate,
     #[serde(rename = "stock.in")]
     StockIn,
     #[serde(rename = "stock.in.reverted")]
@@ -212,7 +214,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 67] = [
+    pub const ALL: [IntentKind; 68] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -244,6 +246,7 @@ impl IntentKind {
         Self::PlanSell,
         Self::PlanSellReverted,
         Self::StaffSetCredentials,
+        Self::StaffDeactivate,
         Self::StockIn,
         Self::StockInReverted,
         Self::DeviceMaintenance,
@@ -316,6 +319,7 @@ impl IntentKind {
             Self::PlanSell => "plan.sell",
             Self::PlanSellReverted => "plan.sell.reverted",
             Self::StaffSetCredentials => "staff.set_credentials",
+            Self::StaffDeactivate => "staff.deactivate",
             Self::StockIn => "stock.in",
             Self::StockInReverted => "stock.in.reverted",
             Self::DeviceMaintenance => "device.maintenance",
@@ -386,9 +390,10 @@ impl IntentKind {
             | Self::DevicePower
             | Self::RateUpsert => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
-            Self::StaffUpsert | Self::RoleUpsert | Self::StaffSetCredentials => {
-                IntentCategory::Staff
-            }
+            Self::StaffUpsert
+            | Self::RoleUpsert
+            | Self::StaffSetCredentials
+            | Self::StaffDeactivate => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
             Self::KioskLog | Self::KioskProcessBlocked => IntentCategory::Kiosk,
             Self::ProductUpsert
@@ -457,7 +462,9 @@ impl IntentKind {
             | Self::AlertRaise
             | Self::SessionExpire
             | Self::SessionRateFlip => Requirement::System,
-            Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
+            Self::StaffUpsert | Self::RoleUpsert | Self::StaffDeactivate => {
+                Requirement::Perm(Permission::UserManage)
+            }
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
             Self::KioskLog | Self::KioskProcessBlocked | Self::DeviceTestSessionCompleted => {
@@ -558,6 +565,7 @@ impl IntentKind {
             | Self::PlanSell
             | Self::PlanSellReverted
             | Self::StaffSetCredentials
+            | Self::StaffDeactivate
             | Self::StockIn
             | Self::StockInReverted => None,
             Self::DeviceMaintenance
@@ -803,6 +811,15 @@ pub struct StaffUpsert {
     pub setup_expires_at: Option<i64>,
 }
 
+/// The payload of `staff.deactivate`: an Owner ends a staff member's access. The member's row
+/// stays (history keeps its name), their Hub sign-in ends at once and their slot under the
+/// licence's `users` limit is freed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StaffDeactivate {
+    pub staff_id: String,
+}
+
 /// The payload of `staff.set_credentials`: the member's own first password and PIN, argon2id
 /// PHC strings computed outside the transaction. `setup_code_hash` is the stored hash the Hub
 /// verified the typed code against and `trusted_now_ms` the Hub's trusted time at that check;
@@ -1030,6 +1047,8 @@ pub enum IntentPayload {
     PlanSellReverted(crate::PlanSellReverted),
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials(StaffSetCredentials),
+    #[serde(rename = "staff.deactivate")]
+    StaffDeactivate(StaffDeactivate),
     #[serde(rename = "stock.in")]
     StockIn(crate::StockIn),
     #[serde(rename = "stock.in.reverted")]
@@ -1138,6 +1157,7 @@ impl IntentPayload {
             Self::PlanSell(_) => IntentKind::PlanSell,
             Self::PlanSellReverted(_) => IntentKind::PlanSellReverted,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
+            Self::StaffDeactivate(_) => IntentKind::StaffDeactivate,
             Self::StockIn(_) => IntentKind::StockIn,
             Self::StockInReverted(_) => IntentKind::StockInReverted,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
@@ -1407,7 +1427,9 @@ mod tests {
                 }
                 "device.screen" => Requirement::Perm(Permission::DeviceScreen),
                 "device.admin_exit" | "device.admin_relock" => Requirement::Device,
-                "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
+                "staff.upsert" | "role.upsert" | "staff.deactivate" => {
+                    Requirement::Perm(Permission::UserManage)
+                }
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert" => {
                     Requirement::Perm(Permission::CatalogEdit)

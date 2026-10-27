@@ -35,6 +35,7 @@ export type IntentKind =
   | "plan.sell"
   | "plan.sell.reverted"
   | "staff.set_credentials"
+  | "staff.deactivate"
   | "stock.in"
   | "stock.in.reverted"
   | "device.maintenance"

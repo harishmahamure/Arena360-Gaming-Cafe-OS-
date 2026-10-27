@@ -58,6 +58,7 @@ mod session;
 pub(crate) mod session_expire;
 mod settings_set;
 mod staff_credentials;
+mod staff_deactivate;
 mod staff_roles;
 mod stock;
 mod test_session;
@@ -143,6 +144,8 @@ pub(crate) enum Target {
     Device(Option<arena_store::DeviceRow>),
     /// `staff.upsert`: the branch, the edited row, the roles involved and the login's holder.
     Staff(Box<staff_roles::StaffTarget>),
+    /// `staff.deactivate`: the member, whether the actor is an Owner, the Owner count.
+    Deactivate(Box<staff_deactivate::DeactivateTarget>),
     /// `role.upsert`: the branch, the edited role and its rows, and the name's holder.
     Role(Box<staff_roles::RoleTarget>),
     /// `audit.read_granted`, `kiosk.log`, `kiosk.process_blocked`: the branch, if it has been
@@ -231,6 +234,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Pc(Box::new(pc_command::load(tx, &intent.payload)?))
         }
         P::StaffSetCredentials(c) => Target::Credentials(staff_credentials::load(tx, c)?),
+        P::StaffDeactivate(d) => {
+            Target::Deactivate(Box::new(staff_deactivate::load(tx, intent, d)?))
+        }
         P::ProductUpsert(_) | P::ProductDelete(_) => {
             Target::Product(Box::new(products::load(tx, &intent.payload)?))
         }
@@ -334,6 +340,7 @@ pub(crate) fn run(
             | arena_proto::IntentKind::BranchSeedDefaults
             | arena_proto::IntentKind::StaffUpsert
             | arena_proto::IntentKind::StaffSetCredentials
+            | arena_proto::IntentKind::StaffDeactivate
             | arena_proto::IntentKind::RoleUpsert
     ) {
         verifier::refresh(tx, now)?;

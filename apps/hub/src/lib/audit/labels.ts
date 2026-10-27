@@ -36,6 +36,7 @@ const MODULE_LABELS: Record<string, MessageKey> = {
 
 /** Intent kinds with a catalogue label; any other kind shows as it is (`settings.set`). */
 const INTENT_LABELS: Record<string, MessageKey> = {
+  "staff.deactivate": "hub.audit.intent.staff.deactivate",
   "device.admin_exit": "hub.audit.intent.device.admin_exit",
   "device.admin_relock": "hub.audit.intent.device.admin_relock",
   "device.admin_unlock": "hub.audit.intent.device.admin_unlock",

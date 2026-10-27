@@ -147,6 +147,7 @@ fn elevation(tx: &StoreTx<'_>, intent: &Intent, e: &ElevatedBy) -> Result<(), Ap
 pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError> {
     match (target, &intent.payload) {
         (Target::Staff(t), _) => staff_roles::authorize_staff(t),
+        (Target::Deactivate(t), _) => super::staff_deactivate::authorize(t),
         (Target::Role(t), arena_proto::IntentPayload::RoleUpsert(r)) => {
             staff_roles::authorize_role(r, t)
         }
@@ -249,6 +250,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         | Target::AdminRelock(_)
         | Target::AdminUnlock(_)
         | Target::Credentials(_)
+        | Target::Deactivate(_)
         | Target::Stock(_)
         | Target::TestSession(_)
         | Target::Pc(_)

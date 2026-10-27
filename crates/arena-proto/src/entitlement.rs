@@ -185,13 +185,29 @@ mod tests {
         for jwt in cases {
             let e = eval(jwt.as_deref(), T0 * 1000);
             assert_eq!(e.standing, LicenceStanding::Unverified, "{jwt:?}");
-            assert_eq!((e.tier, e.limits.devices), (Tier::Free, 20), "{jwt:?}");
+            assert_eq!(e.tier, Tier::Free, "{jwt:?}");
+            assert_eq!(
+                e.limits,
+                TierLimits {
+                    devices: 20,
+                    users: 3,
+                    branches: 1
+                },
+                "{jwt:?}"
+            );
             assert!(e.flags.is_empty());
         }
         let no_keys = Entitlement::evaluate(Some(&ok), &[], "T", "B", T0 * 1000);
         assert_eq!(no_keys.standing, LicenceStanding::Unverified);
     }
 
+    #[test]
+    fn a_licence_without_a_limits_claim_does_not_verify() {
+        let mut claims =
+            serde_json::to_value(LicenceClaims::for_tier("T", "B", Tier::Premium, T0)).unwrap();
+        claims.as_object_mut().unwrap().remove("limits");
+        assert!(serde_json::from_value::<LicenceClaims>(claims).is_err());
+    }
     #[test]
     fn an_expired_paid_licence_falls_back_to_free_and_a_free_one_never_warns() {
         let after = (T0 + licence::LICENCE_TTL_S + 1) * 1000;

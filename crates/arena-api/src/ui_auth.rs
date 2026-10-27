@@ -50,6 +50,7 @@
 //!   unlock (`AUTH_LOCKED` with `retry_after_s`); signing out still works. Locking and
 //!   unlocking push `session.locked` / `session.unlocked` to `/ui/events` streams of the same
 //!   token. `ui.locked` / `ui.unlocked` are logged with staff ids only, never the PIN.
+//! - `GET /ui/staff` (bearer token, `user.manage`) lists the active and invited staff with the//!   `users` limit in effect and how many count against it. `POST /ui/staff/deactivate//!   {staff_id, pin, idempotency_key}` (an Owner) checks the caller's **own** PIN under the//!   elevation throttle and applies `staff.deactivate`; the generic `/ui/intent` refuses that kind.
 //! - `GET /ui/settings` (bearer token) lists the branch settings with their `rev`, so an edit
 //!   can carry `base_rev`.
 //!
@@ -1969,6 +1970,15 @@ async fn intent(
             "a profile is created from the convert form",
         )));
     }
+    if matches!(
+        intent.payload,
+        arena_proto::IntentPayload::StaffDeactivate(_)
+    ) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "staff are deactivated from Settings → Staff, with your PIN",
+        )));
+    }
     if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) {
         return fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
@@ -2850,6 +2860,126 @@ async fn rules(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response 
     }
 }
 
+/// `GET /ui/staff`: the Settings → Staff list and the `users` limit, for a member who holds
+/// `user.manage` (an Owner or a Manager).
+async fn staff_list(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let me = match auth.session(&headers).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    if !me.permissions.contains(&Permission::UserManage) {
+        return fail(ui_error(arena_core::rbac::denied()));
+    }
+    let reader = Arc::clone(&auth.reader);
+    match tokio::task::spawn_blocking(move || reader.staff_list()).await {
+        Ok(Ok(list)) => Json(list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `POST /ui/staff/deactivate {staff_id, pin, idempotency_key}`: an Owner ends a member's
+/// access, confirming with their **own** PIN. The PIN is checked first, under the elevation
+/// throttle (five failures in a row pause it for 60 s), then `staff.deactivate` is applied with
+/// the session's actor; `apply()` re-checks the Owner role, the self and last-Owner rules. The
+/// member's sessions end with their next request.
+async fn staff_deactivate(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    let Ok(arena_proto::UiStaffDeactivateRequest {
+        staff_id,
+        pin,
+        idempotency_key,
+    }) = serde_json::from_slice::<arena_proto::UiStaffDeactivateRequest>(&body)
+    else {
+        return fail(bad_frame(
+            "the body must be {\"staff_id\", \"pin\", \"idempotency_key\"}",
+        ));
+    };
+    if auth.writer.is_none() {
+        return fail(ui_error(AppError::new(
+            ErrorCode::NotPrimary,
+            "this hub is not the primary writer",
+        )));
+    }
+    if !me.permissions.contains(&Permission::UserManage) {
+        return fail(ui_error(arena_core::rbac::denied()));
+    }
+    let requester = me.staff_id.clone();
+    let reserved = match auth.elevate_lockout.lock() {
+        Ok(mut l) => l.begin(&requester, auth.clock.now_ms()),
+        Err(_) => return fail(internal()),
+    };
+    if let Err(retry_after_s) = reserved {
+        tracing::warn!(staff_id = %requester, "staff deactivation refused: paused");
+        return fail(locked(retry_after_s));
+    }
+    let settle = |matched: Option<bool>| -> Option<u32> {
+        let now = auth.clock.now_ms();
+        let mut l = auth.elevate_lockout.lock().ok()?;
+        match matched {
+            Some(true) => l.finish(&requester, now, true),
+            None => l.release(&requester, now),
+            Some(false) => {
+                l.finish(&requester, now, false);
+                return l.paused_for(&requester, now);
+            }
+        }
+        None
+    };
+    let Ok(permit) = Arc::clone(&auth.pin_checks).acquire_owned().await else {
+        settle(None);
+        return fail(internal());
+    };
+    let own = {
+        let staff = Arc::clone(&auth.staff);
+        let id = requester.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            staff.verify_own_pin(&id, &pin)
+        })
+        .await
+    };
+    match own {
+        Ok(Ok(true)) => {
+            settle(Some(true));
+        }
+        Ok(Ok(false)) => {
+            let paused = settle(Some(false));
+            tracing::warn!(staff_id = %requester, "staff deactivation: wrong pin");
+            return match paused {
+                Some(retry) => fail(locked(retry)),
+                None => fail(ui_error(pin_rejected())),
+            };
+        }
+        Ok(Err(e)) => {
+            settle(None);
+            return fail(ui_error(e));
+        }
+        Err(_) => {
+            settle(None);
+            return fail(internal());
+        }
+    }
+    let intent = player_intent(
+        &me,
+        auth.clock.now_ms(),
+        idempotency_key,
+        None,
+        arena_proto::IntentPayload::StaffDeactivate(arena_proto::StaffDeactivate { staff_id }),
+    );
+    run_intent(&auth, &token, &me, intent, None).await
+}
+
 async fn settings(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -2891,6 +3021,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/players/update", post(player_update))
         .route("/ui/players/password", post(player_password))
         .route("/ui/settings", get(settings))
+        .route("/ui/staff", get(staff_list))
+        .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))
         .route("/ui/plans", get(plans))
         .route("/ui/rules", get(rules))
@@ -5319,6 +5451,150 @@ pub(crate) mod tests {
         );
     }
 
+    /// Adds an Owner (`boss` / `b-pass`, PIN 5555) the test hub does not seed.
+    async fn add_owner(hub: &Hub) -> String {
+        let rows = Store::open_reader(&hub.path)
+            .unwrap()
+            .rows(Table::Roles)
+            .unwrap();
+        let role = rows
+            .iter()
+            .find(|r| r["name"] == RowValue::Text("Owner".into()))
+            .map(|r| match &r["role_id"] {
+                RowValue::Text(t) => t.clone(),
+                other => panic!("role_id is {other:?}"),
+            })
+            .unwrap();
+        let applied = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "owner".into(),
+                },
+                IntentPayload::StaffUpsert(StaffUpsert {
+                    staff_id: None,
+                    login: "boss".into(),
+                    display_name: "Boss".into(),
+                    role_id: role,
+                    password_hash: Some(hash_secret("b-pass").unwrap()),
+                    pin_hash: Some(hash_secret("5555").unwrap()),
+                    active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
+                }),
+                None,
+            ))
+            .await
+            .unwrap();
+        applied.changes[0].row_id.clone()
+    }
+
+    fn deactivate_body(staff_id: &str, pin: &str) -> Value {
+        json!({ "staff_id": staff_id, "pin": pin, "idempotency_key": ulid::Ulid::generate().to_string() })
+    }
+
+    #[tokio::test]
+    async fn settings_staff_lists_members_and_an_owner_deactivates_with_their_own_pin() {
+        let hub = hub().await;
+        let boss = add_owner(&hub).await;
+        let owner_token = token_for(&hub, "boss", "b-pass").await;
+        let manager_token = token_for(&hub, "manager", "m-pass").await;
+        let counter_token = token_for(&hub, "counter", "c-pass").await;
+
+        let (status, list) = call(&hub, "GET", "/ui/staff", Some(&manager_token), None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(
+            (list["used"].as_i64(), list["limit"].as_i64()),
+            (Some(4), Some(10))
+        );
+        assert_eq!(list["staff"].as_array().unwrap().len(), 4);
+        assert_eq!(list["staff"][0]["status"], "active");
+        let (status, denied) = call(&hub, "GET", "/ui/staff", Some(&counter_token), None).await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+
+        // The generic intent route does not take it: the PIN is part of the form.
+        let (_, refused) = post_intent(
+            &hub,
+            &owner_token,
+            json!({ "intent": intent_as(
+                Actor { kind: ActorKind::Staff, id: boss.clone() },
+                IntentPayload::StaffDeactivate(arena_proto::StaffDeactivate {
+                    staff_id: hub.counter_id.clone(),
+                }),
+                None,
+            ) }),
+        )
+        .await;
+        assert_eq!(refused["code"], "UNSUPPORTED");
+
+        let n = change_count(&hub);
+        let url = "/ui/staff/deactivate";
+        // A wrong PIN, another member's PIN and a Manager (who is not an Owner) all fail.
+        let (status, wrong) = call(
+            &hub,
+            "POST",
+            url,
+            Some(&owner_token),
+            Some(deactivate_body(&hub.counter_id, "2222")),
+        )
+        .await;
+        assert_eq!(
+            (status, wrong["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PIN_REJECTED"))
+        );
+        let (_, not_owner) = call(
+            &hub,
+            "POST",
+            url,
+            Some(&manager_token),
+            Some(deactivate_body(&hub.counter_id, "2222")),
+        )
+        .await;
+        assert_eq!(not_owner["code"], "PERMISSION_DENIED");
+        assert_eq!(change_count(&hub), n, "nothing written");
+
+        // Nobody deactivates themselves.
+        let (_, itself) = call(
+            &hub,
+            "POST",
+            url,
+            Some(&owner_token),
+            Some(deactivate_body(&boss, "5555")),
+        )
+        .await;
+        assert_eq!(itself["code"], "VALIDATION_FAILED");
+
+        let (status, ok) = call(
+            &hub,
+            "POST",
+            url,
+            Some(&owner_token),
+            Some(deactivate_body(&hub.counter_id, "5555")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{ok}");
+        let change = last_change(&hub);
+        assert_eq!(
+            (change.actor_id.as_str(), change.row_id.as_str()),
+            (boss.as_str(), hub.counter_id.as_str())
+        );
+        // The Counter's sign-in ended at once and the slot is free.
+        let (status, _) = call(&hub, "GET", "/ui/me", Some(&counter_token), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (_, list) = call(&hub, "GET", "/ui/staff", Some(&owner_token), None).await;
+        assert_eq!(list["used"].as_i64(), Some(3));
+        assert!(
+            list["staff"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|m| m["id"] != hub.counter_id.as_str())
+        );
+    }
     #[tokio::test]
     async fn a_counter_turns_hub_high_contrast_on_with_a_manager_pin() {
         let hub = hub().await;

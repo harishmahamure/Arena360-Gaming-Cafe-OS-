@@ -57,6 +57,7 @@ import type { SessionSettleReverted } from "./SessionSettleReverted";
 import type { SessionStart } from "./SessionStart";
 import type { SessionTransfer } from "./SessionTransfer";
 import type { SettingsSet } from "./SettingsSet";
+import type { StaffDeactivate } from "./StaffDeactivate";
 import type { StaffSetCredentials } from "./StaffSetCredentials";
 import type { StaffUpsert } from "./StaffUpsert";
 import type { StockIn } from "./StockIn";
@@ -100,6 +101,7 @@ export type IntentPayload =
   | ({ kind: "plan.sell" } & PlanSell)
   | ({ kind: "plan.sell.reverted" } & PlanSellReverted)
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
+  | ({ kind: "staff.deactivate" } & StaffDeactivate)
   | ({ kind: "stock.in" } & StockIn)
   | ({ kind: "stock.in.reverted" } & StockInReverted)
   | ({ kind: "device.maintenance" } & DeviceMaintenance)

@@ -339,6 +339,7 @@ pub fn apply(ctx: &mut Ctx, intent: Intent) -> Result<Outcome, AppError>
 | `device.register` / `device.assign` / `device.maintenance` / `device.revoke` | `device.manage` | code valid (`PAIR_CODE_INVALID`); group exists; within licence cap (`DEVICE_LIMIT`) | devices, devices\_meta | `device.state` |
 | `device.remote` | `device.remote` | action in set | — | `pc.power`, `pc.lock`, `pc.message` to that kiosk |
 | `staff.upsert` / `role.upsert` | `user.manage` | login unique; builtin roles immutable; user cap (`USER_LIMIT`); from an owner command only a setup code, never credentials | staff, roles, role\_perms | — |
+| `staff.deactivate` | `user.manage`, built-in Owner only; the Owner confirms with their own PIN at `POST /ui/staff/deactivate` | member exists and is active; not oneself; not the last active Owner (`VALIDATION_FAILED`). Frees a slot under the `users` limit (active and invited staff count, Kiosk-device rows never) | staff (active) | — |
 | `staff.set_credentials` | the staff member, with valid setup code | code unexpired (`SETUP_CODE_INVALID`) | staff (pw\_hash, pin\_hash, verifier version) | — |
 | `settings.set` | `settings.edit` | key in catalogue; value type; tz/day-start effective next business day | settings, branch | `settings.changed` |
 | `game.matched` / `game.launch_report` | System (scan) / Device | exe matched against the cached catalogue signatures; unmatched kept with icon tile | game\_matches, game\_launches | `catalog.changed` |

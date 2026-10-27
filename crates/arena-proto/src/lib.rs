@@ -40,6 +40,7 @@ mod signin;
 mod signup;
 mod snapshot;
 mod staff_invite;
+mod staff_list;
 mod stock;
 mod tax;
 mod test_session;
@@ -112,8 +113,8 @@ pub use intent::{
     DeviceMaintenance, DevicePlace, DeviceRegister, DeviceRevoke, DeviceVersionReported,
     FLOOR_COLS, FLOOR_ROWS, GROUP_COLOURS, GROUP_KINDS, GroupDelete, GroupUpsert, Intent,
     IntentCategory, IntentKind, IntentPayload, MAINTENANCE_NOTE_MAX, PermEffect, RATE_MAX_MINOR,
-    RateUpsert, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffSetCredentials, StaffUpsert,
-    ZoneDelete, ZoneUpsert, reasons_json,
+    RateUpsert, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffDeactivate,
+    StaffSetCredentials, StaffUpsert, ZoneDelete, ZoneUpsert, reasons_json,
 };
 pub use kiosk::{
     KioskHubState, KioskHubStatus, KioskLog, KioskLogLevel, MAX_KIOSK_LOG_CODE_LEN,
@@ -230,6 +231,7 @@ pub use snapshot::{
 pub use staff_invite::{
     InviteRole, InviteStatus, StaffInvite, StaffInviteView, StaffInvited, StaffInvites,
 };
+pub use staff_list::{StaffList, StaffStatus, StaffView, UiStaffDeactivateRequest};
 pub use stock::{
     LotView, MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_STOCK_IN,
     MOVE_STOCK_IN_REVERTED, STOCK_UNDO_MS, StockIn, StockInReverted, consume_plan, valid_date,

@@ -129,10 +129,11 @@ pub use sessions::{
 };
 pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
 pub use staff::{
-    PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
-    find_role, find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
-    insert_staff, list_pin_candidates, list_role_perms, list_roles, list_unlock_candidates,
-    role_perm_effect, set_staff_credentials, set_staff_setup_code, update_role_name, update_staff,
+    PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,
+    count_active_staff_with_role, deactivate_staff, find_role, find_role_by_name, find_staff,
+    find_staff_by_login, insert_role, insert_role_perm, insert_staff, list_pin_candidates,
+    list_role_perms, list_roles, list_staff, list_unlock_candidates, role_perm_effect,
+    set_staff_credentials, set_staff_setup_code, update_role_name, update_staff,
 };
 pub use stock::{
     LotRow, MoveRow, StockRow, find_lot, find_move, find_stock, insert_lot, insert_move,
@@ -576,6 +577,19 @@ impl Store {
         seq: i64,
     ) -> Result<Option<Vec<u8>>, AppError> {
         previous_row_image(&self.conn, tbl, row_id, epoch, seq)
+    }
+
+    /// The staff list, the number of people counted against the `users` limit and the stored
+    /// `licence.user_cap` (`None` when unset: the Free default applies). Empty before the staff
+    /// table exists.
+    pub fn staff_overview(&self) -> Result<(Vec<StaffListing>, i64, Option<String>), AppError> {
+        if !self.table_exists("staff")? {
+            return Ok((Vec::new(), 0, None));
+        }
+        self.read_consistent(|s| {
+            let cap = find_setting(&s.conn, "licence.user_cap")?.map(|r| r.value);
+            Ok((list_staff(&s.conn)?, count_active_staff(&s.conn)?, cap))
+        })
     }
 
     /// Every staff member's `(staff_id, display_name)` (empty before the staff table exists).

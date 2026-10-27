@@ -2185,6 +2185,119 @@ mod rbac_matrix {
             .unwrap();
     }
 
+    fn deactivate(by: &str, target: &str) -> Intent {
+        as_actor(
+            staff_actor(by),
+            IntentPayload::StaffDeactivate(arena_proto::StaffDeactivate {
+                staff_id: target.into(),
+            }),
+            None,
+        )
+    }
+
+    fn is_active(f: &Fixture, id: &str) -> bool {
+        reopen(f)
+            .staff_by_id_with_role(id)
+            .unwrap()
+            .unwrap()
+            .0
+            .active
+    }
+
+    #[tokio::test]
+    async fn an_owner_deactivates_a_member_and_the_audit_names_both() {
+        let f = bootstrapped().await;
+        let boss = add_staff(&f, "boss", ROLE_OWNER).await;
+        let crew = add_staff(&f, "crew", ROLE_COUNTER).await;
+        let applied = f
+            .writer
+            .submit_intent(deactivate(&boss, &crew))
+            .await
+            .unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        assert_eq!(
+            (
+                applied.changes[0].tbl.as_str(),
+                applied.changes[0].row_id.as_str()
+            ),
+            ("staff", crew.as_str())
+        );
+        assert!(!is_active(&f, &crew));
+        let change = reopen(&f).changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (change.actor_kind.as_str(), change.actor_id.as_str()),
+            ("staff", boss.as_str())
+        );
+        // Again: it is already inactive.
+        let err = expect_err(&f, deactivate(&boss, &crew)).await;
+        assert_eq!(
+            (err.code, err.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("staff_id"))
+        );
+    }
+
+    #[tokio::test]
+    async fn nobody_deactivates_themselves_or_the_last_owner_and_only_an_owner_deactivates() {
+        let f = bootstrapped().await;
+        let boss = add_staff(&f, "boss", ROLE_OWNER).await;
+        let manager = add_staff(&f, "manager", ROLE_MANAGER).await;
+        let crew = add_staff(&f, "crew", ROLE_COUNTER).await;
+        let n = reopen(&f).applied_intent_count().unwrap();
+        // Not themselves.
+        let err = expect_err(&f, deactivate(&boss, &boss)).await;
+        assert_eq!(err.code, ErrorCode::ValidationFailed);
+        // A Manager holds `user.manage` but is not an Owner.
+        let err = expect_err(&f, deactivate(&manager, &crew)).await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        // A Counter lacks the permission.
+        let err = expect_err(&f, deactivate(&crew, &manager)).await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        // The last Owner stays: a second Owner cannot remove the first once alone.
+        let boss2 = add_staff(&f, "boss2", ROLE_OWNER).await;
+        f.writer
+            .submit_intent(deactivate(&boss2, &boss))
+            .await
+            .unwrap();
+        let err = expect_err(&f, deactivate(&boss2, &boss)).await;
+        assert_eq!(err.code, ErrorCode::ValidationFailed);
+        assert!(is_active(&f, &boss2) && is_active(&f, &manager) && is_active(&f, &crew));
+        assert_eq!(reopen(&f).applied_intent_count().unwrap(), n + 2);
+    }
+
+    #[tokio::test]
+    async fn on_free_the_fourth_user_is_refused_until_a_deactivation_frees_a_slot() {
+        // No licence row: the Free default of 3 users applies.
+        let f = bootstrapped_free().await;
+        let boss = add_staff(&f, "boss", ROLE_OWNER).await;
+        add_staff(&f, "manager", ROLE_MANAGER).await;
+        let crew = add_staff(&f, "crew", ROLE_COUNTER).await;
+        let n = reopen(&f).applied_intent_count().unwrap();
+        let fourth = || {
+            as_actor(
+                owner(),
+                IntentPayload::StaffUpsert(staff_body(
+                    "fourth",
+                    &role_id(&f, ROLE_COUNTER),
+                    Some("pw"),
+                )),
+                None,
+            )
+        };
+        let err = expect_err(&f, fourth()).await;
+        assert_eq!(err.code, ErrorCode::UserLimit);
+        assert_eq!(
+            reopen(&f).applied_intent_count().unwrap(),
+            n,
+            "nothing written"
+        );
+        f.writer
+            .submit_intent(deactivate(&boss, &crew))
+            .await
+            .unwrap();
+        f.writer.submit_intent(fourth()).await.unwrap();
+        // The deactivated member keeps their row but no longer counts.
+        assert!(!is_active(&f, &crew));
+    }
     #[tokio::test]
     async fn role_names_are_unique_without_case_and_never_built_in() {
         let f = bootstrapped().await;

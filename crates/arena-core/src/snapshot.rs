@@ -930,6 +930,39 @@ impl SnapshotReader {
         })
     }
 
+    /// The Settings → Staff list: the active and invited members with the `users` limit in
+    /// effect (the licence's, else the Free default). Deactivated members are not listed.
+    pub fn staff_list(&self) -> Result<arena_proto::StaffList, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let (rows, used, cap) = store.staff_overview()?;
+        let limit = cap
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(i64::from(arena_proto::Tier::Free.defaults().limits.users));
+        Ok(arena_proto::StaffList {
+            staff: rows
+                .into_iter()
+                .filter(|r| r.active)
+                .map(|r| arena_proto::StaffView {
+                    id: r.staff_id,
+                    name: r.display_name,
+                    login: r.login,
+                    role: r.role_name,
+                    status: if r.invited {
+                        arena_proto::StaffStatus::Invited
+                    } else {
+                        arena_proto::StaffStatus::Active
+                    },
+                    rev: r.rev,
+                })
+                .collect(),
+            used,
+            limit,
+        })
+    }
+
     pub fn plans(&self) -> Result<Vec<arena_proto::PlanView>, AppError> {
         let store = self
             .reader

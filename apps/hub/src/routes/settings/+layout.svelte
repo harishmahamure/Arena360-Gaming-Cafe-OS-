@@ -14,6 +14,7 @@
     { href: "/settings/screen-lock", label: "hub.settings.nav.screen_lock" },
     { href: "/settings/devices-display", label: "hub.settings.nav.devices_display" },
     { href: "/settings/devices", label: "hub.settings.nav.devices" },
+    { href: "/settings/staff", label: "hub.settings.nav.staff" },
     { href: "/settings/layout", label: "hub.settings.nav.layout" },
     { href: "/settings/plans", label: "hub.settings.nav.plans" },
     { href: "/settings/rules", label: "hub.settings.nav.rules" },

@@ -227,6 +227,11 @@ enum Op {
         slot: u8,
         undo: bool,
     },
+    /// A deactivation that must be refused (self, by a non-Owner, an unknown member): nothing is
+    /// written.
+    DeactivateRefused {
+        pick: u8,
+    },
     /// A controller check of a session that may be running, on a PC, ended or already marked: it
     /// applies once for an ended console session and otherwise writes nothing.
     ControllerCheck {
@@ -484,6 +489,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..3u8, 0..3u8, 0..4u8).prop_map(|(slot, other, guest)| Op::Group { slot, other, guest }),
         2 => (0..3u8, prop::bool::ANY).prop_map(|(slot, undo)| Op::ForceEnd { slot, undo }),
         2 => (0..4u8, prop::bool::ANY).prop_map(|(slot, missing)| Op::ControllerCheck { slot, missing }),
+        1 => (0..4u8).prop_map(|pick| Op::DeactivateRefused { pick }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -2548,6 +2554,35 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
                 }
             }
+        }
+        Op::DeactivateRefused { pick } => {
+            let [owner, manager, counter] = hub.staff.as_slice() else {
+                return Ok(());
+            };
+            let (by, target, want) = match pick {
+                0 => (owner, owner, ErrorCode::ValidationFailed),
+                1 => (manager, counter, ErrorCode::PermissionDenied),
+                2 => (counter, manager, ErrorCode::PermissionDenied),
+                _ => (
+                    owner,
+                    &"no-such-member".to_owned(),
+                    ErrorCode::ValidationFailed,
+                ),
+            };
+            let before = hub.change_count();
+            let mut intent = hub.intent(
+                IntentPayload::StaffDeactivate(arena_proto::StaffDeactivate {
+                    staff_id: target.clone(),
+                }),
+                None,
+            );
+            intent.actor = Actor {
+                kind: ActorKind::Staff,
+                id: by.clone(),
+            };
+            let out = hub.submit_new(intent);
+            prop_assert_eq!(code(&out).map(|c| c.0), Some(want), "{:?}", out);
+            prop_assert_eq!(hub.change_count(), before);
         }
         Op::ControllerCheck { slot, missing } => {
             let Some(session) = hub

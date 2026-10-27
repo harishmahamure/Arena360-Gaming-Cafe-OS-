@@ -8,7 +8,7 @@ use arena_proto::{
 use arena_store::{StoreTx, find_device, find_staff, read_lease};
 
 use super::{
-    ApplyCtx, Target, admin_exit, devices, groups, maintenance, plans, players, products,
+    ApplyCtx, Target, admin_exit, devices, groups, maintenance, plans, players, products, rules,
     settings_set, staff_roles, zones,
 };
 use crate::rbac;
@@ -173,6 +173,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::Maintenance(_)
             | Target::Rate(_)
             | Target::Plan(_)
+            | Target::Rule(_)
             | Target::Pc(_)
             | Target::Player(_)
             | Target::Session(_)
@@ -275,6 +276,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::Zone(t) => zones::base_rev(intent, t),
         Target::Product(t) => products::base_rev(intent, t),
         Target::Plan(t) => plans::base_rev(intent, t),
+        Target::Rule(t) => rules::base_rev(intent, t),
         Target::Maintenance(t) => maintenance::base_rev(intent, t),
     }
 }

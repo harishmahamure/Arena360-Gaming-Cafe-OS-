@@ -18,6 +18,7 @@ mod migrations;
 mod plans;
 mod player_packs;
 mod players;
+mod pricing_rules;
 mod products;
 mod sessions;
 mod staff;
@@ -92,6 +93,9 @@ pub use players::{
     PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
     latest_consent, list_player_revs, phone_holder, set_player_password, update_player,
     username_taken,
+};
+pub use pricing_rules::{
+    PricingRuleRow, find_pricing_rule, insert_pricing_rule, list_pricing_rules, update_pricing_rule,
 };
 pub use products::{
     ProductRow, barcode_holder, count_active_products, find_product, insert_component,
@@ -839,6 +843,13 @@ impl Store {
 
     pub fn find_pack_for_order(&self, order_id: &str) -> Result<Option<PlayerPackRow>, AppError> {
         find_pack_for_order(&self.conn, order_id)
+    }
+
+    pub fn pricing_rules(&self) -> Result<Vec<PricingRuleRow>, AppError> {
+        if !self.table_exists("pricing_rules")? {
+            return Ok(Vec::new());
+        }
+        list_pricing_rules(&self.conn)
     }
 
     pub fn plans(&self) -> Result<Vec<(PlanRow, Vec<String>)>, AppError> {

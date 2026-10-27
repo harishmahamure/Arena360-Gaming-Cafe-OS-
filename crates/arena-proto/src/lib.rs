@@ -30,6 +30,7 @@ mod pc_command;
 mod permission;
 mod plans;
 mod players;
+mod pricing;
 mod printer;
 mod process;
 mod scope;
@@ -167,6 +168,10 @@ pub use players::{
     PlayerPasswordForm, PlayerPasswordReset, PlayerProfile, PlayerUpdate, UiPasswordResetRequest,
     UiPlayerEditRequest, UiPlayerRequest, normalize_phone, normalize_username, valid_phone,
     valid_policy_version, valid_tags, valid_username,
+};
+pub use pricing::{
+    RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,
+    RULE_MAX_PRIORITY, RULE_MIN_PERCENT_BP, RuleConflict, RuleUpsert, RuleView,
 };
 pub use printer::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_PORT, DEFAULT_PRINTER_SELECTED,

@@ -59,11 +59,12 @@ pub enum Table {
     PlanGroups,
     PlayerPacks,
     Alerts,
+    PricingRules,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 32] = [
+    pub const ALL: [Table; 33] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -96,6 +97,7 @@ impl Table {
         Table::PlanGroups,
         Table::PlayerPacks,
         Table::Alerts,
+        Table::PricingRules,
     ];
 
     /// The SQL table name.
@@ -133,6 +135,7 @@ impl Table {
             Self::PlanGroups => "plan_groups",
             Self::PlayerPacks => "player_packs",
             Self::Alerts => "alerts",
+            Self::PricingRules => "pricing_rules",
         }
     }
 
@@ -161,6 +164,7 @@ impl Table {
             Self::Wallets | Self::CreditBalances => &["player_id"],
             Self::PlayerPacks | Self::Alerts => &["id"],
             Self::Plans => &["plan_id"],
+            Self::PricingRules => &["rule_id"],
             Self::PlanGroups => &["plan_id", "group_id"],
             Self::Consents => &["consent_id"],
             Self::Sessions
@@ -202,6 +206,7 @@ impl Table {
             | Self::CreditBalances
             | Self::PlayerPacks
             | Self::Alerts
+            | Self::PricingRules
             | Self::Plans => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents | Self::PlanGroups => false,
         }
@@ -319,6 +324,9 @@ pub enum RowKey {
         plan_id: String,
         group_id: String,
     },
+    PricingRules {
+        rule_id: String,
+    },
     PlayerPacks {
         id: String,
     },
@@ -350,6 +358,7 @@ impl RowKey {
             Self::Rates { .. } => Table::Rates,
             Self::Plans { .. } => Table::Plans,
             Self::PlanGroups { .. } => Table::PlanGroups,
+            Self::PricingRules { .. } => Table::PricingRules,
             Self::PlayerPacks { .. } => Table::PlayerPacks,
             Self::Alerts { .. } => Table::Alerts,
             Self::Players { .. } => Table::Players,
@@ -394,6 +403,7 @@ impl RowKey {
             Self::Rates { rate_id } => rate_id.clone(),
             Self::Plans { plan_id } => plan_id.clone(),
             Self::PlanGroups { plan_id, group_id } => format!("{plan_id}/{group_id}"),
+            Self::PricingRules { rule_id } => rule_id.clone(),
             Self::Players { player_id } => player_id.clone(),
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
@@ -480,6 +490,9 @@ impl RowKey {
                 plan_id: text("plan_id")?,
                 group_id: text("group_id")?,
             },
+            Table::PricingRules => Self::PricingRules {
+                rule_id: text("rule_id")?,
+            },
             Table::Players => Self::Players {
                 player_id: text("player_id")?,
             },
@@ -531,6 +544,7 @@ impl RowKey {
             Self::Rates { rate_id } => vec![rate_id],
             Self::Plans { plan_id } => vec![plan_id],
             Self::PlanGroups { plan_id, group_id } => vec![plan_id, group_id],
+            Self::PricingRules { rule_id } => vec![rule_id],
             Self::Players { player_id } => vec![player_id],
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],

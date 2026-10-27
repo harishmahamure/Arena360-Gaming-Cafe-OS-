@@ -38,6 +38,7 @@ import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
 import type { RateUpsert } from "./RateUpsert";
 import type { RoleUpsert } from "./RoleUpsert";
+import type { RuleUpsert } from "./RuleUpsert";
 import type { SessionAssignPlayer } from "./SessionAssignPlayer";
 import type { SessionEnd } from "./SessionEnd";
 import type { SessionEndReverted } from "./SessionEndReverted";
@@ -88,6 +89,7 @@ export type IntentPayload =
   | ({ kind: "product.upsert" } & ProductUpsert)
   | ({ kind: "product.delete" } & ProductDelete)
   | ({ kind: "plan.upsert" } & PlanUpsert)
+  | ({ kind: "rule.upsert" } & RuleUpsert)
   | ({ kind: "plan.sell" } & PlanSell)
   | ({ kind: "plan.sell.reverted" } & PlanSellReverted)
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)

@@ -16,6 +16,7 @@
     { href: "/settings/devices", label: "hub.settings.nav.devices" },
     { href: "/settings/layout", label: "hub.settings.nav.layout" },
     { href: "/settings/plans", label: "hub.settings.nav.plans" },
+    { href: "/settings/rules", label: "hub.settings.nav.rules" },
     { href: "/settings/printer", label: "hub.settings.nav.printer" },
     { href: "/settings/kitchen", label: "hub.settings.nav.kitchen" },
     { href: "/settings/system", label: "hub.settings.nav.system" },

@@ -13,6 +13,7 @@ pub mod invoice;
 pub mod locale;
 pub mod pairing;
 pub mod players;
+mod pricing;
 pub mod printer;
 pub mod rbac;
 mod session_screen;
@@ -39,6 +40,7 @@ pub use clock::{Clock, ManualClock, SystemClock};
 pub use commands::command_intent;
 pub use devices::{DeviceDirectory, VerifiedDevice};
 pub use pairing::{HubPairer, PairFuture, PairGate};
+pub use pricing::{Resolved, conflicts as rule_conflicts, resolve as resolve_rate};
 pub use session_screen::session_screens;
 pub use session_timer::{TimedSession, TimerAction, TimerEngine, TimerEvent};
 pub use settings_defaults::{

@@ -25,6 +25,7 @@ mod plans;
 mod players;
 mod prepaid;
 mod rates;
+mod rules;
 mod session;
 mod session_expire;
 mod stock;

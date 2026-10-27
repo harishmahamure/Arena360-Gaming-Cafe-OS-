@@ -678,6 +678,38 @@ impl SnapshotReader {
         store.read_consistent(crate::catalog::products)
     }
 
+    pub fn rules(&self) -> Result<Vec<arena_proto::RuleView>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let rows = s.pricing_rules()?;
+            let conflicts = crate::pricing::conflicts(&rows);
+            Ok(rows
+                .into_iter()
+                .zip(conflicts)
+                .map(|(r, conflicts)| arena_proto::RuleView {
+                    id: r.rule_id,
+                    name: r.name,
+                    group_id: r.group_id,
+                    rule_kind: r.rule_kind,
+                    days_mask: r.days_mask,
+                    start_min: r.start_min,
+                    end_min: r.end_min,
+                    date_from: r.date_from,
+                    date_to: r.date_to,
+                    adjust_kind: r.adjust_kind,
+                    adjust_value: r.adjust_value,
+                    priority: r.priority,
+                    active: r.active,
+                    rev: r.rev,
+                    conflicts,
+                })
+                .collect())
+        })
+    }
+
     pub fn plans(&self) -> Result<Vec<arena_proto::PlanView>, AppError> {
         let store = self
             .reader

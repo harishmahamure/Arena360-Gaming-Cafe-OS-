@@ -111,6 +111,8 @@ pub enum IntentKind {
     ProductDelete,
     #[serde(rename = "plan.upsert")]
     PlanUpsert,
+    #[serde(rename = "rule.upsert")]
+    RuleUpsert,
     #[serde(rename = "plan.sell")]
     PlanSell,
     #[serde(rename = "plan.sell.reverted")]
@@ -186,7 +188,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 59] = [
+    pub const ALL: [IntentKind; 60] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -214,6 +216,7 @@ impl IntentKind {
         Self::ProductUpsert,
         Self::ProductDelete,
         Self::PlanUpsert,
+        Self::RuleUpsert,
         Self::PlanSell,
         Self::PlanSellReverted,
         Self::StaffSetCredentials,
@@ -278,6 +281,7 @@ impl IntentKind {
             Self::ProductUpsert => "product.upsert",
             Self::ProductDelete => "product.delete",
             Self::PlanUpsert => "plan.upsert",
+            Self::RuleUpsert => "rule.upsert",
             Self::PlanSell => "plan.sell",
             Self::PlanSellReverted => "plan.sell.reverted",
             Self::StaffSetCredentials => "staff.set_credentials",
@@ -352,6 +356,7 @@ impl IntentKind {
             Self::ProductUpsert
             | Self::ProductDelete
             | Self::PlanUpsert
+            | Self::RuleUpsert
             | Self::StockIn
             | Self::StockInReverted => IntentCategory::Catalog,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
@@ -416,7 +421,7 @@ impl IntentKind {
             // ([`elevator_permission`](Self::elevator_permission)).
             Self::DeviceAdminExit | Self::DeviceAdminRelock => Requirement::Device,
             Self::DeviceAdminUnlock => Requirement::Perm(Permission::DeviceRemote),
-            Self::ProductUpsert | Self::ProductDelete | Self::PlanUpsert => {
+            Self::ProductUpsert | Self::ProductDelete | Self::PlanUpsert | Self::RuleUpsert => {
                 Requirement::Perm(Permission::CatalogEdit)
             }
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
@@ -492,6 +497,7 @@ impl IntentKind {
             | Self::ProductUpsert
             | Self::ProductDelete
             | Self::PlanUpsert
+            | Self::RuleUpsert
             | Self::PlanSell
             | Self::PlanSellReverted
             | Self::StaffSetCredentials
@@ -939,6 +945,8 @@ pub enum IntentPayload {
     ProductDelete(crate::ProductDelete),
     #[serde(rename = "plan.upsert")]
     PlanUpsert(crate::PlanUpsert),
+    #[serde(rename = "rule.upsert")]
+    RuleUpsert(crate::RuleUpsert),
     #[serde(rename = "plan.sell")]
     PlanSell(crate::PlanSell),
     #[serde(rename = "plan.sell.reverted")]
@@ -1035,6 +1043,7 @@ impl IntentPayload {
             Self::ProductUpsert(_) => IntentKind::ProductUpsert,
             Self::ProductDelete(_) => IntentKind::ProductDelete,
             Self::PlanUpsert(_) => IntentKind::PlanUpsert,
+            Self::RuleUpsert(_) => IntentKind::RuleUpsert,
             Self::PlanSell(_) => IntentKind::PlanSell,
             Self::PlanSellReverted(_) => IntentKind::PlanSellReverted,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
@@ -1303,7 +1312,7 @@ mod tests {
                 "device.admin_exit" | "device.admin_relock" => Requirement::Device,
                 "staff.upsert" | "role.upsert" => Requirement::Perm(Permission::UserManage),
                 "staff.set_credentials" => Requirement::System,
-                "product.upsert" | "product.delete" | "plan.upsert" => {
+                "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert" => {
                     Requirement::Perm(Permission::CatalogEdit)
                 }
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),

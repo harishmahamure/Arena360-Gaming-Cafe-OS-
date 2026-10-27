@@ -7,7 +7,7 @@ use arena_store::{
 };
 
 use super::{
-    Target, devices, groups, maintenance, plans, players, products, rates, settings_set,
+    Target, devices, groups, maintenance, plans, players, products, rates, rules, settings_set,
     staff_roles, stock, zones,
 };
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
@@ -232,6 +232,10 @@ pub(super) fn mutate(
         },
         IntentPayload::PlanUpsert(u) => match target {
             Target::Plan(t) => plans::mutate(tx, u, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::RuleUpsert(u) => match target {
+            Target::Rule(t) => rules::mutate(tx, u, t),
             _ => Err(mismatch()),
         },
         IntentPayload::ProductDelete(p) => match target {

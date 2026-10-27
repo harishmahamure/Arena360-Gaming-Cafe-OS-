@@ -53,7 +53,7 @@ impl PlayWindow {
 
 /// The instant of local `min` on `day`. When the clock shows that minute twice, the first time
 /// it does, unless that has already passed at `now_ms`.
-fn local_ms(tz: Tz, day: NaiveDate, min: i64, now_ms: i64) -> Option<i64> {
+pub(crate) fn local_ms(tz: Tz, day: NaiveDate, min: i64, now_ms: i64) -> Option<i64> {
     let at = day.and_hms_opt(0, 0, 0)? + Duration::minutes(min);
     let t = match tz.from_local_datetime(&at) {
         chrono::LocalResult::Single(t) => t,

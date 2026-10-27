@@ -106,6 +106,17 @@ enum Op {
         stale: bool,
         who: Index,
     },
+    /// `rule.upsert` of a weekly or date rule (valid or not) for the PC group, by a staff member
+    /// of a built-in role (or an admin); or an edit of the first rule with a fresh or stale
+    /// `base_rev`. Overlapping rules save, and every conflict is reported on both sides.
+    Rule {
+        weekly: bool,
+        mask: i64,
+        percent: i64,
+        edit: bool,
+        stale: bool,
+        who: Index,
+    },
     /// `stock.in` of a quantity and cost (valid or not) into the first tracked product, then
     /// maybe `stock.in.reverted` straight after.
     Stock {
@@ -341,6 +352,22 @@ fn op() -> impl Strategy<Value = Op> {
                 price,
                 minutes,
                 mix,
+                edit,
+                stale,
+                who,
+            }),
+        2 => (
+            any::<bool>(),
+            prop_oneof![5 => 1..=127i64, 1 => 0..=0i64, 1 => 128..=129i64],
+            prop_oneof![5 => -10_000..=5_000i64, 1 => -10_003..=-10_001i64],
+            any::<bool>(),
+            prop::bool::weighted(0.3),
+            any::<Index>(),
+        )
+            .prop_map(|(weekly, mask, percent, edit, stale, who)| Op::Rule {
+                weekly,
+                mask,
+                percent,
                 edit,
                 stale,
                 who,
@@ -1043,6 +1070,85 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             for (plan, groups) in hub.reader.plans().unwrap() {
                 prop_assert!(!groups.is_empty(), "plan {} has no group", plan.plan_id);
                 prop_assert!(plan.price_minor > 0);
+            }
+        }
+        Op::Rule {
+            weekly,
+            mask,
+            percent,
+            edit,
+            stale,
+            who,
+        } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let pc = group_of(hub, "pc")?;
+            let existing = hub.reader.pricing_rules().unwrap().into_iter().next();
+            let editing = existing.as_ref().filter(|_| *edit);
+            let upsert = arena_proto::RuleUpsert {
+                id: editing.map(|r| r.rule_id.clone()),
+                name: "Rule".into(),
+                group_id: pc,
+                rule_kind: if *weekly { "weekly" } else { "date" }.into(),
+                days_mask: weekly.then_some(*mask),
+                start_min: weekly.then_some(1320),
+                end_min: weekly.then_some(120),
+                date_from: (!weekly).then(|| "2027-03-10".to_owned()),
+                date_to: (!weekly).then(|| "2027-03-12".to_owned()),
+                adjust_kind: "percent_bp".into(),
+                adjust_value: *percent,
+                priority: 0,
+                active: true,
+            };
+            let base_rev = editing.map(|r| if *stale { r.rev + 1 } else { r.rev });
+            let mut intent = hub.intent(IntentPayload::RuleUpsert(upsert), base_rev);
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len()) {
+                    Some(id) => Actor {
+                        kind: ActorKind::Staff,
+                        id: id.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            let bad_terms = *percent < -10_000 || (*weekly && !(1..=127).contains(mask));
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), before);
+            } else if bad_terms {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else if editing.is_some() && *stale {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale));
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 1);
+            }
+            let rules = hub.reader.pricing_rules().unwrap();
+            let found = arena_core::rule_conflicts(&rules);
+            for (i, list) in found.iter().enumerate() {
+                for c in list {
+                    let j = rules.iter().position(|r| r.rule_id == c.rule_id).unwrap();
+                    let back = found[j].iter().find(|b| b.rule_id == rules[i].rule_id);
+                    prop_assert!(back.is_some(), "conflict {} is not symmetric", c.rule_id);
+                    prop_assert!(back.is_some_and(|b| b.other_wins != c.other_wins));
+                }
+                prop_assert!(rules[i].adjust_value >= -10_000);
             }
         }
         Op::Stock {

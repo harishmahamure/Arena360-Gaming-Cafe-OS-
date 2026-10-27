@@ -2736,6 +2736,18 @@ async fn plans(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response 
     }
 }
 
+async fn rules(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(&auth.reader);
+    match tokio::task::spawn_blocking(move || reader.rules()).await {
+        Ok(Ok(list)) => Json(list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 async fn settings(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -2779,6 +2791,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/settings", get(settings))
         .route("/ui/products", get(products))
         .route("/ui/plans", get(plans))
+        .route("/ui/rules", get(rules))
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/test", post(crate::ui_printer::test))
         .route("/ui/printer/test-kot", post(crate::ui_printer::test_kot))
@@ -4311,6 +4324,109 @@ pub(crate) mod tests {
             )
         );
         assert!(p.get("window_start_min").is_none());
+    }
+
+    #[tokio::test]
+    async fn rules_are_listed_with_their_conflicts_and_written_with_catalog_edit() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/rules", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let group = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "o".into(),
+                },
+                IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                    id: None,
+                    name: "PCs".into(),
+                    group_kind: "pc".into(),
+                    colour: "teal".into(),
+                    sort_order: 1,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let rule = |name: &str, start: i64, end: i64| {
+            json!({ "intent": intent_as(
+                Actor { kind: ActorKind::Staff, id: "x".into() },
+                IntentPayload::RuleUpsert(arena_proto::RuleUpsert {
+                    id: None,
+                    name: name.into(),
+                    group_id: group.clone(),
+                    rule_kind: "weekly".into(),
+                    days_mask: Some(31),
+                    start_min: Some(start),
+                    end_min: Some(end),
+                    date_from: None,
+                    date_to: None,
+                    adjust_kind: "percent_bp".into(),
+                    adjust_value: -2000,
+                    priority: 0,
+                    active: true,
+                }),
+                None,
+            ) })
+        };
+        let (status, denied) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&counter),
+            Some(rule("Happy hour", 960, 1080)),
+        )
+        .await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let (_, listed) = call(&hub, "GET", "/ui/rules", Some(&counter), None).await;
+        assert_eq!(listed, json!([]));
+        for body in [
+            rule("Happy hour", 960, 1080),
+            rule("Early bird", 1020, 1200),
+        ] {
+            let (status, reply) =
+                call(&hub, "POST", "/ui/intent", Some(&manager), Some(body)).await;
+            assert_eq!(status, StatusCode::OK, "{reply}");
+        }
+        let (_, listed) = call(&hub, "GET", "/ui/rules", Some(&counter), None).await;
+        let happy = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "Happy hour")
+            .unwrap();
+        assert_eq!(
+            (
+                happy["rule_kind"].as_str(),
+                happy["days_mask"].as_i64(),
+                happy["start_min"].as_i64(),
+                happy["adjust_kind"].as_str(),
+                happy["adjust_value"].as_i64(),
+                happy["group_id"].as_str(),
+                happy["active"].as_bool(),
+            ),
+            (
+                Some("weekly"),
+                Some(31),
+                Some(960),
+                Some("percent_bp"),
+                Some(-2000),
+                Some(group.as_str()),
+                Some(true)
+            )
+        );
+        assert!(happy.get("date_from").is_none());
+        assert_eq!(happy["conflicts"][0]["name"], "Early bird");
+        assert!(happy["conflicts"][0]["other_wins"].is_boolean());
     }
 
     #[tokio::test]

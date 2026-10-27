@@ -48,6 +48,7 @@ mod printer_status;
 mod products;
 mod rates;
 mod read_grants;
+mod rules;
 pub(crate) mod seed_defaults;
 mod session;
 pub(crate) mod session_expire;
@@ -156,6 +157,7 @@ pub(crate) enum Target {
     Maintenance(Box<maintenance::MaintenanceTarget>),
     Rate(Box<rates::RateTarget>),
     Plan(Box<plans::PlanTarget>),
+    Rule(Box<rules::RuleTarget>),
     TestSession(Box<test_session::SessionTarget>),
     Pc(Box<pc_command::PcTarget>),
     Player(Box<players::PlayerTarget>),
@@ -206,6 +208,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         }
         P::RateUpsert(_) => Target::Rate(Box::new(rates::load(tx, &intent.payload)?)),
         P::PlanUpsert(_) => Target::Plan(Box::new(plans::load(tx, &intent.payload)?)),
+        P::RuleUpsert(_) => Target::Rule(Box::new(rules::load(tx, &intent.payload)?)),
         P::DeviceTestSessionStart(_) | P::DeviceTestSessionCompleted(_) => {
             test_session::load(tx, &intent.payload)?
         }

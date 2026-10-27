@@ -316,6 +316,27 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::RuleUpsert(arena_proto::RuleUpsert {
+                        id: None,
+                        name: "Happy hour".into(),
+                        group_id: group.clone(),
+                        rule_kind: "weekly".into(),
+                        days_mask: Some(31),
+                        start_min: Some(960),
+                        end_min: Some(1080),
+                        date_from: None,
+                        date_to: None,
+                        adjust_kind: "percent_bp".into(),
+                        adjust_value: -2000,
+                        priority: 0,
+                        active: true,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
             let pack_plan = writer
                 .submit_intent(submit(
                     IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
@@ -327,7 +348,7 @@ mod tests {
                         validity_days: Some(7),
                         window_start_min: None,
                         window_end_min: None,
-                        group_ids: vec![group],
+                        group_ids: vec![group.clone()],
                         active: true,
                     }),
                     None,

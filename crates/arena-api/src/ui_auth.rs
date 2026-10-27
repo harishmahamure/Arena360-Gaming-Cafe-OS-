@@ -1997,9 +1997,26 @@ async fn run_intent(
         arena_proto::IntentPayload::DevicePower(p) => Some((p.device_id.clone(), p.action, None)),
         _ => None,
     };
+    let started = match &intent.payload {
+        arena_proto::IntentPayload::SessionStart(s) => Some(s.device_id.clone()),
+        _ => None,
+    };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
+            if let Some(device_id) = started {
+                let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
+                let screens =
+                    tokio::task::spawn_blocking(move || reader.session_screens(now)).await;
+                if let Ok(Ok(screens)) = screens
+                    && let Some((_, screen)) = screens.into_iter().find(|(d, _)| *d == device_id)
+                {
+                    let sent = auth
+                        .presence
+                        .push_session_started(&device_id, &cmd_id, screen);
+                    tracing::info!(device_id = %device_id, cmd_id = %cmd_id, sessions = sent, "session start pushed");
+                }
+            }
             if let Some((device_id, action, text)) = command {
                 let sent = auth
                     .presence
@@ -2948,7 +2965,8 @@ pub(crate) mod tests {
                     event: HubEvent::PcCommand {
                         cmd_id: key.clone(),
                         action: PcAction::Lock,
-                        text: None
+                        text: None,
+                        reason: Some(arena_proto::LockReason::LockedByStaff)
                     }
                 })
             );
@@ -3112,20 +3130,29 @@ pub(crate) mod tests {
         assert_eq!(reply["code"], "PC_UNAVAILABLE");
         let store = Store::open_reader(&hub.path).unwrap();
         assert!(store.rows(arena_store::Table::Sessions).unwrap().is_empty());
-        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         let _session = hub
             .lan
             .register(arena_proto::ClientClass::Paired, Some(paired.clone()), tx);
-        let (status, reply) = call(
-            &hub,
-            "POST",
-            "/ui/intent",
-            Some(&token),
-            Some(start_body(&paired)),
-        )
-        .await;
+        let body = start_body(&paired);
+        let key = body["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
         assert_eq!(status, StatusCode::OK, "{reply}");
         assert_eq!(reply["applied"]["changes"][0]["tbl"], "sessions");
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the session start pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::SessionStarted { cmd_id, session },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a session.started event")
+        };
+        assert_eq!((cmd_id, session.device_name.as_str()), (key, "PC 1"));
+        assert!(session.lock_after_ms > 0);
         let (status, reply) = call(
             &hub,
             "POST",
@@ -3196,6 +3223,7 @@ pub(crate) mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{reply}");
+        assert!(rx.try_recv().is_ok(), "the session start itself is pushed");
         let power = json!({"intent": serde_json::to_value(intent_as(
             Actor { kind: ActorKind::Staff, id: "x".into() },
             IntentPayload::DevicePower(arena_proto::DevicePower {

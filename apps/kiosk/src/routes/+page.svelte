@@ -1,12 +1,34 @@
 <script lang="ts">
   import { t } from "@arena/ui";
   import { onMount } from "svelte";
-  import { currentTestSession, onTestSession, onTestSessionEnded } from "../lib/bridge";
+  import {
+    currentPcScreen,
+    currentTestSession,
+    onPcScreen,
+    onTestSession,
+    onTestSessionEnded,
+    type PcScreen,
+  } from "../lib/bridge";
 
   let endsAt: number | null = $state(null);
   let now = $state(performance.now());
   const left = $derived(endsAt === null ? 0 : Math.max(0, Math.ceil((endsAt - now) / 1000)));
   const clock = $derived([Math.floor(left / 60), String(left % 60).padStart(2, "0")].join(":"));
+
+  let session = $state<{ name: string; from: number } | null>(null);
+  const elapsed = $derived(
+    session === null ? 0 : Math.max(0, Math.floor((now - session.from) / 1000)),
+  );
+  const watch = $derived(
+    [Math.floor(elapsed / 3600), Math.floor((elapsed % 3600) / 60), elapsed % 60]
+      .map((n, i) => (i === 0 ? String(n) : String(n).padStart(2, "0")))
+      .join(":"),
+  );
+
+  const follow = (s: PcScreen) => {
+    now = performance.now();
+    session = s.session ? { name: s.session.device_name, from: now - s.session.elapsed_ms } : null;
+  };
 
   const start = (remainingMs: number) => {
     now = performance.now();
@@ -21,6 +43,9 @@
       const add = (stop: () => void) => (gone ? stop() : stops.push(stop));
       add(await onTestSession(start));
       add(await onTestSessionEnded(() => (endsAt = null)));
+      add(await onPcScreen(follow));
+      const screen = await currentPcScreen();
+      if (screen && session === null) follow(screen);
       const known = await currentTestSession();
       if (known !== null && endsAt === null) start(known);
     })();
@@ -41,6 +66,12 @@
     <h1 class="type-kiosk-headline">{t("player.test_session.title")}</h1>
     <p class="clock type-kiosk-display tabular-nums" data-testid="test-session-clock">{clock}</p>
     <p class="hint type-kiosk-body">{t("player.test_session.hint")}</p>
+  </main>
+{:else if session !== null}
+  <main class="locked" data-testid="session">
+    <p class="brand type-kiosk-eyebrow">{t("app.name")}</p>
+    <h1 class="type-kiosk-headline" data-testid="session-device">{session.name}</h1>
+    <p class="clock type-kiosk-display tabular-nums" data-testid="session-clock">{watch}</p>
   </main>
 {:else}
   <!-- No session yet: the locked placeholder (login comes with the session stories). -->

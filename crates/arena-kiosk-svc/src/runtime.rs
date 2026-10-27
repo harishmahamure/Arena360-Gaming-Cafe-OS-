@@ -220,6 +220,7 @@ impl Runtime {
             tokio::spawn(crate::hub_link::run(Arc::clone(&ctx), stop_rx.clone())),
             tokio::spawn(crate::admin_exit::run(Arc::clone(&ctx), stop_rx.clone())),
             tokio::spawn(crate::test_session::run(Arc::clone(&ctx), stop_rx.clone())),
+            tokio::spawn(crate::session::run(Arc::clone(&ctx), stop_rx.clone())),
             tokio::spawn(crate::app::run(Arc::clone(&ctx), ipc, launcher, stop_rx)),
         ];
         Ok(Self { ctx, stop, tasks })

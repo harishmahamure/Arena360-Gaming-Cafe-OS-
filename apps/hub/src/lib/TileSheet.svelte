@@ -300,7 +300,7 @@
           label="hub.session.start"
           disabled={busy || !picked}
           disabledReason={busy ? "hub.sheet.waiting" : "hub.session.pick_first"}
-          onclick={() => picked && void go(startJob(device.device_id, picked.id))}
+          onclick={() => picked && void go(startJob(device.device_id, picked.id, device.manual))}
         />
       </div>
     {/if}

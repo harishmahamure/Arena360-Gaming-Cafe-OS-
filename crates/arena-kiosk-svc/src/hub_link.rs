@@ -264,8 +264,16 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                         cmd_id,
                         action,
                         text,
+                        reason,
                     }) => {
-                        pc_command(ctx, client, cmd_id, action, text).await;
+                        pc_command(ctx, client, cmd_id, action, text, reason).await;
+                    }
+                    Some(HubEvent::SessionStarted { cmd_id, session }) => {
+                        crate::session::sync(ctx, session, true);
+                        ack(client, &cmd_id).await;
+                    }
+                    Some(HubEvent::SessionTick(session)) => {
+                        crate::session::sync(ctx, session, false);
                     }
                     Some(HubEvent::TestSession { lock_after_ms }) => {
                         crate::test_session::begin(ctx, lock_after_ms);
@@ -279,21 +287,26 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
     }
 }
 
+async fn ack(client: &HubClient, cmd_id: &str) {
+    let body = serde_json::json!({ "cmd_id": cmd_id });
+    if let Err(e) = client.request("kiosk.pc_ack", body).await {
+        tracing::warn!(error = %e, "could not acknowledge the pc command");
+    }
+}
+
 async fn pc_command(
     ctx: &Ctx,
     client: &HubClient,
     cmd_id: String,
     action: arena_proto::PcAction,
     text: Option<String>,
+    reason: Option<arena_proto::LockReason>,
 ) {
-    let step = crate::pc::apply(ctx, &cmd_id, action, text);
+    let step = crate::pc::apply(ctx, &cmd_id, action, text, reason);
     if step == crate::pc::Step::Refused {
         return;
     }
-    let body = serde_json::json!({ "cmd_id": cmd_id });
-    if let Err(e) = client.request("kiosk.pc_ack", body).await {
-        tracing::warn!(error = %e, "could not acknowledge the pc command");
-    }
+    ack(client, &cmd_id).await;
     if let crate::pc::Step::AckThenPower(action) = step
         && let Err(e) = crate::power::run(action)
     {

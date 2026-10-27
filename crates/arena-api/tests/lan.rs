@@ -1529,6 +1529,7 @@ async fn a_pc_command_reaches_the_kiosk_and_only_a_pending_ack_reaches_the_hub_u
                 cmd_id,
                 action,
                 text,
+                ..
             } => break (cmd_id, action, text),
             _ => continue,
         }

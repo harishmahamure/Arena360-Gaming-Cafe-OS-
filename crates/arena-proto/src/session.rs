@@ -60,6 +60,18 @@ pub struct SessionStartedEvent {
     pub device_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionScreen {
+    pub session_id: String,
+    pub device_name: String,
+    #[ts(type = "number")]
+    pub elapsed_ms: u64,
+    #[ts(type = "number")]
+    pub lock_after_ms: u64,
+    pub time_up_mode: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

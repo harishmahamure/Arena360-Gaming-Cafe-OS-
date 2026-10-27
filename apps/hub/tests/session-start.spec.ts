@@ -44,6 +44,7 @@ type Hub = {
   fail?: { status: number; code: string; message?: string };
   rate: number | null;
   hc: boolean;
+  ack: boolean;
 };
 
 const PIN = "2222";
@@ -57,6 +58,7 @@ async function open(page: Page, who: keyof typeof STAFF, over: Partial<Hub> = {}
     queries: [],
     rate: 10000,
     hc: false,
+    ack: true,
     ...over,
   };
   await page.addInitScript(() => {
@@ -161,6 +163,16 @@ async function open(page: Page, who: keyof typeof STAFF, over: Partial<Hub> = {}
             emit("session.started", { session_id: "S9", device_id });
             emit("devices.changed", {});
           }, id);
+          if (hub.ack && !hub.devices.find((d) => d.device_id === id)?.manual) {
+            await page.evaluate(
+              ([cmd_id, device_id]) =>
+                (window as unknown as { __emit: (n: string, d: unknown) => void }).__emit(
+                  "device.pc_ack",
+                  { cmd_id, device_id },
+                ),
+              [sent.key, id],
+            );
+          }
         }
         return;
       }
@@ -224,6 +236,23 @@ test("a guest start sends session.start postpaid and the tile shows In session, 
   await expect(tile(page, "PC 1")).toContainText(/0:01:\d\d/);
   await expect(tile(page, "PC 1").getByTestId("session-line")).toHaveText("Guest 1");
   await expect(page.getByTestId("session-start")).toHaveCount(0);
+});
+
+test("no kiosk ack in 5 s fails the start, and Retry resends the same idempotency key", async ({
+  page,
+}) => {
+  const hub = await open(page, "lookup", { ack: false });
+  await openSheet(page);
+  await act(page, "Guest").click();
+  await start(page).click();
+  await expect(status(page)).toContainText(en["hub.floor.remote_unlock_failed"], {
+    timeout: 8000,
+  });
+  hub.ack = true;
+  await act(page, en["hub.sheet.retry"]).click();
+  await expect(status(page)).toHaveText(en["hub.sheet.done.started"]);
+  expect(hub.sent).toHaveLength(2);
+  expect(hub.sent[1].key).toBe(hub.sent[0].key);
 });
 
 test("a looked-up player is started by id and the tile names the username", async ({ page }) => {

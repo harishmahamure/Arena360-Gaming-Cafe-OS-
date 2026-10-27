@@ -219,14 +219,29 @@ export async function onTestSessionEnded(cb: () => void): Promise<() => void> {
   return listen<unknown>(TEST_SESSION_ENDED_EVENT, () => cb());
 }
 
-export type PcScreen = { locked: boolean; message: string | null };
+export type PcScreen = {
+  locked: boolean;
+  reason: string | null;
+  message: string | null;
+  session: { device_name: string; elapsed_ms: number } | null;
+};
 
 const screenOf = (v: unknown): PcScreen | null => {
   if (typeof v !== "object" || v === null) return null;
-  const { locked, message } = v as { locked?: unknown; message?: unknown };
+  const { locked, reason, message, session } = v as Record<string, unknown>;
   if (typeof locked !== "boolean") return null;
   if (message != null && typeof message !== "string") return null;
-  return { locked, message: message ?? null };
+  const s = session as { device_name?: unknown; elapsed_ms?: unknown } | null | undefined;
+  const live =
+    s && typeof s.device_name === "string" && typeof s.elapsed_ms === "number"
+      ? { device_name: s.device_name, elapsed_ms: s.elapsed_ms }
+      : null;
+  return {
+    locked,
+    reason: typeof reason === "string" ? reason : null,
+    message: message ?? null,
+    session: live,
+  };
 };
 
 export async function currentPcScreen(): Promise<PcScreen | null> {

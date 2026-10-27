@@ -53,10 +53,10 @@ export const screenJob = (device_id: string, action: PcAction, text?: string) =>
 export const powerJob = (device_id: string, action: PcAction) =>
   job({ kind: "device.power", device_id, action }, { done: DONE[action] });
 
-export const startJob = (device_id: string, player_id?: string) =>
+export const startJob = (device_id: string, player_id?: string, manual?: boolean) =>
   job(
     { kind: "session.start", device_id, mode: "postpaid", player_id },
-    { track: "none", done: "hub.sheet.done.started" },
+    { track: manual ? "none" : "cmd", done: "hub.sheet.done.started" },
   );
 
 export const adminUnlockJob = (device_id: string) =>

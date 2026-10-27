@@ -272,7 +272,12 @@ pub(crate) async fn run<S: IpcServer>(
 fn screen_message(s: crate::pc::Screen) -> IpcMsg {
     IpcMsg::PcScreen {
         locked: s.locked,
+        reason: s.reason,
         message: s.message,
+        session: s.session.map(|v| arena_kiosk_core::ipc::PcSession {
+            device_name: v.device_name,
+            elapsed_ms: v.started.elapsed().as_millis() as u64,
+        }),
     }
 }
 

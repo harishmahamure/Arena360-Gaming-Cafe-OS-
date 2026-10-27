@@ -1525,7 +1525,9 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
         shown,
         IpcMsg::PcScreen {
             locked: true,
-            message: Some("Closing in 10".into())
+            reason: Some(arena_proto::LockReason::LockedByStaff),
+            message: Some("Closing in 10".into()),
+            session: None
         }
     );
     app.send(&IpcMsg::Request {
@@ -1539,7 +1541,8 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
             m,
             IpcMsg::PcScreen {
                 message: None,
-                locked: true
+                locked: true,
+                ..
             }
         )
     })
@@ -1552,7 +1555,9 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
         first,
         IpcMsg::PcScreen {
             locked: true,
-            message: None
+            reason: Some(arena_proto::LockReason::LockedByStaff),
+            message: None,
+            session: None
         },
         "a repeated command is acknowledged but not shown again; the lock survives a new app"
     );
@@ -1567,6 +1572,74 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
             .await
             .is_err(),
         "a power command this OS cannot run is refused, not acknowledged"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_started_session_unlocks_ticks_and_locks_at_its_lock_time() {
+    let (hub, kiosk, _) = admin_setup().await;
+    let presence = hub.presence.as_ref().unwrap();
+    let mut acks = presence.pc_acks().unwrap();
+    let mut app = kiosk.app().await;
+    let screen = |elapsed_ms, lock_after_ms| arena_proto::SessionScreen {
+        session_id: "S1".into(),
+        device_name: "PC 1".into(),
+        elapsed_ms,
+        lock_after_ms,
+        time_up_mode: "clean_up".into(),
+    };
+    assert_eq!(
+        presence.push_pc_command(&hub.device_id, "L1", arena_proto::PcAction::Lock, None),
+        1
+    );
+    app.until(|m| matches!(m, IpcMsg::PcScreen { locked: true, .. }))
+        .await;
+    assert_eq!(
+        presence.push_session_started(&hub.device_id, "S1", screen(60_000, 1_500)),
+        1
+    );
+    let mut got = false;
+    while !got {
+        let ack = tokio::time::timeout(Duration::from_secs(5), acks.recv())
+            .await
+            .expect("an ack within 5 s")
+            .unwrap();
+        got = ack.cmd_id == "S1";
+    }
+    let shown = app
+        .until(|m| {
+            matches!(
+                m,
+                IpcMsg::PcScreen {
+                    session: Some(_),
+                    ..
+                }
+            )
+        })
+        .await;
+    let IpcMsg::PcScreen {
+        locked,
+        reason,
+        session: Some(session),
+        ..
+    } = shown
+    else {
+        panic!("a session screen")
+    };
+    assert!(!locked && reason.is_none());
+    assert_eq!(session.device_name, "PC 1");
+    assert!((60_000..62_000).contains(&session.elapsed_ms));
+    let ended = app
+        .until(|m| matches!(m, IpcMsg::PcScreen { locked: true, .. }))
+        .await;
+    assert_eq!(
+        ended,
+        IpcMsg::PcScreen {
+            locked: true,
+            reason: Some(arena_proto::LockReason::TimesUp),
+            message: None,
+            session: None
+        }
     );
 }
 

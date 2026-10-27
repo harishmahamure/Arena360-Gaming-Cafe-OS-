@@ -147,7 +147,9 @@ pub use pairing::{
     SETUP_CODE_PLAINTEXT_TTL_MS, SetupCodeReveal, check_bootstrap, format_pairing_code,
     normalize_pairing_code, valid_pairing_code,
 };
-pub use pc_command::{DevicePower, DeviceScreen, PC_MESSAGE_MAX, PcAck, PcAckEvent, PcAction};
+pub use pc_command::{
+    DevicePower, DeviceScreen, LockReason, PC_MESSAGE_MAX, PcAck, PcAckEvent, PcAction,
+};
 pub use permission::{Permission, Requirement};
 pub use players::{
     CONSENT_TRANSACTIONAL, PLAYER_EMAIL_MAX_CHARS, PLAYER_NAME_MAX_CHARS, PLAYER_NOTES_MAX_CHARS,
@@ -177,7 +179,7 @@ pub use process::{
     is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
-pub use session::{SessionMode, SessionStart, SessionStartedEvent, SnapshotSession};
+pub use session::{SessionMode, SessionScreen, SessionStart, SessionStartedEvent, SnapshotSession};
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
     SetupDevicesView, SetupGroup,

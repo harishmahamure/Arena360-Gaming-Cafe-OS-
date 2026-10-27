@@ -116,3 +116,52 @@ test("a lock that was already on when the page opened covers it at once", async 
   await expect(page.getByTestId("pc-locked")).toBeVisible();
   await expect(page.getByTestId("pc-message")).toContainText("Back soon");
 });
+
+const shown = (over: Record<string, unknown>) => ({
+  locked: false,
+  reason: null,
+  message: null,
+  session: null,
+  ...over,
+});
+
+test("a started session replaces the idle screen with the device name and a ticking clock", async ({
+  page,
+}) => {
+  await openWithShell(page);
+  await expect(page.getByTestId("locked")).toBeVisible();
+  await emit(page, shown({ session: { device_name: "PC 7", elapsed_ms: 3_725_000 } }));
+  await expect(page.getByTestId("session")).toBeVisible();
+  await expect(page.getByTestId("session-device")).toHaveText("PC 7");
+  await expect(page.getByTestId("session-clock")).toHaveText(/^1:02:(0[5-9]|1\d)$/);
+  await expect(page.getByTestId("locked")).toHaveCount(0);
+  expect(await serious(page)).toEqual([]);
+  await emit(page, shown({ session: { device_name: "PC 7", elapsed_ms: 5_000 } }));
+  await expect(page.getByTestId("session-clock")).toHaveText(/^0:00:0[5-9]$/);
+  await emit(page, shown({ locked: true, reason: "times_up" }));
+  await expect(page.getByTestId("session")).toHaveCount(0);
+  await expect(page.getByTestId("locked")).toBeVisible();
+});
+
+test("a session already running when the page opened is shown at once", async ({ page }) => {
+  await openWithShell(page, shown({ session: { device_name: "PC 2", elapsed_ms: 61_000 } }));
+  await expect(page.getByTestId("session-device")).toHaveText("PC 2");
+  await expect(page.getByTestId("session-clock")).toHaveText(/^0:01:0\d$/);
+});
+
+test("each lock reason covers the screen with its catalogue line", async ({ page }) => {
+  await openWithShell(page);
+  const lines: Record<string, string> = {
+    pay_at_counter: en["player.lock.pay_at_counter"],
+    ended_by_staff: en["player.lock.ended_by_staff"],
+    times_up: en["player.lock.times_up"],
+    locked_by_staff: en["player.pc.locked"],
+    paused: en["player.lock.paused"],
+  };
+  for (const [reason, line] of Object.entries(lines)) {
+    await emit(page, shown({ locked: true, reason }));
+    await expect(page.getByTestId("pc-locked").getByRole("heading", { name: line })).toBeVisible();
+  }
+  await emit(page, shown({ locked: false }));
+  await expect(page.getByTestId("pc-locked")).toHaveCount(0);
+});

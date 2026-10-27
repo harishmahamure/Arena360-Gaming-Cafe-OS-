@@ -78,6 +78,12 @@ impl std::fmt::Debug for SecretPin {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PcSession {
+    pub device_name: String,
+    pub elapsed_ms: u64,
+}
+
 /// One IPC message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -143,7 +149,11 @@ pub enum IpcMsg {
     PcScreen {
         locked: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<arena_proto::LockReason>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<PcSession>,
     },
     #[serde(rename = "discovery.found")]
     DiscoveryFound {
@@ -343,14 +353,21 @@ mod tests {
         assert_eq!(
             IpcMsg::PcScreen {
                 locked: true,
-                message: None
+                reason: None,
+                message: None,
+                session: None
             }
             .to_line(),
             "{\"type\":\"pc_screen\",\"locked\":true}\n"
         );
         let shown = IpcMsg::PcScreen {
             locked: false,
+            reason: Some(arena_proto::LockReason::PayAtCounter),
             message: Some("hi".into()),
+            session: Some(PcSession {
+                device_name: "PC 1".into(),
+                elapsed_ms: 7,
+            }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);
     }

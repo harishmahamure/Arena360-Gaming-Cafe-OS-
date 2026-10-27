@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use arena_proto::PcAction;
+use arena_proto::{LockReason, PcAction};
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 use crate::queue::QueueDb;
 use crate::runtime::Ctx;
@@ -13,7 +14,15 @@ const SEEN_MAX: usize = 64;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Screen {
     pub locked: bool,
+    pub reason: Option<LockReason>,
     pub message: Option<String>,
+    pub session: Option<ScreenSession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenSession {
+    pub device_name: String,
+    pub started: Instant,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -25,6 +34,7 @@ pub enum Step {
 
 pub struct PcState {
     pub screen: watch::Sender<Screen>,
+    pub deadline: watch::Sender<Option<Instant>>,
     seen: Mutex<VecDeque<String>>,
 }
 
@@ -34,9 +44,10 @@ impl PcState {
         Self {
             screen: watch::channel(Screen {
                 locked,
-                message: None,
+                ..Screen::default()
             })
             .0,
+            deadline: watch::channel(None).0,
             seen: Mutex::default(),
         }
     }
@@ -54,7 +65,7 @@ impl PcState {
     }
 }
 
-fn set_locked(ctx: &Ctx, locked: bool) {
+pub(crate) fn set_locked(ctx: &Ctx, locked: bool, reason: Option<LockReason>) {
     let saved = ctx.queue.lock().unwrap_or_else(|p| p.into_inner()).kv_set(
         LOCKED_KEY,
         if locked { "1" } else { "0" },
@@ -63,14 +74,32 @@ fn set_locked(ctx: &Ctx, locked: bool) {
     if let Err(e) = saved {
         tracing::error!(error = %e, "could not save the lock state");
     }
+    let ends = locked
+        && matches!(
+            reason,
+            Some(LockReason::PayAtCounter | LockReason::EndedByStaff | LockReason::TimesUp)
+        );
+    if ends {
+        ctx.pc.deadline.send_replace(None);
+    }
     ctx.pc.screen.send_if_modified(|s| {
-        let changed = s.locked != locked;
+        let changed = s.locked != locked || s.reason != reason || (ends && s.session.is_some());
         s.locked = locked;
+        s.reason = reason;
+        if ends {
+            s.session = None;
+        }
         changed
     });
 }
 
-pub fn apply(ctx: &Ctx, cmd_id: &str, action: PcAction, text: Option<String>) -> Step {
+pub fn apply(
+    ctx: &Ctx,
+    cmd_id: &str,
+    action: PcAction,
+    text: Option<String>,
+    reason: Option<LockReason>,
+) -> Step {
     if action.is_power() && !crate::power::supported() {
         tracing::warn!(
             action = action.as_str(),
@@ -88,8 +117,8 @@ pub fn apply(ctx: &Ctx, cmd_id: &str, action: PcAction, text: Option<String>) ->
     }
     tracing::info!(cmd_id, action = action.as_str(), "pc command");
     match action {
-        PcAction::Lock => set_locked(ctx, true),
-        PcAction::Unlock => set_locked(ctx, false),
+        PcAction::Lock => set_locked(ctx, true, reason),
+        PcAction::Unlock => set_locked(ctx, false, None),
         PcAction::Message => {
             let message = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
             ctx.pc.screen.send_modify(|s| s.message = message);

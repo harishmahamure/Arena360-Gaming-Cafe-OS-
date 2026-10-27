@@ -286,6 +286,17 @@ impl SnapshotReader {
             .any(|d| d.device_id == device_id && !d.token_hash.is_empty()))
     }
 
+    pub fn session_screens(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<(String, arena_proto::SessionScreen)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::session_screen::session_screens(&store, now_ms)
+    }
+
     pub fn owner_wrote(&self, epoch: &str, seq: i64) -> bool {
         self.reader
             .lock()

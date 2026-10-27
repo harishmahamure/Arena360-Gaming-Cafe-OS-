@@ -16,6 +16,17 @@ pub enum PcAction {
     Shutdown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum LockReason {
+    PayAtCounter,
+    EndedByStaff,
+    TimesUp,
+    LockedByStaff,
+    Paused,
+}
+
 impl PcAction {
     pub fn as_str(self) -> &'static str {
         match self {

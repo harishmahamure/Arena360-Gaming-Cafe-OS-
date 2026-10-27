@@ -30,6 +30,7 @@ pub struct LiveSession {
     pub player_id: Option<String>,
     pub username: Option<String>,
     pub guest_no: Option<i64>,
+    pub time_up_mode: String,
 }
 
 pub fn insert_session(conn: &Connection, s: &NewSession<'_>) -> Result<(), AppError> {
@@ -101,7 +102,8 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 pub fn list_live_sessions(conn: &Connection) -> Result<Vec<LiveSession>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT s.id, s.device_id, s.state, s.started_at, s.player_id, p.username, s.guest_no
+            "SELECT s.id, s.device_id, s.state, s.started_at, s.player_id, p.username, s.guest_no,
+                    s.time_up_mode
              FROM sessions s LEFT JOIN players p ON p.player_id = s.player_id
              WHERE s.state IN ('active', 'paused', 'grace')
              ORDER BY s.started_at, s.id",
@@ -116,6 +118,7 @@ pub fn list_live_sessions(conn: &Connection) -> Result<Vec<LiveSession>, AppErro
             player_id: r.get(4)?,
             username: r.get(5)?,
             guest_no: r.get(6)?,
+            time_up_mode: r.get(7)?,
         })
     })
     .map_err(db_error)?

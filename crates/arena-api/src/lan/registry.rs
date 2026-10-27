@@ -26,9 +26,10 @@ use arena_core::ChangeOp;
 use arena_core::{Applied, DeviceDirectory};
 use arena_proto::{
     AdminExitMode, AdminUnlockAckEvent, AppError, AppliedSummary, ChangeOpKind, ChangeSummary,
-    ClientClass, ErrorCode, EventFrame, Frame, FrameBody, HcTarget, HubEvent, ManagerVerifier,
-    PAIRED_SETTINGS_PREFIX, PcAckEvent, PcAction, SettingEntry, SettingsValues, TEST_SESSION_MS,
-    TestSessionState, TestSessionStatus, may_read_setting, parse_hc_key,
+    ClientClass, ErrorCode, EventFrame, Frame, FrameBody, HcTarget, HubEvent, LockReason,
+    ManagerVerifier, PAIRED_SETTINGS_PREFIX, PcAckEvent, PcAction, SessionScreen, SettingEntry,
+    SettingsValues, TEST_SESSION_MS, TestSessionState, TestSessionStatus, may_read_setting,
+    parse_hc_key,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -41,6 +42,8 @@ pub(crate) enum Kill {
     /// Close without a frame (queue overflow, shutdown).
     Drop,
 }
+
+const SESSION_TICK: std::time::Duration = std::time::Duration::from_secs(5);
 
 const PENDING_CMD_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
@@ -284,13 +287,7 @@ impl Registry {
         true
     }
 
-    pub(crate) fn push_pc_command(
-        &self,
-        device_id: &str,
-        cmd_id: &str,
-        action: PcAction,
-        text: Option<String>,
-    ) -> usize {
+    fn track(&self, device_id: &str, cmd_id: &str) {
         if let Ok(mut pending) = self.pending_cmds.lock() {
             pending.retain(|_, (_, at)| at.elapsed() < PENDING_CMD_TTL);
             pending.insert(
@@ -298,15 +295,60 @@ impl Registry {
                 (device_id.to_owned(), std::time::Instant::now()),
             );
         }
+    }
+
+    pub(crate) fn push_pc_command(
+        &self,
+        device_id: &str,
+        cmd_id: &str,
+        action: PcAction,
+        text: Option<String>,
+    ) -> usize {
+        self.track(device_id, cmd_id);
         let msg = event_frame(
             self.next_rid(),
             HubEvent::PcCommand {
                 cmd_id: cmd_id.to_owned(),
                 action,
                 text,
+                reason: (action == PcAction::Lock).then_some(LockReason::LockedByStaff),
             },
         );
         self.push_paired(&msg, Some(device_id))
+    }
+
+    pub(crate) fn push_session_started(
+        &self,
+        device_id: &str,
+        cmd_id: &str,
+        session: SessionScreen,
+    ) -> usize {
+        self.track(device_id, cmd_id);
+        let msg = event_frame(
+            self.next_rid(),
+            HubEvent::SessionStarted {
+                cmd_id: cmd_id.to_owned(),
+                session,
+            },
+        );
+        self.push_paired(&msg, Some(device_id))
+    }
+
+    async fn tick_sessions(&self, devices: &Arc<DeviceDirectory>) {
+        if self.device_ids().is_empty() {
+            return;
+        }
+        let dir = Arc::clone(devices);
+        match tokio::task::spawn_blocking(move || dir.session_screens(epoch_ms())).await {
+            Ok(Ok(screens)) => {
+                for (device_id, screen) in screens {
+                    let msg = event_frame(self.next_rid(), HubEvent::SessionTick(screen));
+                    self.push_paired(&msg, Some(&device_id));
+                }
+            }
+            Ok(Err(e)) => tracing::warn!(code = e.code.as_str(), "session tick read failed"),
+            Err(e) => tracing::warn!(error = %e, "session tick read panicked"),
+        }
     }
 
     fn next_rid(&self) -> String {
@@ -720,8 +762,17 @@ impl Registry {
         mut events: broadcast::Receiver<Applied>,
         devices: Arc<DeviceDirectory>,
     ) {
+        let mut tick = tokio::time::interval(SESSION_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            match events.recv().await {
+            let event = tokio::select! {
+                e = events.recv() => e,
+                _ = tick.tick() => {
+                    self.tick_sessions(&devices).await;
+                    continue;
+                }
+            };
+            match event {
                 Ok(applied) => {
                     self.push_applied(&applied);
                     self.push_kiosk_settings(&devices, &applied).await;
@@ -1194,7 +1245,8 @@ mod tests {
                 event: HubEvent::PcCommand {
                     cmd_id: "C1".into(),
                     action: PcAction::Message,
-                    text: Some("hi".into())
+                    text: Some("hi".into()),
+                    reason: None
                 }
             })
         );

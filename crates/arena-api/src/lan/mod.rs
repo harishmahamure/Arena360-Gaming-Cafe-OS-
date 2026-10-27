@@ -131,6 +131,17 @@ impl Presence {
             .as_ref()
             .map_or(0, |r| r.push_pc_command(device_id, cmd_id, action, text))
     }
+
+    pub fn push_session_started(
+        &self,
+        device_id: &str,
+        cmd_id: &str,
+        session: arena_proto::SessionScreen,
+    ) -> usize {
+        self.0
+            .as_ref()
+            .map_or(0, |r| r.push_session_started(device_id, cmd_id, session))
+    }
 }
 
 pub struct HubInfoSource {

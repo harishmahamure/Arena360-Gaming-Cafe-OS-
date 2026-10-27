@@ -189,6 +189,17 @@ impl DeviceDirectory {
         check_device_token(row.as_ref(), class, token)
     }
 
+    pub fn session_screens(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<(String, arena_proto::SessionScreen)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::session_screen::session_screens(&store, now_ms)
+    }
+
     /// The branch settings among `keys` that exist, with their `rev`, in `keys` order (what a
     /// paired device may read: the caller checks the keys against the class scope first).
     pub fn catalog(&self, ids: &[String]) -> Result<Vec<arena_proto::CatalogEntry>, AppError> {

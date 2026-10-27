@@ -35,6 +35,7 @@ pub mod runtime;
 pub mod secret;
 #[cfg(windows)]
 pub mod service;
+pub mod session;
 pub mod test_session;
 pub mod theme;
 #[cfg(windows)]

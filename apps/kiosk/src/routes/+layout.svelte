@@ -1,6 +1,7 @@
 <script lang="ts">
   import "@arena/ui/base.css";
   import { InlinePin, t } from "@arena/ui";
+  import type { MessageKey } from "@arena/ui/messages";
   import type { KioskHubState } from "@arena/ui/generated";
   import { afterNavigate, goto } from "$app/navigation";
   import { page } from "$app/state";
@@ -57,6 +58,14 @@
    */
   let locked = $state(false);
   let message: string | null = $state(null);
+  let reason: string | null = $state(null);
+  const REASONS: Record<string, MessageKey> = {
+    pay_at_counter: "player.lock.pay_at_counter",
+    ended_by_staff: "player.lock.ended_by_staff",
+    times_up: "player.lock.times_up",
+    locked_by_staff: "player.pc.locked",
+    paused: "player.lock.paused",
+  };
   let adminPanel = $state(false);
   let exitUntil: number | null = $state(null);
   let now = $state(Date.now());
@@ -122,6 +131,7 @@
         await onPcScreen((s) => {
           screened = true;
           locked = s.locked;
+          reason = s.reason;
           message = s.message;
         }),
       );
@@ -145,6 +155,7 @@
       const screen = await currentPcScreen();
       if (screen && !screened) {
         locked = screen.locked;
+        reason = screen.reason;
         message = screen.message;
       }
       const hc = await currentTheme();
@@ -173,7 +184,7 @@
   </div>
   {#if locked}
     <div class="cover" role="status" data-testid="pc-locked">
-      <h1 class="type-kiosk-headline">{t("player.pc.locked")}</h1>
+      <h1 class="type-kiosk-headline">{t((reason && REASONS[reason]) || "player.pc.locked")}</h1>
     </div>
   {/if}
   {#if adminPanel}

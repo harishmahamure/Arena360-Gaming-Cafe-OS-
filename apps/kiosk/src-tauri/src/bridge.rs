@@ -99,7 +99,9 @@ pub enum Emit {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct PcScreen {
     pub locked: bool,
+    pub reason: Option<arena_proto::LockReason>,
     pub message: Option<String>,
+    pub session: Option<arena_kiosk_core::ipc::PcSession>,
 }
 
 /// What the service answered to a request: the body, or the error code (and the body that came
@@ -134,7 +136,7 @@ pub struct Bridge {
     /// This kiosk's high contrast, once the service has said (or `main.rs` has decided).
     theme: watch::Sender<Option<bool>>,
     test_deadline: Mutex<Option<Instant>>,
-    screen: Mutex<PcScreen>,
+    screen: Mutex<(PcScreen, Instant)>,
 }
 
 impl Default for Bridge {
@@ -152,7 +154,7 @@ impl Default for Bridge {
             exit_running: AtomicBool::new(false),
             theme: watch::channel(None).0,
             test_deadline: Mutex::default(),
-            screen: Mutex::default(),
+            screen: Mutex::new((PcScreen::default(), Instant::now())),
         }
     }
 }
@@ -253,7 +255,11 @@ impl Bridge {
     }
 
     pub fn pc_screen(&self) -> PcScreen {
-        lock(&self.screen).clone()
+        let (mut screen, at) = lock(&self.screen).clone();
+        if let Some(s) = &mut screen.session {
+            s.elapsed_ms += at.elapsed().as_millis() as u64;
+        }
+        screen
     }
 
     pub fn test_remaining_ms(&self) -> Option<u64> {
@@ -328,9 +334,19 @@ impl Bridge {
                 let ran = lock(&self.test_deadline).take().is_some();
                 (None, ran.then_some(Emit::TestSessionEnded))
             }
-            IpcMsg::PcScreen { locked, message } => {
-                let screen = PcScreen { locked, message };
-                *lock(&self.screen) = screen.clone();
+            IpcMsg::PcScreen {
+                locked,
+                reason,
+                message,
+                session,
+            } => {
+                let screen = PcScreen {
+                    locked,
+                    reason,
+                    message,
+                    session,
+                };
+                *lock(&self.screen) = (screen.clone(), now);
                 (None, Some(Emit::PcScreen(screen)))
             }
             IpcMsg::DiscoveryFound { search, hubs } => {
@@ -739,16 +755,41 @@ mod tests {
         assert_eq!(b.pc_screen(), PcScreen::default());
         let shown = PcScreen {
             locked: true,
+            reason: Some(arena_proto::LockReason::PayAtCounter),
             message: Some("hi".into()),
+            session: None,
         };
         assert_eq!(
             b.on_message(IpcMsg::PcScreen {
                 locked: true,
-                message: Some("hi".into())
+                reason: Some(arena_proto::LockReason::PayAtCounter),
+                message: Some("hi".into()),
+                session: None,
             }),
             (None, Some(Emit::PcScreen(shown.clone())))
         );
         assert_eq!(b.pc_screen(), shown);
+    }
+
+    #[test]
+    fn a_session_screen_keeps_counting_between_service_messages() {
+        let b = Bridge::default();
+        let at = Instant::now();
+        b.on_message_at(
+            IpcMsg::PcScreen {
+                locked: false,
+                reason: None,
+                message: None,
+                session: Some(arena_kiosk_core::ipc::PcSession {
+                    device_name: "PC 1".into(),
+                    elapsed_ms: 1_000,
+                }),
+            },
+            at,
+        );
+        let session = b.pc_screen().session.unwrap();
+        assert_eq!(session.device_name, "PC 1");
+        assert!(session.elapsed_ms >= 1_000);
     }
 
     #[test]

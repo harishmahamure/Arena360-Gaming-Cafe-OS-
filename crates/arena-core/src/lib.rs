@@ -15,6 +15,7 @@ pub mod pairing;
 pub mod players;
 pub mod printer;
 pub mod rbac;
+mod session_screen;
 mod settings_defaults;
 pub mod setup;
 mod snapshot;
@@ -36,6 +37,7 @@ pub use clock::{Clock, ManualClock, SystemClock};
 pub use commands::command_intent;
 pub use devices::{DeviceDirectory, VerifiedDevice};
 pub use pairing::{HubPairer, PairFuture, PairGate};
+pub use session_screen::session_screens;
 pub use settings_defaults::{
     DEFAULT_SETTINGS, DEFERRED_KEYS, KEY_CURRENCY, KEY_DAY_START_MIN, KEY_FY_START_MONTH,
     KEY_NUMBER_FORMAT, KEY_SYMBOL_POSITION, KEY_TZ, LOCALE_KEYS, SETTING_RULES, SettingRule,

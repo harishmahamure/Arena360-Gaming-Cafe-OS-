@@ -14,8 +14,9 @@ use ts_rs::TS;
 use crate::admin::{AdminPinOk, AdminUnlockAck, ManagerVerifier, VerifyAdminPin};
 use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
-use crate::pc_command::{PcAck, PcAction};
+use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::scope::ClientClass;
+use crate::session::SessionScreen;
 use crate::ui_auth::SettingEntry;
 
 /// The only protocol version.
@@ -243,7 +244,17 @@ pub enum HubEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        reason: Option<LockReason>,
     },
+    #[serde(rename = "session.started")]
+    SessionStarted {
+        cmd_id: String,
+        session: SessionScreen,
+    },
+    #[serde(rename = "session.tick")]
+    SessionTick(SessionScreen),
     #[serde(rename = "catalog.changed")]
     CatalogChanged { products: Vec<crate::CatalogEntry> },
     #[serde(rename = "test_session")]
@@ -552,6 +563,38 @@ mod tests {
     }
 
     #[test]
+    fn session_events_carry_the_screen_and_a_lock_its_reason() {
+        let screen = SessionScreen {
+            session_id: "S".into(),
+            device_name: "PC 1".into(),
+            elapsed_ms: 5,
+            lock_after_ms: 9,
+            time_up_mode: "clean_up".into(),
+        };
+        let tick = serde_json::to_value(HubEvent::SessionTick(screen.clone())).unwrap();
+        assert_eq!(tick["kind"], "session.tick");
+        assert_eq!(tick["lock_after_ms"], 9);
+        let started = HubEvent::SessionStarted {
+            cmd_id: "C".into(),
+            session: screen,
+        };
+        let v = serde_json::to_value(&started).unwrap();
+        assert_eq!(v["kind"], "session.started");
+        assert_eq!(v["session"]["device_name"], "PC 1");
+        assert_eq!(serde_json::from_value::<HubEvent>(v).unwrap(), started);
+        let lock = HubEvent::PcCommand {
+            cmd_id: "C".into(),
+            action: PcAction::Lock,
+            text: None,
+            reason: Some(LockReason::PayAtCounter),
+        };
+        assert_eq!(
+            serde_json::to_value(&lock).unwrap()["reason"],
+            "pay_at_counter"
+        );
+    }
+
+    #[test]
     fn pc_command_event_and_ack_round_trip() {
         let ev = Frame::new(
             "e",
@@ -560,6 +603,7 @@ mod tests {
                     cmd_id: "C".into(),
                     action: PcAction::Message,
                     text: Some("hi".into()),
+                    reason: None,
                 },
             }),
         );

@@ -118,6 +118,7 @@ function snapshot(hub: Hub): HubSnapshot {
       lan_port: 7400,
       web_port: 7401,
       fingerprint: FINGERPRINT,
+      no_lan: false,
     },
   };
 }

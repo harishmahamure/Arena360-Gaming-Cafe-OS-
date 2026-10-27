@@ -26,9 +26,9 @@ use arena_core::{
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
 use arena_tasks::{
-    AndroidSecrets, CloudClient, CloudEndpoint, CloudPairer, CommandTask, ConnectivityTask,
-    HeartbeatTask, HousekeepingTask, Keystore, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber,
-    SecretWrapper, SystemInterfaces, platform_keystore,
+    Advertiser, AndroidSecrets, CloudClient, CloudEndpoint, CloudPairer, CommandTask,
+    ConnectivityTask, HeartbeatTask, HousekeepingTask, Keystore, LeaseTask, MdnsAdvertiser,
+    MdnsTask, NetProber, NetworkName, SecretWrapper, SystemInterfaces, platform_keystore,
 };
 use tokio::sync::{Notify, oneshot};
 use tracing_subscriber::EnvFilter;
@@ -47,11 +47,18 @@ const EXIT_SCHEMA_TOO_NEW: u8 = 2;
 const EXIT_USAGE: u8 = 64;
 
 /// What the host process injects into the Hub.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct StartOptions {
     /// The Android Keystore wrapper (the Android shell supplies the JNI-backed one). With it the
     /// device token and branch key are stored wrapped; without it the platform keystore is used.
     pub secret_wrapper: Option<Arc<dyn SecretWrapper>>,
+    /// Advertises the Hub on the LAN in place of the `mdns-sd` daemon (the Android shell
+    /// supplies one backed by `NsdManager`). Taken by the first start.
+    pub advertiser: Option<Box<dyn Advertiser>>,
+    /// The shell notifies this when the network changes, so the Hub re-reads its addresses now.
+    pub network_wake: Option<Arc<Notify>>,
+    /// Names the network the Hub is on (shown in Settings → Devices).
+    pub network_name: Option<Arc<dyn NetworkName>>,
 }
 
 pub async fn start(args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
@@ -215,7 +222,7 @@ fn internal(message: String) -> AppError {
 async fn run(
     cfg: config::Config,
     clock: Arc<dyn Clock>,
-    options: StartOptions,
+    mut options: StartOptions,
 ) -> Result<(), AppError> {
     let stop_signal = Arc::new(Notify::new());
     *STOP.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&stop_signal));
@@ -310,9 +317,13 @@ async fn run(
         "connectivity probe started"
     );
     let (mdns_stop_tx, mdns_stop_rx) = oneshot::channel::<()>();
+    let advertiser: Box<dyn Advertiser> = options
+        .advertiser
+        .take()
+        .unwrap_or_else(|| Box::new(MdnsAdvertiser::default()));
     let mdns_job = tokio::spawn(
         MdnsTask::new(
-            MdnsAdvertiser::default(),
+            advertiser,
             Arc::clone(&snapshots),
             SystemInterfaces,
             status_tx.clone(),
@@ -321,6 +332,8 @@ async fn run(
             cfg.web_port,
         )
         .with_applied(writer.as_ref().map(|w| w.subscribe()))
+        .with_wake(options.network_wake.take())
+        .with_network(options.network_name.take())
         .run(async {
             let _ = mdns_stop_rx.await;
         }),

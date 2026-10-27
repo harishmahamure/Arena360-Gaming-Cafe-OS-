@@ -343,3 +343,11 @@
 - Code review (4.3): a cross-branch code given to a lost Hub is consumed by the cloud before the Hub's `record_repairing` refuses it (needs a cloud-side branch hint on `/v1/pair`); no Hub-level test for that refusal yet.
 - Code review (4.3): a re-pair always mints a fresh branch key, even when only the token file was lost and the key still unwraps (spec says fresh KEK); the re-pair writes `hub_identity` before the wrapped secrets, so a Keystore write failure needs another code.
 - Code review (4.3): no cloud test for `GET /v1/wizard/install-hub` with a paid or comp tier; the pair button focus fix is tested with a mouse only, not touch; no R8 keep rule for `KeystoreBridge` (verify on the first minified release build).
+
+## Deferred from: Story 4.4
+
+- The Gradle/Kotlin build, `NsdBridge.kt`, `nsd_jni.rs` and `android.rs` on the Android target, a kiosk listing the tablet within 10 s, the 5 s re-register after a real IP change, and the Story 1.9 client-class tests on an emulator were not run: no Android target, SDK or emulator here. `nsd_jni.rs` was type-checked on the host in a scratch crate only.
+- The network name is the transport ("Wi-Fi", "Ethernet") plus the SSID only when Android reveals it; the Hub requests no location permission, so the SSID is normally absent.
+- The "No LAN connection" badge is shown only on the Android Hub (`lan.no_lan`); the Windows Hub keeps showing "No network address yet" in Settings → Devices.
+- No Hub-level test injects a fake advertiser through `StartOptions`; `MdnsTask` is covered by unit tests with fakes. `arena-e2e` fails to compile on Windows (unix-only imports) and `test:scripts` has 12 kubectl-dependent failures, both independent of this story.
+- No R8 keep rule for `NsdBridge` (its JNI-called static methods); verify on the first minified release build.

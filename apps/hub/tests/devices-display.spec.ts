@@ -60,6 +60,7 @@ function newHub(): Hub {
       lan_port: 7400,
       web_port: 7401,
       fingerprint: "ab12cd34ef56" + "0".repeat(52),
+      no_lan: false,
     },
     intents: [],
     elevations: [],
@@ -481,6 +482,33 @@ test("a Hub without a LAN address says so, and an older Hub shows no address row
   hub.lan = null;
   pushRaw(hub, "event: devices.changed\ndata: {}\n\n");
   await expect(page.getByTestId("hub-address")).toHaveCount(0);
+});
+
+test("an Android Hub names its network and shows No LAN connection while it has no address", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.lan = { ...hub.lan!, network: "Wi-Fi: Cafe-5G" };
+  await openSection(page, hub);
+  await expect(page.getByTestId("hub-address-network")).toHaveText(
+    en["hub.settings.devices_display.network"].replace("{name}", "Wi-Fi: Cafe-5G"),
+  );
+  await expect(page.getByTestId("hub-no-lan")).toHaveCount(0);
+
+  hub.lan = { ...hub.lan!, addresses: [], network: undefined, no_lan: true };
+  pushRaw(hub, "event: devices.changed\ndata: {}\n\n");
+  const badge = page.getByTestId("hub-no-lan");
+  await expect(badge).toHaveText(new RegExp(en["hub.connectivity.no_lan"]));
+  await expect(page.getByTestId("hub-address-network")).toHaveCount(0);
+  await expect(page.getByTestId("hub-address")).toContainText(
+    en["hub.settings.devices_display.address_none"],
+  );
+  await expectNoSeriousAxe(page);
+
+  hub.lan = { ...hub.lan!, addresses: ["192.168.1.40"], network: "Wi-Fi", no_lan: false };
+  pushRaw(hub, "event: devices.changed\ndata: {}\n\n");
+  await expect(badge).toHaveCount(0);
+  await expect(page.getByTestId("hub-address-ip")).toHaveText(["192.168.1.40"]);
 });
 
 test("the copied note clears after a few seconds and when the addresses change", async ({

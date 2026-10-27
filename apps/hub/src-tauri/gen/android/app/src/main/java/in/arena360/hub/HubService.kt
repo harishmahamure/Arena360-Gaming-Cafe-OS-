@@ -40,6 +40,7 @@ class HubService : Service() {
     }
     ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(null, 0), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
     acquireLocks()
+    NsdBridge.attach(this)
     Thread { begin() }.start()
     return START_STICKY
   }
@@ -133,6 +134,7 @@ class HubService : Service() {
     poller?.interrupt()
     poller = null
     nativeStop()
+    NsdBridge.detach()
     releaseLocks()
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()

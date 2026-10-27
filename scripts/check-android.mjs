@@ -158,6 +158,33 @@ export function checkKeystore(source) {
   return errors;
 }
 
+/**
+ * The NsdManager bridge (Kotlin) is how kiosks find the Hub: it must register the Arena service
+ * type, watch the default network, and the manifest must allow reading network state and
+ * multicast.
+ */
+export const NSD_PERMISSIONS = ["ACCESS_NETWORK_STATE", "CHANGE_WIFI_MULTICAST_STATE"];
+
+export function checkNsd(manifest, source) {
+  const errors = NSD_PERMISSIONS.filter(
+    (p) =>
+      !new RegExp(String.raw`<uses-permission\b[^>]*android:name="android\.permission\.${p}"`).test(
+        manifest,
+      ),
+  ).map((p) => `manifest: permission ${p} is missing`);
+  if (source === undefined) return [...errors, "nsd: NsdBridge.kt is missing"];
+  if (!/"_arena360-hub\._tcp"/.test(source)) {
+    errors.push("nsd: the bridge must advertise the _arena360-hub._tcp service type");
+  }
+  if (!/\bNsdManager\b/.test(source) || !/\bregisterService\s*\(/.test(source)) {
+    errors.push("nsd: the bridge must register the service through NsdManager");
+  }
+  if (!/\bregisterDefaultNetworkCallback\s*\(/.test(source)) {
+    errors.push("nsd: the bridge must watch the default network to re-register on an IP change");
+  }
+  return errors;
+}
+
 export function checkRepoManifest(root) {
   const main = join(root, ANDROID_DIR);
   const res = {};
@@ -171,11 +198,13 @@ export function checkRepoManifest(root) {
   if (!existsSync(path)) return [`${path} is missing`];
   const manifest = readFileSync(path, "utf8");
   const bridge = join(main, "java", "in", "arena360", "hub", "KeystoreBridge.kt");
+  const nsd = join(main, "java", "in", "arena360", "hub", "NsdBridge.kt");
   return [
     ...checkManifest(manifest, res),
     ...checkService(manifest),
     ...checkDuplicates(manifest),
     ...checkKeystore(existsSync(bridge) ? readFileSync(bridge, "utf8") : undefined),
+    ...checkNsd(manifest, existsSync(nsd) ? readFileSync(nsd, "utf8") : undefined),
   ];
 }
 

@@ -77,6 +77,13 @@ pub struct SnapshotLan {
     pub lan_port: u16,
     pub web_port: u16,
     pub fingerprint: String,
+    /// The network the Hub is on ("Wi-Fi", "Ethernet"), when the host can name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub network: Option<String>,
+    /// An Android Hub with no LAN address: the header shows "No LAN connection".
+    #[serde(default)]
+    pub no_lan: bool,
 }
 
 /// The Hub UI settings every open view follows.

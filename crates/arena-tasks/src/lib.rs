@@ -31,7 +31,7 @@ pub use keystore::{
 pub use lease::{LEASE_TTL_MS, LeaseTask, RENEW_INTERVAL, Tick};
 pub use mdns::{
     Advert, Advertiser, BranchSource, Interfaces, MDNS_FAILURE_LOG_INTERVAL, MDNS_POLL_INTERVAL,
-    MdnsAdvertiser, MdnsTask, SystemInterfaces, lan_ipv4_addresses, mdns_host_name,
+    MdnsAdvertiser, MdnsTask, NetworkName, SystemInterfaces, lan_ipv4_addresses, mdns_host_name,
 };
 pub use session_timer::{SessionTimerTask, TIMER_EVENTS_DEPTH, TIMER_TICK};
 pub use test_session::TestSessionTask;

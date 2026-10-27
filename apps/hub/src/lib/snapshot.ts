@@ -116,6 +116,8 @@ export function normalizeLan(v: unknown): SnapshotLan | null {
     lan_port: v.lan_port,
     web_port: v.web_port,
     fingerprint: v.fingerprint,
+    ...(isString(v.network) && v.network !== "" ? { network: v.network } : {}),
+    no_lan: v.no_lan === true,
   };
 }
 

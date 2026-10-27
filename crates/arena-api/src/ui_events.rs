@@ -256,8 +256,13 @@ fn role_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Role> {
     status.as_ref().map(|s| s.borrow().role)
 }
 
-fn lan_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<Vec<std::net::Ipv4Addr>> {
-    status.as_ref().map(|s| s.borrow().lan_addresses.clone())
+fn lan_of(
+    status: &Option<watch::Receiver<HubStatus>>,
+) -> Option<(Vec<std::net::Ipv4Addr>, Option<String>)> {
+    status.as_ref().map(|s| {
+        let s = s.borrow();
+        (s.lan_addresses.clone(), s.lan_network.clone())
+    })
 }
 
 fn connectivity_of(

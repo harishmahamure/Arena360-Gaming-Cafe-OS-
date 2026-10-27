@@ -14,6 +14,8 @@
 mod android;
 #[cfg(target_os = "android")]
 mod keystore_jni;
+#[cfg(target_os = "android")]
+mod nsd_jni;
 #[cfg(not(target_os = "android"))]
 mod sidecar;
 #[cfg(any(all(test, unix), target_os = "android"))]

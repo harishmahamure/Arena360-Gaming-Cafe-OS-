@@ -95,6 +95,8 @@ pub struct HubStatus {
     pub connectivity: Connectivity,
     pub setup: Option<arena_proto::SetupStatus>,
     pub lan_addresses: Vec<std::net::Ipv4Addr>,
+    /// The network the Hub is on ("Wi-Fi", "Ethernet"), when the host can name it (Android).
+    pub lan_network: Option<String>,
     pub lan_ports: Option<(u16, u16)>,
     pub tier: Option<arena_proto::Tier>,
     pub pairing: PairingState,
@@ -124,6 +126,7 @@ impl HubStatus {
             connectivity: Connectivity::default(),
             setup: None,
             lan_addresses: Vec::new(),
+            lan_network: None,
             lan_ports: None,
             tier: None,
             pairing: PairingState::Active,

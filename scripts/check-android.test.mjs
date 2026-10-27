@@ -9,6 +9,7 @@ import {
   checkDuplicates,
   checkKeystore,
   checkManifest,
+  checkNsd,
   checkRepoManifest,
   checkService,
   elfProblem,
@@ -280,6 +281,44 @@ test("a bridge that exports, imports or loosens the key fails", () => {
 test("the committed bridge keeps the key in the Keystore", () => {
   assert.deepEqual(
     checkRepoManifest(ROOT).filter((e) => e.startsWith("keystore:")),
+    [],
+  );
+});
+
+const NSD_MANIFEST = [
+  '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+  '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />',
+].join("\n");
+const NSD_BRIDGE = `
+  private const val SERVICE_TYPE = "_arena360-hub._tcp"
+  nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
+  connectivity()?.registerDefaultNetworkCallback(cb)
+`;
+
+test("a bridge that registers the Arena service and watches the network passes", () => {
+  assert.deepEqual(checkNsd(NSD_MANIFEST, NSD_BRIDGE), []);
+});
+
+test("a missing bridge, service type, registration, network callback or permission fails", () => {
+  assert.deepEqual(checkNsd(NSD_MANIFEST, undefined), ["nsd: NsdBridge.kt is missing"]);
+  assert.deepEqual(checkNsd(NSD_MANIFEST, NSD_BRIDGE.replace("_arena360-hub", "_other")), [
+    "nsd: the bridge must advertise the _arena360-hub._tcp service type",
+  ]);
+  assert.deepEqual(checkNsd(NSD_MANIFEST, NSD_BRIDGE.replace("registerService", "noop")), [
+    "nsd: the bridge must register the service through NsdManager",
+  ]);
+  assert.deepEqual(
+    checkNsd(NSD_MANIFEST, NSD_BRIDGE.replace("registerDefaultNetworkCallback", "x")),
+    ["nsd: the bridge must watch the default network to re-register on an IP change"],
+  );
+  assert.deepEqual(checkNsd(NSD_MANIFEST.replace("ACCESS_NETWORK_STATE", "X"), NSD_BRIDGE), [
+    "manifest: permission ACCESS_NETWORK_STATE is missing",
+  ]);
+});
+
+test("the committed bridge and manifest satisfy the NsdManager rules", () => {
+  assert.deepEqual(
+    checkRepoManifest(ROOT).filter((e) => e.startsWith("nsd:")),
     [],
   );
 });

@@ -4,13 +4,14 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use arena_proto::DeviceSpec;
-use arena_tasks::SecretWrapper;
+use arena_tasks::{Advertiser, NetworkName, SecretWrapper};
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
 use tauri::{AppHandle, Manager};
 
 use crate::keystore_jni::JniWrapper;
+use crate::nsd_jni;
 use crate::spec::{DB_FILE, Gate, probe};
 
 const HEALTH_PORT: u16 = 7409;
@@ -47,10 +48,20 @@ fn data_dir(app: &AppHandle) -> Option<PathBuf> {
     Some(dir)
 }
 
-fn run_hub(dir: PathBuf, secret_wrapper: Arc<dyn SecretWrapper>) {
+/// What the Android shell injects into the Hub.
+struct Services {
+    wrapper: Arc<dyn SecretWrapper>,
+    advertiser: Box<dyn Advertiser>,
+    network: Arc<dyn NetworkName>,
+}
+
+fn run_hub(dir: PathBuf, services: Services) {
     let args = vec![std::ffi::OsString::from("--data-dir"), dir.into_os_string()];
     let options = arena_hub::StartOptions {
-        secret_wrapper: Some(secret_wrapper),
+        secret_wrapper: Some(services.wrapper),
+        advertiser: Some(services.advertiser),
+        network_wake: Some(nsd_jni::network_wake()),
+        network_name: Some(services.network),
     };
     let spawned = std::thread::Builder::new()
         .name("arena-hub".into())
@@ -85,11 +96,11 @@ fn wait_for_hub() -> bool {
     false
 }
 
-fn ensure(dir: &Path, secret_wrapper: Arc<dyn SecretWrapper>) -> DeviceSpec {
+fn ensure(dir: &Path, services: Services) -> DeviceSpec {
     gate().run(
         dir,
         probe,
-        || run_hub(dir.to_path_buf(), secret_wrapper),
+        || run_hub(dir.to_path_buf(), services),
         |line| eprintln!("arena-hub: {line}"),
     )
 }
@@ -99,6 +110,14 @@ fn stop_and_wait() {
     let deadline = Instant::now() + STOP_WAIT;
     while gate().is_started() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+struct NoNetworkName;
+
+impl NetworkName for NoNetworkName {
+    fn name(&self) -> Option<String> {
+        None
     }
 }
 
@@ -116,10 +135,30 @@ pub extern "system" fn Java_in_arena360_hub_HubService_nativeStart(
         eprintln!("arena-hub: cannot create {}: {e}", dir.display());
         return 0;
     }
-    let Some(secret_wrapper) = wrapper(&mut env) else {
+    let Some(wrapper) = wrapper(&mut env) else {
         return 0;
     };
-    jboolean::from(ensure(&dir, secret_wrapper).ok())
+    // NsdManager is how kiosks find the Hub; without the bridge the Hub falls back to the
+    // mdns-sd daemon (which may not reach the LAN on Android), and kiosks can still type its IP.
+    let (advertiser, network) = match nsd_jni::connect(&mut env) {
+        Ok((advertiser, network)) => (
+            Box::new(advertiser) as Box<dyn Advertiser>,
+            Arc::new(network) as Arc<dyn NetworkName>,
+        ),
+        Err(e) => {
+            eprintln!("arena-hub: the NsdManager bridge is unavailable: {e}");
+            (
+                Box::new(arena_tasks::MdnsAdvertiser::default()) as Box<dyn Advertiser>,
+                Arc::new(NoNetworkName) as Arc<dyn NetworkName>,
+            )
+        }
+    };
+    let services = Services {
+        wrapper,
+        advertiser,
+        network,
+    };
+    jboolean::from(ensure(&dir, services).ok())
 }
 
 #[unsafe(no_mangle)]

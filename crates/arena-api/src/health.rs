@@ -176,6 +176,9 @@ pub fn snapshot_lan(status: &HubStatus) -> Option<arena_proto::SnapshotLan> {
         lan_port,
         web_port,
         fingerprint,
+        network: status.lan_network.clone(),
+        no_lan: status.platform == arena_proto::HubPlatform::Android
+            && status.lan_addresses.is_empty(),
     })
 }
 
@@ -462,6 +465,27 @@ mod tests {
         assert_eq!(get_json(rx).await["platform"], "android");
     }
 
+    #[test]
+    fn the_snapshot_flags_an_android_hub_with_no_lan_and_names_its_network() {
+        let mut s = HubStatus::opened(1, "01JSELF");
+        s.tls_fingerprint = Some("ab".repeat(32));
+        s.lan_ports = Some((7400, 7401));
+        s.platform = arena_proto::HubPlatform::Android;
+        let lan = snapshot_lan(&s).unwrap();
+        assert!(lan.no_lan && lan.addresses.is_empty() && lan.network.is_none());
+
+        s.lan_addresses = vec![std::net::Ipv4Addr::new(192, 168, 1, 20)];
+        s.lan_network = Some("Wi-Fi".into());
+        let lan = snapshot_lan(&s).unwrap();
+        assert!(!lan.no_lan);
+        assert_eq!(lan.network.as_deref(), Some("Wi-Fi"));
+
+        // A Windows Hub with no address is not flagged.
+        s.platform = arena_proto::HubPlatform::Windows;
+        s.lan_addresses.clear();
+        assert!(!snapshot_lan(&s).unwrap().no_lan);
+    }
+
     #[tokio::test]
     async fn reports_the_licence_tier() {
         let (tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
@@ -644,7 +668,8 @@ mod tests {
                         "addresses": ["192.168.1.20"],
                         "lan_port": 7400,
                         "web_port": 7401,
-                        "fingerprint": "ab".repeat(32)
+                        "fingerprint": "ab".repeat(32),
+                        "no_lan": false
                     },
                     "paired": true,
                     "device_cap": 20
@@ -659,7 +684,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body,
-                json!({"branch": null, "groups": [], "zones": [], "sessions": [], "bills": [], "group_bills": [], "alerts": [], "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32)}, "paired": true, "device_cap": 20})
+                json!({"branch": null, "groups": [], "zones": [], "sessions": [], "bills": [], "group_bills": [], "alerts": [], "devices": [], "locale": null, "ui": {"idle_lock_minutes": 5, "hc": false}, "connectivity": {"state": "cloud_unreachable", "checked_at": 7}, "setup": null, "lan": {"addresses": ["192.168.1.20"], "lan_port": 7400, "web_port": 7401, "fingerprint": "ab".repeat(32), "no_lan": false}, "paired": true, "device_cap": 20})
             );
         }
 

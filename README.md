@@ -1738,6 +1738,18 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
   Story 9.2). A code for another branch is refused. Replacing a failed Hub from the owner side
   is Story 9.8. Not runnable locally: the Gradle/Kotlin build and the emulator or device checks
   (non-exportable key, Keystore reset, files on a rooted image).
+- **LAN discovery (Story 4.4):** the Android Hub listens on `:7400` (TLS WebSocket) and `:7401`
+  like the Windows Hub and advertises `_arena360-hub._tcp` through `NsdManager` (`NsdBridge.kt`)
+  with the same TXT records (`branch`, `hub`, `proto`, `fp`, `web`). The core's `MdnsTask` still
+  decides what to advertise; the shell injects the `NsdManager`-backed `Advertiser`
+  (`nsd_jni.rs`) into `arena_hub::start_with`, with a wake `Notify` and a network namer. A
+  `ConnectivityManager` default-network callback re-registers the service about 0.5 s after an
+  address change and wakes the task to re-read the addresses. With no IPv4 address an Android
+  Hub withdraws its advert, the snapshot's `lan.no_lan` is true and the header shows
+  "No LAN connection"; it advertises again when an address returns. Settings → Devices shows
+  the address and the network name ("Wi-Fi", "Ethernet", or "Wi-Fi: name" when Android reveals
+  the SSID; the Hub requests no location permission). Not runnable locally: the Gradle/Kotlin
+  build, a kiosk finding the tablet on a real LAN, and the client-class tests on an emulator.
 - **Build:** `pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64`
   (debug APK) and `... --aab --target aarch64 --target x86_64` (release AAB). Needs the Android SDK
   (platform 36), the NDK from the pin table (`NDK_HOME`), JDK 17 and the Rust Android targets.

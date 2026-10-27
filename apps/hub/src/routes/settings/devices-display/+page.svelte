@@ -290,6 +290,11 @@
       {:else}
         <p class="note type-hub-label">{t("hub.settings.devices_display.address_none")}</p>
       {/if}
+      {#if lan.network}
+        <p class="note type-hub-label" data-testid="hub-address-network">
+          {t("hub.settings.devices_display.network", { name: lan.network })}
+        </p>
+      {/if}
       <p class="note type-hub-label" data-testid="hub-address-fingerprint">
         {t("hub.settings.devices_display.fingerprint", {
           fingerprint: shortFingerprint(lan.fingerprint),

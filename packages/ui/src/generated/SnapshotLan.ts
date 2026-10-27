@@ -5,4 +5,12 @@ export type SnapshotLan = {
   lan_port: number;
   web_port: number;
   fingerprint: string;
+  /**
+   * The network the Hub is on ("Wi-Fi", "Ethernet"), when the host can name it.
+   */
+  network?: string;
+  /**
+   * An Android Hub with no LAN address: the header shows "No LAN connection".
+   */
+  no_lan: boolean;
 };

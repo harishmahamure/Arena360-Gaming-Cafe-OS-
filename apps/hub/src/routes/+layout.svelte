@@ -614,6 +614,16 @@
             {t(LINK_LABELS[shownLink])}
           </p>
         {/if}
+        {#if data.hub.ok && data.hub.snapshot.lan?.no_lan}
+          <a
+            class="no-lan ui-interactive type-hub-label"
+            href="/settings/devices-display"
+            data-testid="hub-no-lan"
+          >
+            <AlertBadge count={1} />
+            {t("hub.connectivity.no_lan")}
+          </a>
+        {/if}
         {#if data.hub.ok && data.hub.snapshot.pairing_revoked}
           <p class="chip-offline type-hub-label" role="status" data-testid="hub-revoked">
             <span class="chip-glyph" aria-hidden="true">⚠</span>
@@ -805,6 +815,19 @@
     border-radius: var(--radius-full);
     background-color: var(--chip-offline-background);
     color: var(--chip-offline-foreground);
+    white-space: nowrap;
+  }
+
+  .no-lan {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-full);
+    background-color: var(--chip-offline-background);
+    color: var(--chip-offline-foreground);
+    text-decoration: none;
     white-space: nowrap;
   }
 

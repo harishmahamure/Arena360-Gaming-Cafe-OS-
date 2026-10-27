@@ -131,6 +131,7 @@ async fn start_hub(data: &Path, cloud: &str, wrapper: &Arc<FakeKeystore>) -> Run
     ];
     let options = arena_hub::StartOptions {
         secret_wrapper: Some(Arc::clone(wrapper) as Arc<dyn SecretWrapper>),
+        ..Default::default()
     };
     let task = std::thread::spawn(move || {
         tokio::runtime::Builder::new_multi_thread()

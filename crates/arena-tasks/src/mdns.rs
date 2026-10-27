@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arena_core::{Applied, HubStatus, Role, SnapshotReader};
-use arena_proto::{MDNS_SERVICE, PROTOCOL_VERSION, txt_records};
-use tokio::sync::{broadcast, watch};
+use arena_proto::{HubPlatform, MDNS_SERVICE, PROTOCOL_VERSION, txt_records};
+use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::{Instant, MissedTickBehavior};
 
 pub const MDNS_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -64,10 +64,27 @@ pub fn mdns_host_name(hub_name: &str, fingerprint: &str) -> String {
     format!("{label}-{suffix}.local.")
 }
 
-pub trait Advertiser: Send + 'static {
+pub trait Advertiser: Send + Sync + 'static {
     fn register(&mut self, advert: &Advert) -> Result<(), String>;
     fn unregister(&mut self) -> Result<(), String>;
     fn shutdown(&mut self) {}
+}
+
+impl Advertiser for Box<dyn Advertiser> {
+    fn register(&mut self, advert: &Advert) -> Result<(), String> {
+        (**self).register(advert)
+    }
+    fn unregister(&mut self) -> Result<(), String> {
+        (**self).unregister()
+    }
+    fn shutdown(&mut self) {
+        (**self).shutdown();
+    }
+}
+
+/// Names the network the Hub is on, for hosts that can (Android: "Wi-Fi", "Ethernet").
+pub trait NetworkName: Send + Sync + 'static {
+    fn name(&self) -> Option<String>;
 }
 
 pub trait BranchSource: Send + Sync + 'static {
@@ -186,6 +203,8 @@ pub struct MdnsTask<A: Advertiser, B: BranchSource, I: Interfaces> {
     web_port: u16,
     applied: Option<broadcast::Receiver<Applied>>,
     poll: Duration,
+    wake: Option<Arc<Notify>>,
+    network: Option<Arc<dyn NetworkName>>,
 }
 
 impl<A: Advertiser, B: BranchSource, I: Interfaces> MdnsTask<A, B, I> {
@@ -208,7 +227,21 @@ impl<A: Advertiser, B: BranchSource, I: Interfaces> MdnsTask<A, B, I> {
             web_port,
             applied: None,
             poll: MDNS_POLL_INTERVAL,
+            wake: None,
+            network: None,
         }
+    }
+
+    /// The host calls `notify_one` when the network changes (an IP renewal, Wi-Fi back), so the
+    /// addresses are re-read now instead of at the next poll.
+    pub fn with_wake(mut self, wake: Option<Arc<Notify>>) -> Self {
+        self.wake = wake;
+        self
+    }
+
+    pub fn with_network(mut self, network: Option<Arc<dyn NetworkName>>) -> Self {
+        self.network = network;
+        self
     }
 
     pub fn with_applied(mut self, applied: Option<broadcast::Receiver<Applied>>) -> Self {
@@ -223,22 +256,30 @@ impl<A: Advertiser, B: BranchSource, I: Interfaces> MdnsTask<A, B, I> {
 
     fn refresh_addresses(&self) {
         let addrs = self.interfaces.ipv4();
+        let network = self.network.as_ref().and_then(|n| n.name());
         self.status.send_if_modified(|s| {
-            if s.lan_addresses == addrs {
+            if s.lan_addresses == addrs && s.lan_network == network {
                 false
             } else {
                 s.lan_addresses = addrs.clone();
+                s.lan_network = network.clone();
                 true
             }
         });
     }
 
     async fn desired(&self, current: &Option<Advert>) -> Option<Advert> {
-        let (fingerprint, primary) = {
+        let (fingerprint, primary, no_lan) = {
             let s = self.status.borrow();
-            (s.tls_fingerprint.clone(), s.role == Role::Primary)
+            (
+                s.tls_fingerprint.clone(),
+                s.role == Role::Primary,
+                // An Android Hub with no address withdraws its advert and re-advertises when
+                // the network returns; elsewhere the advert stays as it always did.
+                s.platform == HubPlatform::Android && s.lan_addresses.is_empty(),
+            )
         };
-        let (Some(fingerprint), true) = (fingerprint, primary) else {
+        let (Some(fingerprint), true, false) = (fingerprint, primary, no_lan) else {
             return None;
         };
         match self.branch.branch_name().await {
@@ -308,6 +349,12 @@ impl<A: Advertiser, B: BranchSource, I: Interfaces> MdnsTask<A, B, I> {
             tokio::select! {
                 () = &mut shutdown => break,
                 _ = tick.tick() => by_tick = true,
+                () = async {
+                    match self.wake.as_ref() {
+                        Some(w) => w.notified().await,
+                        None => std::future::pending().await,
+                    }
+                } => by_tick = true,
                 changed = status_rx.changed() => {
                     if changed.is_err() {
                         break;
@@ -565,6 +612,92 @@ mod tests {
             Call::Unregister,
             "a follower never advertises"
         );
+        stop_tx.send(()).unwrap();
+        job.await.unwrap();
+    }
+
+    struct FakeNetwork(Arc<Mutex<Option<String>>>);
+
+    impl NetworkName for FakeNetwork {
+        fn name(&self) -> Option<String> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_android_hub_withdraws_without_a_lan_and_readvertises_when_it_returns() {
+        let daemon = FakeDaemon::default();
+        let ifs = FakeIfs(Arc::new(Mutex::new(vec![Ipv4Addr::new(192, 168, 1, 7)])));
+        let net = Arc::new(Mutex::new(Some("Wi-Fi".to_owned())));
+        let status = status();
+        status.send_modify(|s| s.platform = HubPlatform::Android);
+        let wake = Arc::new(Notify::new());
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let job = tokio::spawn(
+            MdnsTask::new(
+                daemon.clone(),
+                FakeBranch(Arc::new(Mutex::new(Some("Koramangala".into())))),
+                ifs.clone(),
+                status.clone(),
+                "front-desk",
+                7400,
+                7401,
+            )
+            .with_wake(Some(Arc::clone(&wake)))
+            .with_network(Some(Arc::new(FakeNetwork(Arc::clone(&net)))))
+            .run(async {
+                let _ = stop_rx.await;
+            }),
+        );
+        settle().await;
+        let advert = Advert::new("front-desk", 7400, 7401, "Koramangala", &"ab".repeat(32));
+        assert_eq!(daemon.calls(), [Call::Register(advert.clone())]);
+        assert_eq!(status.borrow().lan_network.as_deref(), Some("Wi-Fi"));
+
+        // The Wi-Fi goes: the shell wakes the task, with no poll tick in between.
+        *ifs.0.lock().unwrap() = vec![];
+        *net.lock().unwrap() = None;
+        wake.notify_one();
+        settle().await;
+        assert!(status.borrow().lan_addresses.is_empty());
+        assert_eq!(daemon.calls()[1..], [Call::Unregister]);
+
+        // It comes back on a new address: the advert returns at once.
+        *ifs.0.lock().unwrap() = vec![Ipv4Addr::new(192, 168, 1, 9)];
+        *net.lock().unwrap() = Some("Wi-Fi".into());
+        wake.notify_one();
+        settle().await;
+        assert_eq!(daemon.calls()[2..], [Call::Register(advert)]);
+        assert_eq!(
+            status.borrow().lan_addresses,
+            [Ipv4Addr::new(192, 168, 1, 9)]
+        );
+
+        stop_tx.send(()).unwrap();
+        job.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_windows_hub_keeps_its_advert_without_an_address() {
+        let daemon = FakeDaemon::default();
+        let status = status();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let job = tokio::spawn(
+            MdnsTask::new(
+                daemon.clone(),
+                FakeBranch(Arc::new(Mutex::new(Some("B".into())))),
+                FakeIfs::default(),
+                status,
+                "h",
+                7400,
+                7401,
+            )
+            .run(async {
+                let _ = stop_rx.await;
+            }),
+        );
+        settle().await;
+        assert_eq!(daemon.calls().len(), 1);
         stop_tx.send(()).unwrap();
         job.await.unwrap();
     }

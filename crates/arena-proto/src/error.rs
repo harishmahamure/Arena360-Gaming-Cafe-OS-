@@ -117,6 +117,9 @@ pub enum ErrorCode {
     PaymentShort,
     /// A UPI or card payment is missing its reference.
     ReferenceRequired,
+    /// An Undo that is late, from other staff, or blocked by an irreversible effect or a changed
+    /// state.
+    UndoNotAllowed,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -198,6 +201,7 @@ impl ErrorCode {
             Self::DeviceUnassigned => "DEVICE_UNASSIGNED",
             Self::PaymentShort => "PAYMENT_SHORT",
             Self::ReferenceRequired => "REFERENCE_REQUIRED",
+            Self::UndoNotAllowed => "UNDO_NOT_ALLOWED",
         }
     }
 }
@@ -337,6 +341,7 @@ mod tests {
             (ErrorCode::DeviceUnassigned, "DEVICE_UNASSIGNED"),
             (ErrorCode::PaymentShort, "PAYMENT_SHORT"),
             (ErrorCode::ReferenceRequired, "REFERENCE_REQUIRED"),
+            (ErrorCode::UndoNotAllowed, "UNDO_NOT_ALLOWED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

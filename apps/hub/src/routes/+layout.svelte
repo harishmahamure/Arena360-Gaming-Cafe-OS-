@@ -39,6 +39,7 @@
   import { alertCount, refreshAccess, service } from "../lib/service.svelte";
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
+  import { effectRecorded } from "../lib/undo.svelte";
   import { notePairingCode } from "../lib/pairing";
   import type { Connectivity, ConnectivityState, UnlockOk } from "@arena/ui/generated";
   import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
@@ -246,6 +247,8 @@
         onDevicesChanged: () => void refresh(),
         onSessionStarted: () => void refresh(),
         onBillSettled: () => void refresh(),
+        onBillReverted: () => void refresh(),
+        onEffectRecorded: (orderId) => effectRecorded(orderId),
         onGroupsChanged: (byOwner) => {
           void refresh();
           if (!byOwner) return;

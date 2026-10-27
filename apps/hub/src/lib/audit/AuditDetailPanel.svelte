@@ -77,6 +77,11 @@
     <dt>{t("hub.audit.col.record")}</dt>
     <dd>{detail.item.tbl} / {detail.item.row_id}</dd>
   </dl>
+  {#if detail.item.reverts}
+    <p class="approved type-hub-label" data-testid="audit-reverts">
+      {t("hub.audit.detail.reverts", { id: detail.item.reverts })}
+    </p>
+  {/if}
   {#if detail.item.elevated_by}
     <p class="approved type-hub-label" data-testid="audit-approved-by">
       {t("hub.audit.detail.approved_by", {

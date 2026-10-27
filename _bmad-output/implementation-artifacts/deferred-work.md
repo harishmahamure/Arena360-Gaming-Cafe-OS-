@@ -328,3 +328,7 @@
 - Inline reference and amount errors appear on a Settle attempt, not on blur of the field.
 - `apps/hub/src/routes/players/+page.svelte` fails `prettier --check` on master independent of this story; `audit.spec.ts`, `players.spec.ts`, `shell.spec.ts` and `session-end.spec.ts` have intermittent failures under parallel load on master.
 - The Playwright headless-shell download is blocked in this environment; the suite was run with the full Chromium channel.
+
+## Deferred from: story 3-14-undo-for-end-and-settle
+- `effect.recorded` Hub event has no sender until Epic 5 records receipt/drawer/invoice effects; the server already rejects Undo when an effect exists.
+- Undoing a Settle does not re-lock the kiosk back to "Pay at counter".

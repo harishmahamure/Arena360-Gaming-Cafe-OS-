@@ -384,6 +384,14 @@ impl SnapshotReader {
         store.settlement(order_id)
     }
 
+    pub fn ending(&self, session_id: &str) -> Result<Option<arena_store::Ending>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.ending(session_id)
+    }
+
     pub fn owner_wrote(&self, epoch: &str, seq: i64) -> bool {
         self.reader
             .lock()

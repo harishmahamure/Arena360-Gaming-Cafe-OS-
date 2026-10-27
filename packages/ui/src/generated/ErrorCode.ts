@@ -67,4 +67,5 @@ export type ErrorCode =
   | "NO_RATE"
   | "DEVICE_UNASSIGNED"
   | "PAYMENT_SHORT"
-  | "REFERENCE_REQUIRED";
+  | "REFERENCE_REQUIRED"
+  | "UNDO_NOT_ALLOWED";

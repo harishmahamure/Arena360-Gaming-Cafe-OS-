@@ -11,6 +11,12 @@
 //!   another window sharing the token), so every window locks and unlocks together.
 //! - `event: bill.settled`, data [`BillSettledEvent`]: a `session.settle` committed (the receipt hook);
 //!   the view reloads the snapshot, which no longer lists the bill.
+//! - `event: bill.reverted`, data [`BillRevertedEvent`]: a `session.end.reverted` or
+//!   `session.settle.reverted` committed; the view reloads the snapshot, which lists the bill again
+//!   as unpaid (a settle undone) or no longer (an end undone).
+//! - `event: effect.recorded`, data [`EffectRecordedEvent`]: reserved for an irreversible effect (a
+//!   printed receipt, a drawer kick, an invoice number) recorded against a bill, which closes its
+//!   undo toast. Nothing records an effect before Epic 5, so the Hub does not send it yet.
 //! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN, or
 //!   the Hub's LAN addresses changed; the view reloads the snapshot (which carries each
 //!   device's `online` and the `lan` block).
@@ -41,8 +47,8 @@ use std::time::Duration;
 
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
 use arena_proto::{
-    AppliedEvent, BillSettledEvent, SessionStartedEvent, SettingsChangedEvent, SnapshotLocale,
-    SnapshotUi,
+    AppliedEvent, BillRevertedEvent, BillSettledEvent, SessionStartedEvent, SettingsChangedEvent,
+    SnapshotLocale, SnapshotUi,
 };
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -192,12 +198,27 @@ fn session_started(applied: &Applied) -> Option<SessionStartedEvent> {
 }
 
 fn bill_settled(applied: &Applied) -> Option<BillSettledEvent> {
-    applied.changes.iter().find(|c| c.tbl == "payments")?;
+    applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "payments" && c.op == arena_core::ChangeOp::Insert)?;
     let order = applied
         .changes
         .iter()
         .find(|c| c.tbl == "orders" && c.op == arena_core::ChangeOp::Update)?;
     Some(BillSettledEvent {
+        order_id: order.row_id.clone(),
+    })
+}
+
+fn bill_reverted(applied: &Applied) -> Option<BillRevertedEvent> {
+    let order = applied.changes.iter().find(|c| c.tbl == "orders")?;
+    let reopened = order.op == arena_core::ChangeOp::Delete
+        || applied
+            .changes
+            .iter()
+            .any(|c| c.tbl == "payments" && c.op == arena_core::ChangeOp::Delete);
+    reopened.then(|| BillRevertedEvent {
         order_id: order.row_id.clone(),
     })
 }
@@ -288,6 +309,10 @@ impl HubTask {
                         if let Some(settled) = bill_settled(&applied) {
                             let data = serde_json::to_string(&settled).unwrap_or_default();
                             self.send("bill.settled", data, false);
+                        }
+                        if let Some(reverted) = bill_reverted(&applied) {
+                            let data = serde_json::to_string(&reverted).unwrap_or_default();
+                            self.send("bill.reverted", data, false);
                         }
                         if let Some(started) = session_started(&applied) {
                             let data = serde_json::to_string(&started).unwrap_or_default();
@@ -619,6 +644,42 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use futures_util::StreamExt;
     use serde_json::Value;
+
+    fn applied(changes: &[(&str, &str, arena_core::ChangeOp)]) -> Applied {
+        Applied {
+            intent_id: "I".into(),
+            changes: changes
+                .iter()
+                .enumerate()
+                .map(|(i, (tbl, row_id, op))| arena_core::ChangeMeta {
+                    epoch: "1:H".into(),
+                    seq: i as i64 + 1,
+                    tbl: (*tbl).into(),
+                    row_id: (*row_id).into(),
+                    op: *op,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_revert_is_told_apart_from_a_settle() {
+        use arena_core::ChangeOp::{Delete, Insert, Update};
+        let settle = applied(&[("payments", "P", Insert), ("orders", "O", Update)]);
+        assert!(bill_settled(&settle).is_some());
+        assert!(bill_reverted(&settle).is_none());
+        let unsettle = applied(&[("payments", "P", Delete), ("orders", "O", Update)]);
+        assert!(bill_settled(&unsettle).is_none());
+        assert_eq!(bill_reverted(&unsettle).unwrap().order_id, "O");
+        let unend = applied(&[
+            ("sessions", "S", Update),
+            ("order_lines", "L", Delete),
+            ("orders", "O", Delete),
+        ]);
+        assert_eq!(bill_reverted(&unend).unwrap().order_id, "O");
+        let end = applied(&[("sessions", "S", Update), ("orders", "O", Insert)]);
+        assert!(bill_reverted(&end).is_none());
+    }
     use tower::ServiceExt;
 
     type Frames = std::pin::Pin<

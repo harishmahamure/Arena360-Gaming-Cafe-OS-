@@ -535,12 +535,31 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            let session_id = started.changes[0].row_id.clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                        session_id: session_id.clone(),
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionEndReverted(arena_proto::SessionEndReverted {
+                        session_id: session_id.clone(),
+                    }),
+                    Some(2),
+                ))
+                .await
+                .unwrap();
             let ended = writer
                 .submit_intent(submit(
                     IntentPayload::SessionEnd(arena_proto::SessionEnd {
-                        session_id: started.changes[0].row_id.clone(),
+                        session_id: session_id.clone(),
                     }),
-                    Some(1),
+                    Some(3),
                 ))
                 .await
                 .unwrap();
@@ -551,10 +570,10 @@ mod tests {
                 .unwrap()
                 .row_id
                 .clone();
-            writer
-                .submit_intent(submit(
+            let settle = |rev: i64| {
+                submit(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
-                        order_id,
+                        order_id: order_id.clone(),
                         payments: vec![
                             arena_proto::PaymentRow {
                                 method: arena_proto::PaymentMethod::Cash,
@@ -568,10 +587,20 @@ mod tests {
                             },
                         ],
                     }),
-                    Some(1),
+                    Some(rev),
+                )
+            };
+            writer.submit_intent(settle(1)).await.unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionSettleReverted(arena_proto::SessionSettleReverted {
+                        order_id: order_id.clone(),
+                    }),
+                    Some(2),
                 ))
                 .await
                 .unwrap();
+            writer.submit_intent(settle(3)).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

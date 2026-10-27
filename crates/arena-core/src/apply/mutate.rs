@@ -267,11 +267,19 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::SessionEnd(_) => match target {
-            Target::SessionEnd(t) => super::session::mutate_end(tx, t, now_ms),
+            Target::SessionEnd(t) => super::session::mutate_end(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::SessionSettle(s) => match target {
             Target::SessionSettle(_) => super::session::mutate_settle(tx, intent, s, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::SessionEndReverted(_) => match target {
+            Target::SessionEndReverted(t) => super::session::mutate_end_reverted(tx, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::SessionSettleReverted(_) => match target {
+            Target::SessionSettleReverted(t) => super::session::mutate_settle_reverted(tx, t),
             _ => Err(mismatch()),
         },
         IntentPayload::DeviceMaintenance(m) => match target {

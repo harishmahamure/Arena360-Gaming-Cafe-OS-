@@ -128,6 +128,10 @@ pub struct AuditItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub flagged: Option<bool>,
+    /// For a change made by a `*.reverted` intent: the intent id of the forward change it undoes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reverts: Option<String>,
 }
 
 /// A kiosk admin exit, as the audit detail summarises a `device_admin_exits` change: the kiosk,

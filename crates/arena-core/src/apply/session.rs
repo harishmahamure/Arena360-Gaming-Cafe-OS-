@@ -1,13 +1,16 @@
 use arena_proto::{
     AppError, CARD_REFERENCE_MAX, ErrorCode, Intent, PaymentMethod, PaymentRow, SessionEnd,
-    SessionMode, SessionSettle, SessionStart,
+    SessionEndReverted, SessionMode, SessionSettle, SessionSettleReverted, SessionStart,
+    UNDO_WINDOW_MS,
 };
 use arena_store::{
     ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OrderRow,
-    RateRow, RowKey, SegmentRow, StoreTx, close_segments, device_has_live_session, end_session,
-    find_active_rate, find_device_meta, find_order, find_player, find_session, insert_order,
-    insert_order_line, insert_payment, insert_segment, insert_session, list_segments,
-    next_guest_no, set_device_state, settle_order,
+    RateRow, RowKey, SegmentRow, StoreTx, Table, close_segments, delete_row,
+    device_has_live_session, effect_recorded, end_session, find_active_rate, find_device_meta,
+    find_order, find_order_for_session, find_player, find_session, forward_intent_id, insert_order,
+    insert_order_line, insert_payment, insert_segment, insert_session, list_order_line_ids,
+    list_payment_ids, list_segments, next_guest_no, read_row, reopen_order, reopen_segments,
+    reopen_session, set_device_state, settle_order,
 };
 
 use super::mutate::Written;
@@ -245,6 +248,7 @@ pub(super) fn validate_end(t: &EndTarget) -> Result<(), AppError> {
 
 pub(super) fn mutate_end(
     tx: &StoreTx<'_>,
+    intent: &Intent,
     t: &EndTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
@@ -264,7 +268,7 @@ pub(super) fn mutate_end(
     let subtotal: i64 = lines.iter().map(|l| l.amount_minor).sum();
     let order_id = ulid::Ulid::generate().to_string();
     close_segments(tx, &s.id, now_ms)?;
-    end_session(tx, &s.id, now_ms)?;
+    end_session(tx, &s.id, now_ms, &intent.actor.id)?;
     insert_order(
         tx,
         &NewOrder {
@@ -482,6 +486,280 @@ pub(super) fn mutate_settle(
         key: RowKey::Orders {
             id: s.order_id.clone(),
         },
+        op: ChangeOp::Update,
+        before: None,
+    });
+    Ok(written)
+}
+
+fn undo_denied(message: &str) -> AppError {
+    AppError::new(ErrorCode::UndoNotAllowed, message)
+}
+
+fn in_window(now_ms: i64, at: Option<i64>) -> bool {
+    at.is_some_and(|a| now_ms - a <= UNDO_WINDOW_MS)
+}
+
+fn same_staff(intent: &Intent, by: Option<&str>) -> bool {
+    by == Some(intent.actor.id.as_str())
+}
+
+fn check_rev(intent: &Intent, current: i64, what: &str) -> Result<(), AppError> {
+    match intent.base_rev {
+        None => Err(invalid("base_rev", &format!("{what} needs base_rev"))),
+        Some(b) if b != current => Err(AppError::with_field(
+            ErrorCode::Stale,
+            "base_rev",
+            "this changed since it was read",
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct EndRevertTarget {
+    session: Option<LiveSession>,
+    order: Option<OrderRow>,
+    segments: Vec<SegmentRow>,
+    device: Option<DeviceMetaRow>,
+    busy: bool,
+    paid: bool,
+    effect: bool,
+    now: i64,
+}
+
+pub(super) fn load_end_reverted(
+    tx: &StoreTx<'_>,
+    r: &SessionEndReverted,
+    now: i64,
+) -> Result<EndRevertTarget, AppError> {
+    let Some(session) = find_session(tx, &r.session_id)? else {
+        return Ok(EndRevertTarget {
+            now,
+            ..EndRevertTarget::default()
+        });
+    };
+    let order = find_order_for_session(tx, &session.id)?;
+    let device = find_device_meta(tx, &session.device_id)?;
+    let busy = match &device {
+        Some(d) => d.state == "in_session" || device_has_live_session(tx, &d.device_id)?,
+        None => false,
+    };
+    let (paid, effect) = match &order {
+        Some(o) => {
+            let forward = forward_intent_id(tx, "sessions", &session.id, "session.end")?;
+            (
+                !list_payment_ids(tx, &o.id)?.is_empty(),
+                effect_recorded(tx, forward.as_deref(), &o.id)?,
+            )
+        }
+        None => (false, false),
+    };
+    Ok(EndRevertTarget {
+        segments: list_segments(tx, Some(&session.id))?,
+        session: Some(session),
+        order,
+        device,
+        busy,
+        paid,
+        effect,
+        now,
+    })
+}
+
+pub(super) fn base_rev_end_reverted(intent: &Intent, t: &EndRevertTarget) -> Result<(), AppError> {
+    let Some(s) = &t.session else {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "session_id",
+            "no such session",
+        ));
+    };
+    check_rev(intent, s.rev, "session.end.reverted")
+}
+
+pub(super) fn validate_end_reverted(intent: &Intent, t: &EndRevertTarget) -> Result<(), AppError> {
+    let Some(s) = &t.session else {
+        return Err(invalid("session_id", "no such session"));
+    };
+    if s.state != "ended" || s.mode != SessionMode::Postpaid.as_str() {
+        return Err(undo_denied("this session has not ended"));
+    }
+    if t.order.as_ref().is_none_or(|o| o.status != "open") || t.paid {
+        return Err(undo_denied("the bill is no longer open and unpaid"));
+    }
+    if t.busy {
+        return Err(undo_denied("This PC already has a session."));
+    }
+    if !t
+        .device
+        .as_ref()
+        .is_some_and(|d| d.deleted_at.is_none() && d.state != "maintenance")
+    {
+        return Err(undo_denied("This PC is not available."));
+    }
+    if !same_staff(intent, s.ended_by.as_deref()) {
+        return Err(undo_denied("only the staff member who ended it can undo"));
+    }
+    if !in_window(t.now, s.ended_at) {
+        return Err(undo_denied("the undo window has closed"));
+    }
+    if t.effect {
+        return Err(undo_denied("a receipt, drawer or invoice already happened"));
+    }
+    Ok(())
+}
+
+pub(super) fn mutate_end_reverted(
+    tx: &StoreTx<'_>,
+    t: &EndRevertTarget,
+) -> Result<Vec<Written>, AppError> {
+    let (Some(s), Some(o), Some(d), Some(ended_at)) = (
+        &t.session,
+        &t.order,
+        &t.device,
+        t.session.as_ref().and_then(|s| s.ended_at),
+    ) else {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "an undo validated without its target",
+        ));
+    };
+    reopen_segments(tx, &s.id, ended_at)?;
+    reopen_session(tx, &s.id)?;
+    let mut written = vec![Written {
+        key: RowKey::Sessions { id: s.id.clone() },
+        op: ChangeOp::Update,
+        before: None,
+    }];
+    for seg in t.segments.iter().filter(|g| g.to_at == Some(ended_at)) {
+        written.push(Written {
+            key: RowKey::SessionSegments { id: seg.id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    for id in list_order_line_ids(tx, &o.id)? {
+        let key = RowKey::OrderLines { id };
+        let before = read_row(tx, &key)?;
+        delete_row(tx, Table::OrderLines, &before)?;
+        written.push(Written {
+            key,
+            op: ChangeOp::Delete,
+            before: Some(before),
+        });
+    }
+    let key = RowKey::Orders { id: o.id.clone() };
+    let before = read_row(tx, &key)?;
+    delete_row(tx, Table::Orders, &before)?;
+    written.push(Written {
+        key,
+        op: ChangeOp::Delete,
+        before: Some(before),
+    });
+    set_device_state(tx, &d.device_id, "in_session", Some(&d.state), None)?;
+    written.push(Written {
+        key: RowKey::DevicesMeta {
+            device_id: d.device_id.clone(),
+        },
+        op: ChangeOp::Update,
+        before: None,
+    });
+    Ok(written)
+}
+
+#[derive(Default)]
+pub(crate) struct SettleRevertTarget {
+    order: Option<OrderRow>,
+    payments: Vec<String>,
+    effect: bool,
+    now: i64,
+}
+
+pub(super) fn load_settle_reverted(
+    tx: &StoreTx<'_>,
+    r: &SessionSettleReverted,
+    now: i64,
+) -> Result<SettleRevertTarget, AppError> {
+    let Some(order) = find_order(tx, &r.order_id)? else {
+        return Ok(SettleRevertTarget {
+            now,
+            ..SettleRevertTarget::default()
+        });
+    };
+    let forward = forward_intent_id(tx, "orders", &order.id, "session.settle")?;
+    Ok(SettleRevertTarget {
+        payments: list_payment_ids(tx, &order.id)?,
+        effect: effect_recorded(tx, forward.as_deref(), &order.id)?,
+        order: Some(order),
+        now,
+    })
+}
+
+pub(super) fn base_rev_settle_reverted(
+    intent: &Intent,
+    t: &SettleRevertTarget,
+) -> Result<(), AppError> {
+    let Some(o) = &t.order else {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "order_id",
+            "no such bill",
+        ));
+    };
+    check_rev(intent, o.rev, "session.settle.reverted")
+}
+
+pub(super) fn validate_settle_reverted(
+    intent: &Intent,
+    t: &SettleRevertTarget,
+) -> Result<(), AppError> {
+    let Some(o) = &t.order else {
+        return Err(invalid("order_id", "no such bill"));
+    };
+    if o.status != "settled" {
+        return Err(AppError::with_field(
+            ErrorCode::Stale,
+            "order_id",
+            "this bill is not settled",
+        ));
+    }
+    if !same_staff(intent, o.settled_by.as_deref()) {
+        return Err(undo_denied("only the staff member who settled it can undo"));
+    }
+    if !in_window(t.now, o.settled_at) {
+        return Err(undo_denied("the undo window has closed"));
+    }
+    if t.effect {
+        return Err(undo_denied("a receipt, drawer or invoice already happened"));
+    }
+    Ok(())
+}
+
+pub(super) fn mutate_settle_reverted(
+    tx: &StoreTx<'_>,
+    t: &SettleRevertTarget,
+) -> Result<Vec<Written>, AppError> {
+    let Some(o) = &t.order else {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "an undo validated without its target",
+        ));
+    };
+    let mut written = Vec::with_capacity(t.payments.len() + 1);
+    for id in &t.payments {
+        let key = RowKey::Payments { id: id.clone() };
+        let before = read_row(tx, &key)?;
+        delete_row(tx, Table::Payments, &before)?;
+        written.push(Written {
+            key,
+            op: ChangeOp::Delete,
+            before: Some(before),
+        });
+    }
+    reopen_order(tx, &o.id)?;
+    written.push(Written {
+        key: RowKey::Orders { id: o.id.clone() },
         op: ChangeOp::Update,
         before: None,
     });

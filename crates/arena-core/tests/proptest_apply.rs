@@ -127,6 +127,13 @@ enum Op {
         short: bool,
         split: bool,
     },
+    /// An End (or, with `settle`, a Settle) and then its `.reverted` twin, maybe late or stale.
+    SessionUndo {
+        slot: u8,
+        settle: bool,
+        late: bool,
+        stale: bool,
+    },
     /// Moves the clock forward.
     Advance {
         ms: i64,
@@ -250,6 +257,13 @@ fn op() -> impl Strategy<Value = Op> {
             short,
             split
         }),
+        3 => (0..3u8, any::<bool>(), prop::bool::weighted(0.25), prop::bool::weighted(0.25))
+            .prop_map(|(slot, settle, late, stale)| Op::SessionUndo {
+                slot,
+                settle,
+                late,
+                stale
+            }),
         1 => (0..=MAX_ADVANCE_MS).prop_map(|ms| Op::Advance { ms }),
     ]
 }
@@ -1185,6 +1199,138 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .map(|p| int(p, "amount_minor"))
                     .sum();
                 prop_assert_eq!(paid, int(&o, "total_minor"));
+            }
+        }
+        Op::SessionUndo {
+            slot,
+            settle,
+            late,
+            stale,
+        } => {
+            let before = hub.change_count();
+            let (forward, target, kind): (IntentPayload, String, &str) = if *settle {
+                let open: Vec<_> = hub
+                    .reader
+                    .rows(Table::Orders)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|o| text(o, "status") == "open")
+                    .collect();
+                let Some(order) = open.get(usize::from(*slot) % open.len().max(1)) else {
+                    return Ok(());
+                };
+                let (id, total) = (text(order, "id"), int(order, "total_minor"));
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                        order_id: id.clone(),
+                        payments: vec![arena_proto::PaymentRow {
+                            method: arena_proto::PaymentMethod::Card,
+                            amount_minor: total,
+                            reference: Some("T1".into()),
+                        }],
+                    }),
+                    Some(int(order, "rev")),
+                ));
+                prop_assert!(out.is_ok(), "{:?}", out);
+                (
+                    IntentPayload::SessionSettleReverted(arena_proto::SessionSettleReverted {
+                        order_id: id.clone(),
+                    }),
+                    id,
+                    "settle",
+                )
+            } else {
+                let Some(device) = hub
+                    .reader
+                    .rows(Table::DevicesMeta)
+                    .unwrap()
+                    .get(usize::from(*slot))
+                    .map(|d| text(d, "device_id"))
+                else {
+                    return Ok(());
+                };
+                let Some(session) =
+                    hub.reader
+                        .rows(Table::Sessions)
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| {
+                            text(s, "device_id") == device
+                                && ["active", "paused", "grace"]
+                                    .contains(&text(s, "state").as_str())
+                        })
+                else {
+                    return Ok(());
+                };
+                let id = text(&session, "id");
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                        session_id: id.clone(),
+                    }),
+                    Some(int(&session, "rev")),
+                ));
+                prop_assert!(out.is_ok(), "{:?}", out);
+                (
+                    IntentPayload::SessionEndReverted(arena_proto::SessionEndReverted {
+                        session_id: id.clone(),
+                    }),
+                    id,
+                    "end",
+                )
+            };
+            let after_forward = hub.change_count();
+            let table = if *settle {
+                Table::Orders
+            } else {
+                Table::Sessions
+            };
+            let rev = int(
+                &hub.reader
+                    .rows(table)
+                    .unwrap()
+                    .into_iter()
+                    .find(|r| text(r, "id") == target)
+                    .unwrap(),
+                "rev",
+            );
+            if *late {
+                hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
+            }
+            let based = if *stale { rev - 1 } else { rev };
+            let out = hub.submit_new(hub.intent(forward, Some(based)));
+            if *stale {
+                prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
+                prop_assert_eq!(hub.change_count(), after_forward);
+            } else if *late {
+                prop_assert_eq!(code(&out), Some((ErrorCode::UndoNotAllowed, None)));
+                prop_assert_eq!(hub.change_count(), after_forward);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                let orders = hub.reader.rows(Table::Orders).unwrap();
+                if kind == "settle" {
+                    prop_assert_eq!(hub.change_count(), after_forward + 2);
+                    let o = orders.iter().find(|o| text(o, "id") == target).unwrap();
+                    prop_assert_eq!(text(o, "status"), "open".to_owned());
+                    prop_assert!(
+                        hub.reader
+                            .rows(Table::Payments)
+                            .unwrap()
+                            .iter()
+                            .all(|p| text(p, "order_id") != target)
+                    );
+                } else {
+                    prop_assert_eq!(hub.change_count(), after_forward + 5);
+                    prop_assert!(orders.iter().all(|o| text(o, "session_id") != target));
+                    let s = hub
+                        .reader
+                        .rows(Table::Sessions)
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| text(s, "id") == target)
+                        .unwrap();
+                    prop_assert_eq!(text(&s, "state"), "active".to_owned());
+                }
+                prop_assert!(hub.change_count() > before);
             }
         }
         Op::Advance { ms } => hub.clock.advance(*ms),

@@ -26,4 +26,8 @@ export type AuditItem = {
    * A `device_admin_exits` change whose exit is flagged for review (absent otherwise).
    */
   flagged?: boolean;
+  /**
+   * For a change made by a `*.reverted` intent: the intent id of the forward change it undoes.
+   */
+  reverts?: string;
 };

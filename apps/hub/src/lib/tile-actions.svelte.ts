@@ -2,6 +2,7 @@ import type { IntentPayload, PaymentRow, PcAction, Permission } from "@arena/ui/
 import type { MessageKey } from "@arena/ui/messages";
 import { waitForAck } from "./admin-unlock";
 import { dropElevation, newIdempotencyKey, submitIntent } from "./auth";
+import { offerUndo } from "./undo.svelte";
 
 export type Job = {
   payload: IntentPayload;
@@ -100,13 +101,15 @@ export const MESSAGE_MAX = 140;
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
   kind === "session.start" || kind === "session.end"
     ? kind
-    : kind === "session.settle"
-      ? "pos.sell"
-      : kind === "device.screen"
-        ? "device.screen"
-        : kind === "device.power" || kind === "device.admin_unlock"
-          ? "device.remote"
-          : "device.manage";
+    : kind === "session.end.reverted"
+      ? "session.end"
+      : kind === "session.settle" || kind === "session.settle.reverted"
+        ? "pos.sell"
+        : kind === "device.screen"
+          ? "device.screen"
+          : kind === "device.power" || kind === "device.admin_unlock"
+            ? "device.remote"
+            : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 
@@ -140,8 +143,10 @@ export async function send(
     const offline = code === "VALIDATION_FAILED" && field === "device_id";
     const text = REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code];
     settle(offline ? "failed" : "refused", text ?? "hub.settings.failed");
-  } else if (j.track === "none") settle("done");
-  else {
+  } else if (j.track === "none") {
+    offerUndo(outcome.result);
+    settle("done");
+  } else {
     const id =
       j.track === "cmd"
         ? j.key

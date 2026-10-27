@@ -268,6 +268,7 @@ impl Names {
                 ChangeOp::Delete => ChangeOpKind::Delete,
             },
             flagged: row.flagged,
+            reverts: row.reverts.clone(),
         })
     }
 
@@ -413,9 +414,10 @@ pub fn read_detail(store: &Store, epoch: &str, seq: i64) -> Result<Option<AuditD
             return Ok(None);
         };
         let before = s.previous_row_image(&change.tbl, &change.row_id, epoch, seq)?;
-        Ok(Some((change, before, Names::read(s)?)))
+        let reverts = s.reverted_by(&change)?;
+        Ok(Some((change, before, Names::read(s)?, reverts)))
     })?;
-    let Some((change, before, names)) = found else {
+    let Some((change, before, names, reverts)) = found else {
         return Ok(None);
     };
     let after = decode_image(&change.row)?;
@@ -424,6 +426,7 @@ pub fn read_detail(store: &Store, epoch: &str, seq: i64) -> Result<Option<AuditD
     let admin_exit = names.admin_exit(&change.tbl, &after);
     let mut row = AuditRow::from(&change);
     row.flagged = admin_exit.as_ref().map(|e| e.flagged);
+    row.reverts = reverts;
     Ok(Some(AuditDetail {
         admin_exit,
         item: names.item(&row)?,
@@ -740,6 +743,7 @@ mod tests {
             row_id: "x".into(),
             op: ChangeOp::Update,
             flagged: None,
+            reverts: None,
         };
         let item = names.item(&row).unwrap();
         assert_eq!(item.actor.kind, AuditActorKind::Unknown);

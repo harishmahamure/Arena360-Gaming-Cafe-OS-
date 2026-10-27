@@ -40,6 +40,18 @@ pub struct SessionEnd {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionEndReverted {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionSettleReverted {
+    pub order_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -88,11 +100,38 @@ pub struct SettleOutcome {
     pub settled_at: i64,
     #[ts(type = "number")]
     pub undo_until: i64,
+    #[ts(type = "number")]
+    pub order_rev: i64,
+    #[ts(type = "number")]
+    pub total_minor: i64,
+    pub irreversible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct EndOutcome {
+    pub session_id: String,
+    pub order_id: String,
+    #[ts(type = "number")]
+    pub ended_at: i64,
+    #[ts(type = "number")]
+    pub undo_until: i64,
+    #[ts(type = "number")]
+    pub session_rev: i64,
+    #[ts(type = "number")]
+    pub total_minor: i64,
+    pub irreversible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct BillSettledEvent {
+    pub order_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BillRevertedEvent {
     pub order_id: String,
 }
 
@@ -191,6 +230,16 @@ mod tests {
                 .get("reference")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn reverts_round_trip() {
+        let e: SessionEndReverted =
+            serde_json::from_value(serde_json::json!({"session_id": "S"})).unwrap();
+        assert_eq!(e.session_id, "S");
+        let s: SessionSettleReverted =
+            serde_json::from_value(serde_json::json!({"order_id": "O"})).unwrap();
+        assert_eq!(s.order_id, "O");
     }
 
     #[test]

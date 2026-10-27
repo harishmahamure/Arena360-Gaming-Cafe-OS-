@@ -33,7 +33,7 @@ pub use admin::{
 };
 pub use audit::{
     AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,
-    list_staff_names, previous_row_image,
+    list_staff_names, previous_row_image, reverted_intent,
 };
 pub use branch::{
     BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, NewDeviceEvent, NewReadGrant,
@@ -80,11 +80,13 @@ pub use products::{
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
 pub use rusqlite::Transaction;
 pub use sessions::{
-    LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OpenOrder, OrderLineRow, OrderRow,
-    SegmentRow, Settlement, close_segments, device_has_live_session, end_session, find_order,
-    find_session, find_settlement, insert_order, insert_order_line, insert_payment, insert_segment,
-    insert_session, list_live_sessions, list_open_order_lines, list_open_orders, list_segments,
-    next_guest_no, settle_order,
+    Ending, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OpenOrder, OrderLineRow,
+    OrderRow, SegmentRow, Settlement, close_segments, device_has_live_session, effect_recorded,
+    end_session, find_ending, find_order, find_order_for_session, find_session, find_settlement,
+    forward_intent_id, insert_effect, insert_order, insert_order_line, insert_payment,
+    insert_segment, insert_session, list_live_sessions, list_open_order_lines, list_open_orders,
+    list_order_line_ids, list_payment_ids, list_segments, next_guest_no, reopen_order,
+    reopen_segments, reopen_session, settle_order,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
@@ -506,6 +508,19 @@ impl Store {
         find_change(&self.conn, epoch, seq)
     }
 
+    /// The forward intent a `*.reverted` change undoes (see [`reverted_intent`]).
+    pub fn reverted_by(&self, change: &ChangeRecord) -> Result<Option<String>, AppError> {
+        reverted_intent(
+            &self.conn,
+            &change.tbl,
+            &change.row_id,
+            &change.intent_kind,
+            change.at,
+            &change.epoch,
+            change.seq,
+        )
+    }
+
     /// The row image of the change before `(epoch, seq)` to the same row (see
     /// [`previous_row_image`]).
     pub fn previous_row_image(
@@ -688,6 +703,13 @@ impl Store {
             return Ok(None);
         }
         find_settlement(&self.conn, order_id)
+    }
+
+    pub fn ending(&self, session_id: &str) -> Result<Option<Ending>, AppError> {
+        if !self.table_exists("irreversible_effects")? {
+            return Ok(None);
+        }
+        find_ending(&self.conn, session_id)
     }
 
     pub fn latest_consent(

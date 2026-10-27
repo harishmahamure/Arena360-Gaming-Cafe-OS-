@@ -55,6 +55,8 @@ pub struct AuditRow {
     pub op: ChangeOp,
     /// For a `device_admin_exits` change: whether that exit is flagged for review now.
     pub flagged: Option<bool>,
+    /// For a change made by a `*.reverted` intent: the intent id of the forward change it undoes.
+    pub reverts: Option<String>,
 }
 
 impl From<&ChangeRecord> for AuditRow {
@@ -75,8 +77,38 @@ impl From<&ChangeRecord> for AuditRow {
             row_id: c.row_id.clone(),
             op: c.op,
             flagged: None,
+            reverts: None,
         }
     }
+}
+
+const REVERTED_SUFFIX: &str = ".reverted";
+
+/// The intent id of the forward change that a `*.reverted` change undoes: the latest earlier
+/// change to the same row made by the intent kind without the `.reverted` suffix. `None` for any
+/// other change.
+pub fn reverted_intent(
+    conn: &Connection,
+    tbl: &str,
+    row_id: &str,
+    intent_kind: &str,
+    at: i64,
+    epoch: &str,
+    seq: i64,
+) -> Result<Option<String>, AppError> {
+    let Some(forward) = intent_kind.strip_suffix(REVERTED_SUFFIX) else {
+        return Ok(None);
+    };
+    conn.prepare_cached(
+        "SELECT intent_id FROM changes
+         WHERE tbl = ?1 AND row_id = ?2 AND intent_kind = ?3 AND (at, epoch, seq) < (?4, ?5, ?6)
+         ORDER BY at DESC, epoch DESC, seq DESC
+         LIMIT 1",
+    )
+    .map_err(db_error)?
+    .query_row(params![tbl, row_id, forward, at, epoch, seq], |r| r.get(0))
+    .optional()
+    .map_err(db_error)
 }
 
 /// Up to `limit` changes matching `filter`, newest first by `(at DESC, epoch DESC, seq DESC)`.
@@ -114,10 +146,23 @@ pub fn list_audit(
                     )
                 })?,
                 flagged: r.get::<_, Option<i64>>(14)?.map(|f| f != 0),
+                reverts: None,
             })
         })
         .map_err(db_error)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    let mut rows = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+    for row in &mut rows {
+        row.reverts = reverted_intent(
+            conn,
+            &row.tbl,
+            &row.row_id,
+            &row.intent_kind,
+            row.at,
+            &row.epoch,
+            row.seq,
+        )?;
+    }
+    Ok(rows)
 }
 
 /// The SQL and parameters of one audit page.

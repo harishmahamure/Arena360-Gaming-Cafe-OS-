@@ -44,4 +44,6 @@ export type IntentKind =
   | "player.password_reset"
   | "session.start"
   | "session.end"
-  | "session.settle";
+  | "session.settle"
+  | "session.end.reverted"
+  | "session.settle.reverted";

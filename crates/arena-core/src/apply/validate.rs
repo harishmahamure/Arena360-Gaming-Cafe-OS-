@@ -184,6 +184,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionSettle(t) => super::session::validate_settle(s, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::SessionEndReverted(_) => match target {
+            Target::SessionEndReverted(t) => super::session::validate_end_reverted(intent, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::SessionSettleReverted(_) => match target {
+            Target::SessionSettleReverted(t) => super::session::validate_settle_reverted(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::StockIn(u) => match target {
             Target::Stock(t) => stock::validate_in(u, t),
             _ => Err(internal_target()),

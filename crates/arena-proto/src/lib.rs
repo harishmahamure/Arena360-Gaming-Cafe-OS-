@@ -42,6 +42,7 @@ mod tax;
 mod test_session;
 pub mod tier;
 mod ui_auth;
+mod undo;
 mod wizard;
 
 pub use account::{
@@ -180,9 +181,10 @@ pub use process::{
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
-    BillLine, BillSettledEvent, CARD_REFERENCE_MAX, PaymentMethod, PaymentRow, SessionEnd,
-    SessionMode, SessionScreen, SessionSettle, SessionStart, SessionStartedEvent, SettleOutcome,
-    SnapshotBill, SnapshotSession, UNDO_WINDOW_MS,
+    BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, EndOutcome, PaymentMethod,
+    PaymentRow, SessionEnd, SessionEndReverted, SessionMode, SessionScreen, SessionSettle,
+    SessionSettleReverted, SessionStart, SessionStartedEvent, SettleOutcome, SnapshotBill,
+    SnapshotSession, UNDO_WINDOW_MS,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
@@ -227,6 +229,7 @@ pub use ui_auth::{
     SignInOk, SignInRequest, UiError, UiIntentRequest, UiIntentResult, UiMe, UnlockOk,
     UnlockRequest,
 };
+pub use undo::{EffectKind, EffectRecordedEvent};
 pub use wizard::{
     AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, COUNTRIES, CafeDetails,
     ChooseTier, Country, CountryRow, GoLiveBlocker, GoLiveItem, GoLiveItemView, GoLiveView,

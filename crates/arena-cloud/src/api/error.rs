@@ -61,6 +61,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PcUnavailable
         | ErrorCode::NoRate
         | ErrorCode::PaymentShort
+        | ErrorCode::UndoNotAllowed
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED

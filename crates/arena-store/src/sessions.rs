@@ -38,6 +38,8 @@ pub struct LiveSession {
     pub paused_total_ms: i64,
     pub business_day: String,
     pub fy: String,
+    pub ended_at: Option<i64>,
+    pub ended_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,7 +164,7 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 
 const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
-        s.paused_total_ms, s.business_day, s.fy";
+        s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by";
 
 fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
@@ -181,6 +183,8 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         paused_total_ms: r.get(12)?,
         business_day: r.get(13)?,
         fy: r.get(14)?,
+        ended_at: r.get(15)?,
+        ended_by: r.get(16)?,
     })
 }
 
@@ -240,10 +244,35 @@ pub fn list_segments(
     .map_err(db_error)
 }
 
-pub fn end_session(conn: &Connection, id: &str, ended_at: i64) -> Result<(), AppError> {
+pub fn end_session(
+    conn: &Connection,
+    id: &str,
+    ended_at: i64,
+    ended_by: &str,
+) -> Result<(), AppError> {
     conn.execute(
-        "UPDATE sessions SET state = 'ended', ended_at = ?2, end_reason = 'staff' WHERE id = ?1",
-        params![id, ended_at],
+        "UPDATE sessions SET state = 'ended', ended_at = ?2, end_reason = 'staff', ended_by = ?3
+         WHERE id = ?1",
+        params![id, ended_at, ended_by],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn reopen_session(conn: &Connection, id: &str) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET state = 'active', ended_at = NULL, end_reason = NULL, ended_by = NULL
+         WHERE id = ?1",
+        [id],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn reopen_segments(conn: &Connection, session_id: &str, ended_at: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE session_segments SET to_at = NULL WHERE session_id = ?1 AND to_at = ?2",
+        params![session_id, ended_at],
     )
     .map_err(db_error)?;
     Ok(())
@@ -353,6 +382,9 @@ pub struct OrderRow {
     pub status: String,
     pub total_minor: i64,
     pub rev: i64,
+    pub session_id: Option<String>,
+    pub settled_at: Option<i64>,
+    pub settled_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,6 +393,19 @@ pub struct Settlement {
     pub device_id: Option<String>,
     pub settled_at: i64,
     pub device_busy: bool,
+    pub rev: i64,
+    pub total_minor: i64,
+    pub irreversible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ending {
+    pub session_id: String,
+    pub order_id: String,
+    pub ended_at: i64,
+    pub session_rev: i64,
+    pub total_minor: i64,
+    pub irreversible: bool,
 }
 
 pub struct NewPayment<'a> {
@@ -377,19 +422,146 @@ pub struct NewPayment<'a> {
 
 pub fn find_order(conn: &Connection, id: &str) -> Result<Option<OrderRow>, AppError> {
     conn.query_row(
-        "SELECT id, status, total_minor, rev FROM orders WHERE id = ?1",
+        &format!("SELECT {ORDER_COLUMNS} FROM orders WHERE id = ?1"),
         [id],
-        |r| {
-            Ok(OrderRow {
-                id: r.get(0)?,
-                status: r.get(1)?,
-                total_minor: r.get(2)?,
-                rev: r.get(3)?,
-            })
-        },
+        order_from,
     )
     .optional()
     .map_err(db_error)
+}
+
+const ORDER_COLUMNS: &str = "id, status, total_minor, rev, session_id, settled_at, settled_by";
+
+fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
+    Ok(OrderRow {
+        id: r.get(0)?,
+        status: r.get(1)?,
+        total_minor: r.get(2)?,
+        rev: r.get(3)?,
+        session_id: r.get(4)?,
+        settled_at: r.get(5)?,
+        settled_by: r.get(6)?,
+    })
+}
+
+pub fn find_order_for_session(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<OrderRow>, AppError> {
+    conn.query_row(
+        &format!("SELECT {ORDER_COLUMNS} FROM orders WHERE session_id = ?1"),
+        [session_id],
+        order_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn list_order_line_ids(conn: &Connection, order_id: &str) -> Result<Vec<String>, AppError> {
+    ids(
+        conn,
+        "SELECT id FROM order_lines WHERE order_id = ?1 ORDER BY position, id",
+        order_id,
+    )
+}
+
+pub fn list_payment_ids(conn: &Connection, order_id: &str) -> Result<Vec<String>, AppError> {
+    ids(
+        conn,
+        "SELECT id FROM payments WHERE order_id = ?1 ORDER BY position, id",
+        order_id,
+    )
+}
+
+fn ids(conn: &Connection, sql: &str, key: &str) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn.prepare(sql).map_err(db_error)?;
+    stmt.query_map([key], |r| r.get(0))
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)
+}
+
+pub fn reopen_order(conn: &Connection, id: &str) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET status = 'open', settled_at = NULL, settled_by = NULL WHERE id = ?1",
+        [id],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn insert_effect(
+    conn: &Connection,
+    id: &str,
+    kind: arena_proto::EffectKind,
+    intent_id: Option<&str>,
+    order_id: Option<&str>,
+    recorded_at: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO irreversible_effects (id, kind, intent_id, order_id, recorded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, kind.as_str(), intent_id, order_id, recorded_at],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn forward_intent_id(
+    conn: &Connection,
+    tbl: &str,
+    row_id: &str,
+    intent_kind: &str,
+) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT intent_id FROM changes WHERE tbl = ?1 AND row_id = ?2 AND intent_kind = ?3
+         ORDER BY at DESC, seq DESC LIMIT 1",
+        params![tbl, row_id, intent_kind],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+pub fn effect_recorded(
+    conn: &Connection,
+    intent_id: Option<&str>,
+    order_id: &str,
+) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM irreversible_effects
+                        WHERE order_id = ?2 OR (?1 IS NOT NULL AND intent_id = ?1))",
+        params![intent_id, order_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+pub fn find_ending(conn: &Connection, session_id: &str) -> Result<Option<Ending>, AppError> {
+    type Found = (String, String, i64, i64, i64);
+    let found: Option<Found> = conn
+        .query_row(
+            "SELECT s.id, o.id, s.ended_at, s.rev, o.total_minor
+             FROM sessions s JOIN orders o ON o.session_id = s.id
+             WHERE s.id = ?1 AND s.state = 'ended' AND s.ended_at IS NOT NULL",
+            [session_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some((session_id, order_id, ended_at, session_rev, total_minor)) = found else {
+        return Ok(None);
+    };
+    let forward = forward_intent_id(conn, "sessions", &session_id, "session.end")?;
+    let irreversible = effect_recorded(conn, forward.as_deref(), &order_id)?;
+    Ok(Some(Ending {
+        session_id,
+        order_id,
+        ended_at,
+        session_rev,
+        total_minor,
+        irreversible,
+    }))
 }
 
 pub fn settle_order(
@@ -428,21 +600,33 @@ pub fn insert_payment(conn: &Connection, p: &NewPayment<'_>) -> Result<(), AppEr
 }
 
 pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settlement>, AppError> {
-    conn.query_row(
-        "SELECT o.id, o.device_id, o.settled_at,
-                EXISTS (SELECT 1 FROM sessions s
-                        WHERE s.device_id = o.device_id AND s.state IN ('active', 'paused', 'grace'))
-         FROM orders o WHERE o.id = ?1 AND o.status = 'settled' AND o.settled_at IS NOT NULL",
-        [order_id],
-        |r| {
-            Ok(Settlement {
-                order_id: r.get(0)?,
-                device_id: r.get(1)?,
-                settled_at: r.get(2)?,
-                device_busy: r.get(3)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(db_error)
+    let found = conn
+        .query_row(
+            "SELECT o.id, o.device_id, o.settled_at,
+                    EXISTS (SELECT 1 FROM sessions s
+                            WHERE s.device_id = o.device_id
+                              AND s.state IN ('active', 'paused', 'grace')),
+                    o.rev, o.total_minor
+             FROM orders o WHERE o.id = ?1 AND o.status = 'settled' AND o.settled_at IS NOT NULL",
+            [order_id],
+            |r| {
+                Ok(Settlement {
+                    order_id: r.get(0)?,
+                    device_id: r.get(1)?,
+                    settled_at: r.get(2)?,
+                    device_busy: r.get(3)?,
+                    rev: r.get(4)?,
+                    total_minor: r.get(5)?,
+                    irreversible: false,
+                })
+            },
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some(mut settlement) = found else {
+        return Ok(None);
+    };
+    let forward = forward_intent_id(conn, "orders", order_id, "session.settle")?;
+    settlement.irreversible = effect_recorded(conn, forward.as_deref(), order_id)?;
+    Ok(Some(settlement))
 }

@@ -864,6 +864,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PcUnavailable
         | ErrorCode::NoRate
         | ErrorCode::PaymentShort
+        | ErrorCode::UndoNotAllowed
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -2004,6 +2005,14 @@ async fn run_intent(
         _ => None,
     };
     let ended = matches!(intent.payload, arena_proto::IntentPayload::SessionEnd(_));
+    let ending = match &intent.payload {
+        arena_proto::IntentPayload::SessionEnd(e) => Some(e.session_id.clone()),
+        _ => None,
+    };
+    let reopening = matches!(
+        intent.payload,
+        arena_proto::IntentPayload::SessionEndReverted(_)
+    );
     let settling = match &intent.payload {
         arena_proto::IntentPayload::SessionSettle(s) => Some(s.order_id.clone()),
         _ => None,
@@ -2021,6 +2030,12 @@ async fn run_intent(
                 );
                 tracing::info!(device_id = %c.row_id, cmd_id = %cmd_id, sessions = sent, "pay at counter lock pushed");
             }
+            let started = started.or_else(|| {
+                reopening
+                    .then(|| applied.changes.iter().find(|c| c.tbl == "devices_meta"))
+                    .flatten()
+                    .map(|c| c.row_id.clone())
+            });
             if let Some(device_id) = started {
                 let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
                 let screens =
@@ -2061,9 +2076,14 @@ async fn run_intent(
                 Some(order_id) => settle_outcome(auth, &order_id, &cmd_id).await,
                 None => None,
             };
+            let ended = match ending {
+                Some(session_id) => end_outcome(auth, &session_id).await,
+                None => None,
+            };
             Json(UiIntentResult {
                 applied: crate::lan::registry::summary(&applied),
                 settled,
+                ended,
             })
             .into_response()
         }
@@ -2125,7 +2145,35 @@ async fn settle_outcome(
         order_id: settlement.order_id,
         settled_at: settlement.settled_at,
         undo_until: settlement.settled_at + arena_proto::UNDO_WINDOW_MS,
+        order_rev: settlement.rev,
+        total_minor: settlement.total_minor,
+        irreversible: settlement.irreversible,
     })
+}
+
+/// What an End committed, read back from the rows so a retried key answers the same.
+async fn end_outcome(auth: &Arc<UiAuth>, session_id: &str) -> Option<arena_proto::EndOutcome> {
+    let (reader, id) = (Arc::clone(&auth.reader), session_id.to_owned());
+    match tokio::task::spawn_blocking(move || reader.ending(&id)).await {
+        Ok(Ok(Some(e))) => Some(arena_proto::EndOutcome {
+            session_id: e.session_id,
+            order_id: e.order_id,
+            ended_at: e.ended_at,
+            undo_until: e.ended_at + arena_proto::UNDO_WINDOW_MS,
+            session_rev: e.session_rev,
+            total_minor: e.total_minor,
+            irreversible: e.irreversible,
+        }),
+        Ok(Ok(None)) => None,
+        Ok(Err(e)) => {
+            tracing::warn!(session_id, error = %e, "could not read the end");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "the end read failed");
+            None
+        }
+    }
 }
 
 async fn player_write<T: serde::de::DeserializeOwned>(
@@ -3414,6 +3462,133 @@ pub(crate) mod tests {
             arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
                 .unwrap();
         assert!(snapshot.bills.is_empty());
+    }
+
+    fn plain_body(payload: IntentPayload, rev: Option<i64>) -> Value {
+        json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            payload,
+            rev,
+        )).unwrap()})
+    }
+
+    #[tokio::test]
+    async fn undoing_an_end_unlocks_the_kiosk_and_undoing_a_settle_reopens_the_bill() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (_, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        let session_id = reply["applied"]["changes"][0]["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        rx.recv().await.unwrap();
+        hub.clock.advance(41 * 60_000);
+        let end = plain_body(
+            IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: session_id.clone(),
+            }),
+            Some(1),
+        );
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(end)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let ended_at = hub.clock.now_ms();
+        assert_eq!(reply["ended"]["session_id"], session_id.as_str());
+        assert_eq!(reply["ended"]["ended_at"], ended_at);
+        assert_eq!(reply["ended"]["undo_until"], ended_at + 8_000);
+        assert_eq!(reply["ended"]["session_rev"], 2);
+        assert_eq!(reply["ended"]["total_minor"], 9_000);
+        assert_eq!(reply["ended"]["irreversible"], false);
+        rx.recv().await.unwrap();
+
+        hub.clock.advance(3_000);
+        let undo = plain_body(
+            IntentPayload::SessionEndReverted(arena_proto::SessionEndReverted {
+                session_id: session_id.clone(),
+            }),
+            Some(2),
+        );
+        let key = undo["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(undo)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert!(reply.get("ended").is_none());
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the session screen pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::SessionStarted { cmd_id, session },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a session.started event")
+        };
+        assert_eq!((cmd_id, session.device_name.as_str()), (key, "PC 1"));
+        assert!(session.elapsed_ms >= 41 * 60_000 + 3_000);
+
+        let again = plain_body(
+            IntentPayload::SessionEndReverted(arena_proto::SessionEndReverted {
+                session_id: session_id.clone(),
+            }),
+            Some(3),
+        );
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(again)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "UNDO_NOT_ALLOWED");
+        assert!(rx.try_recv().is_err(), "a refusal pushes nothing");
+
+        let end = plain_body(
+            IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: session_id.clone(),
+            }),
+            Some(3),
+        );
+        let (_, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(end)).await;
+        let order = reply["applied"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["tbl"] == "orders")
+            .unwrap()["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(reply["ended"]["session_rev"], 4);
+        rx.recv().await.unwrap();
+        let settle = settle_body(&order, 1, json!([{"method": "cash", "amount_minor": 9000}]));
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(settle)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["settled"]["order_rev"], 2);
+        assert_eq!(reply["settled"]["total_minor"], 9_000);
+        assert_eq!(reply["settled"]["irreversible"], false);
+        rx.recv().await.unwrap();
+
+        hub.clock.advance(2_000);
+        let undo = plain_body(
+            IntentPayload::SessionSettleReverted(arena_proto::SessionSettleReverted {
+                order_id: order.clone(),
+            }),
+            Some(2),
+        );
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(undo)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        assert_eq!(snapshot.bills.len(), 1);
+        assert_eq!(snapshot.bills[0].order_rev, Some(3));
     }
 
     #[tokio::test]

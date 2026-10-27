@@ -760,3 +760,548 @@ async fn a_new_session_on_the_device_marks_the_settlement_busy() {
     .unwrap();
     assert!(reopen(&f).settlement(&order).unwrap().unwrap().device_busy);
 }
+
+fn with_actor(mut i: Intent, actor: Actor) -> Intent {
+    i.actor = actor;
+    i
+}
+
+fn end_revert_intent(session: &str, rev: Option<i64>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionEndReverted(arena_proto::SessionEndReverted {
+            session_id: session.into(),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+fn settle_revert_intent(order: &str, rev: Option<i64>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionSettleReverted(arena_proto::SessionSettleReverted {
+            order_id: order.into(),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+fn rev_of(f: &Fixture, t: Table, id: &str) -> i64 {
+    int(
+        table(f, t).iter().find(|r| text(r, "id") == id).unwrap(),
+        "rev",
+    )
+}
+
+struct Ended {
+    session: String,
+    order: String,
+    device: String,
+    free: String,
+    applied: Applied,
+}
+
+async fn ended_by(f: &Fixture, actor: Actor, rate: i64, minutes: i64) -> Ended {
+    let device = pc(f, DeviceKind::Pc, "pc", Some(rate)).await;
+    let free = state_of(f, &device);
+    start(f, &device, None).await.unwrap();
+    f.clock.advance(minutes * 60_000);
+    let s = sessions(f).pop().unwrap();
+    let session = text(&s, "id");
+    let applied = end(
+        f,
+        with_actor(end_intent(&session, Some(int(&s, "rev"))), actor),
+    )
+    .await
+    .unwrap();
+    let order = table(f, Table::Orders)
+        .pop()
+        .map(|o| text(&o, "id"))
+        .unwrap();
+    Ended {
+        session,
+        order,
+        device,
+        free,
+        applied,
+    }
+}
+
+async fn settled_by(f: &Fixture, actor: Actor, order: &str) -> Applied {
+    let rev = rev_of(f, Table::Orders, order);
+    let total = int(
+        table(f, Table::Orders)
+            .iter()
+            .find(|o| text(o, "id") == order)
+            .unwrap(),
+        "total_minor",
+    );
+    end(
+        f,
+        with_actor(
+            settle_intent(
+                order,
+                Some(rev),
+                vec![pay(arena_proto::PaymentMethod::Cash, total, None)],
+            ),
+            actor,
+        ),
+    )
+    .await
+    .unwrap()
+}
+
+async fn record_effect(f: &Fixture, kind: arena_proto::EffectKind, intent: &str, order: &str) {
+    let (intent, order) = (intent.to_owned(), order.to_owned());
+    f.writer
+        .submit(move |tx| {
+            let id = ulid::Ulid::generate().to_string();
+            let intent = (!intent.is_empty()).then_some(intent.as_str());
+            let order = (!order.is_empty()).then_some(order.as_str());
+            arena_store::insert_effect(tx, &id, kind, intent, order, 0)
+        })
+        .await
+        .unwrap();
+}
+
+fn nothing_changed(f: &Fixture, before: usize) {
+    assert_eq!(reopen(f).changes().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn undoing_an_end_reopens_the_session_deletes_the_bill_and_bills_the_gap() {
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 41).await;
+    let ended_at = f.clock.now_ms();
+    let s = sessions(&f)[0].clone();
+    assert_eq!(text(&s, "ended_by"), "o");
+    assert_eq!(int(&s, "rev"), 2);
+    assert_eq!(state_of(&f, &e.device), e.free);
+    let seg_rev = rev_of(
+        &f,
+        Table::SessionSegments,
+        &text(&table(&f, Table::SessionSegments)[0], "id"),
+    );
+
+    f.clock.advance(3_000);
+    let i = end_revert_intent(&e.session, Some(2));
+    let a = end(&f, i.clone()).await.unwrap();
+    assert_eq!(
+        a.changes
+            .iter()
+            .map(|c| (c.tbl.as_str(), c.op))
+            .collect::<Vec<_>>(),
+        [
+            ("sessions", ChangeOp::Update),
+            ("session_segments", ChangeOp::Update),
+            ("order_lines", ChangeOp::Delete),
+            ("orders", ChangeOp::Delete),
+            ("devices_meta", ChangeOp::Update),
+        ]
+    );
+    let s = &sessions(&f)[0];
+    assert_eq!(text(s, "state"), "active");
+    for col in ["ended_at", "end_reason", "ended_by"] {
+        assert_eq!(s[col], RowValue::Null, "{col}");
+    }
+    assert_eq!(int(s, "rev"), 3);
+    let seg = &table(&f, Table::SessionSegments)[0];
+    assert_eq!(seg["to_at"], RowValue::Null);
+    assert_eq!(int(seg, "rev"), seg_rev + 1);
+    assert!(table(&f, Table::Orders).is_empty());
+    assert!(table(&f, Table::OrderLines).is_empty());
+    assert_eq!(state_of(&f, &e.device), "in_session");
+    let live = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(live.sessions.len(), 1);
+    assert_eq!(live.bills[0].order_id, None);
+
+    let deleted = reopen(&f)
+        .changes()
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.op == ChangeOp::Delete)
+        .count();
+    assert_eq!(deleted, 2);
+
+    let again = end(&f, i).await.unwrap();
+    assert_eq!(again.intent_id, a.intent_id);
+    assert_eq!(sessions(&f)[0]["state"], RowValue::Text("active".into()));
+
+    f.clock.advance(20 * 60_000);
+    let s = sessions(&f)[0].clone();
+    end(&f, end_intent(&e.session, Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    assert!(f.clock.now_ms() - ended_at >= 20 * 60_000);
+    let line = &table(&f, Table::OrderLines)[0];
+    assert_eq!(int(line, "minutes"), 75);
+    assert_eq!(int(&table(&f, Table::Orders)[0], "total_minor"), 12_500);
+}
+
+#[tokio::test]
+async fn undoing_a_settle_deletes_the_payments_and_reopens_the_order() {
+    use arena_proto::PaymentMethod::{Cash, Upi};
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 41).await;
+    let rev = rev_of(&f, Table::Orders, &e.order);
+    end(
+        &f,
+        settle_intent(
+            &e.order,
+            Some(rev),
+            vec![pay(Cash, 5000, None), pay(Upi, 2500, Some("1234"))],
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(
+        crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms())
+            .unwrap()
+            .bills
+            .is_empty()
+    );
+    f.clock.advance(3_000);
+    let i = settle_revert_intent(&e.order, Some(rev + 1));
+    let a = end(&f, i.clone()).await.unwrap();
+    assert_eq!(
+        a.changes
+            .iter()
+            .map(|c| (c.tbl.as_str(), c.op))
+            .collect::<Vec<_>>(),
+        [
+            ("payments", ChangeOp::Delete),
+            ("payments", ChangeOp::Delete),
+            ("orders", ChangeOp::Update),
+        ]
+    );
+    assert!(table(&f, Table::Payments).is_empty());
+    let o = &table(&f, Table::Orders)[0];
+    assert_eq!(text(o, "status"), "open");
+    assert_eq!(o["settled_at"], RowValue::Null);
+    assert_eq!(o["settled_by"], RowValue::Null);
+    assert_eq!(int(o, "rev"), rev + 2);
+    let live = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(live.bills.len(), 1);
+    assert_eq!(live.bills[0].order_rev, Some(rev + 2));
+    assert_eq!(live.bills[0].remaining_minor, 7500);
+    assert_eq!(state_of(&f, &e.device), e.free);
+
+    let again = end(&f, i).await.unwrap();
+    assert_eq!(again.intent_id, a.intent_id);
+
+    end(
+        &f,
+        settle_intent(&e.order, Some(rev + 2), vec![pay(Cash, 7500, None)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(table(&f, Table::Payments).len(), 1);
+}
+
+#[tokio::test]
+async fn the_undo_window_is_eight_seconds_from_the_end_or_settle() {
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 10).await;
+    let rev = rev_of(&f, Table::Sessions, &e.session);
+    f.clock.advance(8_001);
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, end_revert_intent(&e.session, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    nothing_changed(&f, before);
+
+    let g = bootstrapped().await;
+    let e = ended_by(&g, owner(), 10_000, 10).await;
+    let rev = rev_of(&g, Table::Sessions, &e.session);
+    g.clock.advance(8_000);
+    end(&g, end_revert_intent(&e.session, Some(rev)))
+        .await
+        .unwrap();
+
+    let h = bootstrapped().await;
+    let e = ended_by(&h, owner(), 10_000, 10).await;
+    settled_by(&h, owner(), &e.order).await;
+    let rev = rev_of(&h, Table::Orders, &e.order);
+    h.clock.advance(9_000);
+    let before = reopen(&h).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&h, settle_revert_intent(&e.order, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    nothing_changed(&h, before);
+    assert_eq!(table(&h, Table::Payments).len(), 1);
+}
+
+#[tokio::test]
+async fn only_the_staff_member_who_did_it_can_undo() {
+    let f = bootstrapped().await;
+    let asha = staff(&f, "asha", ROLE_COUNTER).await;
+    let ravi = staff(&f, "ravi", ROLE_COUNTER).await;
+    let e = ended_by(&f, asha.clone(), 10_000, 10).await;
+    let rev = rev_of(&f, Table::Sessions, &e.session);
+    let before = reopen(&f).changes().unwrap().len();
+    for other in [ravi.clone(), owner()] {
+        assert_eq!(
+            refusal(
+                end(
+                    &f,
+                    with_actor(end_revert_intent(&e.session, Some(rev)), other)
+                )
+                .await
+            ),
+            (ErrorCode::UndoNotAllowed, None)
+        );
+    }
+    nothing_changed(&f, before);
+    end(
+        &f,
+        with_actor(end_revert_intent(&e.session, Some(rev)), asha.clone()),
+    )
+    .await
+    .unwrap();
+
+    let g = bootstrapped().await;
+    let asha = staff(&g, "asha", ROLE_COUNTER).await;
+    let ravi = staff(&g, "ravi", ROLE_COUNTER).await;
+    let e = ended_by(&g, owner(), 10_000, 10).await;
+    settled_by(&g, asha.clone(), &e.order).await;
+    let rev = rev_of(&g, Table::Orders, &e.order);
+    let before = reopen(&g).changes().unwrap().len();
+    assert_eq!(
+        refusal(
+            end(
+                &g,
+                with_actor(settle_revert_intent(&e.order, Some(rev)), ravi)
+            )
+            .await
+        ),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    nothing_changed(&g, before);
+    end(
+        &g,
+        with_actor(settle_revert_intent(&e.order, Some(rev)), asha),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn an_undo_needs_the_current_rev_and_a_target_in_the_right_state() {
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 10).await;
+    let rev = rev_of(&f, Table::Sessions, &e.session);
+    let field = |c, f: &str| (c, Some(f.to_owned()));
+    assert_eq!(
+        refusal(end(&f, end_revert_intent("nope", Some(1))).await),
+        field(ErrorCode::NotFound, "session_id")
+    );
+    assert_eq!(
+        refusal(end(&f, end_revert_intent(&e.session, None)).await),
+        field(ErrorCode::ValidationFailed, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, end_revert_intent(&e.session, Some(rev - 1))).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent("nope", Some(1))).await),
+        field(ErrorCode::NotFound, "order_id")
+    );
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent(&e.order, None)).await),
+        field(ErrorCode::ValidationFailed, "base_rev")
+    );
+    let order_rev = rev_of(&f, Table::Orders, &e.order);
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent(&e.order, Some(order_rev + 3))).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent(&e.order, Some(order_rev))).await),
+        field(ErrorCode::Stale, "order_id")
+    );
+    settled_by(&f, owner(), &e.order).await;
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent(&e.order, Some(order_rev))).await),
+        field(ErrorCode::Stale, "base_rev")
+    );
+    nothing_changed(&f, before);
+    let live = sessions(&f)[0].clone();
+    assert_eq!(text(&live, "state"), "ended");
+}
+
+#[tokio::test]
+async fn an_end_cannot_be_undone_after_the_bill_was_settled_or_the_pc_was_reused() {
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 10).await;
+    let rev = rev_of(&f, Table::Sessions, &e.session);
+    settled_by(&f, owner(), &e.order).await;
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, end_revert_intent(&e.session, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    nothing_changed(&f, before);
+    assert_eq!(state_of(&f, &e.device), e.free);
+
+    let g = bootstrapped().await;
+    let e = ended_by(&g, owner(), 10_000, 10).await;
+    let rev = rev_of(&g, Table::Sessions, &e.session);
+    start(&g, &e.device, None).await.unwrap();
+    let before = reopen(&g).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&g, end_revert_intent(&e.session, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    nothing_changed(&g, before);
+    assert_eq!(table(&g, Table::Orders).len(), 1);
+    assert_eq!(
+        sessions(&g)
+            .iter()
+            .filter(|s| text(s, "state") == "active")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_recorded_effect_blocks_undo_while_a_bill_with_none_stays_undoable() {
+    use arena_proto::EffectKind;
+    for kind in EffectKind::ALL {
+        let f = bootstrapped().await;
+        let e = ended_by(&f, owner(), 10_000, 10).await;
+        let forward = e.applied.intent_id.clone();
+        let rev = rev_of(&f, Table::Sessions, &e.session);
+        record_effect(&f, kind, &forward, "").await;
+        let before = reopen(&f).changes().unwrap().len();
+        assert_eq!(
+            refusal(end(&f, end_revert_intent(&e.session, Some(rev))).await),
+            (ErrorCode::UndoNotAllowed, None),
+            "{}",
+            kind.as_str()
+        );
+        nothing_changed(&f, before);
+
+        let g = bootstrapped().await;
+        let e = ended_by(&g, owner(), 10_000, 10).await;
+        let settled = settled_by(&g, owner(), &e.order).await;
+        let rev = rev_of(&g, Table::Orders, &e.order);
+        g.clock.advance(5_000);
+        record_effect(&g, kind, &settled.intent_id, "").await;
+        g.clock.advance(1_000);
+        let before = reopen(&g).changes().unwrap().len();
+        assert_eq!(
+            refusal(end(&g, settle_revert_intent(&e.order, Some(rev))).await),
+            (ErrorCode::UndoNotAllowed, None),
+            "{}",
+            kind.as_str()
+        );
+        nothing_changed(&g, before);
+        assert_eq!(table(&g, Table::Payments).len(), 1);
+    }
+
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 10).await;
+    let settled = settled_by(&f, owner(), &e.order).await;
+    let rev = rev_of(&f, Table::Orders, &e.order);
+    f.clock.advance(7_000);
+    let read = reopen(&f).settlement(&e.order).unwrap().unwrap();
+    assert!(!read.irreversible);
+    record_effect(&f, EffectKind::InvoiceNumberAssigned, "", &e.order).await;
+    assert!(
+        reopen(&f)
+            .settlement(&e.order)
+            .unwrap()
+            .unwrap()
+            .irreversible
+    );
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent(&e.order, Some(rev))).await),
+        (ErrorCode::UndoNotAllowed, None)
+    );
+    assert_eq!(settled.changes.len(), 2);
+}
+
+#[tokio::test]
+async fn the_end_outcome_reads_back_the_rev_total_and_effect_state() {
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 41).await;
+    let ending = reopen(&f).ending(&e.session).unwrap().unwrap();
+    assert_eq!(ending.order_id, e.order);
+    assert_eq!(ending.ended_at, f.clock.now_ms());
+    assert_eq!(ending.session_rev, rev_of(&f, Table::Sessions, &e.session));
+    assert_eq!(ending.total_minor, 7500);
+    assert!(!ending.irreversible);
+    record_effect(
+        &f,
+        arena_proto::EffectKind::ReceiptPrinted,
+        &e.applied.intent_id,
+        "",
+    )
+    .await;
+    assert!(reopen(&f).ending(&e.session).unwrap().unwrap().irreversible);
+}
+
+#[tokio::test]
+async fn the_audit_links_a_reverted_intent_to_its_forward_intent() {
+    let f = bootstrapped().await;
+    let e = ended_by(&f, owner(), 10_000, 10).await;
+    let settled = settled_by(&f, owner(), &e.order).await;
+    let rev = rev_of(&f, Table::Orders, &e.order);
+    f.clock.advance(1_000);
+    let undone = end(&f, settle_revert_intent(&e.order, Some(rev)))
+        .await
+        .unwrap();
+    let page = reopen(&f)
+        .audit_page(&arena_store::AuditFilter::default(), 100)
+        .unwrap();
+    let reverted: Vec<_> = page
+        .iter()
+        .filter(|r| r.intent_id == undone.intent_id)
+        .collect();
+    assert_eq!(reverted.len(), 2);
+    assert!(
+        reverted
+            .iter()
+            .all(|r| r.reverts.as_deref() == Some(settled.intent_id.as_str()))
+    );
+    assert!(
+        page.iter()
+            .filter(|r| r.intent_id == settled.intent_id)
+            .all(|r| r.reverts.is_none())
+    );
+    let change = reopen(&f)
+        .changes()
+        .unwrap()
+        .into_iter()
+        .find(|c| c.intent_id == undone.intent_id)
+        .unwrap();
+    let detail = crate::audit::read_detail(&reopen(&f), &change.epoch, change.seq)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        detail.item.reverts.as_deref(),
+        Some(settled.intent_id.as_str())
+    );
+
+    let g = bootstrapped().await;
+    let e = ended_by(&g, owner(), 10_000, 10).await;
+    let rev = rev_of(&g, Table::Sessions, &e.session);
+    g.clock.advance(1_000);
+    let undone = end(&g, end_revert_intent(&e.session, Some(rev)))
+        .await
+        .unwrap();
+    let page = reopen(&g)
+        .audit_page(&arena_store::AuditFilter::default(), 100)
+        .unwrap();
+    assert!(
+        page.iter()
+            .filter(|r| r.intent_id == undone.intent_id)
+            .all(|r| r.reverts.as_deref() == Some(e.applied.intent_id.as_str()))
+    );
+}

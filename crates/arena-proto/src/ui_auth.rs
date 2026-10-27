@@ -122,8 +122,8 @@ pub struct UiIntentRequest {
     pub elevation_ticket: Option<String>,
 }
 
-/// The reply to a successful `POST /ui/intent`: the applied rows and, for `session.settle`, when
-/// it settled and until when it can be undone.
+/// The reply to a successful `POST /ui/intent`: the applied rows and, for `session.settle` and
+/// `session.end`, when it committed and until when it can be undone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct UiIntentResult {
@@ -131,6 +131,9 @@ pub struct UiIntentResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub settled: Option<crate::session::SettleOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ended: Option<crate::session::EndOutcome>,
 }
 
 /// Most intents one elevation ticket may cover.

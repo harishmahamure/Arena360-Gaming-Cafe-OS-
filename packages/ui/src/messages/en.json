@@ -1438,5 +1438,18 @@
   "hub.sheet.done.settled": "Bill settled",
   "hub.floor.unpaid": "UNPAID {amount}",
   "hub.audit.intent.session.end": "Session end",
-  "hub.audit.intent.session.settle": "Bill settled"
+  "hub.audit.intent.session.settle": "Bill settled",
+  "hub.audit.intent.session.end.reverted": "Session end undone",
+  "hub.audit.intent.session.settle.reverted": "Bill settled undone",
+  "hub.audit.detail.reverts": "Undoes intent {id}",
+  "ui.undo.action": "Undo",
+  "ui.undo.seconds": "{s} s left",
+  "hub.undo.ended": "Session ended · {amount}",
+  "hub.undo.settled": "Bill settled · {amount}",
+  "hub.undo.done.end": "End undone. The session is running again.",
+  "hub.undo.done.settle": "Settle undone. The bill is unpaid again.",
+  "hub.undo.not_allowed": "Too late to undo this.",
+  "hub.undo.stale": "This changed since, so it can't be undone.",
+  "hub.undo.failed": "Couldn't undo. Try again.",
+  "hub.undo.permission": "Ask a manager to approve the undo."
 }

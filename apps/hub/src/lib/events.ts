@@ -36,6 +36,10 @@ export type EventHandlers = {
   onSessionStarted?: () => void;
   /** `bill.settled`: a bill was settled; reload the snapshot so its UNPAID line clears. */
   onBillSettled?: () => void;
+  /** `bill.reverted`: an End or a Settle was undone; reload the snapshot. */
+  onBillReverted?: () => void;
+  /** `effect.recorded`: a receipt, drawer kick or invoice number was recorded for a bill. */
+  onEffectRecorded?: (orderId: string) => void;
   onPairingCodeChanged?: (change: PairingChange) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
@@ -96,6 +100,17 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
     es.addEventListener("devices.changed", () => handlers.onDevicesChanged?.());
     es.addEventListener("session.started", () => handlers.onSessionStarted?.());
     es.addEventListener("bill.settled", () => handlers.onBillSettled?.());
+    es.addEventListener("bill.reverted", () => handlers.onBillReverted?.());
+    es.addEventListener("effect.recorded", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        if (isObject(data) && typeof data.order_id === "string") {
+          handlers.onEffectRecorded?.(data.order_id);
+        }
+      } catch {
+        return;
+      }
+    });
     es.addEventListener("groups.changed", (ev) => {
       try {
         const data: unknown = JSON.parse((ev as MessageEvent<string>).data);

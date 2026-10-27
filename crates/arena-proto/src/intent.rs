@@ -139,11 +139,15 @@ pub enum IntentKind {
     SessionEnd,
     #[serde(rename = "session.settle")]
     SessionSettle,
+    #[serde(rename = "session.end.reverted")]
+    SessionEndReverted,
+    #[serde(rename = "session.settle.reverted")]
+    SessionSettleReverted,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 41] = [
+    pub const ALL: [IntentKind; 43] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -185,6 +189,8 @@ impl IntentKind {
         Self::SessionStart,
         Self::SessionEnd,
         Self::SessionSettle,
+        Self::SessionEndReverted,
+        Self::SessionSettleReverted,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -231,6 +237,8 @@ impl IntentKind {
             Self::SessionStart => "session.start",
             Self::SessionEnd => "session.end",
             Self::SessionSettle => "session.settle",
+            Self::SessionEndReverted => "session.end.reverted",
+            Self::SessionSettleReverted => "session.settle.reverted",
         }
     }
 
@@ -276,7 +284,11 @@ impl IntentKind {
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
-            Self::SessionStart | Self::SessionEnd | Self::SessionSettle => IntentCategory::Session,
+            Self::SessionStart
+            | Self::SessionEnd
+            | Self::SessionSettle
+            | Self::SessionEndReverted
+            | Self::SessionSettleReverted => IntentCategory::Session,
         }
     }
 
@@ -319,8 +331,12 @@ impl IntentKind {
                 Requirement::Perm(Permission::PlayerManage)
             }
             Self::SessionStart => Requirement::Perm(Permission::SessionStart),
-            Self::SessionEnd => Requirement::Perm(Permission::SessionEnd),
-            Self::SessionSettle => Requirement::Perm(Permission::PosSell),
+            Self::SessionEnd | Self::SessionEndReverted => {
+                Requirement::Perm(Permission::SessionEnd)
+            }
+            Self::SessionSettle | Self::SessionSettleReverted => {
+                Requirement::Perm(Permission::PosSell)
+            }
         }
     }
 
@@ -384,7 +400,9 @@ impl IntentKind {
             | Self::PlayerPasswordReset
             | Self::SessionStart
             | Self::SessionEnd
-            | Self::SessionSettle => None,
+            | Self::SessionSettle
+            | Self::SessionEndReverted
+            | Self::SessionSettleReverted => None,
         }
     }
 
@@ -828,6 +846,10 @@ pub enum IntentPayload {
     SessionEnd(crate::SessionEnd),
     #[serde(rename = "session.settle")]
     SessionSettle(crate::SessionSettle),
+    #[serde(rename = "session.end.reverted")]
+    SessionEndReverted(crate::SessionEndReverted),
+    #[serde(rename = "session.settle.reverted")]
+    SessionSettleReverted(crate::SessionSettleReverted),
 }
 
 impl IntentPayload {
@@ -874,6 +896,8 @@ impl IntentPayload {
             Self::SessionStart(_) => IntentKind::SessionStart,
             Self::SessionEnd(_) => IntentKind::SessionEnd,
             Self::SessionSettle(_) => IntentKind::SessionSettle,
+            Self::SessionEndReverted(_) => IntentKind::SessionEndReverted,
+            Self::SessionSettleReverted(_) => IntentKind::SessionSettleReverted,
         }
     }
 }
@@ -1118,8 +1142,10 @@ mod tests {
                     Requirement::Perm(Permission::PlayerManage)
                 }
                 "session.start" => Requirement::Perm(Permission::SessionStart),
-                "session.end" => Requirement::Perm(Permission::SessionEnd),
-                "session.settle" => Requirement::Perm(Permission::PosSell),
+                "session.end" | "session.end.reverted" => Requirement::Perm(Permission::SessionEnd),
+                "session.settle" | "session.settle.reverted" => {
+                    Requirement::Perm(Permission::PosSell)
+                }
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

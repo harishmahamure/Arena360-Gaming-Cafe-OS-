@@ -2,7 +2,7 @@
 title: 'Story 4.9: Free limits — 3 users, 20 devices and one branch — enforced and explained at the Hub'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:

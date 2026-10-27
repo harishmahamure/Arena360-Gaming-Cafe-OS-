@@ -208,6 +208,7 @@ mod tests {
         claims.as_object_mut().unwrap().remove("limits");
         assert!(serde_json::from_value::<LicenceClaims>(claims).is_err());
     }
+
     #[test]
     fn an_expired_paid_licence_falls_back_to_free_and_a_free_one_never_warns() {
         let after = (T0 + licence::LICENCE_TTL_S + 1) * 1000;

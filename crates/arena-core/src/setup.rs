@@ -6,9 +6,10 @@ use tokio::sync::{broadcast, watch};
 use crate::{Applied, HubStatus, SnapshotReader};
 
 use arena_proto::{
-    AdConsentState, AdsConsent, AppError, BACKUP_PROBE_PREFIX, BackupDirProblem, ErrorCode,
-    KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET, KEY_PRINTER_STATUS, KEY_SETUP_LIVE,
-    KEY_TEST_SESSION, PrinterState, PrinterStatus, SetupStatus, TestSessionStatus,
+    AdConsentState, AdRating, AdsConsent, AppError, BACKUP_PROBE_PREFIX, BackupDirProblem,
+    ErrorCode, KEY_ADS_CONSENT, KEY_ADS_RATING, KEY_BACKUP_DIR, KEY_OPENING_HOURS_SET,
+    KEY_PRINTER_STATUS, KEY_SETUP_LIVE, KEY_TEST_SESSION, PrinterState, PrinterStatus, SetupStatus,
+    TestSessionStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub fn setup_status<'a>(
         opening_hours_set: value(KEY_OPENING_HOURS_SET) == Some("true"),
         backup_location_set: value(KEY_BACKUP_DIR).is_some_and(|v| !v.trim().is_empty()),
         ad_consent,
+        ad_rating: value(KEY_ADS_RATING).map_or_else(AdRating::default, AdRating::parse),
         printer: value(KEY_PRINTER_STATUS)
             .and_then(PrinterStatus::parse)
             .map_or(PrinterState::Unset, |s| s.state),
@@ -243,6 +245,7 @@ mod tests {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -267,6 +270,7 @@ mod tests {
                 opening_hours_set: true,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Given,
+                ad_rating: AdRating::PG,
                 printer: PrinterState::Skipped,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -298,6 +302,7 @@ mod tests {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,

@@ -4,6 +4,7 @@ export type { ActivePairingCode } from "./ActivePairingCode";
 export type { Actor } from "./Actor";
 export type { ActorKind } from "./ActorKind";
 export type { AdConsentState } from "./AdConsentState";
+export type { AdRating } from "./AdRating";
 export type { AddBranch } from "./AddBranch";
 export type { AdminExitMode } from "./AdminExitMode";
 export type { AdminPinOk } from "./AdminPinOk";

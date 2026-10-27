@@ -116,7 +116,7 @@ development_status:
   4-9-free-limits-3-users-20-devices-and-one-branch-enforced-and-e: done
   4-10-in-house-admob-plugin-and-the-ads-gate-with-no-ad-code-in-ru: done
   4-11-an-always-visible-banner-in-a-permanent-slot-that-nothing-co: done
-  4-12-safe-ad-categories-a-per-branch-content-rating-and-the-ads-c: backlog
+  4-12-safe-ad-categories-a-per-branch-content-rating-and-the-ads-c: review
   4-13-a-standard-interstitial-only-when-staff-come-back-from-the-i: backlog
   4-14-ad-requests-and-impressions-are-recorded-without-ids-and-sen: backlog
   4-15-upgrading-removes-ads-within-one-heartbeat-and-a-lapse-bring: backlog

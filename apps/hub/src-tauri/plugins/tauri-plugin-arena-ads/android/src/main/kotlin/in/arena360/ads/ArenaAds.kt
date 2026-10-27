@@ -2,6 +2,7 @@ package `in`.arena360.ads
 
 import android.app.Activity
 import android.os.StrictMode
+import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -9,6 +10,7 @@ import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.widget.FrameLayout
+import com.google.ads.mediation.admob.AdMobAdapter
 import com.google.android.gms.ads.AdError
 import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdRequest
@@ -52,7 +54,7 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
 
   /**
    * Starts the SDK (once) off the main thread. Returns `{"debug":true|false}` at once: the dev
-   * gallery only opens on a debug build. `config` is `{"rating":"G"|"PG"|"T"}`.
+   * gallery only opens on a debug build. `config` is `{"rating":"G"|"PG"|"T","personalised":bool}`.
    */
   @JavascriptInterface
   fun init(config: String?): String {
@@ -74,6 +76,37 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
 
   private fun requestConfiguration(): RequestConfiguration =
     MobileAds.getRequestConfiguration().toBuilder().setMaxAdContentRating(config.rating.sdk).build()
+
+  /**
+   * The branch's rating or consent changed (`{"rating":"G"|"PG"|"T","personalised":bool}`). The
+   * rating is the SDK's request configuration, so every request after this one (banner refreshes
+   * and interstitials too) carries it, with no restart. A changed consent re-requests the banner,
+   * because a refresh would reuse the request it was first loaded with.
+   */
+  @JavascriptInterface
+  fun configure(config: String?) {
+    val next = AdsConfig.parse(config)
+    val consentChanged = next.personalised != this.config.personalised
+    this.config = next
+    if (!started.get()) return
+    worker.execute { MobileAds.setRequestConfiguration(requestConfiguration()) }
+    if (consentChanged) {
+      activity.runOnUiThread {
+        val view = banner ?: return@runOnUiThread
+        bannerRequested = false
+        if (view.visibility == View.VISIBLE) requestBanner(view)
+      }
+    }
+  }
+
+  /** Every banner and interstitial request: non-personalised until the owner's consent is recorded. */
+  private fun adRequest(): AdRequest {
+    val builder = AdRequest.Builder()
+    if (!config.personalised) {
+      builder.addNetworkExtrasBundle(AdMobAdapter::class.java, Bundle().apply { putString("npa", "1") })
+    }
+    return builder.build()
+  }
 
   /** Puts an anchored adaptive banner inside `rect` (`{x,y,width,height}` in CSS pixels of the page). */
   @JavascriptInterface
@@ -114,7 +147,7 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
       AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(activity, bannerWidth)
     )
     emit(AdEvents.REQUESTED, AdEvents.BANNER)
-    view.loadAd(AdRequest.Builder().build())
+    view.loadAd(adRequest())
   }
 
   /**
@@ -165,7 +198,7 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
       InterstitialAd.load(
         activity,
         BuildConfig.INTERSTITIAL_UNIT_ID,
-        AdRequest.Builder().build(),
+        adRequest(),
         object : InterstitialAdLoadCallback() {
           override fun onAdLoaded(ad: InterstitialAd) {
             loadingInterstitial = false

@@ -112,6 +112,7 @@ function snapshot(hub: Hub): HubSnapshot {
       opening_hours_set: false,
       backup_location_set: false,
       ad_consent: "missing",
+      ad_rating: "PG",
       printer: printerState(hub),
       products_count: 0,
       groups_without_rate: 0,

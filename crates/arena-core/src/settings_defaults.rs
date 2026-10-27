@@ -1,12 +1,13 @@
 //! The settings every branch starts with, written by `branch.bootstrap`. Every value is TEXT.
 
 use arena_proto::{
-    BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap, DEFAULT_ADS_CONSENT,
-    DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT, DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS,
-    DEFAULT_OPENING_HOURS_SET, DEFAULT_PROCESS_ALLOW, DEFAULT_PROCESS_BLOCK, FULFILMENT_MODES,
-    HC_DEFAULT, KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_HC_HUB,
-    KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW,
-    KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
+    ADS_RATINGS, BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap,
+    DEFAULT_ADS_CONSENT, DEFAULT_ADS_RATING, DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT,
+    DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET, DEFAULT_PROCESS_ALLOW,
+    DEFAULT_PROCESS_BLOCK, FULFILMENT_MODES, HC_DEFAULT, KEY_ADS_CONSENT, KEY_ADS_RATING,
+    KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_HC_HUB, KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS,
+    KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK, KEY_PROCESS_MODE,
+    KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
 };
 use arena_proto::{
     BILLING_GRACE_RANGE, BILLING_MINIMUM_RANGE, BILLING_ROUNDING_RANGE,
@@ -95,6 +96,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_KIOSK_VOLUME_DEFAULT, DEFAULT_KIOSK_VOLUME),
     (KEY_BACKUP_DIR, DEFAULT_BACKUP_DIR),
     (KEY_ADS_CONSENT, DEFAULT_ADS_CONSENT),
+    (KEY_ADS_RATING, DEFAULT_ADS_RATING),
     (KEY_PRINTER_SELECTED, DEFAULT_PRINTER_SELECTED),
     (KEY_PRINTER_PAPER_MM, DEFAULT_PRINTER_PAPER_MM),
     (KEY_PRINTER_STATUS, DEFAULT_PRINTER_STATUS),
@@ -236,6 +238,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     ),
     (KEY_BACKUP_DIR, SettingRule::Path),
     (KEY_ADS_CONSENT, SettingRule::AdsConsent),
+    (KEY_ADS_RATING, SettingRule::OneOf(ADS_RATINGS)),
     (KEY_PRINTER_SELECTED, SettingRule::PrinterSelected),
     (
         KEY_PRINTER_PAPER_MM,
@@ -530,6 +533,13 @@ mod tests {
         assert!(consent.accepts(DEFAULT_ADS_CONSENT));
         assert!(!consent.accepts("yes"));
         assert!(rule("branch.opening_hours_set").accepts("true"));
+        let rating = rule("branch.ads_rating");
+        for ok in ["G", "PG", "T"] {
+            assert!(rating.accepts(ok), "{ok}");
+        }
+        for bad in ["MA", "R", "pg", "", " PG", "UNSPECIFIED"] {
+            assert!(!rating.accepts(bad), "{bad:?}");
+        }
     }
 
     #[test]
@@ -620,6 +630,7 @@ mod tests {
             ("branch.opening_hours_set", "false"),
             ("branch.fulfilment", "counter"),
             ("kiosk.volume_default", "50"),
+            ("branch.ads_rating", "PG"),
             ("system.backup_dir", ""),
             ("printer.selected", ""),
             ("printer.paper_mm", "80"),

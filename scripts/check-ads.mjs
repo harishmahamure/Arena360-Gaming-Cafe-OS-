@@ -6,6 +6,8 @@
 //             ad SDK or endpoint (the Kiosk also may not name the plugin); the plugin's debug build
 //             type does not use Google's test unit ids or its release one does.
 //   artefact  a built file (a Kiosk build, the Windows Hub executable or installer) contains one.
+//   note      the AdMob category note lists the blocked sensitive categories and a config version;
+//             with --release, a named person, date and release are filled in (the release checklist).
 //   ids       a built Android variant carries the wrong ad ids: a test id in release, a production
 //             id in debug (`--require-production` also refuses the all-zero placeholder).
 // Reads local files only (no network).
@@ -17,6 +19,10 @@ import { fileURLToPath } from "node:url";
 export const PLUGIN_DIR = "apps/hub/src-tauri/plugins/tauri-plugin-arena-ads";
 export const PLUGIN_BUILD = `${PLUGIN_DIR}/android/build.gradle.kts`;
 export const ANDROID_PROJECT = "apps/hub/src-tauri/gen/android";
+/** The versioned record of the AdMob account's blocked categories (Story 4.12). */
+export const CATEGORY_NOTE = `${PLUGIN_DIR}/AD-CATEGORIES.md`;
+/** What the note must list as blocked at app level, as the note words them. */
+export const BLOCKED_CATEGORIES = ["Adult / sexual", "Gambling and betting", "Alcohol"];
 
 /** Google's published test publisher id: every id under it is a test id. */
 export const TEST_PUBLISHER = "ca-app-pub-3940256099942544";
@@ -235,6 +241,38 @@ export function checkPluginBuild(text) {
   return errors;
 }
 
+const NOT_FILLED = /^\(.*\)$|^$|^(tbd|todo|n\/a|none|-)$/i;
+
+/**
+ * The category note names a config version and lists the three blocked sensitive categories. With
+ * `release`, it also names the person who checked the account, the date and the release (each
+ * filled in, not the "(nobody yet)" placeholders).
+ */
+export function checkCategoryNote(text, release = false) {
+  if (text === undefined) return [`${CATEGORY_NOTE} is missing`];
+  const errors = [];
+  if (!/^Config version:[ \t]*[1-9]\d*[ \t]*$/m.test(text)) {
+    errors.push(`${CATEGORY_NOTE}: no "Config version: <n>" line`);
+  }
+  const blocked =
+    text.match(/^## Blocked at app level\r?\n([\s\S]*?)(?=^## |(?![\s\S]))/m)?.[1] ?? "";
+  const listed = [...blocked.matchAll(/^- (.+?)\s*$/gm)].map((m) => m[1].toLowerCase());
+  for (const c of BLOCKED_CATEGORIES) {
+    if (!listed.includes(c.toLowerCase())) {
+      errors.push(`${CATEGORY_NOTE}: the blocked category "${c}" is not listed`);
+    }
+  }
+  if (release) {
+    for (const field of ["Checked by", "Checked on", "Checked for release"]) {
+      const value = text.match(new RegExp(String.raw`^${field}:[ \t]*(.*?)\s*$`, "m"))?.[1];
+      if (value === undefined || NOT_FILLED.test(value.trim())) {
+        errors.push(`${CATEGORY_NOTE}: "${field}" is not filled in for this release`);
+      }
+    }
+  }
+  return errors;
+}
+
 export function checkSource(root) {
   return [
     ...checkRust(root),
@@ -242,6 +280,9 @@ export function checkSource(root) {
     ...checkWindowsAndKiosk(root),
     ...checkPluginBuild(
       existsSync(join(root, PLUGIN_BUILD)) ? read(join(root, PLUGIN_BUILD)) : undefined,
+    ),
+    ...checkCategoryNote(
+      existsSync(join(root, CATEGORY_NOTE)) ? read(join(root, CATEGORY_NOTE)) : undefined,
     ),
   ];
 }
@@ -365,13 +406,19 @@ function main() {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   let errors;
   if (mode === "source") errors = checkSource(root);
-  else if (mode === "ids") errors = checkBuiltIds(root, rest.includes("--require-production"));
+  else if (mode === "note") {
+    const file = join(root, CATEGORY_NOTE);
+    errors = checkCategoryNote(
+      existsSync(file) ? read(file) : undefined,
+      rest.includes("--release"),
+    );
+  } else if (mode === "ids") errors = checkBuiltIds(root, rest.includes("--require-production"));
   else if (mode === "artefact" && rest.length > 0) {
     const allow = rest.filter((a) => a.startsWith("--allow=")).map((a) => a.slice(8));
     errors = rest.filter((a) => !a.startsWith("--")).flatMap((p) => checkArtefact(p, allow));
   } else {
     console.error(
-      "usage: check-ads.mjs source | ids [--require-production] | artefact <path>... [--allow=<string>]",
+      "usage: check-ads.mjs source | note [--release] | ids [--require-production] | artefact <path>... [--allow=<string>]",
     );
     process.exit(64);
   }

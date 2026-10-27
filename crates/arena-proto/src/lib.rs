@@ -135,14 +135,14 @@ pub use kitchen::{
 };
 pub use licence::{LicenceClaims, LicenceError, VerifyKey};
 pub use operating::{
-    ADS_POLICY_VERSION, AdConsentState, AdsConsent, AdsConsentSet, BACKUP_PROBE_PREFIX,
-    BackupDirProblem, DAYS_PER_WEEK, DEFAULT_ADS_CONSENT, DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT,
-    DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET, DEFAULT_SETUP_LIVE,
-    FULFILMENT_MODES, KEY_ADS_CONSENT, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT,
-    KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_SETUP_LIVE, KIOSK_OPERATING_KEYS,
-    KIOSK_VOLUME_MAX, LAST_MINUTE, OpeningDay, OpeningHoursError, SetupStatus, TestSessionState,
-    has_open_day, is_absolute_path, is_backup_location, is_backup_tree_uri, opening_hours_json,
-    parse_opening_hours,
+    ADS_POLICY_VERSION, ADS_RATINGS, AdConsentState, AdRating, AdsConsent, AdsConsentSet,
+    BACKUP_PROBE_PREFIX, BackupDirProblem, DAYS_PER_WEEK, DEFAULT_ADS_CONSENT, DEFAULT_ADS_RATING,
+    DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT, DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS,
+    DEFAULT_OPENING_HOURS_SET, DEFAULT_SETUP_LIVE, FULFILMENT_MODES, KEY_ADS_CONSENT,
+    KEY_ADS_RATING, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS,
+    KEY_OPENING_HOURS_SET, KEY_SETUP_LIVE, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, LAST_MINUTE,
+    OpeningDay, OpeningHoursError, SetupStatus, TestSessionState, has_open_day, is_absolute_path,
+    is_backup_location, is_backup_tree_uri, opening_hours_json, parse_opening_hours,
 };
 pub use pairing::{
     ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,

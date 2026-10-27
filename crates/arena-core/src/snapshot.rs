@@ -1148,6 +1148,7 @@ mod tests {
                     opening_hours_set: false,
                     backup_location_set: false,
                     ad_consent: arena_proto::AdConsentState::Missing,
+                    ad_rating: arena_proto::AdRating::PG,
                     printer: arena_proto::PrinterState::Unset,
                     products_count: 0,
                     groups_without_rate: 0,

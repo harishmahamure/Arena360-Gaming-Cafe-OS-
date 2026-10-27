@@ -6,7 +6,7 @@
 // off the plugin is never initialised, no request is made and nothing is rendered; on any other
 // platform every call below does nothing.
 
-import type { Tier } from "@arena/ui/generated";
+import type { AdRating, Tier } from "@arena/ui/generated";
 
 /** The page-side name of the plugin's JavaScript interface (Android WebView only). */
 export const BRIDGE_NAME = "ArenaAds";
@@ -28,9 +28,24 @@ export type AdEvent = { event: AdEventName; slot: AdSlot };
 /** A banner rectangle in CSS pixels of the page. */
 export type AdRect = { x: number; y: number; width: number; height: number };
 
-/** What the Android plugin exposes (`ArenaAds` on `window`). */
+/**
+ * What the plugin is told about the branch (Story 4.12): the highest content rating it may ask
+ * for, and whether the owner's consent is recorded (without it, requests are non-personalised).
+ */
+export type AdsConfig = { rating: AdRating; personalised: boolean };
+
+/** Before the branch says otherwise: PG, non-personalised. */
+export const DEFAULT_ADS_CONFIG: AdsConfig = { rating: "PG", personalised: false };
+
+/** A stored rating the UI knows; MA, junk and nothing at all are PG, never a looser rating. */
+export function adRatingOf(value: unknown): AdRating {
+  return value === "G" || value === "T" ? value : "PG";
+}
+
+/** What the plugin exposes (`ArenaAds` on `window`). */
 export type AdsBridge = {
   init(config: string): string;
+  configure(config: string): void;
   bannerPlace(rect: string): void;
   bannerHide(): void;
   bannerDestroy(): void;
@@ -85,6 +100,7 @@ export class AdsClient {
   #stop: (() => void) | null = null;
   #events = new Set<(e: AdEvent) => void>();
   #changed = new Set<(s: AdsState) => void>();
+  #config: AdsConfig = DEFAULT_ADS_CONFIG;
   state: AdsState = { enabled: false, debug: false };
 
   constructor(env: AdsEnv = browserEnv()) {
@@ -103,10 +119,30 @@ export class AdsClient {
     return this.state.enabled;
   }
 
+  /**
+   * Tells the plugin the branch's content rating and consent. Safe before the gate turns on (the
+   * plugin then starts with it) and while ads run (the next ad request uses it, no restart).
+   */
+  configure(next: AdsConfig) {
+    const config = { rating: adRatingOf(next.rating), personalised: next.personalised === true };
+    if (
+      config.rating === this.#config.rating &&
+      config.personalised === this.#config.personalised
+    ) {
+      return;
+    }
+    this.#config = config;
+    try {
+      this.#bridge?.configure(JSON.stringify(this.#config));
+    } catch {
+      // The plugin is gone with the page; the next start sends the config again.
+    }
+  }
+
   #start(bridge: AdsBridge) {
     let answer: string;
     try {
-      answer = bridge.init(JSON.stringify({ rating: "PG" }));
+      answer = bridge.init(JSON.stringify(this.#config));
     } catch {
       // The plugin did not start: stay off, and try again at the next evaluation.
       return;

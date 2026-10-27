@@ -6,6 +6,7 @@ export const KEY_FULFILMENT = "branch.fulfilment";
 export const KEY_KIOSK_VOLUME = "kiosk.volume_default";
 export const KEY_BACKUP_DIR = "system.backup_dir";
 export const KEY_ADS_CONSENT = "branch.ads_consent";
+export const KEY_ADS_RATING = "branch.ads_rating";
 export const AD_POLICY_URL = "https://arena360.cloud/legal/ad-policy";
 export const DAYS_PER_WEEK = 7;
 export const ADS_POLICY_VERSION = 1;

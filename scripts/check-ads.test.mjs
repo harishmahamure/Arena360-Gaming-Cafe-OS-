@@ -5,12 +5,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  CATEGORY_NOTE,
   PLUGIN_BUILD,
   PLUGIN_DIR,
   adIds,
   cargoDependencyNames,
   checkArtefact,
   checkBuiltIds,
+  checkCategoryNote,
   checkKotlinImports,
   checkPluginBuild,
   checkRust,
@@ -242,4 +244,51 @@ test("an empty artefact directory is reported", () => {
   rmSync(join(r.dir, "x/.keep"));
   assert.equal(checkArtefact(join(r.dir, "x")).length, 1);
   r.done();
+});
+
+const NOTE = (extra = "") => `# Ad category blocks
+
+Config version: 2
+
+## Blocked at app level
+
+- Adult / sexual
+- Gambling and betting
+- Alcohol
+
+## Release check
+
+${extra}`;
+const SIGNED = `Checked by: Asha Rao
+Checked on: 2027-02-01
+Checked for release: 1.4.0
+`;
+
+test("the category note needs a version and the three blocked categories", () => {
+  assert.deepEqual(checkCategoryNote(NOTE()), []);
+  assert.deepEqual(checkCategoryNote(readFileSync(join(ROOT, CATEGORY_NOTE), "utf8")), []);
+  assert.ok(checkCategoryNote(undefined)[0].includes("missing"));
+  assert.ok(checkCategoryNote(NOTE().replace("Config version: 2", "")).length > 0);
+  assert.ok(checkCategoryNote(NOTE().replace("Config version: 2", "Config version: 0")).length > 0);
+  for (const gone of ["Adult / sexual", "Gambling and betting", "Alcohol"]) {
+    const errors = checkCategoryNote(NOTE().replace(`- ${gone}\n`, ""));
+    assert.deepEqual(errors.length, 1, gone);
+    assert.ok(errors[0].includes(gone));
+  }
+  // A category named outside the "Blocked at app level" list does not count.
+  assert.ok(checkCategoryNote(NOTE().replace("- Alcohol\n", "") + "- Alcohol\n").length > 0);
+});
+
+test("a release needs a named person, a date and the release on the note", () => {
+  assert.deepEqual(checkCategoryNote(NOTE(SIGNED), true), []);
+  assert.equal(checkCategoryNote(NOTE(), true).length, 3);
+  const placeholders = `Checked by: (nobody yet)
+Checked on: (not yet)
+Checked for release: (not yet)
+`;
+  assert.equal(checkCategoryNote(NOTE(placeholders), true).length, 3);
+  assert.equal(checkCategoryNote(NOTE(SIGNED.replace("Asha Rao", "")), true).length, 1);
+  assert.equal(checkCategoryNote(NOTE(SIGNED.replace("Asha Rao", "TBD")), true).length, 1);
+  // Without --release the placeholders are fine: the note still has its structure.
+  assert.deepEqual(checkCategoryNote(NOTE(placeholders)), []);
 });

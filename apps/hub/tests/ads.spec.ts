@@ -1,7 +1,14 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { HubSnapshot, Tier } from "@arena/ui/generated";
+import type { AdConsentState, AdRating, HubSnapshot, Tier } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
-import { AdsClient, adsEnabled, isAdEvent, type AdEvent, type AdsBridge } from "../src/lib/ads";
+import {
+  AdsClient,
+  adRatingOf,
+  adsEnabled,
+  isAdEvent,
+  type AdEvent,
+  type AdsBridge,
+} from "../src/lib/ads";
 import { isEntitlementChanged } from "../src/lib/events";
 import { ORIGIN } from "./origin";
 
@@ -23,7 +30,12 @@ const STAFF = {
 const ANDROID_UA =
   "Mozilla/5.0 (Linux; Android 14; SM-X110) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-type Hub = { tier: Tier | null; queue: string[] };
+type Hub = {
+  tier: Tier | null;
+  queue: string[];
+  rating: AdRating | null;
+  consent: AdConsentState;
+};
 
 function json(route: Route, status: number, body: unknown) {
   return route.fulfill({
@@ -34,8 +46,28 @@ function json(route: Route, status: number, body: unknown) {
   });
 }
 
-async function open(page: Page, tier: Tier | null, { debug = true, path = "/floor" } = {}) {
-  const hub: Hub = { tier, queue: [] };
+/** The stream's `settings.changed` event: the UI re-reads the snapshot when the ads keys are in it. */
+const settingsChanged = (keys: string[]) =>
+  `event: settings.changed
+data: ${JSON.stringify({
+    locale: null,
+    keys,
+    ui: { idle_lock_minutes: 5, hc: false },
+  })}
+
+`;
+
+async function open(
+  page: Page,
+  tier: Tier | null,
+  {
+    debug = true,
+    path = "/floor",
+    rating = null,
+    consent = "missing",
+  }: { debug?: boolean; path?: string; rating?: AdRating | null; consent?: AdConsentState } = {},
+) {
+  const hub: Hub = { tier, queue: [], rating, consent };
   await page.addInitScript((debugBuild) => {
     sessionStorage.setItem("arena.hub.token", "manager-token");
     const calls: string[] = [];
@@ -45,6 +77,7 @@ async function open(page: Page, tier: Tier | null, { debug = true, path = "/floo
         calls.push(`init ${config}`);
         return JSON.stringify({ debug: debugBuild });
       },
+      configure: (config: string) => calls.push(`configure ${config}`),
       bannerPlace: (rect: string) => calls.push(`bannerPlace ${rect}`),
       bannerHide: () => calls.push("bannerHide"),
       bannerDestroy: () => calls.push("bannerDestroy"),
@@ -65,6 +98,20 @@ async function open(page: Page, tier: Tier | null, { debug = true, path = "/floo
           connectivity: { state: "online", checked_at: null },
         };
         if (hub.tier) s.tier = hub.tier;
+        if (hub.rating) {
+          s.setup = {
+            opening_hours_set: true,
+            backup_location_set: true,
+            ad_consent: hub.consent,
+            ad_rating: hub.rating,
+            printer: "unset",
+            products_count: 0,
+            groups_without_rate: 0,
+            manager_exists: true,
+            test_session: "unset",
+            live: false,
+          };
+        }
         return json(route, 200, s as unknown as HubSnapshot);
       }
       case "/ui/me":
@@ -120,6 +167,7 @@ test.describe("the gate", () => {
     const listeners = new Set<(e: AdEvent) => void>();
     const bridge: AdsBridge = {
       init: (c) => (log.push(`init ${c}`), '{"debug":false}'),
+      configure: (c) => void log.push(`configure ${c}`),
       bannerPlace: (r) => void log.push(`place ${r}`),
       bannerHide: () => void log.push("hide"),
       bannerDestroy: () => void log.push("destroy"),
@@ -139,7 +187,7 @@ test.describe("the gate", () => {
     expect(ads.evaluate(undefined)).toBe(false);
     expect(ads.evaluate("free")).toBe(true);
     expect(ads.evaluate("free")).toBe(true);
-    expect(log).toEqual(['init {"rating":"PG"}']);
+    expect(log).toEqual(['init {"rating":"PG","personalised":false}']);
     ads.banner.place({ x: 0, y: 800, width: 412, height: 50 });
     ads.interstitial.preload();
     expect(ads.evaluate("basic")).toBe(false);
@@ -149,11 +197,48 @@ test.describe("the gate", () => {
     expect(ads.evaluate(null)).toBe(false);
     expect(ads.evaluate("free")).toBe(true);
     expect(log).toEqual([
-      'init {"rating":"PG"}',
+      'init {"rating":"PG","personalised":false}',
       'place {"x":0,"y":800,"width":412,"height":50}',
       "preload",
       "destroy",
-      'init {"rating":"PG"}',
+      'init {"rating":"PG","personalised":false}',
+    ]);
+  });
+
+  test("hands the rating and consent to the plugin at start and on every change", () => {
+    const { ads, log } = client(true);
+    // Told before the gate turns on: the plugin starts with it.
+    ads.configure({ rating: "G", personalised: true });
+    ads.evaluate("free");
+    expect(log).toEqual(['init {"rating":"G","personalised":true}']);
+    // The same values again say nothing; a change reaches the running plugin at once.
+    ads.configure({ rating: "G", personalised: true });
+    ads.configure({ rating: "T", personalised: true });
+    ads.configure({ rating: "T", personalised: false });
+    expect(log.slice(1)).toEqual([
+      'configure {"rating":"T","personalised":true}',
+      'configure {"rating":"T","personalised":false}',
+    ]);
+    // A stop and a restart start the plugin with the latest values.
+    ads.evaluate("basic");
+    ads.evaluate("free");
+    expect(log.at(-1)).toBe('init {"rating":"T","personalised":false}');
+  });
+
+  test("an unknown rating, MA included, goes to the plugin as PG", () => {
+    expect(adRatingOf("MA")).toBe("PG");
+    expect(adRatingOf(undefined)).toBe("PG");
+    expect(adRatingOf("G")).toBe("G");
+    expect(adRatingOf("T")).toBe("T");
+    const { ads, log } = client(true);
+    ads.evaluate("free");
+    ads.configure({ rating: "MA" as AdRating, personalised: false });
+    expect(log).toEqual(['init {"rating":"PG","personalised":false}']);
+    ads.configure({ rating: "G", personalised: false });
+    ads.configure({ rating: "MA" as AdRating, personalised: false });
+    expect(log.slice(1)).toEqual([
+      'configure {"rating":"G","personalised":false}',
+      'configure {"rating":"PG","personalised":false}',
     ]);
   });
 
@@ -185,9 +270,9 @@ test.describe("android", () => {
 
   test("a Free Hub starts the plugin once", async ({ page }) => {
     await open(page, "free");
-    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}']);
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG","personalised":false}']);
     await page.waitForTimeout(800);
-    expect(await lifecycle(page)).toEqual(['init {"rating":"PG"}']);
+    expect(await lifecycle(page)).toEqual(['init {"rating":"PG","personalised":false}']);
   });
 
   test("a paid Hub never starts it and renders no ad slot", async ({ page }) => {
@@ -207,15 +292,21 @@ test.describe("android", () => {
     page,
   }) => {
     const hub = await open(page, "free");
-    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}']);
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG","personalised":false}']);
     await expect(page.getByTestId("ad-banner")).toBeVisible();
     entitlement(hub, "basic");
-    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}', "bannerDestroy"]);
+    await expect
+      .poll(() => lifecycle(page))
+      .toEqual(['init {"rating":"PG","personalised":false}', "bannerDestroy"]);
     await expect(page.getByTestId("ad-banner")).toHaveCount(0);
     entitlement(hub, "free");
     await expect
       .poll(() => lifecycle(page))
-      .toEqual(['init {"rating":"PG"}', "bannerDestroy", 'init {"rating":"PG"}']);
+      .toEqual([
+        'init {"rating":"PG","personalised":false}',
+        "bannerDestroy",
+        'init {"rating":"PG","personalised":false}',
+      ]);
     await expect(page.getByTestId("ad-banner")).toBeVisible();
   });
 
@@ -223,10 +314,41 @@ test.describe("android", () => {
     page,
   }) => {
     const hub = await open(page, "free");
-    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG"}']);
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG","personalised":false}']);
     // The snapshot keeps its old tier, so only the `entitlement.changed` event can destroy the banner.
     entitlement(hub, "premium", { snapshot: false });
     await expect.poll(() => calls(page)).toContain("bannerDestroy");
+  });
+
+  test("the branch's rating and consent reach the plugin with the first start", async ({
+    page,
+  }) => {
+    await open(page, "free", { rating: "T", consent: "given" });
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"T","personalised":true}']);
+  });
+
+  test("a rating or consent saved while ads run reaches the plugin with no restart", async ({
+    page,
+  }) => {
+    const hub = await open(page, "free", { rating: "PG", consent: "missing" });
+    await expect.poll(() => lifecycle(page)).toEqual(['init {"rating":"PG","personalised":false}']);
+    hub.rating = "G";
+    hub.queue.push(settingsChanged(["branch.ads_rating"]));
+    await expect
+      .poll(() => lifecycle(page))
+      .toEqual([
+        'init {"rating":"PG","personalised":false}',
+        'configure {"rating":"G","personalised":false}',
+      ]);
+    hub.consent = "given";
+    hub.queue.push(settingsChanged(["branch.ads_consent"]));
+    await expect
+      .poll(() => lifecycle(page))
+      .toEqual([
+        'init {"rating":"PG","personalised":false}',
+        'configure {"rating":"G","personalised":false}',
+        'configure {"rating":"G","personalised":true}',
+      ]);
   });
 
   test("the dev gallery loads a banner and an interstitial and lists each event", async ({

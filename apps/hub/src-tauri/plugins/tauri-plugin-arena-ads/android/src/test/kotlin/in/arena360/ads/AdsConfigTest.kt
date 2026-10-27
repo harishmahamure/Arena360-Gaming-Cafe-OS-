@@ -16,6 +16,17 @@ class AdsConfigTest {
   }
 
   @Test
+  fun `requests are non-personalised until the consent is recorded`() {
+    assertEquals(false, AdsConfig.parse(null).personalised)
+    assertEquals(false, AdsConfig.parse("{}").personalised)
+    assertEquals(false, AdsConfig.parse("""{"rating":"G"}""").personalised)
+    assertEquals(false, AdsConfig.parse("not json").personalised)
+    assertEquals(false, AdsConfig.parse("""{"personalised":"yes"}""").personalised)
+    assertEquals(true, AdsConfig.parse("""{"rating":"T","personalised":true}""").personalised)
+    assertEquals(AdsConfig(AdRating.T, true), AdsConfig.parse("""{"rating":"T","personalised":true}"""))
+  }
+
+  @Test
   fun `a banner rect needs four finite numbers and a size`() {
     assertEquals(BannerRect(0.0, 800.0, 412.0, 50.0), BannerRect.parse("""{"x":0,"y":800,"width":412,"height":50}"""))
     assertNull(BannerRect.parse(null))

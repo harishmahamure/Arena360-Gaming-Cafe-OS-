@@ -1859,6 +1859,21 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   `onPause` and `onResume`: a paused banner refreshes nothing and a placement made meanwhile is
   requested on resume. `apps/hub/tests/ad-slot.spec.ts` checks the slot rectangle against every tile,
   sheet, dialog, settle bar and bar at 412 x 915, 800 x 1280 and 1280 x 800.
+- **Ad categories, content rating and consent (Story 4.12).** The AdMob account blocks adult/sexual,
+  gambling and betting, and alcohol at app level for every Hub; `apps/hub/src-tauri/plugins/tauri-plugin-arena-ads/AD-CATEGORIES.md`
+  is the versioned record. Before each release a named person checks the console and fills in its
+  `Checked by`, `Checked on` and `Checked for release` lines; `node scripts/check-ads.mjs note --release`
+  (part of the release checklist, Story 4.16) fails until they are filled in, and `check:ads` always checks
+  the note's structure. **Rating:** the `branch.ads_rating` setting (`G`, `PG` default, `T`; MA is never
+  offered, and a stored MA or unknown value reads as PG) is set from Settings → Branch → Ads with
+  `settings.set`, so a Counter without `settings.edit` is asked for a manager PIN (`inline-pin`) and the
+  audit log records both actors. The Hub snapshot carries it as `setup.ad_rating` with `setup.ad_consent`;
+  the layout hands both to the plugin (`ads.configure`, Kotlin `configure`), which sets the SDK request
+  configuration's maximum ad content rating, so the next request uses a change with no restart. Until the
+  consent tick is recorded every banner and interstitial request carries `npa=1` (non-personalised); a
+  consent change re-requests the banner. The Ads screen also lists what is always excluded and shows the
+  consent's time and staff id; it has no control to turn ads off, only "Ads keep Arena 360 free." with an
+  "Upgrade" link (shown as "Available soon" until billing ships, the shared `billingEnabled` flag).
 - **Free café end to end (Story 4.8).** `crates/arena-hub/tests/free_android_golive.rs` (feature
   `dev-fixtures`) starts a real cloud and the real `arena-hub` binary with `--platform android`,
   with a kiosk speaking the LAN protocol, and walks sign-up → Free (no comp entitlement) → a

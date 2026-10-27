@@ -7,6 +7,7 @@ pub const KEY_FULFILMENT: &str = "branch.fulfilment";
 pub const KEY_KIOSK_VOLUME_DEFAULT: &str = "kiosk.volume_default";
 pub const KEY_BACKUP_DIR: &str = "system.backup_dir";
 pub const KEY_ADS_CONSENT: &str = "branch.ads_consent";
+pub const KEY_ADS_RATING: &str = "branch.ads_rating";
 pub const KEY_SETUP_LIVE: &str = "setup.live";
 
 pub const DEFAULT_OPENING_HOURS: &str = r#"[{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true}]"#;
@@ -20,6 +21,9 @@ pub const DEFAULT_BACKUP_DIR: &str = "";
 pub const DEFAULT_ADS_CONSENT: &str =
     r#"{"given":false,"at":null,"staff_id":null,"policy_version":null}"#;
 pub const ADS_POLICY_VERSION: u32 = 1;
+pub const DEFAULT_ADS_RATING: &str = "PG";
+/// The content ratings a branch may choose, loosest last. MA is never offered.
+pub const ADS_RATINGS: &[&str] = &["G", "PG", "T"];
 pub const BACKUP_PROBE_PREFIX: &str = ".arena360-write-test-";
 pub const DAYS_PER_WEEK: usize = 7;
 pub const LAST_MINUTE: u16 = 1439;
@@ -173,6 +177,27 @@ pub struct AdsConsentSet {
     pub policy_version: u32,
 }
 
+/// The maximum ad content rating a branch asks for (the stored `branch.ads_rating`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum AdRating {
+    G,
+    #[default]
+    PG,
+    T,
+}
+
+impl AdRating {
+    /// The rating a stored value names. Anything else (MA, junk, empty) is PG, never a looser one.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "G" => Self::G,
+            "T" => Self::T,
+            _ => Self::PG,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -188,6 +213,9 @@ pub struct SetupStatus {
     pub opening_hours_set: bool,
     pub backup_location_set: bool,
     pub ad_consent: AdConsentState,
+    /// The branch's maximum ad content rating, for the Android ads plugin (Story 4.12).
+    #[serde(default)]
+    pub ad_rating: AdRating,
     pub printer: crate::PrinterState,
     #[serde(default)]
     pub products_count: u32,
@@ -316,6 +344,7 @@ mod tests {
                 opening_hours_set: false,
                 backup_location_set: true,
                 ad_consent: AdConsentState::NotNeeded,
+                ad_rating: AdRating::PG,
                 printer: crate::PrinterState::Skipped,
                 products_count: 0,
                 groups_without_rate: 2,
@@ -324,7 +353,7 @@ mod tests {
                 live: false,
             })
             .unwrap(),
-            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "printer": "skipped", "products_count": 0, "groups_without_rate": 2, "manager_exists": true, "test_session": "passed", "live": false})
+            serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "ad_rating": "PG", "printer": "skipped", "products_count": 0, "groups_without_rate": 2, "manager_exists": true, "test_session": "passed", "live": false})
         );
         assert_eq!(BackupDirProblem::NotWritable.as_str(), "not_writable");
         assert_eq!(

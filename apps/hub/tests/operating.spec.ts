@@ -58,6 +58,7 @@ function newHub(): Hub {
       ["kiosk.volume_default", { value: "50", rev: 1 }],
       ["system.backup_dir", { value: "", rev: 1 }],
       ["branch.ads_consent", { value: NO_CONSENT, rev: 1 }],
+      ["branch.ads_rating", { value: "PG", rev: 1 }],
     ]),
     intents: [],
     adConsent: "missing",
@@ -93,6 +94,9 @@ function snapshot(hub: Hub): HubSnapshot {
       backup_location_set:
         hub.settings.get("system.backup_dir")!.value !== "" && !hub.backupUnavailable,
       ad_consent: hub.adConsent,
+      ad_rating: ["G", "T"].includes(hub.settings.get("branch.ads_rating")!.value)
+        ? (hub.settings.get("branch.ads_rating")!.value as "G" | "T")
+        : "PG",
       printer: "unset",
       products_count: 0,
       groups_without_rate: 0,
@@ -224,6 +228,9 @@ async function open(page: Page, hub: Hub, path: string, token = "manager-token")
 }
 
 const save = (page: Page) => page.getByRole("button", { name: en["hub.settings.save"] });
+/** The consent form's Save on the Ads screen (the rating form has its own). */
+const saveConsent = (page: Page) =>
+  page.getByTestId("settings-ads").getByRole("button", { name: en["hub.settings.save"] });
 const day = (page: Page, i: number) => page.getByTestId(`hours-day-${i}`);
 
 async function expectNoSeriousAxe(page: Page) {
@@ -443,10 +450,10 @@ test("Ads records the consent tick with the time and the session's staff", async
   await expect(page.getByTestId("ads-recorded")).toHaveText(en["hub.settings.ads.missing"]);
   const tick = page.getByLabel(en["hub.settings.ads.consent"]);
   await expect(tick).not.toBeChecked();
-  await expect(save(page)).toHaveAttribute("aria-disabled", "true");
+  await expect(saveConsent(page)).toHaveAttribute("aria-disabled", "true");
   await expectNoSeriousAxe(page);
   await tick.check();
-  await save(page).click();
+  await saveConsent(page).click();
   await expect(page.getByTestId("ads-status")).toContainText(en["hub.settings.saved"]);
   expect(hub.intents).toEqual([
     { kind: "ads.consent", given: true, policy_version: 1, base_rev: 1 },
@@ -455,6 +462,102 @@ test("Ads records the consent tick with the time and the session's staff", async
     en["hub.settings.ads.given"].split("{date}")[0],
   );
   await expect(tick).toBeChecked();
+});
+
+const ratingRadio = (page: Page, name: string) => page.getByRole("radio", { name });
+
+test("Ads lists what is always excluded and offers only G, PG and T, with PG chosen", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "/settings/branch/ads");
+  await expect(page.getByTestId("ads-excluded").getByRole("listitem")).toHaveText([
+    en["hub.settings.ads.excluded.adult"],
+    en["hub.settings.ads.excluded.gambling"],
+    en["hub.settings.ads.excluded.alcohol"],
+  ]);
+  const group = page.getByRole("group", { name: en["hub.settings.ads.rating.title"] });
+  await expect(group.getByRole("radio")).toHaveCount(3);
+  await expect(group.getByRole("radio")).toHaveCount(3);
+  await expect(ratingRadio(page, en["hub.settings.ads.rating.g"])).not.toBeChecked();
+  await expect(ratingRadio(page, en["hub.settings.ads.rating.pg"])).toBeChecked();
+  await expect(ratingRadio(page, en["hub.settings.ads.rating.t"])).not.toBeChecked();
+  await expect(page.getByText(/MA/)).toHaveCount(0);
+  // Nothing turns ads off: only the plain line, with "Available soon" while billing is off.
+  await expect(page.getByTestId("ads-keep-free")).toHaveText(
+    `${en["hub.settings.ads.keep_free"]} ${en["staff.tier.soon"]}`,
+  );
+  await expect(page.getByRole("switch")).toHaveCount(0);
+  await expectNoSeriousAxe(page);
+});
+
+test("a manager saves a stricter content rating with settings.set", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub, "/settings/branch/ads");
+  await ratingRadio(page, en["hub.settings.ads.rating.g"]).check();
+  const form = page.getByTestId("settings-ads-rating");
+  await form.getByRole("button", { name: en["hub.settings.save"] }).click();
+  await expect(page.getByTestId("ads-rating-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents).toEqual([
+    { kind: "settings.set", key: "branch.ads_rating", value: "G", base_rev: 1 },
+  ]);
+  expect(hub.elevations).toBe(0);
+  await expect(ratingRadio(page, en["hub.settings.ads.rating.g"])).toBeChecked();
+});
+
+test("a stored MA or unknown rating reads as PG", async ({ page }) => {
+  const hub = newHub();
+  hub.settings.set("branch.ads_rating", { value: "MA", rev: 3 });
+  await open(page, hub, "/settings/branch/ads");
+  await expect(ratingRadio(page, en["hub.settings.ads.rating.pg"])).toBeChecked();
+  await expect(
+    page.getByTestId("settings-ads-rating").getByRole("button", { name: en["hub.settings.save"] }),
+  ).toHaveAttribute("aria-disabled", "true");
+});
+
+test("a Counter changing the rating is asked for a manager's PIN, and the change carries the ticket", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "/settings/branch/ads", "counter-token");
+  await expect(page.getByTestId("ads-rating-needs-approval")).toBeVisible();
+  await ratingRadio(page, en["hub.settings.ads.rating.t"]).check();
+  await page
+    .getByTestId("settings-ads-rating")
+    .getByRole("button", { name: en["hub.settings.save"] })
+    .click();
+  const approval = page.getByTestId("ads-rating-approval");
+  await expect(approval).toBeVisible();
+  expect(hub.intents).toEqual([]);
+  await approval.getByLabel(en["ui.pin.label"]).focus();
+  await page.keyboard.type("9999");
+  await page.keyboard.press("Enter");
+  await expect(approval).toContainText(en["ui.pin.rejected"]);
+  expect(hub.intents).toEqual([]);
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("ads-rating-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.elevations).toBe(1);
+  expect(hub.intents).toEqual([
+    { kind: "settings.set", key: "branch.ads_rating", value: "T", base_rev: 1, ticket: "T1" },
+  ]);
+  await expect(approval).toHaveCount(0);
+});
+
+test("Ads shows who recorded the consent and when", async ({ page }) => {
+  const hub = newHub();
+  hub.settings.set("branch.ads_consent", {
+    value: JSON.stringify({
+      given: true,
+      at: Date.UTC(2027, 0, 14, 6, 30),
+      staff_id: "01JMANAGER0000000000000000",
+      policy_version: 1,
+    }),
+    rev: 2,
+  });
+  hub.adConsent = "given";
+  await open(page, hub, "/settings/branch/ads");
+  await expect(page.getByTestId("ads-recorded")).toContainText("01JMANAGER0000000000000000");
 });
 
 test("Ads is left out when the branch's plan needs no consent", async ({ page }) => {
@@ -483,8 +586,8 @@ test("a Counter sees every operating section read-only", async ({ page }) => {
   await expect(page.getByText(en["hub.settings.branch.manager_only"])).toBeVisible();
   await page.goto("/settings/branch/ads");
   await expect(page.getByLabel(en["hub.settings.ads.consent"])).toBeDisabled();
-  await expect(save(page)).toHaveAttribute("aria-disabled", "true");
-  await save(page).click({ force: true });
+  await expect(saveConsent(page)).toHaveAttribute("aria-disabled", "true");
+  await saveConsent(page).click({ force: true });
   expect(hub.intents).toEqual([]);
 });
 
@@ -506,7 +609,7 @@ for (const hc of [false, true]) {
     ]) {
       await page.goto(path);
       await expect(page.locator("section h2")).toBeVisible();
-      await expect(save(page)).toBeVisible();
+      await expect(save(page).first()).toBeVisible();
       await expectNoSeriousAxe(page);
     }
   });
@@ -581,7 +684,7 @@ test("Ads withdraws a given consent and records it", async ({ page }) => {
     en["hub.settings.ads.given"].split("{date}")[0],
   );
   await tick.uncheck();
-  await save(page).click();
+  await saveConsent(page).click();
   await expect(page.getByTestId("ads-status")).toContainText(en["hub.settings.saved"]);
   expect(hub.intents).toEqual([
     { kind: "ads.consent", given: false, policy_version: 1, base_rev: 2 },

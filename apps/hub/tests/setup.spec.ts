@@ -37,6 +37,7 @@ const STATUS: SetupStatus = {
   opening_hours_set: false,
   backup_location_set: false,
   ad_consent: "missing",
+  ad_rating: "PG",
   printer: "unset",
   products_count: 0,
   groups_without_rate: 0,

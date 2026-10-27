@@ -4003,7 +4003,7 @@ mod seed_defaults {
             .iter()
             .filter(|(k, _)| k.starts_with("branch."))
             .count();
-        assert_eq!(branch_defaults, 5);
+        assert_eq!(branch_defaults, 6);
         assert_eq!(
             applied.changes.len(),
             crate::LOCALE_KEYS.len() + 3 + branch_defaults + roles
@@ -4405,7 +4405,9 @@ mod operating {
     use super::*;
     use crate::rbac::{ROLE_COUNTER, ROLE_MANAGER};
     use crate::snapshot::SnapshotReader;
-    use arena_proto::{AdConsentState, AdsConsent, AdsConsentSet, SetupStatus, StaffUpsert};
+    use arena_proto::{
+        AdConsentState, AdRating, AdsConsent, AdsConsentSet, SetupStatus, StaffUpsert,
+    };
 
     const HOURS: &str = "branch.opening_hours";
     const CLOSED: &str = r#"{"closed":true}"#;
@@ -4643,6 +4645,33 @@ mod operating {
     }
 
     #[tokio::test]
+    async fn the_ads_rating_defaults_to_pg_and_takes_only_g_pg_and_t() {
+        let f = bootstrapped().await;
+        assert_eq!(text(&reopen(&f), "branch.ads_rating"), "PG");
+        assert_eq!(setup(&f).ad_rating, AdRating::PG);
+        for bad in ["MA", "R", "pg", ""] {
+            let e = save(&f, "branch.ads_rating", bad).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{bad:?}");
+            assert_eq!(e.field.as_deref(), Some("value"), "{bad:?}");
+        }
+        save(&f, "branch.ads_rating", "G").await.unwrap();
+        assert_eq!(setup(&f).ad_rating, AdRating::G);
+        save(&f, "branch.ads_rating", "T").await.unwrap();
+        assert_eq!(setup(&f).ad_rating, AdRating::T);
+        let c = reopen(&f).changes().unwrap().pop().unwrap();
+        assert_eq!(c.intent_kind, "settings.set");
+    }
+
+    #[test]
+    fn a_stored_ma_or_unknown_rating_reads_as_pg() {
+        for stored in ["MA", "", "junk", "pg", "UNSPECIFIED"] {
+            assert_eq!(AdRating::parse(stored), AdRating::PG, "{stored:?}");
+        }
+        assert_eq!(AdRating::parse("G"), AdRating::G);
+        assert_eq!(AdRating::parse("T"), AdRating::T);
+    }
+
+    #[tokio::test]
     async fn ads_consent_records_the_staff_actor_and_the_time() {
         let f = bootstrapped().await;
         let manager = staff(&f, "manager", ROLE_MANAGER).await;
@@ -4773,6 +4802,7 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -4796,6 +4826,7 @@ mod operating {
                 opening_hours_set: true,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -4822,6 +4853,7 @@ mod operating {
                 opening_hours_set: true,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Given,
+                ad_rating: AdRating::PG,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -4866,6 +4898,7 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: false,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -4882,6 +4915,7 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -4911,6 +4945,7 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: arena_proto::PrinterState::Skipped,
                 products_count: 0,
                 groups_without_rate: 0,
@@ -4927,6 +4962,7 @@ mod operating {
                 opening_hours_set: false,
                 backup_location_set: true,
                 ad_consent: AdConsentState::Missing,
+                ad_rating: AdRating::PG,
                 printer: arena_proto::PrinterState::Unset,
                 products_count: 0,
                 groups_without_rate: 0,

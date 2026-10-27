@@ -78,6 +78,7 @@ function snapshot(hc = false): HubSnapshot {
       opening_hours_set: false,
       backup_location_set: false,
       ad_consent: "not_needed",
+      ad_rating: "PG",
       printer: "unset",
       products_count: 0,
       groups_without_rate: 0,

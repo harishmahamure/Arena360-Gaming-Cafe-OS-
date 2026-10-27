@@ -6973,7 +6973,7 @@ pub(crate) mod tests {
                 panic!("healthz never reported {want}");
             }
         };
-        setup_is(json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "printer": "unset", "products_count": 0, "groups_without_rate": 0, "manager_exists": true, "test_session": "unset", "live": false})).await;
+        setup_is(json!({"opening_hours_set": false, "backup_location_set": false, "ad_consent": "missing", "ad_rating": "PG", "printer": "unset", "products_count": 0, "groups_without_rate": 0, "manager_exists": true, "test_session": "unset", "live": false})).await;
         let token = token_for(&hub, "manager", "m-pass").await;
         let consent = json!({ "intent": intent_as(
             Actor { kind: ActorKind::Owner, id: "spoof".into() },
@@ -7008,7 +7008,7 @@ pub(crate) mod tests {
             let (status, body) = post_intent(&hub, &token, set_body(&hub, key, value, None)).await;
             assert_eq!(status, StatusCode::OK, "{key}: {body}");
         }
-        let done = json!({"opening_hours_set": true, "backup_location_set": true, "ad_consent": "given", "printer": "unset", "products_count": 0, "groups_without_rate": 0, "manager_exists": true, "test_session": "unset", "live": false});
+        let done = json!({"opening_hours_set": true, "backup_location_set": true, "ad_consent": "given", "ad_rating": "PG", "printer": "unset", "products_count": 0, "groups_without_rate": 0, "manager_exists": true, "test_session": "unset", "live": false});
         setup_is(done.clone()).await;
         let snapshot = SnapshotReader::open(&hub.path)
             .unwrap()

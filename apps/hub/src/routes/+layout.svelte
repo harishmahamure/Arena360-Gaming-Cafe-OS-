@@ -52,7 +52,8 @@
   } from "../lib/alerts.svelte";
   import { catalog } from "../lib/catalog.svelte";
   import { alertCount, refreshAccess, service } from "../lib/service.svelte";
-  import { ads } from "../lib/ads";
+  import { adRatingOf, ads } from "../lib/ads";
+  import { KEY_ADS_CONSENT, KEY_ADS_RATING } from "../lib/operating";
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
   import { effectRecorded } from "../lib/undo.svelte";
@@ -341,6 +342,8 @@
         onSettingsChanged: (e) => {
           applySettingsChanged(e.locale, e.keys);
           setUiSettings(uiOf(e));
+          // The rating and consent reach the ads plugin through the snapshot.
+          if (e.keys.some((k) => k === KEY_ADS_RATING || k === KEY_ADS_CONSENT)) void refresh();
         },
         // Another window sharing this session locked or unlocked it.
         onSessionLocked: () => lockScreen(false),
@@ -387,7 +390,14 @@
   $effect(() => {
     if (!data.hub.ok) return;
     const tier = data.hub.snapshot.paired === false ? null : data.hub.snapshot.tier;
-    untrack(() => ads.evaluate(tier));
+    const setup = data.hub.snapshot.setup;
+    untrack(() => {
+      ads.configure({
+        rating: adRatingOf(setup?.ad_rating),
+        personalised: setup?.ad_consent === "given",
+      });
+      ads.evaluate(tier);
+    });
   });
 
   // The More sheet belongs to the signed-in shell.

@@ -14,14 +14,19 @@ enum class AdRating(val wire: String, val sdk: String) {
   }
 }
 
-/** What `init` receives from the Hub UI: `{"rating":"PG"}`. */
-data class AdsConfig(val rating: AdRating) {
+/**
+ * What `init` and `configure` receive from the Hub UI: `{"rating":"PG","personalised":false}`.
+ * `personalised` is true only once the owner's ads consent is recorded; until then every request
+ * is non-personalised. Anything missing or unreadable is the strictest default: PG, non-personalised.
+ */
+data class AdsConfig(val rating: AdRating, val personalised: Boolean = false) {
   companion object {
     fun parse(json: String?): AdsConfig =
       try {
-        AdsConfig(AdRating.parse(JSONObject(json ?: "{}").optString("rating", null)))
+        val o = JSONObject(json ?: "{}")
+        AdsConfig(AdRating.parse(o.optString("rating", null)), o.optBoolean("personalised", false))
       } catch (_: Exception) {
-        AdsConfig(AdRating.PG)
+        AdsConfig(AdRating.PG, false)
       }
   }
 }

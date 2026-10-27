@@ -432,3 +432,11 @@
 
 - Layout test gaps: no case for the Undo dock, the phone picking card, the sign-in gate strip or the wide tile-sheet `--ad-shrink` height; `ArenaAds` pause/resume logic has no JVM unit test (extract the paused/requested state when a toolchain exists).
 - The native `AdView` is not covered by `inert`, so a locked Hub's banner can still be tapped; `onPause` also fires for multi-window and system dialogs (consider `onStop`); a failed banner load is not retried until the width changes; the lock overlay on the phone sign-in gate stops 64px above the slot (`--ad-reserved` counts a bottom bar that gate does not draw).
+
+## Deferred from: Story 4.12
+
+- `ArenaAds.configure`, the `npa=1` request extras (`AdMobAdapter`) and the `personalised` flag in `AdsConfig` are uncompiled and unrun (no Android toolchain); check on a device with the SDK's ad inspector that a branch with no recorded consent sends non-personalised requests and that a stricter rating reaches the next request. The rating takes effect through the SDK's global request configuration, so an ad already loaded in the banner stays until its next refresh.
+- The real AdMob blocking controls cannot be set or verified from the repo: `AD-CATEGORIES.md` says what must be blocked, and `check-ads.mjs note --release` fails until a named person fills in `Checked by`, `Checked on` and `Checked for release`. Nobody has signed it yet; the Story 4.16 release checklist must run it.
+- Consent is a plain tick (Story 2.26's `ads.consent`), not a Google UMP consent form: `npa=1` is the only personalisation switch. EEA/UK users would need UMP; the product is India-first, so it is not built here.
+- The consent line shows the staff id as stored, not the staff member's name (the Ads screen does not load the staff list).
+- `branch.ads_rating` is a branch setting seeded by `branch.bootstrap` and `branch.seed_defaults`; a Windows or paid Hub carries it but nothing reads it there.

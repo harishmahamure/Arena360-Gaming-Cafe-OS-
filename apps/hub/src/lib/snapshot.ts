@@ -40,6 +40,8 @@ export async function loadSnapshot(fetcher: typeof fetch): Promise<SnapshotResul
         })),
         groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
         zones: Array.isArray(snapshot.zones) ? snapshot.zones : [],
+        // A Hub from before alerts sends none.
+        alerts: Array.isArray(snapshot.alerts) ? snapshot.alerts : [],
         locale: snapshot.locale ?? null,
         // A missing or malformed `ui` block falls back to the defaults.
         ui: normalizeUi(snapshot.ui),

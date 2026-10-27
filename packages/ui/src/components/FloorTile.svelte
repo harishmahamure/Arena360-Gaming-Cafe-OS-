@@ -2,7 +2,7 @@
   import type { Snippet } from "svelte";
   import { t, type MessageKey } from "../messages/index.js";
   import { STATUS_LABELS, type Status } from "../status.js";
-  import AlertBadge from "./AlertBadge.svelte";
+  import AlertBadge, { ALERT_TAGS, type AlertTag } from "./AlertBadge.svelte";
   import GroupChip from "./GroupChip.svelte";
   import StatusBadge from "./StatusBadge.svelte";
 
@@ -15,6 +15,7 @@
     secondary,
     group,
     alerts,
+    alertTag,
     tag = "div",
     tabindex = 0,
     onactivate,
@@ -29,6 +30,7 @@
     secondary?: Snippet | string;
     group?: { name: string; colour: string };
     alerts?: number;
+    alertTag?: AlertTag;
     tag?: string;
     tabindex?: number;
     onactivate?: () => void;
@@ -39,7 +41,13 @@
   const INNER = "button, input, a"; // i18n-ignore
   const unassigned = $derived(state === "unassigned");
   const accessibleName = $derived(
-    [name, t(label ?? STATUS_LABELS[state]), time, warning ? t("ui.floor_tile.time_warning") : ""]
+    [
+      name,
+      t(label ?? STATUS_LABELS[state]),
+      alertTag ? t(ALERT_TAGS[alertTag]) : "",
+      time,
+      warning ? t("ui.floor_tile.time_warning") : "",
+    ]
       .filter(Boolean)
       .join(", "),
   );
@@ -70,7 +78,9 @@
       <span data-testid={unassigned ? undefined : "device-presence"}
         ><StatusBadge {state} {label} /></span
       >
-      {#if alerts !== undefined}<AlertBadge count={alerts} />{/if}
+      {#if alertTag}<AlertBadge tag={alertTag} />{:else if alerts !== undefined}<AlertBadge
+          count={alerts}
+        />{/if}
     </div>
     <span class="time type-hub-numeric tabular-nums" aria-hidden={time ? undefined : "true"}
       >{#if warning}<span class="glyph" aria-hidden="true" data-testid="tile-time-warning">⚠</span

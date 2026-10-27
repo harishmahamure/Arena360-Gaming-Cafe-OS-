@@ -24,6 +24,7 @@
 
 mod admin_exit;
 mod ads_consent;
+mod alert;
 mod branch_code;
 mod changes;
 mod credit;
@@ -174,6 +175,7 @@ pub(crate) enum Target {
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
     CreditAutoPause(Box<credit_pause::PauseTarget>),
     SessionExpire(Box<session_expire::ExpireTarget>),
+    Alert(Box<alert::AlertTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -247,6 +249,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         )),
         P::CreditAutoPause(p) => Target::CreditAutoPause(Box::new(credit_pause::load(tx, p, now)?)),
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
+        P::AlertRaise(_) | P::AlertAck(_) => {
+            Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
+        }
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

@@ -32,6 +32,7 @@ pub fn build_snapshot(
     HubSnapshot {
         sessions: Vec::new(),
         bills: Vec::new(),
+        alerts: Vec::new(),
         locale,
         ui,
         // The probe's state is the Hub status's, not the database's: the snapshot handler
@@ -218,6 +219,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         sessions,
         segments,
         orders,
+        alerts,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -232,11 +234,23 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.live_sessions()?,
             s.live_segments()?,
             s.open_orders()?,
+            s.alerts()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
     snapshot.bills = bills(&sessions, &segments, orders, now_ms);
+    snapshot.alerts = alerts
+        .into_iter()
+        .filter_map(|a| {
+            Some(arena_proto::SnapshotAlert {
+                kind: arena_proto::AlertKind::parse(&a.kind)?,
+                id: a.id,
+                device_id: a.device_id,
+                raised_at: a.raised_at,
+            })
+        })
+        .collect();
     snapshot.sessions = sessions
         .into_iter()
         .map(|s| arena_proto::SnapshotSession {
@@ -800,6 +814,7 @@ mod tests {
                 zones: vec![],
                 sessions: vec![],
                 bills: vec![],
+                alerts: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
                     label: "Front PC".into(),
@@ -878,6 +893,7 @@ mod tests {
                 zones: vec![],
                 sessions: vec![],
                 bills: vec![],
+                alerts: vec![],
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FloorTile, STATUS_LABELS, formatDateTime, formatMoney, t } from "@arena/ui";
+  import { AlertBadge, FloorTile, STATUS_LABELS, formatDateTime, formatMoney, t } from "@arena/ui";
   import type {
     DeviceStatus,
     SessionStaff,
@@ -9,7 +9,8 @@
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { page } from "$app/state";
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
+  import { ackDevice, openFor, sheetRequest, tagOf } from "../../lib/alerts.svelte";
   import { nextTile } from "../../lib/floor-nav";
   import TileSheet from "../../lib/TileSheet.svelte";
   import { PAUSE_LABELS, cmds } from "../../lib/tile-actions.svelte";
@@ -137,6 +138,20 @@
   $effect(() => {
     if (activeId && !active) activeId = null;
   });
+  let seenRequest = sheetRequest.n;
+  $effect(() => {
+    const n = sheetRequest.n;
+    if (n === seenRequest) return;
+    seenRequest = n;
+    activeId = sheetRequest.deviceId;
+  });
+  const activeDeviceId = $derived(active?.device_id);
+  $effect(() => {
+    const id = activeDeviceId;
+    if (id) untrack(() => void ackDevice(id));
+  });
+  const zoneAlerts = (members: SnapshotDevice[]) =>
+    members.reduce((sum, d) => sum + openFor(d.device_id).length, 0);
   async function closeSheet() {
     const id = activeId;
     activeId = null;
@@ -186,6 +201,7 @@
     label={group ? badge.label : undefined}
     time={session ? elapsed(session) : undefined}
     warning={session ? nearEnd(session) : false}
+    alertTag={tagOf(device.device_id)}
     tabindex={tabStop === device.device_id ? 0 : -1}
     {group}
     onactivate={() => (activeId = device.device_id)}
@@ -267,6 +283,12 @@
               </button>
             </h2>
             <span class="muted type-hub-label">{count(members.length)}</span>
+            {#if zoneAlerts(members) > 0}
+              <span class="type-hub-label zone-alerts" data-testid="zone-alerts"
+                >{t("hub.alerts.button")}
+                <AlertBadge count={zoneAlerts(members)} live={false} /></span
+              >
+            {/if}
             {#if folded}
               <span class="type-hub-label" data-testid="zone-counts">{counts(members)}</span>
             {/if}
@@ -415,6 +437,12 @@
     display: flex;
     align-items: baseline;
     gap: var(--space-3);
+  }
+
+  .zone-alerts {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .fold {

@@ -173,11 +173,18 @@ pub enum IntentKind {
     SessionExpire,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
+    /// Opens an alert on a device or the branch (system only; any feature supplies the kind). One
+    /// that is already open is `STALE`, so a repeating feature may raise it freely.
+    #[serde(rename = "alert.raise")]
+    AlertRaise,
+    /// Staff acknowledge an open alert, which silences its sound and clears its badge.
+    #[serde(rename = "alert.ack")]
+    AlertAck,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 56] = [
+    pub const ALL: [IntentKind; 58] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -234,6 +241,8 @@ impl IntentKind {
         Self::CreditCollectReverted,
         Self::CreditAutoPause,
         Self::SessionExpire,
+        Self::AlertRaise,
+        Self::AlertAck,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -295,6 +304,8 @@ impl IntentKind {
             Self::CreditAutoPause => "credit.auto_pause",
             Self::SessionExpire => "session.expire",
             Self::SessionAssignPlayer => "session.assign_player",
+            Self::AlertRaise => "alert.raise",
+            Self::AlertAck => "alert.ack",
         }
     }
 
@@ -358,6 +369,8 @@ impl IntentKind {
             | Self::CreditCollectReverted
             | Self::CreditAutoPause
             | Self::SessionExpire
+            | Self::AlertRaise
+            | Self::AlertAck
             | Self::SessionAssignPlayer => IntentCategory::Session,
         }
     }
@@ -386,6 +399,7 @@ impl IntentKind {
             | Self::LicenceApply
             | Self::StaffSetCredentials
             | Self::CreditAutoPause
+            | Self::AlertRaise
             | Self::SessionExpire => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
@@ -404,7 +418,7 @@ impl IntentKind {
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 Requirement::Perm(Permission::PlayerManage)
             }
-            Self::SessionStart | Self::SessionAssignPlayer => {
+            Self::SessionStart | Self::SessionAssignPlayer | Self::AlertAck => {
                 Requirement::Perm(Permission::SessionStart)
             }
             Self::SessionEnd | Self::SessionEndReverted => {
@@ -500,6 +514,8 @@ impl IntentKind {
             | Self::CreditCollectReverted
             | Self::CreditAutoPause
             | Self::SessionExpire
+            | Self::AlertRaise
+            | Self::AlertAck
             | Self::SessionAssignPlayer => None,
         }
     }
@@ -974,6 +990,10 @@ pub enum IntentPayload {
     SessionExpire(crate::SessionExpire),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
+    #[serde(rename = "alert.raise")]
+    AlertRaise(crate::AlertRaise),
+    #[serde(rename = "alert.ack")]
+    AlertAck(crate::AlertAck),
 }
 
 impl IntentPayload {
@@ -1035,6 +1055,8 @@ impl IntentPayload {
             Self::CreditAutoPause(_) => IntentKind::CreditAutoPause,
             Self::SessionExpire(_) => IntentKind::SessionExpire,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
+            Self::AlertRaise(_) => IntentKind::AlertRaise,
+            Self::AlertAck(_) => IntentKind::AlertAck,
         }
     }
 }
@@ -1250,6 +1272,7 @@ mod tests {
                 | "licence.apply"
                 | "audit.read_granted"
                 | "credit.auto_pause"
+                | "alert.raise"
                 | "session.expire" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
@@ -1278,7 +1301,7 @@ mod tests {
                 "player.create" | "player.update" | "player.password_reset" => {
                     Requirement::Perm(Permission::PlayerManage)
                 }
-                "session.start" | "session.assign_player" => {
+                "session.start" | "session.assign_player" | "alert.ack" => {
                     Requirement::Perm(Permission::SessionStart)
                 }
                 "session.end" | "session.end.reverted" => Requirement::Perm(Permission::SessionEnd),

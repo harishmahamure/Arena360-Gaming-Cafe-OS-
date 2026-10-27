@@ -4,6 +4,7 @@
 //! them back), refuses a schema newer than this binary and applies the embedded migrations.
 
 mod admin;
+mod alerts;
 mod audit;
 mod branch;
 mod commands;
@@ -34,6 +35,9 @@ pub use admin::{
     AdminExitRow, META_VERIFIER_COUNTER, NewAdminExit, find_admin_exit, insert_admin_exit,
     insert_verifier_version, latest_verifier, max_pin_verifier_version, set_admin_exit_relocked,
     verifier_staff, verifier_version_at,
+};
+pub use alerts::{
+    AlertRow, NewAlert, ack_alert, find_alert, find_open_alert, insert_alert, list_open_alerts,
 };
 pub use audit::{
     AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,
@@ -705,6 +709,14 @@ impl Store {
             return Ok(Vec::new());
         }
         list_live_sessions(&self.conn)
+    }
+
+    /// Every open alert, oldest first.
+    pub fn alerts(&self) -> Result<Vec<AlertRow>, AppError> {
+        if !self.table_exists("alerts")? {
+            return Ok(Vec::new());
+        }
+        list_open_alerts(&self.conn)
     }
 
     pub fn sessions_for_day(&self, business_day: &str) -> Result<Vec<SessionListing>, AppError> {

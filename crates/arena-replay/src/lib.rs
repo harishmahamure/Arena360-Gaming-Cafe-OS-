@@ -862,6 +862,37 @@ mod tests {
                     .await
                     .unwrap();
             }
+            let raise = |kind: arena_proto::AlertKind| {
+                let mut intent = submit(
+                    IntentPayload::AlertRaise(arena_proto::AlertRaise::new(
+                        kind,
+                        Some(kiosk.clone()),
+                    )),
+                    None,
+                );
+                intent.actor = Actor {
+                    kind: ActorKind::System,
+                    id: "hub".into(),
+                };
+                intent
+            };
+            let alert = writer
+                .submit_intent(raise(arena_proto::AlertKind::Fixture))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::AlertAck(arena_proto::AlertAck {
+                        alert_id: alert.changes[0].row_id.clone(),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(raise(arena_proto::AlertKind::TimeUp))
+                .await
+                .unwrap();
             clock.advance(16 * 24 * 60 * 60 * 1000);
             writer
                 .credit_auto_pause(None)

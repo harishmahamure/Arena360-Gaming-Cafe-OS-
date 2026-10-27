@@ -58,11 +58,12 @@ pub enum Table {
     Plans,
     PlanGroups,
     PlayerPacks,
+    Alerts,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 31] = [
+    pub const ALL: [Table; 32] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -94,6 +95,7 @@ impl Table {
         Table::Plans,
         Table::PlanGroups,
         Table::PlayerPacks,
+        Table::Alerts,
     ];
 
     /// The SQL table name.
@@ -130,6 +132,7 @@ impl Table {
             Self::Plans => "plans",
             Self::PlanGroups => "plan_groups",
             Self::PlayerPacks => "player_packs",
+            Self::Alerts => "alerts",
         }
     }
 
@@ -156,7 +159,7 @@ impl Table {
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
             Self::Wallets | Self::CreditBalances => &["player_id"],
-            Self::PlayerPacks => &["id"],
+            Self::PlayerPacks | Self::Alerts => &["id"],
             Self::Plans => &["plan_id"],
             Self::PlanGroups => &["plan_id", "group_id"],
             Self::Consents => &["consent_id"],
@@ -198,6 +201,7 @@ impl Table {
             | Self::WalletTxns
             | Self::CreditBalances
             | Self::PlayerPacks
+            | Self::Alerts
             | Self::Plans => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents | Self::PlanGroups => false,
         }
@@ -318,6 +322,9 @@ pub enum RowKey {
     PlayerPacks {
         id: String,
     },
+    Alerts {
+        id: String,
+    },
 }
 
 impl RowKey {
@@ -344,6 +351,7 @@ impl RowKey {
             Self::Plans { .. } => Table::Plans,
             Self::PlanGroups { .. } => Table::PlanGroups,
             Self::PlayerPacks { .. } => Table::PlayerPacks,
+            Self::Alerts { .. } => Table::Alerts,
             Self::Players { .. } => Table::Players,
             Self::Consents { .. } => Table::Consents,
             Self::Sessions { .. } => Table::Sessions,
@@ -394,6 +402,7 @@ impl RowKey {
             | Self::Orders { id }
             | Self::OrderLines { id }
             | Self::PlayerPacks { id }
+            | Self::Alerts { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => id.clone(),
         }
@@ -478,6 +487,7 @@ impl RowKey {
                 consent_id: text("consent_id")?,
             },
             Table::PlayerPacks => Self::PlayerPacks { id: text("id")? },
+            Table::Alerts => Self::Alerts { id: text("id")? },
             Table::Sessions => Self::Sessions { id: text("id")? },
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
             Table::Orders => Self::Orders { id: text("id")? },
@@ -529,6 +539,7 @@ impl RowKey {
             | Self::Orders { id }
             | Self::OrderLines { id }
             | Self::PlayerPacks { id }
+            | Self::Alerts { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => vec![id],
         }

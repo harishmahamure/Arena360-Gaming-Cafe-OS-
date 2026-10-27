@@ -31,6 +31,7 @@ const MODULE_LABELS: Record<string, MessageKey> = {
   kiosk: "hub.audit.module.kiosk",
   player: "hub.audit.module.player",
   session: "hub.audit.module.session",
+  alert: "hub.audit.module.alert",
 };
 
 /** Intent kinds with a catalogue label; any other kind shows as it is (`settings.set`). */
@@ -55,6 +56,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "session.assign_player": "hub.audit.intent.session.assign_player",
   "session.resume": "hub.audit.intent.session.resume",
   "session.expire": "hub.audit.intent.session.expire",
+  "alert.raise": "hub.audit.intent.alert.raise",
+  "alert.ack": "hub.audit.intent.alert.ack",
   "session.end.reverted": "hub.audit.intent.session.end.reverted",
   "session.settle.reverted": "hub.audit.intent.session.settle.reverted",
   "player.update": "hub.audit.intent.player.update",

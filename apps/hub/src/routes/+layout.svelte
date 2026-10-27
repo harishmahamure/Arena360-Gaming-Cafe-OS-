@@ -1,9 +1,10 @@
 <script lang="ts">
   import "@arena/ui/base.css";
-  import { AlertBadge, Button, StatusBadge, t } from "@arena/ui";
+  import { AlertBadge, Button, t } from "@arena/ui";
   import { onMount, tick, untrack, type Snippet } from "svelte";
   import { goto, invalidate } from "$app/navigation";
   import { page } from "$app/state";
+  import AlertList from "../lib/AlertList.svelte";
   import Clock from "../lib/Clock.svelte";
   import DeviceGate from "../lib/DeviceGate.svelte";
   import Icon from "../lib/Icon.svelte";
@@ -35,6 +36,16 @@
     unlockSession,
     type LockResult,
   } from "../lib/auth";
+  import {
+    ackAlerts,
+    announcements,
+    listRows,
+    onAlertsChanged,
+    requestSheet,
+    stopAlerts,
+    syncAlerts,
+    type AlertRow,
+  } from "../lib/alerts.svelte";
   import { catalog } from "../lib/catalog.svelte";
   import { alertCount, refreshAccess, service } from "../lib/service.svelte";
   import { connectEvents, uiOf } from "../lib/events";
@@ -74,6 +85,15 @@
   );
 
   let moreOpen = $state(false);
+  /** The header's alert list is open. */
+  let alertsOpen = $state(false);
+  let alertButton: HTMLButtonElement | undefined = $state();
+  const alertRows = $derived(listRows());
+  const deviceNames = $derived(
+    Object.fromEntries(
+      (data.hub.ok ? data.hub.snapshot.devices : []).map((d) => [d.device_id, d.label]),
+    ),
+  );
   /** The idle lock is up: the shell stays mounted but inert behind the overlay. */
   let locked = $state(false);
   /** What had focus when the screen locked (it gets focus back on unlock). */
@@ -196,6 +216,33 @@
         if (connectivity) takeLink(connectivity);
       });
   });
+
+  // Open alerts and the branch conditions come from each (re)loaded snapshot; the sound loop and
+  // the announcements follow them even while the screen is locked.
+  $effect(() => {
+    const snapshot = data.hub.ok ? data.hub.snapshot : null;
+    untrack(() => syncAlerts(snapshot));
+  });
+
+  $effect(() => {
+    if (alertRows.length === 0 || gated) alertsOpen = false;
+  });
+
+  function closeAlerts() {
+    alertsOpen = false;
+    queueMicrotask(() => alertButton?.focus());
+  }
+
+  /** A list row: acknowledges that alert and opens its tile's sheet. */
+  async function pickAlert(row: AlertRow) {
+    alertsOpen = false;
+    if (row.alertId) void ackAlerts([row.alertId]);
+    if (!row.deviceId) return;
+    requestSheet(row.deviceId);
+    if (current?.id !== "floor") {
+      await goto("/floor?" + new URLSearchParams({ device: row.deviceId }));
+    }
+  }
 
   /**
    * Takes a probe answer unless an older one: a snapshot that was in flight while a newer
@@ -404,9 +451,12 @@
   onMount(() => {
     onSessionLocked(() => lockScreen(false));
     onHubNotPaired(() => void refresh());
+    onAlertsChanged(() => void invalidate(SNAPSHOT_DEPENDENCY));
     return () => {
       onSessionLocked(null);
       onHubNotPaired(null);
+      onAlertsChanged(null);
+      stopAlerts();
     };
   });
 
@@ -546,15 +596,19 @@
             {t("hub.pairing.revoked")}
           </p>
         {/if}
-        {#if data.hub.ok && (data.hub.snapshot.licence_unverified || data.hub.snapshot.clock_wrong)}
-          <div class="status-slot" role="status" data-testid="hub-status-slot">
-            {#if data.hub.snapshot.licence_unverified}
-              <StatusBadge state="warning" label="hub.licence.unverified" />
-            {/if}
-            {#if data.hub.snapshot.clock_wrong}
-              <StatusBadge state="warning" label="hub.clock.wrong" />
-            {/if}
-          </div>
+        {#if alertRows.length > 0}
+          <button
+            type="button"
+            class="alert-button ui-interactive"
+            bind:this={alertButton}
+            aria-expanded={alertsOpen}
+            aria-controls={alertsOpen ? "hub-alert-list" : undefined}
+            data-testid="hub-alerts"
+            onclick={() => (alertsOpen = !alertsOpen)}
+          >
+            <span class="type-hub-label">{t("hub.alerts.button")}</span>
+            <AlertBadge count={alertRows.length} live={false} />
+          </button>
         {/if}
         {#if alertCount(service.access) > 0}
           <a
@@ -567,6 +621,15 @@
         {/if}
         <Clock />
       </div>
+      {#if alertsOpen}
+        <AlertList
+          id="hub-alert-list"
+          rows={alertRows}
+          names={deviceNames}
+          onpick={pickAlert}
+          onclose={closeAlerts}
+        />
+      {/if}
     </header>
 
     <nav class="hub-rail" aria-label={t("hub.nav.label")}>
@@ -642,6 +705,9 @@
 {/if}
 
 <p class="visually-hidden" aria-live="polite" data-testid="hub-announce">{announcement}</p>
+<div class="visually-hidden" aria-live="polite" data-testid="alert-announce">
+  {#each announcements as a (a.id)}<p>{a.text}</p>{/each}
+</div>
 {#if toast}
   <p class="toast type-hub-label" role="status" data-testid="hub-toast">{toast}</p>
 {/if}
@@ -685,6 +751,7 @@
 
   /* ── Header ─────────────────────────────────────────────────────────────────── */
   .hub-header {
+    position: relative;
     grid-area: header;
     display: flex;
     align-items: center;
@@ -725,9 +792,19 @@
     text-decoration: none;
   }
 
-  .status-slot {
+  .alert-button {
+    --ui-bg: transparent;
     display: inline-flex;
+    align-items: center;
     gap: var(--space-2);
+    box-sizing: border-box;
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
   }
 
   .staff {

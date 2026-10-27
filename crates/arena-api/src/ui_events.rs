@@ -20,8 +20,8 @@
 //!   printed receipt, a drawer kick, an invoice number) recorded against a bill, which closes its
 //!   undo toast. Nothing records an effect before Epic 5, so the Hub does not send it yet.
 //! - `event: devices.changed`, data `{}`: a device came online or went offline on the LAN, or
-//!   the Hub's LAN addresses changed; the view reloads the snapshot (which carries each
-//!   device's `online` and the `lan` block).
+//!   the Hub's LAN addresses changed, or an alert was raised or acknowledged; the view reloads
+//!   the snapshot (which carries each device's `online`, the `lan` block and the open alerts).
 //! - `event: groups.changed`, data `{"by_owner": bool}`: a device group, floor zone or a device's
 //!   group or place changed (`by_owner`: an owner setup command wrote it); sent with `devices.changed`.
 //! - `event: device.admin_unlock_ack`, data
@@ -331,7 +331,7 @@ impl HubTask {
                         if applied
                             .changes
                             .iter()
-                            .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta"))
+                            .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta" | "alerts"))
                         {
                             self.send("devices.changed", "{}".into(), false);
                         }
@@ -1108,6 +1108,77 @@ mod tests {
             assert!(seen.len() < 6, "{seen:?}");
         }
         assert!(seen.contains(&"devices.changed".to_owned()), "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn an_alert_pushes_devices_changed_and_the_ui_cannot_raise_one() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let device = hub
+            .writer
+            .submit_intent(intent_as(
+                owner(),
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister::new(
+                    arena_proto::ClientClass::Paired,
+                    "PC-01",
+                    arena_core::devices::hash_token_secret("s").unwrap(),
+                )),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let raise = IntentPayload::AlertRaise(arena_proto::AlertRaise::new(
+            arena_proto::AlertKind::Fixture,
+            Some(device.clone()),
+        ));
+        let body = serde_json::json!({ "intent": intent_as(manager(), raise.clone(), None) });
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(
+            (status, reply["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let system = Actor {
+            kind: ActorKind::System,
+            id: "hub".into(),
+        };
+        let applied = hub
+            .writer
+            .submit_intent(intent_as(system, raise, None))
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, _) = next_event(&mut frames).await.unwrap();
+            if event == "devices.changed" {
+                break;
+            }
+            seen.push(event);
+            assert!(seen.len() < 5, "{seen:?}");
+        }
+        let body = serde_json::json!({ "intent": intent_as(
+            manager(),
+            IntentPayload::AlertAck(arena_proto::AlertAck {
+                alert_id: applied.changes[0].row_id.clone(),
+            }),
+            None,
+        ) });
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        loop {
+            let (event, _) = next_event(&mut frames).await.unwrap();
+            if event == "devices.changed" {
+                break;
+            }
+        }
     }
 
     #[tokio::test]

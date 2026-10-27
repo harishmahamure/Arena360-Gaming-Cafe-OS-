@@ -266,24 +266,27 @@ test("a revoked Hub shows a status banner and still shows the screen", async ({ 
   await expect(page.locator("h1")).toHaveCount(1);
 });
 
-test("licence and clock warnings share one header status-badge slot until they clear", async ({
+test("licence and clock warnings are branch-level rows in the alert list until they clear", async ({
   page,
 }) => {
   const hub = await open(page);
-  const slot = page.getByTestId("hub-status-slot");
-  await expect(slot).toHaveCount(0);
+  const button = page.getByTestId("hub-alerts");
+  const rows = page.getByTestId("alert-row");
+  await expect(button).toHaveCount(0);
+  await expect(page.getByTestId("hub-status-slot")).toHaveCount(0);
   hub.licenceUnverified = true;
-  await expect(slot).toHaveAttribute("role", "status");
-  await expect(slot.locator('[data-component="status-badge"]')).toHaveText([
-    en["hub.licence.unverified"],
-  ]);
+  await expect(button).toContainText("1");
+  await button.click();
+  await expect(rows).toHaveText([new RegExp(en["hub.licence.unverified"])]);
   hub.clockWrong = true;
-  await expect(slot.locator('[data-component="status-badge"]')).toHaveText([
-    en["hub.licence.unverified"],
-    en["hub.clock.wrong"],
+  await expect(rows).toHaveText([
+    new RegExp(en["hub.licence.unverified"]),
+    new RegExp(en["hub.clock.wrong"]),
   ]);
+  await expect(button).toContainText("2");
   hub.licenceUnverified = false;
   hub.clockWrong = false;
-  await expect(slot).toHaveCount(0);
+  await expect(button).toHaveCount(0);
+  await expect(page.getByTestId("alert-list")).toHaveCount(0);
   await expect(page.locator("h1")).toHaveCount(1);
 });

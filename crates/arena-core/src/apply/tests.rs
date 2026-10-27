@@ -18,6 +18,7 @@ use crate::clock::ManualClock;
 use crate::status::{HubStatus, LeaseInfo, status_channel};
 use crate::writer::{Writer, WriterHandle};
 
+mod alert;
 mod commands;
 mod plans;
 mod players;

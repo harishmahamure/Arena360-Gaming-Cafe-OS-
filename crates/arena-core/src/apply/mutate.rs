@@ -328,6 +328,10 @@ pub(super) fn mutate(
             Target::CreditAutoPause(t) => super::credit_pause::mutate(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::AlertRaise(_) | IntentPayload::AlertAck(_) => match target {
+            Target::Alert(t) => super::alert::mutate(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::SessionExpire(_) => match target {
             Target::SessionExpire(t) => super::session_expire::mutate(tx, t, now_ms),
             _ => Err(mismatch()),

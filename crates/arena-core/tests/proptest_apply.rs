@@ -184,6 +184,14 @@ enum Op {
     SessionExpire {
         slot: u8,
     },
+    /// The system raises an alert on a device (a repeat is `STALE`), then staff acknowledge it
+    /// (a repeat is `STALE`, an unknown id `NOT_FOUND`).
+    Alert {
+        slot: u8,
+        time_up: bool,
+        ack: bool,
+        bad_ack: bool,
+    },
     /// A Settle of an open bill wholly on credit, maybe with the manager override.
     CreditPay {
         slot: u8,
@@ -389,6 +397,18 @@ fn op() -> impl Strategy<Value = Op> {
             }),
         1 => Just(Op::CreditAutoPause),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
+        3 => (
+            0..4u8,
+            prop::bool::ANY,
+            prop::bool::weighted(0.6),
+            prop::bool::weighted(0.2)
+        )
+            .prop_map(|(slot, time_up, ack, bad_ack)| Op::Alert {
+                slot,
+                time_up,
+                ack,
+                bad_ack
+            }),
         2 => (0..3u8, prop::bool::weighted(0.5)).prop_map(|(slot, over_ride)| Op::CreditPay {
             slot,
             over_ride
@@ -1890,6 +1910,99 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         }
                     }
                 }
+            }
+        }
+        Op::Alert {
+            slot,
+            time_up,
+            ack,
+            bad_ack,
+        } => {
+            let devices: Vec<String> = hub
+                .reader
+                .rows(Table::Devices)
+                .unwrap()
+                .into_iter()
+                .filter(|d| d["revoked_at"] == RowValue::Null)
+                .map(|d| text(&d, "device_id"))
+                .collect();
+            if devices.is_empty() {
+                return Ok(());
+            }
+            let device = devices[usize::from(*slot) % devices.len()].clone();
+            let kind = if *time_up {
+                arena_proto::AlertKind::TimeUp
+            } else {
+                arena_proto::AlertKind::Fixture
+            };
+            let open = |hub: &Hub| {
+                hub.reader
+                    .rows(Table::Alerts)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|a| {
+                        a["acked_at"] == RowValue::Null
+                            && text(a, "kind") == kind.as_str()
+                            && a["device_id"] == RowValue::Text(device.clone())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let raise = |hub: &mut Hub| {
+                let mut intent = hub.intent(
+                    IntentPayload::AlertRaise(arena_proto::AlertRaise::new(
+                        kind,
+                        Some(device.clone()),
+                    )),
+                    None,
+                );
+                intent.actor.kind = ActorKind::System;
+                hub.submit_new(intent)
+            };
+            let before = hub.change_count();
+            let was_open = !open(hub).is_empty();
+            let out = raise(hub);
+            if was_open {
+                prop_assert_eq!(code(&out), Some((ErrorCode::Stale, None)));
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 1);
+            }
+            let now_open = open(hub);
+            prop_assert_eq!(now_open.len(), 1);
+            let again = raise(hub);
+            prop_assert_eq!(code(&again), Some((ErrorCode::Stale, None)));
+            let id = text(&now_open[0], "id");
+            let after_raise = hub.change_count();
+            if *bad_ack {
+                let intent = hub.intent(
+                    IntentPayload::AlertAck(arena_proto::AlertAck {
+                        alert_id: "NOPE".into(),
+                    }),
+                    None,
+                );
+                let out = hub.submit_new(intent);
+                prop_assert_eq!(code(&out), Some((ErrorCode::NotFound, Some("alert_id"))));
+                prop_assert_eq!(hub.change_count(), after_raise);
+            }
+            if *ack {
+                let intent = hub.intent(
+                    IntentPayload::AlertAck(arena_proto::AlertAck {
+                        alert_id: id.clone(),
+                    }),
+                    None,
+                );
+                let out = hub.submit_new(intent);
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), after_raise + 1);
+                prop_assert!(open(hub).is_empty());
+                let intent = hub.intent(
+                    IntentPayload::AlertAck(arena_proto::AlertAck { alert_id: id }),
+                    None,
+                );
+                let out = hub.submit_new(intent);
+                prop_assert_eq!(code(&out), Some((ErrorCode::Stale, None)));
+                prop_assert_eq!(hub.change_count(), after_raise + 1);
             }
         }
         Op::SessionExpire { slot } => {

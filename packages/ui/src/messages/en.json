@@ -559,6 +559,7 @@
   "hub.audit.module.kiosk": "Kiosk",
   "hub.audit.module.player": "Players",
   "hub.audit.module.session": "Sessions",
+  "hub.audit.module.alert": "Alerts",
   "hub.audit.kind.unknown": "Unknown",
   "hub.audit.mode.unknown": "unknown method",
   "hub.audit.mode.remote": "remote unlock",
@@ -1681,5 +1682,17 @@
   "hub.session.pack_expired": "This pack has expired or has no time left. Pick another.",
   "hub.session.pack_group": "This pack is not valid for this PC's group.",
   "hub.session.pack_refused": "This pack can't start a session now. It may already be running one.",
-  "hub.session.wallet_short": "The wallet balance is too low for the first bill. Top up at counter."
+  "hub.session.wallet_short": "The wallet balance is too low for the first bill. Top up at counter.",
+  "hub.alerts.button": "Alerts",
+  "hub.alerts.title": "Open alerts",
+  "hub.alerts.branch": "Branch",
+  "hub.alerts.age_now": "just now",
+  "hub.alerts.age_minutes": "{count} min ago",
+  "hub.alerts.age_hours": "{count} h ago",
+  "hub.alerts.announce": "Alert. {where}: {what}",
+  "hub.alerts.kind.fixture": "Test alert",
+  "hub.alerts.kind.time_up": "Time is up",
+  "hub.alerts.condition": "Needs attention",
+  "hub.audit.intent.alert.raise": "Alert raised",
+  "hub.audit.intent.alert.ack": "Alert acknowledged"
 }

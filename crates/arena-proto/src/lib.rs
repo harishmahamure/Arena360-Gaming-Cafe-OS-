@@ -6,6 +6,7 @@
 mod account;
 mod actor;
 mod admin;
+mod alert;
 mod audit;
 mod billing;
 mod catalog;
@@ -57,6 +58,7 @@ pub use admin::{
     FLAG_STALE_VERIFIER, MAX_VERIFIER_ENTRIES, ManagerVerifier, VerifierEntry, VerifyAdminPin,
     validate_exit_id,
 };
+pub use alert::{AlertAck, AlertKind, AlertRaise, SnapshotAlert};
 pub use audit::{
     AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditAdminExit, AuditDetail,
     AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,

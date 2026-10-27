@@ -31,6 +31,7 @@
     newIdempotencyKey,
   } from "./auth";
   import ConvertGuest from "./players/ConvertGuest.svelte";
+  import ExtendOptions from "./players/ExtendOptions.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
   import StartOptions from "./players/StartOptions.svelte";
   import SettleBar from "./SettleBar.svelte";
@@ -42,6 +43,7 @@
     assignJob,
     cmds,
     endJob,
+    extendJob,
     maintenanceJob,
     pauseJob,
     permissionFor,
@@ -51,6 +53,7 @@
     send,
     settleJob,
     startJob,
+    type ExtendChoice,
     type Job,
     type StartChoice,
   } from "./tile-actions.svelte";
@@ -108,6 +111,7 @@
   let picked: { id?: string; name?: string } | null = $state(null);
   let choice: StartChoice = $state({ mode: "postpaid" });
   let pausing = $state(false);
+  let extending = $state(false);
   let approving: Job | null = $state(null);
   let approvalPrompt: MessageKey = $state("ui.pin.prompt");
 
@@ -229,17 +233,40 @@
     await go(pauseJob(session.id, session.rev, value as PauseReason, note));
   }
 
+  const canExtend = $derived(
+    session?.player_id != null &&
+      group !== undefined &&
+      (session.mode === "pack" || session.mode === "wallet") &&
+      ["active", "grace", "paused"].includes(session.state),
+  );
+
+  $effect(() => {
+    if (!canExtend) extending = false;
+  });
+  $effect(() => {
+    if (cmd?.state === "done" && cmd.job.payload.kind === "session.extend") extending = false;
+  });
+
+  function extend(choice: ExtendChoice) {
+    if (session) void go(extendJob(session.id, choice));
+  }
+
   const creditRefused = $derived(
     cmd?.state === "refused" &&
       cmd.refusal === "hub.settle.credit_limit" &&
-      cmd.job.payload.kind === "session.settle"
+      (cmd.job.payload.kind === "session.settle" || cmd.job.payload.kind === "session.extend")
       ? cmd.job
       : null,
   );
 
   function overrideCredit() {
     const refused = creditRefused;
-    if (!refused || refused.payload.kind !== "session.settle") return;
+    if (
+      !refused ||
+      (refused.payload.kind !== "session.settle" && refused.payload.kind !== "session.extend")
+    ) {
+      return;
+    }
     const job: Job = {
       ...refused,
       key: newIdempotencyKey(),
@@ -524,6 +551,26 @@
             disabled={busy}
             disabledReason="hub.sheet.waiting"
             onclick={() => (pausing = true)}
+          />
+        {/if}
+        {#if canExtend && extending && session.player_id && group}
+          <ExtendOptions
+            playerId={session.player_id}
+            groupId={group.id}
+            ownPackId={session.pack_id ?? null}
+            rateMinor={group.rate_minor ?? null}
+            {locale}
+            disabled={busy}
+            onconfirm={extend}
+            oncancel={() => (extending = false)}
+          />
+        {:else if canExtend}
+          <Button
+            label="hub.session.extend"
+            variant="secondary"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => (extending = true)}
           />
         {/if}
         <Button

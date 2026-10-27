@@ -31,6 +31,7 @@ mod credit;
 mod credit_collect;
 pub(crate) mod credit_pause;
 mod devices;
+mod extend;
 mod frame;
 mod groups;
 mod guards;
@@ -165,6 +166,7 @@ pub(crate) enum Target {
     SessionSettleReverted(Box<session::SettleRevertTarget>),
     SessionPause(Box<session::PauseTarget>),
     SessionResume(Box<session::PauseTarget>),
+    SessionExtend(Box<extend::ExtendTarget>),
     SessionAssign(Box<session::AssignTarget>),
     WalletTopup(Box<wallet::TopupTarget>),
     WalletTopupReverted(Box<wallet::TopupRevertTarget>),
@@ -231,6 +233,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         }
         P::SessionPause(p) => Target::SessionPause(Box::new(session::load_pause(tx, p)?)),
         P::SessionResume(r) => Target::SessionResume(Box::new(session::load_resume(tx, r)?)),
+        P::SessionExtend(e) => Target::SessionExtend(Box::new(extend::load(tx, e, now)?)),
         P::SessionAssignPlayer(a) => Target::SessionAssign(Box::new(session::load_assign(tx, a)?)),
         P::WalletTopup(t) => Target::WalletTopup(Box::new(wallet::load_topup(tx, t)?)),
         P::WalletTopupReverted(r) => {

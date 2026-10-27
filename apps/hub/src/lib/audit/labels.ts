@@ -55,6 +55,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "session.pause": "hub.audit.intent.session.pause",
   "session.assign_player": "hub.audit.intent.session.assign_player",
   "session.resume": "hub.audit.intent.session.resume",
+  "session.extend": "hub.audit.intent.session.extend",
   "session.expire": "hub.audit.intent.session.expire",
   "alert.raise": "hub.audit.intent.alert.raise",
   "alert.ack": "hub.audit.intent.alert.ack",

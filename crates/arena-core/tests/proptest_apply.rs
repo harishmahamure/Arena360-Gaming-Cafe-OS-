@@ -145,6 +145,14 @@ enum Op {
         pass: bool,
         guest: bool,
     },
+    /// An extend of the live session on an existing PC from the wallet, a pack or credit: it
+    /// either moves the end out by exactly the minutes and writes its own settled order, or
+    /// writes nothing.
+    SessionExtend {
+        slot: u8,
+        source: u8,
+        minutes: u8,
+    },
     SessionEnd {
         slot: u8,
     },
@@ -367,6 +375,11 @@ fn op() -> impl Strategy<Value = Op> {
             slot,
             wallet,
             guest
+        }),
+        2 => (0..3u8, 0..3u8, 0..3u8).prop_map(|(slot, source, minutes)| Op::SessionExtend {
+            slot,
+            source,
+            minutes
         }),
         2 => (0..3u8).prop_map(|slot| Op::SessionEnd { slot }),
         2 => (0..3u8, any::<bool>(), any::<bool>()).prop_map(|(slot, short, split)| Op::SessionSettle {
@@ -1504,6 +1517,104 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                                 | ErrorCode::PackExpired
                                 | ErrorCode::PlanNotForGroup
                                 | ErrorCode::PassOutsideWindow
+                        ),
+                        "{:?}",
+                        e
+                    );
+                }
+            }
+        }
+        Op::SessionExtend {
+            slot,
+            source,
+            minutes,
+        } => {
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let Some(session) = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .find(|s| {
+                    text(s, "device_id") == device
+                        && ["active", "paused", "grace"].contains(&text(s, "state").as_str())
+                })
+            else {
+                return Ok(());
+            };
+            let id = text(&session, "id");
+            let source = [
+                arena_proto::ExtendSource::Wallet,
+                arena_proto::ExtendSource::Pack,
+                arena_proto::ExtendSource::Credit,
+            ][usize::from(*source)];
+            let own = match &session["pack_id"] {
+                RowValue::Text(t) => t.clone(),
+                _ => String::new(),
+            };
+            let pack = hub
+                .reader
+                .rows(Table::PlayerPacks)
+                .unwrap()
+                .iter()
+                .find(|r| text(r, "kind") == "pack" && text(r, "id") != own)
+                .map(|r| text(r, "id"));
+            let minutes = arena_proto::EXTEND_OPTIONS_MIN[usize::from(*minutes)];
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionExtend(arena_proto::SessionExtend {
+                    session_id: id.clone(),
+                    minutes,
+                    source,
+                    pack_id: pack.filter(|_| source == arena_proto::ExtendSource::Pack),
+                    credit_override: None,
+                }),
+                None,
+            ));
+            match &out {
+                Ok(_) => {
+                    prop_assert!(hub.change_count() >= before + 3);
+                    let after = hub
+                        .reader
+                        .rows(Table::Sessions)
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| text(s, "id") == id)
+                        .unwrap();
+                    prop_assert_eq!(
+                        int(&after, "ends_at"),
+                        int(&session, "ends_at") + minutes * 60_000
+                    );
+                    prop_assert_eq!(
+                        int(&after, "extended_min"),
+                        int(&session, "extended_min") + minutes
+                    );
+                    prop_assert_eq!(text(&after, "state") == "grace", false);
+                }
+                Err(e) => {
+                    prop_assert_eq!(hub.change_count(), before);
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::ValidationFailed
+                                | ErrorCode::InsufficientBalance
+                                | ErrorCode::NotFound
+                                | ErrorCode::PackExpired
+                                | ErrorCode::PlanNotForGroup
+                                | ErrorCode::CreditLimit
+                                | ErrorCode::CreditPaused
+                                | ErrorCode::OverrideUsedToday
+                                | ErrorCode::PastClosing
+                                | ErrorCode::NoRate
+                                | ErrorCode::Stale
                         ),
                         "{:?}",
                         e

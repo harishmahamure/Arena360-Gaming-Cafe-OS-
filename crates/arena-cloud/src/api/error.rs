@@ -71,6 +71,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PackExpired
         | ErrorCode::PlanNotForGroup
         | ErrorCode::PassOutsideWindow
+        | ErrorCode::PastClosing
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED

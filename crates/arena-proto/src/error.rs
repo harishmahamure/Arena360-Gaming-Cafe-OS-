@@ -138,6 +138,8 @@ pub enum ErrorCode {
     PlanNotForGroup,
     /// A pass or block session started outside the window of the plan.
     PassOutsideWindow,
+    /// An extend that would run past the branch closing time.
+    PastClosing,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -229,6 +231,7 @@ impl ErrorCode {
             Self::PackExpired => "PACK_EXPIRED",
             Self::PlanNotForGroup => "PLAN_NOT_FOR_GROUP",
             Self::PassOutsideWindow => "PASS_OUTSIDE_WINDOW",
+            Self::PastClosing => "PAST_CLOSING",
         }
     }
 }
@@ -381,6 +384,7 @@ mod tests {
             (ErrorCode::PackExpired, "PACK_EXPIRED"),
             (ErrorCode::PlanNotForGroup, "PLAN_NOT_FOR_GROUP"),
             (ErrorCode::PassOutsideWindow, "PASS_OUTSIDE_WINDOW"),
+            (ErrorCode::PastClosing, "PAST_CLOSING"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

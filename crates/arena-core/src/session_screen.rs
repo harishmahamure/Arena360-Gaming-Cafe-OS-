@@ -15,7 +15,7 @@ fn grace_ms(grace_min: u32) -> i64 {
     i64::from(grace_min) * 60_000
 }
 
-fn closes_in(week: &[OpeningDay; 7], tz: Tz, now_ms: i64) -> Option<u64> {
+pub(crate) fn closes_in(week: &[OpeningDay; 7], tz: Tz, now_ms: i64) -> Option<u64> {
     let today: NaiveDate = tz.timestamp_millis_opt(now_ms).single()?.date_naive();
     (-1..=7)
         .filter_map(|d| {

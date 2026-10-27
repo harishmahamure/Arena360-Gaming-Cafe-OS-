@@ -311,6 +311,14 @@ pub(super) fn load_close(tx: &StoreTx<'_>, s: &LiveSession) -> Result<CloseExtra
     })
 }
 
+/// Where a wallet session's own time stops: its end less the minutes extended since, which were
+/// charged when they were added.
+fn base_end(s: &LiveSession) -> Option<i64> {
+    s.ends_at
+        .filter(|_| s.extended_min > 0)
+        .map(|end| end - s.extended_min * MIN_MS)
+}
+
 /// How a prepaid session ended, and so who closed it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Ending {
@@ -353,7 +361,8 @@ pub(super) fn close_out(
     let mut lines = if zero_bill {
         billing::bill(c.segments, 0, 0, None, c.ended_at)
     } else {
-        billing::bill(c.segments, s.rounding_min, s.minimum_min, None, c.ended_at)
+        let bill_at = base_end(s).map_or(c.ended_at, |end| c.ended_at.min(end));
+        billing::bill(c.segments, s.rounding_min, s.minimum_min, None, bill_at)
     };
     let left = c.extras.pack.as_ref().and_then(|p| p.minutes_left);
     let used = lines.iter().map(|l| l.minutes).sum::<i64>();

@@ -274,6 +274,8 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
                 .and_then(arena_proto::PauseReason::parse),
             pause_note: s.pause_note,
             ends_at: s.ends_at,
+            mode: Some(s.mode),
+            pack_id: s.pack_id,
         })
         .collect();
     for g in &mut snapshot.groups {

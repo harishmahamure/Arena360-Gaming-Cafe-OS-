@@ -52,6 +52,7 @@ export type IntentKind =
   | "session.settle.reverted"
   | "session.pause"
   | "session.resume"
+  | "session.extend"
   | "wallet.topup"
   | "wallet.topup.reverted"
   | "credit.set_limit"

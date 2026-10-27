@@ -19,4 +19,12 @@ export type SnapshotSession = {
    * When the grace after `ends_at` runs out (a timed session with a grace period).
    */
   grace_ends_at?: number | null;
+  /**
+   * How the session is paid for: `postpaid`, `pack`, `wallet`, `pass` or `block`.
+   */
+  mode?: string | null;
+  /**
+   * The owned pack a pack or pass session plays on.
+   */
+  pack_id?: string | null;
 };

@@ -33,6 +33,12 @@ export type StartChoice =
   | { mode: "block"; plan_id: string }
   | { mode: "wallet" };
 
+export type ExtendChoice = {
+  minutes: number;
+  source: "wallet" | "pack" | "credit";
+  pack_id?: string;
+};
+
 export const cmds: Record<string, Cmd | undefined> = $state({});
 
 const DONE: Record<PcAction, MessageKey> = {
@@ -68,6 +74,11 @@ const REFUSALS: Record<string, MessageKey> = {
   PLAN_NOT_FOR_GROUP: "hub.session.pack_group",
   PASS_OUTSIDE_WINDOW: "hub.session.window_closed",
   "INSUFFICIENT_BALANCE:session.start": "hub.session.wallet_short",
+  PAST_CLOSING: "hub.extend.past_closing",
+  CREDIT_PAUSED: "hub.plans.sell.credit_paused",
+  "STALE:session.extend": "hub.session.pause_stale",
+  "VALIDATION_FAILED:session.extend": "hub.extend.refused",
+  "NOT_FOUND:session.extend": "hub.extend.refused",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -100,6 +111,18 @@ export const startJob = (
       plan_id: choice.mode === "block" ? choice.plan_id : undefined,
     },
     { track: manual ? "none" : "cmd", done: "hub.sheet.done.started" },
+  );
+
+export const extendJob = (session_id: string, choice: ExtendChoice) =>
+  job(
+    {
+      kind: "session.extend",
+      session_id,
+      minutes: choice.minutes,
+      source: choice.source,
+      pack_id: choice.source === "pack" ? choice.pack_id : undefined,
+    },
+    { track: "none", done: "hub.sheet.done.extended" },
   );
 
 export const endJob = (session_id: string, rev: number) =>
@@ -159,19 +182,21 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
     ? kind
     : kind === "session.pause" || kind === "session.resume"
       ? "session.pause"
-      : kind === "session.end.reverted"
-        ? "session.end"
-        : kind === "session.settle" || kind === "session.settle.reverted"
-          ? "pos.sell"
-          : kind === "credit.collect" || kind === "credit.collect.reverted"
-            ? "credit.collect"
-            : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-              ? "wallet.topup"
-              : kind === "device.screen"
-                ? "device.screen"
-                : kind === "device.power" || kind === "device.admin_unlock"
-                  ? "device.remote"
-                  : "device.manage";
+      : kind === "session.extend"
+        ? "session.extend"
+        : kind === "session.end.reverted"
+          ? "session.end"
+          : kind === "session.settle" || kind === "session.settle.reverted"
+            ? "pos.sell"
+            : kind === "credit.collect" || kind === "credit.collect.reverted"
+              ? "credit.collect"
+              : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+                ? "wallet.topup"
+                : kind === "device.screen"
+                  ? "device.screen"
+                  : kind === "device.power" || kind === "device.admin_unlock"
+                    ? "device.remote"
+                    : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 
@@ -203,14 +228,19 @@ export async function send(
   else if (outcome.kind === "error") {
     const { code, field, message } = outcome.error;
     const offline = code === "VALIDATION_FAILED" && field === "device_id";
+    const extend = j.payload.kind === "session.extend";
     const text =
       (code === "VALIDATION_FAILED" || code === "NOT_FOUND") &&
-      (field === "pack_id" || field === "plan_id")
+      (field === "pack_id" || field === "plan_id") &&
+      !extend
         ? "hub.session.pack_refused"
         : (REFUSALS[[code, j.payload.kind].join(":")] ?? REFUSALS[code]);
     const detail =
-      (code === "INSUFFICIENT_BALANCE" || code === "PASS_OUTSIDE_WINDOW") &&
-      j.payload.kind === "session.start"
+      ((code === "INSUFFICIENT_BALANCE" || code === "PASS_OUTSIDE_WINDOW") &&
+        j.payload.kind === "session.start") ||
+      (extend &&
+        (code === "INSUFFICIENT_BALANCE" ||
+          (code === "VALIDATION_FAILED" && (field === "pack_id" || field === "source"))))
         ? message
         : undefined;
     settle(offline ? "failed" : "refused", text ?? "hub.settings.failed", detail);

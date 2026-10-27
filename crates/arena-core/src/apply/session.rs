@@ -1150,7 +1150,7 @@ pub(super) fn validate_settle_reverted(
     let Some(o) = &t.order else {
         return Err(invalid("order_id", "no such bill"));
     };
-    if o.kind != "session" {
+    if o.kind != "session" || o.session_id.is_none() {
         return Err(invalid("order_id", "this is not a session bill"));
     }
     if o.status != "settled" {

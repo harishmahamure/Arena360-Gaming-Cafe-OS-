@@ -10,14 +10,14 @@ use arena_proto::{DeviceKind, PlanUpsert, SessionExpire, SessionMode, SessionSta
 
 const MIN: i64 = 60_000;
 
-fn system() -> Actor {
+pub(super) fn system() -> Actor {
     Actor {
         kind: ActorKind::System,
         id: "hub".into(),
     }
 }
 
-async fn sql(f: &Fixture, statement: String) {
+pub(super) async fn sql(f: &Fixture, statement: String) {
     f.writer
         .submit(move |tx| {
             tx.execute_batch(&statement).unwrap();
@@ -27,7 +27,7 @@ async fn sql(f: &Fixture, statement: String) {
         .unwrap();
 }
 
-fn group_of(f: &Fixture, device: &str) -> String {
+pub(super) fn group_of(f: &Fixture, device: &str) -> String {
     table(f, Table::DevicesMeta)
         .iter()
         .find(|r| text(r, "device_id") == device)
@@ -35,7 +35,7 @@ fn group_of(f: &Fixture, device: &str) -> String {
         .unwrap()
 }
 
-async fn plan_for(f: &Fixture, groups: &[String], price: i64) -> String {
+pub(super) async fn plan_for(f: &Fixture, groups: &[String], price: i64) -> String {
     submit(
         f,
         owner(),
@@ -62,7 +62,7 @@ async fn plan_for(f: &Fixture, groups: &[String], price: i64) -> String {
     .clone()
 }
 
-async fn owned_pack(f: &Fixture, player: &str, groups: &[String], left: i64) -> String {
+pub(super) async fn owned_pack(f: &Fixture, player: &str, groups: &[String], left: i64) -> String {
     let plan = plan_for(f, groups, 30_000).await;
     end(f, sell_intent(player, &plan, vec![pay(Cash, 30_000, None)]))
         .await
@@ -91,7 +91,7 @@ fn start_as(device: &str, player: Option<&str>, mode: SessionMode, pack: Option<
     i
 }
 
-async fn begin(
+pub(super) async fn begin(
     f: &Fixture,
     device: &str,
     player: Option<&str>,
@@ -124,21 +124,21 @@ async fn begin_block(
     f.writer.submit_intent(i).await
 }
 
-async fn pack_session(f: &Fixture, device: &str, player: &str, pack: &str) -> String {
+pub(super) async fn pack_session(f: &Fixture, device: &str, player: &str, pack: &str) -> String {
     begin(f, device, Some(player), SessionMode::Pack, Some(pack))
         .await
         .unwrap();
     text(sessions(f).last().unwrap(), "id")
 }
 
-async fn wallet_session(f: &Fixture, device: &str, player: &str) -> String {
+pub(super) async fn wallet_session(f: &Fixture, device: &str, player: &str) -> String {
     begin(f, device, Some(player), SessionMode::Wallet, None)
         .await
         .unwrap();
     text(sessions(f).last().unwrap(), "id")
 }
 
-async fn expire(f: &Fixture, session: &str, at: i64) -> Result<Applied, AppError> {
+pub(super) async fn expire(f: &Fixture, session: &str, at: i64) -> Result<Applied, AppError> {
     sql(
         f,
         format!("UPDATE sessions SET grace_min = 0 WHERE id = '{session}'"),
@@ -154,19 +154,19 @@ async fn expire(f: &Fixture, session: &str, at: i64) -> Result<Applied, AppError
     f.writer.submit_intent(i).await
 }
 
-async fn stop(f: &Fixture, session: &str) -> Result<Applied, AppError> {
+pub(super) async fn stop(f: &Fixture, session: &str) -> Result<Applied, AppError> {
     let rev = rev_of(f, Table::Sessions, session);
     end(f, end_intent(session, Some(rev))).await
 }
 
-fn order_of(f: &Fixture, session: &str) -> Row {
+pub(super) fn order_of(f: &Fixture, session: &str) -> Row {
     table(f, Table::Orders)
         .into_iter()
         .find(|o| matches!(&o["session_id"], RowValue::Text(t) if t == session))
         .unwrap()
 }
 
-fn pack_left(f: &Fixture, pack: &str) -> i64 {
+pub(super) fn pack_left(f: &Fixture, pack: &str) -> i64 {
     int(&row_of(f, Table::PlayerPacks, pack), "minutes_left")
 }
 
@@ -648,7 +648,7 @@ async fn a_pack_sale_cannot_be_undone_while_a_session_runs_on_it() {
     );
 }
 
-fn ist(local: &str) -> i64 {
+pub(super) fn ist(local: &str) -> i64 {
     use chrono::TimeZone;
     let naive = chrono::NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M").unwrap();
     chrono_tz::Tz::Asia__Kolkata
@@ -684,7 +684,7 @@ async fn window_plan(f: &Fixture, kind: &str, groups: &[String], price: i64) -> 
     .clone()
 }
 
-async fn owned_pass(f: &Fixture, player: &str, groups: &[String]) -> String {
+pub(super) async fn owned_pass(f: &Fixture, player: &str, groups: &[String]) -> String {
     let plan = window_plan(f, "pass", groups, 90_000).await;
     end(f, sell_intent(player, &plan, vec![pay(Cash, 90_000, None)]))
         .await
@@ -692,7 +692,12 @@ async fn owned_pass(f: &Fixture, player: &str, groups: &[String]) -> String {
     text(table(f, Table::PlayerPacks).last().unwrap(), "id")
 }
 
-async fn begin_pass(f: &Fixture, d: &str, p: &str, pass: &str) -> Result<Applied, AppError> {
+pub(super) async fn begin_pass(
+    f: &Fixture,
+    d: &str,
+    p: &str,
+    pass: &str,
+) -> Result<Applied, AppError> {
     begin(f, d, Some(p), SessionMode::Pass, Some(pass)).await
 }
 

@@ -874,6 +874,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PackExpired
         | ErrorCode::PlanNotForGroup
         | ErrorCode::PassOutsideWindow
+        | ErrorCode::PastClosing
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -2057,6 +2058,7 @@ async fn run_intent(
     let pausing = match &intent.payload {
         arena_proto::IntentPayload::SessionPause(p) => Some((p.session_id.clone(), true)),
         arena_proto::IntentPayload::SessionResume(r) => Some((r.session_id.clone(), false)),
+        arena_proto::IntentPayload::SessionExtend(e) => Some((e.session_id.clone(), false)),
         _ => None,
     };
     let cmd_id = intent.idempotency_key.clone();
@@ -2157,8 +2159,8 @@ async fn run_intent(
     }
 }
 
-/// The kiosk follows a pause (covered, "Session paused") or a resume (unlocked to the session
-/// screen like a start). The device is the one whose live session screen names the session.
+/// The kiosk follows a pause (covered, "Session paused"), or a resume or an extend (unlocked to the
+/// session screen like a start, with the new end time). The device is the one whose live session screen names the session.
 async fn push_pause_state(auth: &Arc<UiAuth>, session_id: &str, paused: bool, cmd_id: &str) {
     let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
     let screens = match tokio::task::spawn_blocking(move || reader.session_screens(now)).await {

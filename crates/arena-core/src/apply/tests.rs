@@ -20,6 +20,7 @@ use crate::writer::{Writer, WriterHandle};
 
 mod alert;
 mod commands;
+mod extend;
 mod plans;
 mod players;
 mod prepaid;

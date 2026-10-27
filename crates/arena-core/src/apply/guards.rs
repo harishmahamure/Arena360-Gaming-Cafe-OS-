@@ -51,10 +51,12 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
 /// A credit override needs `credit.manage` on top of the settle: the actor's own, or the
 /// elevating manager's.
 fn overriding_credit(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
-    let IntentPayload::SessionSettle(s) = &intent.payload else {
-        return Ok(());
+    let credit_override = match &intent.payload {
+        IntentPayload::SessionSettle(s) => s.credit_override,
+        IntentPayload::SessionExtend(e) => e.credit_override,
+        _ => return Ok(()),
     };
-    if s.credit_override != Some(true) || intent.actor.kind == ActorKind::Owner {
+    if credit_override != Some(true) || intent.actor.kind == ActorKind::Owner {
         return Ok(());
     }
     let holder = intent
@@ -178,6 +180,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionSettleReverted(_)
             | Target::SessionPause(_)
             | Target::SessionResume(_)
+            | Target::SessionExtend(_)
             | Target::SessionAssign(_)
             | Target::WalletTopup(_)
             | Target::WalletTopupReverted(_)
@@ -247,6 +250,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionSettleReverted(t) => super::session::base_rev_settle_reverted(intent, t),
         Target::SessionPause(t) => super::session::base_rev_pause(intent, t, "session.pause"),
         Target::SessionResume(t) => super::session::base_rev_pause(intent, t, "session.resume"),
+        Target::SessionExtend(_) => Ok(()),
         Target::SessionAssign(t) => super::session::base_rev_assign(intent, t),
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),

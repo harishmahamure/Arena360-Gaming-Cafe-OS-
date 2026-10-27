@@ -50,6 +50,7 @@ pub struct LiveSession {
     pub pack_id: Option<String>,
     pub reserved_minor: i64,
     pub grace_min: u32,
+    pub extended_min: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,7 +186,7 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
         s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by, s.ends_at, s.paused_at,
-        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min";
+        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min, s.extended_min";
 
 fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
@@ -213,6 +214,7 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         pack_id: r.get(21)?,
         reserved_minor: r.get(22)?,
         grace_min: r.get(23)?,
+        extended_min: r.get(24)?,
     })
 }
 
@@ -841,6 +843,84 @@ pub fn sum_reserved_minor(conn: &Connection, player_id: &str) -> Result<i64, App
         |r| r.get(0),
     )
     .map_err(db_error)
+}
+
+/// Moves the end of a running session out by `minutes` to `ends_at` and brings a session in
+/// its grace period back to `active`.
+pub fn extend_session(
+    conn: &Connection,
+    id: &str,
+    ends_at: i64,
+    minutes: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET ends_at = ?2, extended_min = extended_min + ?3,
+                             state = CASE WHEN state = 'grace' THEN 'active' ELSE state END
+         WHERE id = ?1",
+        params![id, ends_at, minutes],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The order and its one line for an extend, settled as it is written.
+pub struct NewExtensionOrder<'a> {
+    pub order_id: &'a str,
+    pub line_id: &'a str,
+    pub session_id: &'a str,
+    pub segment_id: &'a str,
+    pub player_id: Option<&'a str>,
+    pub device_id: &'a str,
+    pub from_at: i64,
+    pub to_at: i64,
+    pub minutes: i64,
+    pub rate_minor_per_hour: i64,
+    pub amount_minor: i64,
+    pub settled_at: i64,
+    pub settled_by: &'a str,
+    pub business_day: &'a str,
+    pub fy: &'a str,
+}
+
+/// Writes the settled order that charges an extend, tied to its session by
+/// `orders.extends_session_id` (a session's own bill stays its one `orders.session_id` row).
+pub fn insert_extension_order(
+    conn: &Connection,
+    o: &NewExtensionOrder<'_>,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO orders (id, session_id, player_id, guest_no, device_id, status, subtotal_minor,
+                             total_minor, business_day, fy, kind, settled_at, settled_by,
+                             extends_session_id, rev, created_at, updated_at)
+         VALUES (?1, NULL, ?2, NULL, ?3, 'settled', ?4, ?4, ?5, ?6, 'session', ?7, ?8, ?9, 0, 0, 0)",
+        params![
+            o.order_id,
+            o.player_id,
+            o.device_id,
+            o.amount_minor,
+            o.business_day,
+            o.fy,
+            o.settled_at,
+            o.settled_by,
+            o.session_id
+        ],
+    )
+    .map_err(db_error)?;
+    insert_order_line(
+        conn,
+        &NewOrderLine {
+            id: o.line_id,
+            order_id: o.order_id,
+            segment_id: o.segment_id,
+            device_id: o.device_id,
+            from_at: o.from_at,
+            to_at: o.to_at,
+            minutes: o.minutes,
+            rate_minor_per_hour: o.rate_minor_per_hour,
+            amount_minor: o.amount_minor,
+            position: 0,
+        },
+    )
 }
 
 /// Moves a running session into its grace period after `ends_at`.

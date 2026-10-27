@@ -124,6 +124,45 @@ pub struct SessionResume {
     pub session_id: String,
 }
 
+/// Minutes a Hub extend may add, shortest first.
+pub const EXTEND_OPTIONS_MIN: [i64; 3] = [30, 60, 120];
+
+/// What pays for an extend: the wallet or credit (at the group's live rate) or minutes off a pack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum ExtendSource {
+    Wallet,
+    Pack,
+    Credit,
+}
+
+impl ExtendSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wallet => "wallet",
+            Self::Pack => "pack",
+            Self::Credit => "credit",
+        }
+    }
+}
+
+/// Adds `minutes` to a prepaid session, paid from `source`; a pack source names the pack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionExtend {
+    pub session_id: String,
+    #[ts(type = "number")]
+    pub minutes: i64,
+    pub source: ExtendSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub credit_override: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SessionEndReverted {
@@ -542,6 +581,14 @@ pub struct SnapshotSession {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub grace_ends_at: Option<i64>,
+    /// How the session is paid for: `postpaid`, `pack`, `wallet`, `pass` or `block`.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub mode: Option<String>,
+    /// The owned pack a pack or pass session plays on.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub pack_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

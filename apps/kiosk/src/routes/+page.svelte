@@ -15,7 +15,26 @@
   const left = $derived(endsAt === null ? 0 : Math.max(0, Math.ceil((endsAt - now) / 1000)));
   const clock = $derived([Math.floor(left / 60), String(left % 60).padStart(2, "0")].join(":"));
 
-  let session = $state<{ name: string; from: number; warning: number | null } | null>(null);
+  let session = $state<{
+    name: string;
+    from: number;
+    warning: number | null;
+    graceFrom: number | null;
+    graceMs: number;
+  } | null>(null);
+  const graceLeft = $derived(
+    session === null || session.graceFrom === null
+      ? null
+      : Math.max(0, Math.ceil((session.graceFrom + session.graceMs - now) / 1000)),
+  );
+  const inGrace = $derived(
+    session !== null && session.graceFrom !== null && now >= session.graceFrom,
+  );
+  const graceClock = $derived(
+    graceLeft === null
+      ? ""
+      : [Math.floor(graceLeft / 60), String(graceLeft % 60).padStart(2, "0")].join(":"),
+  );
   const elapsed = $derived(
     session === null ? 0 : Math.max(0, Math.floor((now - session.from) / 1000)),
   );
@@ -32,6 +51,8 @@
           name: s.session.device_name,
           from: now - s.session.elapsed_ms,
           warning: s.session.warning_min,
+          graceFrom: s.session.grace_in_ms === null ? null : now + s.session.grace_in_ms,
+          graceMs: s.session.grace_ms,
         }
       : null;
   };
@@ -78,7 +99,12 @@
     <p class="brand type-kiosk-eyebrow">{t("app.name")}</p>
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.name}</h1>
     <p class="clock type-kiosk-display tabular-nums" data-testid="session-clock">{watch}</p>
-    {#if session.warning !== null}
+    {#if inGrace}
+      <p class="warning type-kiosk-body" role="status" data-testid="session-grace">
+        <span aria-hidden="true">⚠</span>
+        {t("player.session.grace", { time: graceClock })}
+      </p>
+    {:else if session.warning !== null}
       <p class="warning type-kiosk-body" role="status" data-testid="session-warning">
         <span aria-hidden="true">⚠</span>
         {t("player.session.warning", { minutes: session.warning })}

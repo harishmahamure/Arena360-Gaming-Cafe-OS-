@@ -24,6 +24,11 @@ pub struct ScreenSession {
     pub device_name: String,
     pub started: Instant,
     pub warning_min: Option<u8>,
+    /// When the grace after the end time runs out and the kiosk locks.
+    pub lock_at: Instant,
+    pub grace_ms: u64,
+    /// The branch's time-up mode is "Staff handles".
+    pub hold: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -78,7 +83,12 @@ pub(crate) fn set_locked(ctx: &Ctx, locked: bool, reason: Option<LockReason>) {
     let ends = locked
         && matches!(
             reason,
-            Some(LockReason::PayAtCounter | LockReason::EndedByStaff | LockReason::TimesUp)
+            Some(
+                LockReason::PayAtCounter
+                    | LockReason::EndedByStaff
+                    | LockReason::TimesUp
+                    | LockReason::TimesUpSeeCounter
+            )
         );
     if ends || (locked && reason == Some(LockReason::Paused)) {
         ctx.pc.deadline.send_replace(None);

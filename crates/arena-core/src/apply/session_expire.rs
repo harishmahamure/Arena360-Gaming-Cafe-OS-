@@ -1,12 +1,15 @@
-use arena_proto::{AppError, ErrorCode, Intent, SessionExpire};
+use arena_proto::{AlertKind, AppError, ErrorCode, Intent, SessionExpire};
 use arena_store::{
-    ChangeOp, DeviceMetaRow, LiveSession, RowKey, SegmentRow, StoreTx, close_segments,
-    expire_session, find_device_meta, find_session, list_segments, set_device_state,
+    AlertRow, ChangeOp, DeviceMetaRow, LiveSession, NewAlert, RowKey, SegmentRow, StoreTx,
+    close_segments, expire_session, find_device_meta, find_open_alert, find_session, grace_session,
+    hold_session_expired, insert_alert, list_segments, set_device_state,
 };
 
 use super::mutate::Written;
 use super::prepaid::{self, CloseExtras, Closing, Ending};
 use super::session::invalid;
+
+const MIN_MS: i64 = 60_000;
 
 #[derive(Default)]
 pub(crate) struct ExpireTarget {
@@ -14,6 +17,14 @@ pub(crate) struct ExpireTarget {
     segments: Vec<SegmentRow>,
     device: Option<DeviceMetaRow>,
     close: CloseExtras,
+    open_alert: Option<AlertRow>,
+}
+
+/// What reaching a timed session's end does next.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Grace,
+    Close,
 }
 
 pub(super) fn load(tx: &StoreTx<'_>, e: &SessionExpire) -> Result<ExpireTarget, AppError> {
@@ -24,12 +35,25 @@ pub(super) fn load(tx: &StoreTx<'_>, e: &SessionExpire) -> Result<ExpireTarget, 
         segments: list_segments(tx, Some(&session.id))?,
         device: find_device_meta(tx, &session.device_id)?,
         close: prepaid::load_close(tx, &session)?,
+        open_alert: find_open_alert(tx, AlertKind::TimeUp.as_str(), Some(&session.device_id))?,
         session: Some(session),
     })
 }
 
 fn stale(message: &str) -> AppError {
     AppError::new(ErrorCode::Stale, message)
+}
+
+/// Whether a due session first gets its grace or is closed out now: grace applies from the end
+/// time for the session's snapshot grace period, and a session found past it (after a restart)
+/// goes straight to the time-up action.
+fn step(s: &LiveSession, ends_at: i64, now: i64) -> Step {
+    let grace_ms = i64::from(s.grace_min) * MIN_MS;
+    if s.state == "active" && grace_ms > 0 && now < ends_at + grace_ms {
+        Step::Grace
+    } else {
+        Step::Close
+    }
 }
 
 pub(super) fn validate(intent: &Intent, t: &ExpireTarget) -> Result<(), AppError> {
@@ -43,18 +67,24 @@ pub(super) fn validate(intent: &Intent, t: &ExpireTarget) -> Result<(), AppError
             "no such session",
         ));
     };
-    if s.state != "active" {
+    if s.state != "active" && s.state != "grace" {
         return Err(stale("this session is no longer running"));
     }
-    match s.ends_at {
-        None => Err(invalid("session_id", "this session has no end time")),
-        Some(at) if at > intent.issued_at => Err(stale("this session is not due yet")),
-        Some(_) => Ok(()),
+    let Some(ends_at) = s.ends_at else {
+        return Err(invalid("session_id", "this session has no end time"));
+    };
+    if ends_at > intent.issued_at {
+        return Err(stale("this session is not due yet"));
     }
+    if s.state == "grace" && ends_at + i64::from(s.grace_min) * MIN_MS > intent.issued_at {
+        return Err(stale("this session is still in its grace period"));
+    }
+    Ok(())
 }
 
 pub(super) fn mutate(
     tx: &StoreTx<'_>,
+    intent: &Intent,
     t: &ExpireTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
@@ -65,6 +95,17 @@ pub(super) fn mutate(
         ));
     };
     let ended_at = s.ends_at.unwrap_or(s.started_at);
+    if step(s, ended_at, intent.issued_at) == Step::Grace {
+        grace_session(tx, &s.id)?;
+        return Ok(vec![Written {
+            key: RowKey::Sessions { id: s.id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        }]);
+    }
+    if s.time_up_mode == arena_proto::TimeUpMode::StaffHandles.as_str() {
+        return hold(tx, t, s, ended_at, now_ms);
+    }
     if prepaid::is_prepaid(s) {
         return prepaid::close_out(
             tx,
@@ -102,6 +143,49 @@ pub(super) fn mutate(
                 device_id: d.device_id.clone(),
             },
             op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    Ok(written)
+}
+
+/// "Staff handles": the time is up, no more is charged, and the session stays `expired` on its
+/// device with a "TIME UP" alert until staff end it.
+fn hold(
+    tx: &StoreTx<'_>,
+    t: &ExpireTarget,
+    s: &LiveSession,
+    ended_at: i64,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    close_segments(tx, &s.id, ended_at)?;
+    hold_session_expired(tx, &s.id)?;
+    let mut written = vec![Written {
+        key: RowKey::Sessions { id: s.id.clone() },
+        op: ChangeOp::Update,
+        before: None,
+    }];
+    for seg in t.segments.iter().filter(|g| g.to_at.is_none()) {
+        written.push(Written {
+            key: RowKey::SessionSegments { id: seg.id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
+    if t.open_alert.is_none() {
+        let id = ulid::Ulid::generate().to_string();
+        insert_alert(
+            tx,
+            &NewAlert {
+                id: &id,
+                kind: AlertKind::TimeUp.as_str(),
+                device_id: Some(&s.device_id),
+                raised_at: now_ms,
+            },
+        )?;
+        written.push(Written {
+            key: RowKey::Alerts { id },
+            op: ChangeOp::Insert,
             before: None,
         });
     }

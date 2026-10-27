@@ -351,15 +351,16 @@ impl Registry {
                 );
                 self.push_paired(&msg, Some(&device_id))
             }
-            arena_core::TimerEvent::Expired { device_id, .. } => {
+            arena_core::TimerEvent::Expired {
+                device_id, held, ..
+            } => {
                 let cmd_id = ulid::Ulid::generate().to_string();
-                self.push_pc_command(
-                    &device_id,
-                    &cmd_id,
-                    PcAction::Lock,
-                    None,
-                    Some(LockReason::TimesUp),
-                )
+                let reason = if held {
+                    LockReason::TimesUpSeeCounter
+                } else {
+                    LockReason::TimesUp
+                };
+                self.push_pc_command(&device_id, &cmd_id, PcAction::Lock, None, Some(reason))
             }
         }
     }

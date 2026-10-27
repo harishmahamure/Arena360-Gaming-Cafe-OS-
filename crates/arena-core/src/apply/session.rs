@@ -267,7 +267,8 @@ pub(super) fn validate_end(t: &EndTarget) -> Result<(), AppError> {
     let Some(s) = &t.session else {
         return Err(invalid("session_id", "no such session"));
     };
-    if !["active", "paused", "grace"].contains(&s.state.as_str()) {
+    let held = s.state == "expired" && s.ended_at.is_none();
+    if !held && !["active", "paused", "grace"].contains(&s.state.as_str()) {
         return Err(invalid("session_id", "this session has already ended"));
     }
     if !["postpaid", "pack", "wallet"].contains(&s.mode.as_str()) {
@@ -300,7 +301,10 @@ pub(super) fn mutate_end(
                 device: t.device.as_ref(),
                 extras: &t.close,
                 ending: super::prepaid::Ending::Staff,
-                ended_at: now_ms,
+                ended_at: match (s.state.as_str(), s.ends_at) {
+                    ("grace" | "expired", Some(at)) => at.min(now_ms),
+                    _ => now_ms,
+                },
                 actor_id: &intent.actor.id,
             },
             now_ms,

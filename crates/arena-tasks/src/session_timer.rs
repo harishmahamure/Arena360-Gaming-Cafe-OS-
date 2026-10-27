@@ -80,11 +80,15 @@ impl SessionTimerTask {
     async fn expire(&self, engine: &mut TimerEngine, s: TimedSession) {
         let intent = expire_intent(s.session_id.clone(), self.clock.now_ms());
         match self.writer.submit_intent(intent).await {
-            Ok(_) => {
-                let _ = self.events.send(TimerEvent::Expired {
-                    session_id: s.session_id,
-                    device_id: s.device_id,
-                });
+            Ok(applied) => {
+                let wrote = |tbl: &str| applied.changes.iter().any(|c| c.tbl == tbl);
+                if applied.changes.iter().any(|c| c.tbl != "sessions") {
+                    let _ = self.events.send(TimerEvent::Expired {
+                        session_id: s.session_id,
+                        device_id: s.device_id,
+                        held: !wrote("devices_meta") && !wrote("orders"),
+                    });
+                }
             }
             Err(e) if e.code == ErrorCode::Stale || e.code == ErrorCode::NotFound => {}
             Err(e)
@@ -263,11 +267,15 @@ mod tests {
     }
 
     async fn live_session(f: &Fixture, ends_at: i64) {
+        timed_session(f, ends_at, 0, "clean_up").await;
+    }
+
+    async fn timed_session(f: &Fixture, ends_at: i64, grace_min: u32, mode: &str) {
         let sql = format!(
             "INSERT INTO sessions (id, device_id, group_id, mode, state, started_at, ends_at,
                  rounding_min, minimum_min, grace_min, time_up_mode, epoch, business_day, fy,
                  guest_no, rev, created_at, updated_at)
-             VALUES ('S1', '{}', '{}', 'pack', 'active', {T0}, {ends_at}, 15, 30, 2, 'clean_up',
+             VALUES ('S1', '{}', '{}', 'pack', 'active', {T0}, {ends_at}, 15, 30, {grace_min}, '{mode}',
                      'e', 'd', 'fy', 1, 0, 0, 0)",
             f.device, f.group
         );
@@ -352,6 +360,35 @@ mod tests {
         assert_eq!(marks, [10, 5, 1]);
         assert!(matches!(seen.last(), Some(TimerEvent::Expired { .. })));
         assert_eq!(session_state(&f), None);
+        job.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn staff_handles_waits_out_the_grace_then_announces_a_held_expiry() {
+        let f = fixture().await;
+        timed_session(&f, T0 + 5_000, 1, "staff_handles").await;
+        let (tx, mut rx) = broadcast::channel(8);
+        let job = tokio::spawn(task(&f, tx).run());
+        tokio::task::yield_now().await;
+        let mut seen = Vec::new();
+        for _ in 0..90 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            f.clock.advance(1_000);
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            while let Ok(ev) = rx.try_recv() {
+                seen.push(ev);
+            }
+            if !seen.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            matches!(seen.as_slice(), [TimerEvent::Expired { held: true, .. }]),
+            "{seen:?}"
+        );
+        assert!(f.clock.now_ms() >= T0 + 65_000);
         job.abort();
     }
 }

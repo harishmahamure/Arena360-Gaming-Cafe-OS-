@@ -104,10 +104,11 @@ pub use sessions::{
     Ending, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession, OpenOrder, OrderLineRow,
     OrderRow, SegmentRow, Settlement, close_segments, device_has_live_session, effect_recorded,
     end_session, expire_session, find_ending, find_order, find_order_for_session, find_session,
-    find_settlement, forward_intent_id, insert_effect, insert_order, insert_order_line,
-    insert_payment, insert_segment, insert_session, list_live_sessions, list_open_order_lines,
-    list_open_orders, list_order_line_ids, list_payment_ids, list_segments, next_guest_no,
-    reopen_order, reopen_segments, reopen_session, settle_order, sum_reserved_minor,
+    find_settlement, forward_intent_id, grace_session, hold_session_expired, insert_effect,
+    insert_order, insert_order_line, insert_payment, insert_segment, insert_session,
+    list_live_sessions, list_open_order_lines, list_open_orders, list_order_line_ids,
+    list_payment_ids, list_segments, next_guest_no, reopen_order, reopen_segments, reopen_session,
+    settle_order, sum_reserved_minor,
 };
 pub use sessions::{
     SessionListing, assign_order_player, assign_session_player, fold_pause, list_sessions_for_day,

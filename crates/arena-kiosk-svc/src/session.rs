@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arena_proto::{LockReason, SessionScreen};
+use arena_proto::{LockReason, SessionScreen, TimeUpMode};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -31,6 +31,9 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
                 .checked_sub(Duration::from_millis(s.elapsed_ms))
                 .unwrap_or(now),
             warning_min,
+            lock_at: now + Duration::from_millis(s.lock_after_ms),
+            grace_ms: s.grace_ms,
+            hold: s.time_up_mode == TimeUpMode::StaffHandles.as_str(),
         });
     });
 }
@@ -57,7 +60,12 @@ pub(crate) async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
                 }
             } => {
                 tracing::info!("the session reached its lock time; locked");
-                set_locked(&ctx, true, Some(LockReason::TimesUp));
+                let hold = ctx.pc.screen.borrow().session.as_ref().is_some_and(|s| s.hold);
+                set_locked(
+                    &ctx,
+                    true,
+                    Some(if hold { LockReason::TimesUpSeeCounter } else { LockReason::TimesUp }),
+                );
             }
             changed = rx.changed() => if changed.is_err() { return },
             _ = stop.changed() => return,

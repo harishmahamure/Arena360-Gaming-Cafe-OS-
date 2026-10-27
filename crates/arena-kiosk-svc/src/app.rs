@@ -278,6 +278,13 @@ fn screen_message(s: crate::pc::Screen) -> IpcMsg {
             device_name: v.device_name,
             elapsed_ms: v.started.elapsed().as_millis() as u64,
             warning_min: v.warning_min,
+            grace_in_ms: (v.grace_ms > 0).then(|| {
+                let left = v
+                    .lock_at
+                    .saturating_duration_since(tokio::time::Instant::now());
+                left.as_millis().saturating_sub(u128::from(v.grace_ms)) as u64
+            }),
+            grace_ms: v.grace_ms,
         }),
     }
 }

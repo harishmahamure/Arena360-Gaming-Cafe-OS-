@@ -68,3 +68,18 @@ test("a timed session counts down and warns from 10 minutes", async ({ page }) =
     results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
   ).toEqual([]);
 });
+
+test("a session in grace shows its countdown and a held one shows time up", async ({ page }) => {
+  await open(page, [
+    session(1, { state: "grace", ends_at: Date.now() - MIN, grace_ends_at: Date.now() + 75_000 }),
+    session(2, { state: "expired", ends_at: Date.now() - 5 * MIN }),
+  ]);
+  await expect(tile(page, "PC 1")).toContainText(/Grace 1:1\d/);
+  await expect(tile(page, "PC 1").getByTestId("tile-time-warning")).toBeVisible();
+  await expect(tile(page, "PC 2")).toContainText(en["hub.floor.time_up"]);
+  await expect(tile(page, "PC 2").getByTestId("tile-time-warning")).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
+  ).toEqual([]);
+});

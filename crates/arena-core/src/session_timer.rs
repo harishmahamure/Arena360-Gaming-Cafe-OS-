@@ -8,13 +8,15 @@ use arena_proto::SESSION_WARNING_MARKS_MIN;
 
 const MINUTE_MS: i64 = 60_000;
 
-/// A running session with an end time. A postpaid session carries its branch's closing time
-/// instead and is only warned, never expired (its kiosk locks at closing).
+/// A running session with an end time. `due_at` is when the engine next acts on it: `ends_at` for
+/// an active session, the end of its grace for one in grace. A postpaid session carries its
+/// branch's closing time instead and is only warned, never expired (its kiosk locks at closing).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimedSession {
     pub session_id: String,
     pub device_id: String,
     pub ends_at: i64,
+    pub due_at: i64,
     pub expires: bool,
 }
 
@@ -37,9 +39,12 @@ pub enum TimerEvent {
         device_id: String,
         minutes_left: u8,
     },
+    /// The time-up action ran: the kiosk locks, asking the player to see the counter when staff
+    /// (`held`) must end the session.
     Expired {
         session_id: String,
         device_id: String,
+        held: bool,
     },
 }
 
@@ -47,6 +52,7 @@ pub enum TimerEvent {
 struct Entry {
     device_id: String,
     ends_at: i64,
+    due_at: i64,
     expires: bool,
     next_mark: usize,
 }
@@ -87,16 +93,17 @@ impl TimerEngine {
             let kept = self
                 .entries
                 .remove(&s.session_id)
-                .filter(|e| e.ends_at == s.ends_at)
+                .filter(|e| e.ends_at == s.ends_at && e.due_at == s.due_at)
                 .map(|e| e.next_mark);
             if kept.is_none() {
-                self.heap.push(Reverse((s.ends_at, s.session_id.clone())));
+                self.heap.push(Reverse((s.due_at, s.session_id.clone())));
             }
             next.insert(
                 s.session_id,
                 Entry {
                     device_id: s.device_id,
                     ends_at: s.ends_at,
+                    due_at: s.due_at,
                     expires: s.expires,
                     next_mark: kept.unwrap_or_else(|| first_unpassed(s.ends_at, now_ms)),
                 },
@@ -107,19 +114,20 @@ impl TimerEngine {
             self.heap = self
                 .entries
                 .iter()
-                .map(|(id, e)| Reverse((e.ends_at, id.clone())))
+                .map(|(id, e)| Reverse((e.due_at, id.clone())))
                 .collect();
         }
     }
 
     /// Puts back a session whose expiry could not be recorded, so the next tick retries it.
     pub fn requeue(&mut self, s: &TimedSession, now_ms: i64) {
-        self.heap.push(Reverse((s.ends_at, s.session_id.clone())));
+        self.heap.push(Reverse((s.due_at, s.session_id.clone())));
         self.entries.insert(
             s.session_id.clone(),
             Entry {
                 device_id: s.device_id.clone(),
                 ends_at: s.ends_at,
+                due_at: s.due_at,
                 expires: s.expires,
                 next_mark: first_unpassed(s.ends_at, now_ms),
             },
@@ -135,14 +143,15 @@ impl TimerEngine {
                 break;
             }
             self.heap.pop();
-            if self.entries.get(&id).is_some_and(|e| e.ends_at == at)
+            if self.entries.get(&id).is_some_and(|e| e.due_at == at)
                 && let Some(e) = self.entries.remove(&id)
                 && e.expires
             {
                 actions.push(TimerAction::Expire(TimedSession {
                     session_id: id,
                     device_id: e.device_id,
-                    ends_at: at,
+                    ends_at: e.ends_at,
+                    due_at: at,
                     expires: true,
                 }));
             }
@@ -187,6 +196,7 @@ mod tests {
             session_id: id.into(),
             device_id: format!("D-{id}"),
             ends_at,
+            due_at: ends_at,
             expires: true,
         }
     }
@@ -307,6 +317,24 @@ mod tests {
         );
         assert_eq!(expired(&e.tick(T0)), ["A", "B", "C"]);
         assert!(e.tick(T0 + 1_000).is_empty());
+    }
+
+    #[test]
+    fn a_session_in_grace_is_acted_on_at_the_end_of_its_grace_and_never_warned() {
+        let mut e = TimerEngine::new();
+        let ends = T0 - 30_000;
+        let due = ends + 2 * MINUTE_MS;
+        e.sync(
+            [TimedSession {
+                due_at: due,
+                ..timed("G", ends)
+            }],
+            T0,
+        );
+        assert!(e.tick(T0).is_empty());
+        assert!(e.tick(due - 1).is_empty());
+        assert_eq!(expired(&e.tick(due)), ["G"]);
+        assert!(e.tick(due + 1_000).is_empty());
     }
 
     #[test]

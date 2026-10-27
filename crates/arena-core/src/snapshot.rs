@@ -254,6 +254,10 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
     snapshot.sessions = sessions
         .into_iter()
         .map(|s| arena_proto::SnapshotSession {
+            grace_ends_at: s
+                .ends_at
+                .filter(|_| s.state == "grace")
+                .map(|at| at + i64::from(s.grace_min) * 60_000),
             id: s.id,
             device_id: s.device_id,
             state: s.state,
@@ -517,6 +521,7 @@ impl SnapshotReader {
             .map(|s| {
                 let state = match (s.state.as_str(), s.order_status.as_deref()) {
                     ("active" | "paused" | "grace", _) => S::Running,
+                    ("expired", _) if s.ended_at.is_none() => S::Running,
                     (_, Some("open")) => S::Unpaid,
                     _ => S::Settled,
                 };

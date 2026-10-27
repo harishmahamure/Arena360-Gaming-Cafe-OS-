@@ -117,6 +117,11 @@ async fn wallet_session(f: &Fixture, device: &str, player: &str) -> String {
 }
 
 async fn expire(f: &Fixture, session: &str, at: i64) -> Result<Applied, AppError> {
+    sql(
+        f,
+        format!("UPDATE sessions SET grace_min = 0 WHERE id = '{session}'"),
+    )
+    .await;
     let mut i = intent(
         system(),
         IntentPayload::SessionExpire(SessionExpire {

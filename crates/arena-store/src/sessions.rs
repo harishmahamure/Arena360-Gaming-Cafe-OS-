@@ -49,6 +49,7 @@ pub struct LiveSession {
     pub pause_note: Option<String>,
     pub pack_id: Option<String>,
     pub reserved_minor: i64,
+    pub grace_min: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +165,8 @@ pub fn insert_segment(
 pub fn device_has_live_session(conn: &Connection, device_id: &str) -> Result<bool, AppError> {
     conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM sessions
-                        WHERE device_id = ?1 AND state IN ('active', 'paused', 'grace'))",
+                        WHERE device_id = ?1 AND (state IN ('active', 'paused', 'grace')
+                               OR (state = 'expired' AND ended_at IS NULL)))",
         [device_id],
         |r| r.get(0),
     )
@@ -183,7 +185,7 @@ pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppEr
 const SESSION_COLUMNS: &str = "s.id, s.device_id, s.state, s.started_at, s.player_id, p.username,
         s.guest_no, s.time_up_mode, s.mode, s.rev, s.rounding_min, s.minimum_min,
         s.paused_total_ms, s.business_day, s.fy, s.ended_at, s.ended_by, s.ends_at, s.paused_at,
-        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor";
+        s.pause_reason, s.pause_note, s.pack_id, s.reserved_minor, s.grace_min";
 
 fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
     Ok(LiveSession {
@@ -210,6 +212,7 @@ fn live_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LiveSession> {
         pause_note: r.get(20)?,
         pack_id: r.get(21)?,
         reserved_minor: r.get(22)?,
+        grace_min: r.get(23)?,
     })
 }
 
@@ -232,6 +235,7 @@ pub fn list_live_sessions(conn: &Connection) -> Result<Vec<LiveSession>, AppErro
             "SELECT {SESSION_COLUMNS} FROM sessions s
              LEFT JOIN players p ON p.player_id = s.player_id
              WHERE s.state IN ('active', 'paused', 'grace')
+                OR (s.state = 'expired' AND s.ended_at IS NULL)
              ORDER BY s.started_at, s.id"
         ))
         .map_err(db_error)?;
@@ -251,7 +255,8 @@ pub fn list_segments(
                     g.paused_ms
              FROM session_segments g JOIN sessions s ON s.id = g.session_id
              WHERE (?1 IS NOT NULL AND g.session_id = ?1)
-                OR (?1 IS NULL AND s.state IN ('active', 'paused', 'grace'))
+                OR (?1 IS NULL AND (s.state IN ('active', 'paused', 'grace')
+                                   OR (s.state = 'expired' AND s.ended_at IS NULL)))
              ORDER BY g.from_at, g.id",
         )
         .map_err(db_error)?;
@@ -700,7 +705,8 @@ pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settl
             "SELECT o.id, o.device_id, o.settled_at,
                     EXISTS (SELECT 1 FROM sessions s
                             WHERE s.device_id = o.device_id
-                              AND s.state IN ('active', 'paused', 'grace')),
+                              AND (s.state IN ('active', 'paused', 'grace')
+                                   OR (s.state = 'expired' AND s.ended_at IS NULL))),
                     o.rev, o.total_minor, o.kind
              FROM orders o WHERE o.id = ?1 AND o.status = 'settled' AND o.settled_at IS NOT NULL",
             [order_id],
@@ -829,9 +835,28 @@ pub fn expire_session(conn: &Connection, id: &str, ended_at: i64) -> Result<(), 
 pub fn sum_reserved_minor(conn: &Connection, player_id: &str) -> Result<i64, AppError> {
     conn.query_row(
         "SELECT COALESCE(SUM(reserved_minor), 0) FROM sessions
-         WHERE player_id = ?1 AND mode = 'wallet' AND state IN ('active', 'paused', 'grace')",
+         WHERE player_id = ?1 AND mode = 'wallet'
+           AND (state IN ('active', 'paused', 'grace') OR (state = 'expired' AND ended_at IS NULL))",
         [player_id],
         |r| r.get(0),
     )
     .map_err(db_error)
+}
+
+/// Moves a running session into its grace period after `ends_at`.
+pub fn grace_session(conn: &Connection, id: &str) -> Result<(), AppError> {
+    conn.execute("UPDATE sessions SET state = 'grace' WHERE id = ?1", [id])
+        .map_err(db_error)?;
+    Ok(())
+}
+
+/// Holds a session as `expired` until staff end it: no end time is recorded yet, and the device
+/// stays in its session.
+pub fn hold_session_expired(conn: &Connection, id: &str) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET state = 'expired', end_reason = 'expired' WHERE id = ?1",
+        [id],
+    )
+    .map_err(db_error)?;
+    Ok(())
 }

@@ -29,6 +29,10 @@ async fn device(f: &Fixture) -> String {
 }
 
 async fn timed_session(f: &Fixture, ends_in_ms: i64) -> (String, String) {
+    timed_with(f, ends_in_ms, 0, "clean_up").await
+}
+
+async fn timed_with(f: &Fixture, ends_in_ms: i64, grace_min: u32, mode: &str) -> (String, String) {
     let d = device(f).await;
     let (player, _) = add(f, owner(), &form("asha", "+919876543210"))
         .await
@@ -45,11 +49,12 @@ async fn timed_session(f: &Fixture, ends_in_ms: i64) -> (String, String) {
     i.issued_at = f.clock.now_ms();
     f.writer.submit_intent(i).await.unwrap();
     let id = text(&reopen(f).rows(Table::Sessions).unwrap()[0], "id");
-    let (sid, at) = (id.clone(), f.clock.now_ms() + ends_in_ms);
+    let (sid, at, mode) = (id.clone(), f.clock.now_ms() + ends_in_ms, mode.to_owned());
     f.writer
         .submit(move |tx| {
             tx.execute_batch(&format!(
-                "UPDATE sessions SET ends_at = {at} WHERE id = '{sid}'"
+                "UPDATE sessions SET ends_at = {at}, grace_min = {grace_min}, time_up_mode = '{mode}'
+                 WHERE id = '{sid}'"
             ))
             .unwrap();
             Ok(())
@@ -196,4 +201,128 @@ async fn the_snapshot_and_the_kiosk_screen_carry_the_end_time() {
     let (device, screen) = &screens[0];
     assert_eq!(device, &d);
     assert_eq!(screen.lock_after_ms, 60_000);
+}
+
+fn device_state(f: &Fixture, device: &str) -> String {
+    reopen(f)
+        .rows(Table::DevicesMeta)
+        .unwrap()
+        .iter()
+        .find(|r| text(r, "device_id") == device)
+        .map(|r| text(r, "state"))
+        .unwrap()
+}
+
+fn alerts(f: &Fixture) -> Vec<Row> {
+    reopen(f).rows(Table::Alerts).unwrap()
+}
+
+#[tokio::test]
+async fn a_session_with_a_grace_enters_grace_at_its_end_and_closes_when_it_runs_out() {
+    let f = bootstrapped().await;
+    let (id, d) = timed_with(&f, 60_000, 2, "clean_up").await;
+    let ends = T0 + 60_000;
+    let early = expire(&f, system(), &id, ends - 1).await.unwrap_err();
+    assert_eq!(early.code, ErrorCode::Stale);
+    f.clock.set(ends);
+    let a = expire(&f, system(), &id, ends).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["sessions"]
+    );
+    let s = session_row(&f);
+    assert_eq!(text(&s, "state"), "grace");
+    assert!(matches!(s["ended_at"], RowValue::Null));
+    assert_eq!(device_state(&f, &d), "in_session");
+    let seg = &reopen(&f).rows(Table::SessionSegments).unwrap()[0];
+    assert!(matches!(seg["to_at"], RowValue::Null));
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), ends).unwrap();
+    assert_eq!(snap.sessions[0].state, "grace");
+    assert_eq!(snap.sessions[0].grace_ends_at, Some(ends + 120_000));
+    let screens = crate::session_screens(&reopen(&f), ends + 30_000).unwrap();
+    assert_eq!(screens[0].1.lock_after_ms, 90_000);
+    assert_eq!(screens[0].1.grace_ms, 120_000);
+
+    let again = expire(&f, system(), &id, ends + 119_999).await.unwrap_err();
+    assert_eq!(again.code, ErrorCode::Stale);
+    f.clock.set(ends + 120_000);
+    expire(&f, system(), &id, ends + 120_000).await.unwrap();
+    let s = session_row(&f);
+    assert_eq!(text(&s, "state"), "expired");
+    assert_eq!(int(&s, "ended_at"), ends);
+    assert_ne!(device_state(&f, &d), "in_session");
+    assert!(alerts(&f).is_empty());
+    let twice = expire(&f, system(), &id, ends + 130_000).await.unwrap_err();
+    assert_eq!(twice.code, ErrorCode::Stale);
+}
+
+#[tokio::test]
+async fn a_session_found_past_its_grace_closes_at_once() {
+    let f = bootstrapped().await;
+    let (id, _) = timed_with(&f, 1_000, 2, "clean_up").await;
+    let at = T0 + 1_000 + 120_000;
+    f.clock.set(at);
+    expire(&f, system(), &id, at).await.unwrap();
+    assert_eq!(text(&session_row(&f), "state"), "expired");
+}
+
+#[tokio::test]
+async fn staff_handles_holds_the_session_expired_with_a_time_up_alert_until_staff_end_it() {
+    let f = bootstrapped().await;
+    let (id, d) = timed_with(&f, 1_000, 1, "staff_handles").await;
+    let ends = T0 + 1_000;
+    f.clock.set(ends);
+    expire(&f, system(), &id, ends).await.unwrap();
+    assert_eq!(text(&session_row(&f), "state"), "grace");
+    assert!(alerts(&f).is_empty());
+
+    f.clock.set(ends + 60_000);
+    let a = expire(&f, system(), &id, ends + 60_000).await.unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["sessions", "session_segments", "alerts"]
+    );
+    let s = session_row(&f);
+    assert_eq!(text(&s, "state"), "expired");
+    assert!(matches!(s["ended_at"], RowValue::Null));
+    let seg = &reopen(&f).rows(Table::SessionSegments).unwrap()[0];
+    assert_eq!(int(seg, "to_at"), ends);
+    assert_eq!(device_state(&f, &d), "in_session");
+    let raised = alerts(&f);
+    assert_eq!(raised.len(), 1);
+    assert_eq!(text(&raised[0], "kind"), "time_up");
+    assert_eq!(text(&raised[0], "device_id"), d);
+    assert!(matches!(raised[0]["acked_at"], RowValue::Null));
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), ends + 60_000).unwrap();
+    assert_eq!(snap.sessions[0].state, "expired");
+    assert_eq!(snap.alerts.len(), 1);
+    assert_eq!(
+        crate::session_screens(&reopen(&f), ends + 61_000).unwrap()[0]
+            .1
+            .lock_after_ms,
+        0
+    );
+
+    let blocked = expire(&f, system(), &id, ends + 70_000).await.unwrap_err();
+    assert_eq!(blocked.code, ErrorCode::Stale);
+    let mut start = intent(
+        owner(),
+        IntentPayload::SessionStart(SessionStart {
+            device_id: d.clone(),
+            mode: SessionMode::Postpaid,
+            player_id: None,
+            pack_id: None,
+        }),
+    );
+    start.issued_at = ends + 70_000;
+    assert!(f.writer.submit_intent(start).await.is_err());
+
+    f.clock.set(ends + 300_000);
+    let rev = int(&session_row(&f), "rev");
+    let mut end = super::session::end_intent(&id, Some(rev));
+    end.issued_at = ends + 300_000;
+    super::session::end(&f, end).await.unwrap();
+    let s = session_row(&f);
+    assert_eq!(text(&s, "state"), "ended");
+    assert_ne!(device_state(&f, &d), "in_session");
 }

@@ -6,4 +6,8 @@ export type SessionScreen = {
   elapsed_ms: number;
   lock_after_ms: number;
   time_up_mode: string;
+  /**
+   * The grace at the end of `lock_after_ms`; the kiosk shows "Time's up" while it runs.
+   */
+  grace_ms: number;
 };

@@ -56,10 +56,20 @@
   const two = (n: number) => String(n).padStart(2, "0");
   const WARN_MS = 10 * 60_000;
   const timed = (session: SnapshotSession) => session.state === "active" && session.ends_at != null;
-  const nearEnd = (session: SnapshotSession) => timed(session) && session.ends_at! - now <= WARN_MS;
+  const inGrace = (session: SnapshotSession) =>
+    session.state === "grace" && session.grace_ends_at != null;
+  const nearEnd = (session: SnapshotSession) =>
+    (timed(session) && session.ends_at! - now <= WARN_MS) ||
+    inGrace(session) ||
+    session.state === "expired";
   const clock = (s: number) =>
     [Math.floor(s / 3600), two(Math.floor(s / 60) % 60), two(s % 60)].join(":");
   const elapsed = (session: SnapshotSession) => {
+    if (inGrace(session)) {
+      const s = Math.max(0, Math.ceil((session.grace_ends_at! - now) / 1000));
+      return t("hub.floor.grace", { time: [Math.floor(s / 60), two(s % 60)].join(":") });
+    }
+    if (session.state === "expired") return t("hub.floor.time_up");
     if (timed(session)) return clock(Math.max(0, Math.ceil((session.ends_at! - now) / 1000)));
     const end = session.paused_at ?? now;
     const s = Math.max(

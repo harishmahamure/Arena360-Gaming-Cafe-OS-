@@ -333,7 +333,7 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::SessionExpire(_) => match target {
-            Target::SessionExpire(t) => super::session_expire::mutate(tx, t, now_ms),
+            Target::SessionExpire(t) => super::session_expire::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::CreditCollectReverted(_) => match target {

@@ -23,6 +23,8 @@ pub enum LockReason {
     PayAtCounter,
     EndedByStaff,
     TimesUp,
+    /// Time ran out and staff end the session: the lock says to see the counter.
+    TimesUpSeeCounter,
     LockedByStaff,
     Paused,
 }

@@ -184,7 +184,8 @@ pub fn find_player_pack(
 pub fn pack_in_use(conn: &Connection, id: &str) -> Result<bool, AppError> {
     conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM sessions
-                        WHERE pack_id = ?1 AND state IN ('active', 'paused', 'grace'))",
+                        WHERE pack_id = ?1 AND (state IN ('active', 'paused', 'grace')
+                               OR (state = 'expired' AND ended_at IS NULL)))",
         [id],
         |r| r.get(0),
     )

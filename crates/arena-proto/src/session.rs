@@ -535,6 +535,10 @@ pub struct SnapshotSession {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub ends_at: Option<i64>,
+    /// When the grace after `ends_at` runs out (a timed session with a grace period).
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub grace_ends_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -554,6 +558,10 @@ pub struct SessionScreen {
     #[ts(type = "number")]
     pub lock_after_ms: u64,
     pub time_up_mode: String,
+    /// The grace at the end of `lock_after_ms`; the kiosk shows "Time's up" while it runs.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub grace_ms: u64,
 }
 
 #[cfg(test)]

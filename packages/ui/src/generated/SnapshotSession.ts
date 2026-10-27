@@ -15,4 +15,8 @@ export type SnapshotSession = {
   pause_reason?: PauseReason | null;
   pause_note?: string | null;
   ends_at?: number | null;
+  /**
+   * When the grace after `ends_at` runs out (a timed session with a grace period).
+   */
+  grace_ends_at?: number | null;
 };

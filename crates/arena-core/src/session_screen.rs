@@ -11,6 +11,10 @@ use crate::session_timer::TimedSession;
 
 const DAY_MS: u64 = 86_400_000;
 
+fn grace_ms(grace_min: u32) -> i64 {
+    i64::from(grace_min) * 60_000
+}
+
 fn closes_in(week: &[OpeningDay; 7], tz: Tz, now_ms: i64) -> Option<u64> {
     let today: NaiveDate = tz.timestamp_millis_opt(now_ms).single()?.date_naive();
     (-1..=7)
@@ -59,14 +63,19 @@ pub fn timed_sessions(store: &Store, now_ms: i64) -> Result<Vec<TimedSession>, A
         .map(|ms| now_ms + ms);
     Ok(sessions
         .into_iter()
-        .filter(|s| s.state == "active")
+        .filter(|s| s.state == "active" || s.state == "grace")
         .filter_map(|s| match (s.ends_at, closing) {
             (Some(at), _) => Some((s, at, true)),
-            (None, Some(at)) if s.mode == "postpaid" => Some((s, at, false)),
+            (None, Some(at)) if s.mode == "postpaid" && s.state == "active" => Some((s, at, false)),
             _ => None,
         })
         .map(|(s, ends_at, expires)| TimedSession {
             ends_at,
+            due_at: if s.state == "grace" {
+                ends_at + grace_ms(s.grace_min)
+            } else {
+                ends_at
+            },
             expires,
             session_id: s.id,
             device_id: s.device_id,
@@ -110,10 +119,19 @@ pub fn session_screens(
                 )
                 .unwrap_or(0),
                 lock_after_ms: match (s.state.as_str(), s.ends_at) {
-                    ("active", Some(at)) => u64::try_from(at - now_ms).unwrap_or(0).min(lock_after),
+                    ("active" | "grace", Some(at)) => {
+                        u64::try_from(at + grace_ms(s.grace_min) - now_ms)
+                            .unwrap_or(0)
+                            .min(lock_after)
+                    }
+                    ("expired", _) => 0,
                     _ => lock_after,
                 },
                 time_up_mode: s.time_up_mode,
+                grace_ms: match s.ends_at {
+                    Some(_) if s.state != "paused" => u64::from(s.grace_min) * 60_000,
+                    _ => 0,
+                },
             };
             (s.device_id, screen)
         })

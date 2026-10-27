@@ -84,6 +84,15 @@ pub struct PcSession {
     pub elapsed_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning_min: Option<u8>,
+    /// Milliseconds until the grace after the end time begins (`None` without a grace).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grace_in_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub grace_ms: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// One IPC message.
@@ -370,6 +379,8 @@ mod tests {
                 device_name: "PC 1".into(),
                 elapsed_ms: 7,
                 warning_min: Some(5),
+                grace_in_ms: Some(3),
+                grace_ms: 4,
             }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);

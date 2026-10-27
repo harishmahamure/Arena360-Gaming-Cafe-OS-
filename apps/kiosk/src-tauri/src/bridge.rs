@@ -257,7 +257,9 @@ impl Bridge {
     pub fn pc_screen(&self) -> PcScreen {
         let (mut screen, at) = lock(&self.screen).clone();
         if let Some(s) = &mut screen.session {
-            s.elapsed_ms += at.elapsed().as_millis() as u64;
+            let gone = at.elapsed().as_millis() as u64;
+            s.elapsed_ms += gone;
+            s.grace_in_ms = s.grace_in_ms.map(|m| m.saturating_sub(gone));
         }
         screen
     }
@@ -784,6 +786,8 @@ mod tests {
                     device_name: "PC 1".into(),
                     elapsed_ms: 1_000,
                     warning_min: None,
+                    grace_in_ms: None,
+                    grace_ms: 0,
                 }),
             },
             at,

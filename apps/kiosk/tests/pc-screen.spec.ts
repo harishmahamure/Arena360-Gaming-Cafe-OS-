@@ -157,6 +157,7 @@ test("each lock reason covers the screen with its catalogue line", async ({ page
     times_up: en["player.lock.times_up"],
     locked_by_staff: en["player.pc.locked"],
     paused: en["player.lock.paused"],
+    times_up_see_counter: en["player.lock.times_up_see_counter"],
   };
   for (const [reason, line] of Object.entries(lines)) {
     await emit(page, shown({ locked: true, reason }));
@@ -164,4 +165,17 @@ test("each lock reason covers the screen with its catalogue line", async ({ page
   }
   await emit(page, shown({ locked: false }));
   await expect(page.getByTestId("pc-locked")).toHaveCount(0);
+});
+
+test("a session in its grace says time is up and counts the grace down", async ({ page }) => {
+  await openWithShell(page);
+  const session = (grace_in_ms: number) =>
+    shown({ session: { device_name: "PC 7", elapsed_ms: 5_000, grace_in_ms, grace_ms: 90_000 } });
+  await emit(page, session(60_000));
+  await expect(page.getByTestId("session-grace")).toHaveCount(0);
+  await emit(page, session(0));
+  await expect(page.getByTestId("session-grace")).toContainText(
+    /Time's up\. Grace ends in 1:(2|3)\d/,
+  );
+  expect(await serious(page)).toEqual([]);
 });

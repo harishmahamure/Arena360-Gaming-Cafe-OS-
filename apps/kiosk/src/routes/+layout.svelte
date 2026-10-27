@@ -63,6 +63,7 @@
     pay_at_counter: "player.lock.pay_at_counter",
     ended_by_staff: "player.lock.ended_by_staff",
     times_up: "player.lock.times_up",
+    times_up_see_counter: "player.lock.times_up_see_counter",
     locked_by_staff: "player.pc.locked",
     paused: "player.lock.paused",
   };

@@ -214,6 +214,7 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                         == Some(arena_proto::LicenceStanding::Unverified))
                     .then_some(true);
                     snapshot.clock_wrong = status.clock_wrong.then_some(true);
+                    snapshot.tier = status.tier;
                 }
             }
             Json(snapshot).into_response()
@@ -722,6 +723,19 @@ mod tests {
                 assert!(body.get("licence_unverified").is_none());
                 assert!(body.get("clock_wrong").is_none());
             }
+        }
+
+        #[tokio::test]
+        async fn the_snapshot_carries_the_effective_tier_for_the_ads_gate() {
+            let (_dir, r) = reader(false);
+            let (_, _, body) = send_with(r, get(None), |s| {
+                s.tier = Some(arena_proto::Tier::Free);
+            })
+            .await;
+            assert_eq!(body["tier"], "free");
+            let (_dir, r) = reader(false);
+            let (_, _, body) = send_with(r, get(None), |s| s.tier = None).await;
+            assert!(body.get("tier").is_none());
         }
 
         #[tokio::test]

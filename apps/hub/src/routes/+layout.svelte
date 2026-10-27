@@ -51,6 +51,7 @@
   } from "../lib/alerts.svelte";
   import { catalog } from "../lib/catalog.svelte";
   import { alertCount, refreshAccess, service } from "../lib/service.svelte";
+  import { ads } from "../lib/ads";
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
   import { effectRecorded } from "../lib/undo.svelte";
@@ -353,6 +354,7 @@
           void refresh();
         },
         onConnectivityChanged: (e) => takeLink(e),
+        onEntitlementChanged: (e) => ads.evaluate(e.tier),
         onAdminUnlockAck: (e) => noteAck(e.exit_id),
         onPcAck: (e) => noteAck(e.cmd_id),
         onPairingCodeChanged: (c) => notePairingCode(c),
@@ -361,6 +363,14 @@
         onClosed: () => void invalidate(SESSION_DEPENDENCY),
       });
     });
+  });
+
+  // The ads gate follows the Hub's effective tier on every snapshot (and, when signed in, on
+  // `entitlement.changed`). An unreachable Hub keeps the gate as it was.
+  $effect(() => {
+    if (!data.hub.ok) return;
+    const tier = data.hub.snapshot.paired === false ? null : data.hub.snapshot.tier;
+    untrack(() => ads.evaluate(tier));
   });
 
   // The More sheet belongs to the signed-in shell.

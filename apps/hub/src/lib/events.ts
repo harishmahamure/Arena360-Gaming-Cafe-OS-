@@ -4,6 +4,7 @@
 import type {
   AdminUnlockAckEvent,
   Connectivity,
+  EntitlementChangedEvent,
   PcAckEvent,
   SettingsChangedEvent,
   UnlockOk,
@@ -43,6 +44,8 @@ export type EventHandlers = {
   /** `effect.recorded`: a receipt, drawer kick or invoice number was recorded for a bill. */
   onEffectRecorded?: (orderId: string) => void;
   onPairingCodeChanged?: (change: PairingChange) => void;
+  /** `entitlement.changed`: the Hub's effective tier moved; the ads gate re-evaluates. */
+  onEntitlementChanged?: (event: EntitlementChangedEvent) => void;
   /** `resync`, or the stream reopened after a drop: events may be missed; reload the snapshot. */
   onResync: () => void;
   /** The Hub closed or refused the stream (signed out, revoked, or the Hub restarted). */
@@ -64,6 +67,12 @@ export function isSettingsChanged(v: unknown): v is SettingsChangedEvent {
 /** The event's UI settings; a missing or malformed block means the defaults. */
 export function uiOf(event: SettingsChangedEvent): SettingsChangedEvent["ui"] {
   return normalizeUi(event.ui);
+}
+
+const TIERS = ["free", "basic", "premium"];
+
+export function isEntitlementChanged(v: unknown): v is EntitlementChangedEvent {
+  return isObject(v) && (v.tier === null || (typeof v.tier === "string" && TIERS.includes(v.tier)));
 }
 
 /**
@@ -167,6 +176,14 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
         if (isConnectivity(data)) handlers.onConnectivityChanged?.(data);
       } catch {
         // A malformed event is ignored: the next snapshot carries the state.
+      }
+    });
+    es.addEventListener("entitlement.changed", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        if (isEntitlementChanged(data)) handlers.onEntitlementChanged?.(data);
+      } catch {
+        // A malformed event is ignored: the next snapshot carries the tier.
       }
     });
     es.addEventListener("session.locked", () => handlers.onSessionLocked?.());

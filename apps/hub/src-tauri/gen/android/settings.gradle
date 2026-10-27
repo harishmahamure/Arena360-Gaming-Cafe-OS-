@@ -1,3 +1,7 @@
 include ':app'
 
+// The in-house AdMob plugin: a Kotlin-only module, the one place that imports the ads SDK.
+include ':tauri-plugin-arena-ads'
+project(':tauri-plugin-arena-ads').projectDir = file('../../plugins/tauri-plugin-arena-ads/android')
+
 apply from: 'tauri.settings.gradle'

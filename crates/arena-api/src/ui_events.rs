@@ -32,6 +32,9 @@
 //!   change of state, never for a probe that found the same state; also sent once, with the
 //!   current value, as the first event of every newly opened stream (so a change between the
 //!   snapshot load and the stream opening is not missed). The snapshot carries it too.
+//! - `event: entitlement.changed`, data [`EntitlementChangedEvent`](arena_proto::EntitlementChangedEvent):
+//!   the Hub's effective tier moved (a licence applied, expired or failed its check; `tier: null` when
+//!   unpaired); sent once per change, never on open (the snapshot carries `tier`).
 //! - `event: resync`, data `{}`: this stream fell behind and missed events, or the Hub's role
 //!   changed (the stream then closes so the client reopens it). The view reloads the snapshot.
 //!
@@ -265,6 +268,10 @@ fn lan_of(
     })
 }
 
+fn tier_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<arena_proto::Tier> {
+    status.as_ref().and_then(|s| s.borrow().tier)
+}
+
 fn connectivity_of(
     status: &Option<watch::Receiver<HubStatus>>,
 ) -> Option<arena_proto::Connectivity> {
@@ -310,6 +317,7 @@ impl HubTask {
     async fn run(mut self) {
         let mut role = role_of(&self.status);
         let mut link = connectivity_of(&self.status).map(|c| c.state);
+        let mut tier = tier_of(&self.status);
         let mut lan = lan_of(&self.status);
         let (mut waiting, mut rollover) = match self.read().await {
             Some((locale, at, _)) => (pending_keys(locale.as_ref()), at),
@@ -498,6 +506,13 @@ impl HubTask {
                     if now_lan != lan {
                         lan = now_lan;
                         self.send("devices.changed", "{}".into(), false);
+                    }
+                    let now_tier = tier_of(&self.status);
+                    if now_tier != tier {
+                        tier = now_tier;
+                        let data = serde_json::to_string(&arena_proto::EntitlementChangedEvent { tier })
+                            .unwrap_or_default();
+                        self.send("entitlement.changed", data, false);
                     }
                     let now = role_of(&self.status);
                     if now != role {
@@ -1710,6 +1725,38 @@ mod tests {
                 serde_json::json!({"state": "internet_offline", "checked_at": 2}),
                 serde_json::json!({"state": "cloud_unreachable", "checked_at": 4}),
                 serde_json::json!({"state": "online", "checked_at": 5}),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tier_change_is_pushed_once_and_a_repeat_is_not() {
+        use arena_proto::Tier;
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let set = |tier| hub._status.send_modify(|s| s.tier = tier);
+        // A heartbeat that finds the tier it already had pushes nothing.
+        set(Some(Tier::Free));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        set(Some(Tier::Free));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        set(Some(Tier::Basic));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        set(None);
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            assert_eq!(event, "entitlement.changed");
+            seen.push(data);
+        }
+        assert_eq!(
+            seen,
+            vec![
+                serde_json::json!({"tier": "free"}),
+                serde_json::json!({"tier": "basic"}),
+                serde_json::json!({"tier": null}),
             ]
         );
     }

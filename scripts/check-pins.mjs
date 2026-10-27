@@ -156,6 +156,12 @@ export function readAndroidRoot(text) {
   return m ? { Kotlin: m[1] } : {};
 }
 
+/** The ads plugin's build.gradle.kts -> { Google Mobile Ads SDK } from its exact dependency */
+export function readAdsPlugin(text) {
+  const m = text.match(/com\.google\.android\.gms:play-services-ads:(\d+\.\d+\.\d+)/);
+  return m ? { "Google Mobile Ads SDK": m[1] } : {};
+}
+
 /** apps/hub/src-tauri/tauri.conf.json -> { Android minSdk } */
 export function readTauriConf(text) {
   const v = JSON.parse(text).bundle?.android?.minSdkVersion;
@@ -223,6 +229,7 @@ export const READERS = {
   "crates/arena-cloud/data/common-passwords.txt": readDataSource,
   "apps/hub/src-tauri/gen/android/app/build.gradle.kts": readAndroidApp,
   "apps/hub/src-tauri/gen/android/build.gradle.kts": readAndroidRoot,
+  "apps/hub/src-tauri/plugins/tauri-plugin-arena-ads/android/build.gradle.kts": readAdsPlugin,
   "apps/hub/src-tauri/tauri.conf.json": readTauriConf,
   "apps/hub/src/lib/android.ts": readWebviewMin,
 };

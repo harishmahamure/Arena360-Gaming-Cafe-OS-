@@ -12,6 +12,7 @@ import type { SnapshotLocale } from "./SnapshotLocale";
 import type { SnapshotSession } from "./SnapshotSession";
 import type { SnapshotUi } from "./SnapshotUi";
 import type { SnapshotZone } from "./SnapshotZone";
+import type { Tier } from "./Tier";
 
 /**
  * What the Hub UI needs to draw its shell and the floor placeholder.
@@ -64,4 +65,9 @@ export type HubSnapshot = {
   licence_unverified?: boolean;
   clock_wrong?: boolean;
   device_cap?: number;
+  /**
+   * The effective tier (the licence's, or Free after a failed check); omitted until the Hub knows it.
+   * The Android ads gate reads it (Story 4.10).
+   */
+  tier?: Tier;
 };

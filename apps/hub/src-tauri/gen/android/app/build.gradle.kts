@@ -21,6 +21,15 @@ val tauriProperties = Properties().apply {
     }
 }
 
+/**
+ * The AdMob app id for a release build comes from `-PARENA_ADMOB_APP_ID` or the environment. Unset,
+ * it is an all-zero id (valid in form, never Google's test id): the build still works and no test
+ * ad can ship. The debug build always uses Google's test app id.
+ */
+fun releaseAdmobAppId(): String =
+    (providers.gradleProperty("ARENA_ADMOB_APP_ID").orNull ?: providers.environmentVariable("ARENA_ADMOB_APP_ID").orNull)
+        ?.takeIf { it.isNotBlank() } ?: "ca-app-pub-0000000000000000~0000000000"
+
 android {
     compileSdk = 36
     namespace = "in.arena360.hub"
@@ -46,6 +55,7 @@ android {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
+            manifestPlaceholders["arenaAdmobAppId"] = "ca-app-pub-3940256099942544~3347511713"
             isJniDebuggable = true
             isMinifyEnabled = false
             packaging {
@@ -56,6 +66,7 @@ android {
             }
         }
         getByName("release") {
+            manifestPlaceholders["arenaAdmobAppId"] = releaseAdmobAppId()
             if (!keystoreProperties.isEmpty) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -90,6 +101,7 @@ rust {
 }
 
 dependencies {
+    implementation(project(":tauri-plugin-arena-ads"))
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

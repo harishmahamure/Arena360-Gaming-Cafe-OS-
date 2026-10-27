@@ -1900,5 +1900,13 @@
   "hub.staff.pin_rejected": "That isn't your PIN.",
   "hub.staff.deactivated": "{name} was deactivated. Their sign-in has ended.",
   "hub.staff.refused": "That couldn't be done. Nothing was changed.",
-  "hub.staff.refused.staff_id": "You can't deactivate yourself, and the branch needs at least one active Owner."
+  "hub.staff.refused.staff_id": "You can't deactivate yourself, and the branch needs at least one active Owner.",
+  "hub.dev_ads.title": "Ads gallery",
+  "hub.dev_ads.unavailable": "The ads gallery opens only on a debug build of the Android Hub on the Free tier.",
+  "hub.dev_ads.banner_place": "Load test banner",
+  "hub.dev_ads.banner_hide": "Hide banner",
+  "hub.dev_ads.interstitial_preload": "Load test interstitial",
+  "hub.dev_ads.interstitial_show": "Show test interstitial",
+  "hub.dev_ads.events": "Events",
+  "hub.dev_ads.no_events": "No events yet."
 }

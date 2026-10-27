@@ -48,6 +48,7 @@ pub fn build_snapshot(
         licence_unverified: None,
         clock_wrong: None,
         device_cap: None,
+        tier: None,
         branch: branch.map(|b| SnapshotBranch {
             name: b.name,
             branch_code: b.branch_code,
@@ -1161,6 +1162,7 @@ mod tests {
                 licence_unverified: None,
                 clock_wrong: None,
                 device_cap: Some(20),
+                tier: None,
             }
         );
     }
@@ -1206,6 +1208,7 @@ mod tests {
                 licence_unverified: None,
                 clock_wrong: None,
                 device_cap: Some(20),
+                tier: None,
             }
         );
     }

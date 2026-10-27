@@ -97,6 +97,7 @@ export type { ElevationItem } from "./ElevationItem";
 export type { ElevationKind } from "./ElevationKind";
 export type { ElevationMode } from "./ElevationMode";
 export type { EndOutcome } from "./EndOutcome";
+export type { EntitlementChangedEvent } from "./EntitlementChangedEvent";
 export type { EntitlementSource } from "./EntitlementSource";
 export type { ErrorCode } from "./ErrorCode";
 export type { ErrorFrame } from "./ErrorFrame";

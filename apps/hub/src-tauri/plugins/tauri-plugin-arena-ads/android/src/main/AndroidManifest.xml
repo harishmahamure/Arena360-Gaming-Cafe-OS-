@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The AdMob app id comes from the app's build config (`arenaAdmobAppId`); the SDK reads it at
+         process start, before the gate decides anything, so it must always be a well-formed id. -->
+    <application>
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="${arenaAdmobAppId}" />
+    </application>
+</manifest>

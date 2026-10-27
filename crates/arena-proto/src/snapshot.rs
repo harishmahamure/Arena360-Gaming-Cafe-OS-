@@ -64,6 +64,11 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub device_cap: Option<u32>,
+    /// The effective tier (the licence's, or Free after a failed check); omitted until the Hub knows it.
+    /// The Android ads gate reads it (Story 4.10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tier: Option<crate::Tier>,
 }
 
 fn paired_default() -> bool {
@@ -207,6 +212,15 @@ pub struct SettingsChangedEvent {
     pub keys: Vec<String>,
     /// The Hub UI settings now in effect.
     pub ui: SnapshotUi,
+}
+
+/// `event: entitlement.changed` on `GET /ui/events`: the Hub's effective tier moved (a licence applied,
+/// expired or failed its check). `tier` is `null` when the Hub no longer knows it (unpaired). The
+/// Android ads gate re-evaluates on it without a restart (Story 4.10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct EntitlementChangedEvent {
+    pub tier: Option<crate::Tier>,
 }
 
 /// `event: applied` on `GET /ui/events`: any other committed intent.
@@ -418,6 +432,7 @@ mod tests {
             licence_unverified: None,
             clock_wrong: None,
             device_cap: None,
+            tier: None,
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),

@@ -224,9 +224,10 @@ pub use signup::{
     SignupVerified, SignupVerify,
 };
 pub use snapshot::{
-    AppliedEvent, DeviceStatus, HubSnapshot, LocalePending, NumberFormat, PendingNumber,
-    PendingText, SettingsChangedEvent, SnapshotActiveRule, SnapshotBranch, SnapshotDevice,
-    SnapshotGroup, SnapshotLan, SnapshotLocale, SnapshotUi, SnapshotZone, SymbolPosition,
+    AppliedEvent, DeviceStatus, EntitlementChangedEvent, HubSnapshot, LocalePending, NumberFormat,
+    PendingNumber, PendingText, SettingsChangedEvent, SnapshotActiveRule, SnapshotBranch,
+    SnapshotDevice, SnapshotGroup, SnapshotLan, SnapshotLocale, SnapshotUi, SnapshotZone,
+    SymbolPosition,
 };
 pub use staff_invite::{
     InviteRole, InviteStatus, StaffInvite, StaffInviteView, StaffInvited, StaffInvites,

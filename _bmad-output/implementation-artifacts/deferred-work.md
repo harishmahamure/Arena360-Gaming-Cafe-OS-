@@ -402,3 +402,13 @@
 - The Staff screen does not invite members: invites come from the wizard (Story 2.16) and the owner app (Story 8.26). The "Upgrade" link stays hidden behind `billingEnabled` until Story 10.5.
 - The `DEVICE_LIMIT` check on Android runs against the in-process Hub on the host (the cap lowered in `branch.db` to the one paired kiosk); no Android device or emulator ran it.
 - A deactivated member's open `/ui/events` stream ends with their next request or heartbeat, not by a push.
+
+## Deferred from: Story 4.10
+
+- The Kotlin module, its Gradle wiring, `ArenaAds.kt` and the Kotlin unit test were written without an Android toolchain and have not been compiled. Check the SDK 25.5.0 API names (`getCurrentOrientationAnchoredAdaptiveBannerAdSize`, `RequestConfiguration.toBuilder`, `InterstitialAd.load`) and AGP 9's handling of `org.jetbrains.kotlin.android` in a library module on first build.
+- "Tauri plugin" here is a Kotlin-only Gradle module reached through a WebView interface (like `ArenaHub`), not a Tauri plugin with a Rust crate: a Rust plugin crate would put ad symbols in Rust, which the story forbids.
+- `loadAd`, `InterstitialAd.load` and `show` run on the main thread because the SDK requires it; only SDK start-up runs on the plugin's worker thread. StrictMode (debug) logs main-thread network or disk access from the plugin; it does not fail the build.
+- `check-ads.mjs ids` reads `BuildConfig.java` and the merged manifest under `build/`; the Gradle output paths were not verified. The release checklist (Story 4.16) should run it with `--require-production` and set `ARENA_ADMOB_*` from repository variables; CI currently builds release with the all-zero placeholder.
+- The Windows executables are checked for plain strings only; Tauri compresses embedded assets, so the Hub and Kiosk web build folders are checked too.
+- `entitlement.changed` is not sent as the first event of a new stream (the snapshot carries `tier`; the layout re-evaluates on every snapshot). A tier change between a snapshot load and the stream opening is picked up by the next snapshot.
+- The gate does not render a banner slot, lifecycle pausing, the content rating (the plugin takes `rating`, the UI sends PG) or the interstitial rules: Stories 4.11 to 4.13.

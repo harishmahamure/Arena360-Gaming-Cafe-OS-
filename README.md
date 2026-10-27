@@ -1614,92 +1614,93 @@ This table is checked against the manifests by `pnpm check:pins`. Change the man
 table together. JS framework versions live in the pnpm `catalog:`; apps reference them as
 `"catalog:"`.
 
-| Item                                | Version                | Source                                                |
-| ----------------------------------- | ---------------------- | ----------------------------------------------------- |
-| rust                                | 1.95.0                 | `rust-toolchain.toml`                                 |
-| node                                | 22.23.4                | `.nvmrc`                                              |
-| node engines                        | >=22.23.4 <23          | `package.json`                                        |
-| pnpm                                | 12.15.0                | `package.json`                                        |
-| svelte                              | 5.57.2                 | `pnpm-workspace.yaml`                                 |
-| @sveltejs/kit                       | 3.1.0                  | `pnpm-workspace.yaml`                                 |
-| @sveltejs/vite-plugin-svelte        | 7.3.1                  | `pnpm-workspace.yaml`                                 |
-| vite                                | 8.3.5                  | `pnpm-workspace.yaml`                                 |
-| typescript                          | 6.0.3                  | `pnpm-workspace.yaml`                                 |
-| @sveltejs/adapter-static            | 4.0.0                  | `pnpm-workspace.yaml`                                 |
-| @sveltejs/adapter-cloudflare        | 8.0.1                  | `pnpm-workspace.yaml`                                 |
-| wrangler                            | 4.152.0                | `pnpm-workspace.yaml`                                 |
-| svelte-check                        | 4.7.7                  | `pnpm-workspace.yaml`                                 |
-| astro                               | 7.4.2                  | `pnpm-workspace.yaml`                                 |
-| @astrojs/svelte                     | 9.1.1                  | `pnpm-workspace.yaml`                                 |
-| @tauri-apps/cli                     | 2.12.4                 | `pnpm-workspace.yaml`                                 |
-| @tauri-apps/api                     | 2.12.4                 | `pnpm-workspace.yaml`                                 |
-| @tauri-apps/plugin-updater          | 2.14.0                 | `pnpm-workspace.yaml`                                 |
-| @fontsource-variable/sora           | 5.3.0                  | `pnpm-workspace.yaml`                                 |
-| @playwright/test                    | 1.64.1                 | `pnpm-workspace.yaml`                                 |
-| @axe-core/playwright                | 4.14.0                 | `pnpm-workspace.yaml`                                 |
-| yaml                                | 2.9.1                  | `package.json`                                        |
-| tauri                               | =2.12.5                | `Cargo.toml`                                          |
-| tauri-build                         | =2.7.4                 | `Cargo.toml`                                          |
-| tauri-plugin-updater                | =2.14.0                | `Cargo.toml`                                          |
-| serde                               | =1.0.229               | `Cargo.toml`                                          |
-| serde_json                          | =1.0.154               | `Cargo.toml`                                          |
-| ts-rs                               | =12.0.1                | `Cargo.toml`                                          |
-| tokio                               | =1.54.1                | `Cargo.toml`                                          |
-| axum                                | =0.8.9                 | `Cargo.toml`                                          |
-| rusqlite                            | =0.40.2                | `Cargo.toml`                                          |
-| tracing                             | =0.1.44                | `Cargo.toml`                                          |
-| tracing-subscriber                  | =0.3.23                | `Cargo.toml`                                          |
-| ulid                                | =3.0.0                 | `Cargo.toml`                                          |
-| rmp-serde                           | =1.3.1                 | `Cargo.toml`                                          |
-| chrono-tz                           | =0.10.4                | `Cargo.toml`                                          |
-| chrono                              | =0.4.45                | `Cargo.toml`                                          |
-| sha2                                | =0.10.9                | `Cargo.toml`                                          |
-| tokio-tungstenite                   | =0.30.0                | `Cargo.toml`                                          |
-| rustls                              | =0.23.46               | `Cargo.toml`                                          |
-| tokio-rustls                        | =0.26.6                | `Cargo.toml`                                          |
-| webpki-roots                        | =1.0.9                 | `Cargo.toml`                                          |
-| rcgen                               | =0.14.10               | `Cargo.toml`                                          |
-| argon2                              | =0.6.0                 | `Cargo.toml`                                          |
-| futures-util                        | =0.3.34                | `Cargo.toml`                                          |
-| windows                             | =0.62.2                | `Cargo.toml`                                          |
-| windows-service                     | =0.8.1                 | `Cargo.toml`                                          |
-| tempfile                            | =3.27.0                | `Cargo.toml`                                          |
-| tower                               | =0.5.3                 | `Cargo.toml`                                          |
-| proptest                            | =1.12.0                | `Cargo.toml`                                          |
-| libsql                              | =0.10.0                | `Cargo.toml`                                          |
-| hyper-rustls                        | =0.25.0                | `Cargo.toml`                                          |
-| hyper                               | =0.14.32               | `Cargo.toml`                                          |
-| serde_path_to_error                 | =0.1.20                | `Cargo.toml`                                          |
-| aws-sdk-s3                          | =1.155.0               | `Cargo.toml`                                          |
-| aws-smithy-http-client              | =1.5.1                 | `Cargo.toml`                                          |
-| age                                 | =0.12.1                | `Cargo.toml`                                          |
-| reqwest                             | =0.13.5                | `Cargo.toml`                                          |
-| hmac                                | =0.12.1                | `Cargo.toml`                                          |
-| getrandom                           | =0.3.4                 | `Cargo.toml`                                          |
-| ring                                | =0.17.14               | `Cargo.toml`                                          |
-| qrcode                              | =0.14.1                | `Cargo.toml`                                          |
-| mdns-sd                             | =0.21.6                | `Cargo.toml`                                          |
-| if-addrs                            | =0.15.0                | `Cargo.toml`                                          |
-| jsonwebtoken                        | =11.1.0                | `Cargo.toml`                                          |
-| base64                              | =0.22.1                | `Cargo.toml`                                          |
-| libc                                | =0.2.191               | `Cargo.toml`                                          |
-| jni                                 | =0.21.1                | `Cargo.toml`                                          |
-| Android compileSdk                  | 36                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts` |
-| Android targetSdk                   | 36                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts` |
-| Android minSdk                      | 28                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts` |
-| Android minSdk                      | 28                     | `apps/hub/src-tauri/tauri.conf.json`                  |
-| Kotlin                              | 2.2.10                 | `apps/hub/src-tauri/gen/android/build.gradle.kts`     |
-| Android NDK                         | 28.2.13676358          | `.github/workflows/ci.yml`                            |
-| Android System WebView minimum      | 111                    | `apps/hub/src/lib/android.ts`                         |
-| sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`                  |
-| age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`                  |
-| gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile`                |
-| ghcr.io/tursodatabase/libsql-server | v0.24.31               | `.github/workflows/ci.yml`                            |
-| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `.github/workflows/ci.yml`                            |
-| k3s                                 | v1.33.4+k3s1           | `deploy/README.md`                                    |
-| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `deploy/dev/compose.yaml`                             |
-| bitnamilegacy/minio-client          | 2025.7.21-debian-12-r3 | `deploy/dev/compose.yaml`                             |
-| @zxcvbn-ts/language-common          | 3.0.4                  | `crates/arena-cloud/data/common-passwords.txt`        |
+| Item                                | Version                | Source                                                                       |
+| ----------------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
+| rust                                | 1.95.0                 | `rust-toolchain.toml`                                                        |
+| node                                | 22.23.4                | `.nvmrc`                                                                     |
+| node engines                        | >=22.23.4 <23          | `package.json`                                                               |
+| pnpm                                | 12.15.0                | `package.json`                                                               |
+| svelte                              | 5.57.2                 | `pnpm-workspace.yaml`                                                        |
+| @sveltejs/kit                       | 3.1.0                  | `pnpm-workspace.yaml`                                                        |
+| @sveltejs/vite-plugin-svelte        | 7.3.1                  | `pnpm-workspace.yaml`                                                        |
+| vite                                | 8.3.5                  | `pnpm-workspace.yaml`                                                        |
+| typescript                          | 6.0.3                  | `pnpm-workspace.yaml`                                                        |
+| @sveltejs/adapter-static            | 4.0.0                  | `pnpm-workspace.yaml`                                                        |
+| @sveltejs/adapter-cloudflare        | 8.0.1                  | `pnpm-workspace.yaml`                                                        |
+| wrangler                            | 4.152.0                | `pnpm-workspace.yaml`                                                        |
+| svelte-check                        | 4.7.7                  | `pnpm-workspace.yaml`                                                        |
+| astro                               | 7.4.2                  | `pnpm-workspace.yaml`                                                        |
+| @astrojs/svelte                     | 9.1.1                  | `pnpm-workspace.yaml`                                                        |
+| @tauri-apps/cli                     | 2.12.4                 | `pnpm-workspace.yaml`                                                        |
+| @tauri-apps/api                     | 2.12.4                 | `pnpm-workspace.yaml`                                                        |
+| @tauri-apps/plugin-updater          | 2.14.0                 | `pnpm-workspace.yaml`                                                        |
+| @fontsource-variable/sora           | 5.3.0                  | `pnpm-workspace.yaml`                                                        |
+| @playwright/test                    | 1.64.1                 | `pnpm-workspace.yaml`                                                        |
+| @axe-core/playwright                | 4.14.0                 | `pnpm-workspace.yaml`                                                        |
+| yaml                                | 2.9.1                  | `package.json`                                                               |
+| tauri                               | =2.12.5                | `Cargo.toml`                                                                 |
+| tauri-build                         | =2.7.4                 | `Cargo.toml`                                                                 |
+| tauri-plugin-updater                | =2.14.0                | `Cargo.toml`                                                                 |
+| serde                               | =1.0.229               | `Cargo.toml`                                                                 |
+| serde_json                          | =1.0.154               | `Cargo.toml`                                                                 |
+| ts-rs                               | =12.0.1                | `Cargo.toml`                                                                 |
+| tokio                               | =1.54.1                | `Cargo.toml`                                                                 |
+| axum                                | =0.8.9                 | `Cargo.toml`                                                                 |
+| rusqlite                            | =0.40.2                | `Cargo.toml`                                                                 |
+| tracing                             | =0.1.44                | `Cargo.toml`                                                                 |
+| tracing-subscriber                  | =0.3.23                | `Cargo.toml`                                                                 |
+| ulid                                | =3.0.0                 | `Cargo.toml`                                                                 |
+| rmp-serde                           | =1.3.1                 | `Cargo.toml`                                                                 |
+| chrono-tz                           | =0.10.4                | `Cargo.toml`                                                                 |
+| chrono                              | =0.4.45                | `Cargo.toml`                                                                 |
+| sha2                                | =0.10.9                | `Cargo.toml`                                                                 |
+| tokio-tungstenite                   | =0.30.0                | `Cargo.toml`                                                                 |
+| rustls                              | =0.23.46               | `Cargo.toml`                                                                 |
+| tokio-rustls                        | =0.26.6                | `Cargo.toml`                                                                 |
+| webpki-roots                        | =1.0.9                 | `Cargo.toml`                                                                 |
+| rcgen                               | =0.14.10               | `Cargo.toml`                                                                 |
+| argon2                              | =0.6.0                 | `Cargo.toml`                                                                 |
+| futures-util                        | =0.3.34                | `Cargo.toml`                                                                 |
+| windows                             | =0.62.2                | `Cargo.toml`                                                                 |
+| windows-service                     | =0.8.1                 | `Cargo.toml`                                                                 |
+| tempfile                            | =3.27.0                | `Cargo.toml`                                                                 |
+| tower                               | =0.5.3                 | `Cargo.toml`                                                                 |
+| proptest                            | =1.12.0                | `Cargo.toml`                                                                 |
+| libsql                              | =0.10.0                | `Cargo.toml`                                                                 |
+| hyper-rustls                        | =0.25.0                | `Cargo.toml`                                                                 |
+| hyper                               | =0.14.32               | `Cargo.toml`                                                                 |
+| serde_path_to_error                 | =0.1.20                | `Cargo.toml`                                                                 |
+| aws-sdk-s3                          | =1.155.0               | `Cargo.toml`                                                                 |
+| aws-smithy-http-client              | =1.5.1                 | `Cargo.toml`                                                                 |
+| age                                 | =0.12.1                | `Cargo.toml`                                                                 |
+| reqwest                             | =0.13.5                | `Cargo.toml`                                                                 |
+| hmac                                | =0.12.1                | `Cargo.toml`                                                                 |
+| getrandom                           | =0.3.4                 | `Cargo.toml`                                                                 |
+| ring                                | =0.17.14               | `Cargo.toml`                                                                 |
+| qrcode                              | =0.14.1                | `Cargo.toml`                                                                 |
+| mdns-sd                             | =0.21.6                | `Cargo.toml`                                                                 |
+| if-addrs                            | =0.15.0                | `Cargo.toml`                                                                 |
+| jsonwebtoken                        | =11.1.0                | `Cargo.toml`                                                                 |
+| base64                              | =0.22.1                | `Cargo.toml`                                                                 |
+| libc                                | =0.2.191               | `Cargo.toml`                                                                 |
+| jni                                 | =0.21.1                | `Cargo.toml`                                                                 |
+| Android compileSdk                  | 36                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts`                        |
+| Android targetSdk                   | 36                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts`                        |
+| Android minSdk                      | 28                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts`                        |
+| Android minSdk                      | 28                     | `apps/hub/src-tauri/tauri.conf.json`                                         |
+| Kotlin                              | 2.2.10                 | `apps/hub/src-tauri/gen/android/build.gradle.kts`                            |
+| Google Mobile Ads SDK               | 25.5.0                 | `apps/hub/src-tauri/plugins/tauri-plugin-arena-ads/android/build.gradle.kts` |
+| Android NDK                         | 28.2.13676358          | `.github/workflows/ci.yml`                                                   |
+| Android System WebView minimum      | 111                    | `apps/hub/src/lib/android.ts`                                                |
+| sops                                | 3.13.3                 | `.github/workflows/deploy-cloud.yml`                                         |
+| age                                 | 1.3.2                  | `.github/workflows/deploy-cloud.yml`                                         |
+| gcr.io/distroless/cc-debian12       | nonroot                | `deploy/docker/arena-cloud.Dockerfile`                                       |
+| ghcr.io/tursodatabase/libsql-server | v0.24.31               | `.github/workflows/ci.yml`                                                   |
+| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `.github/workflows/ci.yml`                                                   |
+| k3s                                 | v1.33.4+k3s1           | `deploy/README.md`                                                           |
+| bitnamilegacy/minio                 | 2025.7.23-debian-12-r5 | `deploy/dev/compose.yaml`                                                    |
+| bitnamilegacy/minio-client          | 2025.7.21-debian-12-r3 | `deploy/dev/compose.yaml`                                                    |
+| @zxcvbn-ts/language-common          | 3.0.4                  | `crates/arena-cloud/data/common-passwords.txt`                               |
 
 ## Android Hub
 
@@ -1820,6 +1821,32 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   policy, duplicate manifest entries and that `KeystoreBridge.kt` uses `AndroidKeyStore` with
   AES-GCM and never reads the key out; `node scripts/check-android.mjs aab <dir>` checks an extracted AAB for 16 KB ELF
   alignment and the `arm64-v8a` and `x86_64` libraries.
+- **Ads (Story 4.10).** Ads exist only on the Free Android Hub. They come from one Kotlin-only
+  module, `apps/hub/src-tauri/plugins/tauri-plugin-arena-ads/android` (Google Mobile Ads SDK 25.5.0,
+  pinned), the only code that imports `com.google.android.gms.ads`. It is included from
+  `gen/android/settings.gradle` and the app, and reached from the page through the `ArenaAds`
+  WebView interface (`MainActivity` adds it next to `ArenaHub`; no Rust crate and no Tauri plugin
+  crate is involved). Surface: `init`, `banner.place(rect)`, `banner.hide`, `banner.destroy`,
+  `interstitial.preload`, `interstitial.show` (Kotlin: `bannerPlace` …), and the window event
+  `arena:ad` with `detail { event, slot }` for `ad.requested`, `ad.loaded`, `ad.failed`,
+  `ad.shown`, `ad.clicked`, `ad.dismissed`. The SDK starts on a background thread; a debug build
+  installs a StrictMode policy that logs (`adb logcat -s ArenaAds`) any main-thread network or
+  disk access that starts in the plugin. **Gate:** `apps/hub/src/lib/ads.ts` turns ads on only when the
+  platform is Android and `HubSnapshot.tier` is `free` (the effective tier, so a failed licence
+  check is Free); the Hub pushes `entitlement.changed {tier}` on `/ui/events` and the gate
+  re-evaluates without a restart. With the gate off the plugin is never initialised, no request is
+  made and nothing renders; on Windows or in a browser every call does nothing. **Ids:** a debug
+  build uses Google's test app and unit ids; a release build reads `ARENA_ADMOB_APP_ID`,
+  `ARENA_ADMOB_BANNER_UNIT` and `ARENA_ADMOB_INTERSTITIAL_UNIT` (Gradle property or environment) and
+  falls back to an all-zero placeholder, never a test id. **Checks:** `pnpm run check:ads`
+  (`node scripts/check-ads.mjs source`) fails if a Rust crate depends on or names an ads SDK,
+  symbol or endpoint, if anything but the plugin imports the SDK, if the Kiosk, the Windows Hub
+  shell or the shared UI carry an SDK, endpoint or the plugin, or if the plugin's debug build type
+  is not on test units; `check-ads.mjs ids [--require-production]` inspects the built debug and
+  release variants (the release checklist, Story 4.16, adds `--require-production`);
+  `check-ads.mjs artefact <path>…` inspects built files. **Dev gallery:** `/dev/ads` on a debug
+  Android build loads and shows a test banner and a test interstitial and lists each event. Not
+  runnable locally: the Gradle/Kotlin build, the SDK, StrictMode and the gallery on a device.
 - **Free café end to end (Story 4.8).** `crates/arena-hub/tests/free_android_golive.rs` (feature
   `dev-fixtures`) starts a real cloud and the real `arena-hub` binary with `--platform android`,
   with a kiosk speaking the LAN protocol, and walks sign-up → Free (no comp entitlement) → a

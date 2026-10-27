@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import `in`.arena360.ads.ArenaAds
 import kotlin.math.roundToInt
 import org.json.JSONObject
 
@@ -39,6 +40,7 @@ class MainActivity : TauriActivity() {
     registerForActivityResult(ActivityResultContracts.RequestPermission()) { afterNotifications() }
 
   private var webView: WebView? = null
+  private var ads: ArenaAds? = null
 
   // Back goes to the Hub UI, which closes the topmost sheet (or does nothing): it never leaves the
   // app and never walks the WebView history.
@@ -96,6 +98,12 @@ class MainActivity : TauriActivity() {
     claimBack()
   }
 
+  override fun onDestroy() {
+    ads?.release()
+    ads = null
+    super.onDestroy()
+  }
+
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     // The system font size changed (the activity is not recreated: `fontScale` is in configChanges).
@@ -107,6 +115,8 @@ class MainActivity : TauriActivity() {
       this.webView = webView
       applyTextZoom(webView)
       webView.addJavascriptInterface(HubBridge(this), "ArenaHub")
+      // Inert until the page's ads gate (Android and Free) calls `init`.
+      ads = ArenaAds(this, webView).also { webView.addJavascriptInterface(it, "ArenaAds") }
       claimBack()
     }
   }

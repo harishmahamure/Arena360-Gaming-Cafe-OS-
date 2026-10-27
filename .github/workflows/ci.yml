@@ -121,6 +121,7 @@ jobs:
       - run: pnpm run check:contrast
       - run: pnpm run check:tokens-used
       - run: pnpm run check:hex
+      - run: pnpm run check:ads
       - run: pnpm run check:secrets
       - run: pnpm run check:deploy
       - run: pnpm run test:scripts
@@ -167,8 +168,27 @@ jobs:
       - name: Built output loads nothing remotely
         if: matrix.app == 'hub' || matrix.app == 'kiosk' || matrix.app == 'kitchen'
         run: pnpm run check:no-remote ${{ matrix.app }}
+      # No ad SDK, ad endpoint or ads plugin in the Hub or Kiosk web build (the Hub's holds only the
+      # no-op gate, which names the plugin's bridge) or in the Windows executables.
+      - name: Built output has no ad code
+        if: matrix.app == 'hub' || matrix.app == 'kiosk'
+        shell: bash
+        run: |
+          if [[ "${{ matrix.app }}" == "hub" ]]; then
+            node scripts/check-ads.mjs artefact apps/hub/build --allow=ArenaAds
+          else
+            node scripts/check-ads.mjs artefact apps/kiosk/build
+          fi
       - if: matrix.os == 'windows-latest'
         run: pnpm --filter @arena/${{ matrix.app }} tauri build --no-bundle -- --locked
+      - name: Windows executable has no ad code
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          exe=$(node -p "require('./apps/${{ matrix.app }}/src-tauri/tauri.conf.json').mainBinaryName")
+          allow=""
+          if [[ "${{ matrix.app }}" == "hub" ]]; then allow="--allow=ArenaAds"; fi
+          node scripts/check-ads.mjs artefact "target/release/$exe.exe" $allow
 
   installer:
     name: installer (hub, windows)
@@ -262,6 +282,7 @@ jobs:
           echo "NDK_HOME=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       - run: node scripts/check-android.mjs manifest
+      - run: node scripts/check-ads.mjs source
       - name: Upload key from SOPS
         id: key
         env:
@@ -295,6 +316,8 @@ jobs:
         run: pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64 -- --locked
       - name: Release AAB
         run: pnpm --filter @arena/hub exec tauri android build --aab --target aarch64 --target x86_64 -- --locked
+      - name: Check the ad ids in the debug and release builds
+        run: node scripts/check-ads.mjs ids
       - name: Inspect the AAB
         run: |
           aab=$(find apps/hub/src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -n 1)

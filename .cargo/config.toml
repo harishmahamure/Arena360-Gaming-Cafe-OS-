@@ -3,3 +3,8 @@ rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 [target.x86_64-linux-android]
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+# Faster links on Windows: rust-lld (shipped with the toolchain, no install needed) in place of
+# MSVC link.exe. Linux x86_64 already uses rust-lld by default since Rust 1.90.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

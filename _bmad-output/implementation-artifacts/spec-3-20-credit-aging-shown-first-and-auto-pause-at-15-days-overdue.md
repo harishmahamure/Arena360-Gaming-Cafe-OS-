@@ -2,7 +2,7 @@
 title: 'Story 3.20: Credit Aging Shown First, and Auto-Pause at 15+ Days Overdue'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'e0f92dc'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -83,6 +83,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review (2026-10-27): no blocking findings. cargo clippy (excluding arena-kiosk-svc tests, which fail on unrelated unused imports), core/store/api/proto/replay/proptest tests, hub svelte-check, check:strings and prettier pass. Two unrelated arena-tasks tests (heartbeat trusted time, LAN printer timeout) fail independently of this story.
+
 ## Verification
 
 **Commands:**
@@ -92,6 +94,6 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: see the commit message of this story.
 Left for later: reminders on cycle days and the Overdue report use the same FIFO helper (Epic 8); pausing is evaluated per business day, so a player crossing 15 days is paused by the next hourly check or the next lookup, and a credit settle is refused in the meantime by the live check.

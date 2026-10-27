@@ -117,7 +117,7 @@ development_status:
   4-10-in-house-admob-plugin-and-the-ads-gate-with-no-ad-code-in-ru: done
   4-11-an-always-visible-banner-in-a-permanent-slot-that-nothing-co: done
   4-12-safe-ad-categories-a-per-branch-content-rating-and-the-ads-c: done
-  4-13-a-standard-interstitial-only-when-staff-come-back-from-the-i: backlog
+  4-13-a-standard-interstitial-only-when-staff-come-back-from-the-i: review
   4-14-ad-requests-and-impressions-are-recorded-without-ids-and-sen: backlog
   4-15-upgrading-removes-ads-within-one-heartbeat-and-a-lapse-bring: backlog
   4-16-the-android-hub-ships-through-google-play-with-a-staged-roll: backlog

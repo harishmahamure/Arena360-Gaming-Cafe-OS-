@@ -8,6 +8,7 @@
     TextField,
     formatDateTime,
     formatMoney,
+    registerAdExclusion,
     t,
   } from "@arena/ui";
   import type {
@@ -406,6 +407,8 @@
   }
 
   $effect(() => pushBack(dismiss));
+  // An open sheet is an ad-exclusion surface (Story 4.13).
+  $effect(() => registerAdExclusion("tile-sheet"));
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

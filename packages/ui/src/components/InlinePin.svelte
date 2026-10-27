@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
+  import { registerAdExclusion } from "../ad-exclusion.ts";
   import { t, type MessageKey } from "../messages/index.js";
   import Button from "./Button.svelte";
 
@@ -181,6 +182,9 @@
     setPin(input.value);
     submitWhenFull();
   }
+
+  // An open PIN prompt is a surface no full-screen ad may follow (Story 4.13).
+  $effect(() => registerAdExclusion("inline-pin"));
 
   onMount(() => {
     if (autofocus) input?.focus();

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { registerAdExclusion } from "../ad-exclusion.ts";
   import { t, type MessageKey } from "../messages/index.js";
 
   type Props = {
@@ -32,6 +33,9 @@
     error,
     children,
   }: Props = $props();
+
+  // While the Undo window is on screen no full-screen ad may follow (Story 4.13).
+  $effect(() => registerAdExclusion("undo-toast"));
 </script>
 
 <div class="undo-toast" data-component="undo-toast" data-testid="undo-toast">

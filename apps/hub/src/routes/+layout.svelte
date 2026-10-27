@@ -1,6 +1,6 @@
 <script lang="ts">
   import "@arena/ui/base.css";
-  import { AlertBadge, Button, t } from "@arena/ui";
+  import { AlertBadge, Button, openAdExclusions, registerAdExclusion, t } from "@arena/ui";
   import { onMount, tick, untrack, type Snippet } from "svelte";
   import { goto, invalidate } from "$app/navigation";
   import { page } from "$app/state";
@@ -53,6 +53,7 @@
   import { catalog } from "../lib/catalog.svelte";
   import { alertCount, refreshAccess, service } from "../lib/service.svelte";
   import { adRatingOf, ads } from "../lib/ads";
+  import { InterstitialPolicy } from "../lib/interstitial";
   import { KEY_ADS_CONSENT, KEY_ADS_RATING } from "../lib/operating";
   import { connectEvents, uiOf } from "../lib/events";
   import { noteAck } from "../lib/admin-unlock";
@@ -118,6 +119,43 @@
   );
   /** The idle lock is up: the shell stays mounted but inert behind the overlay. */
   let locked = $state(false);
+  /**
+   * When a full-screen ad may follow a PIN unlock (Story 4.13). `adShowing` holds the idle
+   * countdown while Google's interstitial is on screen; it restarts from zero when it ends.
+   */
+  const interstitial = new InterstitialPolicy(ads);
+  let adShowing = $state(false);
+  /** Where focus goes back to once the interstitial has closed. */
+  let adReturnFocus: HTMLElement | null = null;
+  $effect(() => {
+    const stop = interstitial.onShowing((showing) => {
+      adShowing = showing;
+      if (showing) return;
+      const back = adReturnFocus;
+      adReturnFocus = null;
+      void tick().then(() => {
+        if (back?.isConnected) back.focus({ preventScroll: true });
+      });
+    });
+    return () => {
+      stop();
+      interstitial.dispose();
+    };
+  });
+  // Leaving through the ad and coming back also ends the wait.
+  $effect(() => {
+    if (!adShowing) return;
+    let hidden = false;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") hidden = true;
+      else if (hidden) interstitial.ended();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  });
+  // The header's alert list is open: no full-screen ad may follow a lock that starts now.
+  $effect(() => (alertsOpen ? registerAdExclusion("alert-list") : undefined));
+
   /** What had focus when the screen locked (it gets focus back on unlock). */
   let lockedFrom: HTMLElement | null = null;
   /** Who the lock screen names (kept while the Hub is unreachable). */
@@ -449,6 +487,8 @@
     }
     setLocalLocked(true);
     if (locked) return;
+    // Taken before anything closes: the surfaces open now decide whether an ad may follow.
+    interstitial.lock(openAdExclusions());
     const active = document.activeElement;
     lockedFrom = active instanceof HTMLElement && active !== document.body ? active : null;
     moreOpen = false;
@@ -458,7 +498,7 @@
   }
 
   /** Uncovers the screen once the Hub has unlocked the session (here or in another window). */
-  async function finishUnlock(result: UnlockOk) {
+  async function finishUnlock(result: UnlockOk, byPin = false) {
     setLocalLocked(false);
     lockGeneration++;
     // Catch up on what changed while locked (and on who is signed in now) before uncovering.
@@ -472,6 +512,10 @@
     lockedFrom = null;
     if (back?.isConnected) back.focus({ preventScroll: true });
     else focusEl(mainEl?.querySelector("h1"));
+    // Only a PIN typed here after an idle lock can bring an ad, and never makes the Hub wait.
+    if (byPin) {
+      if (interstitial.unlock()) adReturnFocus = back?.isConnected ? back : null;
+    } else interstitial.cancel();
   }
 
   /** The PIN typed on the lock screen. */
@@ -498,7 +542,7 @@
         return { ok: false, message: "ui.pin.unreachable" } as const;
       }
       if (outcome.kind === "error") return { ok: false, message: "ui.pin.failed" } as const;
-      await finishUnlock(outcome);
+      await finishUnlock(outcome, true);
       return { ok: true } as const;
     } finally {
       unlocking = false;
@@ -512,7 +556,7 @@
     onIdle: () => lockScreen(true),
     target: typeof window === "undefined" ? null : window,
   });
-  const tracking = $derived(!gated && !locked);
+  const tracking = $derived(!gated && !locked && !adShowing);
   $effect(() => {
     if (!tracking) return;
     untrack(() => idleTracker.start());

@@ -13,6 +13,7 @@ export { default as TabControl } from "./components/TabControl.svelte";
 export { default as InlinePin } from "./components/InlinePin.svelte";
 export { default as ReasonPicker } from "./components/ReasonPicker.svelte";
 export { default as UndoToast } from "./components/UndoToast.svelte";
+export { openAdExclusions, registerAdExclusion } from "./ad-exclusion.ts";
 export { focusFirstInvalid } from "./forms.js";
 export { reasonOptions, reasonsFor } from "./reasons.js";
 export { STATUS_LABELS } from "./status.js";

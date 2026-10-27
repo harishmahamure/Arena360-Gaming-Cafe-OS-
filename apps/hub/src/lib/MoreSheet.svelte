@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, t } from "@arena/ui";
+  import { Button, registerAdExclusion, t } from "@arena/ui";
   import { pushBack } from "./back";
   import Icon from "./Icon.svelte";
   import { MORE, type ScreenId } from "./nav";
@@ -33,6 +33,9 @@
   $effect(() => {
     focusables()[0]?.focus();
   });
+
+  // An open sheet is an ad-exclusion surface (Story 4.13).
+  $effect(() => registerAdExclusion("more-sheet"));
 
   // Android Back closes the sheet like Esc does.
   $effect(() => pushBack(() => onclose("dismiss")));

@@ -440,3 +440,9 @@
 - Consent is a plain tick (Story 2.26's `ads.consent`), not a Google UMP consent form: `npa=1` is the only personalisation switch. EEA/UK users would need UMP; the product is India-first, so it is not built here.
 - The consent line shows the staff id as stored, not the staff member's name (the Ads screen does not load the staff list).
 - `branch.ads_rating` is a branch setting seeded by `branch.bootstrap` and `branch.seed_defaults`; a Windows or paid Hub carries it but nothing reads it there.
+
+## Deferred from: Story 4.13
+
+- The Kotlin side needed no change (`interstitialPreload`/`interstitialShow` and their events already existed) and, like the rest of the plugin, has not been run on a device: whether the Hub's alert sound and `devices.changed` handling keep running in the WebView while the SDK's full-screen activity is on top is only covered by a Playwright test that plays the plugin's events.
+- Leaving through the ad is detected by `ad.dismissed`/`ad.failed`, a `visibilitychange` back to visible, or a 2-minute safety limit; the real behaviour of the SDK's close callback after a click-through is unverified on a device.
+- The `phone-cart-bar` and POS cart (Epic 5) must call `registerAdExclusion` when they are built.

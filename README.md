@@ -1874,6 +1874,18 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   consent change re-requests the banner. The Ads screen also lists what is always excluded and shows the
   consent's time and staff id; it has no control to turn ads off, only "Ads keep Arena 360 free." with an
   "Upgrade" link (shown as "Available soon" until billing ships, the shared `billingEnabled` flag).
+- **Interstitial (Story 4.13).** One standard AdMob interstitial, and one trigger: a PIN unlock after the
+  idle lock. `apps/hub/src/lib/interstitial.ts` (`InterstitialPolicy`) preloads one while the lock
+  screen is up (only when no ad-exclusion surface was open at lock time and 15 minutes have passed since
+  the last `ad.shown`), and `unlock()` shows it only if `ad.loaded` arrived; otherwise the Hub returns at
+  once, and a skipped ad is not delayed. Google owns the close control and timing (no custom skip UI).
+  While it is up the idle countdown is held; `ad.dismissed`, `ad.failed`, coming back to the foreground
+  or a 2-minute safety limit ends the wait, focus returns to the element focused before the lock and the
+  countdown restarts from zero. The shared registry `packages/ui/src/ad-exclusion.ts`
+  (`registerAdExclusion(name)`, `openAdExclusions()`) holds the open surfaces: `tile-sheet`,
+  `settle-bar`, `undo-toast`, `inline-pin`, `more-sheet` and `alert-list`; the Epic 5 cart and
+  `phone-cart-bar` register themselves the same way. A settle, its undo window or a closed bill never
+  triggers an ad.
 - **Free café end to end (Story 4.8).** `crates/arena-hub/tests/free_android_golive.rs` (feature
   `dev-fixtures`) starts a real cloud and the real `arena-hub` binary with `--platform android`,
   with a kiosk speaking the LAN protocol, and walks sign-up → Free (no comp entitlement) → a

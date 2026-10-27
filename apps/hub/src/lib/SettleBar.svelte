@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { Button, TextField, focusFirstInvalid, formatMoney, t } from "@arena/ui";
+  import {
+    Button,
+    TextField,
+    focusFirstInvalid,
+    formatMoney,
+    registerAdExclusion,
+    t,
+  } from "@arena/ui";
   import type {
     PaymentMethod,
     PaymentRow,
@@ -37,6 +44,8 @@
   } = $props();
 
   let root: HTMLElement | undefined = $state();
+  // A bill being settled is an ad-exclusion surface (Story 4.13).
+  $effect(() => registerAdExclusion("settle-bar"));
   let rows: Row[] = $state([]);
   let attempted = $state(false);
 

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// What an alert is about. Each kind has a catalogue label (`alert.kind.<kind>`) and a tile tag
+/// What an alert is about. Each kind has a catalogue label (`hub.alerts.kind.<kind>`) and a tile tag
 /// ([`AlertKind::tag`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]

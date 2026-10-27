@@ -218,9 +218,11 @@
   });
 
   // Open alerts and the branch conditions come from each (re)loaded snapshot; the sound loop and
-  // the announcements follow them even while the screen is locked.
+  // the announcements follow them even while the screen is locked. A failed load keeps the last
+  // ones, so an outage neither hides an open alert nor replays its sound on recovery.
   $effect(() => {
-    const snapshot = data.hub.ok ? data.hub.snapshot : null;
+    if (!data.hub.ok) return;
+    const snapshot = data.hub.snapshot;
     untrack(() => syncAlerts(snapshot));
   });
 

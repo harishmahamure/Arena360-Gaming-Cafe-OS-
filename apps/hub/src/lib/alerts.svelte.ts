@@ -196,9 +196,13 @@ export async function ackAlerts(ids: string[]) {
   try {
     const done = new Set<string>();
     for (const id of mine) {
-      const out = await submitIntent({ kind: "alert.ack", alert_id: id }, newIdempotencyKey());
-      const gone = out.kind === "error" && ["STALE", "NOT_FOUND"].includes(out.error.code);
-      if (out.kind === "applied" || gone) done.add(id);
+      try {
+        const out = await submitIntent({ kind: "alert.ack", alert_id: id }, newIdempotencyKey());
+        const gone = out.kind === "error" && ["STALE", "NOT_FOUND"].includes(out.error.code);
+        if (out.kind === "applied" || gone) done.add(id);
+      } catch {
+        continue;
+      }
     }
     if (done.size > 0) {
       alerts.open = alerts.open.filter((a) => !done.has(a.id));

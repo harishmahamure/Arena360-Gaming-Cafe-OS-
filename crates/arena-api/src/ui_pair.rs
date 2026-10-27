@@ -237,7 +237,12 @@ mod tests {
             zones: vec![],
             sessions: vec![],
             bills: vec![],
-            alerts: vec![],
+            alerts: vec![arena_proto::SnapshotAlert {
+                id: "A1".into(),
+                kind: arena_proto::AlertKind::Fixture,
+                device_id: Some("D1".into()),
+                raised_at: 1,
+            }],
             devices: vec![],
             locale: None,
             ui: arena_proto::SnapshotUi::default(),
@@ -253,5 +258,6 @@ mod tests {
         let min = unpaired_snapshot(full);
         assert!(!min.paired);
         assert_eq!(min.branch, None);
+        assert!(min.alerts.is_empty());
     }
 }

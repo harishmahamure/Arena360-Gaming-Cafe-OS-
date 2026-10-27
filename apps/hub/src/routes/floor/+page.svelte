@@ -148,7 +148,7 @@
   const activeDeviceId = $derived(active?.device_id);
   $effect(() => {
     const id = activeDeviceId;
-    if (id) untrack(() => void ackDevice(id));
+    if (id && openFor(id).length > 0) untrack(() => void ackDevice(id));
   });
   const zoneAlerts = (members: SnapshotDevice[]) =>
     members.reduce((sum, d) => sum + openFor(d.device_id).length, 0);

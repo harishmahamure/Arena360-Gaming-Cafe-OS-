@@ -1692,7 +1692,6 @@
   "hub.alerts.announce": "Alert. {where}: {what}",
   "hub.alerts.kind.fixture": "Test alert",
   "hub.alerts.kind.time_up": "Time is up",
-  "hub.alerts.condition": "Needs attention",
   "hub.audit.intent.alert.raise": "Alert raised",
   "hub.audit.intent.alert.ack": "Alert acknowledged"
 }

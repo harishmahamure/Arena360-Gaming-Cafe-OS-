@@ -19,10 +19,11 @@
 
   let now = $state(Date.now());
   let list: HTMLUListElement | undefined = $state();
+  let section: HTMLElement | undefined = $state();
 
   onMount(() => {
     const timer = setInterval(() => (now = Date.now()), 15_000);
-    list?.querySelector<HTMLElement>("button")?.focus();
+    (list?.querySelector<HTMLElement>("button") ?? section)?.focus();
     return () => clearInterval(timer);
   });
 
@@ -35,6 +36,8 @@
 <section
   {id}
   class="panel"
+  bind:this={section}
+  tabindex="-1"
   aria-labelledby="{id}-title"
   data-testid="alert-list"
   onkeydown={(e) => e.key === "Escape" && onclose()}

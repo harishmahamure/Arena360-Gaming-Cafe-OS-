@@ -2,7 +2,7 @@
 title: 'Story 3.25: Hub Alerts with Sound and a Persistent Badge'
 type: 'feature'
 created: '2026-10-27'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'c1d703047acc969ceec053247675e81dd96a38ca'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -93,7 +93,12 @@ Alerts are rows so "held by the Hub service" is true across restarts and the cha
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 Verified: fmt, clippy, arena-proto/store/core/replay tests, hub svelte-check, string/protocol/format checks, `alerts` and `session-timer` Playwright specs (desktop and phone) pass. Unrelated timing failures as in 3.23/3.24 (arena-cloud, arena-tasks); a plan proptest (3.21) can fail at 300 cases with `[Bootstrap, Plan, Plan]`.
 Decisions: the `alert.raise` payload field is `alert_kind` (`kind` collides with the payload tag); a branch-level row is acknowledged-by-click with no sheet and no sound; the sound loop runs whenever the snapshot has open device alerts.
 Left for later: real raisers (`time_up` in 3.26 and later stories); sound on a real Windows webview is untested.
+
+## Code Review (bmad-code-review)
+
+Fixed: acknowledge now survives a rejected request; an alert raised while its sheet is open is acknowledged; a failed snapshot load keeps the last alerts (no vanishing badge or sound replay); the header list takes focus (Escape works) with only branch rows; unused `hub.alerts.condition` key removed; `AlertKind` doc key corrected; unpaired snapshot test now asserts alerts are blanked.
+Deferred: autoplay-blocked sound feedback, mute control, tile tag priority when several alerts, closing alerts of a revoked device, branch-alert UI test, non-floor route pick test.

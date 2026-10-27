@@ -2,7 +2,7 @@
 title: 'Story 3.15: Pause and Resume a Session with a Reason'
 type: 'feature'
 created: '2026-10-27'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'f1b3d2ae91daece57e01bd81a800cf1bc6697410'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -100,6 +100,7 @@ Per-segment `paused_ms` (not only the session total) keeps billing right once a 
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 Verified: `cargo fmt --check`, clippy `-D warnings` (proto/store/core/replay/api/kiosk-core), `cargo test` for those crates (205 arena-api lib tests passed on two full runs; one earlier run had a flaky `a_component_change_also_reports_the_bundles_that_hold_it`, which passes alone with and without this change), `pnpm --filter @arena/hub check`, check:strings, check:tokens-used, check:contrast, Playwright `pause`, `session-end`, `undo`, `settle`, `tile-sheet`, `session-start` specs (146 passed). `check:generated` only reports the regenerated TS as new/stale until it is committed.
-Left for later: the `arena-kiosk-svc` paused-session integration test (`runtime.rs`) is Unix-only and was not compiled or run on this Windows machine; the independent code review (step 4) has not run; kiosk resync of a paused state after a kiosk restart.
+Review: diff re-read against the spec (billing per-segment pause, End folding, kiosk push, base_rev guards, note validation) with no open findings; gate re-run green (fmt, clippy, cargo test, check:generated, check:strings, hub svelte-check, 146 Playwright specs; one `session-end` keyboard spec flaked once under parallel load and passed on two reruns).
+Left for later: the `arena-kiosk-svc` paused-session integration test (`runtime.rs`) is Unix-only and was not compiled or run on this Windows machine; kiosk resync of a paused state after a kiosk restart.

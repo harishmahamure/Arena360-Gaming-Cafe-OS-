@@ -2026,7 +2026,10 @@ async fn run_intent(
         intent.payload,
         arena_proto::IntentPayload::SessionEndReverted(_)
     );
-    let topping_up = matches!(intent.payload, arena_proto::IntentPayload::WalletTopup(_));
+    let topping_up = matches!(
+        intent.payload,
+        arena_proto::IntentPayload::WalletTopup(_) | arena_proto::IntentPayload::CreditCollect(_)
+    );
     let settling = match &intent.payload {
         arena_proto::IntentPayload::SessionSettle(s) => Some(s.order_id.clone()),
         _ => None,
@@ -2183,10 +2186,13 @@ async fn settle_outcome(
     cmd_id: &str,
 ) -> Option<arena_proto::SettleOutcome> {
     let (reader, id) = (Arc::clone(&auth.reader), order_id.to_owned());
-    let found = tokio::task::spawn_blocking(move || reader.settlement(&id)).await;
-    let settlement = match found {
-        Ok(Ok(Some(s))) => s,
-        Ok(Ok(None)) => return None,
+    let found = tokio::task::spawn_blocking(move || {
+        Ok::<_, arena_proto::AppError>((reader.settlement(&id)?, reader.credit_collection(&id)?))
+    })
+    .await;
+    let (settlement, collection) = match found {
+        Ok(Ok((Some(s), c))) => (s, c),
+        Ok(Ok((None, _))) => return None,
         Ok(Err(e)) => {
             tracing::warn!(order_id, error = %e, "could not read the settlement");
             return None;
@@ -2222,6 +2228,7 @@ async fn settle_outcome(
         order_rev: settlement.rev,
         total_minor: settlement.total_minor,
         irreversible: settlement.irreversible,
+        collection,
     })
 }
 

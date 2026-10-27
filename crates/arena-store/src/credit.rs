@@ -1,4 +1,4 @@
-use arena_proto::AppError;
+use arena_proto::{AppError, ClearedSpend, CreditCollection};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db_error;
@@ -107,4 +107,68 @@ pub fn set_override_day(
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+pub fn credit_collection(
+    conn: &Connection,
+    order_id: &str,
+) -> Result<Option<CreditCollection>, AppError> {
+    let collected: Option<(String, i64, i64)> = conn
+        .query_row(
+            "SELECT t.player_id, t.rowid, -t.delta_minor
+             FROM wallet_txns t JOIN orders o ON o.id = t.order_id
+             WHERE t.order_id = ?1 AND t.reason = 'credit' AND t.delta_minor < 0
+               AND o.kind = 'credit_collect'",
+            [order_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some((player_id, at_rowid, amount)) = collected else {
+        return Ok(None);
+    };
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.rowid, t.order_id, t.delta_minor, COALESCE(o.settled_at, 0)
+             FROM wallet_txns t JOIN orders o ON o.id = t.order_id
+             WHERE t.player_id = ?1 AND t.reason = 'credit' AND t.rowid <= ?2
+             ORDER BY t.rowid",
+        )
+        .map_err(db_error)?;
+    let rows: Vec<(i64, String, i64, i64)> = stmt
+        .query_map(params![player_id, at_rowid], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)?;
+    let before: i64 = rows
+        .iter()
+        .filter(|(rowid, _, delta, _)| *delta < 0 && *rowid < at_rowid)
+        .map(|(_, _, delta, _)| -delta)
+        .sum();
+    let after = before + amount;
+    let mut cleared = Vec::new();
+    let mut start = 0i64;
+    let mut spent = 0i64;
+    for (_, spend_order, delta, at) in rows.iter().filter(|(_, _, delta, _)| *delta > 0) {
+        let end = start + delta;
+        let part = after.min(end) - before.max(start);
+        if part > 0 {
+            cleared.push(ClearedSpend {
+                order_id: spend_order.clone(),
+                at: *at,
+                spend_minor: *delta,
+                cleared_minor: part,
+            });
+        }
+        start = end;
+        spent += delta;
+    }
+    Ok(Some(CreditCollection {
+        player_id,
+        amount_minor: amount,
+        cleared,
+        outstanding_after_minor: spent - after,
+    }))
 }

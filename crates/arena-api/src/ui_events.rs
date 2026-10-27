@@ -210,7 +210,24 @@ fn bill_settled(applied: &Applied) -> Option<BillSettledEvent> {
         .find(|c| c.tbl == "orders" && c.op == arena_core::ChangeOp::Update)?;
     Some(BillSettledEvent {
         order_id: order.row_id.clone(),
+        collection: None,
     })
+}
+
+fn collected_order(applied: &Applied) -> Option<String> {
+    let has = |tbl: &str, op: arena_core::ChangeOp| {
+        applied.changes.iter().any(|c| c.tbl == tbl && c.op == op)
+    };
+    if !has("payments", arena_core::ChangeOp::Insert)
+        || !has("credit_balances", arena_core::ChangeOp::Update)
+    {
+        return None;
+    }
+    applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders" && c.op == arena_core::ChangeOp::Insert)
+        .map(|c| c.row_id.clone())
 }
 
 fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
@@ -319,6 +336,17 @@ impl HubTask {
                             self.send("devices.changed", "{}".into(), false);
                         }
                         if let Some(settled) = bill_settled(&applied) {
+                            let data = serde_json::to_string(&settled).unwrap_or_default();
+                            self.send("bill.settled", data, false);
+                        }
+                        if let Some(order_id) = collected_order(&applied) {
+                            let (reader, id) = (Arc::clone(&self.reader), order_id.clone());
+                            let collection = tokio::task::spawn_blocking(move || reader.credit_collection(&id))
+                                .await
+                                .ok()
+                                .and_then(Result::ok)
+                                .flatten();
+                            let settled = BillSettledEvent { order_id, collection };
                             let data = serde_json::to_string(&settled).unwrap_or_default();
                             self.send("bill.settled", data, false);
                         }
@@ -695,6 +723,39 @@ mod tests {
         assert_eq!(bill_reverted(&unend).unwrap().order_id, "O");
         let end = applied(&[("sessions", "S", Update), ("orders", "O", Insert)]);
         assert!(bill_reverted(&end).is_none());
+    }
+
+    #[test]
+    fn a_credit_collection_names_its_order_and_is_not_a_settle_or_a_top_up() {
+        use arena_core::ChangeOp::{Delete, Insert, Update};
+        let collect = applied(&[
+            ("orders", "CO", Insert),
+            ("payments", "P", Insert),
+            ("wallet_txns", "T", Insert),
+            ("credit_balances", "P2", Update),
+        ]);
+        assert_eq!(collected_order(&collect).as_deref(), Some("CO"));
+        assert!(bill_settled(&collect).is_none());
+        assert_eq!(wallet_changed(&collect).unwrap().player_id, "P2");
+        let topup = applied(&[
+            ("orders", "TO", Insert),
+            ("payments", "P", Insert),
+            ("wallets", "P1", Update),
+        ]);
+        assert!(collected_order(&topup).is_none());
+        let settle = applied(&[
+            ("payments", "P", Insert),
+            ("orders", "O", Update),
+            ("credit_balances", "P2", Update),
+        ]);
+        assert!(collected_order(&settle).is_none());
+        let undo = applied(&[
+            ("payments", "P", Delete),
+            ("orders", "CO", Delete),
+            ("credit_balances", "P2", Update),
+        ]);
+        assert!(collected_order(&undo).is_none());
+        assert_eq!(bill_reverted(&undo).unwrap().order_id, "CO");
     }
 
     #[test]

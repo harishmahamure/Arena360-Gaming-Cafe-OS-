@@ -43,6 +43,7 @@ pub struct OrderTxn {
 }
 
 pub struct NewTopupOrder<'a> {
+    pub kind: &'a str,
     pub id: &'a str,
     pub player_id: &'a str,
     pub total_minor: i64,
@@ -113,7 +114,7 @@ pub fn insert_topup_order(conn: &Connection, o: &NewTopupOrder<'_>) -> Result<()
         "INSERT INTO orders (id, session_id, player_id, guest_no, device_id, status, subtotal_minor,
                              total_minor, business_day, fy, kind, settled_at, settled_by, rev,
                              created_at, updated_at)
-         VALUES (?1, NULL, ?2, NULL, NULL, 'settled', ?3, ?3, ?4, ?5, 'topup', ?6, ?7, 0, 0, 0)",
+         VALUES (?1, NULL, ?2, NULL, NULL, 'settled', ?3, ?3, ?4, ?5, ?8, ?6, ?7, 0, 0, 0)",
         params![
             o.id,
             o.player_id,
@@ -121,7 +122,8 @@ pub fn insert_topup_order(conn: &Connection, o: &NewTopupOrder<'_>) -> Result<()
             o.business_day,
             o.fy,
             o.settled_at,
-            o.settled_by
+            o.settled_by,
+            o.kind
         ],
     )
     .map_err(db_error)?;

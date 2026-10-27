@@ -704,10 +704,10 @@ pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settl
     let Some((mut settlement, kind)) = found else {
         return Ok(None);
     };
-    let intent_kind = if kind == "topup" {
-        "wallet.topup"
-    } else {
-        "session.settle"
+    let intent_kind = match kind.as_str() {
+        "topup" => "wallet.topup",
+        "credit_collect" => "credit.collect",
+        _ => "session.settle",
     };
     let forward = forward_intent_id(conn, "orders", order_id, intent_kind)?;
     settlement.irreversible = effect_recorded(conn, forward.as_deref(), order_id)?;

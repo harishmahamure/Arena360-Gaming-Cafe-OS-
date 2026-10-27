@@ -27,6 +27,7 @@ mod ads_consent;
 mod branch_code;
 mod changes;
 mod credit;
+mod credit_collect;
 mod devices;
 mod frame;
 mod groups;
@@ -161,6 +162,8 @@ pub(crate) enum Target {
     WalletTopup(Box<wallet::TopupTarget>),
     WalletTopupReverted(Box<wallet::TopupRevertTarget>),
     CreditSetLimit(Box<credit::LimitTarget>),
+    CreditCollect(Box<credit_collect::CollectTarget>),
+    CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -221,6 +224,12 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::WalletTopupReverted(Box::new(wallet::load_topup_reverted(tx, r, now)?))
         }
         P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),
+        P::CreditCollect(c) => {
+            Target::CreditCollect(Box::new(credit_collect::load_collect(tx, c)?))
+        }
+        P::CreditCollectReverted(r) => Target::CreditCollectReverted(Box::new(
+            credit_collect::load_collect_reverted(tx, r, now)?,
+        )),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

@@ -7,10 +7,11 @@
 
   let { staff }: { staff: SessionStaff | null } = $props();
 
-  const MESSAGE: Record<"end" | "settle" | "topup", MessageKey> = {
+  const MESSAGE: Record<"end" | "settle" | "topup" | "collect", MessageKey> = {
     end: "hub.undo.ended",
     settle: "hub.undo.settled",
     topup: "hub.undo.topped_up",
+    collect: "hub.undo.collected",
   };
 </script>
 

@@ -144,6 +144,14 @@ enum Op {
         player: u8,
         limit: u16,
     },
+    /// Collects some of a player's tab in cash (or too much, or from a player without credit), then maybe its Undo.
+    CreditCollect {
+        player: u8,
+        amount: u16,
+        over: bool,
+        undo: bool,
+        late: bool,
+    },
     /// A Settle of an open bill wholly on credit, maybe with the manager override.
     CreditPay {
         slot: u8,
@@ -301,6 +309,20 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         2 => (0..3u8, prop::bool::weighted(0.3)).prop_map(|(slot, over)| Op::WalletPay { slot, over }),
         2 => (any::<u8>(), 0..3000u16).prop_map(|(player, limit)| Op::CreditSet { player, limit }),
+        2 => (
+            any::<u8>(),
+            0..3000u16,
+            prop::bool::weighted(0.2),
+            prop::bool::weighted(0.4),
+            prop::bool::weighted(0.3)
+        )
+            .prop_map(|(player, amount, over, undo, late)| Op::CreditCollect {
+                player,
+                amount,
+                over,
+                undo,
+                late
+            }),
         2 => (0..3u8, prop::bool::weighted(0.5)).prop_map(|(slot, over_ride)| Op::CreditPay {
             slot,
             over_ride
@@ -1432,6 +1454,100 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert!(out.is_ok(), "{:?}", out);
             }
         }
+        Op::CreditCollect {
+            player,
+            amount,
+            over,
+            undo,
+            late,
+        } => {
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let Some(p) = players.get(usize::from(*player) % players.len().max(1)) else {
+                return Ok(());
+            };
+            let id = text(p, "player_id");
+            let owed = hub
+                .reader
+                .rows(Table::CreditBalances)
+                .unwrap()
+                .iter()
+                .find(|c| text(c, "player_id") == id)
+                .map(|c| int(c, "outstanding_minor"));
+            let wanted = if *over {
+                owed.unwrap_or(0) + 1
+            } else {
+                i64::from(*amount).min(owed.unwrap_or(0))
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::CreditCollect(arena_proto::CreditCollect {
+                    player_id: id.clone(),
+                    amount_minor: wanted,
+                    payments: vec![arena_proto::PaymentRow {
+                        method: arena_proto::PaymentMethod::Cash,
+                        amount_minor: wanted,
+                        reference: None,
+                    }],
+                }),
+                None,
+            ));
+            match owed {
+                None => {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::NotFound, Some("player_id"))));
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+                Some(_) if wanted <= 0 || *over => {
+                    prop_assert_eq!(
+                        code(&out),
+                        Some((ErrorCode::ValidationFailed, Some("amount_minor")))
+                    );
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+                Some(owed) => {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert_eq!(hub.change_count(), before + 4);
+                    let order = hub
+                        .reader
+                        .rows(Table::Orders)
+                        .unwrap()
+                        .into_iter()
+                        .rfind(|o| text(o, "kind") == "credit_collect")
+                        .unwrap();
+                    let owed_now = |hub: &Hub| {
+                        hub.reader
+                            .rows(Table::CreditBalances)
+                            .unwrap()
+                            .iter()
+                            .find(|c| text(c, "player_id") == id)
+                            .map(|c| int(c, "outstanding_minor"))
+                    };
+                    prop_assert_eq!(owed_now(hub), Some(owed - wanted));
+                    if *undo {
+                        if *late {
+                            hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
+                        }
+                        let after_forward = hub.change_count();
+                        let out = hub.submit_new(hub.intent(
+                            IntentPayload::CreditCollectReverted(
+                                arena_proto::CreditCollectReverted {
+                                    order_id: text(&order, "id"),
+                                },
+                            ),
+                            Some(int(&order, "rev")),
+                        ));
+                        if *late {
+                            prop_assert_eq!(code(&out), Some((ErrorCode::UndoNotAllowed, None)));
+                            prop_assert_eq!(hub.change_count(), after_forward);
+                            prop_assert_eq!(owed_now(hub), Some(owed - wanted));
+                        } else {
+                            prop_assert!(out.is_ok(), "{:?}", out);
+                            prop_assert_eq!(hub.change_count(), after_forward + 4);
+                            prop_assert_eq!(owed_now(hub), Some(owed));
+                        }
+                    }
+                }
+            }
+        }
         Op::CreditPay { slot, over_ride } => {
             let open: Vec<_> = hub
                 .reader
@@ -1851,6 +1967,23 @@ fn assert_credit_holds(hub: &Hub) -> Result<(), TestCaseError> {
         if owed > int(&c, "limit_minor") {
             prop_assert!(c["last_override_day"] != RowValue::Null);
         }
+    }
+    for o in hub.reader.rows(Table::Orders).unwrap() {
+        if text(&o, "kind") != "credit_collect" {
+            continue;
+        }
+        let summary = hub.reader.credit_collection(&text(&o, "id")).unwrap();
+        prop_assert!(summary.is_some());
+        let summary = summary.unwrap();
+        let cleared: i64 = summary.cleared.iter().map(|c| c.cleared_minor).sum();
+        prop_assert_eq!(cleared, int(&o, "total_minor"));
+        prop_assert!(summary.outstanding_after_minor >= 0);
+        prop_assert!(
+            summary
+                .cleared
+                .iter()
+                .all(|c| c.cleared_minor > 0 && c.cleared_minor <= c.spend_minor)
+        );
     }
     Ok(())
 }

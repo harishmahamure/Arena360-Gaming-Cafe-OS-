@@ -139,13 +139,15 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
         ? "session.end"
         : kind === "session.settle" || kind === "session.settle.reverted"
           ? "pos.sell"
-          : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-            ? "wallet.topup"
-            : kind === "device.screen"
-              ? "device.screen"
-              : kind === "device.power" || kind === "device.admin_unlock"
-                ? "device.remote"
-                : "device.manage";
+          : kind === "credit.collect" || kind === "credit.collect.reverted"
+            ? "credit.collect"
+            : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+              ? "wallet.topup"
+              : kind === "device.screen"
+                ? "device.screen"
+                : kind === "device.power" || kind === "device.admin_unlock"
+                  ? "device.remote"
+                  : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 

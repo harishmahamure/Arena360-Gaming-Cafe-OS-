@@ -50,8 +50,8 @@ pub use commands::{
     max_applied_command_id, unreported_commands,
 };
 pub use credit::{
-    CreditRow, adjust_outstanding, decode_days, encode_days, find_credit, insert_credit,
-    set_override_day, update_credit_limit,
+    CreditRow, adjust_outstanding, credit_collection, decode_days, encode_days, find_credit,
+    insert_credit, set_override_day, update_credit_limit,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
@@ -732,6 +732,16 @@ impl Store {
             return Ok(None);
         }
         find_credit(&self.conn, player_id)
+    }
+
+    pub fn credit_collection(
+        &self,
+        order_id: &str,
+    ) -> Result<Option<arena_proto::CreditCollection>, AppError> {
+        if !self.table_exists("credit_balances")? {
+            return Ok(None);
+        }
+        credit_collection(&self.conn, order_id)
     }
 
     pub fn wallet_balance(&self, player_id: &str) -> Result<i64, AppError> {
@@ -1481,6 +1491,56 @@ mod tests {
                 code_locked: false,
             })
         );
+    }
+
+    #[test]
+    fn v31_database_upgrades_to_credit_collect_orders_keeping_its_children() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &migrations::MIGRATIONS[..31] {
+                conn.execute_batch(m.sql).unwrap();
+                record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            conn.execute_batch(
+                "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy,
+                                     kind, rev, created_at, updated_at)
+                 VALUES ('O1', 'settled', 100, 100, '2026-10-27', '2026-27', 'topup', 1, 0, 0);
+                 INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position,
+                                       business_day, fy, rev, created_at, updated_at)
+                 VALUES ('P1', 'O1', 'cash', 100, 'S', 0, '2026-10-27', '2026-27', 1, 0, 0);",
+            )
+            .unwrap();
+        }
+        let mut store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        store
+            .write_tx(|tx| {
+                let kind: String = tx
+                    .query_row("SELECT kind FROM orders WHERE id = 'O1'", [], |r| r.get(0))
+                    .map_err(db_error)?;
+                assert_eq!(kind, "topup");
+                tx.execute_batch(
+                    "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy,
+                                         kind, rev, created_at, updated_at)
+                     VALUES ('O2', 'settled', 50, 50, '2026-10-27', '2026-27', 'credit_collect',
+                             1, 0, 0);
+                     INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position,
+                                           business_day, fy, rev, created_at, updated_at)
+                     VALUES ('P2', 'O2', 'cash', 50, 'S', 0, '2026-10-27', '2026-27', 1, 0, 0);",
+                )
+                .map_err(db_error)?;
+                let rows: i64 = tx
+                    .query_row("SELECT COUNT(*) FROM payments", [], |r| r.get(0))
+                    .map_err(db_error)?;
+                assert_eq!(rows, 2);
+                assert!(
+                    tx.execute("INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position, business_day, fy, rev, created_at, updated_at) VALUES ('P3', 'NOPE', 'cash', 1, 'S', 0, 'd', 'f', 1, 0, 0)", [])
+                        .is_err()
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

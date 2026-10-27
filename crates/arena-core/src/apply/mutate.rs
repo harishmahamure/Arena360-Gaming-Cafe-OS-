@@ -306,6 +306,18 @@ pub(super) fn mutate(
             Target::CreditSetLimit(t) => super::credit::mutate_set_limit(tx, c, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::CreditCollect(c) => match target {
+            Target::CreditCollect(_) => {
+                super::credit_collect::mutate_collect(tx, intent, c, now_ms)
+            }
+            _ => Err(mismatch()),
+        },
+        IntentPayload::CreditCollectReverted(_) => match target {
+            Target::CreditCollectReverted(t) => {
+                super::credit_collect::mutate_collect_reverted(tx, t)
+            }
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceMaintenance(m) => match target {
             Target::Maintenance(t) => maintenance::mutate(tx, m, t),
             _ => Err(mismatch()),

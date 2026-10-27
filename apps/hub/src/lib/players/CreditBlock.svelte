@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, TextField, focusFirstInvalid, formatMoney, t } from "@arena/ui";
-  import type { CreditView, SessionStaff } from "@arena/ui/generated";
+  import type { CreditCollection, CreditView, SessionStaff } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { tick, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
@@ -14,14 +14,20 @@
   import { branchLocale } from "../locale.svelte";
   import { amountText, headroomOf, parseAmount } from "../settle";
   import { walletEvents } from "../wallet.svelte";
+  import CollectCredit from "./CollectCredit.svelte";
+  import CollectionSummary from "./CollectionSummary.svelte";
 
   let { playerId, staff }: { playerId: string; staff: SessionStaff | null } = $props();
 
   const DEFAULT_DAYS = "3, 7, 14";
   const locale = $derived(branchLocale.current);
   const canManage = $derived(hasPermission(staff, "credit.manage"));
+  const canCollect = $derived(hasPermission(staff, "credit.collect"));
 
-  let credit: CreditView | null = $state(null);
+  let credit = $state<CreditView | null>(null);
+  let walletMinor = $state(0);
+  let collecting = $state(false);
+  let collection: CreditCollection | null = $state(null);
   let loaded = $state(false);
   let failed = $state(false);
   let editing = $state(false);
@@ -33,6 +39,7 @@
   let saved = $state(false);
   let busy = $state(false);
   let root: HTMLElement | undefined = $state();
+  const canCollectNow = $derived(canCollect && (credit?.outstanding_minor ?? 0) > 0 && !editing);
   let turn = 0;
 
   const money = (minor: number) => (locale ? formatMoney(minor, locale) : "");
@@ -43,7 +50,10 @@
     if (mine !== turn) return;
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     failed = outcome.kind !== "ok";
-    if (outcome.kind === "ok") credit = outcome.value.credit ?? null;
+    if (outcome.kind === "ok") {
+      credit = outcome.value.credit ?? null;
+      walletMinor = outcome.value.balance_minor;
+    }
     loaded = true;
   }
 
@@ -175,10 +185,37 @@
         <Button label="hub.credit.cancel" variant="secondary" onclick={() => (editing = false)} />
       </div>
     </form>
-  {:else if canManage && loaded && !failed}
+  {:else if loaded && !failed && !collecting && (canManage || canCollectNow)}
     <div class="actions" data-testid="credit-actions">
-      <Button label={credit ? "hub.credit.edit" : "hub.credit.enable"} onclick={open} />
+      {#if canManage}
+        <Button label={credit ? "hub.credit.edit" : "hub.credit.enable"} onclick={open} />
+      {/if}
+      {#if canCollectNow}
+        <Button
+          label="hub.credit.collect"
+          onclick={() => {
+            collection = null;
+            collecting = true;
+          }}
+        />
+      {/if}
     </div>
+  {/if}
+
+  {#if collecting && credit}
+    <CollectCredit
+      {playerId}
+      outstanding={credit.outstanding_minor}
+      {walletMinor}
+      ondone={(done) => {
+        collecting = false;
+        collection = done;
+        void refresh();
+      }}
+      oncancel={() => (collecting = false)}
+    />
+  {:else if collection}
+    <CollectionSummary {collection} onclose={() => (collection = null)} />
   {/if}
 </section>
 

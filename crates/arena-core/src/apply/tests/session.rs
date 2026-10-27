@@ -2706,3 +2706,354 @@ async fn a_guest_bill_linked_to_a_credit_player_offers_credit() {
         .unwrap();
     assert_eq!(bill.credit.as_ref().unwrap().limit_minor, 50_000);
 }
+
+fn collect_intent(player: &str, amount: i64, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+    intent(
+        owner(),
+        IntentPayload::CreditCollect(arena_proto::CreditCollect {
+            player_id: player.into(),
+            amount_minor: amount,
+            payments,
+        }),
+    )
+}
+
+fn collect_revert_intent(order: &str, rev: Option<i64>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::CreditCollectReverted(arena_proto::CreditCollectReverted {
+            order_id: order.into(),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+fn collect_cash(player: &str, amount: i64) -> Intent {
+    collect_intent(
+        player,
+        amount,
+        vec![pay(arena_proto::PaymentMethod::Cash, amount, None)],
+    )
+}
+
+fn collection_order(f: &Fixture) -> String {
+    table(f, Table::Orders)
+        .iter()
+        .rev()
+        .find(|o| text(o, "kind") == "credit_collect")
+        .map(|o| text(o, "id"))
+        .unwrap()
+}
+
+async fn owing(f: &Fixture, player: &str, spends: &[(i64, i64)]) -> Vec<String> {
+    let mut orders = Vec::new();
+    for (rate, minutes) in spends {
+        let (order, rev) = billed_for(f, player, *rate, *minutes).await;
+        let amount = int(&row_of(f, Table::Orders, &order), "total_minor");
+        end(f, settle_on_credit(&order, rev, amount, false))
+            .await
+            .unwrap();
+        orders.push(order);
+    }
+    orders
+}
+
+#[tokio::test]
+async fn collecting_part_of_the_tab_clears_the_oldest_spends_first() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    let spends = owing(&f, &p, &[(12_000, 60), (12_000, 30)]).await;
+    assert_eq!(owed(&f, &p), 18_000);
+    let a = end(&f, collect_cash(&p, 15_000)).await.unwrap();
+    let tables: Vec<_> = a.changes.iter().map(|c| c.tbl.as_str()).collect();
+    assert!(tables.contains(&"credit_balances") && tables.contains(&"payments"));
+    assert_eq!(owed(&f, &p), 3_000);
+    let order = collection_order(&f);
+    let o = row_of(&f, Table::Orders, &order);
+    assert_eq!(text(&o, "status"), "settled");
+    assert_eq!(int(&o, "total_minor"), 15_000);
+    let txn = table(&f, Table::WalletTxns)
+        .into_iter()
+        .find(|t| text(t, "order_id") == order)
+        .unwrap();
+    assert_eq!(
+        (text(&txn, "reason"), int(&txn, "delta_minor")),
+        ("credit".to_owned(), -15_000)
+    );
+    let summary = reopen(&f).credit_collection(&order).unwrap().unwrap();
+    assert_eq!(summary.amount_minor, 15_000);
+    assert_eq!(summary.outstanding_after_minor, 3_000);
+    let cleared: Vec<_> = summary
+        .cleared
+        .iter()
+        .map(|c| (c.order_id.clone(), c.spend_minor, c.cleared_minor))
+        .collect();
+    assert_eq!(
+        cleared,
+        [
+            (spends[0].clone(), 12_000, 12_000),
+            (spends[1].clone(), 6_000, 3_000)
+        ]
+    );
+    end(&f, collect_cash(&p, 3_000)).await.unwrap();
+    assert_eq!(owed(&f, &p), 0);
+    let second = reopen(&f)
+        .credit_collection(&collection_order(&f))
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.cleared.len(), 1);
+    assert_eq!(
+        (
+            second.cleared[0].cleared_minor,
+            second.outstanding_after_minor
+        ),
+        (3_000, 0)
+    );
+    assert!(reopen(&f).credit_collection(&spends[0]).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_collection_can_be_paid_from_the_wallet_and_by_upi() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    topped_up(&f, &p, 5_000).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    end(
+        &f,
+        collect_intent(
+            &p,
+            9_000,
+            vec![
+                pay(arena_proto::PaymentMethod::Wallet, 4_000, None),
+                pay(arena_proto::PaymentMethod::Upi, 5_000, Some("1234")),
+            ],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(owed(&f, &p), 3_000);
+    assert_eq!(balance(&f, &p), 1_000);
+    let order = collection_order(&f);
+    let methods: Vec<_> = table(&f, Table::Payments)
+        .iter()
+        .filter(|x| text(x, "order_id") == order)
+        .map(|x| text(x, "method"))
+        .collect();
+    assert_eq!(methods, ["wallet", "upi"]);
+    let shown = reopen(&f).wallet_txns(&p).unwrap();
+    assert!(shown.iter().all(|t| t.reason != "credit"));
+    assert_eq!(shown[0].delta_minor, -4_000);
+}
+
+#[tokio::test]
+async fn a_bad_collection_is_refused_and_writes_nothing() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    let plain = player(&f, "ben", "+919876543211").await;
+    topped_up(&f, &p, 500).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    let before = reopen(&f).changes().unwrap().len();
+    let cash = |amount| pay(arena_proto::PaymentMethod::Cash, amount, None);
+    let cases = [
+        (
+            collect_cash(&p, 12_001),
+            ErrorCode::ValidationFailed,
+            Some("amount_minor"),
+        ),
+        (
+            collect_cash(&p, 0),
+            ErrorCode::ValidationFailed,
+            Some("amount_minor"),
+        ),
+        (
+            collect_intent(&p, 5_000, vec![cash(4_000)]),
+            ErrorCode::PaymentShort,
+            Some("payments"),
+        ),
+        (
+            collect_intent(&p, 5_000, vec![]),
+            ErrorCode::ValidationFailed,
+            Some("payments"),
+        ),
+        (
+            collect_intent(
+                &p,
+                5_000,
+                vec![pay(arena_proto::PaymentMethod::Credit, 5_000, None)],
+            ),
+            ErrorCode::ValidationFailed,
+            Some("payments[0].method"),
+        ),
+        (
+            collect_intent(
+                &p,
+                5_000,
+                vec![pay(arena_proto::PaymentMethod::Wallet, 5_000, None)],
+            ),
+            ErrorCode::InsufficientBalance,
+            Some("payments[0].amount_minor"),
+        ),
+        (
+            collect_intent(
+                &p,
+                5_000,
+                vec![pay(arena_proto::PaymentMethod::Upi, 5_000, None)],
+            ),
+            ErrorCode::ReferenceRequired,
+            Some("payments[0].reference"),
+        ),
+        (
+            collect_cash(&plain, 100),
+            ErrorCode::NotFound,
+            Some("player_id"),
+        ),
+    ];
+    for (i, code, field) in cases {
+        assert_eq!(refusal(end(&f, i).await), (code, field.map(str::to_owned)));
+    }
+    let mut with_rev = collect_cash(&p, 100);
+    with_rev.base_rev = Some(1);
+    assert_eq!(
+        refusal(end(&f, with_rev).await).0,
+        ErrorCode::ValidationFailed
+    );
+    nothing_changed(&f, before);
+    assert_eq!(owed(&f, &p), 12_000);
+}
+
+#[tokio::test]
+async fn collecting_needs_the_collect_permission() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    let kitchen = staff(&f, "kit", ROLE_KITCHEN).await;
+    let counter = staff(&f, "cnt", ROLE_COUNTER).await;
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, with_actor(collect_cash(&p, 100), kitchen)).await).0,
+        ErrorCode::PermissionDenied
+    );
+    nothing_changed(&f, before);
+    end(&f, with_actor(collect_cash(&p, 100), counter))
+        .await
+        .unwrap();
+    assert_eq!(owed(&f, &p), 11_900);
+}
+
+#[tokio::test]
+async fn undoing_a_collection_restores_outstanding_and_the_wallet() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    topped_up(&f, &p, 5_000).await;
+    let spends = owing(&f, &p, &[(12_000, 60)]).await;
+    end(
+        &f,
+        collect_intent(
+            &p,
+            7_000,
+            vec![
+                pay(arena_proto::PaymentMethod::Wallet, 2_000, None),
+                pay(arena_proto::PaymentMethod::Cash, 5_000, None),
+            ],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!((owed(&f, &p), balance(&f, &p)), (5_000, 3_000));
+    let order = collection_order(&f);
+    let rev = rev_of(&f, Table::Orders, &order);
+    let a = end(&f, collect_revert_intent(&order, Some(rev)))
+        .await
+        .unwrap();
+    assert!(a.changes.iter().any(|c| c.tbl == "credit_balances"));
+    assert_eq!((owed(&f, &p), balance(&f, &p)), (12_000, 5_000));
+    assert!(
+        table(&f, Table::Orders)
+            .iter()
+            .all(|o| text(o, "kind") != "credit_collect")
+    );
+    assert!(
+        table(&f, Table::WalletTxns)
+            .iter()
+            .all(|t| text(t, "order_id") != order)
+    );
+    assert!(
+        table(&f, Table::Payments)
+            .iter()
+            .all(|x| text(x, "order_id") != order)
+    );
+    end(&f, collect_cash(&p, 12_000)).await.unwrap();
+    let again = reopen(&f)
+        .credit_collection(&collection_order(&f))
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.cleared.len(), 1);
+    assert_eq!(again.cleared[0].order_id, spends[0]);
+    assert_eq!(again.outstanding_after_minor, 0);
+}
+
+#[tokio::test]
+async fn a_collection_undo_is_refused_late_by_other_staff_or_for_a_settle() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    let spends = owing(&f, &p, &[(12_000, 60)]).await;
+    end(&f, collect_cash(&p, 4_000)).await.unwrap();
+    let order = collection_order(&f);
+    let rev = rev_of(&f, Table::Orders, &order);
+    let counter = staff(&f, "cnt", ROLE_COUNTER).await;
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                with_actor(collect_revert_intent(&order, Some(rev)), counter)
+            )
+            .await
+        )
+        .0,
+        ErrorCode::UndoNotAllowed
+    );
+    assert_eq!(
+        refusal(end(&f, collect_revert_intent(&order, Some(rev + 1))).await).0,
+        ErrorCode::Stale
+    );
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                collect_revert_intent(&spends[0], Some(rev_of(&f, Table::Orders, &spends[0])))
+            )
+            .await
+        )
+        .0,
+        ErrorCode::ValidationFailed
+    );
+    assert_eq!(
+        refusal(end(&f, collect_revert_intent("NOPE", Some(1))).await).0,
+        ErrorCode::NotFound
+    );
+    f.clock.advance(8_001);
+    assert_eq!(
+        refusal(end(&f, collect_revert_intent(&order, Some(rev))).await).0,
+        ErrorCode::UndoNotAllowed
+    );
+    nothing_changed(&f, before);
+    assert_eq!(owed(&f, &p), 8_000);
+}
+
+#[tokio::test]
+async fn a_credit_settle_cannot_be_undone_once_its_credit_was_collected() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    let (order, rev) = billed_for(&f, &p, 12_000, 60).await;
+    end(&f, settle_on_credit(&order, rev, 12_000, false))
+        .await
+        .unwrap();
+    end(&f, collect_cash(&p, 12_000)).await.unwrap();
+    let settled_rev = rev_of(&f, Table::Orders, &order);
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent(&order, Some(settled_rev))).await).0,
+        ErrorCode::UndoNotAllowed
+    );
+}

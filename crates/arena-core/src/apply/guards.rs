@@ -180,7 +180,9 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionAssign(_)
             | Target::WalletTopup(_)
             | Target::WalletTopupReverted(_)
-            | Target::CreditSetLimit(_),
+            | Target::CreditSetLimit(_)
+            | Target::CreditCollect(_)
+            | Target::CreditCollectReverted(_),
             _,
         ) => Ok(()),
     }
@@ -243,6 +245,10 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
         Target::CreditSetLimit(_) => Ok(()),
+        Target::CreditCollect(_) => Ok(()),
+        Target::CreditCollectReverted(t) => {
+            super::credit_collect::base_rev_collect_reverted(intent, t)
+        }
         Target::Player(t) => players::base_rev(intent, t),
         Target::Device(row) => devices::base_rev(intent, row.as_ref()),
         Target::RegisterEdit(t) => devices::base_rev_edit(intent, t),

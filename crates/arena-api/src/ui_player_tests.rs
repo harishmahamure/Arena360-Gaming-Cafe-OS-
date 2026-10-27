@@ -721,3 +721,69 @@ async fn a_manager_enables_credit_and_the_wallet_route_shows_it() {
     assert_eq!(shown["credit"]["reminder_days"], json!([3, 7, 14]));
     assert_eq!(shown["credit"]["paused"], false);
 }
+
+fn collect_body(hub: &Hub, player: &str, amount: i64) -> Value {
+    json!({"intent": {
+        "intent_id": ulid::Ulid::generate().to_string(),
+        "kind": "credit.collect",
+        "idempotency_key": ulid::Ulid::generate().to_string(),
+        "issued_at": hub.clock.now_ms(),
+        "actor": {"kind": "staff", "id": "x"},
+        "payload": {
+            "kind": "credit.collect",
+            "player_id": player,
+            "amount_minor": amount,
+            "payments": [{"method": "cash", "amount_minor": amount}],
+        },
+    }})
+}
+
+#[tokio::test]
+async fn counter_staff_may_collect_but_only_what_is_owed() {
+    let hub = hub().await;
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let manager = token_for(&hub, "manager", "m-pass").await;
+    let (_, reply) = create(
+        &hub,
+        &counter,
+        body(form("Asha_9", "+91 98765 43210"), None),
+    )
+    .await;
+    let player = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let (status, none) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&counter),
+        Some(collect_body(&hub, &player, 100)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{none}");
+    assert_eq!(none["code"], "NOT_FOUND");
+
+    let (status, ok) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&manager),
+        Some(credit_body(&hub, &player, 50_000)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+
+    let (status, over) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&counter),
+        Some(collect_body(&hub, &player, 100)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{over}");
+    assert_eq!(over["code"], "VALIDATION_FAILED");
+    assert_eq!(over["field"], "amount_minor");
+}

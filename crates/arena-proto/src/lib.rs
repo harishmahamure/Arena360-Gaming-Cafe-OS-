@@ -182,9 +182,10 @@ pub use process::{
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
     BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,
-    CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, CreditSetLimit, CreditView, DEFAULT_REMINDER_DAYS,
-    EndOutcome, PAUSE_NOTE_MAX, PauseReason, PaymentMethod, PaymentRow, SessionAssignPlayer,
-    SessionEnd, SessionEndReverted, SessionListRow, SessionListState, SessionListView, SessionMode,
+    CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, ClearedSpend, CreditCollect, CreditCollectReverted,
+    CreditCollection, CreditSetLimit, CreditView, DEFAULT_REMINDER_DAYS, EndOutcome,
+    PAUSE_NOTE_MAX, PauseReason, PaymentMethod, PaymentRow, SessionAssignPlayer, SessionEnd,
+    SessionEndReverted, SessionListRow, SessionListState, SessionListView, SessionMode,
     SessionPause, SessionResume, SessionScreen, SessionSettle, SessionSettleReverted, SessionStart,
     SessionStartedEvent, SettleOutcome, SnapshotBill, SnapshotSession, UNDO_WINDOW_MS,
     UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup,

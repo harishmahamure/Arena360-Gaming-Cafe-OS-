@@ -153,13 +153,17 @@ pub enum IntentKind {
     WalletTopupReverted,
     #[serde(rename = "credit.set_limit")]
     CreditSetLimit,
+    #[serde(rename = "credit.collect")]
+    CreditCollect,
+    #[serde(rename = "credit.collect.reverted")]
+    CreditCollectReverted,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 49] = [
+    pub const ALL: [IntentKind; 51] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -209,6 +213,8 @@ impl IntentKind {
         Self::WalletTopupReverted,
         Self::SessionAssignPlayer,
         Self::CreditSetLimit,
+        Self::CreditCollect,
+        Self::CreditCollectReverted,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -262,6 +268,8 @@ impl IntentKind {
             Self::WalletTopup => "wallet.topup",
             Self::WalletTopupReverted => "wallet.topup.reverted",
             Self::CreditSetLimit => "credit.set_limit",
+            Self::CreditCollect => "credit.collect",
+            Self::CreditCollectReverted => "credit.collect.reverted",
             Self::SessionAssignPlayer => "session.assign_player",
         }
     }
@@ -318,6 +326,8 @@ impl IntentKind {
             | Self::WalletTopup
             | Self::WalletTopupReverted
             | Self::CreditSetLimit
+            | Self::CreditCollect
+            | Self::CreditCollectReverted
             | Self::SessionAssignPlayer => IntentCategory::Session,
         }
     }
@@ -374,6 +384,9 @@ impl IntentKind {
                 Requirement::Perm(Permission::WalletTopup)
             }
             Self::CreditSetLimit => Requirement::Perm(Permission::CreditManage),
+            Self::CreditCollect | Self::CreditCollectReverted => {
+                Requirement::Perm(Permission::CreditCollect)
+            }
         }
     }
 
@@ -445,6 +458,8 @@ impl IntentKind {
             | Self::WalletTopup
             | Self::WalletTopupReverted
             | Self::CreditSetLimit
+            | Self::CreditCollect
+            | Self::CreditCollectReverted
             | Self::SessionAssignPlayer => None,
         }
     }
@@ -903,6 +918,10 @@ pub enum IntentPayload {
     WalletTopupReverted(crate::WalletTopupReverted),
     #[serde(rename = "credit.set_limit")]
     CreditSetLimit(crate::CreditSetLimit),
+    #[serde(rename = "credit.collect")]
+    CreditCollect(crate::CreditCollect),
+    #[serde(rename = "credit.collect.reverted")]
+    CreditCollectReverted(crate::CreditCollectReverted),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
 }
@@ -958,6 +977,8 @@ impl IntentPayload {
             Self::WalletTopup(_) => IntentKind::WalletTopup,
             Self::WalletTopupReverted(_) => IntentKind::WalletTopupReverted,
             Self::CreditSetLimit(_) => IntentKind::CreditSetLimit,
+            Self::CreditCollect(_) => IntentKind::CreditCollect,
+            Self::CreditCollectReverted(_) => IntentKind::CreditCollectReverted,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
         }
     }
@@ -1036,7 +1057,6 @@ mod tests {
     /// Permissions no intent requires yet: views, ops and the modules later stories build.
     const USED_BY_LATER_STORIES: &[Permission] = &[
         Permission::PlayerView,
-        Permission::CreditCollect,
         Permission::SessionExtend,
         Permission::SessionTransfer,
         Permission::SessionForceEnd,
@@ -1211,6 +1231,9 @@ mod tests {
                     Requirement::Perm(Permission::WalletTopup)
                 }
                 "credit.set_limit" => Requirement::Perm(Permission::CreditManage),
+                "credit.collect" | "credit.collect.reverted" => {
+                    Requirement::Perm(Permission::CreditCollect)
+                }
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
                     Requirement::Device

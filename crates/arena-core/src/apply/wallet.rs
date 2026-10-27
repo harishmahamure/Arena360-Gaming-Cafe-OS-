@@ -92,6 +92,7 @@ pub(super) fn mutate_topup(
     insert_topup_order(
         tx,
         &NewTopupOrder {
+            kind: "topup",
             id: &order_id,
             player_id: &t.player_id,
             total_minor: t.amount_minor,

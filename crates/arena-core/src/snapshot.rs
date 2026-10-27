@@ -486,6 +486,16 @@ impl SnapshotReader {
             .wallet_balance(player_id)
     }
 
+    pub fn credit_collection(
+        &self,
+        order_id: &str,
+    ) -> Result<Option<arena_proto::CreditCollection>, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?
+            .credit_collection(order_id)
+    }
+
     pub fn ending(&self, session_id: &str) -> Result<Option<arena_store::Ending>, AppError> {
         let store = self
             .reader

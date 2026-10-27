@@ -271,6 +271,44 @@ pub struct CreditView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditCollect {
+    pub player_id: String,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    pub payments: Vec<PaymentRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditCollectReverted {
+    pub order_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ClearedSpend {
+    pub order_id: String,
+    #[ts(type = "number")]
+    pub at: i64,
+    #[ts(type = "number")]
+    pub spend_minor: i64,
+    #[ts(type = "number")]
+    pub cleared_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditCollection {
+    pub player_id: String,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    pub cleared: Vec<ClearedSpend>,
+    #[ts(type = "number")]
+    pub outstanding_after_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
 pub struct WalletTopup {
     pub player_id: String,
     #[ts(type = "number")]
@@ -330,6 +368,9 @@ pub struct SettleOutcome {
     #[ts(type = "number")]
     pub total_minor: i64,
     pub irreversible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub collection: Option<CreditCollection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -352,6 +393,9 @@ pub struct EndOutcome {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct BillSettledEvent {
     pub order_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub collection: Option<CreditCollection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

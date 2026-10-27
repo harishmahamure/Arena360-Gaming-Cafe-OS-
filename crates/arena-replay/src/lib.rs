@@ -690,6 +690,70 @@ mod tests {
                     .await
                     .unwrap();
             }
+            let guest_session = guest.changes[0].row_id.clone();
+            let guest_end = writer
+                .submit_intent(submit(
+                    IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                        session_id: guest_session,
+                    }),
+                    Some(2),
+                ))
+                .await
+                .unwrap();
+            let guest_order = guest_end
+                .changes
+                .iter()
+                .find(|c| c.tbl == "orders")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                        order_id: guest_order,
+                        credit_override: None,
+                        payments: vec![arena_proto::PaymentRow {
+                            method: arena_proto::PaymentMethod::Credit,
+                            amount_minor: 6_000,
+                            reference: None,
+                        }],
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
+            let collect = |amount: i64| {
+                submit(
+                    IntentPayload::CreditCollect(arena_proto::CreditCollect {
+                        player_id: player_id.clone(),
+                        amount_minor: amount,
+                        payments: vec![arena_proto::PaymentRow {
+                            method: arena_proto::PaymentMethod::Cash,
+                            amount_minor: amount,
+                            reference: None,
+                        }],
+                    }),
+                    None,
+                )
+            };
+            writer.submit_intent(collect(2_500)).await.unwrap();
+            let second = writer.submit_intent(collect(1_000)).await.unwrap();
+            let collection = second
+                .changes
+                .iter()
+                .find(|c| c.tbl == "orders")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::CreditCollectReverted(arena_proto::CreditCollectReverted {
+                        order_id: collection,
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

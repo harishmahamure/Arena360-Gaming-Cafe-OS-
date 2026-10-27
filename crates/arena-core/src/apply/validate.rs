@@ -216,6 +216,16 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::CreditSetLimit(t) => super::credit::validate_set_limit(intent, c, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::CreditCollect(c) => match target {
+            Target::CreditCollect(t) => super::credit_collect::validate_collect(intent, c, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::CreditCollectReverted(_) => match target {
+            Target::CreditCollectReverted(t) => {
+                super::credit_collect::validate_collect_reverted(intent, t)
+            }
+            _ => Err(internal_target()),
+        },
         IntentPayload::StockIn(u) => match target {
             Target::Stock(t) => stock::validate_in(u, t),
             _ => Err(internal_target()),

@@ -52,4 +52,6 @@ export type IntentKind =
   | "wallet.topup"
   | "wallet.topup.reverted"
   | "credit.set_limit"
+  | "credit.collect"
+  | "credit.collect.reverted"
   | "session.assign_player";

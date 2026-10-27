@@ -83,7 +83,7 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
     activity.runOnUiThread {
       val host = webView.parent as? ViewGroup ?: return@runOnUiThread
       val density = activity.resources.displayMetrics.density
-      val view = banner ?: newBanner().also { banner = it }
+      val view = banner ?: newBanner().also { banner = it; if (paused) it.pause() }
       val params =
         FrameLayout.LayoutParams(
             (r.width * density).toInt(),
@@ -131,7 +131,8 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
     paused = false
     banner?.let {
       it.resume()
-      requestBanner(it)
+      // A hidden banner (its strip is gone) waits for the next placement instead.
+      if (it.visibility == View.VISIBLE) requestBanner(it)
     }
   }
 

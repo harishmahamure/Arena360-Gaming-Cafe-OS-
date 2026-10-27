@@ -427,3 +427,8 @@
 - The phone More sheet, lock screen and full-height tile sheet now end at the slot, so the bottom bar stays visible (inert) beneath them instead of being covered.
 - The strip is drawn on the sign-in screen and the unreachable state of a Free Android Hub, not on the pairing or device-check screens (the gate is off there).
 - The bottom-bar items were 1px taller than the bar, which let the page scroll 1px; they are now 63px (`min-height: calc(var(--space-9) - 1px)`).
+
+## Deferred from: code review of Story 4.11
+
+- Layout test gaps: no case for the Undo dock, the phone picking card, the sign-in gate strip or the wide tile-sheet `--ad-shrink` height; `ArenaAds` pause/resume logic has no JVM unit test (extract the paused/requested state when a toolchain exists).
+- The native `AdView` is not covered by `inert`, so a locked Hub's banner can still be tapped; `onPause` also fires for multi-window and system dialogs (consider `onStop`); a failed banner load is not retried until the width changes; the lock overlay on the phone sign-in gate stops 64px above the slot (`--ad-reserved` counts a bottom bar that gate does not draw).

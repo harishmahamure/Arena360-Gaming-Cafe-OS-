@@ -2,7 +2,7 @@
 title: 'Story 4.11: An always-visible banner in a permanent slot that nothing covers'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'

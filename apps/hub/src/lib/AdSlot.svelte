@@ -18,7 +18,12 @@
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         const r = el.getBoundingClientRect();
-        if (r.width < 1 || r.height < 1) return;
+        if (r.width < 1 || r.height < 1) {
+          // The strip collapsed: the native banner must not stay over whatever took its place.
+          if (last) ads.banner.hide();
+          last = "";
+          return;
+        }
         const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
         const key = JSON.stringify(rect);
         if (key === last) return;
@@ -30,6 +35,8 @@
     resize.observe(el);
     window.addEventListener("resize", place);
     window.addEventListener("orientationchange", place);
+    // The document itself scrolling moves the strip against the (fixed) native banner.
+    window.addEventListener("scroll", place, { passive: true });
     window.visualViewport?.addEventListener("resize", place);
     window.visualViewport?.addEventListener("scroll", place);
     place();
@@ -38,6 +45,7 @@
       resize.disconnect();
       window.removeEventListener("resize", place);
       window.removeEventListener("orientationchange", place);
+      window.removeEventListener("scroll", place);
       window.visualViewport?.removeEventListener("resize", place);
       window.visualViewport?.removeEventListener("scroll", place);
       // The strip moved to another layout (or the gate went off, which destroys the banner).

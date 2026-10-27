@@ -862,7 +862,8 @@
   .toast {
     position: fixed;
     right: var(--space-4);
-    bottom: var(--space-4);
+    /* Above the ad-banner slot, which nothing draws over (--ad-reserved is 0 without ads). */
+    bottom: calc(var(--space-4) + var(--ad-reserved));
     z-index: 10;
     margin: 0;
     padding: var(--space-3) var(--space-4);

@@ -80,7 +80,7 @@ development_status:
   3-13-settle-bar-and-payment-split-at-the-counter: done
   3-14-undo-for-end-and-settle: done
   3-15-pause-and-resume-a-session-with-a-reason: done
-  3-16-wallet-top-up-and-paying-from-the-wallet: review
+  3-16-wallet-top-up-and-paying-from-the-wallet: done
   3-17-convert-a-guest-to-a-profile-including-at-settle-and-list-se: backlog
   3-18-enable-credit-for-a-player-and-settle-the-remainder-on-credi: backlog
   3-19-collect-credit-with-partial-payments-and-undo: backlog

@@ -2,7 +2,7 @@
 title: 'Story 3.16: Wallet Top-up and Paying from the Wallet'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'cfd2631'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -72,6 +72,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review 2026-10-27: no blocking findings. Deferred (non-blocking): pre-0030 backfill untested; top-up undo deletes the ledger row.
 
 ## Verification
 

@@ -41,8 +41,29 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
         return admin_exit::permission(tx, intent);
     }
     match &intent.elevated_by {
-        Some(e) => elevation(tx, intent, e),
-        None => rbac::check(tx, intent),
+        Some(e) => elevation(tx, intent, e)?,
+        None => rbac::check(tx, intent)?,
+    }
+    creating_player(tx, intent)
+}
+
+/// A conversion that also creates the profile needs `player.manage` on top of the kind's
+/// requirement: the actor's own, or the elevating manager's.
+fn creating_player(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    let IntentPayload::SessionAssignPlayer(a) = &intent.payload else {
+        return Ok(());
+    };
+    if a.create.is_none() || intent.actor.kind == ActorKind::Owner {
+        return Ok(());
+    }
+    let holder = intent
+        .elevated_by
+        .as_ref()
+        .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+    if rbac::staff_allows(tx, holder, arena_proto::Permission::PlayerManage)? {
+        Ok(())
+    } else {
+        Err(rbac::denied())
     }
 }
 
@@ -135,6 +156,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionSettleReverted(_)
             | Target::SessionPause(_)
             | Target::SessionResume(_)
+            | Target::SessionAssign(_)
             | Target::WalletTopup(_)
             | Target::WalletTopupReverted(_),
             _,
@@ -195,6 +217,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionSettleReverted(t) => super::session::base_rev_settle_reverted(intent, t),
         Target::SessionPause(t) => super::session::base_rev_pause(intent, t, "session.pause"),
         Target::SessionResume(t) => super::session::base_rev_pause(intent, t, "session.resume"),
+        Target::SessionAssign(t) => super::session::base_rev_assign(intent, t),
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
         Target::Player(t) => players::base_rev(intent, t),

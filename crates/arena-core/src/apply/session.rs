@@ -1,18 +1,18 @@
 use arena_proto::{
-    AppError, CARD_REFERENCE_MAX, ErrorCode, Intent, PaymentMethod, PaymentRow, SessionEnd,
-    SessionEndReverted, SessionMode, SessionPause, SessionResume, SessionSettle,
-    SessionSettleReverted, SessionStart, UNDO_WINDOW_MS,
+    AppError, CARD_REFERENCE_MAX, ErrorCode, Intent, PaymentMethod, PaymentRow,
+    SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionMode, SessionPause, SessionResume,
+    SessionSettle, SessionSettleReverted, SessionStart, UNDO_WINDOW_MS,
 };
 use arena_store::{
     ChangeOp, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment, NewSession,
     NewWalletTxn, OrderRow, RateRow, RowKey, SegmentRow, StoreTx, Table, adjust_wallet,
-    close_segments, delete_row, device_has_live_session, effect_recorded, end_session,
-    find_active_rate, find_device_meta, find_order, find_order_for_session, find_player,
-    find_session, find_wallet, fold_pause, forward_intent_id, insert_order, insert_order_line,
-    insert_payment, insert_segment, insert_session, insert_wallet_txn, list_order_line_ids,
-    list_order_wallet_txns, list_payment_ids, list_segments, next_guest_no, pause_session,
-    read_row, reopen_order, reopen_segments, reopen_session, resume_session, set_device_state,
-    settle_order,
+    assign_order_player, assign_session_player, close_segments, delete_row,
+    device_has_live_session, effect_recorded, end_session, find_active_rate, find_device_meta,
+    find_order, find_order_for_session, find_player, find_session, find_wallet, fold_pause,
+    forward_intent_id, insert_order, insert_order_line, insert_payment, insert_segment,
+    insert_session, insert_wallet_txn, list_order_line_ids, list_order_wallet_txns,
+    list_payment_ids, list_segments, next_guest_no, pause_session, read_row, reopen_order,
+    reopen_segments, reopen_session, resume_session, set_device_state, settle_order,
 };
 
 use super::mutate::Written;
@@ -989,5 +989,102 @@ pub(super) fn mutate_settle_reverted(
         op: ChangeOp::Update,
         before: None,
     });
+    Ok(written)
+}
+
+#[derive(Default)]
+pub(crate) struct AssignTarget {
+    session: Option<LiveSession>,
+    order: Option<OrderRow>,
+    player: bool,
+    create: Option<super::players::PlayerTarget>,
+}
+
+pub(super) fn load_assign(
+    tx: &StoreTx<'_>,
+    a: &SessionAssignPlayer,
+) -> Result<AssignTarget, AppError> {
+    let Some(session) = find_session(tx, &a.session_id)? else {
+        return Ok(AssignTarget::default());
+    };
+    Ok(AssignTarget {
+        order: find_order_for_session(tx, &session.id)?,
+        player: find_player(tx, &a.player_id)?.is_some(),
+        create: a
+            .create
+            .as_ref()
+            .map(|c| super::players::load_create(tx, c))
+            .transpose()?,
+        session: Some(session),
+    })
+}
+
+pub(super) fn base_rev_assign(intent: &Intent, t: &AssignTarget) -> Result<(), AppError> {
+    let Some(s) = &t.session else {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "session_id",
+            "no such session",
+        ));
+    };
+    check_rev(intent, s.rev, "session.assign_player")
+}
+
+pub(super) fn validate_assign(a: &SessionAssignPlayer, t: &AssignTarget) -> Result<(), AppError> {
+    let Some(s) = &t.session else {
+        return Err(invalid("session_id", "no such session"));
+    };
+    if s.player_id.is_some() {
+        return Err(invalid("session_id", "this session already has a player"));
+    }
+    if t.order.as_ref().is_some_and(|o| o.status != "open") {
+        return Err(invalid("session_id", "this bill is already settled"));
+    }
+    match (&a.create, &t.create) {
+        (Some(c), Some(target)) => {
+            if c.player_id != a.player_id {
+                return Err(invalid("player_id", "the new player does not match"));
+            }
+            super::players::validate(c, target)
+        }
+        (None, _) if !t.player => Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "player_id",
+            "no such player",
+        )),
+        _ => Ok(()),
+    }
+}
+
+pub(super) fn mutate_assign(
+    tx: &StoreTx<'_>,
+    a: &SessionAssignPlayer,
+    t: &AssignTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let Some(s) = &t.session else {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "an assignment validated without its target",
+        ));
+    };
+    let mut written = match &a.create {
+        Some(c) => super::players::mutate(tx, c, now_ms)?,
+        None => Vec::new(),
+    };
+    assign_session_player(tx, &s.id, &a.player_id)?;
+    written.push(Written {
+        key: RowKey::Sessions { id: s.id.clone() },
+        op: ChangeOp::Update,
+        before: None,
+    });
+    if let Some(o) = &t.order {
+        assign_order_player(tx, &o.id, &a.player_id)?;
+        written.push(Written {
+            key: RowKey::Orders { id: o.id.clone() },
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
     Ok(written)
 }

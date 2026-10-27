@@ -200,6 +200,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionResume(t) => super::session::validate_resume(t),
             _ => Err(internal_target()),
         },
+        IntentPayload::SessionAssignPlayer(a) => match target {
+            Target::SessionAssign(t) => super::session::validate_assign(a, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::WalletTopup(p) => match target {
             Target::WalletTopup(t) => super::wallet::validate_topup(intent, p, t),
             _ => Err(internal_target()),

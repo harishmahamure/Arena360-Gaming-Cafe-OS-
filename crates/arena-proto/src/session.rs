@@ -121,6 +121,82 @@ pub struct SessionSettleReverted {
     pub order_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionAssignPlayer {
+    pub session_id: String,
+    pub player_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub create: Option<crate::PlayerCreate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UiSessionConvertRequest {
+    pub session_id: String,
+    #[ts(type = "number")]
+    pub base_rev: i64,
+    pub form: crate::PlayerForm,
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub elevation_ticket: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum SessionListState {
+    Running,
+    Unpaid,
+    Settled,
+}
+
+impl SessionListState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Unpaid => "unpaid",
+            Self::Settled => "settled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionListRow {
+    pub id: String,
+    pub device_id: String,
+    pub device: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub username: Option<String>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub guest_no: Option<i64>,
+    pub mode: String,
+    #[ts(type = "number")]
+    pub started_at: i64,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub ended_at: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub bill_minor: Option<i64>,
+    pub state: SessionListState,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub order_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionListView {
+    pub business_day: String,
+    pub sessions: Vec<SessionListRow>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -282,6 +358,12 @@ pub struct SnapshotBill {
     #[serde(default)]
     #[ts(optional, type = "number | null")]
     pub wallet_minor: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub session_rev: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub guest: Option<bool>,
     pub lines: Vec<BillLine>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,

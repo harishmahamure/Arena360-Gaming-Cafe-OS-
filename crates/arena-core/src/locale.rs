@@ -273,6 +273,18 @@ pub fn stamp(tx: &StoreTx<'_>, now_ms: i64) -> Result<Option<(String, String)>, 
     }))
 }
 
+/// The business day in effect at `now_ms` (`None` before the branch exists).
+pub fn current_business_day(
+    store: &arena_store::Store,
+    now_ms: i64,
+) -> Result<Option<String>, AppError> {
+    let Some(branch) = store.branch_locale()? else {
+        return Ok(None);
+    };
+    let rows = locale_rows(&branch, &store.settings()?);
+    Ok(Some(resolve(&rows, now_ms).0.to_string()))
+}
+
 /// The locale block of the Hub snapshot at `now_ms`: what is in effect now, and each tz,
 /// day-start or financial-year change still waiting for its business day.
 pub fn snapshot_locale(rows: &[LocaleSetting], now_ms: i64) -> SnapshotLocale {

@@ -31,15 +31,17 @@ fn invalid(field: &str, message: &str) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
 }
 
+pub(super) fn load_create(tx: &StoreTx<'_>, c: &PlayerCreate) -> Result<PlayerTarget, AppError> {
+    Ok(PlayerTarget {
+        username_taken: username_taken(tx, &c.username)?,
+        phone_holder: phone_holder(tx, &c.phone_lookup)?,
+        existing: None,
+    })
+}
+
 pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<PlayerTarget, AppError> {
     let id = match p {
-        IntentPayload::PlayerCreate(c) => {
-            return Ok(PlayerTarget {
-                username_taken: username_taken(tx, &c.username)?,
-                phone_holder: phone_holder(tx, &c.phone_lookup)?,
-                existing: None,
-            });
-        }
+        IntentPayload::PlayerCreate(c) => return load_create(tx, c),
         IntentPayload::PlayerUpdate(u) => &u.player_id,
         IntentPayload::PlayerPasswordReset(r) => &r.player_id,
         _ => return Ok(PlayerTarget::default()),

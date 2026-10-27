@@ -527,7 +527,7 @@ mod tests {
             let started = writer
                 .submit_intent(submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
-                        device_id: kiosk,
+                        device_id: kiosk.clone(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: Some(player_id.clone()),
                     }),
@@ -649,6 +649,28 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::WalletTopupReverted(arena_proto::WalletTopupReverted {
                         order_id: topup_order,
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
+            let guest = writer
+                .submit_intent(submit(
+                    IntentPayload::SessionStart(arena_proto::SessionStart {
+                        device_id: kiosk,
+                        mode: arena_proto::SessionMode::Postpaid,
+                        player_id: None,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::SessionAssignPlayer(arena_proto::SessionAssignPlayer {
+                        session_id: guest.changes[0].row_id.clone(),
+                        player_id: player_id.clone(),
+                        create: None,
                     }),
                     Some(1),
                 ))

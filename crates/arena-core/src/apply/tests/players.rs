@@ -21,7 +21,7 @@ pub(super) fn form(username: &str, phone: &str) -> PlayerForm {
     }
 }
 
-fn create(f: &PlayerForm) -> (String, IntentPayload) {
+pub(super) fn create(f: &PlayerForm) -> (String, IntentPayload) {
     let id = ulid::Ulid::generate().to_string();
     let sealed = seal(&KEK, f, &id, "$argon2id$stub".into()).unwrap();
     (id, IntentPayload::PlayerCreate(sealed))

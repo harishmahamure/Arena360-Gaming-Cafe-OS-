@@ -2074,3 +2074,234 @@ async fn a_wallet_never_goes_negative_when_two_bills_race_for_the_same_balance()
     assert_eq!(balance(&f, &p), 0);
     assert_eq!(ledger_sum(&f, &p), 0);
 }
+
+fn assign_intent(
+    session: &str,
+    player: &str,
+    create: Option<arena_proto::PlayerCreate>,
+    rev: Option<i64>,
+) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::SessionAssignPlayer(arena_proto::SessionAssignPlayer {
+            session_id: session.into(),
+            player_id: player.into(),
+            create,
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+fn new_profile(username: &str, phone: &str) -> (String, arena_proto::PlayerCreate) {
+    match super::players::create(&form(username, phone)) {
+        (id, IntentPayload::PlayerCreate(c)) => (id, c),
+        _ => unreachable!(),
+    }
+}
+
+fn session_row(f: &Fixture, id: &str) -> Row {
+    row_of(f, Table::Sessions, id)
+}
+
+#[tokio::test]
+async fn converting_a_running_guest_creates_the_profile_and_keeps_the_guest_number() {
+    let f = bootstrapped().await;
+    let (id, _) = running(&f, 6_000).await;
+    let before = session_row(&f, &id);
+    assert_eq!(before["player_id"], RowValue::Null);
+    let guest = int(&before, "guest_no");
+    let (player, create) = new_profile("asha", "+919876543210");
+    let applied = end(
+        &f,
+        assign_intent(&id, &player, Some(create), Some(int(&before, "rev"))),
+    )
+    .await
+    .unwrap();
+    let tables: Vec<_> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+    assert!(tables.contains(&"players") && tables.contains(&"wallets"));
+    assert!(tables.contains(&"consents") && tables.contains(&"sessions"));
+    let after = session_row(&f, &id);
+    assert_eq!(text(&after, "player_id"), player);
+    assert_eq!(int(&after, "guest_no"), guest);
+    assert_eq!(int(&after, "rev"), int(&before, "rev") + 1);
+    assert_eq!(balance(&f, &player), 0);
+}
+
+#[tokio::test]
+async fn converting_an_unpaid_guest_moves_the_bill_to_the_player() {
+    let f = bootstrapped().await;
+    let (id, _) = running(&f, 6_000).await;
+    f.clock.advance(60 * 60_000);
+    let s = session_row(&f, &id);
+    end(&f, end_intent(&id, Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let order = table(&f, Table::Orders).pop().unwrap();
+    assert_eq!(order["player_id"], RowValue::Null);
+    let (player, create) = new_profile("asha", "+919876543210");
+    let rev = rev_of(&f, Table::Sessions, &id);
+    let applied = end(&f, assign_intent(&id, &player, Some(create), Some(rev)))
+        .await
+        .unwrap();
+    assert!(applied.changes.iter().any(|c| c.tbl == "orders"));
+    let after = row_of(&f, Table::Orders, &text(&order, "id"));
+    assert_eq!(text(&after, "player_id"), player);
+    assert_eq!(int(&after, "rev"), int(&order, "rev") + 1);
+    topped_up(&f, &player, 6_000).await;
+    end(
+        &f,
+        settle_intent(
+            &text(&order, "id"),
+            Some(int(&after, "rev")),
+            vec![pay(arena_proto::PaymentMethod::Wallet, 6_000, None)],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(balance(&f, &player), 0);
+}
+
+#[tokio::test]
+async fn linking_to_an_existing_player_attaches_the_session_and_its_bill() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let (id, _) = running(&f, 6_000).await;
+    f.clock.advance(30 * 60_000);
+    let s = session_row(&f, &id);
+    end(&f, end_intent(&id, Some(int(&s, "rev"))))
+        .await
+        .unwrap();
+    let rev = rev_of(&f, Table::Sessions, &id);
+    let applied = end(&f, assign_intent(&id, &p, None, Some(rev)))
+        .await
+        .unwrap();
+    assert!(applied.changes.iter().all(|c| c.tbl != "players"));
+    assert_eq!(text(&session_row(&f, &id), "player_id"), p);
+    assert_eq!(
+        text(&table(&f, Table::Orders).pop().unwrap(), "player_id"),
+        p
+    );
+}
+
+#[tokio::test]
+async fn a_conversion_is_refused_for_each_bad_case_and_writes_nothing() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let (id, _) = running(&f, 6_000).await;
+    let rev = rev_of(&f, Table::Sessions, &id);
+    let changes = || reopen(&f).changes().unwrap().len();
+    let before = changes();
+    let (other, create) = new_profile("ben", "+919876543211");
+    assert_eq!(
+        refusal(end(&f, assign_intent(&id, &other, Some(create.clone()), None)).await).0,
+        ErrorCode::ValidationFailed
+    );
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                assign_intent(&id, &other, Some(create.clone()), Some(rev + 5))
+            )
+            .await
+        )
+        .0,
+        ErrorCode::Stale
+    );
+    assert_eq!(
+        refusal(end(&f, assign_intent("nope", &p, None, Some(rev))).await).0,
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        refusal(
+            end(
+                &f,
+                assign_intent(&id, "01HZZZZZZZZZZZZZZZZZZZZZZZ", None, Some(rev))
+            )
+            .await
+        )
+        .0,
+        ErrorCode::NotFound
+    );
+    let (_, taken) = new_profile("asha2", "+919876543210");
+    let (taken_id, taken) = (taken.player_id.clone(), taken);
+    assert_eq!(
+        refusal(end(&f, assign_intent(&id, &taken_id, Some(taken), Some(rev))).await).0,
+        ErrorCode::PhoneTaken
+    );
+    assert_eq!(
+        refusal(end(&f, assign_intent(&id, &p, Some(create), Some(rev))).await).0,
+        ErrorCode::ValidationFailed
+    );
+    nothing_changed(&f, before);
+    end(&f, assign_intent(&id, &p, None, Some(rev)))
+        .await
+        .unwrap();
+    let rev = rev_of(&f, Table::Sessions, &id);
+    assert_eq!(
+        refusal(end(&f, assign_intent(&id, &p, None, Some(rev))).await).0,
+        ErrorCode::ValidationFailed
+    );
+}
+
+#[tokio::test]
+async fn a_settled_guest_bill_cannot_be_converted() {
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let (order, order_rev) = billed_guest(&f).await;
+    end(
+        &f,
+        settle_intent(
+            &order,
+            Some(order_rev),
+            vec![pay(arena_proto::PaymentMethod::Cash, 5_000, None)],
+        ),
+    )
+    .await
+    .unwrap();
+    let s = sessions(&f).pop().unwrap();
+    let rev = int(&s, "rev");
+    assert_eq!(
+        refusal(end(&f, assign_intent(&text(&s, "id"), &p, None, Some(rev))).await).0,
+        ErrorCode::ValidationFailed
+    );
+}
+
+#[tokio::test]
+async fn creating_a_profile_in_a_conversion_needs_player_manage() {
+    use arena_proto::{PermEffect, RolePerm, RoleUpsert};
+    let f = bootstrapped().await;
+    let (id, _) = running(&f, 6_000).await;
+    submit(
+        &f,
+        owner(),
+        IntentPayload::RoleUpsert(RoleUpsert {
+            role_id: None,
+            name: "Greeter".into(),
+            perms: vec![RolePerm {
+                permission: "session.start".into(),
+                effect: PermEffect::Allow,
+            }],
+        }),
+    )
+    .await
+    .unwrap();
+    let greeter = super::stock::staff(&f, "greet", "Greeter").await;
+    let rev = rev_of(&f, Table::Sessions, &id);
+    let (player, create) = new_profile("asha", "+919876543210");
+    let denied = with_actor(
+        assign_intent(&id, &player, Some(create), Some(rev)),
+        greeter.clone(),
+    );
+    assert_eq!(
+        end(&f, denied).await.unwrap_err().code,
+        ErrorCode::PermissionDenied
+    );
+    let existing = self::player(&f, "ben", "+919876543211").await;
+    end(
+        &f,
+        with_actor(assign_intent(&id, &existing, None, Some(rev)), greeter),
+    )
+    .await
+    .unwrap();
+}

@@ -125,6 +125,8 @@ fn bills(
                 order_id: Option<String>,
                 order_rev: Option<i64>,
                 wallet_minor: Option<i64>,
+                session_rev: Option<i64>,
+                guest: Option<bool>,
                 lines: Vec<arena_proto::BillLine>| {
         let subtotal_minor = lines.iter().map(|l| l.amount_minor).sum();
         arena_proto::SnapshotBill {
@@ -133,6 +135,8 @@ fn bills(
             order_id,
             order_rev,
             wallet_minor,
+            session_rev,
+            guest,
             lines,
             subtotal_minor,
             paid_minor: 0,
@@ -146,9 +150,19 @@ fn bills(
             .cloned()
             .collect();
         let lines = crate::billing::bill(&own, s.rounding_min, s.minimum_min, s.paused_at, now_ms);
-        bill(s.id.clone(), s.device_id.clone(), None, None, None, lines)
+        bill(
+            s.id.clone(),
+            s.device_id.clone(),
+            None,
+            None,
+            None,
+            Some(s.rev),
+            s.player_id.is_none().then_some(true),
+            lines,
+        )
     });
     let open = orders.into_iter().map(|o| {
+        let guest = o.player_id.is_none() && o.session_id.is_some();
         let lines = order_lines
             .iter()
             .filter(|l| l.order_id == o.id)
@@ -166,7 +180,9 @@ fn bills(
             o.device_id,
             Some(o.id),
             Some(o.rev),
-            o.player_id.map(|_| o.wallet_minor.unwrap_or(0)),
+            o.player_id.as_ref().map(|_| o.wallet_minor.unwrap_or(0)),
+            o.session_rev,
+            guest.then_some(true),
             lines,
         )
     });
@@ -409,6 +425,43 @@ impl SnapshotReader {
             player_id: player_id.to_owned(),
             balance_minor: store.wallet_balance(player_id)?,
             txns,
+        })
+    }
+
+    pub fn sessions_today(&self, now_ms: i64) -> Result<arena_proto::SessionListView, AppError> {
+        use arena_proto::SessionListState as S;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let business_day = crate::locale::current_business_day(&store, now_ms)?.unwrap_or_default();
+        let sessions = store
+            .sessions_for_day(&business_day)?
+            .into_iter()
+            .map(|s| {
+                let state = match (s.state.as_str(), s.order_status.as_deref()) {
+                    ("active" | "paused" | "grace", _) => S::Running,
+                    (_, Some("open")) => S::Unpaid,
+                    _ => S::Settled,
+                };
+                arena_proto::SessionListRow {
+                    id: s.id,
+                    device_id: s.device_id,
+                    device: s.device,
+                    username: s.username,
+                    guest_no: s.guest_no,
+                    mode: s.mode,
+                    started_at: s.started_at,
+                    ended_at: s.ended_at,
+                    bill_minor: s.total_minor,
+                    state,
+                    order_id: s.order_id.filter(|_| state == S::Unpaid),
+                }
+            })
+            .collect();
+        Ok(arena_proto::SessionListView {
+            business_day,
+            sessions,
         })
     }
 

@@ -126,7 +126,7 @@
     ...unassigned,
   ]);
   let focusId: string | null = $state(null);
-  let activeId: string | null = $state(null);
+  let activeId: string | null = $state(page.url.searchParams.get("device"));
   const active = $derived(snapshot?.devices.find((d) => d.device_id === activeId));
   $effect(() => {
     if (activeId && !active) activeId = null;

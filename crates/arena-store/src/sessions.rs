@@ -99,6 +99,7 @@ pub struct OpenOrder {
     pub wallet_minor: Option<i64>,
     pub rev: i64,
     pub session_id: Option<String>,
+    pub session_rev: Option<i64>,
     pub device_id: String,
     pub subtotal_minor: i64,
 }
@@ -389,8 +390,9 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
     let mut stmt = conn
         .prepare(
             "SELECT o.id, o.session_id, COALESCE(o.device_id, ''), o.subtotal_minor, o.rev, o.player_id,
-                    w.balance_minor
+                    w.balance_minor, s.rev
              FROM orders o LEFT JOIN wallets w ON w.player_id = o.player_id
+                  LEFT JOIN sessions s ON s.id = o.session_id
              WHERE o.status = 'open' ORDER BY o.created_at, o.id",
         )
         .map_err(db_error)?;
@@ -403,6 +405,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             rev: r.get(4)?,
             player_id: r.get(5)?,
             wallet_minor: r.get(6)?,
+            session_rev: r.get(7)?,
         })
     })
     .map_err(db_error)?
@@ -701,4 +704,83 @@ pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settl
     let forward = forward_intent_id(conn, "orders", order_id, intent_kind)?;
     settlement.irreversible = effect_recorded(conn, forward.as_deref(), order_id)?;
     Ok(Some(settlement))
+}
+
+pub fn assign_session_player(
+    conn: &Connection,
+    session_id: &str,
+    player_id: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET player_id = ?2 WHERE id = ?1",
+        params![session_id, player_id],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn assign_order_player(
+    conn: &Connection,
+    order_id: &str,
+    player_id: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET player_id = ?2 WHERE id = ?1",
+        params![order_id, player_id],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionListing {
+    pub id: String,
+    pub device_id: String,
+    pub device: String,
+    pub username: Option<String>,
+    pub guest_no: Option<i64>,
+    pub mode: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub state: String,
+    pub order_id: Option<String>,
+    pub order_status: Option<String>,
+    pub total_minor: Option<i64>,
+}
+
+pub fn list_sessions_for_day(
+    conn: &Connection,
+    business_day: &str,
+) -> Result<Vec<SessionListing>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.id, s.device_id, COALESCE(m.label, s.device_id), p.username, s.guest_no,
+                    s.mode, s.started_at, s.ended_at, s.state, o.id, o.status, o.total_minor
+             FROM sessions s
+             LEFT JOIN players p ON p.player_id = s.player_id
+             LEFT JOIN devices_meta m ON m.device_id = s.device_id
+             LEFT JOIN orders o ON o.session_id = s.id
+             WHERE s.business_day = ?1
+             ORDER BY s.started_at DESC, s.id DESC",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([business_day], |r| {
+        Ok(SessionListing {
+            id: r.get(0)?,
+            device_id: r.get(1)?,
+            device: r.get(2)?,
+            username: r.get(3)?,
+            guest_no: r.get(4)?,
+            mode: r.get(5)?,
+            started_at: r.get(6)?,
+            ended_at: r.get(7)?,
+            state: r.get(8)?,
+            order_id: r.get(9)?,
+            order_status: r.get(10)?,
+            total_minor: r.get(11)?,
+        })
+    })
+    .map_err(db_error)?
+    .collect::<Result<_, _>>()
+    .map_err(db_error)
 }

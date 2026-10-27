@@ -17,6 +17,7 @@ import type {
   PlayerProfile,
   WalletView,
   ReasonCode,
+  SessionListView,
   SessionStaff,
   SettingEntry,
   SignInOk,
@@ -33,6 +34,8 @@ export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
 export const PLAYERS_URL = "http://127.0.0.1:7409/ui/players";
 export const PLAYER_PROFILE_URL = "http://127.0.0.1:7409/ui/players/profile";
 export const PLAYER_WALLET_URL = "http://127.0.0.1:7409/ui/players/wallet";
+export const SESSIONS_URL = "http://127.0.0.1:7409/ui/sessions";
+export const SESSION_CONVERT_URL = "http://127.0.0.1:7409/ui/sessions/convert";
 export const PLAYER_UPDATE_URL = "http://127.0.0.1:7409/ui/players/update";
 export const PLAYER_PASSWORD_URL = "http://127.0.0.1:7409/ui/players/password";
 export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
@@ -414,6 +417,25 @@ export const loadPlayer = (id: string) =>
   getJson<PlayerProfile>(withQuery(PLAYER_PROFILE_URL, { id }));
 
 export const loadWallet = (id: string) => getJson<WalletView>(withQuery(PLAYER_WALLET_URL, { id }));
+
+export const loadSessions = () => getJson<SessionListView>(SESSIONS_URL);
+
+export async function convertSession(
+  sessionId: string,
+  baseRev: number,
+  form: PlayerForm,
+  elevationTicket?: string,
+): Promise<IntentOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  return postIntent(SESSION_CONVERT_URL, token, TIMEOUT_MS * 3, {
+    session_id: sessionId,
+    base_rev: baseRev,
+    form,
+    idempotency_key: newIdempotencyKey(),
+    elevation_ticket: elevationTicket,
+  });
+}
 
 async function postIntent(
   url: string,

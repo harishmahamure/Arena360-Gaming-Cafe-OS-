@@ -50,4 +50,5 @@ export type IntentKind =
   | "session.pause"
   | "session.resume"
   | "wallet.topup"
-  | "wallet.topup.reverted";
+  | "wallet.topup.reverted"
+  | "session.assign_player";

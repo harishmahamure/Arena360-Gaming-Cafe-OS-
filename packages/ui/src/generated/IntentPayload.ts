@@ -29,6 +29,7 @@ import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
 import type { RateUpsert } from "./RateUpsert";
 import type { RoleUpsert } from "./RoleUpsert";
+import type { SessionAssignPlayer } from "./SessionAssignPlayer";
 import type { SessionEnd } from "./SessionEnd";
 import type { SessionEndReverted } from "./SessionEndReverted";
 import type { SessionPause } from "./SessionPause";
@@ -95,4 +96,5 @@ export type IntentPayload =
   | ({ kind: "session.pause" } & SessionPause)
   | ({ kind: "session.resume" } & SessionResume)
   | ({ kind: "wallet.topup" } & WalletTopup)
-  | ({ kind: "wallet.topup.reverted" } & WalletTopupReverted);
+  | ({ kind: "wallet.topup.reverted" } & WalletTopupReverted)
+  | ({ kind: "session.assign_player" } & SessionAssignPlayer);

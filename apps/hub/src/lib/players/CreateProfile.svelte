@@ -4,16 +4,26 @@
   import { messages, type MessageKey } from "@arena/ui/messages";
   import { onMount, tick, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
-  import { SESSION_DEPENDENCY, createPlayer, elevate, hasPermission } from "../auth";
+  import {
+    SESSION_DEPENDENCY,
+    createPlayer,
+    elevate,
+    hasPermission,
+    type IntentOutcome,
+  } from "../auth";
 
   let {
     staff,
     phone = "+91",
+    save = createPlayer,
+    elevationKind = "player.create",
     oncreated,
     oncancel,
   }: {
     staff: SessionStaff | null;
     phone?: string;
+    save?: (form: PlayerForm, ticket?: string) => Promise<IntentOutcome>;
+    elevationKind?: "player.create" | "session.assign_player";
     oncreated: (username: string) => void;
     oncancel: () => void;
   } = $props();
@@ -96,7 +106,7 @@
     if (busy) return;
     busy = true;
     refusal = null;
-    const outcome = await createPlayer(build(), ticket).finally(() => (busy = false));
+    const outcome = await save(build(), ticket).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (outcome.kind === "applied") return oncreated(form.username.trim().toLowerCase());
     const err = outcome.kind === "error" ? outcome.error : null;
@@ -114,7 +124,12 @@
     if (err?.code === "VALIDATION_FAILED" && err.field && INVALID[err.field]) {
       return void (await showErrors({ [err.field]: INVALID[err.field] }));
     }
-    refusal = err?.code === "PERMISSION_DENIED" ? "hub.refusal.permission" : "hub.settings.failed";
+    refusal =
+      err?.code === "PERMISSION_DENIED"
+        ? "hub.refusal.permission"
+        : err?.code === "STALE" || (err?.code === "VALIDATION_FAILED" && err.field === "session_id")
+          ? "hub.session.convert.refused"
+          : "hub.settings.failed";
   }
 
   async function submit(event: SubmitEvent) {
@@ -133,7 +148,7 @@
   }
 
   async function approve(pin: string) {
-    const outcome = await elevate([{ intent_kind: "player.create" }], pin);
+    const outcome = await elevate([{ intent_kind: elevationKind }], pin);
     if (outcome.kind === "signed_out") {
       await invalidate(SESSION_DEPENDENCY);
       return { ok: false, message: "ui.pin.unreachable" } as const;

@@ -10,7 +10,7 @@
     oncreate,
   }: {
     onpick: (hit: PlayerHit) => void;
-    onguest: () => void;
+    onguest?: () => void;
     oncreate?: (phone: string) => void;
   } = $props();
 
@@ -67,7 +67,9 @@
         oninput={() => void search()}
         {onkeydown}
       />
-      <Button label="hub.players.lookup.guest" variant="secondary" onclick={onguest} />
+      {#if onguest}
+        <Button label="hub.players.lookup.guest" variant="secondary" onclick={onguest} />
+      {/if}
     </div>
   </div>
   <div role="status">
@@ -85,7 +87,9 @@
             onclick={() => oncreate(digits.length === 10 ? `+91${digits}` : `+${digits}`)}
           />
         {/if}
-        <Button label="hub.players.lookup.guest" variant="secondary" onclick={onguest} />
+        {#if onguest}
+          <Button label="hub.players.lookup.guest" variant="secondary" onclick={onguest} />
+        {/if}
       </div>
     {/if}
   </div>

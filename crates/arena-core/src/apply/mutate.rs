@@ -290,6 +290,10 @@ pub(super) fn mutate(
             Target::SessionResume(t) => super::session::mutate_resume(tx, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionAssignPlayer(a) => match target {
+            Target::SessionAssign(t) => super::session::mutate_assign(tx, a, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::WalletTopup(p) => match target {
             Target::WalletTopup(t) => super::wallet::mutate_topup(tx, intent, p, t, now_ms),
             _ => Err(mismatch()),

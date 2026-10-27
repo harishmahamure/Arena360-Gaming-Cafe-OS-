@@ -24,6 +24,7 @@
   import { invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
   import { SESSION_DEPENDENCY, dropElevation, elevate, hasPermission } from "./auth";
+  import ConvertGuest from "./players/ConvertGuest.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
   import SettleBar from "./SettleBar.svelte";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
@@ -214,6 +215,13 @@
     }
   }
 
+  let convertedName: string | null = $state(null);
+
+  async function converted(name: string) {
+    convertedName = name;
+    await invalidate(SNAPSHOT_DEPENDENCY);
+  }
+
   const settled = $derived(
     cmd?.state === "done" && cmd.job.payload.kind === "session.settle" ? cmd.job.payload : null,
   );
@@ -295,6 +303,12 @@
     {/if}
   </dl>
 
+  {#if convertedName}
+    <p class="type-hub-label" role="status" data-testid="convert-done">
+      {t("hub.session.converted", { name: convertedName })}
+    </p>
+  {/if}
+
   <p class="result type-hub-label" role="status" data-testid="unlock-status">
     {#if cmd}
       {#if cmd.state === "failed"}<span aria-hidden="true">⚠</span>
@@ -325,7 +339,19 @@
   {/if}
 
   {#if unpaid && locale}
-    <SettleBar bind:this={settleBar} bill={unpaid} {locale} {busy} onsettle={settle} />
+    <SettleBar bind:this={settleBar} bill={unpaid} {locale} {busy} onsettle={settle}>
+      {#snippet extra()}
+        {#if unpaid.guest && unpaid.session_rev != null}
+          <ConvertGuest
+            sessionId={unpaid.session_id}
+            rev={unpaid.session_rev}
+            {staff}
+            {busy}
+            ondone={converted}
+          />
+        {/if}
+      {/snippet}
+    </SettleBar>
   {:else if settled && locale}
     <p class="type-hub-numeric" role="status" data-testid="settle-done">
       {t("hub.settle.settled", {
@@ -443,6 +469,15 @@
           disabledReason="hub.sheet.waiting"
           onclick={() => void go(endJob(session.id, session.rev))}
         />
+        {#if !session.player_id}
+          <ConvertGuest
+            sessionId={session.id}
+            rev={session.rev}
+            {staff}
+            {busy}
+            ondone={converted}
+          />
+        {/if}
       </div>
     {/if}
     <div class="section" role="group" aria-label={t("hub.sheet.screen")}>

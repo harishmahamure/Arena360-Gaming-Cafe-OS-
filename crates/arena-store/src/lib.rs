@@ -89,7 +89,10 @@ pub use sessions::{
     list_order_line_ids, list_payment_ids, list_segments, next_guest_no, reopen_order,
     reopen_segments, reopen_session, settle_order,
 };
-pub use sessions::{fold_pause, pause_session, resume_session};
+pub use sessions::{
+    SessionListing, assign_order_player, assign_session_player, fold_pause, list_sessions_for_day,
+    pause_session, resume_session,
+};
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
     find_role, find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
@@ -686,6 +689,13 @@ impl Store {
             return Ok(Vec::new());
         }
         list_live_sessions(&self.conn)
+    }
+
+    pub fn sessions_for_day(&self, business_day: &str) -> Result<Vec<SessionListing>, AppError> {
+        if !self.table_exists("sessions")? {
+            return Ok(Vec::new());
+        }
+        list_sessions_for_day(&self.conn, business_day)
     }
 
     pub fn live_segments(&self) -> Result<Vec<SegmentRow>, AppError> {

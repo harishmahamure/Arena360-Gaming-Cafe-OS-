@@ -1913,6 +1913,15 @@ async fn intent(
             "profiles are changed from the profile forms",
         )));
     }
+    if matches!(
+        &intent.payload,
+        arena_proto::IntentPayload::SessionAssignPlayer(a) if a.create.is_some()
+    ) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "a profile is created from the convert form",
+        )));
+    }
     if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) {
         return fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
@@ -2360,6 +2369,82 @@ async fn players(
     run_intent(&auth, &token, &me, intent, elevation_ticket).await
 }
 
+async fn session_convert(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let (token, me, request) = match player_write::<arena_proto::UiSessionConvertRequest>(
+        &auth,
+        &headers,
+        &body,
+        "the body must be {\"session_id\", \"base_rev\", \"form\": PlayerForm, \"idempotency_key\", \"elevation_ticket\"?}",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let arena_proto::UiSessionConvertRequest {
+        session_id,
+        base_rev,
+        form,
+        idempotency_key,
+        elevation_ticket,
+    } = request;
+    let kek = match player_kek(&auth) {
+        Ok(k) => k,
+        Err(e) => return fail(e),
+    };
+    if let Err(e) = require_manage(&me, &elevation_ticket, "creating a profile") {
+        return fail(e);
+    }
+    let now = auth.clock.now_ms();
+    if let Err(e) = form.check(&arena_core::players::utc_day(now)) {
+        return fail(ui_error(e));
+    }
+    let Ok(permit) = Arc::clone(&auth.pin_checks).acquire_owned().await else {
+        return fail(internal());
+    };
+    let player_id = ulid::Ulid::generate().to_string();
+    let id = player_id.clone();
+    let sealed = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let hash = arena_core::staff::hash_secret(&form.password)?;
+        arena_core::players::seal(&kek.kek()?, &form, &id, hash)
+    })
+    .await;
+    let create = match sealed {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => return fail(ui_error(e)),
+        Err(_) => return fail(internal()),
+    };
+    let intent = player_intent(
+        &me,
+        now,
+        idempotency_key,
+        Some(base_rev),
+        arena_proto::IntentPayload::SessionAssignPlayer(arena_proto::SessionAssignPlayer {
+            session_id,
+            player_id,
+            create: Some(create),
+        }),
+    );
+    run_intent(&auth, &token, &me, intent, elevation_ticket).await
+}
+
+async fn sessions_today(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
+    match tokio::task::spawn_blocking(move || reader.sessions_today(now)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 async fn player_update(
     State(auth): State<Arc<UiAuth>>,
     headers: HeaderMap,
@@ -2613,6 +2698,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/players", post(players).get(player_search))
         .route("/ui/players/profile", get(player_profile))
         .route("/ui/players/wallet", get(player_wallet))
+        .route("/ui/sessions", get(sessions_today))
+        .route("/ui/sessions/convert", post(session_convert))
         .route("/ui/players/update", post(player_update))
         .route("/ui/players/password", post(player_password))
         .route("/ui/settings", get(settings))
@@ -3554,6 +3641,185 @@ pub(crate) mod tests {
             arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
                 .unwrap();
         assert!(snapshot.bills.is_empty());
+    }
+
+    fn convert_body(session: &str, rev: i64, username: &str, phone: &str) -> Value {
+        json!({
+            "session_id": session,
+            "base_rev": rev,
+            "idempotency_key": ulid::Ulid::generate().to_string(),
+            "form": {
+                "username": username,
+                "password": "secret1",
+                "phone": phone,
+                "name": "Asha Rao",
+                "email": "",
+                "dob": "",
+                "notes": "",
+                "tags": [],
+                "consent": true,
+                "policy_version": "1",
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn converting_a_guest_creates_the_profile_and_the_sessions_list_follows() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (_, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        let session_id = reply["applied"]["changes"][0]["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        rx.recv().await.unwrap();
+        let (status, list) = call(&hub, "GET", "/ui/sessions", Some(&token), None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list["sessions"][0]["state"], "running");
+        assert_eq!(list["sessions"][0]["guest_no"], 1);
+        assert!(list["sessions"][0]["username"].is_null());
+
+        let raw = plain_body(
+            IntentPayload::SessionAssignPlayer(arena_proto::SessionAssignPlayer {
+                session_id: session_id.clone(),
+                player_id: ulid::Ulid::generate().to_string(),
+                create: Some(
+                    serde_json::from_value(json!({
+                        "player_id": "x", "username": "x", "password_hash": "x",
+                        "phone_lookup": "x", "name_enc": "x", "phone_enc": "x", "tags": [],
+                        "wrapped_key": "x", "consent": true, "policy_version": "1",
+                    }))
+                    .unwrap(),
+                ),
+            }),
+            Some(1),
+        );
+        let (status, refused) = call(&hub, "POST", "/ui/intent", Some(&token), Some(raw)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+
+        let (status, bad) = call(
+            &hub,
+            "POST",
+            "/ui/sessions/convert",
+            Some(&token),
+            Some(convert_body(&session_id, 9, "asha_9", "+91 98765 43210")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{bad}");
+        assert_eq!(bad["code"], "STALE");
+
+        let (status, ok) = call(
+            &hub,
+            "POST",
+            "/ui/sessions/convert",
+            Some(&token),
+            Some(convert_body(&session_id, 1, "asha_9", "+91 98765 43210")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{ok}");
+        let (_, list) = call(&hub, "GET", "/ui/sessions", Some(&token), None).await;
+        assert_eq!(list["sessions"][0]["username"], "asha_9");
+        assert_eq!(list["sessions"][0]["guest_no"], 1);
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        assert_eq!(snapshot.sessions[0].username.as_deref(), Some("asha_9"));
+
+        let (status, again) = call(
+            &hub,
+            "POST",
+            "/ui/sessions/convert",
+            Some(&token),
+            Some(convert_body(&session_id, 2, "ben_9", "+91 98765 43211")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{again}");
+        assert_eq!(again["code"], "VALIDATION_FAILED");
+
+        let end = plain_body(
+            IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: session_id.clone(),
+            }),
+            Some(2),
+        );
+        let (status, ended) = call(&hub, "POST", "/ui/intent", Some(&token), Some(end)).await;
+        assert_eq!(status, StatusCode::OK, "{ended}");
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        assert_eq!(snapshot.bills[0].wallet_minor, Some(0));
+    }
+
+    #[tokio::test]
+    async fn the_sessions_list_marks_unpaid_and_settled_bills_and_needs_a_session() {
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let (status, _) = call(&hub, "GET", "/ui/sessions", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (_, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        let session_id = reply["applied"]["changes"][0]["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        rx.recv().await.unwrap();
+        hub.clock.advance(60 * 60_000);
+        let end = plain_body(
+            IntentPayload::SessionEnd(arena_proto::SessionEnd {
+                session_id: session_id.clone(),
+            }),
+            Some(1),
+        );
+        let (_, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(end)).await;
+        let order = reply["applied"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["tbl"] == "orders")
+            .unwrap()["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (_, list) = call(&hub, "GET", "/ui/sessions", Some(&token), None).await;
+        let row = &list["sessions"][0];
+        assert_eq!(
+            (row["state"].as_str(), row["bill_minor"].as_i64()),
+            (Some("unpaid"), Some(12_000))
+        );
+        assert_eq!(row["order_id"], order.as_str());
+        let body = settle_body(
+            &order,
+            1,
+            json!([{"method": "cash", "amount_minor": 12000}]),
+        );
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, list) = call(&hub, "GET", "/ui/sessions", Some(&token), None).await;
+        assert_eq!(list["sessions"][0]["state"], "settled");
+        assert!(list["sessions"][0]["order_id"].is_null());
     }
 
     fn plain_body(payload: IntentPayload, rev: Option<i64>) -> Value {

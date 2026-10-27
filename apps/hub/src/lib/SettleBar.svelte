@@ -7,7 +7,7 @@
     SnapshotLocale,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
-  import { tick } from "svelte";
+  import { tick, type Snippet } from "svelte";
   import {
     amountText,
     methodsFor,
@@ -24,12 +24,14 @@
     busy,
     onsettle,
     title = "hub.settle.title",
+    extra,
   }: {
     bill: SnapshotBill;
     locale: SnapshotLocale;
     busy: boolean;
     onsettle: (payments: PaymentRow[]) => void;
     title?: MessageKey;
+    extra?: Snippet;
   } = $props();
 
   let root: HTMLElement | undefined = $state();
@@ -136,6 +138,8 @@
       >
     {/each}
   </div>
+
+  {@render extra?.()}
 
   {#if rows.length > 0}
     <div class="split" data-component="payment-split" data-testid="payment-split">

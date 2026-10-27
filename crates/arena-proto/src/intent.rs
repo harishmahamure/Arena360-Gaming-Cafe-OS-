@@ -151,11 +151,13 @@ pub enum IntentKind {
     WalletTopup,
     #[serde(rename = "wallet.topup.reverted")]
     WalletTopupReverted,
+    #[serde(rename = "session.assign_player")]
+    SessionAssignPlayer,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 47] = [
+    pub const ALL: [IntentKind; 48] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -203,6 +205,7 @@ impl IntentKind {
         Self::SessionResume,
         Self::WalletTopup,
         Self::WalletTopupReverted,
+        Self::SessionAssignPlayer,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -255,6 +258,7 @@ impl IntentKind {
             Self::SessionResume => "session.resume",
             Self::WalletTopup => "wallet.topup",
             Self::WalletTopupReverted => "wallet.topup.reverted",
+            Self::SessionAssignPlayer => "session.assign_player",
         }
     }
 
@@ -308,7 +312,8 @@ impl IntentKind {
             | Self::SessionPause
             | Self::SessionResume
             | Self::WalletTopup
-            | Self::WalletTopupReverted => IntentCategory::Session,
+            | Self::WalletTopupReverted
+            | Self::SessionAssignPlayer => IntentCategory::Session,
         }
     }
 
@@ -350,7 +355,9 @@ impl IntentKind {
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 Requirement::Perm(Permission::PlayerManage)
             }
-            Self::SessionStart => Requirement::Perm(Permission::SessionStart),
+            Self::SessionStart | Self::SessionAssignPlayer => {
+                Requirement::Perm(Permission::SessionStart)
+            }
             Self::SessionEnd | Self::SessionEndReverted => {
                 Requirement::Perm(Permission::SessionEnd)
             }
@@ -430,7 +437,8 @@ impl IntentKind {
             | Self::SessionPause
             | Self::SessionResume
             | Self::WalletTopup
-            | Self::WalletTopupReverted => None,
+            | Self::WalletTopupReverted
+            | Self::SessionAssignPlayer => None,
         }
     }
 
@@ -886,6 +894,8 @@ pub enum IntentPayload {
     WalletTopup(crate::WalletTopup),
     #[serde(rename = "wallet.topup.reverted")]
     WalletTopupReverted(crate::WalletTopupReverted),
+    #[serde(rename = "session.assign_player")]
+    SessionAssignPlayer(crate::SessionAssignPlayer),
 }
 
 impl IntentPayload {
@@ -938,6 +948,7 @@ impl IntentPayload {
             Self::SessionResume(_) => IntentKind::SessionResume,
             Self::WalletTopup(_) => IntentKind::WalletTopup,
             Self::WalletTopupReverted(_) => IntentKind::WalletTopupReverted,
+            Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
         }
     }
 }
@@ -1179,7 +1190,9 @@ mod tests {
                 "player.create" | "player.update" | "player.password_reset" => {
                     Requirement::Perm(Permission::PlayerManage)
                 }
-                "session.start" => Requirement::Perm(Permission::SessionStart),
+                "session.start" | "session.assign_player" => {
+                    Requirement::Perm(Permission::SessionStart)
+                }
                 "session.end" | "session.end.reverted" => Requirement::Perm(Permission::SessionEnd),
                 "session.settle" | "session.settle.reverted" => {
                     Requirement::Perm(Permission::PosSell)

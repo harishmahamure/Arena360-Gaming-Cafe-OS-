@@ -145,6 +145,12 @@ enum Op {
         reason: u8,
         stale: bool,
     },
+    /// Links a session (guest or not, running or ended) to an existing player, maybe stale.
+    SessionAssign {
+        slot: u8,
+        player: u8,
+        stale: bool,
+    },
     /// An End (or, with `settle`, a Settle) and then its `.reverted` twin, maybe late or stale.
     SessionUndo {
         slot: u8,
@@ -286,6 +292,9 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..3u8, prop::bool::weighted(0.3)).prop_map(|(slot, over)| Op::WalletPay { slot, over }),
         3 => (0..3u8, 0..4u8, prop::bool::weighted(0.25)).prop_map(|(slot, reason, stale)| {
             Op::SessionPause { slot, reason, stale }
+        }),
+        2 => (0..6u8, any::<u8>(), prop::bool::weighted(0.25)).prop_map(|(slot, player, stale)| {
+            Op::SessionAssign { slot, player, stale }
         }),
         3 => (0..3u8, any::<bool>(), prop::bool::weighted(0.25), prop::bool::weighted(0.25))
             .prop_map(|(slot, settle, late, stale)| Op::SessionUndo {
@@ -1371,6 +1380,54 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
+            }
+        }
+        Op::SessionAssign {
+            slot,
+            player,
+            stale,
+        } => {
+            let sessions = hub.reader.rows(Table::Sessions).unwrap();
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let (Some(session), Some(p)) = (
+                sessions.get(usize::from(*slot)),
+                players.get(usize::from(*player) % players.len().max(1)),
+            ) else {
+                return Ok(());
+            };
+            let (id, rev) = (text(session, "id"), int(session, "rev"));
+            let order = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .find(|o| o["session_id"] == arena_store::RowValue::Text(id.clone()));
+            let has_player = session["player_id"] != arena_store::RowValue::Null;
+            let settled = order.as_ref().is_some_and(|o| text(o, "status") != "open");
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::SessionAssignPlayer(arena_proto::SessionAssignPlayer {
+                    session_id: id.clone(),
+                    player_id: text(p, "player_id"),
+                    create: None,
+                }),
+                Some(if *stale { rev - 1 } else { rev }),
+            ));
+            if *stale {
+                prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("base_rev"))));
+                prop_assert_eq!(hub.change_count(), before);
+            } else if has_player || settled {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("session_id")))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(
+                    hub.change_count(),
+                    before + 1 + usize::from(order.is_some())
+                );
             }
         }
         Op::SessionPause {

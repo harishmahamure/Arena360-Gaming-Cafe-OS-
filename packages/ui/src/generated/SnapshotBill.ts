@@ -7,6 +7,8 @@ export type SnapshotBill = {
   order_id?: string | null;
   order_rev?: number | null;
   wallet_minor?: number | null;
+  session_rev?: number | null;
+  guest?: boolean;
   lines: Array<BillLine>;
   subtotal_minor: number;
   paid_minor: number;

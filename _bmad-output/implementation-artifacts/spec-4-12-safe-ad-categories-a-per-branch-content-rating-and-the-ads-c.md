@@ -2,7 +2,7 @@
 title: 'Story 4.12: Safe ad categories, a per-branch content rating and the ads consent view'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
@@ -75,3 +75,7 @@ deferred: []
 ## Verification Log
 
 Pass: cargo test (arena-proto, arena-store, arena-core, arena-api, arena-hub except dev_seed), clippy `-D warnings`, `cargo fmt --check`, `pnpm --filter @arena/hub check`, Hub Playwright (1165 passed, 60 skipped, 1 failed), `node --test scripts/check-ads.test.mjs`, `check:ads`, `check:strings`, `check:hex`, `check:layers`, `check:pins`, `check:protocol`, `check:secrets`, `check:contrast`, prettier. `check:generated` passes once the new generated file is committed. Failing on master too, not caused by this story: `arena-hub` `dev_seed` (2 tests) and Hub Playwright `players.spec.ts` `Ctrl+K from another screen` (flaky). `check-ads.mjs note --release` fails by design until a named person signs `AD-CATEGORIES.md`. Not run: everything Android (Gradle, `ArenaAds.kt`, the Kotlin unit test, the SDK's request configuration and `npa` extras on a device).
+
+## Review Log
+
+Code review (4 layers) fixed: a rating-only change now re-requests the banner and drops a preloaded or in-flight interstitial (Kotlin, after the SDK has the new rating); a `settings.changed` for the ads keys during a snapshot read triggers a follow-up read; `ads.configure` forgets a config the bridge rejected; saving consent keeps an unsaved rating choice. Deferred: `note --release` is not wired into CI (Story 4.16), release sign-off is not compared with the release version, more rating-save error-path tests. Kotlin changes were not built (no Android SDK).

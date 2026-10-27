@@ -51,6 +51,8 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
   private var paused = false
   private var interstitial: InterstitialAd? = null
   private var loadingInterstitial = false
+  /** Bumped when the config changes, so a load that began under the old one is discarded. */
+  private var interstitialGeneration = 0
 
   /**
    * Starts the SDK (once) off the main thread. Returns `{"debug":true|false}` at once: the dev
@@ -80,23 +82,30 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
   /**
    * The branch's rating or consent changed (`{"rating":"G"|"PG"|"T","personalised":bool}`). The
    * rating is the SDK's request configuration, so every request after this one (banner refreshes
-   * and interstitials too) carries it, with no restart. A changed consent re-requests the banner,
-   * because a refresh would reuse the request it was first loaded with.
+   * and interstitials too) carries it, with no restart. A changed rating or consent re-requests
+   * the banner (a refresh would reuse the request it was first loaded with) and drops a preloaded
+   * interstitial, so nothing loaded under the old rating or consent is shown after the change.
    */
   @JavascriptInterface
   fun configure(config: String?) {
     val next = AdsConfig.parse(config)
-    val consentChanged = next.personalised != this.config.personalised
+    val changed = next != this.config
     this.config = next
     if (!started.get()) return
-    worker.execute { MobileAds.setRequestConfiguration(requestConfiguration()) }
-    if (consentChanged) {
-      activity.runOnUiThread {
-        val view = banner ?: return@runOnUiThread
-        bannerRequested = false
-        if (view.visibility == View.VISIBLE) requestBanner(view)
-      }
+    worker.execute {
+      MobileAds.setRequestConfiguration(requestConfiguration())
+      // After the SDK has the new rating, so the re-request cannot go out with the old one.
+      if (changed) activity.runOnUiThread { reloadForConfig() }
     }
+  }
+
+  private fun reloadForConfig() {
+    interstitialGeneration++
+    interstitial = null
+    loadingInterstitial = false
+    val view = banner ?: return
+    bannerRequested = false
+    if (view.visibility == View.VISIBLE) requestBanner(view)
   }
 
   /** Every banner and interstitial request: non-personalised until the owner's consent is recorded. */
@@ -194,6 +203,7 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
     activity.runOnUiThread {
       if (interstitial != null || loadingInterstitial) return@runOnUiThread
       loadingInterstitial = true
+      val generation = interstitialGeneration
       emit(AdEvents.REQUESTED, AdEvents.INTERSTITIAL)
       InterstitialAd.load(
         activity,
@@ -201,12 +211,14 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
         adRequest(),
         object : InterstitialAdLoadCallback() {
           override fun onAdLoaded(ad: InterstitialAd) {
+            if (generation != interstitialGeneration) return
             loadingInterstitial = false
             interstitial = ad
             emit(AdEvents.LOADED, AdEvents.INTERSTITIAL)
           }
 
           override fun onAdFailedToLoad(error: LoadAdError) {
+            if (generation != interstitialGeneration) return
             loadingInterstitial = false
             interstitial = null
             emit(AdEvents.FAILED, AdEvents.INTERSTITIAL)

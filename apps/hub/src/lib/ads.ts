@@ -131,11 +131,13 @@ export class AdsClient {
     ) {
       return;
     }
+    const previous = this.#config;
     this.#config = config;
     try {
-      this.#bridge?.configure(JSON.stringify(this.#config));
+      this.#bridge?.configure(JSON.stringify(config));
     } catch {
-      // The plugin is gone with the page; the next start sends the config again.
+      // The plugin did not take it (or is gone with the page): forget it, so the next call sends it again.
+      this.#config = previous;
     }
   }
 

@@ -131,14 +131,14 @@
       if (outcome.kind === "applied") {
         pendingKey = null;
         status = { tone: "ok", message: "hub.settings.saved" };
-        await load();
+        await load(false, ratingChanged);
         return;
       }
       const code = outcome.kind === "error" ? outcome.error.code : null;
       if (code === "STALE") {
         pendingKey = null;
         status = { tone: "refusal", message: "hub.settings.branch.stale" };
-        await load(true);
+        await load(true, ratingChanged);
       } else if (code === "PERMISSION_DENIED") {
         pendingKey = null;
         status = { tone: "refusal", message: "hub.settings.branch.manager_only" };

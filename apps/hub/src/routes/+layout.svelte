@@ -195,7 +195,18 @@
       await invalidate(SNAPSHOT_DEPENDENCY);
     } finally {
       refreshing = false;
+      // An ads setting changed while this read was in flight: it may have missed the new value.
+      if (adsChangedDuringRefresh) {
+        adsChangedDuringRefresh = false;
+        void refresh();
+      }
     }
+  }
+
+  let adsChangedDuringRefresh = false;
+  function refreshForAds() {
+    if (refreshing) adsChangedDuringRefresh = true;
+    void refresh();
   }
 
   function scheduleRetry() {
@@ -343,7 +354,7 @@
           applySettingsChanged(e.locale, e.keys);
           setUiSettings(uiOf(e));
           // The rating and consent reach the ads plugin through the snapshot.
-          if (e.keys.some((k) => k === KEY_ADS_RATING || k === KEY_ADS_CONSENT)) void refresh();
+          if (e.keys.some((k) => k === KEY_ADS_RATING || k === KEY_ADS_CONSENT)) refreshForAds();
         },
         // Another window sharing this session locked or unlocked it.
         onSessionLocked: () => lockScreen(false),

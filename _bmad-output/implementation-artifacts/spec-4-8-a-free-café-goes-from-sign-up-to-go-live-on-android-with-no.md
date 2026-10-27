@@ -2,7 +2,7 @@
 title: 'Story 4.8: A Free café goes from sign-up to go-live on Android with no help'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:

@@ -14,4 +14,5 @@ export type SnapshotSession = {
   paused_total_ms: number;
   pause_reason?: PauseReason | null;
   pause_note?: string | null;
+  ends_at?: number | null;
 };

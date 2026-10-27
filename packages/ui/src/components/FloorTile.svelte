@@ -11,6 +11,7 @@
     state,
     label,
     time,
+    warning = false,
     secondary,
     group,
     alerts,
@@ -24,6 +25,7 @@
     state: Status;
     label?: MessageKey;
     time?: string;
+    warning?: boolean;
     secondary?: Snippet | string;
     group?: { name: string; colour: string };
     alerts?: number;
@@ -37,14 +39,22 @@
   const INNER = "button, input, a"; // i18n-ignore
   const unassigned = $derived(state === "unassigned");
   const accessibleName = $derived(
-    [name, t(label ?? STATUS_LABELS[state]), time].filter(Boolean).join(", "),
+    [name, t(label ?? STATUS_LABELS[state]), time, warning ? t("ui.floor_tile.time_warning") : ""]
+      .filter(Boolean)
+      .join(", "),
   );
   const activate = (e: Event) => {
     if (e.target === e.currentTarget) onactivate?.();
   };
 </script>
 
-<svelte:element this={tag} class="tile state-{state}" data-component="floor-tile" {...rest}>
+<svelte:element
+  this={tag}
+  class="tile state-{state}"
+  class:warning
+  data-component="floor-tile"
+  {...rest}
+>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div
     class="face"
@@ -63,7 +73,8 @@
       {#if alerts !== undefined}<AlertBadge count={alerts} />{/if}
     </div>
     <span class="time type-hub-numeric tabular-nums" aria-hidden={time ? undefined : "true"}
-      >{time ?? "—"}</span
+      >{#if warning}<span class="glyph" aria-hidden="true" data-testid="tile-time-warning">⚠</span
+        >{/if}{time ?? "—"}</span
     >
     <div class="bottom">
       <span class="secondary type-hub-label">
@@ -86,6 +97,15 @@
     color: var(--text);
     list-style: none;
     overflow: hidden;
+  }
+
+  .tile.warning {
+    border: 2px solid var(--warning);
+  }
+
+  .glyph {
+    margin-inline-end: var(--space-1);
+    color: var(--warning);
   }
 
   .tile.state-unassigned {

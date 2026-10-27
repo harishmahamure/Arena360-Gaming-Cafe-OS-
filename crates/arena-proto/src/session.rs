@@ -42,6 +42,15 @@ pub struct SessionEnd {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionExpire {
+    pub session_id: String,
+}
+
+/// Minutes before a session's end at which the Hub warns the kiosk, longest first.
+pub const SESSION_WARNING_MARKS_MIN: [u8; 3] = [10, 5, 1];
+
 pub const PAUSE_NOTE_MAX: usize = 140;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -520,6 +529,9 @@ pub struct SnapshotSession {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub pause_note: Option<String>,
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub ends_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

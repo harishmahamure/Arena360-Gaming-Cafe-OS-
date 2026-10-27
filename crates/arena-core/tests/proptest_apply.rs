@@ -174,6 +174,9 @@ enum Op {
     },
     /// The system check that pauses credit 15+ days overdue (a no-op is `STALE`).
     CreditAutoPause,
+    SessionExpire {
+        slot: u8,
+    },
     /// A Settle of an open bill wholly on credit, maybe with the manager override.
     CreditPay {
         slot: u8,
@@ -373,6 +376,7 @@ fn op() -> impl Strategy<Value = Op> {
                 late
             }),
         1 => Just(Op::CreditAutoPause),
+        2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8, prop::bool::weighted(0.5)).prop_map(|(slot, over_ride)| Op::CreditPay {
             slot,
             over_ride
@@ -1790,6 +1794,35 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     }
                 }
             }
+        }
+        Op::SessionExpire { slot } => {
+            let Some(session) = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .filter(|s| text(s, "state") == "active")
+                .nth(usize::from(*slot))
+            else {
+                return Ok(());
+            };
+            let before = hub.change_count();
+            let mut intent = hub.intent(
+                IntentPayload::SessionExpire(arena_proto::SessionExpire {
+                    session_id: text(&session, "id"),
+                }),
+                None,
+            );
+            intent.actor.kind = ActorKind::System;
+            let out = hub.submit_new(intent);
+            match session["ends_at"] {
+                RowValue::Null => prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("session_id")))
+                ),
+                _ => prop_assert_eq!(code(&out), Some((ErrorCode::Stale, None))),
+            }
+            prop_assert_eq!(hub.change_count(), before);
         }
         Op::CreditAutoPause => {
             let before = hub.change_count();

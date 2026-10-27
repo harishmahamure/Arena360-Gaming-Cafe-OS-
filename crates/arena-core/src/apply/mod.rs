@@ -47,6 +47,7 @@ mod rates;
 mod read_grants;
 pub(crate) mod seed_defaults;
 mod session;
+pub(crate) mod session_expire;
 mod settings_set;
 mod staff_credentials;
 mod staff_roles;
@@ -171,6 +172,7 @@ pub(crate) enum Target {
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
     CreditAutoPause(Box<credit_pause::PauseTarget>),
+    SessionExpire(Box<session_expire::ExpireTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -243,6 +245,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             credit_collect::load_collect_reverted(tx, r, now)?,
         )),
         P::CreditAutoPause(p) => Target::CreditAutoPause(Box::new(credit_pause::load(tx, p, now)?)),
+        P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

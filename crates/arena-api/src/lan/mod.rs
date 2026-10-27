@@ -133,6 +133,10 @@ impl Presence {
         })
     }
 
+    pub fn push_timer_event(&self, event: arena_core::TimerEvent) -> usize {
+        self.0.as_ref().map_or(0, |r| r.push_timer_event(event))
+    }
+
     pub fn push_session_started(
         &self,
         device_id: &str,

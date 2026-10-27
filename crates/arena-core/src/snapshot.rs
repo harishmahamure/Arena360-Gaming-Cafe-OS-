@@ -255,6 +255,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
                 .as_deref()
                 .and_then(arena_proto::PauseReason::parse),
             pause_note: s.pause_note,
+            ends_at: s.ends_at,
         })
         .collect();
     for g in &mut snapshot.groups {
@@ -407,6 +408,14 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         crate::session_screen::session_screens(&store, now_ms)
+    }
+
+    pub fn timed_sessions(&self, now_ms: i64) -> Result<Vec<crate::TimedSession>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::session_screen::timed_sessions(&store, now_ms)
     }
 
     pub fn settlement(&self, order_id: &str) -> Result<Option<arena_store::Settlement>, AppError> {

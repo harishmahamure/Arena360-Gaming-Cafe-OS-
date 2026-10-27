@@ -783,6 +783,7 @@ mod tests {
                 session: Some(arena_kiosk_core::ipc::PcSession {
                     device_name: "PC 1".into(),
                     elapsed_ms: 1_000,
+                    warning_min: None,
                 }),
             },
             at,

@@ -195,6 +195,7 @@ export type { SelectedHub } from "./SelectedHub";
 export type { SessionAssignPlayer } from "./SessionAssignPlayer";
 export type { SessionEnd } from "./SessionEnd";
 export type { SessionEndReverted } from "./SessionEndReverted";
+export type { SessionExpire } from "./SessionExpire";
 export type { SessionInfo } from "./SessionInfo";
 export type { SessionListRow } from "./SessionListRow";
 export type { SessionListState } from "./SessionListState";

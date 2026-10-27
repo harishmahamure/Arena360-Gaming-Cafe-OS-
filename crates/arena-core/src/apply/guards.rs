@@ -186,7 +186,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::CreditSetLimit(_)
             | Target::CreditCollect(_)
             | Target::CreditCollectReverted(_)
-            | Target::CreditAutoPause(_),
+            | Target::CreditAutoPause(_)
+            | Target::SessionExpire(_),
             _,
         ) => Ok(()),
     }
@@ -253,6 +254,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::CreditSetLimit(_) => Ok(()),
         Target::CreditCollect(_) => Ok(()),
         Target::CreditAutoPause(_) => Ok(()),
+        Target::SessionExpire(_) => Ok(()),
         Target::CreditCollectReverted(t) => {
             super::credit_collect::base_rev_collect_reverted(intent, t)
         }

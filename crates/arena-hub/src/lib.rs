@@ -393,6 +393,34 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             arena_tasks::TestSessionTask::new(w, Arc::clone(&snapshots), Arc::clone(&clock)).run(),
         )
     });
+    let timer_job = writer.clone().map(|w| {
+        let (events, mut forward) =
+            tokio::sync::broadcast::channel(arena_tasks::TIMER_EVENTS_DEPTH);
+        let presence = lan_hub.presence();
+        let relay = tokio::spawn(async move {
+            loop {
+                match forward.recv().await {
+                    Ok(event) => {
+                        presence.push_timer_event(event);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
+        (
+            tokio::spawn(
+                arena_tasks::SessionTimerTask::new(
+                    w,
+                    Arc::clone(&snapshots),
+                    Arc::clone(&clock),
+                    events,
+                )
+                .run(),
+            ),
+            relay,
+        )
+    });
     let pairer: Arc<dyn arena_core::HubPairer> = Arc::new(CloudPairer::new(
         cloud,
         writer.clone(),
@@ -523,6 +551,12 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
     if let Some(job) = test_session_job {
         job.abort();
         let _ = job.await;
+    }
+    if let Some((job, relay)) = timer_job {
+        job.abort();
+        let _ = job.await;
+        relay.abort();
+        let _ = relay.await;
     }
     let _ = mdns_stop_tx.send(());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), mdns_job).await;

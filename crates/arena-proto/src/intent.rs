@@ -167,13 +167,17 @@ pub enum IntentKind {
     /// (system only; the Hub submits it at business-day start and when a player is looked up).
     #[serde(rename = "credit.auto_pause")]
     CreditAutoPause,
+    /// Ends a timed session whose `ends_at` has passed (system only; the Hub's timer engine
+    /// submits it once per session).
+    #[serde(rename = "session.expire")]
+    SessionExpire,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 55] = [
+    pub const ALL: [IntentKind; 56] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -229,6 +233,7 @@ impl IntentKind {
         Self::CreditCollect,
         Self::CreditCollectReverted,
         Self::CreditAutoPause,
+        Self::SessionExpire,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -288,6 +293,7 @@ impl IntentKind {
             Self::CreditCollect => "credit.collect",
             Self::CreditCollectReverted => "credit.collect.reverted",
             Self::CreditAutoPause => "credit.auto_pause",
+            Self::SessionExpire => "session.expire",
             Self::SessionAssignPlayer => "session.assign_player",
         }
     }
@@ -351,6 +357,7 @@ impl IntentKind {
             | Self::CreditCollect
             | Self::CreditCollectReverted
             | Self::CreditAutoPause
+            | Self::SessionExpire
             | Self::SessionAssignPlayer => IntentCategory::Session,
         }
     }
@@ -378,7 +385,8 @@ impl IntentKind {
             Self::DeviceVersionReported
             | Self::LicenceApply
             | Self::StaffSetCredentials
-            | Self::CreditAutoPause => Requirement::System,
+            | Self::CreditAutoPause
+            | Self::SessionExpire => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
@@ -491,6 +499,7 @@ impl IntentKind {
             | Self::CreditCollect
             | Self::CreditCollectReverted
             | Self::CreditAutoPause
+            | Self::SessionExpire
             | Self::SessionAssignPlayer => None,
         }
     }
@@ -961,6 +970,8 @@ pub enum IntentPayload {
     CreditCollectReverted(crate::CreditCollectReverted),
     #[serde(rename = "credit.auto_pause")]
     CreditAutoPause(crate::CreditAutoPause),
+    #[serde(rename = "session.expire")]
+    SessionExpire(crate::SessionExpire),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
 }
@@ -1022,6 +1033,7 @@ impl IntentPayload {
             Self::CreditCollect(_) => IntentKind::CreditCollect,
             Self::CreditCollectReverted(_) => IntentKind::CreditCollectReverted,
             Self::CreditAutoPause(_) => IntentKind::CreditAutoPause,
+            Self::SessionExpire(_) => IntentKind::SessionExpire,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
         }
     }
@@ -1237,7 +1249,8 @@ mod tests {
                 | "device.version_reported"
                 | "licence.apply"
                 | "audit.read_granted"
-                | "credit.auto_pause" => Requirement::System,
+                | "credit.auto_pause"
+                | "session.expire" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }

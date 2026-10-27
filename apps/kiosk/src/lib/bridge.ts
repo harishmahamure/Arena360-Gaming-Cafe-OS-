@@ -223,7 +223,7 @@ export type PcScreen = {
   locked: boolean;
   reason: string | null;
   message: string | null;
-  session: { device_name: string; elapsed_ms: number } | null;
+  session: { device_name: string; elapsed_ms: number; warning_min: number | null } | null;
 };
 
 const screenOf = (v: unknown): PcScreen | null => {
@@ -231,10 +231,15 @@ const screenOf = (v: unknown): PcScreen | null => {
   const { locked, reason, message, session } = v as Record<string, unknown>;
   if (typeof locked !== "boolean") return null;
   if (message != null && typeof message !== "string") return null;
-  const s = session as { device_name?: unknown; elapsed_ms?: unknown } | null | undefined;
+  const s = session as
+    { device_name?: unknown; elapsed_ms?: unknown; warning_min?: unknown } | null | undefined;
   const live =
     s && typeof s.device_name === "string" && typeof s.elapsed_ms === "number"
-      ? { device_name: s.device_name, elapsed_ms: s.elapsed_ms }
+      ? {
+          device_name: s.device_name,
+          elapsed_ms: s.elapsed_ms,
+          warning_min: typeof s.warning_min === "number" ? s.warning_min : null,
+        }
       : null;
   return {
     locked,

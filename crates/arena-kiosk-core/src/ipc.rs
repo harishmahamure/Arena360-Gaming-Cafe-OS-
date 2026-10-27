@@ -82,6 +82,8 @@ impl std::fmt::Debug for SecretPin {
 pub struct PcSession {
     pub device_name: String,
     pub elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning_min: Option<u8>,
 }
 
 /// One IPC message.
@@ -367,6 +369,7 @@ mod tests {
             session: Some(PcSession {
                 device_name: "PC 1".into(),
                 elapsed_ms: 7,
+                warning_min: Some(5),
             }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);

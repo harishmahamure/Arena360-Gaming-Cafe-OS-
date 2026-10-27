@@ -335,6 +335,35 @@ impl Registry {
         self.push_paired(&msg, Some(device_id))
     }
 
+    pub(crate) fn push_timer_event(&self, event: arena_core::TimerEvent) -> usize {
+        match event {
+            arena_core::TimerEvent::Warning {
+                session_id,
+                device_id,
+                minutes_left,
+            } => {
+                let msg = event_frame(
+                    self.next_rid(),
+                    HubEvent::SessionWarning {
+                        session_id,
+                        minutes_left,
+                    },
+                );
+                self.push_paired(&msg, Some(&device_id))
+            }
+            arena_core::TimerEvent::Expired { device_id, .. } => {
+                let cmd_id = ulid::Ulid::generate().to_string();
+                self.push_pc_command(
+                    &device_id,
+                    &cmd_id,
+                    PcAction::Lock,
+                    None,
+                    Some(LockReason::TimesUp),
+                )
+            }
+        }
+    }
+
     async fn tick_sessions(&self, devices: &Arc<DeviceDirectory>) {
         if self.device_ids().is_empty() {
             return;

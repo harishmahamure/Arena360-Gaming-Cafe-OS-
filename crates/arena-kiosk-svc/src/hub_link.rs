@@ -275,6 +275,9 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                     Some(HubEvent::SessionTick(session)) => {
                         crate::session::sync(ctx, session, false);
                     }
+                    Some(HubEvent::SessionWarning { minutes_left, .. }) => {
+                        crate::session::warn(ctx, minutes_left);
+                    }
                     Some(HubEvent::TestSession { lock_after_ms }) => {
                         crate::test_session::begin(ctx, lock_after_ms);
                     }

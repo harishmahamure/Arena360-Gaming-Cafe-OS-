@@ -23,6 +23,7 @@ mod plans;
 mod players;
 mod rates;
 mod session;
+mod session_expire;
 mod stock;
 mod test_session;
 

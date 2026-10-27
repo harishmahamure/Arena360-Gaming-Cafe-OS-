@@ -53,7 +53,13 @@
     return () => clearInterval(timer);
   });
   const two = (n: number) => String(n).padStart(2, "0");
+  const WARN_MS = 10 * 60_000;
+  const timed = (session: SnapshotSession) => session.state === "active" && session.ends_at != null;
+  const nearEnd = (session: SnapshotSession) => timed(session) && session.ends_at! - now <= WARN_MS;
+  const clock = (s: number) =>
+    [Math.floor(s / 3600), two(Math.floor(s / 60) % 60), two(s % 60)].join(":");
   const elapsed = (session: SnapshotSession) => {
+    if (timed(session)) return clock(Math.max(0, Math.ceil((session.ends_at! - now) / 1000)));
     const end = session.paused_at ?? now;
     const s = Math.max(
       0,
@@ -179,6 +185,7 @@
     state={group ? badge.state : "unassigned"}
     label={group ? badge.label : undefined}
     time={session ? elapsed(session) : undefined}
+    warning={session ? nearEnd(session) : false}
     tabindex={tabStop === device.device_id ? 0 : -1}
     {group}
     onactivate={() => (activeId = device.device_id)}

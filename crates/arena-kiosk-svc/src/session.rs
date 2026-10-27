@@ -20,12 +20,28 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
         set_locked(ctx, false, None);
     }
     ctx.pc.screen.send_modify(|v| {
+        let warning_min = v
+            .session
+            .as_ref()
+            .and_then(|p| p.warning_min)
+            .filter(|m| s.lock_after_ms <= u64::from(*m) * 60_000);
         v.session = Some(ScreenSession {
             device_name: s.device_name,
             started: now
                 .checked_sub(Duration::from_millis(s.elapsed_ms))
                 .unwrap_or(now),
+            warning_min,
         });
+    });
+}
+
+pub fn warn(ctx: &Ctx, minutes_left: u8) {
+    ctx.pc.screen.send_if_modified(|v| match &mut v.session {
+        Some(s) if s.warning_min != Some(minutes_left) => {
+            s.warning_min = Some(minutes_left);
+            true
+        }
+        _ => false,
     });
 }
 

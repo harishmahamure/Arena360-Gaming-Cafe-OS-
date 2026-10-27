@@ -23,6 +23,7 @@ pub struct Screen {
 pub struct ScreenSession {
     pub device_name: String,
     pub started: Instant,
+    pub warning_min: Option<u8>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

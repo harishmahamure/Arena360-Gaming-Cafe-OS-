@@ -328,6 +328,10 @@ pub(super) fn mutate(
             Target::CreditAutoPause(t) => super::credit_pause::mutate(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::SessionExpire(_) => match target {
+            Target::SessionExpire(t) => super::session_expire::mutate(tx, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditCollectReverted(_) => match target {
             Target::CreditCollectReverted(t) => {
                 super::credit_collect::mutate_collect_reverted(tx, t)

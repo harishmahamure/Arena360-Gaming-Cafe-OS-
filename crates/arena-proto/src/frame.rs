@@ -255,6 +255,12 @@ pub enum HubEvent {
     },
     #[serde(rename = "session.tick")]
     SessionTick(SessionScreen),
+    /// 10, 5 or 1 minute remain on the device's session (not persisted, not resent).
+    #[serde(rename = "session.warning")]
+    SessionWarning {
+        session_id: String,
+        minutes_left: u8,
+    },
     #[serde(rename = "catalog.changed")]
     CatalogChanged { products: Vec<crate::CatalogEntry> },
     #[serde(rename = "test_session")]

@@ -7,6 +7,7 @@ use chrono::{Datelike, Duration, NaiveDate, NaiveTime, TimeZone};
 use chrono_tz::Tz;
 
 use crate::locale::{locale_rows, resolve};
+use crate::session_timer::TimedSession;
 
 const DAY_MS: u64 = 86_400_000;
 
@@ -34,6 +35,45 @@ fn closes_in(week: &[OpeningDay; 7], tz: Tz, now_ms: i64) -> Option<u64> {
         .min()
 }
 
+fn closing_in(
+    branch: Option<arena_store::BranchLocale>,
+    settings: &[arena_store::SettingRow],
+    now_ms: i64,
+) -> Option<u64> {
+    let b = branch?;
+    let tz = resolve(&locale_rows(&b, settings), now_ms).1.tz;
+    let hours = settings
+        .iter()
+        .find(|r| r.key == KEY_OPENING_HOURS)
+        .map_or(DEFAULT_OPENING_HOURS, |r| r.value.as_str());
+    closes_in(&parse_opening_hours(hours).ok()?, tz, now_ms)
+}
+
+/// The running sessions the timer engine tracks: a timed session by its `ends_at`, a postpaid
+/// one by the branch's next closing time.
+pub fn timed_sessions(store: &Store, now_ms: i64) -> Result<Vec<TimedSession>, AppError> {
+    let (sessions, settings, branch) =
+        store.read_consistent(|s| Ok((s.live_sessions()?, s.settings()?, s.branch_locale()?)))?;
+    let closing = closing_in(branch, &settings, now_ms)
+        .and_then(|ms| i64::try_from(ms).ok())
+        .map(|ms| now_ms + ms);
+    Ok(sessions
+        .into_iter()
+        .filter(|s| s.state == "active")
+        .filter_map(|s| match (s.ends_at, closing) {
+            (Some(at), _) => Some((s, at, true)),
+            (None, Some(at)) if s.mode == "postpaid" => Some((s, at, false)),
+            _ => None,
+        })
+        .map(|(s, ends_at, expires)| TimedSession {
+            ends_at,
+            expires,
+            session_id: s.id,
+            device_id: s.device_id,
+        })
+        .collect())
+}
+
 pub fn session_screens(
     store: &Store,
     now_ms: i64,
@@ -47,16 +87,7 @@ pub fn session_screens(
             s.branch_locale()?,
         ))
     })?;
-    let lock_after = branch
-        .and_then(|b| {
-            let tz = resolve(&locale_rows(&b, &settings), now_ms).1.tz;
-            let hours = settings
-                .iter()
-                .find(|r| r.key == KEY_OPENING_HOURS)
-                .map_or(DEFAULT_OPENING_HOURS, |r| r.value.as_str());
-            closes_in(&parse_opening_hours(hours).ok()?, tz, now_ms)
-        })
-        .unwrap_or(DAY_MS);
+    let lock_after = closing_in(branch, &settings, now_ms).unwrap_or(DAY_MS);
     Ok(sessions
         .into_iter()
         .map(|s| {
@@ -78,7 +109,10 @@ pub fn session_screens(
                     s.paused_at.unwrap_or(now_ms) - s.started_at - s.paused_total_ms,
                 )
                 .unwrap_or(0),
-                lock_after_ms: lock_after,
+                lock_after_ms: match (s.state.as_str(), s.ends_at) {
+                    ("active", Some(at)) => u64::try_from(at - now_ms).unwrap_or(0).min(lock_after),
+                    _ => lock_after,
+                },
                 time_up_mode: s.time_up_mode,
             };
             (s.device_id, screen)

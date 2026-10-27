@@ -277,6 +277,7 @@ fn screen_message(s: crate::pc::Screen) -> IpcMsg {
         session: s.session.map(|v| arena_kiosk_core::ipc::PcSession {
             device_name: v.device_name,
             elapsed_ms: v.started.elapsed().as_millis() as u64,
+            warning_min: v.warning_min,
         }),
     }
 }

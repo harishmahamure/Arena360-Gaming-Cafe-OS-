@@ -15,7 +15,7 @@
   const left = $derived(endsAt === null ? 0 : Math.max(0, Math.ceil((endsAt - now) / 1000)));
   const clock = $derived([Math.floor(left / 60), String(left % 60).padStart(2, "0")].join(":"));
 
-  let session = $state<{ name: string; from: number } | null>(null);
+  let session = $state<{ name: string; from: number; warning: number | null } | null>(null);
   const elapsed = $derived(
     session === null ? 0 : Math.max(0, Math.floor((now - session.from) / 1000)),
   );
@@ -27,7 +27,13 @@
 
   const follow = (s: PcScreen) => {
     now = performance.now();
-    session = s.session ? { name: s.session.device_name, from: now - s.session.elapsed_ms } : null;
+    session = s.session
+      ? {
+          name: s.session.device_name,
+          from: now - s.session.elapsed_ms,
+          warning: s.session.warning_min,
+        }
+      : null;
   };
 
   const start = (remainingMs: number) => {
@@ -72,6 +78,12 @@
     <p class="brand type-kiosk-eyebrow">{t("app.name")}</p>
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.name}</h1>
     <p class="clock type-kiosk-display tabular-nums" data-testid="session-clock">{watch}</p>
+    {#if session.warning !== null}
+      <p class="warning type-kiosk-body" role="status" data-testid="session-warning">
+        <span aria-hidden="true">⚠</span>
+        {t("player.session.warning", { minutes: session.warning })}
+      </p>
+    {/if}
   </main>
 {:else}
   <!-- No session yet: the locked placeholder (login comes with the session stories). -->
@@ -100,8 +112,14 @@
 
   .brand,
   .hint,
-  .clock {
+  .clock,
+  .warning {
     margin: 0;
+  }
+
+  .warning {
+    color: var(--text);
+    font-weight: 600;
   }
 
   .brand,

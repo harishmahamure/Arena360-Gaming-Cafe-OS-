@@ -39,6 +39,7 @@ import type { RoleUpsert } from "./RoleUpsert";
 import type { SessionAssignPlayer } from "./SessionAssignPlayer";
 import type { SessionEnd } from "./SessionEnd";
 import type { SessionEndReverted } from "./SessionEndReverted";
+import type { SessionExpire } from "./SessionExpire";
 import type { SessionPause } from "./SessionPause";
 import type { SessionResume } from "./SessionResume";
 import type { SessionSettle } from "./SessionSettle";
@@ -111,4 +112,5 @@ export type IntentPayload =
   | ({ kind: "credit.collect" } & CreditCollect)
   | ({ kind: "credit.collect.reverted" } & CreditCollectReverted)
   | ({ kind: "credit.auto_pause" } & CreditAutoPause)
+  | ({ kind: "session.expire" } & SessionExpire)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer);

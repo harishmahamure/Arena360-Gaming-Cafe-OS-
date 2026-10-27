@@ -58,4 +58,5 @@ export type IntentKind =
   | "credit.collect"
   | "credit.collect.reverted"
   | "credit.auto_pause"
+  | "session.expire"
   | "session.assign_player";

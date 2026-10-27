@@ -27,7 +27,12 @@ async fn submit(f: &Fixture, actor: Actor, p: IntentPayload) -> Result<Applied, 
     f.writer.submit_intent(i).await
 }
 
-async fn pc(f: &Fixture, kind: DeviceKind, group_kind: &str, rate: Option<i64>) -> String {
+pub(super) async fn pc(
+    f: &Fixture,
+    kind: DeviceKind,
+    group_kind: &str,
+    rate: Option<i64>,
+) -> String {
     let mut d = DeviceRegister::new(
         ClientClass::Paired,
         "PC",

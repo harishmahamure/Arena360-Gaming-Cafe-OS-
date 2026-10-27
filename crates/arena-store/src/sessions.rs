@@ -793,3 +793,14 @@ pub fn list_sessions_for_day(
     .collect::<Result<_, _>>()
     .map_err(db_error)
 }
+
+pub fn expire_session(conn: &Connection, id: &str, ended_at: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET state = 'expired', ended_at = ?2, end_reason = 'expired',
+                             ended_by = 'hub'
+         WHERE id = ?1",
+        params![id, ended_at],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}

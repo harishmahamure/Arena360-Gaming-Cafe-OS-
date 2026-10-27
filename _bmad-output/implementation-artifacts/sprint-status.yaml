@@ -107,7 +107,7 @@ development_status:
   epic-4: in-progress
   4-1-android-hub-app-builds-from-the-shared-hub-code-and-checks-t: done
   4-2-the-android-hub-keeps-serving-while-the-screen-is-off-in-doz: done
-  4-3-the-android-hub-pairs-with-the-wizard-code-and-keeps-its-sec: review
+  4-3-the-android-hub-pairs-with-the-wizard-code-and-keeps-its-sec: done
   4-4-kiosks-find-and-pair-with-an-android-hub-on-the-lan: backlog
   4-5-the-hub-works-on-an-android-phone-and-tablet-by-touch: backlog
   4-6-the-android-hub-prints-over-bluetooth-or-lan: backlog

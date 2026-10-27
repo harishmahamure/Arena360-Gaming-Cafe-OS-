@@ -14,8 +14,9 @@
 
   let issued: PairingCodeIssued | null = $state(null);
   let paired = $state(false);
-  // Free runs on the Android Hub only; paid and comp branches keep Windows first.
-  let free = $state(true);
+  // Free runs on the Android Hub only; paid and comp branches keep Windows first. `null` until
+  // the tier is known, so a paid owner never sees the Android-only block while loading.
+  let free: boolean | null = $state(null);
   let loading = $state(true);
   let loadError: string | null = $state(null);
   let regenerating = $state(false);
@@ -88,13 +89,15 @@
 
 <h1 tabindex="-1">{t(STEP_NAMES.install_hub)}</h1>
 <p class="intro">
-  {t(free ? "onboarding.install.intro_android" : "onboarding.install.intro")}
+  {free === null ? "" : t(free ? "onboarding.install.intro_android" : "onboarding.install.intro")}
 </p>
 
 <ol class="parts">
   <li class="part">
     <h2 id="{id}-download">{t("onboarding.install.download.title")}</h2>
-    {#if free}
+    {#if free === null}
+      <!-- the tier is not known yet -->
+    {:else if free}
       <p>{t("onboarding.install.download.platform_android")}</p>
       <p class="spec" data-testid="hub-spec">{t("onboarding.install.download.spec_android")}</p>
       <div class="links">
@@ -120,7 +123,11 @@
   </li>
   <li class="part">
     <h2 id="{id}-install">{t("onboarding.install.install.title")}</h2>
-    <p>{t(free ? "onboarding.install.install.body_android" : "onboarding.install.install.body")}</p>
+    {#if free !== null}
+      <p>
+        {t(free ? "onboarding.install.install.body_android" : "onboarding.install.install.body")}
+      </p>
+    {/if}
   </li>
   <li class="part">
     <h2 id="{id}-code">{t("onboarding.install.code.title")}</h2>

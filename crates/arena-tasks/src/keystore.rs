@@ -529,6 +529,30 @@ mod tests {
         assert!(!is_key_lost(&io::Error::other("disk")));
     }
 
+    /// A Keystore that is momentarily unavailable: unwrap fails, but the key is not gone.
+    struct Flaky;
+
+    impl SecretWrapper for Flaky {
+        fn wrap(&self, plain: &[u8]) -> Result<Vec<u8>, WrapError> {
+            Ok(plain.to_vec())
+        }
+
+        fn unwrap(&self, _wrapped: &[u8]) -> Result<Vec<u8>, WrapError> {
+            Err(WrapError::Failed("keystore busy".into()))
+        }
+    }
+
+    #[test]
+    fn a_transient_keystore_failure_is_never_mistaken_for_a_lost_key() {
+        let dir = tempfile::tempdir().unwrap();
+        android(dir.path(), 0x21).token.put(b"hub_x.y").unwrap();
+        android(dir.path(), 0x21).kek.put(&[7; KEK_LEN]).unwrap();
+        let flaky = AndroidSecrets::new(dir.path(), &(Arc::new(Flaky) as Arc<dyn SecretWrapper>));
+        let err = flaky.token.get().unwrap_err();
+        assert!(!is_key_lost(&err), "{err}");
+        assert!(!flaky.lost(true));
+    }
+
     #[test]
     fn lost_detection_needs_an_unwrap_failure_or_a_missing_file_with_an_identity() {
         let dir = tempfile::tempdir().unwrap();

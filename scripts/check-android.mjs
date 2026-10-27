@@ -114,7 +114,7 @@ export function checkService(manifest) {
 export function checkDuplicates(manifest) {
   const seen = new Map();
   for (const m of manifest.matchAll(
-    /<(uses-permission|service|receiver|activity|provider)\b[^>]*>/g,
+    /<(uses-permission|service|receiver|activity|provider)(?=[\s>/])[^>]*>/g,
   )) {
     const name = attr(m[0], "android:name");
     if (name === undefined) continue;

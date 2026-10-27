@@ -2,7 +2,7 @@
 title: 'Story 4.3: The Android Hub pairs with the wizard code and keeps its secrets in the Android Keystore'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 baseline_commit: '5de05542428cf079dd354f28a0fa50c96eacde2a'
 review_loop_iteration: 0
 followup_review_recommended: false

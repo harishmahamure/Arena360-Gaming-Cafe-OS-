@@ -340,3 +340,6 @@
 - Data encrypted with a lost branch key stays unreadable after a re-pair until key escrow and restore (Story 9.2); the owner cannot yet replace a failed Hub from Account → Branches (Story 9.8).
 - The key is not StrongBox-backed and not bound to a lock screen; a device with no secure lock screen still keeps it in the hardware or software Keystore.
 - "branch.db untouched while lost" is tested on the branch's data (staff, settings, change log); the file bytes still change on start (lease and WAL bookkeeping).
+- Code review (4.3): a cross-branch code given to a lost Hub is consumed by the cloud before the Hub's `record_repairing` refuses it (needs a cloud-side branch hint on `/v1/pair`); no Hub-level test for that refusal yet.
+- Code review (4.3): a re-pair always mints a fresh branch key, even when only the token file was lost and the key still unwraps (spec says fresh KEK); the re-pair writes `hub_identity` before the wrapped secrets, so a Keystore write failure needs another code.
+- Code review (4.3): no cloud test for `GET /v1/wizard/install-hub` with a paid or comp tier; the pair button focus fix is tested with a mouse only, not touch; no R8 keep rule for `KeystoreBridge` (verify on the first minified release build).

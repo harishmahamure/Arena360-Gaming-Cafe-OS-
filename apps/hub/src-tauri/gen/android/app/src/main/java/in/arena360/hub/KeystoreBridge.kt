@@ -29,6 +29,7 @@ object KeystoreBridge {
 
   /** `nonce || ciphertext` for [plain]. Creates the key on first use. Throws on any failure. */
   @JvmStatic
+  @Synchronized
   fun wrap(plain: ByteArray): ByteArray {
     val cipher = Cipher.getInstance(TRANSFORMATION)
     cipher.init(Cipher.ENCRYPT_MODE, key(create = true) ?: throw GeneralSecurityException("no key"))
@@ -60,6 +61,7 @@ object KeystoreBridge {
     }
   }
 
+  @Synchronized
   private fun key(create: Boolean): SecretKey? {
     val store = KeyStore.getInstance(PROVIDER).apply { load(null) }
     (store.getKey(ALIAS, null) as? SecretKey)?.let { return it }

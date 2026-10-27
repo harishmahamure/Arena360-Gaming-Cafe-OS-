@@ -2,7 +2,7 @@
 title: 'Story 3.37: Floor Invariants, Throughput and Offline Proof'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_revision: 'eb37c0c'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-3-context.md'

@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-28-2026 16:00
+last_updated: 10-28-2026 17:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -101,7 +101,7 @@ development_status:
   3-34-forced-end-with-manager-pin-and-reason: done
   3-35-console-sessions-timed-from-the-hub-with-warnings-on-the-til: done
   3-36-console-time-up-alert-and-controller-check: done
-  3-37-floor-invariants-throughput-and-offline-proof: review
+  3-37-floor-invariants-throughput-and-offline-proof: done
   epic-3-retrospective: optional
 
   epic-4: in-progress

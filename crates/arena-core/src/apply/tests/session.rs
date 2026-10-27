@@ -214,7 +214,7 @@ async fn refusals_name_the_code_and_write_nothing() {
     let f = bootstrapped().await;
     let ok = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;
     let norate = pc(&f, DeviceKind::Pc, "pc", None).await;
-    let console = pc(&f, DeviceKind::Console, "console", Some(100)).await;
+    let vr = pc(&f, DeviceKind::Vr, "vr", Some(100)).await;
     let loose = {
         let d = DeviceRegister::new(
             ClientClass::Paired,
@@ -249,7 +249,7 @@ async fn refusals_name_the_code_and_write_nothing() {
         field(ErrorCode::NotFound, "device_id")
     );
     assert_eq!(
-        refusal(start(&f, &console, None).await),
+        refusal(start(&f, &vr, None).await),
         field(ErrorCode::ValidationFailed, "device_id")
     );
     assert_eq!(

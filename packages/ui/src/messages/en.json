@@ -77,6 +77,7 @@
   "ui.floor_tile.time_warning": "Time almost up",
   "hub.floor.grace": "Grace {time}",
   "hub.floor.time_up": "Time up",
+  "hub.floor.min_left": "{n} min left",
   "hub.floor.no_zones": "No zones yet. Devices are listed under Unassigned until zones are set up.",
   "hub.floor.unassigned": "Unassigned",
   "hub.floor.no_devices": "No devices are registered yet.",

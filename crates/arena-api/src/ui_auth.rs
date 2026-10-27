@@ -4423,16 +4423,17 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_manual_console_is_not_offline_but_is_refused_as_not_a_pc() {
+    async fn a_manual_console_takes_a_timed_session_from_the_hub() {
         let hub = hub().await;
         let token = token_for(&hub, "counter", "c-pass").await;
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
         let console = hub
             .writer
             .submit_intent(intent_as(
-                Actor {
-                    kind: ActorKind::Owner,
-                    id: "owner".into(),
-                },
+                owner(),
                 IntentPayload::DeviceRegister(arena_proto::DeviceRegister {
                     device_id: None,
                     device_kind: arena_proto::DeviceKind::Console,
@@ -4449,6 +4450,39 @@ pub(crate) mod tests {
             .changes[0]
             .row_id
             .clone();
+        let group = hub
+            .writer
+            .submit_intent(intent_as(
+                owner(),
+                IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                    id: None,
+                    name: "PS5".into(),
+                    group_kind: "console".into(),
+                    colour: "teal".into(),
+                    sort_order: 1,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        for payload in [
+            IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                group_id: group.clone(),
+                price_per_hour_minor: 12_000,
+            }),
+            IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                device_id: console.clone(),
+                group_id: Some(group),
+            }),
+        ] {
+            hub.writer
+                .submit_intent(intent_as(owner(), payload, None))
+                .await
+                .unwrap();
+        }
         let (status, reply) = call(
             &hub,
             "POST",
@@ -4457,9 +4491,12 @@ pub(crate) mod tests {
             Some(start_body(&console)),
         )
         .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
-        assert_eq!(reply["code"], "VALIDATION_FAILED");
-        assert_eq!(reply["field"], "device_id");
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].device_id, console);
     }
 
     #[tokio::test]

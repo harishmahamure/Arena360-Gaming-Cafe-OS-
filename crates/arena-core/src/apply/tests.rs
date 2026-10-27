@@ -20,6 +20,7 @@ use crate::writer::{Writer, WriterHandle};
 
 mod alert;
 mod commands;
+mod console;
 mod extend;
 mod force_end;
 mod group_bill;

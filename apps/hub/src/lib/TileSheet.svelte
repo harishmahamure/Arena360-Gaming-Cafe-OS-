@@ -150,11 +150,12 @@
   const cmd = $derived(cmds[device.device_id]);
   const busy = $derived(cmd?.state === "waiting" || approving !== null);
   const isPc = $derived(device.kind === "pc");
+  const seated = $derived(isPc || device.kind === "console");
   const assigned = $derived(group !== undefined);
   const maintenance = $derived(device.status === "maintenance");
   const offline = $derived(device.status === "offline");
-  const live = $derived(isPc && assigned && !maintenance && !offline);
-  const fitting = $derived(groups.filter((g) => g.kind === "pc"));
+  const live = $derived(seated && assigned && !maintenance && !offline);
+  const fitting = $derived(groups.filter((g) => g.kind === device.kind));
   const needsRemote = $derived(!hasPermission(staff, "device.remote"));
   const free = $derived(device.status === "online");
 
@@ -550,7 +551,7 @@
     </p>
   {/if}
 
-  {#if !isPc}
+  {#if !seated}
     <p class="note type-hub-body" data-testid="sheet-details-only">{t("hub.sheet.details_only")}</p>
   {:else if !assigned}
     <form class="section" onsubmit={assign} data-testid="sheet-assign">
@@ -582,7 +583,7 @@
         onclick={() => void go(maintenanceJob(device.device_id, device.meta_rev ?? undefined))}
       />
     </div>
-    {@render admin()}
+    {#if isPc}{@render admin()}{/if}
   {:else if live}
     {#if free}
       <div class="section" data-testid="session-start">
@@ -775,57 +776,59 @@
         {/if}
       </div>
     {/if}
-    <div class="section" role="group" aria-label={t("hub.sheet.screen")}>
-      <Button
-        label="hub.sheet.unlock"
-        disabled={busy}
-        disabledReason="hub.sheet.waiting"
-        onclick={() => void go(screenJob(device.device_id, "unlock"))}
-      />
-      <form class="compose" onsubmit={sendMessage}>
-        <TextField label="hub.sheet.message_label" bind:value={text} error={textError} />
-        <span class="count type-hub-label tabular-nums"
-          >{t("hub.sheet.message_count", { count: [...text].length, max: MESSAGE_MAX })}</span
-        >
+    {#if isPc}
+      <div class="section" role="group" aria-label={t("hub.sheet.screen")}>
         <Button
-          label="hub.sheet.message"
-          type="submit"
+          label="hub.sheet.unlock"
           disabled={busy}
           disabledReason="hub.sheet.waiting"
+          onclick={() => void go(screenJob(device.device_id, "unlock"))}
         />
-      </form>
-    </div>
-    <div class="section">
-      <Button
-        label="hub.sheet.lock"
-        variant="secondary"
-        disabled={busy}
-        disabledReason="hub.sheet.waiting"
-        onclick={() => void go(screenJob(device.device_id, "lock"))}
-      />
-    </div>
-    <div class="section" role="group" aria-label={t("hub.sheet.power")}>
-      <Button
-        label="hub.sheet.restart"
-        variant="secondary"
-        disabled={busy}
-        disabledReason="hub.sheet.waiting"
-        onclick={() => void go(powerJob(device.device_id, "restart"))}
-      />
-      <Button
-        label="hub.sheet.shutdown"
-        variant="secondary"
-        disabled={busy}
-        disabledReason="hub.sheet.waiting"
-        onclick={() => void go(powerJob(device.device_id, "shutdown"))}
-      />
-      {#if needsRemote}
-        <span class="note type-hub-label" data-testid="power-needs-approval"
-          >{t("hub.sheet.power_needs_approval")}</span
-        >
-      {/if}
-    </div>
-    {@render admin()}
+        <form class="compose" onsubmit={sendMessage}>
+          <TextField label="hub.sheet.message_label" bind:value={text} error={textError} />
+          <span class="count type-hub-label tabular-nums"
+            >{t("hub.sheet.message_count", { count: [...text].length, max: MESSAGE_MAX })}</span
+          >
+          <Button
+            label="hub.sheet.message"
+            type="submit"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+          />
+        </form>
+      </div>
+      <div class="section">
+        <Button
+          label="hub.sheet.lock"
+          variant="secondary"
+          disabled={busy}
+          disabledReason="hub.sheet.waiting"
+          onclick={() => void go(screenJob(device.device_id, "lock"))}
+        />
+      </div>
+      <div class="section" role="group" aria-label={t("hub.sheet.power")}>
+        <Button
+          label="hub.sheet.restart"
+          variant="secondary"
+          disabled={busy}
+          disabledReason="hub.sheet.waiting"
+          onclick={() => void go(powerJob(device.device_id, "restart"))}
+        />
+        <Button
+          label="hub.sheet.shutdown"
+          variant="secondary"
+          disabled={busy}
+          disabledReason="hub.sheet.waiting"
+          onclick={() => void go(powerJob(device.device_id, "shutdown"))}
+        />
+        {#if needsRemote}
+          <span class="note type-hub-label" data-testid="power-needs-approval"
+            >{t("hub.sheet.power_needs_approval")}</span
+          >
+        {/if}
+      </div>
+      {@render admin()}
+    {/if}
   {/if}
 </aside>
 

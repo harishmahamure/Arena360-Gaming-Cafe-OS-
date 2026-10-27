@@ -56,6 +56,7 @@ const devices = (): SnapshotDevice[] => [
   device(4, { status: "maintenance", online: true, maintenance_note: "fan", meta_rev: 7 }),
   device(5, { group_id: null, zone: null, status: "offline", online: false, meta_rev: 3 }),
   device(6, { kind: "console", group_id: "G2", zone: null, tv_number: 2 }),
+  device(7, { kind: "vr", group_id: null, zone: null }),
 ];
 
 async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise<Hub> {
@@ -310,7 +311,7 @@ test("a maintenance PC offers Return to service and Admin unlock only", async ({
   }
 });
 
-test("an offline PC shows its last seen and no actions; a console shows details only", async ({
+test("an offline PC shows its last seen and no actions; a VR rig shows details only", async ({
   page,
 }) => {
   await open(page, "manager-token");
@@ -319,7 +320,7 @@ test("an offline PC shows its last seen and no actions; a console shows details 
   await expect(page.getByTestId("sheet-offline")).toBeVisible();
   await expect(sheet(page)).toContainText("3:00");
   await expect(sheet(page).getByRole("button")).toHaveCount(1);
-  await face(page, "PC 6").focus();
+  await face(page, "PC 7").focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("sheet-details-only")).toBeVisible();
   await expect(sheet(page).getByRole("button")).toHaveCount(1);

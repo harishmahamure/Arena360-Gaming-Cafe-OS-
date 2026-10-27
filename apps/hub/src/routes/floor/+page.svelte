@@ -63,6 +63,13 @@
     (timed(session) && session.ends_at! - now <= WARN_MS) ||
     inGrace(session) ||
     session.state === "expired";
+  const leftText = (session: SnapshotSession) => {
+    if (!timed(session)) return undefined;
+    const left = Math.ceil((session.ends_at! - now) / 60_000);
+    return left > 10
+      ? undefined
+      : t("hub.floor.min_left", { n: left <= 1 ? 1 : left <= 5 ? 5 : 10 });
+  };
   const clock = (s: number) =>
     [Math.floor(s / 3600), two(Math.floor(s / 60) % 60), two(s % 60)].join(":");
   const elapsed = (session: SnapshotSession) => {
@@ -308,6 +315,8 @@
     label={group ? badge.label : undefined}
     time={session ? elapsed(session) : undefined}
     warning={session ? nearEnd(session) : false}
+    warningText={session && device.kind === "console" ? leftText(session) : undefined}
+    console={device.kind === "console"}
     alertTag={tagOf(device.device_id)}
     tabindex={tabStop === device.device_id ? 0 : -1}
     {group}

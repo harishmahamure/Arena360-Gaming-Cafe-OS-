@@ -119,8 +119,11 @@ pub(super) fn validate(
             "no such device",
         ));
     };
-    if d.kind != "pc" {
-        return Err(invalid("device_id", "only a PC takes a session"));
+    if !matches!(d.kind.as_str(), "pc" | "console") {
+        return Err(invalid(
+            "device_id",
+            "only a PC or a console takes a session",
+        ));
     }
     let Some(group_id) = &d.group_id else {
         return Err(AppError::with_field(

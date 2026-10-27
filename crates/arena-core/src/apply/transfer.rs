@@ -129,8 +129,11 @@ pub(super) fn validate(t: &TransferTarget) -> Result<(), AppError> {
             "A session moves only to a device of the same kind.",
         ));
     }
-    if d.kind != "pc" {
-        return Err(invalid("device_id", "only a PC takes a session"));
+    if !matches!(d.kind.as_str(), "pc" | "console") {
+        return Err(invalid(
+            "device_id",
+            "only a PC or a console takes a session",
+        ));
     }
     if d.state == "maintenance" {
         return Err(AppError::with_field(

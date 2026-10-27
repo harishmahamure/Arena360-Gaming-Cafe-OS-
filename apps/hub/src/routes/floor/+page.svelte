@@ -28,6 +28,8 @@
   type Badge = {
     state: "free" | "offline" | "in-session" | "paused" | "reserved" | "maintenance";
     label: MessageKey;
+    /** Draws the status badge as a warning while the tile keeps its own state. */
+    badgeState?: "warning";
   };
   const BADGE: Record<DeviceStatus, Badge> = {
     online: { state: "free", label: "hub.floor.online" },
@@ -70,6 +72,8 @@
       ? undefined
       : t("hub.floor.min_left", { n: left <= 1 ? 1 : left <= 5 ? 5 : 10 });
   };
+  const isConsole = (session: SnapshotSession) =>
+    snapshot?.devices.find((d) => d.device_id === session.device_id)?.kind === "console";
   const clock = (s: number) =>
     [Math.floor(s / 3600), two(Math.floor(s / 60) % 60), two(s % 60)].join(":");
   const elapsed = (session: SnapshotSession) => {
@@ -77,7 +81,8 @@
       const s = Math.max(0, Math.ceil((session.grace_ends_at! - now) / 1000));
       return t("hub.floor.grace", { time: [Math.floor(s / 60), two(s % 60)].join(":") });
     }
-    if (session.state === "expired") return t("hub.floor.time_up");
+    if (session.state === "expired")
+      return t(isConsole(session) ? "hub.floor.times_up" : "hub.floor.time_up");
     if (timed(session)) return clock(Math.max(0, Math.ceil((session.ends_at! - now) / 1000)));
     const end = session.paused_at ?? now;
     const s = Math.max(
@@ -89,7 +94,9 @@
   const badgeOf = (d: SnapshotDevice, session: SnapshotSession | undefined): Badge =>
     session?.state === "paused"
       ? { state: "paused", label: "ui.status.paused" }
-      : (BADGE[d.status ?? "offline"] ?? BADGE.offline);
+      : d.controller_check && d.status === "online"
+        ? { state: "free", label: "hub.floor.check_controllers", badgeState: "warning" }
+        : (BADGE[d.status ?? "offline"] ?? BADGE.offline);
   const pauseText = (session: SnapshotSession) =>
     session.pause_reason === "other"
       ? (session.pause_note ?? "")
@@ -313,6 +320,7 @@
     name={device.label}
     state={group ? badge.state : "unassigned"}
     label={group ? badge.label : undefined}
+    badgeState={group ? badge.badgeState : undefined}
     time={session ? elapsed(session) : undefined}
     warning={session ? nearEnd(session) : false}
     warningText={session && device.kind === "console" ? leftText(session) : undefined}

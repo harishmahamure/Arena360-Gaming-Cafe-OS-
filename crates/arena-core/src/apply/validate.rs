@@ -268,6 +268,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Alert(t) => super::alert::validate(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::ControllerCheck(_) => match target {
+            Target::ControllerCheck(t) => super::controller_check::validate(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::SessionExpire(_) => match target {
             Target::SessionExpire(t) => super::session_expire::validate(intent, t),
             _ => Err(internal_target()),

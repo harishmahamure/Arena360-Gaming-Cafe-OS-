@@ -227,6 +227,12 @@ enum Op {
         slot: u8,
         undo: bool,
     },
+    /// A controller check of a session that may be running, on a PC, ended or already marked: it
+    /// applies once for an ended console session and otherwise writes nothing.
+    ControllerCheck {
+        slot: u8,
+        missing: bool,
+    },
     /// Staff put a session and another into one group bill, or are refused and nothing is
     /// written; a payer is then named, or refused the same way.
     Group {
@@ -477,6 +483,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..3u8, 0..4u8).prop_map(|(slot, target)| Op::Transfer { slot, target }),
         2 => (0..3u8, 0..3u8, 0..4u8).prop_map(|(slot, other, guest)| Op::Group { slot, other, guest }),
         2 => (0..3u8, prop::bool::ANY).prop_map(|(slot, undo)| Op::ForceEnd { slot, undo }),
+        2 => (0..4u8, prop::bool::ANY).prop_map(|(slot, missing)| Op::ControllerCheck { slot, missing }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -2540,6 +2547,36 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     }
                     Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
                 }
+            }
+        }
+        Op::ControllerCheck { slot, missing } => {
+            let Some(session) = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .nth(usize::from(*slot))
+            else {
+                return Ok(());
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::ControllerCheck(arena_proto::ControllerCheck {
+                    session_id: text(&session, "id"),
+                    result: if *missing {
+                        arena_proto::ControllerResult::Missing
+                    } else {
+                        arena_proto::ControllerResult::Returned
+                    },
+                }),
+                None,
+            ));
+            match code(&out) {
+                None => prop_assert!(hub.change_count() > before),
+                Some((ErrorCode::ValidationFailed | ErrorCode::Stale, _)) => {
+                    prop_assert_eq!(hub.change_count(), before)
+                }
+                Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
             }
         }
         Op::Group { slot, other, guest } => {

@@ -343,6 +343,10 @@ pub struct SnapshotDevice {
     #[serde(default)]
     #[ts(optional, type = "string | null")]
     pub maintenance_note: Option<String>,
+    /// The ended console session whose controllers staff have not marked yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "string | null")]
+    pub controller_check: Option<String>,
 }
 
 impl SnapshotDevice {
@@ -389,6 +393,7 @@ mod tests {
                 status: DeviceStatus::Online,
                 last_seen_at: None,
                 maintenance_note: None,
+                controller_check: None,
             }],
             locale: None,
             ui: SnapshotUi::default(),
@@ -492,6 +497,7 @@ mod locale_tests {
             status,
             last_seen_at: None,
             maintenance_note: None,
+            controller_check: None,
         };
         let mut d = dev(false, DeviceStatus::Offline);
         d.apply_presence(true, Some(9));

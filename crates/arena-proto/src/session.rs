@@ -211,6 +211,33 @@ pub struct SessionEndReverted {
     pub session_id: String,
 }
 
+/// Whether a console's controllers came back after a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum ControllerResult {
+    Returned,
+    Missing,
+}
+
+impl ControllerResult {
+    /// The stored and wire form, e.g. `missing`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Returned => "returned",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// Records the controller check of an ended console session. Marking a session twice is `STALE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ControllerCheck {
+    pub session_id: String,
+    pub result: ControllerResult,
+}
+
 /// Ends a session early. Needs a manager's PIN and one of the reasons of
 /// [`IntentKind::SessionForceEnd`](crate::IntentKind::reasons); `note` is required with
 /// `other`. The player is charged only the time used.
@@ -302,6 +329,10 @@ pub struct SessionListRow {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub order_id: Option<String>,
+    /// How a console session's controllers were marked: `returned` or `missing`.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub controller_check: Option<ControllerResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

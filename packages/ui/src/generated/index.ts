@@ -58,6 +58,8 @@ export type { CommandsPage } from "./CommandsPage";
 export type { ComponentView } from "./ComponentView";
 export type { Connectivity } from "./Connectivity";
 export type { ConnectivityState } from "./ConnectivityState";
+export type { ControllerCheck } from "./ControllerCheck";
+export type { ControllerResult } from "./ControllerResult";
 export type { Country } from "./Country";
 export type { CreditAging } from "./CreditAging";
 export type { CreditAutoPause } from "./CreditAutoPause";

@@ -108,6 +108,7 @@ pub fn build_snapshot(
                         }),
                     last_seen_at: None,
                     maintenance_note: m.and_then(|m| m.maintenance_note.clone()),
+                    controller_check: None,
                     device_id: d.device_id,
                     // Presence is the LAN registry's, not the database's: the snapshot
                     // handler fills it in.
@@ -288,6 +289,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         rules,
         group_rows,
         ended_group,
+        unchecked,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -306,10 +308,20 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.pricing_rules()?,
             s.group_bills()?,
             s.ended_group_sessions()?,
+            s.unchecked_consoles()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
+    for (device_id, session_id) in unchecked {
+        if let Some(d) = snapshot
+            .devices
+            .iter_mut()
+            .find(|d| d.device_id == device_id)
+        {
+            d.controller_check = Some(session_id);
+        }
+    }
     snapshot.bills = bills(&sessions, &segments, orders, &rules, now_ms);
     snapshot.group_bills = group_bills(group_rows, &sessions, ended_group, &rules, now_ms);
     snapshot.alerts = alerts
@@ -709,6 +721,11 @@ impl SnapshotReader {
                     bill_minor: s.total_minor,
                     state,
                     order_id: s.order_id.filter(|_| state == S::Unpaid),
+                    controller_check: s.controller_check.as_deref().and_then(|c| match c {
+                        "returned" => Some(arena_proto::ControllerResult::Returned),
+                        "missing" => Some(arena_proto::ControllerResult::Missing),
+                        _ => None,
+                    }),
                 }
             })
             .collect();
@@ -1041,6 +1058,7 @@ mod tests {
                     status: DeviceStatus::Offline,
                     last_seen_at: None,
                     maintenance_note: None,
+                    controller_check: None,
                 }],
                 locale: Some(SnapshotLocale {
                     currency: "INR".into(),

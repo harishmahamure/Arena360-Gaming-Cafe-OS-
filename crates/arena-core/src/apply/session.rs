@@ -1,7 +1,7 @@
 use arena_proto::{
     AppError, CARD_REFERENCE_MAX, ErrorCode, Intent, PaymentMethod, PaymentRow,
     SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionMode, SessionPause, SessionResume,
-    SessionSettle, SessionSettleReverted, SessionStart, UNDO_WINDOW_MS,
+    SessionSettle, SessionSettleReverted, SessionStart, TimeUpMode, UNDO_WINDOW_MS,
 };
 use arena_store::{
     ChangeOp, CreditRow, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment,
@@ -28,6 +28,7 @@ pub(crate) struct SessionTarget {
     rate: Option<RateRow>,
     rule_id: Option<String>,
     player: bool,
+    unchecked: bool,
     prepaid: super::prepaid::StartExtras,
     group_host: Option<LiveSession>,
 }
@@ -44,6 +45,10 @@ pub(super) fn load(
     let device = find_device_meta(tx, &s.device_id)?.filter(|d| d.deleted_at.is_none());
     let busy = match &device {
         Some(d) => d.state == "in_session" || device_has_live_session(tx, &d.device_id)?,
+        None => false,
+    };
+    let unchecked = match &device {
+        Some(d) => arena_store::unchecked_console_session(tx, &d.device_id)?.is_some(),
         None => false,
     };
     let (rate, rule_id) = match device.as_ref().and_then(|d| d.group_id.as_deref()) {
@@ -75,9 +80,18 @@ pub(super) fn load(
         rate,
         rule_id,
         player,
+        unchecked,
         prepaid,
         group_host,
     })
+}
+
+pub(super) fn unchecked_error() -> AppError {
+    AppError::with_field(
+        ErrorCode::ControllersUnchecked,
+        "device_id",
+        "Mark controllers first",
+    )
 }
 
 pub(super) fn busy_error() -> AppError {
@@ -146,6 +160,9 @@ pub(super) fn validate(
             "This PC already has a session.",
         ));
     }
+    if t.unchecked {
+        return Err(unchecked_error());
+    }
     if t.rate.is_none() && priced_by_rate(s.mode) {
         return Err(AppError::with_field(
             ErrorCode::NoRate,
@@ -187,6 +204,7 @@ pub(super) fn mutate(
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
         AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
     })?;
+    let console = d.kind == "console";
     let rules = crate::billing::read(tx)?;
     let guest_no = match s.player_id {
         Some(_) => None,
@@ -210,8 +228,12 @@ pub(super) fn mutate(
             reserved_minor: plan.reserved_minor,
             rounding_min: rules.rounding_min,
             minimum_min: rules.minimum_min,
-            grace_min: rules.grace_min,
-            time_up_mode: rules.time_up_mode.as_str(),
+            grace_min: if console { 0 } else { rules.grace_min },
+            time_up_mode: if console {
+                TimeUpMode::StaffHandles.as_str()
+            } else {
+                rules.time_up_mode.as_str()
+            },
             epoch: &epoch.to_string(),
             business_day: &business_day,
             fy: &fy,

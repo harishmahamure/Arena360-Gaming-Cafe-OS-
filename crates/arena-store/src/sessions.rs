@@ -361,12 +361,67 @@ pub fn reopen_session(conn: &Connection, id: &str) -> Result<(), AppError> {
     conn.execute(
         "UPDATE sessions SET state = 'active', ended_at = NULL, end_reason = NULL, ended_by = NULL,
                 forced_reason = NULL, forced_note = NULL, forced_left_min = NULL,
-                forced_pack_min = NULL
+                forced_pack_min = NULL, controller_check = NULL, controller_checked_at = NULL,
+                controller_checked_by = NULL
          WHERE id = ?1",
         [id],
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// Records whether a console's controllers came back after a session (`returned` or `missing`),
+/// with who checked and when.
+pub fn set_controller_check(
+    conn: &Connection,
+    id: &str,
+    result: &str,
+    at: i64,
+    by: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE sessions SET controller_check = ?2, controller_checked_at = ?3,
+                controller_checked_by = ?4
+         WHERE id = ?1",
+        params![id, result, at, by],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The newest ended session on this console whose controllers have not been checked.
+pub fn unchecked_console_session(
+    conn: &Connection,
+    device_id: &str,
+) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT s.id FROM sessions s JOIN devices_meta m ON m.device_id = s.device_id
+         WHERE s.device_id = ?1 AND m.kind = 'console' AND s.ended_at IS NOT NULL
+           AND s.controller_check IS NULL
+         ORDER BY s.ended_at DESC, s.id DESC LIMIT 1",
+        [device_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Every console with an ended session awaiting its controller check, as (device, session).
+pub fn list_unchecked_consoles(conn: &Connection) -> Result<Vec<(String, String)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.device_id, s.id FROM sessions s
+             JOIN devices_meta m ON m.device_id = s.device_id
+             WHERE m.kind = 'console' AND s.ended_at IS NOT NULL AND s.controller_check IS NULL
+             ORDER BY s.ended_at, s.id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    Ok(rows)
 }
 
 /// What a forced end records on the session it just ended.
@@ -854,6 +909,7 @@ pub struct SessionListing {
     pub order_id: Option<String>,
     pub order_status: Option<String>,
     pub total_minor: Option<i64>,
+    pub controller_check: Option<String>,
 }
 
 pub fn list_sessions_for_day(
@@ -863,7 +919,8 @@ pub fn list_sessions_for_day(
     let mut stmt = conn
         .prepare(
             "SELECT s.id, s.device_id, COALESCE(m.label, s.device_id), p.username, s.guest_no,
-                    s.mode, s.started_at, s.ended_at, s.state, o.id, o.status, o.total_minor
+                    s.mode, s.started_at, s.ended_at, s.state, o.id, o.status, o.total_minor,
+                    s.controller_check
              FROM sessions s
              LEFT JOIN players p ON p.player_id = s.player_id
              LEFT JOIN devices_meta m ON m.device_id = s.device_id
@@ -886,6 +943,7 @@ pub fn list_sessions_for_day(
             order_id: r.get(9)?,
             order_status: r.get(10)?,
             total_minor: r.get(11)?,
+            controller_check: r.get(12)?,
         })
     })
     .map_err(db_error)?

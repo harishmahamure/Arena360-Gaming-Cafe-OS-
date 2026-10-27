@@ -46,9 +46,13 @@ fn stale(message: &str) -> AppError {
 
 /// Whether a due session first gets its grace or is closed out now: grace applies from the end
 /// time for the session's snapshot grace period, and a session found past it (after a restart)
-/// goes straight to the time-up action.
-fn step(s: &LiveSession, ends_at: i64, now: i64) -> Step {
-    let grace_ms = i64::from(s.grace_min) * MIN_MS;
+/// goes straight to the time-up action. A console has no grace and always waits for staff.
+fn step(s: &LiveSession, console: bool, ends_at: i64, now: i64) -> Step {
+    let grace_ms = if console {
+        0
+    } else {
+        i64::from(s.grace_min) * MIN_MS
+    };
     if s.state == "active" && grace_ms > 0 && now < ends_at + grace_ms {
         Step::Grace
     } else {
@@ -95,7 +99,8 @@ pub(super) fn mutate(
         ));
     };
     let ended_at = s.ends_at.unwrap_or(s.started_at);
-    if step(s, ended_at, intent.issued_at) == Step::Grace {
+    let console = t.device.as_ref().is_some_and(|d| d.kind == "console");
+    if step(s, console, ended_at, intent.issued_at) == Step::Grace {
         grace_session(tx, &s.id)?;
         return Ok(vec![Written {
             key: RowKey::Sessions { id: s.id.clone() },
@@ -103,7 +108,7 @@ pub(super) fn mutate(
             before: None,
         }]);
     }
-    if s.time_up_mode == arena_proto::TimeUpMode::StaffHandles.as_str() {
+    if console || s.time_up_mode == arena_proto::TimeUpMode::StaffHandles.as_str() {
         return hold(tx, t, s, ended_at, now_ms);
     }
     if prepaid::is_prepaid(s) {

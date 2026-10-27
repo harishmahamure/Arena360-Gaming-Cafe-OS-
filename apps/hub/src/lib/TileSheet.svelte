@@ -52,6 +52,7 @@
     cmds,
     endJob,
     extendJob,
+    controllerJob,
     forceEndJob,
     groupJob,
     maintenanceJob,
@@ -73,6 +74,7 @@
   type Badge = {
     state: "free" | "offline" | "in-session" | "paused" | "reserved" | "maintenance";
     label: MessageKey;
+    badgeState?: "warning";
   };
 
   const PAUSE_OPTIONS = (Object.keys(PAUSE_LABELS) as PauseReason[]).map((value) => ({
@@ -429,7 +431,7 @@
       <dt>{t("hub.sheet.status")}</dt>
       <dd data-testid="sheet-status">
         <StatusBadge
-          state={assigned ? badge.state : "unassigned"}
+          state={assigned ? (badge.badgeState ?? badge.state) : "unassigned"}
           label={assigned ? badge.label : undefined}
         />
       </dd>
@@ -607,6 +609,30 @@
           {rate ? t("hub.session.rate", { rate }) : t("hub.sheet.no_rate")}
         </p>
         <RuleChips chips={groupChips} scope="start" />
+        {#if device.controller_check}
+          <div
+            class="controllers"
+            role="group"
+            aria-labelledby="{id}-controllers"
+            data-testid="controller-check"
+          >
+            <p class="type-hub-label" id="{id}-controllers">{t("hub.console.controllers_title")}</p>
+            <Button
+              label="hub.console.returned"
+              variant="secondary"
+              disabled={busy}
+              disabledReason="hub.sheet.waiting"
+              onclick={() => void go(controllerJob(device.controller_check!, "returned"))}
+            />
+            <Button
+              label="hub.console.missing"
+              variant="secondary"
+              disabled={busy}
+              disabledReason="hub.sheet.waiting"
+              onclick={() => void go(controllerJob(device.controller_check!, "missing"))}
+            />
+          </div>
+        {/if}
         {#if picked && group}
           <StartOptions
             playerId={picked.id ?? null}
@@ -619,8 +645,12 @@
         {/if}
         <Button
           label={START_LABEL[choice.mode]}
-          disabled={busy || !picked}
-          disabledReason={busy ? "hub.sheet.waiting" : "hub.session.pick_first"}
+          disabled={busy || !picked || !!device.controller_check}
+          disabledReason={busy
+            ? "hub.sheet.waiting"
+            : device.controller_check
+              ? "hub.console.mark_first"
+              : "hub.session.pick_first"}
           onclick={() =>
             picked && void go(startJob(device.device_id, picked.id, device.manual, choice))}
         />
@@ -913,6 +943,13 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+    gap: var(--space-3);
+  }
+
+  .controllers {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: var(--space-3);
   }
 

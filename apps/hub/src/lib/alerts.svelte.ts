@@ -15,11 +15,13 @@ export const SOUND_REPEAT_MS = 30_000;
 export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   fixture: "hub.alerts.kind.fixture",
   time_up: "hub.alerts.kind.time_up",
+  controller_missing: "hub.alerts.kind.controller_missing",
 };
 
-export const KIND_TAGS: Record<AlertKind, "new" | "time-up"> = {
+export const KIND_TAGS: Record<AlertKind, "new" | "time-up" | "controllers"> = {
   fixture: "new",
   time_up: "time-up",
+  controller_missing: "controllers",
 };
 
 const CONDITIONS = {
@@ -60,7 +62,7 @@ export const requestSheet = (deviceId: string) => {
 export const openFor = (deviceId: string) => alerts.open.filter((a) => a.device_id === deviceId);
 
 /** The tag a device's tile shows: its oldest open alert's. */
-export const tagOf = (deviceId: string): "new" | "time-up" | undefined => {
+export const tagOf = (deviceId: string): "new" | "time-up" | "controllers" | undefined => {
   const first = openFor(deviceId)[0];
   return first ? KIND_TAGS[first.kind] : undefined;
 };

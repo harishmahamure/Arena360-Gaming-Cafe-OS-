@@ -69,4 +69,5 @@ export type IntentKind =
   | "session.rate_flip"
   | "session.assign_player"
   | "alert.raise"
-  | "alert.ack";
+  | "alert.ack"
+  | "controller.check";

@@ -1,4 +1,5 @@
 import type {
+  ControllerResult,
   IntentPayload,
   PauseReason,
   PaymentRow,
@@ -66,6 +67,10 @@ const REFUSALS: Record<string, MessageKey> = {
   DEVICE_UNASSIGNED: "hub.session.unassigned",
   "STALE:session.end": "hub.session.end_stale",
   "STALE:session.force_end": "hub.session.end_stale",
+  CONTROLLERS_UNCHECKED: "hub.console.mark_first",
+  "STALE:controller.check": "hub.console.check_refused",
+  "VALIDATION_FAILED:controller.check": "hub.console.check_refused",
+  "NOT_FOUND:controller.check": "hub.console.check_refused",
   "VALIDATION_FAILED:session.force_end": "hub.force.refused",
   "NOT_FOUND:session.force_end": "hub.force.refused",
   "STALE:session.pause": "hub.session.pause_stale",
@@ -175,6 +180,18 @@ export const payerJob = (
 export const endJob = (session_id: string, rev: number) =>
   job({ kind: "session.end", session_id }, { track: "none", rev, done: "hub.sheet.done.ended" });
 
+export const controllerJob = (session_id: string, result: ControllerResult) =>
+  job(
+    { kind: "controller.check", session_id, result },
+    {
+      track: "none",
+      done:
+        result === "returned"
+          ? "hub.sheet.done.controllers_returned"
+          : "hub.sheet.done.controllers_missing",
+    },
+  );
+
 export const FORCE_REASONS: ReasonCode[] = ["rule_violation", "hardware_issue", "closing", "other"];
 
 export const FORCE_LABELS: Record<string, MessageKey> = {
@@ -242,31 +259,33 @@ export const MESSAGE_MAX = 140;
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
   kind === "session.start" || kind === "session.end"
     ? kind
-    : kind === "session.force_end" || kind === "session.force_end.reverted"
-      ? "session.force_end"
-      : kind === "session.group"
-        ? "session.start"
-        : kind === "group.payer"
-          ? "pos.sell"
-          : kind === "session.pause" || kind === "session.resume"
-            ? "session.pause"
-            : kind === "session.extend"
-              ? "session.extend"
-              : kind === "session.transfer"
-                ? "session.transfer"
-                : kind === "session.end.reverted"
-                  ? "session.end"
-                  : kind === "session.settle" || kind === "session.settle.reverted"
-                    ? "pos.sell"
-                    : kind === "credit.collect" || kind === "credit.collect.reverted"
-                      ? "credit.collect"
-                      : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-                        ? "wallet.topup"
-                        : kind === "device.screen"
-                          ? "device.screen"
-                          : kind === "device.power" || kind === "device.admin_unlock"
-                            ? "device.remote"
-                            : "device.manage";
+    : kind === "controller.check"
+      ? "session.end"
+      : kind === "session.force_end" || kind === "session.force_end.reverted"
+        ? "session.force_end"
+        : kind === "session.group"
+          ? "session.start"
+          : kind === "group.payer"
+            ? "pos.sell"
+            : kind === "session.pause" || kind === "session.resume"
+              ? "session.pause"
+              : kind === "session.extend"
+                ? "session.extend"
+                : kind === "session.transfer"
+                  ? "session.transfer"
+                  : kind === "session.end.reverted"
+                    ? "session.end"
+                    : kind === "session.settle" || kind === "session.settle.reverted"
+                      ? "pos.sell"
+                      : kind === "credit.collect" || kind === "credit.collect.reverted"
+                        ? "credit.collect"
+                        : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+                          ? "wallet.topup"
+                          : kind === "device.screen"
+                            ? "device.screen"
+                            : kind === "device.power" || kind === "device.admin_unlock"
+                              ? "device.remote"
+                              : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 

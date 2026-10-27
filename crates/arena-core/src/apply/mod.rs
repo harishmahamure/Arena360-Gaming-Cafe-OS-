@@ -27,6 +27,7 @@ mod ads_consent;
 mod alert;
 mod branch_code;
 mod changes;
+mod controller_check;
 mod credit;
 mod credit_collect;
 pub(crate) mod credit_pause;
@@ -190,6 +191,7 @@ pub(crate) enum Target {
     SessionExpire(Box<session_expire::ExpireTarget>),
     SessionRateFlip(Box<rate_flip::FlipTarget>),
     Alert(Box<alert::AlertTarget>),
+    ControllerCheck(Box<controller_check::CheckTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -276,6 +278,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::AlertRaise(_) | P::AlertAck(_) => {
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }
+        P::ControllerCheck(c) => Target::ControllerCheck(Box::new(controller_check::load(tx, c)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

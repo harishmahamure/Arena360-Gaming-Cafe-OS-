@@ -10,6 +10,7 @@
     name,
     state,
     label,
+    badgeState,
     time,
     warning = false,
     warningText,
@@ -28,6 +29,7 @@
     name: string;
     state: Status;
     label?: MessageKey;
+    badgeState?: Status;
     time?: string;
     warning?: boolean;
     warningText?: string;
@@ -102,7 +104,7 @@
           >{/if}{name}</span
       >
       <span data-testid={unassigned ? undefined : "device-presence"}
-        ><StatusBadge {state} {label} /></span
+        ><StatusBadge state={badgeState ?? state} {label} /></span
       >
       {#if alertTag}<AlertBadge tag={alertTag} />{:else if alerts !== undefined}<AlertBadge
           count={alerts}

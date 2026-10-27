@@ -194,17 +194,17 @@ pub use process::{
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
     BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,
-    CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, CREDIT_OVERDUE_DAYS, ClearedSpend, CreditAging,
-    CreditAutoPause, CreditCollect, CreditCollectReverted, CreditCollection, CreditSetLimit,
-    CreditView, DEFAULT_REMINDER_DAYS, EXTEND_OPTIONS_MIN, EndOutcome, ExtendSource, GroupPayer,
-    PAUSE_NOTE_MAX, PauseReason, PaymentMethod, PaymentRow, SESSION_WARNING_MARKS_MIN,
-    SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionExpire, SessionExtend,
-    SessionForceEnd, SessionForceEndReverted, SessionGroup, SessionListRow, SessionListState,
-    SessionListView, SessionMode, SessionPause, SessionRateFlip, SessionResume, SessionScreen,
-    SessionSettle, SessionSettleReverted, SessionStart, SessionStartedEvent, SessionTransfer,
-    SettleOutcome, SnapshotBill, SnapshotGroupBill, SnapshotSession, UNDO_WINDOW_MS,
-    UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup,
-    WalletTopupReverted, WalletTxnView, WalletView,
+    CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, CREDIT_OVERDUE_DAYS, ClearedSpend, ControllerCheck,
+    ControllerResult, CreditAging, CreditAutoPause, CreditCollect, CreditCollectReverted,
+    CreditCollection, CreditSetLimit, CreditView, DEFAULT_REMINDER_DAYS, EXTEND_OPTIONS_MIN,
+    EndOutcome, ExtendSource, GroupPayer, PAUSE_NOTE_MAX, PauseReason, PaymentMethod, PaymentRow,
+    SESSION_WARNING_MARKS_MIN, SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionExpire,
+    SessionExtend, SessionForceEnd, SessionForceEndReverted, SessionGroup, SessionListRow,
+    SessionListState, SessionListView, SessionMode, SessionPause, SessionRateFlip, SessionResume,
+    SessionScreen, SessionSettle, SessionSettleReverted, SessionStart, SessionStartedEvent,
+    SessionTransfer, SettleOutcome, SnapshotBill, SnapshotGroupBill, SnapshotSession,
+    UNDO_WINDOW_MS, UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent,
+    WalletTopup, WalletTopupReverted, WalletTxnView, WalletView,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,

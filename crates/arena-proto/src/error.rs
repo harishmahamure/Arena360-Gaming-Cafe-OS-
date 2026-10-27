@@ -113,6 +113,8 @@ pub enum ErrorCode {
     PcUnavailable,
     NoRate,
     DeviceUnassigned,
+    /// A console has an ended session whose controllers staff have not yet marked.
+    ControllersUnchecked,
     /// The payments do not add up to the bill total.
     PaymentShort,
     /// A UPI or card payment is missing its reference.
@@ -219,6 +221,7 @@ impl ErrorCode {
             Self::PcUnavailable => "PC_UNAVAILABLE",
             Self::NoRate => "NO_RATE",
             Self::DeviceUnassigned => "DEVICE_UNASSIGNED",
+            Self::ControllersUnchecked => "CONTROLLERS_UNCHECKED",
             Self::PaymentShort => "PAYMENT_SHORT",
             Self::ReferenceRequired => "REFERENCE_REQUIRED",
             Self::UndoNotAllowed => "UNDO_NOT_ALLOWED",
@@ -369,6 +372,7 @@ mod tests {
             (ErrorCode::PcUnavailable, "PC_UNAVAILABLE"),
             (ErrorCode::NoRate, "NO_RATE"),
             (ErrorCode::DeviceUnassigned, "DEVICE_UNASSIGNED"),
+            (ErrorCode::ControllersUnchecked, "CONTROLLERS_UNCHECKED"),
             (ErrorCode::PaymentShort, "PAYMENT_SHORT"),
             (ErrorCode::ReferenceRequired, "REFERENCE_REQUIRED"),
             (ErrorCode::UndoNotAllowed, "UNDO_NOT_ALLOWED"),

@@ -1,6 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { SessionStaff, SnapshotDevice, SnapshotSession } from "@arena/ui/generated";
+import type {
+  SessionStaff,
+  SnapshotAlert,
+  SnapshotDevice,
+  SnapshotSession,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { CORS, HUB, device, json, snapshot } from "./floor-fixture";
 
@@ -9,7 +14,7 @@ const COUNTER: SessionStaff = {
   staff_id: "01JCOUNTER0000000000000000",
   display_name: "Counter",
   role_name: "Counter",
-  permissions: ["session.start", "device.screen", "device.remote"],
+  permissions: ["session.start", "session.end", "device.screen", "device.remote"],
 };
 
 const tv = (n: number, extra: Partial<SnapshotDevice> = {}) =>
@@ -35,7 +40,12 @@ const session = (n: number, extra: Partial<SnapshotSession>): SnapshotSession =>
 
 type Sent = Record<string, unknown> & { kind: string };
 
-async function open(page: Page, devices: SnapshotDevice[], sessions: SnapshotSession[] = []) {
+async function open(
+  page: Page,
+  devices: SnapshotDevice[],
+  sessions: SnapshotSession[] = [],
+  alerts: SnapshotAlert[] = [],
+) {
   const sent: Sent[] = [];
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "tok"));
   await page.route(`${HUB}/**`, async (route) => {
@@ -54,6 +64,7 @@ async function open(page: Page, devices: SnapshotDevice[], sessions: SnapshotSes
           rate_minor: 12000,
         });
         snap.sessions = sessions;
+        snap.alerts = alerts;
         return json(route, snap);
       }
       case "/ui/me":
@@ -158,4 +169,45 @@ test("a free console starts a session from its sheet, with no remote PC actions"
     device_id: tv(1).device_id,
     mode: "postpaid",
   });
+});
+
+test("a console past its end time shows Time's up with a TIME UP badge until acknowledged", async ({
+  page,
+}) => {
+  await open(
+    page,
+    [tv(1, { status: "in_session" })],
+    [session(1, { state: "expired", ends_at: Date.now() - MIN })],
+    [{ id: "A1", kind: "time_up", device_id: tv(1).device_id, raised_at: Date.now() - MIN }],
+  );
+  const t = tile(page, "PS5 1");
+  await expect(t).toContainText(en["hub.floor.times_up"]);
+  await expect(t.locator("[data-component=alert-badge]")).toContainText(en["ui.alert.tag.time_up"]);
+});
+
+test("an ended console shows CHECK CONTROLLERS and blocks Start until Returned or Missing", async ({
+  page,
+}) => {
+  const sent = await open(page, [tv(1, { controller_check: "S7" })]);
+  await expect(tile(page, "PS5 1")).toContainText(en["hub.floor.check_controllers"]);
+  await tile(page, "PS5 1").click({ position: { x: 20, y: 20 } });
+  const check = sheet(page).getByTestId("controller-check");
+  await expect(check).toBeVisible();
+  await act(page, en["hub.players.lookup.guest"]).click();
+  const start = act(page, en["hub.session.start"]);
+  await expect(start).toBeDisabled();
+  await expect(sheet(page)).toContainText(en["hub.console.mark_first"]);
+  await check.getByRole("button", { name: en["hub.console.missing"], exact: true }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]).toMatchObject({ kind: "controller.check", session_id: "S7", result: "missing" });
+  await check.getByRole("button", { name: en["hub.console.returned"], exact: true }).click();
+  await expect.poll(() => sent.length).toBe(2);
+  expect(sent[1]).toMatchObject({ kind: "controller.check", session_id: "S7", result: "returned" });
+});
+
+test("a console with its controllers marked starts a session as usual", async ({ page }) => {
+  await open(page, [tv(1)]);
+  await tile(page, "PS5 1").click({ position: { x: 20, y: 20 } });
+  await expect(sheet(page).getByTestId("controller-check")).toHaveCount(0);
+  await expect(tile(page, "PS5 1")).not.toContainText(en["hub.floor.check_controllers"]);
 });

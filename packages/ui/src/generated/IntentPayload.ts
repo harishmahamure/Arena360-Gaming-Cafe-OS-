@@ -5,6 +5,7 @@ import type { AlertRaise } from "./AlertRaise";
 import type { AuditReadGranted } from "./AuditReadGranted";
 import type { BranchBootstrap } from "./BranchBootstrap";
 import type { BranchSeedDefaults } from "./BranchSeedDefaults";
+import type { ControllerCheck } from "./ControllerCheck";
 import type { CreditAutoPause } from "./CreditAutoPause";
 import type { CreditCollect } from "./CreditCollect";
 import type { CreditCollectReverted } from "./CreditCollectReverted";
@@ -133,4 +134,5 @@ export type IntentPayload =
   | ({ kind: "session.rate_flip" } & SessionRateFlip)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer)
   | ({ kind: "alert.raise" } & AlertRaise)
-  | ({ kind: "alert.ack" } & AlertAck);
+  | ({ kind: "alert.ack" } & AlertAck)
+  | ({ kind: "controller.check" } & ControllerCheck);

@@ -4,4 +4,4 @@
  * What an alert is about. Each kind has a catalogue label (`hub.alerts.kind.<kind>`) and a tile tag
  * ([`AlertKind::tag`]).
  */
-export type AlertKind = "fixture" | "time_up";
+export type AlertKind = "fixture" | "time_up" | "controller_missing";

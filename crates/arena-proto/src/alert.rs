@@ -13,17 +13,20 @@ pub enum AlertKind {
     Fixture,
     /// A session reached its end time (raised by Story 3.26).
     TimeUp,
+    /// Staff marked a console's controllers missing after a session (raised by `controller.check`).
+    ControllerMissing,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 2] = [Self::Fixture, Self::TimeUp];
+    pub const ALL: [AlertKind; 3] = [Self::Fixture, Self::TimeUp, Self::ControllerMissing];
 
     /// The stored and wire form, e.g. `time_up`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Fixture => "fixture",
             Self::TimeUp => "time_up",
+            Self::ControllerMissing => "controller_missing",
         }
     }
 
@@ -37,6 +40,7 @@ impl AlertKind {
         match self {
             Self::Fixture => "new",
             Self::TimeUp => "time-up",
+            Self::ControllerMissing => "controller",
         }
     }
 }

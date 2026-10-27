@@ -360,6 +360,10 @@ pub(super) fn mutate(
             Target::Alert(t) => super::alert::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::ControllerCheck(_) => match target {
+            Target::ControllerCheck(t) => super::controller_check::mutate(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::SessionExpire(_) => match target {
             Target::SessionExpire(t) => super::session_expire::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),

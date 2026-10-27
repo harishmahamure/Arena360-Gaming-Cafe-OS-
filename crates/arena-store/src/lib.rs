@@ -126,6 +126,7 @@ pub use sessions::{
     list_sessions_for_day, move_open_orders, move_session, pause_session, reprice_wallet_session,
     resume_session,
 };
+pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
 pub use staff::{
     PinCandidate, RoleRow, StaffRow, StaffWrite, count_active_staff, count_active_staff_with_role,
     find_role, find_role_by_name, find_staff, find_staff_by_login, insert_role, insert_role_perm,
@@ -738,6 +739,14 @@ impl Store {
             return Ok(Vec::new());
         }
         list_open_alerts(&self.conn)
+    }
+
+    /// Every console with an ended session awaiting its controller check, as (device, session).
+    pub fn unchecked_consoles(&self) -> Result<Vec<(String, String)>, AppError> {
+        if !self.table_exists("sessions")? {
+            return Ok(Vec::new());
+        }
+        list_unchecked_consoles(&self.conn)
     }
 
     pub fn sessions_for_day(&self, business_day: &str) -> Result<Vec<SessionListing>, AppError> {

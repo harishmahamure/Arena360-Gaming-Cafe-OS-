@@ -85,6 +85,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PlanNotForGroup
         | ErrorCode::PassOutsideWindow
         | ErrorCode::PastClosing
+        | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame
         | ErrorCode::HsnRequired

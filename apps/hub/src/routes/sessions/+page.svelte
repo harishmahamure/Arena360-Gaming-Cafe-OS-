@@ -1,6 +1,11 @@
 <script lang="ts">
   import { Button, formatDateTime, formatMoney, t } from "@arena/ui";
-  import type { SessionListRow, SessionListState, SessionListView } from "@arena/ui/generated";
+  import type {
+    ControllerResult,
+    SessionListRow,
+    SessionListState,
+    SessionListView,
+  } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { goto, invalidate } from "$app/navigation";
   import { SESSION_DEPENDENCY, loadSessions } from "../../lib/auth";
@@ -20,6 +25,10 @@
     running: "hub.sessions.state.running",
     unpaid: "hub.sessions.state.unpaid",
     settled: "hub.sessions.state.settled",
+  };
+  const CONTROLLERS: Record<ControllerResult, MessageKey> = {
+    returned: "hub.sessions.controllers.returned",
+    missing: "hub.sessions.controllers.missing",
   };
   const MODE: Record<string, MessageKey> = {
     postpaid: "hub.sessions.mode.postpaid",
@@ -109,6 +118,7 @@
             <th scope="col">{t("hub.sessions.col.end")}</th>
             <th scope="col" class="num">{t("hub.sessions.col.bill")}</th>
             <th scope="col">{t("hub.sessions.col.state")}</th>
+            <th scope="col">{t("hub.sessions.col.controllers")}</th>
             <th scope="col"><span class="sr-only">{t("hub.sessions.col.action")}</span></th>
           </tr>
         </thead>
@@ -129,6 +139,9 @@
                 >
                 {t(STATE[r.state])}</td
               >
+              <td data-testid="session-controllers">
+                {r.controller_check ? t(CONTROLLERS[r.controller_check]) : "—"}
+              </td>
               <td>
                 {#if r.state === "unpaid"}
                   <Button label="hub.sessions.open" variant="secondary" onclick={() => open(r)} />

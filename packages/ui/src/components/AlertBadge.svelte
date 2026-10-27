@@ -1,13 +1,14 @@
 <script lang="ts" module>
   import type { MessageKey } from "../messages/index.js";
 
-  export type AlertTag = "new" | "call" | "time-up" | "request";
+  export type AlertTag = "new" | "call" | "time-up" | "request" | "controllers";
 
   export const ALERT_TAGS: Record<AlertTag, MessageKey> = {
     new: "ui.alert.tag.new",
     call: "ui.alert.tag.call",
     "time-up": "ui.alert.tag.time_up",
     request: "ui.alert.tag.request",
+    controllers: "ui.alert.tag.controllers",
   };
 </script>
 

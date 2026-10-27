@@ -204,11 +204,15 @@ pub enum IntentKind {
     /// Staff acknowledge an open alert, which silences its sound and clears its badge.
     #[serde(rename = "alert.ack")]
     AlertAck,
+    /// Staff record whether a console's controllers came back after a session ended. Missing
+    /// also raises a `controller_missing` alert for the manager.
+    #[serde(rename = "controller.check")]
+    ControllerCheck,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 66] = [
+    pub const ALL: [IntentKind; 67] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -275,6 +279,7 @@ impl IntentKind {
         Self::SessionRateFlip,
         Self::AlertRaise,
         Self::AlertAck,
+        Self::ControllerCheck,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -346,6 +351,7 @@ impl IntentKind {
             Self::SessionAssignPlayer => "session.assign_player",
             Self::AlertRaise => "alert.raise",
             Self::AlertAck => "alert.ack",
+            Self::ControllerCheck => "controller.check",
         }
     }
 
@@ -419,6 +425,7 @@ impl IntentKind {
             | Self::SessionRateFlip
             | Self::AlertRaise
             | Self::AlertAck
+            | Self::ControllerCheck
             | Self::SessionAssignPlayer => IntentCategory::Session,
         }
     }
@@ -471,7 +478,7 @@ impl IntentKind {
             | Self::SessionAssignPlayer
             | Self::SessionGroup
             | Self::AlertAck => Requirement::Perm(Permission::SessionStart),
-            Self::SessionEnd | Self::SessionEndReverted => {
+            Self::SessionEnd | Self::SessionEndReverted | Self::ControllerCheck => {
                 Requirement::Perm(Permission::SessionEnd)
             }
             Self::SessionForceEnd | Self::SessionForceEndReverted => {
@@ -584,6 +591,7 @@ impl IntentKind {
             | Self::SessionRateFlip
             | Self::AlertRaise
             | Self::AlertAck
+            | Self::ControllerCheck
             | Self::SessionAssignPlayer => None,
         }
     }
@@ -1092,6 +1100,8 @@ pub enum IntentPayload {
     AlertRaise(crate::AlertRaise),
     #[serde(rename = "alert.ack")]
     AlertAck(crate::AlertAck),
+    #[serde(rename = "controller.check")]
+    ControllerCheck(crate::ControllerCheck),
 }
 
 impl IntentPayload {
@@ -1163,6 +1173,7 @@ impl IntentPayload {
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
             Self::AlertRaise(_) => IntentKind::AlertRaise,
             Self::AlertAck(_) => IntentKind::AlertAck,
+            Self::ControllerCheck(_) => IntentKind::ControllerCheck,
         }
     }
 }
@@ -1408,7 +1419,9 @@ mod tests {
                 "session.start" | "session.assign_player" | "session.group" | "alert.ack" => {
                     Requirement::Perm(Permission::SessionStart)
                 }
-                "session.end" | "session.end.reverted" => Requirement::Perm(Permission::SessionEnd),
+                "session.end" | "session.end.reverted" | "controller.check" => {
+                    Requirement::Perm(Permission::SessionEnd)
+                }
                 "session.force_end" | "session.force_end.reverted" => {
                     Requirement::Perm(Permission::SessionForceEnd)
                 }

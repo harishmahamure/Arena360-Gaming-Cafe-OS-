@@ -25,6 +25,7 @@ pub(crate) struct TransferTarget {
     busy: bool,
     rate: Option<RateRow>,
     rule_id: Option<String>,
+    unchecked: bool,
     pack: Option<PlayerPackRow>,
 }
 
@@ -61,6 +62,10 @@ pub(super) fn load(
         },
         None => (None, None),
     };
+    let unchecked = match &target {
+        Some(d) => arena_store::unchecked_console_session(tx, &d.device_id)?.is_some(),
+        None => false,
+    };
     let pack = match (session.player_id.as_deref(), session.pack_id.as_deref()) {
         (Some(player_id), Some(pack_id)) if plan_backed(&session) => {
             find_player_pack(tx, player_id, pack_id)?
@@ -74,6 +79,7 @@ pub(super) fn load(
         busy,
         rate,
         rule_id,
+        unchecked,
         pack,
         session: Some(session),
     })
@@ -148,6 +154,9 @@ pub(super) fn validate(t: &TransferTarget) -> Result<(), AppError> {
             "device_id",
             "This PC already has a session.",
         ));
+    }
+    if t.unchecked {
+        return Err(super::session::unchecked_error());
     }
     if priced_by_rate(s) && t.rate.is_none() {
         return Err(AppError::with_field(

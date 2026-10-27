@@ -3132,6 +3132,60 @@ fn assert_credit_holds(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+fn assert_sessions_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let mut live = std::collections::HashSet::new();
+    for s in hub.reader.rows(Table::Sessions).unwrap() {
+        let state = text(&s, "state");
+        let held = state == "expired" && s["ended_at"] == RowValue::Null;
+        if matches!(state.as_str(), "active" | "paused" | "grace") || held {
+            prop_assert!(
+                live.insert(text(&s, "device_id")),
+                "two live sessions on a device"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn assert_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let payments = hub.reader.rows(Table::Payments).unwrap();
+    for p in &payments {
+        let reference = match &p["reference"] {
+            RowValue::Text(t) => Some(t.clone()),
+            _ => None,
+        };
+        match text(p, "method").as_str() {
+            "upi" => {
+                let r = reference.unwrap_or_default();
+                prop_assert!(
+                    r.len() == 4 && r.bytes().all(|b| b.is_ascii_digit()),
+                    "UPI ref {r:?}"
+                );
+            }
+            "card" => prop_assert!(reference.is_some_and(|r| !r.is_empty())),
+            _ => {}
+        }
+    }
+    for o in hub.reader.rows(Table::Orders).unwrap() {
+        if text(&o, "status") != "settled" {
+            continue;
+        }
+        let id = text(&o, "id");
+        let paid: i64 = payments
+            .iter()
+            .filter(|p| text(p, "order_id") == id)
+            .map(|p| int(p, "amount_minor"))
+            .sum();
+        prop_assert_eq!(
+            paid,
+            int(&o, "total_minor"),
+            "settled order {} payments",
+            id
+        );
+    }
+    Ok(())
+}
+
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()
@@ -3153,6 +3207,8 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 step(&mut hub, op)?;
                 assert_wallets_hold(&hub)?;
                 assert_credit_holds(&hub)?;
+                assert_sessions_hold(&hub)?;
+                assert_orders_hold(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

@@ -10,7 +10,8 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
     "test:shell": "playwright test",
-    "bench:floor": "playwright test -c playwright.bench.config.ts"
+    "bench:floor": "playwright test -c playwright.bench.config.ts floor-perf",
+    "bench:flows": "playwright test -c playwright.bench.config.ts flow-timing"
   },
   "dependencies": {
     "@arena/ui": "workspace:*"

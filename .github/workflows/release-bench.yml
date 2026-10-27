@@ -4,6 +4,8 @@ name: Release benchmark
 # < 250 MB; Kiosk service + app + WebView2 < 80 MB; no GPU use. Not part of ci-ok; runs on
 # demand and on release tags. `floor-perf` (Story 3.3) fails the run when the 60-device Floor misses
 # cold open 1 s, paint 2 s, frame 100 ms, input 100 ms or the 30-minute JS heap (250 MB).
+# `floor-load` and `flow-timing` (Story 3.37) fail the run when apply p95 passes 100 ms, a floor
+# update 2 s, a start or settle 10 s or a profile creation 15 s.
 # The `soak` input adds the 8-hour WAN-down soak (Story 1.22).
 
 on:
@@ -121,6 +123,36 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @arena/hub exec playwright install chromium
       - run: pnpm --filter @arena/hub bench:floor
+
+  floor-load:
+    name: floor load, 60 devices (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 45
+    env:
+      FLOOR_LOAD_SECONDS: "600"
+      FLOOR_LOAD_BURST_SECONDS: "10"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: 5/s for 10 min with 50/s bursts, then the kill-during-burst check
+        run: cargo test --locked --release -p arena-core --test floor_load -- --nocapture
+
+  flow-timing:
+    name: counter flow timings (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/hub exec playwright install chromium
+      - run: pnpm --filter @arena/hub bench:flows
+      - name: Profile creation under 15 s
+        run: pnpm --filter @arena/hub exec playwright test --project=desktop -g "create a profile in under 15 seconds" players.spec.ts
 
   kiosk-installer:
     name: build the Kiosk installer

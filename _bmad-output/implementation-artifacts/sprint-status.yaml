@@ -77,7 +77,7 @@ development_status:
   3-10-the-pc-unlocks-to-a-session-screen-when-a-session-starts: done
   3-11-end-a-postpaid-session-and-see-the-bill-to-the-minute: done
   3-12-settle-a-bill-into-payment-records-with-reference-rules: done
-  3-13-settle-bar-and-payment-split-at-the-counter: review
+  3-13-settle-bar-and-payment-split-at-the-counter: done
   3-14-undo-for-end-and-settle: backlog
   3-15-pause-and-resume-a-session-with-a-reason: backlog
   3-16-wallet-top-up-and-paying-from-the-wallet: backlog

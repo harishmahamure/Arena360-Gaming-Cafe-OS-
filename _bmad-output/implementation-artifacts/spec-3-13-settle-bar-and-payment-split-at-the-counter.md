@@ -2,7 +2,7 @@
 title: 'Story 3.13: Settle bar and payment split at the counter'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'adadc1c'
 review_loop_iteration: 0
 followup_review_recommended: false

@@ -2,7 +2,7 @@
 title: 'Story 3.14: Undo for End and Settle'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: '2de75054e483aaa4f116f6436d1590ae031e946f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -99,6 +99,6 @@ Compensation deletes rows with `before` images (as `stock.in.reverted` deletes t
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: `cargo fmt --check`, clippy (proto/store/core/replay/api/kiosk-core, `-D warnings`), `cargo test` for those crates, `pnpm --filter @arena/hub check`, check:strings, check:tokens-used, check:contrast, Playwright `undo.spec.ts` + `settle.spec.ts` (42 passed).
 Left for later: the `effect.recorded` event has no sender until Epic 5 records a real effect (the server already rejects Undo on a recorded effect); undoing a Settle does not re-lock the kiosk to "Pay at counter".

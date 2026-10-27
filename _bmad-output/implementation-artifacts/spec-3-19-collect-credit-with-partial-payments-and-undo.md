@@ -81,6 +81,8 @@ deferred: []
 
 ## Review Triage Log
 
+- Fixed: `a_collection_can_be_paid_from_the_wallet_and_by_upi` asserted payment rows in table order, which varies with random ids and failed about half the runs; it now compares the sorted methods.
+
 ## Verification
 
 **Commands:**

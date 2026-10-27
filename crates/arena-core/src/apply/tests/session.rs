@@ -2835,12 +2835,13 @@ async fn a_collection_can_be_paid_from_the_wallet_and_by_upi() {
     assert_eq!(owed(&f, &p), 3_000);
     assert_eq!(balance(&f, &p), 1_000);
     let order = collection_order(&f);
-    let methods: Vec<_> = table(&f, Table::Payments)
+    let mut methods: Vec<_> = table(&f, Table::Payments)
         .iter()
         .filter(|x| text(x, "order_id") == order)
         .map(|x| text(x, "method"))
         .collect();
-    assert_eq!(methods, ["wallet", "upi"]);
+    methods.sort();
+    assert_eq!(methods, ["upi", "wallet"]);
     let shown = reopen(&f).wallet_txns(&p).unwrap();
     assert!(shown.iter().all(|t| t.reason != "credit"));
     assert_eq!(shown[0].delta_minor, -4_000);

@@ -5,12 +5,21 @@
 #        BMAD_STORY_RETRIES  (0 = retry a story forever; N = mark it blocked after N failed attempts)
 #        BMAD_RETRY_COOLDOWN (seconds to wait before retrying a failed attempt, default 30)
 #
+# Console / master log show only status lines (running / reviewing / completed / failed / blocked, with the
+# story id). The agent's full output goes to .bmad-logs/run_<ts>_story_<n>[_review].log (raw stream: *.raw.jsonl).
+#
 # Design rules (learned the hard way):
 #  * Never `set -e`: a single failing grep used to kill the whole loop silently. Every failure is handled explicitly.
+#  * Never read claude through a pipe. On Windows the claude process (or a child that inherited its stdout, e.g. an
+#    MCP server or a detached test run) can linger after the final `result` event, so `claude | tee` never saw EOF
+#    and the runner sat after <STORY_DONE> without ever reviewing or starting the next story. claude writes to the
+#    raw log; the runner polls that file for the `result` event (or the timeout) and then kills the process tree.
+#    (`perl -e 'alarm; exec'` did not help: on Windows exec replaces perl, so the alarm never fired.)
 #  * Quota / rate limits are detected from claude's structured `result` event and stderr, not from the agent's prose.
 #    When hit, the runner keeps the half-finished work in the tree, waits for the quota to reset, and resumes the SAME story.
 #  * A story is never skipped or marked blocked because the agent stopped early or hallucinated a marker; it is retried.
 set -uo pipefail
+export GIT_TERMINAL_PROMPT=0   # a push that needs a credential prompt must fail, not hang the loop
 
 MAX_STORIES=${1:-0}
 CLAUDE_BIN=${BMAD_CLAUDE_BIN:-claude}
@@ -27,6 +36,7 @@ COUNT=0        # stories finished (done, or sent back to build after a failed re
 ITER=0         # agent runs started (used for log file names)
 BLOCKED=0
 LOG_DIR=".bmad-logs"
+CHILD_PID=""   # the running claude process, killed on exit
 # Matched only against claude's error/result text and stderr, never against the agent's normal output.
 LIMIT_RE='hit your (usage |rate )?limit|usage limit|rate.?limit|limit reached|credit balance|out of (extra )?usage|insufficient credits|too many requests|overloaded|resets? (at|in) [0-9]|try again (later|in)|\b(429|529)\b'
 mkdir -p "$LOG_DIR"
@@ -48,17 +58,33 @@ LATEST_IS_COPY=0
 ln -sf "sprint_${RUN_TIMESTAMP}.log" "$LOG_DIR/latest.log" 2>/dev/null || LATEST_IS_COPY=1
 sync_latest() { [ "$LATEST_IS_COPY" = "1" ] && cp "$MASTER_LOG" "$LOG_DIR/latest.log" 2>/dev/null || true; }
 
-log() { echo "$@" | tee -a "$MASTER_LOG"; sync_latest; }
+log() { echo "$(date +"%H:%M:%S") $*" | tee -a "$MASTER_LOG"; sync_latest; }
 
+# kill_tree PID: kill a process and every descendant. Walks the MSYS process table (children first), then
+# taskkill //T on Windows for native descendants (claude.exe, node, python MCP servers), then the pid itself.
+kill_tree() {
+  local pid=${1:-} kid winpid
+  [ -n "$pid" ] || return 0
+  for kid in $(ps -ef 2>/dev/null | awk -v p="$pid" '$3 == p { print $2 }'); do
+    kill_tree "$kid"
+  done
+  if command -v taskkill >/dev/null 2>&1; then
+    winpid=$(ps -p "$pid" 2>/dev/null | awk -v p="$pid" '$1 == p { print $4 }')
+    [ -n "$winpid" ] && taskkill //F //T //PID "$winpid" >/dev/null 2>&1
+  fi
+  kill -9 "$pid" 2>/dev/null
+  return 0
+}
 # Whatever makes the runner exit, say so in the log instead of vanishing.
 on_exit() {
   local rc=$?
-  log "🛑 Runner exiting (code $rc) at $(date +"%H:%M:%S"): $COUNT stories finished, $BLOCKED blocked, $ITER agent runs."
+  kill_tree "$CHILD_PID"
+  log "🛑 exited (code $rc): $COUNT completed, $BLOCKED blocked, $ITER agent runs"
 }
 trap on_exit EXIT
-trap 'log "🛑 Interrupted. Uncommitted work is left in the tree; rerun the script to resume the same story."; exit 130' INT TERM
+trap 'log "🛑 interrupted; uncommitted work stays in the tree, rerun to resume"; exit 130' INT TERM
 
-# Pretty-print claude's stream-json. Perl (with core JSON::PP) ships with Git Bash; python does not.
+# Pretty-print claude's stream-json into the per-run story log. Perl (with core JSON::PP) ships with Git Bash.
 format_stream() {
   perl -MJSON::PP -ne '
     BEGIN { $| = 1; binmode STDOUT, ":utf8"; }
@@ -80,14 +106,41 @@ format_stream() {
     }'
 }
 
-# run_claude PROMPT PRETTY_LOG RAW_LOG  -> exit status of claude
+# has_result RAW_LOG -> 0 once the stream contains claude's final top-level `result` event.
+has_result() {
+  tail -n 20 "$1" 2>/dev/null | perl -MJSON::PP -ne '
+    my $e = eval { decode_json($_) }; next unless ref $e;
+    $found = 1, last if ($e->{type} // "") eq "result";
+    END { exit($found ? 0 : 1) }'
+}
+
+# run_claude PROMPT PRETTY_LOG RAW_LOG -> 0 when claude produced a result event, 1 on timeout / early death.
+# Nothing from the agent reaches the console; see the header comment for why claude is not piped.
 run_claude() {
-  perl -e 'alarm shift; exec @ARGV' "$STORY_TIMEOUT" \
-    "$CLAUDE_BIN" --dangerously-skip-permissions --verbose --output-format stream-json --model "$MODEL" --effort "$EFFORT" -p "$1" 2>&1 \
-    | tee "$3" | format_stream | tee "$2" | tee -a "$MASTER_LOG"
-  local rc=${PIPESTATUS[0]}
-  sync_latest
-  return "$rc"
+  local prompt=$1 pretty=$2 raw=$3 start now status=1
+  : > "$raw"
+  "$CLAUDE_BIN" --dangerously-skip-permissions --verbose --output-format stream-json --model "$MODEL" --effort "$EFFORT" -p "$prompt" >"$raw" 2>&1 </dev/null &
+  CHILD_PID=$!
+  start=$(date +%s)
+  while kill -0 "$CHILD_PID" 2>/dev/null; do
+    if has_result "$raw"; then
+      sleep 5   # let the stream flush; claude may still exit on its own
+      status=0
+      break
+    fi
+    now=$(date +%s)
+    if [ $((now - start)) -ge "$STORY_TIMEOUT" ]; then
+      log "⏱️  agent run exceeded ${STORY_TIMEOUT}s; killing it"
+      break
+    fi
+    sleep 5
+  done
+  kill_tree "$CHILD_PID"
+  wait "$CHILD_PID" 2>/dev/null
+  CHILD_PID=""
+  format_stream < "$raw" > "$pretty" 2>/dev/null
+  has_result "$raw" && status=0
+  return "$status"
 }
 
 # Error-ish text from a raw stream-json log: the final result event when it is an error, plus any non-JSON (stderr) lines.
@@ -110,7 +163,7 @@ hit_limit() {
   local errs
   errs=$(stream_errors "$1")
   if echo "$errs" | grep -aqiE "$LIMIT_RE"; then
-    LIMIT_MSG=$(echo "$errs" | grep -aiE "$LIMIT_RE" | head -1 | cut -c1-300)
+    LIMIT_MSG=$(echo "$errs" | grep -aiE "$LIMIT_RE" | head -1 | cut -c1-200)
     return 0
   fi
   return 1
@@ -133,21 +186,35 @@ open_stories() {
   awk '{ sub(/[[:cntrl:]]+$/, "") } /^ +[0-9]+-[0-9]+-[^:]+: */ { s=$2; if (s != "done" && s != "blocked") n++ } END { print n+0 }' "$f"
 }
 
-# resolve_story_id PRETTY_LOG HEAD_BEFORE: marker in the log, else the commit message, else sprint-status.yaml.
-resolve_story_id() {
-  local id f st
-  id=$(grep -oE "<STORY_ID: *[^>]+>" "$1" 2>/dev/null | head -1 | sed -E 's/<STORY_ID: *([^> ]*) *>/\1/')
-  if [ -n "$id" ]; then echo "$id"; return; fi
-  id=$(git log --format=%s "$2..HEAD" 2>/dev/null | sed -nE 's/^feat\(story\): (implement|complete) ([^ ]+).*/\2/p' | head -1)
-  if [ -n "$id" ]; then echo "$id"; return; fi
+# first_story_with_status STATUS... -> key of the first story entry whose status is one of the given, in that order.
+first_story_with_status() {
+  local f st id
   f=$(sprint_file)
   [ -n "$f" ] || { echo ""; return; }
-  for st in in-progress review ready-for-dev; do
+  for st in "$@"; do
     id=$(grep -E "^ +[0-9]+-[0-9]+-[^:]+: *$st[[:space:]]*$" "$f" | head -1 | sed -E 's/^ +([^:]+):.*/\1/')
     if [ -n "$id" ]; then echo "$id"; return; fi
   done
   echo ""
 }
+
+# The story the next build run will pick, mirroring the agent's own selection order.
+next_story_id() {
+  first_story_with_status in-progress review ready-for-dev backlog
+}
+
+# resolve_story_id PRETTY_LOG HEAD_BEFORE: marker in the log, else the commit message, else sprint-status.yaml.
+resolve_story_id() {
+  local id
+  id=$(grep -oE "<STORY_ID: *[^>]+>" "$1" 2>/dev/null | head -1 | sed -E 's/<STORY_ID: *([^> ]*) *>/\1/')
+  if [ -n "$id" ]; then echo "$id"; return; fi
+  id=$(git log --format=%s "$2..HEAD" 2>/dev/null | sed -nE 's/^feat\(story\): (implement|complete) ([^ ]+).*/\2/p' | head -1)
+  if [ -n "$id" ]; then echo "$id"; return; fi
+  # Last resort: the story the agent was told to pick (same order as the build prompt), so a run that
+  # never announced itself can still be retried or blocked instead of looping for ever.
+  next_story_id
+}
+
 
 # Throw away whatever an agent run left behind. Only used when a story is given up on (finite BMAD_STORY_RETRIES).
 reset_tree() {
@@ -161,18 +228,16 @@ push_changes() {
   local attempt
   for attempt in 1 2 3; do
     if git push "$REMOTE" "HEAD:$BRANCH" >>"$MASTER_LOG" 2>&1; then
-      log "⬆️  Pushed $BRANCH to $REMOTE ($(git rev-parse --short HEAD))."
       return 0
     fi
-    log "⚠️  Push attempt $attempt failed; rebasing onto $REMOTE/$BRANCH and retrying..."
     git fetch -q "$REMOTE" "$BRANCH" 2>>"$MASTER_LOG" || true
     if ! git rebase -q "$REMOTE/$BRANCH" >>"$MASTER_LOG" 2>&1; then
       git rebase --abort 2>/dev/null || true
-      log "❌ Rebase conflict; leaving commits local. Resolve by hand: git pull --rebase $REMOTE $BRANCH && git push"
+      log "❌ push failed (rebase conflict); commits stay local: git pull --rebase $REMOTE $BRANCH && git push"
       return 1
     fi
   done
-  log "❌ Could not push after 3 attempts. Commits remain local on $BRANCH."
+  log "❌ push failed after 3 attempts; commits stay local on $BRANCH"
   return 1
 }
 
@@ -183,9 +248,9 @@ mark_blocked() {
   [ -n "$f" ] && [ -n "$1" ] || return 0
   perl -pi -e "s/^( *\Q$1\E:).*/\$1 blocked/" "$f"
   BLOCKED=$((BLOCKED + 1))
-  log "🚫 Marked $1 as blocked in $f"
+  log "🚫 $1 blocked"
   if ! git diff --quiet -- "$f"; then
-    git add -- "$f" && git commit -q -m "chore(sprint): mark $1 blocked" && log "📝 Committed blocked status for $1"
+    git add -- "$f" && git commit -q -m "chore(sprint): mark $1 blocked"
     push_changes || true
   fi
 }
@@ -193,7 +258,6 @@ mark_blocked() {
 # Commit anything the agent left uncommitted after reporting success.
 commit_leftovers() {
   if [ -n "$(git status --porcelain)" ]; then
-    log "📝 Agent left uncommitted changes; committing them as part of $1."
     git add -A && git commit -q -m "$2" || true
   fi
 }
@@ -201,17 +265,15 @@ commit_leftovers() {
 # Start from the remote tip so we never rebuild stories another machine already finished.
 sync_repo() {
   [ "$PUSH" = "1" ] || return 0
-  log "🔄 Syncing $BRANCH with $REMOTE..."
   if ! git pull --rebase --autostash -q "$REMOTE" "$BRANCH" >>"$MASTER_LOG" 2>&1; then
     git rebase --abort 2>/dev/null || true
-    log "⚠️  Could not fast-forward from $REMOTE/$BRANCH; continuing on local HEAD."
+    log "⚠️  could not sync from $REMOTE/$BRANCH; continuing on local HEAD"
   fi
-  log "📌 HEAD: $(git log --oneline -1)"
 }
 
 credits_ok() {
   local out rc
-  out=$("$CLAUDE_BIN" -p "Reply with exactly OK" --model "$MODEL" --max-turns 1 --output-format json 2>&1)
+  out=$("$CLAUDE_BIN" -p "Reply with exactly OK" --model "$MODEL" --max-turns 1 --output-format json 2>&1 </dev/null)
   rc=$?
   [ $rc -eq 0 ] && ! echo "$out" | grep -aqiE "$LIMIT_RE"
 }
@@ -221,10 +283,9 @@ wait_for_credits() {
   local n=0
   until credits_ok; do
     n=$((n + 1))
-    log "⏳ $(date +"%H:%M:%S") Quota exhausted / rate limited (check #$n). Retrying in $((LIMIT_POLL / 60)) min..."
+    log "⏳ quota / rate limited (check #$n); retrying in $((LIMIT_POLL / 60)) min"
     sleep "$LIMIT_POLL"
   done
-  log "✅ $(date +"%H:%M:%S") Credits available, continuing."
 }
 
 retries_left() {  # retries_left ATTEMPTS -> 0 when another attempt is allowed
@@ -242,7 +303,7 @@ Follow these exact steps in order:
 4. RESUME CHECK: Run 'git status'. If there are uncommitted changes, they are a previous interrupted attempt at this same story (the runner was stopped by a quota limit or timeout). Inspect them and CONTINUE from them; do NOT discard or revert them.
 5. PREPARE STORY: If the story is 'backlog' (no story file yet), run the bmad-create-story workflow to draft it and mark it 'ready-for-dev'.
 6. BUILD STORY: Run the bmad-dev-story workflow for that story (read docs/ARCHITECTURE-SPINE.md first if present). Implement every task and acceptance criterion using Serena LSP and Context7. If the story is in 'review', address any open review findings in the story file instead.
-7. VERIFY GATE: Run the project's typechecker, linter, and unit tests. Fix all failures before proceeding.
+7. VERIFY GATE: Run the project's typechecker, linter, and unit tests. Fix all failures before proceeding. Never leave background processes running when you finish.
 8. UPDATE SPRINT & COMMIT:
    - Check off all completed tasks in the story file and set its status to 'review'.
    - Update sprint-status.yaml so this story is 'review'.
@@ -255,7 +316,7 @@ review_prompt() {
   cat <<PROMPT
 You are an autonomous BMAD reviewer in an unattended loop. Story key: $1.
 1. Run the bmad-code-review workflow for this story (status 'review'). Read the story file and the diff of the last commit.
-2. Fix every blocking finding directly in code, re-run the typechecker, linter and unit tests until green.
+2. Fix every blocking finding directly in code, re-run the typechecker, linter and unit tests until green. Never leave background processes running when you finish.
 3. Set the story file status and sprint-status.yaml entry to 'done'. Commit with message: 'feat(story): complete $1'. Do NOT push; the runner pushes.
 4. Output the exact string <REVIEW_DONE> as your final line. If the implementation is fundamentally wrong and cannot be fixed, write the findings into the story file, commit that, output <REVIEW_FAILED> instead and leave status as 'review'.
 PROMPT
@@ -263,15 +324,10 @@ PROMPT
 
 RETRIES_LABEL=unlimited; [ "$STORY_RETRIES" -gt 0 ] && RETRIES_LABEL=$STORY_RETRIES
 MAX_LABEL=unlimited;     [ "$MAX_STORIES" -gt 0 ] && MAX_LABEL=$MAX_STORIES
-log "🚀 Starting Autonomous BMAD Sprint Runner ($MODEL / effort $EFFORT / timeout ${STORY_TIMEOUT}s / review=$REVIEW / push=$PUSH to $REMOTE/$BRANCH / limit-poll ${LIMIT_POLL}s / story-retries $RETRIES_LABEL / max-stories $MAX_LABEL)"
-log "📂 Live logs saving to: $LOG_DIR/latest.log"
-log "🔎 Preflight: checking credits / rate limits..."
+log "🚀 sprint runner started ($MODEL / effort $EFFORT / timeout ${STORY_TIMEOUT}s / review=$REVIEW / push=$PUSH / retries $RETRIES_LABEL / max-stories $MAX_LABEL)"
+log "📂 agent logs: $LOG_DIR/run_${RUN_TIMESTAMP}_story_<n>.log"
 wait_for_credits
 sync_repo
-if [ -n "$(git status --porcelain)" ]; then
-  log "📎 Uncommitted changes found from an earlier interrupted attempt; the agent will resume from them."
-fi
-log "---------------------------------------------------------------------"
 
 STORY_ATTEMPT=0   # failed build attempts on the current story
 REVIEW_ATTEMPT=0  # failed review attempts on the current story
@@ -284,11 +340,13 @@ while [ "$MAX_STORIES" -eq 0 ] || [ "$COUNT" -lt "$MAX_STORIES" ]; do
   REVIEW_LOG="$LOG_DIR/run_${RUN_TIMESTAMP}_story_${ITER}_review.log"
   REVIEW_RAW="$LOG_DIR/run_${RUN_TIMESTAMP}_story_${ITER}_review.raw.jsonl"
   HEAD_BEFORE=$(git rev-parse HEAD)
-  RETRY_NOTE=""; [ "$STORY_ATTEMPT" -gt 0 ] && RETRY_NOTE=" (retry #$STORY_ATTEMPT of current story)"
+  RETRY_NOTE=""; [ "$STORY_ATTEMPT" -gt 0 ] && RETRY_NOTE=" (retry #$STORY_ATTEMPT)"
 
-  log ""
-  log "🔄 [Run $ITER | finished $COUNT / $MAX_LABEL | open stories: $(open_stories)] Started at $(date +"%H:%M:%S")$RETRY_NOTE"
-  log "📄 Story log: $STORY_LOG"
+  if [ "$(open_stories)" -eq 0 ]; then
+    log "🎉 sprint complete: all stories done ($BLOCKED blocked)"
+    exit 0
+  fi
+  log "▶️  running $(next_story_id)$RETRY_NOTE  [$(open_stories) open]"
 
   run_claude "$(build_prompt)" "$STORY_LOG" "$STORY_RAW"
   CLAUDE_RC=$?
@@ -296,37 +354,25 @@ while [ "$MAX_STORIES" -eq 0 ] || [ "$COUNT" -lt "$MAX_STORIES" ]; do
 
   # ---- Quota / rate limit: keep the work, wait, resume the same story. --------------------------------
   if hit_limit "$STORY_RAW"; then
-    log ""
-    log "⛔ $(date +"%H:%M:%S") Quota exhausted or rate limited mid-run: ${LIMIT_MSG}"
-    log "   Keeping uncommitted work for ${STORY_ID:-the current story}; will resume it when the quota resets."
+    log "⛔ ${STORY_ID:-story} paused: ${LIMIT_MSG}"
     wait_for_credits
     continue
   fi
 
   # ---- Sprint complete: trust it only if sprint-status.yaml agrees. ----------------------------------
-  if has_marker SPRINT_COMPLETE "$STORY_LOG"; then
-    OPEN=$(open_stories)
-    if [ "$OPEN" -eq 0 ]; then
-      log ""
-      log "🎉 All stories are COMPLETE ($BLOCKED blocked). Exiting loop cleanly."
-      exit 0
-    fi
-    log "⚠️  Agent claimed <SPRINT_COMPLETE> but $OPEN stories are still open in sprint-status.yaml. Ignoring and retrying."
+  if has_marker SPRINT_COMPLETE "$STORY_LOG" && [ "$(open_stories)" -eq 0 ]; then
+    log "🎉 sprint complete: all stories done ($BLOCKED blocked)"
+    exit 0
   fi
 
   # ---- Agent stopped early / timed out / hallucinated: retry the same story, never skip it. ------------
   if ! has_marker STORY_DONE "$STORY_LOG"; then
     STORY_ATTEMPT=$((STORY_ATTEMPT + 1))
-    log ""
-    log "⚠️  Story ${STORY_ID:-?} did not finish (claude exit $CLAUDE_RC; timeout or no <STORY_DONE>). Attempt $STORY_ATTEMPT failed. Log: $STORY_LOG"
-    ERRS=$(stream_errors "$STORY_RAW" | head -3 | cut -c1-300)
-    [ -n "$ERRS" ] && log "   claude reported: $ERRS"
+    log "⚠️  ${STORY_ID:-?} failed (attempt $STORY_ATTEMPT, exit $CLAUDE_RC); see $STORY_LOG"
     if retries_left "$STORY_ATTEMPT"; then
-      log "🔁 Retrying ${STORY_ID:-the story} in ${RETRY_COOLDOWN}s, continuing from the work left in the tree."
       sleep "$RETRY_COOLDOWN"
       continue
     fi
-    log "🚫 Gave up on ${STORY_ID:-?} after $STORY_ATTEMPT attempts (BMAD_STORY_RETRIES=$STORY_RETRIES)."
     reset_tree
     mark_blocked "$STORY_ID"
     STORY_ATTEMPT=0; REVIEW_ATTEMPT=0
@@ -337,51 +383,44 @@ while [ "$MAX_STORIES" -eq 0 ] || [ "$COUNT" -lt "$MAX_STORIES" ]; do
   push_changes || true
 
   # ---- Review loop: retry on limit or early stop; <REVIEW_FAILED> sends the story back to build. -------
-  if [ "$REVIEW" = "1" ]; then
-    if [ -z "$STORY_ID" ]; then
-      log "⚠️  Could not determine the story key for review; the next build run will pick up the 'review' story."
-    else
-      while :; do
-        REVIEW_NOTE=""; [ "$REVIEW_ATTEMPT" -gt 0 ] && REVIEW_NOTE=" (retry #$REVIEW_ATTEMPT)"
-        log "🧐 Reviewing $STORY_ID...$REVIEW_NOTE"
-        run_claude "$(review_prompt "$STORY_ID")" "$REVIEW_LOG" "$REVIEW_RAW"
-        CLAUDE_RC=$?
-        if hit_limit "$REVIEW_RAW"; then
-          log "⛔ $(date +"%H:%M:%S") Quota exhausted during review of $STORY_ID: ${LIMIT_MSG}"
-          log "   Keeping review work in the tree; will resume the review when the quota resets."
-          wait_for_credits
-          continue
-        fi
-        if has_marker REVIEW_DONE "$REVIEW_LOG"; then
-          commit_leftovers "$STORY_ID" "feat(story): complete ${STORY_ID}"
-          push_changes || true
-          break
-        fi
-        if has_marker REVIEW_FAILED "$REVIEW_LOG"; then
-          log "↩️  Reviewer rejected $STORY_ID; it stays in 'review' and the next build run will address the findings."
-          commit_leftovers "$STORY_ID" "chore(story): review findings for ${STORY_ID}"
-          push_changes || true
-          break
-        fi
-        REVIEW_ATTEMPT=$((REVIEW_ATTEMPT + 1))
-        log "⚠️  Review of $STORY_ID did not finish (claude exit $CLAUDE_RC; no <REVIEW_DONE>). Attempt $REVIEW_ATTEMPT failed. Log: $REVIEW_LOG"
-        if retries_left "$REVIEW_ATTEMPT"; then
-          log "🔁 Retrying the review in ${RETRY_COOLDOWN}s."
-          sleep "$RETRY_COOLDOWN"
-          continue
-        fi
-        log "🚫 Gave up reviewing $STORY_ID after $REVIEW_ATTEMPT attempts (BMAD_STORY_RETRIES=$STORY_RETRIES)."
-        reset_tree
-        mark_blocked "$STORY_ID"
+  if [ "$REVIEW" = "1" ] && [ -n "$STORY_ID" ]; then
+    while :; do
+      REVIEW_NOTE=""; [ "$REVIEW_ATTEMPT" -gt 0 ] && REVIEW_NOTE=" (retry #$REVIEW_ATTEMPT)"
+      log "🧐 reviewing $STORY_ID$REVIEW_NOTE"
+      run_claude "$(review_prompt "$STORY_ID")" "$REVIEW_LOG" "$REVIEW_RAW"
+      CLAUDE_RC=$?
+      if hit_limit "$REVIEW_RAW"; then
+        log "⛔ $STORY_ID review paused: ${LIMIT_MSG}"
+        wait_for_credits
+        continue
+      fi
+      if has_marker REVIEW_DONE "$REVIEW_LOG"; then
+        commit_leftovers "$STORY_ID" "feat(story): complete ${STORY_ID}"
+        push_changes || true
         break
-      done
-    fi
+      fi
+      if has_marker REVIEW_FAILED "$REVIEW_LOG"; then
+        log "↩️  $STORY_ID sent back to build (review findings recorded)"
+        commit_leftovers "$STORY_ID" "chore(story): review findings for ${STORY_ID}"
+        push_changes || true
+        break
+      fi
+      REVIEW_ATTEMPT=$((REVIEW_ATTEMPT + 1))
+      log "⚠️  $STORY_ID review failed (attempt $REVIEW_ATTEMPT, exit $CLAUDE_RC); see $REVIEW_LOG"
+      if retries_left "$REVIEW_ATTEMPT"; then
+        sleep "$RETRY_COOLDOWN"
+        continue
+      fi
+      reset_tree
+      mark_blocked "$STORY_ID"
+      break
+    done
   fi
 
   COUNT=$((COUNT + 1))
   STORY_ATTEMPT=0; REVIEW_ATTEMPT=0
-  log "✅ Story $COUNT (${STORY_ID:-?}) finished at $(date +"%H:%M:%S"); $(open_stories) stories still open. Cooling down 3s..."
+  log "✅ completed ${STORY_ID:-?}  [$COUNT done this run, $(open_stories) open]"
   sleep 3
 done
 
-log "🏁 Reached the story limit of $MAX_STORIES ($BLOCKED blocked)."
+log "🏁 reached the story limit of $MAX_STORIES ($BLOCKED blocked)"

@@ -44,6 +44,7 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
 
   private var banner: AdView? = null
   private var bannerRequested = false
+  private var bannerWidth = 0
   private var interstitial: InterstitialAd? = null
   private var loadingInterstitial = false
 
@@ -55,13 +56,15 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
   fun init(config: String?): String {
     this.config = AdsConfig.parse(config)
     if (started.compareAndSet(false, true)) {
-      if (BuildConfig.DEBUG) AdsStrictMode.install(activity)
+      // A thread policy covers only the thread that sets it, and `init` runs on the WebView's bridge thread.
+      if (BuildConfig.DEBUG) activity.runOnUiThread { AdsStrictMode.install(activity) }
       worker.execute {
         MobileAds.setRequestConfiguration(requestConfiguration())
         MobileAds.initialize(activity.applicationContext) {}
         ready = true
       }
-    } else if (ready) {
+    } else {
+      // Queued behind the start-up task on the single worker, so a later rating is never dropped.
       worker.execute { MobileAds.setRequestConfiguration(requestConfiguration()) }
     }
     return JSONObject().put("debug", BuildConfig.DEBUG).toString()
@@ -91,9 +94,12 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
           }
       if (view.parent == null) host.addView(view, params) else view.layoutParams = params
       view.visibility = View.VISIBLE
-      if (!bannerRequested) {
+      val width = r.width.toInt()
+      if (!bannerRequested || width != bannerWidth) {
+        // A new width (rotation, resize) gets a new adaptive size, and so a new request.
+        bannerWidth = width
         bannerRequested = true
-        view.setAdSize(AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(activity, r.width.toInt()))
+        view.setAdSize(AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(activity, width))
         emit(AdEvents.REQUESTED, AdEvents.BANNER)
         view.loadAd(AdRequest.Builder().build())
       }
@@ -114,6 +120,7 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
       }
       banner = null
       bannerRequested = false
+      bannerWidth = 0
     }
   }
 
@@ -150,7 +157,13 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
   @JavascriptInterface
   fun interstitialShow() {
     activity.runOnUiThread {
-      val ad = interstitial ?: return@runOnUiThread
+      val ad =
+        interstitial
+          ?: run {
+            // Tell the page nothing is showing, so it does not wait for a dismiss.
+            emit(AdEvents.FAILED, AdEvents.INTERSTITIAL)
+            return@runOnUiThread
+          }
       interstitial = null
       ad.fullScreenContentCallback =
         object : FullScreenContentCallback() {

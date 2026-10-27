@@ -116,6 +116,7 @@ class MainActivity : TauriActivity() {
       applyTextZoom(webView)
       webView.addJavascriptInterface(HubBridge(this), "ArenaHub")
       // Inert until the page's ads gate (Android and Free) calls `init`.
+      ads?.release()
       ads = ArenaAds(this, webView).also { webView.addJavascriptInterface(it, "ArenaAds") }
       claimBack()
     }

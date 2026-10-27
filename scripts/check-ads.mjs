@@ -273,6 +273,7 @@ const ARTEFACT_STRINGS = [
 export function checkArtefact(path, allow = []) {
   const errors = [];
   const files = statSync(path).isDirectory() ? [...walk(path, new Set())] : [path];
+  if (files.length === 0) errors.push(`${path}: no files to inspect`);
   for (const f of files) {
     const buf = readFileSync(f);
     for (const s of ARTEFACT_STRINGS) {
@@ -333,7 +334,14 @@ export function checkBuiltIds(root, requireProduction = false) {
     const manifest = [...walk(join(manifestRoot, variant), new Set())].find((f) =>
       f.endsWith("AndroidManifest.xml"),
     );
-    if (!cfg && !manifest) continue;
+    // Both variants and both files, or an id could ship unchecked.
+    if (!cfg)
+      errors.push(`${variant}: no BuildConfig.java found: build the ${variant} Android Hub first`);
+    if (!manifest)
+      errors.push(
+        `${variant}: no merged AndroidManifest.xml found: build the ${variant} Android Hub first`,
+      );
+    if (!cfg || !manifest) continue;
     seen++;
     errors.push(
       ...checkVariantIds(

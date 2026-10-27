@@ -87,8 +87,8 @@ async function open(page: Page, tier: Tier | null, { debug = true, path = "/floo
 
 const calls = (page: Page) => page.evaluate(() => (window as unknown as { __ads: string[] }).__ads);
 /** The Hub's tier moved: the snapshot says so and the stream pushes the change. */
-const entitlement = (hub: Hub, tier: Tier | null) => {
-  hub.tier = tier;
+const entitlement = (hub: Hub, tier: Tier | null, { snapshot = true } = {}) => {
+  if (snapshot) hub.tier = tier;
   hub.queue.push(`event: entitlement.changed\ndata: ${JSON.stringify({ tier })}\n\n`);
 };
 
@@ -188,10 +188,10 @@ test.describe("android", () => {
   });
 
   test("a paid Hub never starts it and renders no ad slot", async ({ page }) => {
-    await open(page, "basic");
-    await page.waitForTimeout(800);
-    expect(await calls(page)).toEqual([]);
+    await open(page, "basic", { path: "/dev/ads" });
+    await expect(page.getByTestId("dev-ads-unavailable")).toBeVisible();
     await expect(page.getByTestId("dev-ads-slot")).toHaveCount(0);
+    expect(await calls(page)).toEqual([]);
   });
 
   test("a Hub that does not know its tier yet starts nothing", async ({ page }) => {
@@ -211,6 +211,16 @@ test.describe("android", () => {
     await expect
       .poll(() => calls(page))
       .toEqual(['init {"rating":"PG"}', "bannerDestroy", 'init {"rating":"PG"}']);
+  });
+
+  test("the stream event alone stops ads, with the snapshot still saying Free", async ({
+    page,
+  }) => {
+    const hub = await open(page, "free");
+    await expect.poll(() => calls(page)).toEqual(['init {"rating":"PG"}']);
+    // The snapshot keeps its old tier, so only the `entitlement.changed` event can destroy the banner.
+    entitlement(hub, "premium", { snapshot: false });
+    await expect.poll(() => calls(page)).toContain("bannerDestroy");
   });
 
   test("the dev gallery loads a banner and an interstitial and lists each event", async ({

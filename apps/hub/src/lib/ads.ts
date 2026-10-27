@@ -104,11 +104,16 @@ export class AdsClient {
   }
 
   #start(bridge: AdsBridge) {
+    let answer: string;
+    try {
+      answer = bridge.init(JSON.stringify({ rating: "PG" }));
+    } catch {
+      // The plugin did not start: stay off, and try again at the next evaluation.
+      return;
+    }
     let debug = false;
     try {
-      debug =
-        (JSON.parse(bridge.init(JSON.stringify({ rating: "PG" }))) as { debug?: unknown }).debug ===
-        true;
+      debug = (JSON.parse(answer) as { debug?: unknown }).debug === true;
     } catch {
       // A plugin that answers nothing readable is treated as a release build.
     }

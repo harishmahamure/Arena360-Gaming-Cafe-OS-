@@ -10,6 +10,7 @@ import {
   adIds,
   cargoDependencyNames,
   checkArtefact,
+  checkBuiltIds,
   checkKotlinImports,
   checkPluginBuild,
   checkRust,
@@ -191,4 +192,54 @@ test("a built artefact with an ad string fails, as UTF-8 or UTF-16", () => {
   } finally {
     r.done();
   }
+});
+
+test("built ids need both variants, each with its BuildConfig and merged manifest", () => {
+  const cfg = (v, id) =>
+    `${PLUGIN_DIR}/android/build/generated/source/buildConfig/${v}/in/arena360/ads/BuildConfig.java`;
+  const man = (v) =>
+    "apps/hub/src-tauri/gen/android/app/build/intermediates/merged_manifests/" +
+    `${v}/AndroidManifest.xml`;
+  const TEST_BANNER = "ca-app-pub-3940256099942544/6300978111";
+  const TEST_INTERSTITIAL = "ca-app-pub-3940256099942544/1033173712";
+  const TEST_APP = "ca-app-pub-3940256099942544~3347511713";
+  const ZERO = "ca-app-pub-0000000000000000";
+  const config = (b, i) =>
+    `public static final String BANNER_UNIT_ID = "${b}";\npublic static final String INTERSTITIAL_UNIT_ID = "${i}";`;
+  const manifest = (app) =>
+    `<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="${app}"/>`;
+  const placeholder = `${ZERO}~0000000000`;
+  const unit = `${ZERO}/0000000000`;
+
+  const both = repo({
+    [cfg("debug")]: config(TEST_BANNER, TEST_INTERSTITIAL),
+    [man("debug")]: manifest(TEST_APP),
+    [cfg("release")]: config(unit, unit),
+    [man("release")]: manifest(placeholder),
+  });
+  assert.deepEqual(checkBuiltIds(both.dir), []);
+  both.done();
+
+  const onlyDebug = repo({
+    [cfg("debug")]: config(TEST_BANNER, TEST_INTERSTITIAL),
+    [man("debug")]: manifest(TEST_APP),
+  });
+  assert.ok(checkBuiltIds(onlyDebug.dir).some((e) => e.startsWith("release:")));
+  onlyDebug.done();
+
+  const testInRelease = repo({
+    [cfg("debug")]: config(TEST_BANNER, TEST_INTERSTITIAL),
+    [man("debug")]: manifest(TEST_APP),
+    [cfg("release")]: config(TEST_BANNER, unit),
+    [man("release")]: manifest(placeholder),
+  });
+  assert.ok(checkBuiltIds(testInRelease.dir).length > 0);
+  testInRelease.done();
+});
+
+test("an empty artefact directory is reported", () => {
+  const r = repo({ "x/.keep": "" });
+  rmSync(join(r.dir, "x/.keep"));
+  assert.equal(checkArtefact(join(r.dir, "x")).length, 1);
+  r.done();
 });

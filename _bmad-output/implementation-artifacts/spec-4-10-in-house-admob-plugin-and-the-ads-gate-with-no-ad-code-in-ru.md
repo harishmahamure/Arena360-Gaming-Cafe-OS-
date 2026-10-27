@@ -2,7 +2,7 @@
 title: 'Story 4.10: In-house AdMob plugin and the ads gate, with no ad code in Rust or on Windows'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: true
 context:
@@ -76,3 +76,7 @@ deferred: []
 ## Verification Log
 
 Pass: all of the above (Hub Playwright: 1128 passed, 42 skipped). `check:generated` passes once the new generated file is committed. Not run: `check:tokens-used` (fails on master on `--sticky-bottom`, known), `check:deploy` and 12 `scripts` tests (need `kubectl`), and everything Android: the Gradle build, `ArenaAds.kt`, the Kotlin unit test, StrictMode, the SDK, `check-ads.mjs ids` against real build output and the gallery on a device.
+
+## Review Log
+
+Code review (4 layers) fixed: StrictMode installed on the UI thread, `interstitialShow` with nothing loaded emits `ad.failed`, a later `init` rating always reaches the SDK, a banner re-requests on a new width, banner rect bounded, previous `ArenaAds` released on WebView re-create, `ads.ts` stays off if `init` throws, `check-ads ids` requires both variants with BuildConfig and manifest, empty artefact dirs reported, the stream-only entitlement test and `/dev/ads` paid-Hub test added. Remaining items are in `deferred-work.md`. Re-run: `node --test scripts/check-ads.test.mjs`, `pnpm --filter @arena/hub check`, Hub Playwright `ads.spec.ts` (26 passed). Kotlin changes are uncompiled (no Android toolchain).

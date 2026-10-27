@@ -412,3 +412,9 @@
 - The Windows executables are checked for plain strings only; Tauri compresses embedded assets, so the Hub and Kiosk web build folders are checked too.
 - `entitlement.changed` is not sent as the first event of a new stream (the snapshot carries `tier`; the layout re-evaluates on every snapshot). A tier change between a snapshot load and the stream opening is picked up by the next snapshot.
 - The gate does not render a banner slot, lifecycle pausing, the content rating (the plugin takes `rating`, the UI sends PG) or the interstitial rules: Stories 4.11 to 4.13.
+
+## Deferred from: code review of Story 4.10
+
+- The Kotlin unit test (`AdsConfigTest`) is not run by CI: add `./gradlew :tauri-plugin-arena-ads:testDebugUnitTest` once the module has been built on a real toolchain.
+- Gate-off clears the banner only; a preloaded interstitial survives until the activity is destroyed (the page cannot show it once the gate is off). The SDK's manifest components and `APPLICATION_ID` meta-data ship in paid Android builds; `DELAY_APP_MEASUREMENT_INIT` is worth checking on the first device run.
+- `check-ads.mjs` skips any directory named `build`, `dist` or `target`, also nested ones; no consent (UMP) or child-directed treatment yet (Story 4.16 release checklist).

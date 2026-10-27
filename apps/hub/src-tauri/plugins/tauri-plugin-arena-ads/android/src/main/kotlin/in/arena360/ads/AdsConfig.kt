@@ -29,13 +29,16 @@ data class AdsConfig(val rating: AdRating) {
 /** A banner rectangle in CSS pixels, relative to the WebView's viewport. */
 data class BannerRect(val x: Double, val y: Double, val width: Double, val height: Double) {
   companion object {
-    /** Null for anything that is not four finite numbers with a positive size. */
+    private const val MAX_SIDE = 10_000.0
+
+    /** Null for anything that is not four finite numbers with a size of 1 to 10000 CSS pixels. */
     fun parse(json: String?): BannerRect? =
       try {
         val o = JSONObject(json ?: return null)
         val r = BannerRect(o.getDouble("x"), o.getDouble("y"), o.getDouble("width"), o.getDouble("height"))
         r.takeIf {
-          listOf(it.x, it.y, it.width, it.height).all { v -> v.isFinite() } && it.width > 0 && it.height > 0
+          listOf(it.x, it.y, it.width, it.height).all { v -> v.isFinite() } && it.width >= 1 && it.height >= 1 &&
+            it.width <= MAX_SIDE && it.height <= MAX_SIDE
         }
       } catch (_: Exception) {
         null

@@ -1,3 +1,4 @@
+mod bluetooth;
 mod fake;
 mod lan;
 mod spooler;
@@ -6,6 +7,10 @@ pub use arena_core::printer::{
     BoxFuture, PaperWidth, Printer, PrinterError, PrinterTarget, test_page, test_page_date,
 };
 use arena_proto::FoundPrinter;
+pub use bluetooth::{
+    AndroidPrinter, BLUETOOTH_SEND_TIMEOUT, BluetoothFailure, BluetoothLink, FakeBluetooth,
+    PairedPrinter, access_from_bridge,
+};
 pub use fake::{FakePrinter, SentJob};
 pub use lan::{
     LanScanner, SCAN_CONNECT_TIMEOUT, SCAN_DEADLINE, SCAN_MAX_CONCURRENT, SEND_TIMEOUT, Subnet,
@@ -53,6 +58,7 @@ impl Printer for SystemPrinter {
         Box::pin(async move {
             match target {
                 PrinterTarget::Lan(addr) => send_lan(*addr, bytes, SEND_TIMEOUT).await,
+                PrinterTarget::Bluetooth(_) => Err(PrinterError::BluetoothUnavailable),
                 PrinterTarget::Usb(name) => {
                     let task_name = name.clone();
                     let bytes = bytes.to_vec();

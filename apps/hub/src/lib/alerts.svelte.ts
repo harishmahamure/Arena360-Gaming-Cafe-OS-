@@ -16,12 +16,15 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   fixture: "hub.alerts.kind.fixture",
   time_up: "hub.alerts.kind.time_up",
   controller_missing: "hub.alerts.kind.controller_missing",
+  printer_offline: "hub.alerts.kind.printer_offline",
 };
 
-export const KIND_TAGS: Record<AlertKind, "new" | "time-up" | "controllers"> = {
+// A branch-level alert (no device) has no tile tag.
+export const KIND_TAGS: Record<AlertKind, "new" | "time-up" | "controllers" | null> = {
   fixture: "new",
   time_up: "time-up",
   controller_missing: "controllers",
+  printer_offline: null,
 };
 
 const CONDITIONS = {
@@ -64,7 +67,7 @@ export const openFor = (deviceId: string) => alerts.open.filter((a) => a.device_
 /** The tag a device's tile shows: its oldest open alert's. */
 export const tagOf = (deviceId: string): "new" | "time-up" | "controllers" | undefined => {
   const first = openFor(deviceId)[0];
-  return first ? KIND_TAGS[first.kind] : undefined;
+  return first ? (KIND_TAGS[first.kind] ?? undefined) : undefined;
 };
 
 /** The header list: open alerts oldest first, then the branch conditions. */

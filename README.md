@@ -325,7 +325,7 @@ flow, and no payment-provider keys are asked for (UPI and card are recorded by r
 bill is settled).
 
 - **Adapter** (`arena-core::printer::Printer`, implemented in `arena-tasks::printer`):
-  `discover()` lists `{id, kind: usb|lan, name, addr?}` and `send(target, bytes)` prints raw
+  `discover()` lists `{id, kind: usb|lan|bluetooth, name, addr?}` (bluetooth: Android Hub, Story 4.6) and `send(target, bytes)` prints raw
   ESC/POS bytes. `SystemPrinter` is the production adapter; `FakePrinter` records every job and
   has scripted discovery and failure (`--printer fake`, and the tests).
   - **USB (Windows):** printers come from the spooler (`EnumPrintersW`, local and connected
@@ -346,7 +346,7 @@ bill is settled).
   as `ip:port`, a bad one is `VALIDATION_FAILED` on `ip`) and `printer.paper_mm` (`58` or `80`,
   default `80`), both through `settings.set`; changing either resets `printer.status` to
   `unset`. `printer.status` (`{state: unset|ok|failed|skipped, error_kind?, error?, at}`, where
-  `error_kind` is `refused|timeout|unreachable|spooler|other` and `error` an optional detail of at
+  `error_kind` is `refused|timeout|unreachable|spooler|bluetooth|bluetooth_permission|other` and `error` an optional detail of at
   most 200 characters) is written only by the `printer.status` intent behind the endpoints
   below, never by `settings.set` or a raw `/ui/intent`. All need `settings.edit` (Manager or
   Owner).
@@ -1767,6 +1767,28 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
   for 44 x 44 px and axe on a phone (412 x 915) and a tablet (1280 x 800). Not runnable locally:
   the Gradle/Kotlin build, the real Back gesture, cutouts and gesture bar, the on-screen keyboard,
   the system font scale and rotation on hardware.
+- **Bluetooth and LAN printing (Story 4.6):** the Android Hub prints through `AndroidPrinter`
+  (`arena-tasks::printer`), the same `Printer` trait as the Windows adapter: Bluetooth SPP, LAN
+  `:9100` and a typed IP; USB is not supported ("USB: Not supported on Android" in Settings →
+  Printer). The shell injects a `BluetoothLink` (`bt_jni.rs` over the Kotlin `BluetoothBridge`) into
+  `arena_hub::start_with` (`StartOptions.bluetooth`); without it the Hub still prints to LAN printers.
+  The bridge lists only printers already paired in Android settings (it never scans or pairs) and
+  opens a fresh RFCOMM connection for every job, so the next print after a drop reconnects; a job
+  to a printer that is off or out of range fails within 10 s (the bridge's 10 s timeout, with a Rust
+  backstop) and never blocks the Hub. **Permission:** `BLUETOOTH_CONNECT` (Android 12+, asked at
+  "Find printer" with a one-line reason; `ArenaHub.requestBluetooth()` answers with an
+  `arena:bluetooth` window event) and `BLUETOOTH` up to Android 11; no scan, advertise, admin or
+  location permission (checked by `check-android.mjs`). If it is refused the Bluetooth list shows
+  "Bluetooth permission is off" with an "Open app settings" button and the LAN search still runs;
+  `POST /ui/printer/find` also reports `bluetooth: granted|denied|off|unavailable` and
+  `usb_supported`. A Bluetooth printer is chosen as `{kind: "bluetooth", id_or_addr: "AA:BB:...",
+name}`. **Failures:** every print goes through one dispatch; a failed job is kept as the last job
+  failure (`GET /ui/printer/health` → `{last_job_failure}`, shown in Settings → Printer, cleared by
+  the next job that works) and a failed job to a Bluetooth printer raises a `printer_offline` alert
+  ("Printer offline", a branch row in the header alert list, no sound). The setup status
+  (`printer.status`) still records test prints only. CI runs the adapter against `FakeBluetooth`.
+  Not runnable locally: the Gradle/Kotlin build, `bt_jni.rs` on the Android target, the permission
+  prompt and a real SPP printer.
 - **Build:** `pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64`
   (debug APK) and `... --aab --target aarch64 --target x86_64` (release AAB). Needs the Android SDK
   (platform 36), the NDK from the pin table (`NDK_HOME`), JDK 17 and the Rust Android targets.

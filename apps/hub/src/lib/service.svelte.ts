@@ -8,6 +8,11 @@ export type Bridge = {
   skipAccess(): void;
   openBatterySettings(): void;
   openNotificationSettings(): void;
+  /** "granted", or "ask" while the Bluetooth permission is still to be requested (Android 12+). */
+  bluetoothState?(): string;
+  /** Asks for the Bluetooth permission; the page gets `arena:bluetooth` when the user answers. */
+  requestBluetooth?(): void;
+  openAppSettings?(): void;
 };
 
 export const service: { access: Access | null } = $state({ access: null });

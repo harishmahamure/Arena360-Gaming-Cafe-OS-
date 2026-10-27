@@ -59,6 +59,22 @@ class HubBridge(private val activity: MainActivity) {
     }
   }
 
+  /** "granted" when Bluetooth printers can be listed, else "ask" (Android 12+ permission). */
+  @JavascriptInterface
+  fun bluetoothState(): String = if (BluetoothBridge.permitted(activity)) "granted" else "ask"
+
+  @JavascriptInterface
+  fun requestBluetooth() = activity.runOnUiThread { activity.askBluetooth() }
+
+  @JavascriptInterface
+  fun openAppSettings() {
+    activity.runOnUiThread {
+      activity.startActivity(
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + activity.packageName)),
+      )
+    }
+  }
+
   private fun requestBattery() {
     if (activity.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(activity.packageName)) return
     activity.startActivity(

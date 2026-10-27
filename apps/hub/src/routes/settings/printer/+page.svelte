@@ -2,8 +2,10 @@
   import { Button, formatDateTime, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type {
+    BluetoothAccess,
     FoundPrinter,
     PrinterErrorKind,
+    PrinterJobFailure,
     PrinterSelected,
     PrinterStatus,
     PrinterStatusReply,
@@ -26,7 +28,10 @@
     KEY_PRINTER_STATUS,
     PAPER_WIDTHS,
     PRINTER_KEYS,
+    askBluetooth,
     findPrinters,
+    openAppSettings,
+    printerHealth,
     parseSelected,
     parseStatus,
     sameSelection,
@@ -49,11 +54,19 @@
     timeout: "hub.settings.printer.error.timeout",
     unreachable: "hub.settings.printer.error.unreachable",
     spooler: "hub.settings.printer.error.spooler",
+    bluetooth: "hub.settings.printer.error.bluetooth",
+    bluetooth_permission: "hub.settings.printer.error.bluetooth_permission",
     other: "hub.settings.printer.error.other",
   };
   const KIND_LABELS: Record<FoundPrinter["kind"], MessageKey> = {
     usb: "hub.settings.printer.kind.usb",
     lan: "hub.settings.printer.kind.lan",
+    bluetooth: "hub.settings.printer.kind.bluetooth",
+  };
+  const BLUETOOTH_NOTES: Record<Exclude<BluetoothAccess, "granted">, MessageKey> = {
+    denied: "hub.settings.printer.bluetooth.denied",
+    off: "hub.settings.printer.bluetooth.off",
+    unavailable: "hub.settings.printer.bluetooth.unavailable",
   };
 
   let rows: Record<string, Row> = $state({});
@@ -63,6 +76,10 @@
   let busy: "find" | "select" | "paper" | "add" | "test" | "skip" | null = $state(null);
   let found: FoundPrinter[] | null = $state(null);
   let findNotice: MessageKey | null = $state(null);
+  let bluetooth: BluetoothAccess | null = $state(null);
+  let usbSupported = $state(true);
+  let askingBluetooth = $state(false);
+  let jobFailure: PrinterJobFailure | null = $state(null);
   let ip = $state("");
   let ipError: MessageKey | null = $state(null);
   let ipInput: HTMLInputElement | undefined = $state();
@@ -142,22 +159,34 @@
     return "failed";
   }
 
+  async function loadHealth() {
+    const r = await printerHealth();
+    if (r.kind === "ok") jobFailure = r.body.last_job_failure;
+  }
+
   async function find() {
     if (locked) return;
     busy = "find";
     findNotice = null;
     notice = null;
     try {
+      // Android 12+: ask for the Bluetooth permission first; the LAN search runs either way.
+      askingBluetooth = true;
+      await askBluetooth();
+      askingBluetooth = false;
       const r = await findPrinters();
       if (r.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
       if (r.kind === "ok") {
         found = r.body.printers;
+        bluetooth = r.body.bluetooth ?? null;
+        usbSupported = r.body.usb_supported;
       } else if (r.kind === "error" && r.error.code === "PERMISSION_DENIED") {
         findNotice = "hub.settings.printer.manager_only";
       } else {
         findNotice = "hub.settings.printer.find_failed";
       }
     } finally {
+      askingBluetooth = false;
       busy = null;
     }
   }
@@ -238,6 +267,7 @@
       if (r.kind === "ok") {
         notice = noticeOf(r.body);
         await load(true);
+        void loadHealth();
       } else if (r.kind === "error" && r.error.code === "PERMISSION_DENIED") {
         notice = { tone: "refusal", message: "hub.settings.printer.manager_only" };
       } else if (r.kind === "error" && r.error.field === KEY_PRINTER_SELECTED) {
@@ -264,14 +294,23 @@
 
   function optionText(p: FoundPrinter): string {
     const kind = t(KIND_LABELS[p.kind]);
-    return p.kind === "lan" && p.addr
-      ? t("hub.settings.printer.option_lan", {
-          name: p.name,
-          kind,
-          ip: p.addr.replace(/:9100$/, ""),
-        })
-      : t("hub.settings.printer.option", { name: p.name, kind });
+    if (p.kind === "lan" && p.addr)
+      return t("hub.settings.printer.option_lan", {
+        name: p.name,
+        kind,
+        ip: p.addr.replace(/:9100$/, ""),
+      });
+    return t("hub.settings.printer.option", { name: p.name, kind });
   }
+
+  function jobFailureText(f: PrinterJobFailure): string {
+    return t("hub.settings.printer.job_failed", {
+      date: formatDateTime(f.at, branchLocale.current?.tz),
+      error: t(ERROR_KINDS[f.error_kind]),
+    });
+  }
+
+  const hasBluetooth = (list: FoundPrinter[]) => list.some((p) => p.kind === "bluetooth");
 
   let seenVersion = untrack(() => branchLocale.version);
   $effect(() => {
@@ -286,6 +325,7 @@
 
   onMount(() => {
     void load();
+    void loadHealth();
   });
 
   const ipDescribedBy = $derived(
@@ -320,6 +360,12 @@
             : t("hub.settings.printer.none_selected")}
         </p>
         <p class="note type-hub-label" data-testid="printer-last-status">{statusText(status)}</p>
+        {#if jobFailure}
+          <p class="note refusal type-hub-label" data-testid="printer-job-failure">
+            <span aria-hidden="true">⚠</span>
+            <span>{jobFailureText(jobFailure)}</span>
+          </p>
+        {/if}
 
         <div class="field">
           <div class="actions">
@@ -339,6 +385,35 @@
                 "hub.settings.printer.found_none",
               )}{/if}
           </p>
+          {#if askingBluetooth}
+            <p class="note type-hub-label" data-testid="printer-bluetooth-reason">
+              {t("hub.settings.printer.bluetooth.reason")}
+            </p>
+          {/if}
+          {#if bluetooth && bluetooth !== "granted"}
+            <div class="bluetooth-note" data-testid="printer-bluetooth-note">
+              <p class="note refusal type-hub-label">
+                <span aria-hidden="true">⚠</span>
+                <span>{t(BLUETOOTH_NOTES[bluetooth])}</span>
+              </p>
+              {#if bluetooth === "denied"}
+                <Button
+                  label="hub.settings.printer.bluetooth.open_settings"
+                  variant="secondary"
+                  onclick={openAppSettings}
+                />
+              {/if}
+            </div>
+          {:else if bluetooth === "granted" && found && !hasBluetooth(found)}
+            <p class="note type-hub-label" data-testid="printer-bluetooth-none">
+              {t("hub.settings.printer.bluetooth.none_paired")}
+            </p>
+          {/if}
+          {#if found && !usbSupported}
+            <p class="note type-hub-label" data-testid="printer-usb-unsupported">
+              {t("hub.settings.printer.usb_unsupported")}
+            </p>
+          {/if}
           {#if found && found.length > 0}
             <fieldset class="group" data-testid="printer-found">
               <legend class="label type-hub-label">{t("hub.settings.printer.found")}</legend>
@@ -606,6 +681,17 @@
     gap: var(--space-2);
     min-height: 1lh;
     color: var(--text);
+  }
+
+  .note.refusal {
+    color: var(--text-field-error-text);
+  }
+
+  .bluetooth-note {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
   }
 
   .error {

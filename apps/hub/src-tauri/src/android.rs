@@ -4,12 +4,14 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use arena_proto::DeviceSpec;
+use arena_tasks::printer::BluetoothLink;
 use arena_tasks::{Advertiser, NetworkName, SecretWrapper};
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
 use tauri::{AppHandle, Manager};
 
+use crate::bt_jni;
 use crate::keystore_jni::JniWrapper;
 use crate::nsd_jni;
 use crate::spec::{DB_FILE, Gate, probe};
@@ -53,6 +55,7 @@ struct Services {
     wrapper: Arc<dyn SecretWrapper>,
     advertiser: Box<dyn Advertiser>,
     network: Arc<dyn NetworkName>,
+    bluetooth: Option<Arc<dyn BluetoothLink>>,
 }
 
 fn run_hub(dir: PathBuf, services: Services) {
@@ -62,6 +65,7 @@ fn run_hub(dir: PathBuf, services: Services) {
         advertiser: Some(services.advertiser),
         network_wake: Some(nsd_jni::network_wake()),
         network_name: Some(services.network),
+        bluetooth: services.bluetooth,
     };
     let spawned = std::thread::Builder::new()
         .name("arena-hub".into())
@@ -155,10 +159,20 @@ pub extern "system" fn Java_in_arena360_hub_HubService_nativeStart(
             )
         }
     };
+    // Without the bridge the Hub still prints to LAN printers; Bluetooth printers are not listed.
+    let bluetooth = match bt_jni::connect(&mut env) {
+        Ok(link) => Some(link),
+        Err(e) => {
+            let _ = env.exception_clear();
+            eprintln!("arena-hub: the Bluetooth printing bridge is unavailable: {e}");
+            None
+        }
+    };
     let services = Services {
         wrapper,
         advertiser,
         network,
+        bluetooth,
     };
     jboolean::from(ensure(&dir, services).ok())
 }

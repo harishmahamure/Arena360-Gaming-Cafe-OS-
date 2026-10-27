@@ -186,6 +186,54 @@ export function checkNsd(manifest, source) {
 }
 
 /**
+ * Bluetooth printing lists printers already paired in Android settings and prints over RFCOMM: it
+ * asks for BLUETOOTH_CONNECT (Android 12+) and the install-time BLUETOOTH up to Android 11, and
+ * never for scanning, advertising, admin or location, so the Hub cannot pair or track anything.
+ */
+export const BLUETOOTH_FORBIDDEN = [
+  "BLUETOOTH_SCAN",
+  "BLUETOOTH_ADVERTISE",
+  "BLUETOOTH_ADMIN",
+  "ACCESS_FINE_LOCATION",
+  "ACCESS_COARSE_LOCATION",
+];
+
+export function checkBluetooth(manifest, source) {
+  const errors = [];
+  const permission = (p) =>
+    manifest.match(
+      new RegExp(String.raw`<uses-permission\b[^>]*android:name="android\.permission\.${p}"[^>]*>`),
+    )?.[0];
+  if (permission("BLUETOOTH_CONNECT") === undefined) {
+    errors.push("manifest: permission BLUETOOTH_CONNECT is missing");
+  }
+  const legacy = permission("BLUETOOTH");
+  if (legacy === undefined) errors.push("manifest: permission BLUETOOTH is missing");
+  else if (attr(legacy, "android:maxSdkVersion") !== "30") {
+    errors.push('manifest: permission BLUETOOTH must have maxSdkVersion="30"');
+  }
+  for (const p of BLUETOOTH_FORBIDDEN) {
+    if (permission(p) !== undefined) errors.push(`manifest: permission ${p} must not be requested`);
+  }
+  const feature = manifest.match(
+    /<uses-feature\b[^>]*android:name="android\.hardware\.bluetooth"[^>]*>/,
+  )?.[0];
+  if (feature === undefined || attr(feature, "android:required") !== "false") {
+    errors.push(
+      'manifest: <uses-feature android.hardware.bluetooth> must be declared with required="false"',
+    );
+  }
+  if (source === undefined) return [...errors, "bluetooth: BluetoothBridge.kt is missing"];
+  if (!/\bcreateRfcommSocketToServiceRecord\s*\(/.test(source)) {
+    errors.push("bluetooth: the bridge must print over an RFCOMM (SPP) socket");
+  }
+  if (/\bstartDiscovery\s*\(|\bcreateBond\s*\(/.test(source)) {
+    errors.push("bluetooth: the bridge must not scan or pair, only use paired printers");
+  }
+  return errors;
+}
+
+/**
  * The activity handles rotation, split-screen and a system font-size change itself (it is not
  * recreated, so the open screen, sheet and typed text survive): `configChanges` must keep these.
  */
@@ -214,6 +262,7 @@ export function checkRepoManifest(root) {
   const manifest = readFileSync(path, "utf8");
   const bridge = join(main, "java", "in", "arena360", "hub", "KeystoreBridge.kt");
   const nsd = join(main, "java", "in", "arena360", "hub", "NsdBridge.kt");
+  const bt = join(main, "java", "in", "arena360", "hub", "BluetoothBridge.kt");
   return [
     ...checkManifest(manifest, res),
     ...checkService(manifest),
@@ -221,6 +270,7 @@ export function checkRepoManifest(root) {
     ...checkActivity(manifest),
     ...checkKeystore(existsSync(bridge) ? readFileSync(bridge, "utf8") : undefined),
     ...checkNsd(manifest, existsSync(nsd) ? readFileSync(nsd, "utf8") : undefined),
+    ...checkBluetooth(manifest, existsSync(bt) ? readFileSync(bt, "utf8") : undefined),
   ];
 }
 

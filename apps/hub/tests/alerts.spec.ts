@@ -259,3 +259,22 @@ test("licence trouble is a branch row with no sound, and it clears with the cond
   hub.queue.push("event: devices.changed\ndata: {}\n\n");
   await expect(headerButton(page)).toHaveCount(0);
 });
+
+test("a Printer offline alert is a branch row with no tile tag and no sound, and a click acknowledges it", async ({
+  page,
+}) => {
+  const hub = await open(page, [
+    { id: "P1", kind: "printer_offline", device_id: null, raised_at: Date.now() - MIN },
+  ]);
+  await expect(headerButton(page)).toBeVisible();
+  await headerButton(page).click();
+  const row = page.getByTestId("alert-row");
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText(en["hub.alerts.branch"]);
+  await expect(row).toContainText(en["hub.alerts.kind.printer_offline"]);
+  await expect(tile(page, "PC 1").locator("[data-component=alert-badge]")).toHaveCount(0);
+  expect(await plays(page)).toHaveLength(0);
+  await row.getByRole("button").click();
+  await expect.poll(() => hub.acks).toEqual(["P1"]);
+  await expect(page.getByTestId("alert-list")).toHaveCount(0);
+});

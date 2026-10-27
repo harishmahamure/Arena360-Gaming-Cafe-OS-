@@ -41,6 +41,7 @@ class HubService : Service() {
     ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(null, 0), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
     acquireLocks()
     NsdBridge.attach(this)
+    BluetoothBridge.attach(this)
     Thread { begin() }.start()
     return START_STICKY
   }

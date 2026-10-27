@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use arena_proto::{FoundPrinter, PrinterKind};
+use arena_proto::{BluetoothAccess, FoundPrinter, PrinterKind};
 
 use super::{BoxFuture, Printer, PrinterError, PrinterTarget};
 
@@ -15,6 +15,8 @@ struct FakeState {
     found: Vec<FoundPrinter>,
     failure: Option<PrinterError>,
     sent: Vec<SentJob>,
+    bluetooth: Option<BluetoothAccess>,
+    no_usb: bool,
 }
 
 #[derive(Debug, Default)]
@@ -65,6 +67,16 @@ impl FakePrinter {
     pub fn sent(&self) -> Vec<SentJob> {
         self.with_state(|s| s.sent.clone())
     }
+
+    /// Makes the fake report Bluetooth access, as the Android adapter does.
+    pub fn set_bluetooth(&self, access: Option<BluetoothAccess>) {
+        self.with_state(|s| s.bluetooth = access);
+    }
+
+    /// Makes the fake say USB is not supported, as the Android adapter does.
+    pub fn set_usb_supported(&self, supported: bool) {
+        self.with_state(|s| s.no_usb = !supported);
+    }
 }
 
 impl Printer for FakePrinter {
@@ -89,6 +101,15 @@ impl Printer for FakePrinter {
             }
         });
         Box::pin(async move { outcome })
+    }
+
+    fn bluetooth_access(&self) -> BoxFuture<'_, Option<BluetoothAccess>> {
+        let access = self.with_state(|s| s.bluetooth);
+        Box::pin(async move { access })
+    }
+
+    fn usb_supported(&self) -> bool {
+        self.with_state(|s| !s.no_usb)
     }
 }
 

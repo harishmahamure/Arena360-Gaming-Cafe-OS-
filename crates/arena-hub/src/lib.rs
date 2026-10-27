@@ -59,6 +59,9 @@ pub struct StartOptions {
     pub network_wake: Option<Arc<Notify>>,
     /// Names the network the Hub is on (shown in Settings → Devices).
     pub network_name: Option<Arc<dyn NetworkName>>,
+    /// The Android shell's Bluetooth SPP bridge. With it the Hub prints through Bluetooth and
+    /// LAN (no USB); without it the platform adapter is used.
+    pub bluetooth: Option<Arc<dyn arena_tasks::printer::BluetoothLink>>,
 }
 
 pub async fn start(args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
@@ -368,7 +371,10 @@ async fn run(
     let fake_printer = (cfg.printer == config::PrinterChoice::Fake)
         .then(|| Arc::new(arena_tasks::printer::FakePrinter::dev()));
     let printer: Arc<dyn arena_core::printer::Printer> = match cfg.printer {
-        config::PrinterChoice::System => Arc::new(arena_tasks::printer::SystemPrinter::new()),
+        config::PrinterChoice::System => match options.bluetooth.take() {
+            Some(link) => Arc::new(arena_tasks::printer::AndroidPrinter::new(link)),
+            None => Arc::new(arena_tasks::printer::SystemPrinter::new()),
+        },
         #[cfg(feature = "dev-fixtures")]
         config::PrinterChoice::Fake => match &fake_printer {
             Some(fake) => Arc::clone(fake) as Arc<dyn arena_core::printer::Printer>,
@@ -524,6 +530,9 @@ async fn run(
                         let target = match job.target {
                             arena_core::printer::PrinterTarget::Usb(name) => format!("usb:{name}"),
                             arena_core::printer::PrinterTarget::Lan(addr) => format!("lan:{addr}"),
+                            arena_core::printer::PrinterTarget::Bluetooth(addr) => {
+                                format!("bt:{addr}")
+                            }
                         };
                         (target, job.bytes)
                     })

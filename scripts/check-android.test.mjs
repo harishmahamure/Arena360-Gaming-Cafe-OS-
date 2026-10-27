@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkAab,
   checkActivity,
+  checkBluetooth,
   checkDuplicates,
   checkKeystore,
   checkManifest,
@@ -320,6 +321,60 @@ test("a missing bridge, service type, registration, network callback or permissi
 test("the committed bridge and manifest satisfy the NsdManager rules", () => {
   assert.deepEqual(
     checkRepoManifest(ROOT).filter((e) => e.startsWith("nsd:")),
+    [],
+  );
+});
+
+const BT_MANIFEST = [
+  '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
+  '<uses-feature android:name="android.hardware.bluetooth" android:required="false" />',
+].join("");
+const BT_BRIDGE = "device.createRfcommSocketToServiceRecord(SPP)";
+
+test("a manifest that asks only for paired-printer Bluetooth, with an RFCOMM bridge, passes", () => {
+  assert.deepEqual(checkBluetooth(BT_MANIFEST, BT_BRIDGE), []);
+});
+
+test("a missing or over-broad Bluetooth permission, feature, bridge or scan call fails", () => {
+  assert.deepEqual(checkBluetooth(BT_MANIFEST.replace("BLUETOOTH_CONNECT", "X"), BT_BRIDGE), [
+    "manifest: permission BLUETOOTH_CONNECT is missing",
+  ]);
+  assert.deepEqual(
+    checkBluetooth(BT_MANIFEST.replace(' android:maxSdkVersion="30"', ""), BT_BRIDGE),
+    ['manifest: permission BLUETOOTH must have maxSdkVersion="30"'],
+  );
+  const scan = '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" />';
+  assert.deepEqual(checkBluetooth(BT_MANIFEST + scan, BT_BRIDGE), [
+    "manifest: permission BLUETOOTH_SCAN must not be requested",
+  ]);
+  const location = '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />';
+  assert.deepEqual(checkBluetooth(BT_MANIFEST + location, BT_BRIDGE), [
+    "manifest: permission ACCESS_FINE_LOCATION must not be requested",
+  ]);
+  assert.match(
+    checkBluetooth(
+      BT_MANIFEST.replace('android:required="false"', 'android:required="true"'),
+      BT_BRIDGE,
+    )[0],
+    /required="false"/,
+  );
+  assert.deepEqual(checkBluetooth(BT_MANIFEST, undefined), [
+    "bluetooth: BluetoothBridge.kt is missing",
+  ]);
+  assert.deepEqual(checkBluetooth(BT_MANIFEST, "nothing"), [
+    "bluetooth: the bridge must print over an RFCOMM (SPP) socket",
+  ]);
+  assert.deepEqual(checkBluetooth(BT_MANIFEST, BT_BRIDGE + " adapter.startDiscovery()"), [
+    "bluetooth: the bridge must not scan or pair, only use paired printers",
+  ]);
+});
+
+test("the committed bridge and manifest satisfy the Bluetooth rules", () => {
+  assert.deepEqual(
+    checkRepoManifest(ROOT).filter((e) =>
+      /^(bluetooth:|manifest: .*(BLUETOOTH|LOCATION|bluetooth))/.test(e),
+    ),
     [],
   );
 });

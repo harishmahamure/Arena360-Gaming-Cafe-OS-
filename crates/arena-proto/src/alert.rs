@@ -15,11 +15,18 @@ pub enum AlertKind {
     TimeUp,
     /// Staff marked a console's controllers missing after a session (raised by `controller.check`).
     ControllerMissing,
+    /// A Bluetooth printer dropped a job (raised by the Hub's printer dispatch; Story 4.6).
+    PrinterOffline,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 3] = [Self::Fixture, Self::TimeUp, Self::ControllerMissing];
+    pub const ALL: [AlertKind; 4] = [
+        Self::Fixture,
+        Self::TimeUp,
+        Self::ControllerMissing,
+        Self::PrinterOffline,
+    ];
 
     /// The stored and wire form, e.g. `time_up`.
     pub fn as_str(self) -> &'static str {
@@ -27,6 +34,7 @@ impl AlertKind {
             Self::Fixture => "fixture",
             Self::TimeUp => "time_up",
             Self::ControllerMissing => "controller_missing",
+            Self::PrinterOffline => "printer_offline",
         }
     }
 
@@ -41,6 +49,7 @@ impl AlertKind {
             Self::Fixture => "new",
             Self::TimeUp => "time-up",
             Self::ControllerMissing => "controller",
+            Self::PrinterOffline => "printer",
         }
     }
 }

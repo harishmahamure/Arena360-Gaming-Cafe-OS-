@@ -2,6 +2,7 @@ package `in`.arena360.hub
 
 import android.Manifest
 import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.WebView
@@ -19,6 +20,9 @@ class MainActivity : TauriActivity() {
 
     /** The window event the Hub UI listens for (`apps/hub/src/lib/back.ts`). */
     private const val BACK_SCRIPT = "window.dispatchEvent(new Event('arena:back'))"
+
+    /** Tells the Settings → Printer page the Bluetooth permission prompt was answered. */
+    private const val BLUETOOTH_SCRIPT = "window.dispatchEvent(new Event('arena:bluetooth'))"
 
     /** The text zoom (percent) for a system font scale: it follows the scale, capped at 130%. */
     fun textZoomFor(fontScale: Float): Int = (fontScale * 100).roundToInt().coerceAtMost(MAX_TEXT_ZOOM)
@@ -41,6 +45,20 @@ class MainActivity : TauriActivity() {
 
   // The Hub UI handles Back itself (see `back`).
   override val handleBackNavigation: Boolean = false
+
+  // Asked from Settings → Printer on Android 12+; the page waits for the `arena:bluetooth` event.
+  private val bluetooth =
+    registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+      webView?.evaluateJavascript(BLUETOOTH_SCRIPT, null)
+    }
+
+  fun askBluetooth() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      bluetooth.launch(Manifest.permission.BLUETOOTH_CONNECT)
+    } else {
+      webView?.evaluateJavascript(BLUETOOTH_SCRIPT, null)
+    }
+  }
 
   fun askNotifications(done: () -> Unit) {
     afterNotifications = done

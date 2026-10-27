@@ -411,6 +411,7 @@ pub struct UiAuth {
     printer: Option<Arc<dyn arena_core::printer::Printer>>,
     printer_find: tokio::sync::Mutex<()>,
     printer_job: tokio::sync::Mutex<()>,
+    printer_failure: Mutex<Option<arena_proto::PrinterJobFailure>>,
     pairing: Option<Arc<crate::pairing::Pairing>>,
     streams: Mutex<HashMap<String, usize>>,
     pair_gate: Option<arena_core::PairGate>,
@@ -464,6 +465,7 @@ impl UiAuth {
             printer: None,
             printer_find: tokio::sync::Mutex::new(()),
             printer_job: tokio::sync::Mutex::new(()),
+            printer_failure: Mutex::new(None),
             pairing: None,
             pair_gate: None,
             kek: None,
@@ -497,6 +499,11 @@ impl UiAuth {
 
     pub(crate) fn printer_job_lock(&self) -> &tokio::sync::Mutex<()> {
         &self.printer_job
+    }
+
+    /// The last print job that failed, until a job succeeds.
+    pub(crate) fn printer_failure(&self) -> &Mutex<Option<arena_proto::PrinterJobFailure>> {
+        &self.printer_failure
     }
 
     pub fn with_pairing(mut self, pairing: Arc<crate::pairing::Pairing>) -> Self {
@@ -2871,6 +2878,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/plans", get(plans))
         .route("/ui/rules", get(rules))
         .route("/ui/printer/find", post(crate::ui_printer::find))
+        .route("/ui/printer/health", get(crate::ui_printer::health))
         .route("/ui/printer/test", post(crate::ui_printer::test))
         .route("/ui/printer/test-kot", post(crate::ui_printer::test_kot))
         .route("/ui/printer/skip", post(crate::ui_printer::skip))

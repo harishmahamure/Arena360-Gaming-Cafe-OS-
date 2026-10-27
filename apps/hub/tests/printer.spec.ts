@@ -1,9 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import type {
+  BluetoothAccess,
   FoundPrinter,
   HubSnapshot,
   PrinterErrorKind,
+  PrinterJobFailure,
   PrinterStatus,
   SessionStaff,
 } from "@arena/ui/generated";
@@ -49,6 +51,9 @@ type Hub = {
   intents: Sent[];
   calls: string[];
   found: FoundPrinter[];
+  bluetooth: BluetoothAccess | null;
+  usbSupported: boolean;
+  jobFailure: PrinterJobFailure | null;
   findDelayMs: number;
   printFails: PrinterErrorKind | null;
   notRecorded: boolean;
@@ -67,6 +72,9 @@ function newHub(): Hub {
     intents: [],
     calls: [],
     found: FOUND,
+    bluetooth: null,
+    usbSupported: true,
+    jobFailure: null,
     findDelayMs: 0,
     printFails: null,
     notRecorded: false,
@@ -156,6 +164,9 @@ async function stub(page: Page, hub: Hub, token: string) {
           headers: CORS,
           body: "retry: 400\n\n",
         });
+      case "/ui/printer/health":
+        if (!staff) return json(route, 401, AUTH_FAILED);
+        return json(route, 200, { last_job_failure: hub.jobFailure });
       case "/ui/printer/find":
       case "/ui/printer/test":
       case "/ui/printer/skip": {
@@ -166,7 +177,11 @@ async function stub(page: Page, hub: Hub, token: string) {
         }
         if (url.pathname === "/ui/printer/find") {
           await new Promise((r) => setTimeout(r, hub.findDelayMs));
-          return json(route, 200, { printers: hub.found });
+          return json(route, 200, {
+            printers: hub.found,
+            bluetooth: hub.bluetooth,
+            usb_supported: hub.usbSupported,
+          });
         }
         if (url.pathname === "/ui/printer/skip") {
           return json(
@@ -478,3 +493,171 @@ for (const hc of [false, true]) {
     await expectNoSeriousAxe(page);
   });
 }
+
+const BT_PRINTER: FoundPrinter = {
+  id: "bt:00:11:22:AA:BB:CC",
+  kind: "bluetooth",
+  name: "RPP02N",
+  addr: "00:11:22:AA:BB:CC",
+};
+const LAN_PRINTER = FOUND[1];
+
+type Android = { asked: number; settings: number };
+
+/** The Android shell's JavaScript interface: the permission prompt answers with arena:bluetooth. */
+async function androidShell(page: Page, state: "granted" | "ask") {
+  await page.addInitScript((initial) => {
+    const w = window as unknown as { __android: Android };
+    w.__android = { asked: 0, settings: 0 };
+    (window as unknown as { ArenaHub: unknown }).ArenaHub = {
+      state: () => JSON.stringify({ notifications: true, battery_exempt: true, asked: true }),
+      bluetoothState: () => initial,
+      requestBluetooth: () => {
+        w.__android.asked++;
+        setTimeout(() => window.dispatchEvent(new Event("arena:bluetooth")), 400);
+      },
+      openAppSettings: () => {
+        w.__android.settings++;
+      },
+    };
+  }, state);
+}
+
+const android = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __android: Android }).__android);
+
+test("on Android, Find asks for Bluetooth with its reason, then lists paired and LAN printers and says USB is not supported", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.found = [BT_PRINTER, LAN_PRINTER];
+  hub.bluetooth = "granted";
+  hub.usbSupported = false;
+  await androidShell(page, "ask");
+  await open(page, hub);
+  await button(page, "hub.settings.printer.find").click();
+  await expect(page.getByTestId("printer-bluetooth-reason")).toHaveText(
+    en["hub.settings.printer.bluetooth.reason"],
+  );
+  await expect(page.getByTestId("printer-found").getByRole("radio")).toHaveCount(2);
+  await expect(page.getByTestId("printer-bluetooth-reason")).toHaveCount(0);
+  expect((await android(page)).asked).toBe(1);
+  await expect(page.getByTestId("printer-usb-unsupported")).toHaveText(
+    en["hub.settings.printer.usb_unsupported"],
+  );
+  await expect(page.getByTestId("printer-bluetooth-note")).toHaveCount(0);
+  await expect(page.getByTestId("printer-bluetooth-none")).toHaveCount(0);
+  await expectNoSeriousAxe(page);
+  await page.getByLabel("RPP02N · Bluetooth").check();
+  await expect(page.getByTestId("printer-selected")).toHaveText("Printer: RPP02N");
+  expect(hub.intents[0]).toEqual({
+    kind: "settings.set",
+    key: "printer.selected",
+    value: JSON.stringify({ kind: "bluetooth", id_or_addr: "00:11:22:AA:BB:CC", name: "RPP02N" }),
+    base_rev: 1,
+  });
+  await button(page, "hub.settings.printer.test").click();
+  await expect(page.getByTestId("printer-status")).toHaveText(en["hub.settings.printer.result.ok"]);
+});
+
+test("when the Bluetooth permission is already granted Find does not ask again", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.found = [BT_PRINTER];
+  hub.bluetooth = "granted";
+  await androidShell(page, "granted");
+  await open(page, hub);
+  await button(page, "hub.settings.printer.find").click();
+  await expect(page.getByTestId("printer-found").getByRole("radio")).toHaveCount(1);
+  expect((await android(page)).asked).toBe(0);
+});
+
+test("a refused Bluetooth permission says so with a link to settings and the LAN printers are still listed", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.found = [LAN_PRINTER];
+  hub.bluetooth = "denied";
+  hub.usbSupported = false;
+  await androidShell(page, "ask");
+  await open(page, hub);
+  await button(page, "hub.settings.printer.find").click();
+  const note = page.getByTestId("printer-bluetooth-note");
+  await expect(note).toContainText(en["hub.settings.printer.bluetooth.denied"]);
+  await expect(page.getByTestId("printer-found").getByRole("radio")).toHaveCount(1);
+  await expect(page.getByLabel("Fake network printer · Network · 192.168.1.250")).toBeVisible();
+  const settings = button(page, "hub.settings.printer.bluetooth.open_settings");
+  await expectTarget(settings);
+  await expectNoSeriousAxe(page);
+  await settings.click();
+  expect((await android(page)).settings).toBe(1);
+});
+
+test("a switched-off radio, no Bluetooth, or no paired printer each get their own plain note", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.found = [LAN_PRINTER];
+  hub.bluetooth = "off";
+  await androidShell(page, "granted");
+  await open(page, hub);
+  const find = button(page, "hub.settings.printer.find");
+  await find.click();
+  await expect(page.getByTestId("printer-bluetooth-note")).toContainText(
+    en["hub.settings.printer.bluetooth.off"],
+  );
+  await expect(button(page, "hub.settings.printer.bluetooth.open_settings")).toHaveCount(0);
+  hub.bluetooth = "unavailable";
+  await find.click();
+  await expect(page.getByTestId("printer-bluetooth-note")).toContainText(
+    en["hub.settings.printer.bluetooth.unavailable"],
+  );
+  hub.bluetooth = "granted";
+  await find.click();
+  await expect(page.getByTestId("printer-bluetooth-none")).toHaveText(
+    en["hub.settings.printer.bluetooth.none_paired"],
+  );
+});
+
+test("a Bluetooth printer that drops fails the test inside the page and shows the last print failure", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.settings.set("printer.selected", {
+    value: JSON.stringify({ kind: "bluetooth", id_or_addr: "00:11:22:AA:BB:CC", name: "RPP02N" }),
+    rev: 1,
+  });
+  hub.printFails = "bluetooth";
+  await open(page, hub);
+  await expect(page.getByTestId("printer-job-failure")).toHaveCount(0);
+  hub.jobFailure = {
+    error_kind: "bluetooth",
+    error: "Could not print to the Bluetooth printer 00:11:22:AA:BB:CC: it dropped",
+    at: AT,
+  };
+  await button(page, "hub.settings.printer.test").click();
+  await expect(page.getByTestId("printer-status")).toContainText(
+    en["hub.settings.printer.error.bluetooth"],
+  );
+  await expect(page.getByTestId("printer-job-failure")).toContainText(
+    en["hub.settings.printer.error.bluetooth"],
+  );
+  hub.printFails = null;
+  hub.jobFailure = null;
+  await button(page, "hub.settings.printer.test").click();
+  await expect(page.getByTestId("printer-status")).toHaveText(en["hub.settings.printer.result.ok"]);
+  await expect(page.getByTestId("printer-job-failure")).toHaveCount(0);
+});
+
+test("a Hub without a Bluetooth bridge shows no Bluetooth notes and keeps USB", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  await button(page, "hub.settings.printer.find").click();
+  await expect(page.getByTestId("printer-found").getByRole("radio")).toHaveCount(2);
+  await expect(page.getByTestId("printer-bluetooth-note")).toHaveCount(0);
+  await expect(page.getByTestId("printer-bluetooth-none")).toHaveCount(0);
+  await expect(page.getByTestId("printer-usb-unsupported")).toHaveCount(0);
+});

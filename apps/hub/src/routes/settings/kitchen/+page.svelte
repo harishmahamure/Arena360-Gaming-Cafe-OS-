@@ -24,6 +24,7 @@
     KITCHEN_KEYS,
     KOT_MODES,
     PAPER_WIDTHS,
+    askBluetooth,
     findPrinters,
     parseSelected,
     sameSelection,
@@ -47,6 +48,8 @@
     timeout: "hub.settings.printer.error.timeout",
     unreachable: "hub.settings.printer.error.unreachable",
     spooler: "hub.settings.printer.error.spooler",
+    bluetooth: "hub.settings.printer.error.bluetooth",
+    bluetooth_permission: "hub.settings.printer.error.bluetooth_permission",
     other: "hub.settings.printer.error.other",
   };
 
@@ -113,6 +116,7 @@
     busy = true;
     status = null;
     try {
+      await askBluetooth();
       const r = await findPrinters();
       if (r.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
       if (r.kind === "ok") found = r.body.printers;

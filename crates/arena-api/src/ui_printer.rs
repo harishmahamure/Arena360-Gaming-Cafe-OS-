@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
-use arena_core::printer::{PaperWidth, Printer, PrinterTarget, test_page, test_page_date};
+use arena_core::printer::{
+    PaperWidth, Printer, PrinterError, PrinterTarget, test_page, test_page_date,
+};
 use arena_proto::{
-    ActorKind, AppError, ErrorCode, FLAG_KITCHEN, HubSnapshot, Intent, IntentPayload,
-    KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_FLAGS, KEY_PRINTER_PAPER_MM,
-    KEY_PRINTER_SELECTED, Permission, PrinterErrorKind, PrinterFindResult, PrinterOutcome,
-    PrinterSelected, PrinterState, PrinterStatus, PrinterStatusReply, PrinterStatusSet,
-    SessionStaff, SettingEntry, UiError, has_flag, printer_error_text,
+    ActorKind, AlertKind, AlertRaise, AppError, ErrorCode, FLAG_KITCHEN, HubSnapshot, Intent,
+    IntentPayload, KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_FLAGS,
+    KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, Permission, PrinterErrorKind, PrinterFindResult,
+    PrinterHealth, PrinterJobFailure, PrinterOutcome, PrinterSelected, PrinterState, PrinterStatus,
+    PrinterStatusReply, PrinterStatusSet, SessionStaff, SettingEntry, UiError, has_flag,
+    printer_error_text,
 };
 use axum::Json;
 use axum::extract::State;
@@ -129,9 +132,80 @@ pub(crate) async fn find(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) ->
         Err(e) => return fail(e),
     };
     let _single = auth.printer_find_lock().lock().await;
-    let printers = printer.discover().await;
-    tracing::info!(found = printers.len(), "printer search finished");
-    Json(PrinterFindResult { printers }).into_response()
+    let (printers, bluetooth) = tokio::join!(printer.discover(), printer.bluetooth_access());
+    tracing::info!(found = printers.len(), bluetooth = ?bluetooth, "printer search finished");
+    Json(PrinterFindResult {
+        printers,
+        bluetooth,
+        usb_supported: printer.usb_supported(),
+    })
+    .into_response()
+}
+
+pub(crate) async fn health(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = editor(&auth, &headers).await {
+        return fail(e);
+    }
+    let last_job_failure = auth
+        .printer_failure()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    Json(PrinterHealth { last_job_failure }).into_response()
+}
+
+/// Raises the "Printer offline" alert (system actor) for the header alert list. An alert that is
+/// already open is left as it is.
+async fn raise_offline(auth: &UiAuth) {
+    let Some(writer) = auth.writer() else { return };
+    let intent = Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: arena_proto::IntentKind::AlertRaise,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: auth.clock().now_ms(),
+        base_rev: None,
+        actor: arena_proto::Actor {
+            kind: ActorKind::System,
+            id: "printer".to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::AlertRaise(AlertRaise::new(AlertKind::PrinterOffline, None)),
+    };
+    if let Err(e) = writer.submit_intent(intent).await
+        && e.code != ErrorCode::Stale
+    {
+        tracing::warn!(
+            code = e.code.as_str(),
+            "the printer offline alert was not raised"
+        );
+    }
+}
+
+/// The one way a page reaches a printer. A failed job is kept as the printer's last job failure
+/// (cleared by the next job that works), and a Bluetooth printer that drops raises a "Printer
+/// offline" alert. The next job opens a new connection, so a printer that is back works at once.
+async fn dispatch(
+    auth: &UiAuth,
+    printer: &dyn Printer,
+    target: &PrinterTarget,
+    page: &[u8],
+) -> Result<(), PrinterError> {
+    let sent = printer.send(target, page).await;
+    let failure = sent.as_ref().err().map(|e| PrinterJobFailure {
+        error_kind: e.kind(),
+        error: printer_error_text(&e.to_string()),
+        at: auth.clock().now_ms(),
+    });
+    let failed = failure.is_some();
+    *auth
+        .printer_failure()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = failure;
+    if failed && matches!(target, PrinterTarget::Bluetooth(_)) {
+        raise_offline(auth).await;
+    }
+    sent
 }
 
 async fn run_test(auth: &UiAuth, headers: &HeaderMap) -> Result<PrinterStatusReply, UiError> {
@@ -156,7 +230,7 @@ async fn run_test(auth: &UiAuth, headers: &HeaderMap) -> Result<PrinterStatusRep
     let tz = snapshot.locale.map(|l| l.tz).unwrap_or_default();
     let page = test_page(&name, &test_page_date(auth.clock().now_ms(), &tz), paper);
     let sent = match PrinterTarget::from_selected(&selected) {
-        Ok(target) => printer.send(&target, &page).await,
+        Ok(target) => dispatch(auth, printer.as_ref(), &target, &page).await,
         Err(e) => Err(e),
     };
     match sent {
@@ -219,7 +293,7 @@ async fn run_kot_test(auth: &UiAuth, headers: &HeaderMap) -> Result<PrinterStatu
     let tz = snapshot.locale.map(|l| l.tz).unwrap_or_default();
     let page = test_page(&name, &test_page_date(auth.clock().now_ms(), &tz), paper);
     let sent = match PrinterTarget::from_selected(&selected) {
-        Ok(target) => printer.send(&target, &page).await,
+        Ok(target) => dispatch(auth, printer.as_ref(), &target, &page).await,
         Err(e) => Err(e),
     };
     let (state, error_kind, error) = match sent {
@@ -376,7 +450,7 @@ mod tests {
             json!({"printers": [
                 {"id": "fake-usb", "kind": "usb", "name": "Fake USB printer", "addr": null},
                 {"id": "lan:192.168.1.250:9100", "kind": "lan", "name": "Fake network printer", "addr": "192.168.1.250:9100"}
-            ]})
+            ], "bluetooth": null, "usb_supported": true})
         );
     }
 
@@ -488,6 +562,144 @@ mod tests {
         );
         assert_eq!(setup_printer(&r), json!("failed"));
         assert!(fake.sent().is_empty());
+    }
+
+    fn open_alert_kinds(r: &Rig) -> Vec<String> {
+        Store::open_reader(&r.hub.path)
+            .unwrap()
+            .alerts()
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.acked_at.is_none())
+            .map(|a| a.kind)
+            .collect()
+    }
+
+    async fn select_bluetooth(r: &Rig, token: &str) {
+        let value =
+            json!({"kind": "bluetooth", "id_or_addr": "00:11:22:aa:bb:cc", "name": "RPP02N"})
+                .to_string();
+        let (status, body) = set(r, token, "printer.selected", &value).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            setting(r, "printer.selected").0,
+            r#"{"kind":"bluetooth","id_or_addr":"00:11:22:AA:BB:CC","name":"RPP02N"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn find_reports_the_bluetooth_access_and_that_usb_is_not_supported_on_android() {
+        let fake = Arc::new(FakePrinter::new(Vec::new()));
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        let (_, body) = post(&r, "/ui/printer/find", &token, None).await;
+        assert_eq!(body["usb_supported"], true);
+        assert_eq!(body["bluetooth"], Value::Null);
+        fake.set_bluetooth(Some(arena_proto::BluetoothAccess::Denied));
+        fake.set_usb_supported(false);
+        let (status, body) = post(&r, "/ui/printer/find", &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["bluetooth"], "denied");
+        assert_eq!(body["usb_supported"], false);
+        assert_eq!(body["printers"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_bluetooth_job_is_kept_as_a_failure_raises_one_alert_and_the_next_job_clears_it()
+     {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        select_bluetooth(&r, &token).await;
+        let (_, health) = call_app(&r.app, "GET", "/ui/printer/health", Some(&token), None).await;
+        assert_eq!(health, json!({"last_job_failure": null}));
+        fake.fail_with(Some(PrinterError::Bluetooth(
+            "00:11:22:AA:BB:CC".into(),
+            "the printer dropped the connection".into(),
+        )));
+        let (status, body) = post(&r, "/ui/printer/test", &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"]["state"], "failed");
+        assert_eq!(body["status"]["error_kind"], "bluetooth");
+        assert_eq!(setup_printer(&r), json!("failed"));
+        assert_eq!(open_alert_kinds(&r), ["printer_offline"]);
+        let (_, health) = call_app(&r.app, "GET", "/ui/printer/health", Some(&token), None).await;
+        assert_eq!(health["last_job_failure"]["error_kind"], "bluetooth");
+        assert_eq!(
+            health["last_job_failure"]["error"],
+            "Could not print to the Bluetooth printer 00:11:22:AA:BB:CC: the printer dropped the connection"
+        );
+        // A second failure leaves the one open alert alone.
+        let (status, _) = post(&r, "/ui/printer/test", &token, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(open_alert_kinds(&r), ["printer_offline"]);
+        // The next print opens a new connection and works.
+        fake.fail_with(None);
+        let (_, body) = post(&r, "/ui/printer/test", &token, None).await;
+        assert_eq!(body["status"]["state"], "ok");
+        assert_eq!(fake.sent().len(), 1);
+        assert_eq!(
+            fake.sent()[0].target,
+            PrinterTarget::Bluetooth("00:11:22:AA:BB:CC".into())
+        );
+        let (_, health) = call_app(&r.app, "GET", "/ui/printer/health", Some(&token), None).await;
+        assert_eq!(health, json!({"last_job_failure": null}));
+    }
+
+    #[tokio::test]
+    async fn a_lan_failure_is_kept_but_raises_no_alert_and_a_counter_cannot_read_the_health() {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        select_lan(&r, &token, "192.168.1.250").await;
+        fake.fail_with(Some(PrinterError::Refused(
+            "192.168.1.250:9100".parse().unwrap(),
+        )));
+        post(&r, "/ui/printer/test", &token, None).await;
+        assert!(open_alert_kinds(&r).is_empty());
+        let (_, health) = call_app(&r.app, "GET", "/ui/printer/health", Some(&token), None).await;
+        assert_eq!(health["last_job_failure"]["error_kind"], "refused");
+        let counter = sign_in(&r, "counter", "c-pass").await;
+        let (status, _) = call_app(&r.app, "GET", "/ui/printer/health", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn the_android_adapter_over_the_recorded_bluetooth_fake_prints_the_test_page_and_flags_a_drop()
+     {
+        use arena_tasks::printer::{
+            AndroidPrinter, BluetoothFailure, BluetoothLink, FakeBluetooth, PairedPrinter,
+        };
+        let link = Arc::new(FakeBluetooth::new(vec![PairedPrinter {
+            address: "00:11:22:AA:BB:CC".into(),
+            name: "RPP02N".into(),
+        }]));
+        let r = rig_with(
+            hub().await,
+            Arc::new(AndroidPrinter::new(
+                Arc::clone(&link) as Arc<dyn BluetoothLink>
+            )),
+        );
+        let token = sign_in(&r, "manager", "m-pass").await;
+        select_bluetooth(&r, &token).await;
+        let (_, body) = post(&r, "/ui/printer/test", &token, None).await;
+        assert_eq!(body["status"]["state"], "ok", "{body}");
+        let page = test_page(
+            "Dev Branch",
+            &test_page_date(T0, "Asia/Kolkata"),
+            PaperWidth::Mm80,
+        );
+        assert_eq!(link.sent(), vec![("00:11:22:AA:BB:CC".to_owned(), page)]);
+        link.fail_with(Some(BluetoothFailure::Link(
+            "the connection dropped while printing".into(),
+        )));
+        let (_, body) = post(&r, "/ui/printer/test", &token, None).await;
+        assert_eq!(body["status"]["state"], "failed", "{body}");
+        assert_eq!(body["status"]["error_kind"], "bluetooth");
+        assert_eq!(open_alert_kinds(&r), ["printer_offline"]);
+        link.fail_with(Some(BluetoothFailure::Permission));
+        let (_, body) = post(&r, "/ui/printer/test", &token, None).await;
+        assert_eq!(body["status"]["error_kind"], "bluetooth_permission");
     }
 
     struct Probe {

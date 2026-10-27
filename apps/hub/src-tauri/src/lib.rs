@@ -13,6 +13,8 @@
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(target_os = "android")]
+mod bt_jni;
+#[cfg(target_os = "android")]
 mod keystore_jni;
 #[cfg(target_os = "android")]
 mod nsd_jni;

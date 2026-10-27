@@ -6,7 +6,8 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use arena_proto::{
-    FoundPrinter, PrinterErrorKind, PrinterKind, PrinterSelected, parse_printer_addr,
+    BluetoothAccess, FoundPrinter, PrinterErrorKind, PrinterKind, PrinterSelected,
+    parse_bluetooth_address, parse_printer_addr,
 };
 
 pub use escpos::{pc437_text, ruler, test_page, test_page_date};
@@ -40,12 +41,17 @@ impl PaperWidth {
 pub enum PrinterTarget {
     Usb(String),
     Lan(SocketAddrV4),
+    /// A paired Bluetooth printer by device address (Android Hub).
+    Bluetooth(String),
 }
 
 impl PrinterTarget {
     pub fn from_selected(selected: &PrinterSelected) -> Result<Self, PrinterError> {
         match selected.kind {
             PrinterKind::Usb => Ok(Self::Usb(selected.id_or_addr.clone())),
+            PrinterKind::Bluetooth => parse_bluetooth_address(&selected.id_or_addr)
+                .map(Self::Bluetooth)
+                .ok_or_else(|| PrinterError::BadAddress(selected.id_or_addr.clone())),
             PrinterKind::Lan => parse_printer_addr(&selected.id_or_addr)
                 .map(Self::Lan)
                 .ok_or_else(|| PrinterError::BadAddress(selected.id_or_addr.clone())),
@@ -61,6 +67,12 @@ pub enum PrinterError {
     BadAddress(String),
     Spooler(String, String),
     UsbUnavailable,
+    /// The Bluetooth printer (by address) could not be reached or dropped the job.
+    Bluetooth(String, String),
+    /// The Bluetooth permission is off.
+    BluetoothPermission,
+    /// This Hub has no Bluetooth printing (a Windows Hub) or the device has no Bluetooth.
+    BluetoothUnavailable,
 }
 
 impl std::fmt::Display for PrinterError {
@@ -80,6 +92,16 @@ impl std::fmt::Display for PrinterError {
                 write!(f, "Windows could not print to {name}: {detail}")
             }
             Self::UsbUnavailable => write!(f, "USB printing works only on a Windows Hub"),
+            Self::Bluetooth(addr, detail) => {
+                write!(
+                    f,
+                    "Could not print to the Bluetooth printer {addr}: {detail}"
+                )
+            }
+            Self::BluetoothPermission => write!(f, "The Bluetooth permission is off"),
+            Self::BluetoothUnavailable => {
+                write!(f, "Bluetooth printing is not available on this Hub")
+            }
         }
     }
 }
@@ -93,6 +115,8 @@ impl PrinterError {
             Self::Timeout(..) => PrinterErrorKind::Timeout,
             Self::Network(..) => PrinterErrorKind::Unreachable,
             Self::Spooler(..) | Self::UsbUnavailable => PrinterErrorKind::Spooler,
+            Self::Bluetooth(..) | Self::BluetoothUnavailable => PrinterErrorKind::Bluetooth,
+            Self::BluetoothPermission => PrinterErrorKind::BluetoothPermission,
             Self::BadAddress(_) => PrinterErrorKind::Other,
         }
     }
@@ -106,6 +130,16 @@ pub trait Printer: Send + Sync + 'static {
         target: &'a PrinterTarget,
         bytes: &'a [u8],
     ) -> BoxFuture<'a, Result<(), PrinterError>>;
+
+    /// What this Hub may do with Bluetooth; `None` when it has no Bluetooth printing.
+    fn bluetooth_access(&self) -> BoxFuture<'_, Option<BluetoothAccess>> {
+        Box::pin(async { None })
+    }
+
+    /// False on a Hub that cannot print to a USB printer (Android).
+    fn usb_supported(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +169,23 @@ mod tests {
             PrinterTarget::from_selected(&usb),
             Ok(PrinterTarget::Usb("EPSON TM-T82".into()))
         );
+        let bt = PrinterSelected {
+            kind: PrinterKind::Bluetooth,
+            id_or_addr: "00:11:22:aa:bb:cc".into(),
+            name: "RPP02N".into(),
+        };
+        assert_eq!(
+            PrinterTarget::from_selected(&bt),
+            Ok(PrinterTarget::Bluetooth("00:11:22:AA:BB:CC".into()))
+        );
+        let bad_bt = PrinterSelected {
+            id_or_addr: "printer".into(),
+            ..bt
+        };
+        assert!(matches!(
+            PrinterTarget::from_selected(&bad_bt),
+            Err(PrinterError::BadAddress(_))
+        ));
         let bad = PrinterSelected {
             id_or_addr: "abc".into(),
             ..lan
@@ -183,6 +234,21 @@ mod tests {
         assert_eq!(
             PrinterError::BadAddress("x".into()).kind(),
             PrinterErrorKind::Other
+        );
+        let dropped =
+            PrinterError::Bluetooth("00:11:22:AA:BB:CC".into(), "the printer dropped".into());
+        assert_eq!(
+            dropped.to_string(),
+            "Could not print to the Bluetooth printer 00:11:22:AA:BB:CC: the printer dropped"
+        );
+        assert_eq!(dropped.kind(), PrinterErrorKind::Bluetooth);
+        assert_eq!(
+            PrinterError::BluetoothUnavailable.kind(),
+            PrinterErrorKind::Bluetooth
+        );
+        assert_eq!(
+            PrinterError::BluetoothPermission.kind(),
+            PrinterErrorKind::BluetoothPermission
         );
     }
 }

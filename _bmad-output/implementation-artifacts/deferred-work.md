@@ -359,3 +359,12 @@
 - During a transfer or grouping pick on a phone the sheet is a bottom card (Story 3.5 behaviour), not full height, so the floor targets stay reachable.
 - The Epic 5 phone POS (`phone-cart-bar`, full-height cart sheet) must register its own Back handler with `pushBack` and set `--sticky-bottom` on `.hub-main` for its sticky bar.
 - The 44 px audit covers Floor, the tile sheets, Players, the Shift placeholder and the More sheet only; other screens are not audited yet.
+
+## Deferred from: Story 4.6
+
+- The Gradle/Kotlin build, `BluetoothBridge.kt`, `bt_jni.rs` on the Android target, the Android 12+ permission prompt (including the second refusal, where Android stops showing it), a real SPP printer (connect, a page, a printer switched off, out of range or dropped mid-print, and a reconnect on the next print) and the 10 s failure bound on a device were not run: no Android target, SDK, emulator or printer here. `bt_jni.rs` was not type-checked on the host.
+- The permission prompt is wired through `HubBridge` (`bluetoothState`, `requestBluetooth`, `openAppSettings`) and a window event, not a Tauri plugin; AD-28 calls the Bluetooth piece a plugin, but Stories 4.3 and 4.4 set the JNI bridge pattern and this follows it. If a later story moves the bridges into Tauri plugins this one moves with them.
+- Only a failed job to a Bluetooth printer raises `printer_offline`; a failed LAN job on Android is kept as the last job failure but raises no alert, so the Windows Hub's behaviour is unchanged. The alert has no sound (it has no device) and is cleared by a staff acknowledgement, not when the printer comes back.
+- The last job failure is held in memory and is lost on a Hub restart; there is no job queue yet (receipts and KOTs arrive in Epics 5 and 7), so "the next print retries the connection" is a fresh connection per job, not a queued retry.
+- A Bluetooth printer is matched by its device address; renaming it in Android settings changes the listed name, not the saved selection.
+- `dev_seed`, `lan` and `printer` integration tests in `arena-hub` fail on master with `USER_LIMIT: the staff limit for this branch is reached` (checked with the work stashed), and `pnpm run check:tokens-used` fails on `--sticky-bottom` in `+layout.svelte` (Story 4.5); both are independent of this story.

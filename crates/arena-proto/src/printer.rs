@@ -23,6 +23,8 @@ pub const PRINTER_IP_FIELD: &str = "ip";
 pub enum PrinterKind {
     Usb,
     Lan,
+    /// A Bluetooth SPP printer already paired in Android settings (Android Hub only).
+    Bluetooth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -39,6 +41,32 @@ pub struct FoundPrinter {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct PrinterFindResult {
     pub printers: Vec<FoundPrinter>,
+    /// What the Hub may do with Bluetooth; absent on a Hub that has no Bluetooth printing.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub bluetooth: Option<BluetoothAccess>,
+    /// False on the Android Hub, which cannot print to a USB printer.
+    #[serde(default = "usb_supported_by_default")]
+    pub usb_supported: bool,
+}
+
+fn usb_supported_by_default() -> bool {
+    true
+}
+
+/// What the Android Hub may do with Bluetooth when a Manager presses "Find printer".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum BluetoothAccess {
+    /// Paired printers are listed.
+    Granted,
+    /// The Bluetooth permission (Android 12+) is not granted.
+    Denied,
+    /// The permission is granted but Bluetooth is switched off.
+    Off,
+    /// The device has no Bluetooth.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -89,6 +117,10 @@ impl PrinterSelected {
             return Err(PrinterSelectedError::Shape);
         }
         match p.kind {
+            PrinterKind::Bluetooth => {
+                p.id_or_addr =
+                    parse_bluetooth_address(&p.id_or_addr).ok_or(PrinterSelectedError::Shape)?;
+            }
             PrinterKind::Lan => {
                 let addr = parse_printer_addr(&p.id_or_addr).ok_or(PrinterSelectedError::Ip)?;
                 p.id_or_addr = addr.to_string();
@@ -105,6 +137,16 @@ impl PrinterSelected {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }
+}
+
+/// A Bluetooth device address as six upper-case hex pairs, e.g. `00:11:22:AA:BB:CC`.
+pub fn parse_bluetooth_address(text: &str) -> Option<String> {
+    let parts: Vec<&str> = text.trim().split(':').collect();
+    let well_formed = parts.len() == 6
+        && parts
+            .iter()
+            .all(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_hexdigit()));
+    well_formed.then(|| parts.join(":").to_ascii_uppercase())
 }
 
 pub fn parse_printer_addr(text: &str) -> Option<SocketAddrV4> {
@@ -141,6 +183,10 @@ pub enum PrinterErrorKind {
     Timeout,
     Unreachable,
     Spooler,
+    /// A Bluetooth printer is off, out of range or dropped the connection.
+    Bluetooth,
+    /// The Bluetooth permission is off.
+    BluetoothPermission,
     Other,
 }
 
@@ -207,6 +253,23 @@ pub struct PrinterStatusSet {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub error: Option<String>,
+}
+
+/// The last print job that failed on the Hub's printer. It is kept in memory and cleared by the
+/// next job that succeeds; `printer.status` is separate and records test prints only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PrinterJobFailure {
+    pub error_kind: PrinterErrorKind,
+    pub error: String,
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PrinterHealth {
+    pub last_job_failure: Option<PrinterJobFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -323,6 +386,42 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn a_bluetooth_selection_is_a_device_address_in_upper_case() {
+        assert_eq!(
+            parse_bluetooth_address(" 00:11:22:aa:bb:cc "),
+            Some("00:11:22:AA:BB:CC".to_owned())
+        );
+        for bad in [
+            "",
+            "00:11:22:AA:BB",
+            "00:11:22:AA:BB:CC:DD",
+            "0:11:22:AA:BB:CC",
+            "GG:11:22:AA:BB:CC",
+            "192.168.1.5",
+        ] {
+            assert_eq!(parse_bluetooth_address(bad), None, "{bad:?}");
+        }
+        let p = PrinterSelected::parse(
+            r#"{"kind":"bluetooth","id_or_addr":"00:11:22:aa:bb:cc","name":"RPP02N"}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(p.kind, PrinterKind::Bluetooth);
+        assert_eq!(p.id_or_addr, "00:11:22:AA:BB:CC");
+        assert_eq!(PrinterSelected::parse(&p.to_json()), Ok(Some(p)));
+        assert_eq!(
+            PrinterSelected::parse(r#"{"kind":"bluetooth","id_or_addr":"x","name":"P"}"#),
+            Err(PrinterSelectedError::Shape)
+        );
+    }
+
+    #[test]
+    fn a_find_result_without_bluetooth_fields_reads_as_a_windows_hub() {
+        let r: PrinterFindResult = serde_json::from_str(r#"{"printers":[]}"#).unwrap();
+        assert_eq!((r.bluetooth, r.usb_supported), (None, true));
     }
 
     #[test]

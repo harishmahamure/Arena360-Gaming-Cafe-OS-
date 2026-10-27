@@ -296,12 +296,9 @@ async fn staff_handles_holds_the_session_expired_with_a_time_up_alert_until_staf
     let snap = crate::snapshot::read_snapshot(&reopen(&f), ends + 60_000).unwrap();
     assert_eq!(snap.sessions[0].state, "expired");
     assert_eq!(snap.alerts.len(), 1);
-    assert_eq!(
-        crate::session_screens(&reopen(&f), ends + 61_000).unwrap()[0]
-            .1
-            .lock_after_ms,
-        0
-    );
+    let held = &crate::session_screens(&reopen(&f), ends + 61_000).unwrap()[0].1;
+    assert_eq!(held.lock_after_ms, 0);
+    assert_eq!(held.grace_ms, 0);
 
     let blocked = expire(&f, system(), &id, ends + 70_000).await.unwrap_err();
     assert_eq!(blocked.code, ErrorCode::Stale);

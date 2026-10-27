@@ -111,6 +111,12 @@ pub fn session_screens(
                         .map(|d| d.label.clone())
                 })
                 .unwrap_or_default();
+            let own_lock = match (s.state.as_str(), s.ends_at) {
+                ("active" | "grace", Some(at)) => {
+                    Some(u64::try_from(at + grace_ms(s.grace_min) - now_ms).unwrap_or(0))
+                }
+                _ => None,
+            };
             let screen = SessionScreen {
                 session_id: s.id,
                 device_name: name,
@@ -118,19 +124,18 @@ pub fn session_screens(
                     s.paused_at.unwrap_or(now_ms) - s.started_at - s.paused_total_ms,
                 )
                 .unwrap_or(0),
-                lock_after_ms: match (s.state.as_str(), s.ends_at) {
-                    ("active" | "grace", Some(at)) => {
-                        u64::try_from(at + grace_ms(s.grace_min) - now_ms)
-                            .unwrap_or(0)
-                            .min(lock_after)
-                    }
+                lock_after_ms: match (s.state.as_str(), own_lock) {
                     ("expired", _) => 0,
+                    (_, Some(own)) => own.min(lock_after),
                     _ => lock_after,
                 },
                 time_up_mode: s.time_up_mode,
-                grace_ms: match s.ends_at {
-                    Some(_) if s.state != "paused" => u64::from(s.grace_min) * 60_000,
-                    _ => 0,
+                // The grace phase shows only while the session's own end drives the lock: a
+                // held session, or one capped by closing time, has none.
+                grace_ms: if own_lock.is_some_and(|own| own <= lock_after) {
+                    u64::from(s.grace_min) * 60_000
+                } else {
+                    0
                 },
             };
             (s.device_id, screen)

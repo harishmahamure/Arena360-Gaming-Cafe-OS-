@@ -2,7 +2,7 @@
 title: 'Story 3.26: Time-up on PCs — Grace, Then Clean Up or Staff Handles'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'fddafbe'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -88,7 +88,14 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: fmt, clippy (workspace without `arena-kiosk-svc`, and its lib), hub and kiosk svelte-check, string/token/contrast/protocol/layer checks and prettier pass; arena-core (new grace, clean-up and staff-handles apply tests, engine test), arena-tasks (staff-handles task test) and arena-api tests pass; hub `session-timer` and `floor` and kiosk `pc-screen` Playwright specs pass. Unrelated failures as before: arena-tasks (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reading_times_out`), arena-kiosk-svc integration tests do not lint (`discovery.rs`, existing).
 Decisions: one `session.expire` intent drives both steps (no new intent kind); the grace is not a new column (`ends_at + grace_min`); the kiosk receives no grace event, it derives the phase from `lock_after_ms` and `grace_ms` in the tick; the "Time's up" alert is raised inside the hold transaction so a crash cannot lose it.
 Left for later: Undo of an End on a held session reopens it as `active` past its `ends_at` (the engine then expires it again); extend out of grace (3.28); end-to-end kiosk test on a real Windows kiosk.
+
+## Code Review (2026-10-27)
+
+Four layers (blind, edge-case, verification-gap, acceptance) ran on the implementation commit.
+- Fixed: the kiosk tick reported a full `grace_ms` for a held `expired` session and for one whose lock is capped by branch closing time, so a resynced kiosk showed a wrong "Grace ends in" countdown. `session_screens` now reports `grace_ms = 0` unless the session's own end drives the lock; the held-session test asserts it.
+- Deferred (low or by design, not blocking): `held` is inferred from the tables a close wrote (a hold with no open segment and an already-open alert would emit no lock event; not reachable for a running session); the TIME UP alert is acked by staff on its own, not by End (3.25 design); Undo of an End on a held session (already listed above); extra tests for a prepaid End in grace, a held pack/wallet session, the registry `held` mapping and the bridge `grace_in_ms` arithmetic.
+- Verified: arena-core tests, fmt and clippy (excluding the Unix-only `arena-e2e` and existing non-linting `arena-kiosk-svc` integration tests) are green; arena-tasks/arena-kiosk-svc failures are the existing Windows-environment ones.

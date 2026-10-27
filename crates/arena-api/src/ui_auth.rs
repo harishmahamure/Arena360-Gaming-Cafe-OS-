@@ -870,6 +870,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::CreditBelowOutstanding
         | ErrorCode::OverrideUsedToday
         | ErrorCode::CreditPaused
+        | ErrorCode::PassAlreadyActive
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -2042,7 +2043,9 @@ async fn run_intent(
     );
     let topping_up = matches!(
         intent.payload,
-        arena_proto::IntentPayload::WalletTopup(_) | arena_proto::IntentPayload::CreditCollect(_)
+        arena_proto::IntentPayload::WalletTopup(_)
+            | arena_proto::IntentPayload::CreditCollect(_)
+            | arena_proto::IntentPayload::PlanSell(_)
     );
     let settling = match &intent.payload {
         arena_proto::IntentPayload::SessionSettle(s) => Some(s.order_id.clone()),

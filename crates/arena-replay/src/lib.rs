@@ -316,7 +316,7 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            writer
+            let pack_plan = writer
                 .submit_intent(submit(
                     IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
                         id: None,
@@ -333,7 +333,13 @@ mod tests {
                     None,
                 ))
                 .await
-                .unwrap();
+                .unwrap()
+                .changes
+                .iter()
+                .find(|c| c.tbl == "plans")
+                .unwrap()
+                .row_id
+                .clone();
             let zone = writer
                 .submit_intent(submit(
                     IntentPayload::ZoneUpsert(arena_proto::ZoneUpsert {
@@ -768,6 +774,39 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::CreditCollectReverted(arena_proto::CreditCollectReverted {
                         order_id: collection,
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
+            let sell = || {
+                submit(
+                    IntentPayload::PlanSell(arena_proto::PlanSell {
+                        player_id: player_id.clone(),
+                        plan_id: pack_plan.clone(),
+                        credit_override: None,
+                        payments: vec![arena_proto::PaymentRow {
+                            method: arena_proto::PaymentMethod::Cash,
+                            amount_minor: 30_000,
+                            reference: None,
+                        }],
+                    }),
+                    None,
+                )
+            };
+            writer.submit_intent(sell()).await.unwrap();
+            let second = writer.submit_intent(sell()).await.unwrap();
+            let sale = second
+                .changes
+                .iter()
+                .find(|c| c.tbl == "orders")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::PlanSellReverted(arena_proto::PlanSellReverted {
+                        order_id: sale,
                     }),
                     Some(1),
                 ))

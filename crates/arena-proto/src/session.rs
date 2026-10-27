@@ -387,6 +387,9 @@ pub struct WalletView {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub aging: Option<CreditAging>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<crate::OwnedPlanView>>")]
+    pub plans: Vec<crate::OwnedPlanView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -452,6 +452,24 @@ impl SnapshotReader {
             credit: credit.as_ref().map(credit_view),
             aging,
             txns,
+            plans: store
+                .player_packs(player_id)?
+                .into_iter()
+                .map(|p| arena_proto::OwnedPlanView {
+                    expired: p.expires_at <= now_ms,
+                    id: p.id,
+                    plan_id: p.plan_id,
+                    plan_kind: p.kind,
+                    name: p.name,
+                    minutes_left: p.minutes_left,
+                    minutes_total: p.minutes_total,
+                    window_start_min: p.window_start_min,
+                    window_end_min: p.window_end_min,
+                    group_ids: p.group_ids,
+                    bought_at: p.bought_at,
+                    expires_at: p.expires_at,
+                })
+                .collect(),
         })
     }
 

@@ -11,7 +11,7 @@ import {
 } from "./auth";
 import { SNAPSHOT_DEPENDENCY } from "./snapshot";
 
-export type UndoKind = "end" | "settle" | "topup" | "collect";
+export type UndoKind = "end" | "settle" | "topup" | "collect" | "plan";
 
 export type Undo = {
   kind: UndoKind;
@@ -43,6 +43,7 @@ const PERMISSION: Record<UndoKind, Permission> = {
   settle: "pos.sell",
   topup: "wallet.topup",
   collect: "credit.collect",
+  plan: "wallet.topup",
 };
 
 const payloadOf = (u: Undo): IntentPayload =>
@@ -50,15 +51,18 @@ const payloadOf = (u: Undo): IntentPayload =>
     ? { kind: "session.end.reverted", session_id: u.id }
     : u.kind === "topup"
       ? { kind: "wallet.topup.reverted", order_id: u.id }
-      : u.kind === "collect"
-        ? { kind: "credit.collect.reverted", order_id: u.id }
-        : { kind: "session.settle.reverted", order_id: u.id };
+      : u.kind === "plan"
+        ? { kind: "plan.sell.reverted", order_id: u.id }
+        : u.kind === "collect"
+          ? { kind: "credit.collect.reverted", order_id: u.id }
+          : { kind: "session.settle.reverted", order_id: u.id };
 
 const DONE: Record<UndoKind, MessageKey> = {
   end: "hub.undo.done.end",
   settle: "hub.undo.done.settle",
   topup: "hub.undo.done.topup",
   collect: "hub.undo.done.collect",
+  plan: "hub.undo.done.plan",
 };
 
 export const undoPermission = (u: Undo): Permission => PERMISSION[u.kind];
@@ -99,7 +103,7 @@ function open(next: Omit<Undo, "key" | "phase">): void {
  */
 export function offerUndo(
   result: UiIntentResult,
-  settledKind: "settle" | "topup" | "collect" = "settle",
+  settledKind: "settle" | "topup" | "collect" | "plan" = "settle",
 ): void {
   const { ended, settled } = result;
   const now = Date.now();

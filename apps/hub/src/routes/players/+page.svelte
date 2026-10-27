@@ -11,6 +11,8 @@
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
   import EditProfile from "../../lib/players/EditProfile.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
+  import PlayerPlans from "../../lib/players/PlayerPlans.svelte";
+  import SellPlan from "../../lib/players/SellPlan.svelte";
   import TopUp from "../../lib/players/TopUp.svelte";
   import WalletList from "../../lib/players/WalletList.svelte";
   import UndoDock from "../../lib/UndoDock.svelte";
@@ -22,6 +24,7 @@
   let prefill = $state("+91");
   let profile: PlayerProfile | null = $state(null);
   let guest = $state(false);
+  let guestSell = $state(false);
   let failed = $state(false);
   let lookup: PlayerLookup | undefined = $state();
   let created: string | null = $state(null);
@@ -33,6 +36,8 @@
   let walletOpen = $state(false);
   let walletFailed = $state(false);
   let toppingUp = $state(false);
+  let selling = $state(false);
+  let plansVersion = $state(0);
 
   const staff = $derived(sessionStaff(page.data));
 
@@ -64,11 +69,13 @@
 
   async function pick(id: string) {
     guest = false;
+    guestSell = false;
     failed = false;
     editing = false;
     edited = null;
     stale = false;
     toppingUp = false;
+    selling = false;
     walletOpen = false;
     wallet = null;
     const mine = ++turn;
@@ -121,6 +128,7 @@
       onguest={() => {
         profile = null;
         guest = true;
+        guestSell = false;
       }}
       oncreate={(phone) => {
         prefill = phone;
@@ -132,8 +140,16 @@
 
   <div role="status" class="type-hub-label">
     {#if guest}{t("hub.players.lookup.guest_picked")}{/if}
+    {#if guest && guestSell}<span data-testid="guest-sell-note">{t("hub.plans.sell.guest")}</span
+      >{/if}
     {#if failed}<span aria-hidden="true">⚠</span> {t("hub.players.lookup.failed")}{/if}
   </div>
+
+  {#if guest && hasPermission(staff, "wallet.topup")}
+    <div class="actions" data-testid="guest-actions">
+      <Button label="hub.plans.sell" variant="secondary" onclick={() => (guestSell = true)} />
+    </div>
+  {/if}
 
   {#if profile}
     {@const p = profile.player}
@@ -167,10 +183,11 @@
           {/if}
         </dd>
       </dl>
-      {#if !toppingUp}
+      {#if !toppingUp && !selling}
         <div class="actions" data-testid="wallet-actions">
           {#if hasPermission(staff, "wallet.topup")}
             <Button label="hub.wallet.topup" onclick={() => (toppingUp = true)} />
+            <Button label="hub.plans.sell" onclick={() => (selling = true)} />
           {/if}
           <Button
             label={walletOpen ? "hub.wallet.list.hide" : "hub.wallet.list.show"}
@@ -198,6 +215,20 @@
     {#key p.player_id}
       <CreditBlock playerId={p.player_id} {staff} />
     {/key}
+    {#key p.player_id}
+      <PlayerPlans playerId={p.player_id} version={plansVersion} />
+    {/key}
+    {#if selling}
+      <SellPlan
+        playerId={p.player_id}
+        ondone={() => {
+          selling = false;
+          plansVersion++;
+          void reloadBalance(p.player_id);
+        }}
+        oncancel={() => (selling = false)}
+      />
+    {/if}
     {#if toppingUp}
       <TopUp
         playerId={p.player_id}

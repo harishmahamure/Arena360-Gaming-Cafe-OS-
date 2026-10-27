@@ -80,6 +80,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::CreditBelowOutstanding
         | ErrorCode::OverrideUsedToday
         | ErrorCode::CreditPaused
+        | ErrorCode::PassAlreadyActive
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame
         | ErrorCode::HsnRequired

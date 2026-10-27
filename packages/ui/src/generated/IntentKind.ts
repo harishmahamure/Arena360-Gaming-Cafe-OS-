@@ -31,6 +31,8 @@ export type IntentKind =
   | "product.upsert"
   | "product.delete"
   | "plan.upsert"
+  | "plan.sell"
+  | "plan.sell.reverted"
   | "staff.set_credentials"
   | "stock.in"
   | "stock.in.reverted"

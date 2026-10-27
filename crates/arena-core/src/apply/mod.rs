@@ -38,6 +38,7 @@ mod licence;
 mod maintenance;
 mod mutate;
 mod pc_command;
+mod plan_sales;
 mod plans;
 mod players;
 mod printer_status;
@@ -164,6 +165,8 @@ pub(crate) enum Target {
     SessionAssign(Box<session::AssignTarget>),
     WalletTopup(Box<wallet::TopupTarget>),
     WalletTopupReverted(Box<wallet::TopupRevertTarget>),
+    PlanSell(Box<plan_sales::SellTarget>),
+    PlanSellReverted(Box<plan_sales::SellRevertTarget>),
     CreditSetLimit(Box<credit::LimitTarget>),
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
@@ -227,6 +230,10 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::WalletTopup(t) => Target::WalletTopup(Box::new(wallet::load_topup(tx, t)?)),
         P::WalletTopupReverted(r) => {
             Target::WalletTopupReverted(Box::new(wallet::load_topup_reverted(tx, r, now)?))
+        }
+        P::PlanSell(s) => Target::PlanSell(Box::new(plan_sales::load_sell(tx, s, now)?)),
+        P::PlanSellReverted(r) => {
+            Target::PlanSellReverted(Box::new(plan_sales::load_sell_reverted(tx, r, now)?))
         }
         P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),
         P::CreditCollect(c) => {

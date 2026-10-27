@@ -1,3 +1,4 @@
+import { t } from "@arena/ui";
 import type { PlanView } from "@arena/ui/generated";
 import { authHeaders, getToken, setToken } from "./auth";
 
@@ -50,4 +51,35 @@ export function parseWhole(text: string, max: number): number | null {
 /** Hours and minutes of a pack, e.g. `5 h` or `1 h 30 min`. */
 export function hoursText(minutes: number): { h: number; m: number } {
   return { h: Math.floor(minutes / 60), m: minutes % 60 };
+}
+
+type Terms = {
+  plan_kind: string;
+  minutes?: number | null;
+  validity_days?: number | null;
+  window_start_min?: number | null;
+  window_end_min?: number | null;
+};
+
+/** A pack's time as `5 h` or `1 h 30 min`. */
+export function timeText(minutes: number): string {
+  const { h, m } = hoursText(minutes);
+  return m ? t("hub.plans.time_hours_minutes", { h, m }) : t("hub.plans.time_hours", { h });
+}
+
+/** The play window as `22:00–06:00`. */
+export function windowText(start: number, end: number): string {
+  return t("hub.plans.window", { start: clock(start), end: clock(end) });
+}
+
+/** What a plan gives, in words: its time or window and its validity. */
+export function termsText(p: Terms): string {
+  const days = p.validity_days ?? 0;
+  if (p.plan_kind === "pack") {
+    return t("hub.plans.terms.pack", { time: timeText(p.minutes ?? 0), days });
+  }
+  const window = windowText(p.window_start_min ?? 0, p.window_end_min ?? 0);
+  return p.plan_kind === "block"
+    ? t("hub.plans.terms.block", { window })
+    : t("hub.plans.terms.pass", { window, days });
 }

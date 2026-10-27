@@ -111,6 +111,10 @@ pub enum IntentKind {
     ProductDelete,
     #[serde(rename = "plan.upsert")]
     PlanUpsert,
+    #[serde(rename = "plan.sell")]
+    PlanSell,
+    #[serde(rename = "plan.sell.reverted")]
+    PlanSellReverted,
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials,
     #[serde(rename = "stock.in")]
@@ -169,7 +173,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 53] = [
+    pub const ALL: [IntentKind; 55] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -197,6 +201,8 @@ impl IntentKind {
         Self::ProductUpsert,
         Self::ProductDelete,
         Self::PlanUpsert,
+        Self::PlanSell,
+        Self::PlanSellReverted,
         Self::StaffSetCredentials,
         Self::StockIn,
         Self::StockInReverted,
@@ -255,6 +261,8 @@ impl IntentKind {
             Self::ProductUpsert => "product.upsert",
             Self::ProductDelete => "product.delete",
             Self::PlanUpsert => "plan.upsert",
+            Self::PlanSell => "plan.sell",
+            Self::PlanSellReverted => "plan.sell.reverted",
             Self::StaffSetCredentials => "staff.set_credentials",
             Self::StockIn => "stock.in",
             Self::StockInReverted => "stock.in.reverted",
@@ -336,6 +344,8 @@ impl IntentKind {
             | Self::SessionPause
             | Self::SessionResume
             | Self::WalletTopup
+            | Self::PlanSell
+            | Self::PlanSellReverted
             | Self::WalletTopupReverted
             | Self::CreditSetLimit
             | Self::CreditCollect
@@ -396,9 +406,10 @@ impl IntentKind {
                 Requirement::Perm(Permission::PosSell)
             }
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
-            Self::WalletTopup | Self::WalletTopupReverted => {
-                Requirement::Perm(Permission::WalletTopup)
-            }
+            Self::WalletTopup
+            | Self::WalletTopupReverted
+            | Self::PlanSell
+            | Self::PlanSellReverted => Requirement::Perm(Permission::WalletTopup),
             Self::CreditSetLimit => Requirement::Perm(Permission::CreditManage),
             Self::CreditCollect | Self::CreditCollectReverted => {
                 Requirement::Perm(Permission::CreditCollect)
@@ -453,6 +464,8 @@ impl IntentKind {
             | Self::ProductUpsert
             | Self::ProductDelete
             | Self::PlanUpsert
+            | Self::PlanSell
+            | Self::PlanSellReverted
             | Self::StaffSetCredentials
             | Self::StockIn
             | Self::StockInReverted => None,
@@ -894,6 +907,10 @@ pub enum IntentPayload {
     ProductDelete(crate::ProductDelete),
     #[serde(rename = "plan.upsert")]
     PlanUpsert(crate::PlanUpsert),
+    #[serde(rename = "plan.sell")]
+    PlanSell(crate::PlanSell),
+    #[serde(rename = "plan.sell.reverted")]
+    PlanSellReverted(crate::PlanSellReverted),
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials(StaffSetCredentials),
     #[serde(rename = "stock.in")]
@@ -978,6 +995,8 @@ impl IntentPayload {
             Self::ProductUpsert(_) => IntentKind::ProductUpsert,
             Self::ProductDelete(_) => IntentKind::ProductDelete,
             Self::PlanUpsert(_) => IntentKind::PlanUpsert,
+            Self::PlanSell(_) => IntentKind::PlanSell,
+            Self::PlanSellReverted(_) => IntentKind::PlanSellReverted,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
             Self::StockIn(_) => IntentKind::StockIn,
             Self::StockInReverted(_) => IntentKind::StockInReverted,
@@ -1254,7 +1273,7 @@ mod tests {
                     Requirement::Perm(Permission::PosSell)
                 }
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
-                "wallet.topup" | "wallet.topup.reverted" => {
+                "wallet.topup" | "wallet.topup.reverted" | "plan.sell" | "plan.sell.reverted" => {
                     Requirement::Perm(Permission::WalletTopup)
                 }
                 "credit.set_limit" => Requirement::Perm(Permission::CreditManage),

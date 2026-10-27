@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use arena_core::{
-    Applied, DEFAULT_SETTINGS, HubStatus, INTENT_TTL_MS, LOCALE_KEYS, LeaseInfo, ManualClock, Role,
-    Writer, WriterHandle, status_channel,
+    Applied, Clock, DEFAULT_SETTINGS, HubStatus, INTENT_TTL_MS, LOCALE_KEYS, LeaseInfo,
+    ManualClock, Role, Writer, WriterHandle, status_channel,
 };
 use arena_proto::{
     Actor, ActorKind, AppError, BranchBootstrap, ErrorCode, Intent, IntentPayload, SettingsSet,
@@ -138,6 +138,14 @@ enum Op {
         slot: u8,
         short: bool,
         split: bool,
+    },
+    /// A cash sale of a pack or pass to a player (or short, or a second live pass), then maybe its Undo.
+    PlanSell {
+        player: u8,
+        plan: u8,
+        short: bool,
+        undo: bool,
+        late: bool,
     },
     /// A cash top-up for a player, then maybe its Undo (late or in time).
     WalletTopup {
@@ -340,6 +348,15 @@ fn op() -> impl Strategy<Value = Op> {
             }
         ),
         2 => (0..3u8, prop::bool::weighted(0.3)).prop_map(|(slot, over)| Op::WalletPay { slot, over }),
+        2 => (any::<u8>(), any::<u8>(), prop::bool::weighted(0.2), any::<bool>(), prop::bool::weighted(0.3)).prop_map(
+            |(player, plan, short, undo, late)| Op::PlanSell {
+                player,
+                plan,
+                short,
+                undo,
+                late
+            }
+        ),
         2 => (any::<u8>(), 0..3000u16).prop_map(|(player, limit)| Op::CreditSet { player, limit }),
         2 => (
             any::<u8>(),
@@ -1461,6 +1478,115 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(hub.change_count(), after_forward + 4);
                     prop_assert_eq!(held(hub), balance);
                 }
+            }
+        }
+        Op::PlanSell {
+            player,
+            plan,
+            short,
+            undo,
+            late,
+        } => {
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let plans: Vec<_> = hub
+                .reader
+                .plans()
+                .unwrap()
+                .into_iter()
+                .map(|(p, _)| p)
+                .filter(|p| p.active && p.kind != "block")
+                .collect();
+            let (Some(p), Some(chosen)) = (
+                players.get(usize::from(*player) % players.len().max(1)),
+                plans.get(usize::from(*plan) % plans.len().max(1)),
+            ) else {
+                return Ok(());
+            };
+            let player_id = text(p, "player_id");
+            let amount_minor = if *short {
+                chosen.price_minor - 1
+            } else {
+                chosen.price_minor
+            };
+            let now = hub.clock.now_ms();
+            let live_pass = chosen.kind == "pass"
+                && hub
+                    .reader
+                    .rows(Table::PlayerPacks)
+                    .unwrap()
+                    .iter()
+                    .any(|k| {
+                        text(k, "player_id") == player_id
+                            && text(k, "kind") == "pass"
+                            && int(k, "expires_at") > now
+                    });
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::PlanSell(arena_proto::PlanSell {
+                    player_id: player_id.clone(),
+                    plan_id: chosen.plan_id.clone(),
+                    credit_override: None,
+                    payments: vec![arena_proto::PaymentRow {
+                        method: arena_proto::PaymentMethod::Cash,
+                        amount_minor,
+                        reference: None,
+                    }],
+                }),
+                None,
+            ));
+            if live_pass {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::PassAlreadyActive, Some("plan_id")))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            if *short {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::PaymentShort, Some("payments")))
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            prop_assert!(out.is_ok(), "{:?}", out);
+            prop_assert_eq!(hub.change_count(), before + 4);
+            if *undo {
+                let order = hub
+                    .reader
+                    .rows(Table::Orders)
+                    .unwrap()
+                    .into_iter()
+                    .rfind(|o| text(o, "kind") == "plan_sale")
+                    .unwrap();
+                if *late {
+                    hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
+                }
+                let after_forward = hub.change_count();
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::PlanSellReverted(arena_proto::PlanSellReverted {
+                        order_id: text(&order, "id"),
+                    }),
+                    Some(int(&order, "rev")),
+                ));
+                if *late {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::UndoNotAllowed, None)));
+                    prop_assert_eq!(hub.change_count(), after_forward);
+                } else {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert_eq!(hub.change_count(), after_forward + 4);
+                }
+            }
+            let packs = hub.reader.rows(Table::PlayerPacks).unwrap();
+            for k in &packs {
+                prop_assert!(
+                    hub.reader
+                        .rows(Table::Orders)
+                        .unwrap()
+                        .iter()
+                        .any(|o| text(o, "id") == text(k, "order_id"))
+                );
             }
         }
         Op::WalletPay { slot, over } => {

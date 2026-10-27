@@ -68,6 +68,56 @@ pub struct PlanView {
     pub rev: i64,
 }
 
+use crate::PaymentRow;
+
+/// The payload of `plan.sell`: a pack or pass sold to a profiled player, settled in the same
+/// intent (payments sum to the plan price; wallet and credit are allowed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlanSell {
+    pub player_id: String,
+    pub plan_id: String,
+    pub payments: Vec<PaymentRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub credit_override: Option<bool>,
+}
+
+/// The payload of `plan.sell.reverted`: Undo of a plan sale within its window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlanSellReverted {
+    pub order_id: String,
+}
+
+/// One pack or pass a player owns, with the terms it was sold under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnedPlanView {
+    pub id: String,
+    pub plan_id: String,
+    pub plan_kind: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub minutes_left: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub minutes_total: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub window_start_min: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub window_end_min: Option<i64>,
+    pub group_ids: Vec<String>,
+    #[ts(type = "number")]
+    pub bought_at: i64,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+    pub expired: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

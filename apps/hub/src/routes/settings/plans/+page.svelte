@@ -14,7 +14,7 @@
   } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
   import { sessionStaff, snapshotOf } from "../../../lib/operating";
-  import { clock, hoursText, loadPlans, parseClock, parseWhole } from "../../../lib/plans";
+  import { clock, loadPlans, parseClock, parseWhole, termsText } from "../../../lib/plans";
   import { parsePrice, priceText } from "../../../lib/products";
 
   type Job = { payload: IntentPayload; rev?: number; key: string };
@@ -227,24 +227,6 @@
     const parts = [symbol, priceText(minor, exponent)];
     return (branchLocale.current?.symbol_position === "after" ? parts.reverse() : parts).join("");
   };
-
-  function terms(p: PlanView): string {
-    const days = p.validity_days ?? 0;
-    if (p.plan_kind === "pack") {
-      const { h, m } = hoursText(p.minutes ?? 0);
-      return t("hub.plans.terms.pack", {
-        time: m ? t("hub.plans.time_hours_minutes", { h, m }) : t("hub.plans.time_hours", { h }),
-        days,
-      });
-    }
-    const window = t("hub.plans.window", {
-      start: clock(p.window_start_min ?? 0),
-      end: clock(p.window_end_min ?? 0),
-    });
-    return p.plan_kind === "block"
-      ? t("hub.plans.terms.block", { window })
-      : t("hub.plans.terms.pass", { window, days });
-  }
 </script>
 
 <svelte:head>
@@ -390,7 +372,7 @@
             >{t(KINDS.find((k) => k.id === p.plan_kind)?.label ?? "hub.plans.kind.pack")}</span
           >
           <span class="type-hub-label">{money(p.price_minor)}</span>
-          <span class="type-hub-label" data-testid="plan-terms">{terms(p)}</span>
+          <span class="type-hub-label" data-testid="plan-terms">{termsText(p)}</span>
           <span class="type-hub-label"
             >{t("hub.plans.for_groups", {
               names: p.group_ids.map(groupName).join(", "),

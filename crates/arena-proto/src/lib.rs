@@ -154,8 +154,8 @@ pub use pc_command::{
 };
 pub use permission::{Permission, Requirement};
 pub use plans::{
-    MINUTES_PER_DAY, PLAN_KINDS, PLAN_MAX_GROUPS, PLAN_MAX_MINUTES, PLAN_MAX_VALIDITY_DAYS,
-    PlanUpsert, PlanView,
+    MINUTES_PER_DAY, OwnedPlanView, PLAN_KINDS, PLAN_MAX_GROUPS, PLAN_MAX_MINUTES,
+    PLAN_MAX_VALIDITY_DAYS, PlanSell, PlanSellReverted, PlanUpsert, PlanView,
 };
 pub use players::{
     CONSENT_TRANSACTIONAL, PLAYER_EMAIL_MAX_CHARS, PLAYER_NAME_MAX_CHARS, PLAYER_NOTES_MAX_CHARS,

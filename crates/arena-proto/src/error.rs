@@ -130,6 +130,8 @@ pub enum ErrorCode {
     OverrideUsedToday,
     /// A credit spend for a player whose credit is paused for being 15+ days overdue.
     CreditPaused,
+    /// A second pass sold to a player who already holds an unexpired one.
+    PassAlreadyActive,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -217,6 +219,7 @@ impl ErrorCode {
             Self::CreditBelowOutstanding => "CREDIT_BELOW_OUTSTANDING",
             Self::OverrideUsedToday => "OVERRIDE_USED_TODAY",
             Self::CreditPaused => "CREDIT_PAUSED",
+            Self::PassAlreadyActive => "PASS_ALREADY_ACTIVE",
         }
     }
 }
@@ -365,6 +368,7 @@ mod tests {
             ),
             (ErrorCode::OverrideUsedToday, "OVERRIDE_USED_TODAY"),
             (ErrorCode::CreditPaused, "CREDIT_PAUSED"),
+            (ErrorCode::PassAlreadyActive, "PASS_ALREADY_ACTIVE"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

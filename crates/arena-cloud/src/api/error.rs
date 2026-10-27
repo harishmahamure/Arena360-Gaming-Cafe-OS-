@@ -67,6 +67,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::CreditBelowOutstanding
         | ErrorCode::OverrideUsedToday
         | ErrorCode::CreditPaused
+        | ErrorCode::PassAlreadyActive
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED

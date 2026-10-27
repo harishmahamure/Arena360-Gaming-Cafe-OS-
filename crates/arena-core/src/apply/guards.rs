@@ -181,6 +181,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionAssign(_)
             | Target::WalletTopup(_)
             | Target::WalletTopupReverted(_)
+            | Target::PlanSell(_)
+            | Target::PlanSellReverted(_)
             | Target::CreditSetLimit(_)
             | Target::CreditCollect(_)
             | Target::CreditCollectReverted(_)
@@ -246,6 +248,8 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionAssign(t) => super::session::base_rev_assign(intent, t),
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
+        Target::PlanSell(_) => Ok(()),
+        Target::PlanSellReverted(t) => super::plan_sales::base_rev_sell_reverted(intent, t),
         Target::CreditSetLimit(_) => Ok(()),
         Target::CreditCollect(_) => Ok(()),
         Target::CreditAutoPause(_) => Ok(()),

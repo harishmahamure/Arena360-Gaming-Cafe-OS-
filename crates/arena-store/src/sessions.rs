@@ -707,6 +707,7 @@ pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settl
     let intent_kind = match kind.as_str() {
         "topup" => "wallet.topup",
         "credit_collect" => "credit.collect",
+        "plan_sale" => "plan.sell",
         _ => "session.settle",
     };
     let forward = forward_intent_id(conn, "orders", order_id, intent_kind)?;

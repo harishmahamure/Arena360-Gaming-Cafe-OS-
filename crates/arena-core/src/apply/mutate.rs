@@ -306,6 +306,14 @@ pub(super) fn mutate(
             Target::WalletTopupReverted(t) => super::wallet::mutate_topup_reverted(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::PlanSell(p) => match target {
+            Target::PlanSell(t) => super::plan_sales::mutate_sell(tx, intent, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::PlanSellReverted(_) => match target {
+            Target::PlanSellReverted(t) => super::plan_sales::mutate_sell_reverted(tx, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditSetLimit(c) => match target {
             Target::CreditSetLimit(t) => super::credit::mutate_set_limit(tx, c, t),
             _ => Err(mismatch()),

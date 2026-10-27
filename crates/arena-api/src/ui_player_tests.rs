@@ -827,3 +827,124 @@ async fn the_wallet_route_carries_aging_and_lookup_hits_carry_outstanding() {
     let (_, hits) = call(&hub, "GET", "/ui/players?q=98765", Some(&counter), None).await;
     assert_eq!(hits[0]["outstanding_minor"], 0);
 }
+
+#[tokio::test]
+async fn a_counter_sells_a_plan_and_the_wallet_route_lists_what_the_player_owns() {
+    use arena_proto::{Actor, ActorKind, IntentPayload};
+
+    use crate::ui_auth::tests::intent_as;
+
+    let hub = hub().await;
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let manager = token_for(&hub, "manager", "m-pass").await;
+    let (_, reply) = create(
+        &hub,
+        &counter,
+        body(form("Asha_9", "+91 98765 43210"), None),
+    )
+    .await;
+    let player = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let group = hub
+        .writer
+        .submit_intent(intent_as(
+            Actor {
+                kind: ActorKind::Owner,
+                id: "o".into(),
+            },
+            IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                id: None,
+                name: "PCs".into(),
+                group_kind: "pc".into(),
+                colour: "teal".into(),
+                sort_order: 1,
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone();
+    let plan = json!({"intent": intent_as(
+        Actor { kind: ActorKind::Staff, id: "x".into() },
+        IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
+            id: None,
+            plan_kind: "pack".into(),
+            name: "5 h".into(),
+            price_minor: 30_000,
+            minutes: Some(300),
+            validity_days: Some(7),
+            window_start_min: None,
+            window_end_min: None,
+            group_ids: vec![group],
+            active: true,
+        }),
+        None,
+    )});
+    let (status, planned) = call(&hub, "POST", "/ui/intent", Some(&manager), Some(plan)).await;
+    assert_eq!(status, StatusCode::OK, "{planned}");
+    let plan_id = planned["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let sell = |amount: i64| {
+        json!({"intent": {
+            "intent_id": ulid::Ulid::generate().to_string(),
+            "kind": "plan.sell",
+            "idempotency_key": ulid::Ulid::generate().to_string(),
+            "issued_at": hub.clock.now_ms(),
+            "actor": {"kind": "staff", "id": "x"},
+            "payload": {
+                "kind": "plan.sell",
+                "player_id": player,
+                "plan_id": plan_id,
+                "payments": [{"method": "cash", "amount_minor": amount}],
+            },
+        }})
+    };
+    let (status, refused) = call(&hub, "POST", "/ui/intent", Some(&counter), Some(sell(100))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "PAYMENT_SHORT");
+
+    hub.clock.advance(1_000);
+    let (status, reply) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&counter),
+        Some(sell(30_000)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let settled_at = reply["settled"]["settled_at"].as_i64().unwrap();
+    assert_eq!(reply["settled"]["undo_until"], settled_at + 8_000);
+    assert_eq!(reply["settled"]["total_minor"], 30_000);
+    assert_eq!(reply["settled"]["irreversible"], false);
+
+    let (_, wallet) = call(
+        &hub,
+        "GET",
+        &format!("/ui/players/wallet?id={player}"),
+        Some(&counter),
+        None,
+    )
+    .await;
+    let owned = &wallet["plans"][0];
+    assert_eq!(
+        (
+            owned["name"].as_str(),
+            owned["plan_kind"].as_str(),
+            owned["minutes_left"].as_i64(),
+            owned["expired"].as_bool(),
+        ),
+        (Some("5 h"), Some("pack"), Some(300), Some(false))
+    );
+    assert_eq!(
+        owned["expires_at"].as_i64().unwrap(),
+        owned["bought_at"].as_i64().unwrap() + 7 * 24 * 60 * 60 * 1000
+    );
+}

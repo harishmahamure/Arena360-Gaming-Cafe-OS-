@@ -15,6 +15,7 @@ mod devices;
 mod identity;
 mod migrations;
 mod plans;
+mod player_packs;
 mod players;
 mod products;
 mod sessions;
@@ -77,6 +78,10 @@ pub use identity::{
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use plans::{
     PlanRow, find_plan, insert_plan, insert_plan_group, list_plan_groups, list_plans, update_plan,
+};
+pub use player_packs::{
+    NewPlanLine, NewPlayerPack, PlayerPackRow, find_pack_for_order, has_unexpired_pass,
+    insert_plan_line, insert_player_pack, list_player_packs,
 };
 pub use players::{
     PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
@@ -808,6 +813,17 @@ impl Store {
             return Ok(Vec::new());
         }
         list_moves(&self.conn, product_id)
+    }
+
+    pub fn player_packs(&self, player_id: &str) -> Result<Vec<PlayerPackRow>, AppError> {
+        if !self.table_exists("player_packs")? {
+            return Ok(Vec::new());
+        }
+        list_player_packs(&self.conn, player_id)
+    }
+
+    pub fn find_pack_for_order(&self, order_id: &str) -> Result<Option<PlayerPackRow>, AppError> {
+        find_pack_for_order(&self.conn, order_id)
     }
 
     pub fn plans(&self) -> Result<Vec<(PlanRow, Vec<String>)>, AppError> {
@@ -1570,6 +1586,53 @@ mod tests {
                 assert!(
                     tx.execute("INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position, business_day, fy, rev, created_at, updated_at) VALUES ('P3', 'NOPE', 'cash', 1, 'S', 0, 'd', 'f', 1, 0, 0)", [])
                         .is_err()
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn v33_database_upgrades_to_plan_sale_orders_keeping_its_children() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &migrations::MIGRATIONS[..33] {
+                conn.execute_batch(m.sql).unwrap();
+                record_schema_version(&conn, m.version, 0).unwrap();
+            }
+            conn.execute_batch(
+                "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy,
+                                     kind, rev, created_at, updated_at)
+                 VALUES ('O1', 'settled', 100, 100, '2026-10-27', '2026-27', 'credit_collect', 1, 0, 0);
+                 INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position,
+                                       business_day, fy, rev, created_at, updated_at)
+                 VALUES ('P1', 'O1', 'cash', 100, 'S', 0, '2026-10-27', '2026-27', 1, 0, 0);",
+            )
+            .unwrap();
+        }
+        let mut store = Store::open(&path, T).unwrap();
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        store
+            .write_tx(|tx| {
+                let kept: i64 = tx
+                    .query_row("SELECT COUNT(*) FROM payments WHERE order_id = 'O1'", [], |r| {
+                        r.get(0)
+                    })
+                    .map_err(db_error)?;
+                assert_eq!(kept, 1);
+                tx.execute_batch(
+                    "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy,
+                                         kind, rev, created_at, updated_at)
+                     VALUES ('O2', 'settled', 50, 50, '2026-10-27', '2026-27', 'plan_sale', 1, 0, 0);",
+                )
+                .map_err(db_error)?;
+                assert!(
+                    tx.execute(
+                        "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, kind, rev, created_at, updated_at) VALUES ('O3', 'settled', 1, 1, 'd', 'f', 'nope', 1, 0, 0)",
+                        []
+                    )
+                    .is_err()
                 );
                 Ok(())
             })

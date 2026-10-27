@@ -347,10 +347,10 @@ pub(super) fn mutate_end(
 #[derive(Default)]
 pub(crate) struct SettleTarget {
     order: Option<OrderRow>,
-    wallet_minor: i64,
-    credit: Option<CreditRow>,
-    credit_blocked: bool,
-    business_day: String,
+    pub(super) wallet_minor: i64,
+    pub(super) credit: Option<CreditRow>,
+    pub(super) credit_blocked: bool,
+    pub(super) business_day: String,
 }
 
 pub(super) fn load_settle(
@@ -359,12 +359,28 @@ pub(super) fn load_settle(
     now_ms: i64,
 ) -> Result<SettleTarget, AppError> {
     let order = find_order(tx, &s.order_id)?;
-    let wallet_minor = match order.as_ref().and_then(|o| o.player_id.as_deref()) {
+    let mut target = load_payer(
+        tx,
+        order.as_ref().and_then(|o| o.player_id.as_deref()),
+        &s.payments,
+        now_ms,
+    )?;
+    target.order = order;
+    Ok(target)
+}
+
+pub(super) fn load_payer(
+    tx: &StoreTx<'_>,
+    player_id: Option<&str>,
+    payments: &[PaymentRow],
+    now_ms: i64,
+) -> Result<SettleTarget, AppError> {
+    let wallet_minor = match player_id {
         Some(p) => find_wallet(tx, p)?.map_or(0, |w| w.balance_minor),
         None => 0,
     };
-    let wants_credit = s.payments.iter().any(|p| p.method == PaymentMethod::Credit);
-    let credit = match order.as_ref().and_then(|o| o.player_id.as_deref()) {
+    let wants_credit = payments.iter().any(|p| p.method == PaymentMethod::Credit);
+    let credit = match player_id {
         Some(p) if wants_credit => find_credit(tx, p)?,
         _ => None,
     };
@@ -384,7 +400,7 @@ pub(super) fn load_settle(
         _ => false,
     };
     Ok(SettleTarget {
-        order,
+        order: None,
         wallet_minor,
         credit,
         credit_blocked,
@@ -465,10 +481,26 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
         }
         _ => return Err(invalid("order_id", "this bill is void")),
     }
-    if s.payments.len() > MAX_PAYMENTS {
+    validate_payments(
+        &s.payments,
+        s.credit_override,
+        t,
+        o.player_id.is_some(),
+        o.total_minor,
+    )
+}
+
+pub(super) fn validate_payments(
+    payments: &[PaymentRow],
+    credit_override: Option<bool>,
+    t: &SettleTarget,
+    has_player: bool,
+    total_minor: i64,
+) -> Result<(), AppError> {
+    if payments.len() > MAX_PAYMENTS {
         return Err(invalid("payments", "too many payments"));
     }
-    for (i, p) in s.payments.iter().enumerate() {
+    for (i, p) in payments.iter().enumerate() {
         if p.amount_minor <= 0 {
             return Err(invalid(
                 &format!("payments[{i}].amount_minor"),
@@ -477,14 +509,13 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
         }
         check_reference(i, p)?;
     }
-    let mut wallet_rows = s
-        .payments
+    let mut wallet_rows = payments
         .iter()
         .enumerate()
         .filter(|(_, p)| p.method == PaymentMethod::Wallet);
     if let Some((i, p)) = wallet_rows.next() {
         let field = format!("payments[{i}].method");
-        if o.player_id.is_none() {
+        if !has_player {
             return Err(invalid(&field, "a guest bill has no wallet"));
         }
         if wallet_rows.next().is_some() {
@@ -498,13 +529,12 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
             ));
         }
     }
-    validate_credit(s, t, o.player_id.is_some())?;
-    let paid = s
-        .payments
+    validate_credit(payments, credit_override, t, has_player)?;
+    let paid = payments
         .iter()
         .try_fold(0i64, |sum, p| sum.checked_add(p.amount_minor))
         .ok_or_else(|| invalid("payments", "the payments are too large"))?;
-    if paid != o.total_minor {
+    if paid != total_minor {
         return Err(AppError::with_field(
             ErrorCode::PaymentShort,
             "payments",
@@ -514,18 +544,20 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
     Ok(())
 }
 
-pub(super) fn mutate_settle(
+pub(super) struct Stamp<'a> {
+    pub staff_id: &'a str,
+    pub order_id: &'a str,
+    pub business_day: &'a str,
+    pub fy: &'a str,
+}
+
+pub(super) fn insert_payments(
     tx: &StoreTx<'_>,
-    intent: &Intent,
-    s: &SessionSettle,
-    t: &SettleTarget,
-    now_ms: i64,
-) -> Result<Vec<Written>, AppError> {
-    let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
-        AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
-    })?;
-    let mut written = Vec::with_capacity(s.payments.len() + 1);
-    for (i, p) in s.payments.iter().enumerate() {
+    stamp: &Stamp<'_>,
+    payments: &[PaymentRow],
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    for (i, p) in payments.iter().enumerate() {
         let id = ulid::Ulid::generate().to_string();
         let reference = p
             .reference
@@ -536,14 +568,14 @@ pub(super) fn mutate_settle(
             tx,
             &NewPayment {
                 id: &id,
-                order_id: &s.order_id,
+                order_id: stamp.order_id,
                 method: p.method.as_str(),
                 amount_minor: p.amount_minor,
                 reference,
-                staff_id: &intent.actor.id,
+                staff_id: stamp.staff_id,
                 position: i as i64,
-                business_day: &business_day,
-                fy: &fy,
+                business_day: stamp.business_day,
+                fy: stamp.fy,
             },
         )?;
         written.push(Written {
@@ -552,20 +584,20 @@ pub(super) fn mutate_settle(
             before: None,
         });
     }
-    settle_order(tx, &s.order_id, now_ms, &intent.actor.id)?;
-    written.push(Written {
-        key: RowKey::Orders {
-            id: s.order_id.clone(),
-        },
-        op: ChangeOp::Update,
-        before: None,
-    });
-    let player_id = t.order.as_ref().and_then(|o| o.player_id.as_deref());
+    Ok(())
+}
+
+pub(super) fn record_payer_txns(
+    tx: &StoreTx<'_>,
+    stamp: &Stamp<'_>,
+    payments: &[PaymentRow],
+    player_id: Option<&str>,
+    credit: Option<&CreditRow>,
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
     if let (Some(player_id), Some(w)) = (
         player_id,
-        s.payments
-            .iter()
-            .find(|p| p.method == PaymentMethod::Wallet),
+        payments.iter().find(|p| p.method == PaymentMethod::Wallet),
     ) {
         let txn_id = ulid::Ulid::generate().to_string();
         insert_wallet_txn(
@@ -576,10 +608,10 @@ pub(super) fn mutate_settle(
                 delta_minor: -w.amount_minor,
                 reason: "bill",
                 method: None,
-                staff_id: &intent.actor.id,
-                order_id: &s.order_id,
-                business_day: &business_day,
-                fy: &fy,
+                staff_id: stamp.staff_id,
+                order_id: stamp.order_id,
+                business_day: stamp.business_day,
+                fy: stamp.fy,
             },
         )?;
         adjust_wallet(tx, player_id, -w.amount_minor)?;
@@ -598,10 +630,8 @@ pub(super) fn mutate_settle(
     }
     if let (Some(player_id), Some(c), Some(credit)) = (
         player_id,
-        s.payments
-            .iter()
-            .find(|p| p.method == PaymentMethod::Credit),
-        t.credit.as_ref(),
+        payments.iter().find(|p| p.method == PaymentMethod::Credit),
+        credit,
     ) {
         let over = credit.outstanding_minor + c.amount_minor > credit.limit_minor;
         let txn_id = ulid::Ulid::generate().to_string();
@@ -613,15 +643,15 @@ pub(super) fn mutate_settle(
                 delta_minor: c.amount_minor,
                 reason: "credit",
                 method: over.then_some("override"),
-                staff_id: &intent.actor.id,
-                order_id: &s.order_id,
-                business_day: &business_day,
-                fy: &fy,
+                staff_id: stamp.staff_id,
+                order_id: stamp.order_id,
+                business_day: stamp.business_day,
+                fy: stamp.fy,
             },
         )?;
         adjust_outstanding(tx, player_id, c.amount_minor)?;
         if over {
-            set_override_day(tx, player_id, Some(&business_day))?;
+            set_override_day(tx, player_id, Some(stamp.business_day))?;
         }
         written.push(Written {
             key: RowKey::WalletTxns { id: txn_id },
@@ -636,6 +666,44 @@ pub(super) fn mutate_settle(
             before: None,
         });
     }
+    Ok(())
+}
+
+pub(super) fn mutate_settle(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    s: &SessionSettle,
+    t: &SettleTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
+        AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
+    })?;
+    let stamp = Stamp {
+        staff_id: &intent.actor.id,
+        order_id: &s.order_id,
+        business_day: &business_day,
+        fy: &fy,
+    };
+    let mut written = Vec::with_capacity(s.payments.len() + 1);
+    insert_payments(tx, &stamp, &s.payments, &mut written)?;
+    settle_order(tx, &s.order_id, now_ms, &intent.actor.id)?;
+    written.push(Written {
+        key: RowKey::Orders {
+            id: s.order_id.clone(),
+        },
+        op: ChangeOp::Update,
+        before: None,
+    });
+    let player_id = t.order.as_ref().and_then(|o| o.player_id.as_deref());
+    record_payer_txns(
+        tx,
+        &stamp,
+        &s.payments,
+        player_id,
+        t.credit.as_ref(),
+        &mut written,
+    )?;
     Ok(written)
 }
 
@@ -1189,9 +1257,13 @@ pub(super) fn mutate_assign(
     Ok(written)
 }
 
-fn validate_credit(s: &SessionSettle, t: &SettleTarget, has_player: bool) -> Result<(), AppError> {
-    let mut rows = s
-        .payments
+fn validate_credit(
+    payments: &[PaymentRow],
+    credit_override: Option<bool>,
+    t: &SettleTarget,
+    has_player: bool,
+) -> Result<(), AppError> {
+    let mut rows = payments
         .iter()
         .enumerate()
         .filter(|(_, p)| p.method == PaymentMethod::Credit);
@@ -1223,7 +1295,7 @@ fn validate_credit(s: &SessionSettle, t: &SettleTarget, has_player: bool) -> Res
         return Ok(());
     }
     let amount = format!("payments[{i}].amount_minor");
-    if s.credit_override != Some(true) {
+    if credit_override != Some(true) {
         return Err(AppError::with_field(
             ErrorCode::CreditLimit,
             amount,

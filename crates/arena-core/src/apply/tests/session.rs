@@ -3280,3 +3280,324 @@ async fn the_auto_pause_intent_is_system_only() {
     );
     assert_eq!(e.0, ErrorCode::PermissionDenied);
 }
+
+async fn plan_of(f: &Fixture, kind: &str, price: i64, active: bool) -> String {
+    let g = submit(
+        f,
+        owner(),
+        IntentPayload::GroupUpsert(GroupUpsert {
+            id: None,
+            name: format!("PG{}", table(f, Table::DeviceGroups).len() + 1),
+            group_kind: "pc".into(),
+            colour: "teal".into(),
+            sort_order: 1,
+        }),
+    )
+    .await
+    .unwrap()
+    .changes[0]
+        .row_id
+        .clone();
+    let (minutes, window) = match kind {
+        "pack" => (Some(300), (None, None)),
+        "block" => (None, (Some(1080), Some(1410))),
+        _ => (None, (Some(1320), Some(360))),
+    };
+    submit(
+        f,
+        owner(),
+        IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
+            id: None,
+            plan_kind: kind.into(),
+            name: format!("{kind} plan"),
+            price_minor: price,
+            minutes,
+            validity_days: (kind != "block").then_some(7),
+            window_start_min: window.0,
+            window_end_min: window.1,
+            group_ids: vec![g],
+            active,
+        }),
+    )
+    .await
+    .unwrap()
+    .changes
+    .iter()
+    .find(|c| c.tbl == "plans")
+    .unwrap()
+    .row_id
+    .clone()
+}
+
+fn sell_intent(player: &str, plan: &str, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+    intent(
+        owner(),
+        IntentPayload::PlanSell(arena_proto::PlanSell {
+            player_id: player.into(),
+            plan_id: plan.into(),
+            payments,
+            credit_override: None,
+        }),
+    )
+}
+
+fn sell_revert_intent(order: &str, rev: Option<i64>) -> Intent {
+    let mut i = intent(
+        owner(),
+        IntentPayload::PlanSellReverted(arena_proto::PlanSellReverted {
+            order_id: order.into(),
+        }),
+    );
+    i.base_rev = rev;
+    i
+}
+
+fn sale_order(f: &Fixture) -> Row {
+    table(f, Table::Orders)
+        .into_iter()
+        .rev()
+        .find(|o| text(o, "kind") == "plan_sale")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn selling_a_pack_writes_the_bill_line_payment_and_owned_copy() {
+    use arena_proto::PaymentMethod::Cash;
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let plan = plan_of(&f, "pack", 30_000, true).await;
+    let a = end(&f, sell_intent(&p, &plan, vec![pay(Cash, 30_000, None)]))
+        .await
+        .unwrap();
+    assert_eq!(
+        a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
+        ["orders", "order_lines", "payments", "player_packs"]
+    );
+    let o = sale_order(&f);
+    assert_eq!(
+        (
+            text(&o, "status"),
+            int(&o, "total_minor"),
+            text(&o, "player_id")
+        ),
+        ("settled".to_owned(), 30_000, p.clone())
+    );
+    let line = &table(&f, Table::OrderLines)[0];
+    assert_eq!(
+        (
+            text(line, "plan_id"),
+            text(line, "label"),
+            int(line, "amount_minor")
+        ),
+        (plan.clone(), "pack plan".to_owned(), 30_000)
+    );
+    let pack = &table(&f, Table::PlayerPacks)[0];
+    assert_eq!(text(pack, "order_id"), text(&o, "id"));
+    assert_eq!(
+        (int(pack, "minutes_total"), int(pack, "minutes_left")),
+        (300, 300)
+    );
+    assert_eq!(int(pack, "bought_at"), f.clock.now_ms());
+    assert_eq!(
+        int(pack, "expires_at"),
+        f.clock.now_ms() + 7 * 24 * 60 * 60_000
+    );
+    assert_eq!(text(pack, "group_ids").split(',').count(), 1);
+    let s = reopen(&f).settlement(&text(&o, "id")).unwrap().unwrap();
+    assert_eq!(s.total_minor, 30_000);
+    let live = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert!(live.bills.is_empty());
+}
+
+#[tokio::test]
+async fn a_plan_can_be_paid_from_the_wallet_and_on_credit_and_undo_reverts_all() {
+    use arena_proto::PaymentMethod::{Cash, Credit, Wallet};
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    topped_up(&f, &p, 10_000).await;
+    let plan = plan_of(&f, "pass", 30_000, true).await;
+    end(
+        &f,
+        sell_intent(
+            &p,
+            &plan,
+            vec![
+                pay(Wallet, 10_000, None),
+                pay(Credit, 15_000, None),
+                pay(Cash, 5_000, None),
+            ],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!((balance(&f, &p), owed(&f, &p)), (0, 15_000));
+    let o = sale_order(&f);
+    let pack = &table(&f, Table::PlayerPacks)[0];
+    assert_eq!(pack["minutes_left"], RowValue::Null);
+    assert_eq!(int(pack, "window_start_min"), 1320);
+
+    let rev = int(&o, "rev");
+    end(&f, sell_revert_intent(&text(&o, "id"), Some(rev)))
+        .await
+        .unwrap();
+    assert_eq!((balance(&f, &p), owed(&f, &p)), (10_000, 0));
+    assert!(table(&f, Table::PlayerPacks).is_empty());
+    assert!(table(&f, Table::OrderLines).is_empty());
+    assert!(
+        table(&f, Table::Payments)
+            .iter()
+            .all(|x| text(x, "order_id") != text(&o, "id"))
+    );
+    assert!(
+        table(&f, Table::Orders)
+            .iter()
+            .all(|x| text(x, "kind") != "plan_sale")
+    );
+}
+
+#[tokio::test]
+async fn a_second_unexpired_pass_is_refused_but_an_expired_one_can_be_replaced() {
+    use arena_proto::PaymentMethod::Cash;
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let plan = plan_of(&f, "pass", 90_000, true).await;
+    let again = || sell_intent(&p, &plan, vec![pay(Cash, 90_000, None)]);
+    end(&f, again()).await.unwrap();
+    assert_eq!(
+        refusal(end(&f, again()).await),
+        (ErrorCode::PassAlreadyActive, Some("plan_id".into()))
+    );
+    assert_eq!(table(&f, Table::PlayerPacks).len(), 1);
+    f.clock.advance(7 * 24 * 60 * 60_000);
+    end(&f, again()).await.unwrap();
+    assert_eq!(table(&f, Table::PlayerPacks).len(), 2);
+    let pack = plan_of(&f, "pack", 100, true).await;
+    end(&f, sell_intent(&p, &pack, vec![pay(Cash, 100, None)]))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_bad_plan_sale_is_refused_and_writes_nothing() {
+    use arena_proto::PaymentMethod::{Cash, Credit, Upi, Wallet};
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pack = plan_of(&f, "pack", 1_000, true).await;
+    let off = plan_of(&f, "pack", 1_000, false).await;
+    let block = plan_of(&f, "block", 1_000, true).await;
+    let before = reopen(&f).changes().unwrap().len();
+    let cash = |n: i64| vec![pay(Cash, n, None)];
+    let cases: Vec<(Intent, ErrorCode, &str)> = vec![
+        (
+            sell_intent("nobody", &pack, cash(1_000)),
+            ErrorCode::NotFound,
+            "player_id",
+        ),
+        (
+            sell_intent(&p, "nope", cash(1_000)),
+            ErrorCode::NotFound,
+            "plan_id",
+        ),
+        (
+            sell_intent(&p, &off, cash(1_000)),
+            ErrorCode::ValidationFailed,
+            "plan_id",
+        ),
+        (
+            sell_intent(&p, &block, cash(1_000)),
+            ErrorCode::ValidationFailed,
+            "plan_id",
+        ),
+        (
+            sell_intent(&p, &pack, cash(999)),
+            ErrorCode::PaymentShort,
+            "payments",
+        ),
+        (
+            sell_intent(&p, &pack, vec![]),
+            ErrorCode::PaymentShort,
+            "payments",
+        ),
+        (
+            sell_intent(&p, &pack, vec![pay(Wallet, 1_000, None)]),
+            ErrorCode::InsufficientBalance,
+            "payments[0].amount_minor",
+        ),
+        (
+            sell_intent(&p, &pack, vec![pay(Credit, 1_000, None)]),
+            ErrorCode::ValidationFailed,
+            "payments[0].method",
+        ),
+        (
+            sell_intent(&p, &pack, vec![pay(Upi, 1_000, None)]),
+            ErrorCode::ReferenceRequired,
+            "payments[0].reference",
+        ),
+    ];
+    for (i, code, field) in cases {
+        let got = refusal(end(&f, i).await);
+        assert_eq!(got, (code, Some(field.to_owned())), "{field}");
+    }
+    let mut with_rev = sell_intent(&p, &pack, cash(1_000));
+    with_rev.base_rev = Some(1);
+    assert_eq!(
+        refusal(end(&f, with_rev).await).0,
+        ErrorCode::ValidationFailed
+    );
+    assert_eq!(reopen(&f).changes().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn undoing_a_plan_sale_needs_the_same_staff_and_the_window() {
+    use arena_proto::PaymentMethod::Cash;
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let plan = plan_of(&f, "pack", 1_000, true).await;
+    end(&f, sell_intent(&p, &plan, vec![pay(Cash, 1_000, None)]))
+        .await
+        .unwrap();
+    let o = sale_order(&f);
+    let (id, rev) = (text(&o, "id"), int(&o, "rev"));
+    let other = staff(&f, "someone", ROLE_COUNTER).await;
+    let mut by_other = sell_revert_intent(&id, Some(rev));
+    by_other.actor = other;
+    assert_eq!(
+        end(&f, by_other).await.unwrap_err().code,
+        ErrorCode::UndoNotAllowed
+    );
+    assert_eq!(
+        end(&f, sell_revert_intent(&id, Some(rev + 1)))
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Stale
+    );
+    f.clock.advance(9_000);
+    assert_eq!(
+        end(&f, sell_revert_intent(&id, Some(rev)))
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::UndoNotAllowed
+    );
+    assert_eq!(table(&f, Table::PlayerPacks).len(), 1);
+}
+
+#[tokio::test]
+async fn the_wallet_view_lists_owned_plans_with_an_expired_flag() {
+    use arena_proto::PaymentMethod::Cash;
+    let f = bootstrapped().await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let plan = plan_of(&f, "pack", 1_000, true).await;
+    end(&f, sell_intent(&p, &plan, vec![pay(Cash, 1_000, None)]))
+        .await
+        .unwrap();
+    let now = f.clock.now_ms();
+    let reader = crate::SnapshotReader::open(&f.path).unwrap();
+    let view = reader.wallet(&p, now).unwrap();
+    assert_eq!(view.plans.len(), 1);
+    assert!(!view.plans[0].expired);
+    assert_eq!(view.plans[0].minutes_left, Some(300));
+    let late = reader.wallet(&p, now + 8 * 24 * 60 * 60_000).unwrap();
+    assert!(late.plans[0].expired);
+}

@@ -26,9 +26,9 @@ use arena_core::{
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LATEST_SCHEMA_VERSION, Store};
 use arena_tasks::{
-    CloudClient, CloudEndpoint, CloudPairer, CommandTask, ConnectivityTask, HeartbeatTask,
-    HousekeepingTask, Keystore, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber, SystemInterfaces,
-    platform_keystore,
+    AndroidSecrets, CloudClient, CloudEndpoint, CloudPairer, CommandTask, ConnectivityTask,
+    HeartbeatTask, HousekeepingTask, Keystore, LeaseTask, MdnsAdvertiser, MdnsTask, NetProber,
+    SecretWrapper, SystemInterfaces, platform_keystore,
 };
 use tokio::sync::{Notify, oneshot};
 use tracing_subscriber::EnvFilter;
@@ -46,7 +46,22 @@ const EXIT_FAILURE: u8 = 1;
 const EXIT_SCHEMA_TOO_NEW: u8 = 2;
 const EXIT_USAGE: u8 = 64;
 
+/// What the host process injects into the Hub.
+#[derive(Clone, Default)]
+pub struct StartOptions {
+    /// The Android Keystore wrapper (the Android shell supplies the JNI-backed one). With it the
+    /// device token and branch key are stored wrapped; without it the platform keystore is used.
+    pub secret_wrapper: Option<Arc<dyn SecretWrapper>>,
+}
+
 pub async fn start(args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
+    start_with(args, StartOptions::default()).await
+}
+
+pub async fn start_with(
+    args: impl Iterator<Item = std::ffi::OsString>,
+    options: StartOptions,
+) -> ExitCode {
     let cfg = match config::parse(args, |k| std::env::var_os(k), cfg!(windows)) {
         Ok(config::Command::Run(cfg)) => cfg,
         #[cfg(feature = "dev-fixtures")]
@@ -89,7 +104,7 @@ pub async fn start(args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
         .with_writer(Arc::new(ring))
         .try_init();
 
-    match run(cfg, clock).await {
+    match run(cfg, clock, options).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.code == ErrorCode::SchemaTooNew => {
             tracing::error!(
@@ -197,7 +212,11 @@ fn internal(message: String) -> AppError {
     AppError::new(ErrorCode::Internal, message)
 }
 
-async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError> {
+async fn run(
+    cfg: config::Config,
+    clock: Arc<dyn Clock>,
+    options: StartOptions,
+) -> Result<(), AppError> {
     let stop_signal = Arc::new(Notify::new());
     *STOP.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&stop_signal));
     let mut store = Store::open(cfg.db_path(), clock.now_ms())?;
@@ -210,8 +229,20 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         "store open"
     );
     let identity = store.hub_identity()?;
-    let pair_gate = PairGate::new(identity.is_some());
-    if pair_gate.is_paired() {
+    let secrets = options
+        .secret_wrapper
+        .as_ref()
+        .map(|w| AndroidSecrets::new(&cfg.data_dir, w));
+    // Before anything can mint a branch key: has the key that wrapped the secrets been lost?
+    let keys_lost = identity.is_some() && secrets.as_ref().is_some_and(|s| s.lost(true));
+    let pair_gate = if keys_lost {
+        PairGate::needing_repair()
+    } else {
+        PairGate::new(identity.is_some())
+    };
+    if keys_lost {
+        tracing::warn!("the keystore key is lost; the hub needs to be paired again");
+    } else if pair_gate.is_paired() {
         tracing::info!("hub paired; pairing screen skipped");
     } else {
         tracing::info!("hub not paired yet; serving the pairing screen");
@@ -339,16 +370,23 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         .with_printer(printer)
         .with_pairing(pairing)
         .with_pair_gate(pair_gate.clone())
-        .with_player_kek(Arc::new(arena_tasks::KeystoreKek::new(
-            arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
-        ))),
+        .with_player_kek(Arc::new(
+            arena_tasks::KeystoreKek::new(match &secrets {
+                Some(s) => Box::new(Arc::clone(&s.kek)),
+                None => arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
+            })
+            .refusing_while_lost(pair_gate.clone()),
+        )),
     );
     let cloud = CloudClient::new(&CloudEndpoint {
         host: cfg.cloud_host.clone(),
         plain_http: cfg.cloud_plain_http,
     })
     .map_err(|e| internal(format!("cloud client: {e}")))?;
-    let keystore: Arc<dyn Keystore> = Arc::from(platform_keystore(&cfg.data_dir));
+    let keystore: Arc<dyn Keystore> = match &secrets {
+        Some(s) => Arc::clone(&s.token),
+        None => Arc::from(platform_keystore(&cfg.data_dir)),
+    };
     let verify_keys = [
         arena_proto::licence::LICENCE_VERIFY_KEYS,
         #[cfg(feature = "dev-fixtures")]
@@ -423,7 +461,7 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
             relay,
         )
     });
-    let pairer: Arc<dyn arena_core::HubPairer> = Arc::new(CloudPairer::new(
+    let mut cloud_pairer = CloudPairer::new(
         cloud,
         writer.clone(),
         keystore,
@@ -432,7 +470,11 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
         cfg.platform,
         instance_id,
         env!("CARGO_PKG_VERSION").to_owned(),
-    ));
+    );
+    if let Some(s) = &secrets {
+        cloud_pairer = cloud_pairer.with_kek_store(Arc::clone(&s.kek));
+    }
+    let pairer: Arc<dyn arena_core::HubPairer> = Arc::new(cloud_pairer);
     #[cfg_attr(not(feature = "dev-fixtures"), allow(unused_mut))]
     let setup_job = tokio::spawn(arena_core::setup::publish_setup(
         Arc::clone(&snapshots),

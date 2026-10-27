@@ -107,6 +107,57 @@ export function checkService(manifest) {
   return errors;
 }
 
+/**
+ * Entries that appear twice in the manifest (a merge once left a second `<service>`,
+ * `<receiver>` and every permission).
+ */
+export function checkDuplicates(manifest) {
+  const seen = new Map();
+  for (const m of manifest.matchAll(
+    /<(uses-permission|service|receiver|activity|provider)\b[^>]*>/g,
+  )) {
+    const name = attr(m[0], "android:name");
+    if (name === undefined) continue;
+    const key = `${m[1]} ${name}`;
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
+  return [...seen]
+    .filter(([, n]) => n > 1)
+    .map(([key]) => `manifest: <${key}> is declared more than once`);
+}
+
+/**
+ * The Keystore bridge (Kotlin) must keep the Hub's secrets key in the Android Keystore and
+ * never read it out: the `AndroidKeyStore` provider, AES-GCM, and no call that exports or
+ * reveals the key bytes, imports a key, or loosens its use.
+ */
+export const KEYSTORE_FORBIDDEN = [
+  [/\.encoded\b|\bgetEncoded\s*\(/, "reads the key bytes (encoded / getEncoded)"],
+  [/\bSecretKeySpec\b/, "builds a key from raw bytes (SecretKeySpec)"],
+  [/setRandomizedEncryptionRequired\s*\(\s*false/, "turns off randomised encryption"],
+  [/\bsetUserAuthenticationRequired\s*\(\s*false/, "loosens user authentication"],
+  [/\bsetKeyEntry\b|\bsetEntry\b|\bPasswordProtection\b/, "imports a key into the Keystore"],
+];
+
+export function checkKeystore(source) {
+  if (source === undefined) return ["keystore: KeystoreBridge.kt is missing"];
+  const errors = [];
+  if (!/"AndroidKeyStore"/.test(source)) {
+    errors.push("keystore: the bridge must use the AndroidKeyStore provider");
+  }
+  if (!/AES\/GCM\/NoPadding/.test(source)) {
+    errors.push("keystore: the bridge must use AES/GCM/NoPadding");
+  }
+  if (!/KeyGenParameterSpec\.Builder/.test(source)) {
+    errors.push("keystore: the key must be generated in the Keystore (KeyGenParameterSpec)");
+  }
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  for (const [re, what] of KEYSTORE_FORBIDDEN) {
+    if (re.test(code)) errors.push(`keystore: the bridge ${what}`);
+  }
+  return errors;
+}
+
 export function checkRepoManifest(root) {
   const main = join(root, ANDROID_DIR);
   const res = {};
@@ -119,7 +170,13 @@ export function checkRepoManifest(root) {
   const path = join(main, "AndroidManifest.xml");
   if (!existsSync(path)) return [`${path} is missing`];
   const manifest = readFileSync(path, "utf8");
-  return [...checkManifest(manifest, res), ...checkService(manifest)];
+  const bridge = join(main, "java", "in", "arena360", "hub", "KeystoreBridge.kt");
+  return [
+    ...checkManifest(manifest, res),
+    ...checkService(manifest),
+    ...checkDuplicates(manifest),
+    ...checkKeystore(existsSync(bridge) ? readFileSync(bridge, "utf8") : undefined),
+  ];
 }
 
 export function elfProblem(buf) {

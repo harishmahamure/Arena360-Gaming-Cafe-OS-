@@ -188,8 +188,9 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
     let read = tokio::task::spawn_blocking(move || reader.snapshot(now)).await;
     match read {
         Ok(Ok(mut snapshot)) => {
-            if state.pairing.as_ref().is_some_and(|g| !g.is_paired()) {
+            if let Some(gate) = state.pairing.as_ref().filter(|g| !g.is_paired()) {
                 snapshot = crate::ui_pair::unpaired_snapshot(snapshot);
+                snapshot.needs_repair = gate.needs_repair().then_some(true);
             }
             for d in &mut snapshot.devices {
                 d.online = state.presence.online(&d.device_id);

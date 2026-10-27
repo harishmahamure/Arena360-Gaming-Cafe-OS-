@@ -24,8 +24,9 @@ pub use housekeeping::{
     DEDUPE_RETENTION_MS, HOUSEKEEPING_INTERVAL, Housekeeping, HousekeepingTask,
 };
 pub use keystore::{
-    AndroidKeystore, FileKeystore, HUB_TOKEN_FILE, KEK_FILE, Keystore, KeystoreKek, named_keystore,
-    platform_keystore,
+    AndroidKeystore, AndroidSecrets, FileKeystore, HUB_TOKEN_FILE, KEK_FILE, KeyLost, Keystore,
+    KeystoreKek, SecretWrapper, WrapError, WrappedKeystore, is_key_lost, key_lost_error, mint_kek,
+    named_keystore, platform_keystore,
 };
 pub use lease::{LEASE_TTL_MS, LeaseTask, RENEW_INTERVAL, Tick};
 pub use mdns::{

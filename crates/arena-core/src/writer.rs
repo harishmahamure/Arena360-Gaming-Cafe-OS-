@@ -279,6 +279,30 @@ impl WriterHandle {
         Ok(paired.is_some())
     }
 
+    /// Re-pair after the secrets' key was lost: replaces the hub id, tier and licence of the same
+    /// branch in one transaction. No bootstrap is applied and nothing else is touched.
+    /// `false` when the Hub has no identity or the code is for another branch.
+    pub async fn record_repairing(
+        &self,
+        identity: arena_store::HubIdentity,
+        licence: String,
+    ) -> Result<bool, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx_mut(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                if !arena_store::replace_hub_identity(tx, &identity)? {
+                    return Ok(false);
+                }
+                arena_store::store_licence(tx, &licence, identity.paired_at)?;
+                Ok(true)
+            })
+        })
+        .await
+    }
+
     pub async fn record_heartbeat(
         &self,
         licence: Option<String>,

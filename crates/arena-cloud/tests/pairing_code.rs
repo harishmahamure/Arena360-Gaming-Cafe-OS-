@@ -383,7 +383,7 @@ async fn a_reload_shows_the_live_code_without_its_value_then_issues_a_new_one() 
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(
         r.body,
-        json!({"active": null, "hub_paired": false, "server_now": T0})
+        json!({"active": null, "hub_paired": false, "tier": "free", "server_now": T0})
     );
 
     let (first, expires) = h.issue(&a).await;
@@ -391,7 +391,7 @@ async fn a_reload_shows_the_live_code_without_its_value_then_issues_a_new_one() 
     let r = h.call("GET", "/v1/wizard/install-hub", None, &a).await;
     assert_eq!(
         r.body,
-        json!({"active": {"expires_at": expires}, "hub_paired": false, "server_now": T0 + 60_000})
+        json!({"active": {"expires_at": expires}, "hub_paired": false, "tier": "free", "server_now": T0 + 60_000})
     );
     assert!(!r.body.to_string().contains(&first));
     let r = h

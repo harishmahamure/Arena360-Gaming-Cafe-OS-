@@ -41,7 +41,7 @@ const fail = (status: number, code: string, extra: Record<string, unknown> = {})
   body: { code, message: code.toLowerCase(), ...extra },
 });
 
-async function serve(page: Page, answers: Answer[] = []) {
+async function serve(page: Page, answers: Answer[] = [], unpaired: HubSnapshot = UNPAIRED) {
   const state = {
     paired: false,
     answers: [...answers],
@@ -63,7 +63,7 @@ async function serve(page: Page, answers: Answer[] = []) {
       status: 200,
       contentType: "application/json",
       headers: CORS,
-      body: JSON.stringify(state.paired ? PAIRED : UNPAIRED),
+      body: JSON.stringify(state.paired ? PAIRED : unpaired),
     }),
   );
   await page.route(`${HUB}/ui/pair-hub`, (route) => {
@@ -87,10 +87,17 @@ const codeField = (page: Page) => page.getByLabel(en["hub.pair.code"], { exact: 
 const pairButton = (page: Page) =>
   page.getByRole("button", { name: en["hub.pair.submit"], exact: true });
 
-async function openPair(page: Page, path = "/pair", answers: Answer[] = []) {
-  const state = await serve(page, answers);
+async function openPair(
+  page: Page,
+  path = "/pair",
+  answers: Answer[] = [],
+  unpaired: HubSnapshot = UNPAIRED,
+) {
+  const state = await serve(page, answers, unpaired);
   await page.goto(path);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(en["hub.pair.title"]);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    unpaired.needs_repair ? en["hub.pair.repair_title"] : en["hub.pair.title"],
+  );
   return state;
 }
 
@@ -231,4 +238,56 @@ test("the pairing screen passes axe, with an error showing", async ({ page }) =>
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual(
     [],
   );
+});
+
+test("pressing Pair keeps the focus in the code field so the keyboard stays open", async ({
+  page,
+}) => {
+  await openPair(page, "/pair", [fail(401, "PAIR_CODE_INVALID")]);
+  await codeField(page).fill("WRONG123");
+  const box = (await pairButton(page).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(codeField(page)).toBeFocused();
+  await page.mouse.up();
+  await expect(page.getByTestId("pair-error")).toContainText(en["hub.pair.invalid"]);
+  await expect(codeField(page)).toHaveValue("");
+  await expect(codeField(page)).toBeFocused();
+});
+
+test.describe("a Hub whose Keystore key is lost", () => {
+  const LOST: HubSnapshot = { ...UNPAIRED, needs_repair: true };
+
+  test("says it needs to be paired again, on the pairing screen", async ({ page }) => {
+    await openPair(page, "/pair", [], LOST);
+    await expect(page.getByTestId("pair-title")).toHaveText(en["hub.pair.repair_title"]);
+    await expect(page.getByTestId("pair-intro")).toHaveText(en["hub.pair.repair_intro"]);
+    await expect(codeField(page)).toBeFocused();
+    await expect(pairButton(page)).toBeVisible();
+    await expect(page.getByTestId("hub-branch")).toHaveCount(0);
+  });
+
+  test("any other route goes to the pairing screen", async ({ page }) => {
+    await openPair(page, "/floor", [], LOST);
+    await expect(page).toHaveURL(/\/pair$/);
+  });
+
+  test("a wrong code keeps the screen and focus, a new code loads the shell", async ({ page }) => {
+    const state = await openPair(page, "/pair", [fail(401, "PAIR_CODE_INVALID")], LOST);
+    await submit(page, "WRONG123");
+    await expect(page.getByTestId("pair-error")).toContainText(en["hub.pair.invalid"]);
+    await expect(page.getByTestId("pair-title")).toHaveText(en["hub.pair.repair_title"]);
+    await expect(codeField(page)).toBeFocused();
+    await submit(page, "K7Q49MZD");
+    await expect(page).toHaveURL(/\/sign-in/);
+    await expect(page.getByTestId("hub-branch")).toHaveText("Dev Branch");
+    expect(state.codes).toEqual(["WRONG123", "K7Q49MZD"]);
+  });
+
+  test("the screen passes axe", async ({ page }) => {
+    await openPair(page, "/pair", [], LOST);
+    const results = await new AxeBuilder({ page }).analyze();
+    const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(bad.map((v) => v.id)).toEqual([]);
+  });
 });

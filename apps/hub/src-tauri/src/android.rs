@@ -1,14 +1,16 @@
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use arena_proto::DeviceSpec;
+use arena_tasks::SecretWrapper;
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
 use tauri::{AppHandle, Manager};
 
+use crate::keystore_jni::JniWrapper;
 use crate::spec::{DB_FILE, Gate, probe};
 
 const HEALTH_PORT: u16 = 7409;
@@ -16,6 +18,24 @@ const START_WAIT: Duration = Duration::from_secs(10);
 const STOP_WAIT: Duration = Duration::from_secs(15);
 
 static GATE: Mutex<Gate> = Mutex::new(Gate::new());
+
+/// The Android Keystore wrapper, built once on the Java thread that calls `nativeStart` (the
+/// app's class loader is only reachable there). The Hub is never started without it, so the
+/// token and branch key are never written in clear.
+static WRAPPER: OnceLock<Arc<dyn SecretWrapper>> = OnceLock::new();
+
+fn wrapper(env: &mut JNIEnv) -> Option<Arc<dyn SecretWrapper>> {
+    if let Some(w) = WRAPPER.get() {
+        return Some(Arc::clone(w));
+    }
+    match JniWrapper::new(env) {
+        Ok(w) => Some(Arc::clone(WRAPPER.get_or_init(|| Arc::new(w)))),
+        Err(e) => {
+            eprintln!("arena-hub: the Android Keystore bridge is unavailable: {e}");
+            None
+        }
+    }
+}
 
 fn gate() -> MutexGuard<'static, Gate> {
     GATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -27,8 +47,11 @@ fn data_dir(app: &AppHandle) -> Option<PathBuf> {
     Some(dir)
 }
 
-fn run_hub(dir: PathBuf) {
+fn run_hub(dir: PathBuf, secret_wrapper: Arc<dyn SecretWrapper>) {
     let args = vec![std::ffi::OsString::from("--data-dir"), dir.into_os_string()];
+    let options = arena_hub::StartOptions {
+        secret_wrapper: Some(secret_wrapper),
+    };
     let spawned = std::thread::Builder::new()
         .name("arena-hub".into())
         .spawn(move || {
@@ -37,7 +60,7 @@ fn run_hub(dir: PathBuf) {
                 .build()
             {
                 Ok(rt) => {
-                    let code = rt.block_on(arena_hub::start(args.into_iter()));
+                    let code = rt.block_on(arena_hub::start_with(args.into_iter(), options));
                     eprintln!("arena-hub: stopped with {code:?}");
                 }
                 Err(e) => eprintln!("arena-hub: no Tokio runtime: {e}"),
@@ -62,11 +85,11 @@ fn wait_for_hub() -> bool {
     false
 }
 
-fn ensure(dir: &Path) -> DeviceSpec {
+fn ensure(dir: &Path, secret_wrapper: Arc<dyn SecretWrapper>) -> DeviceSpec {
     gate().run(
         dir,
         probe,
-        || run_hub(dir.to_path_buf()),
+        || run_hub(dir.to_path_buf(), secret_wrapper),
         |line| eprintln!("arena-hub: {line}"),
     )
 }
@@ -93,7 +116,10 @@ pub extern "system" fn Java_in_arena360_hub_HubService_nativeStart(
         eprintln!("arena-hub: cannot create {}: {e}", dir.display());
         return 0;
     }
-    jboolean::from(ensure(&dir).ok())
+    let Some(secret_wrapper) = wrapper(&mut env) else {
+        return 0;
+    };
+    jboolean::from(ensure(&dir, secret_wrapper).ok())
 }
 
 #[unsafe(no_mangle)]

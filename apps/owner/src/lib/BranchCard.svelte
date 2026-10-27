@@ -84,6 +84,17 @@
     {t(branch.live ? "owner.branches.state.live" : "owner.branches.state.setup")}
   </p>
   <p>{seen}</p>
+  {#if branch.hub.paired && branch.hub.platform}
+    <p data-testid="hub-platform">
+      {t("owner.branches.hub.platform", {
+        platform: t(
+          branch.hub.platform === "android"
+            ? "owner.branches.hub.platform.android"
+            : "owner.branches.hub.platform.windows",
+        ),
+      })}
+    </p>
+  {/if}
   {#if branch.waiting}<StatusBadge state="warning" label="owner.branches.waiting" />{/if}
   {#if editing}
     <form onsubmit={save}>

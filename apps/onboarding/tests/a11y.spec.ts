@@ -322,6 +322,19 @@ const VIEWS: {
     },
   },
   {
+    name: "setup, install the Hub on a paid plan",
+    cloud: {
+      signedIn: true,
+      owner: READY_OWNER,
+      wizard: { branch: {}, done: ["cafe", "tier"], tier: "basic" },
+    },
+    open: async (page) => {
+      await page.goto("/setup/install_hub");
+      await expect(page.getByTestId("pairing-code-value")).toBeVisible();
+      await expect(page.getByTestId("hub-download")).toBeVisible();
+    },
+  },
+  {
     name: "setup, install the Hub with an expired code",
     cloud: { signedIn: true, owner: READY_OWNER, wizard: { branch: {}, done: ["cafe", "tier"] } },
     open: async (page, cloud) => {

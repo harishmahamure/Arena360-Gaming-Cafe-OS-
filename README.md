@@ -109,8 +109,8 @@ version}` (reqwest, rustls + ring, webpki roots, 15 s timeout). Answers: 200
   `retry_after_s` and `Retry-After`; 503 `CLOUD_UNREACHABLE` (no network, or the cloud
   failed). On success the token goes to the OS keystore (`<data>/hub-token.bin`: DPAPI
   `CryptProtectData`, machine scope plus a random entropy file `hub-token.entropy` on Windows;
-  a `0600` file, NOT encrypted, elsewhere for dev and tests; the Android Keystore is a stub
-  until Epic 4), then `hub_identity(tenant_id, branch_id, hub_id, tier, paired_at)` and
+  a `0600` file, NOT encrypted, elsewhere for dev and tests; on the Android Hub the file
+  holds bytes wrapped by an Android Keystore key, see the Android Hub section), then `hub_identity(tenant_id, branch_id, hub_id, tier, paired_at)` and
   `licence_cache(jwt, received_at)` (migration 0011, singletons) are written in one Hub DB
   transaction through the writer. A paired Hub skips the screen on restart and never calls
   `/v1/pair` again. `dev seed` writes a dev identity (`dev-tenant`, the seeded branch,
@@ -1475,7 +1475,11 @@ until, updated_at)` and `ops_audit(id, at, operator, action, target, reason,
 details_json)`.
 
 - **Hub pairing code** (Story 2.9). Wizard step 3 (`/setup/install_hub`) has three parts:
-  "1 · Download" (Hub for Windows 10 or 11, linked from `PUBLIC_HUB_DOWNLOAD_URL`, default
+  "1 · Download" (Story 4.3: tier-aware through `tier` in `GET /v1/wizard/install-hub`. Free
+  sees the Android Hub only: "Hub for Android", "Android 9 or later · 3 GB RAM · 20 GB free" and
+  the Play link from `PUBLIC_ANDROID_HUB_URL`, default
+  `https://play.google.com/store/apps/details?id=in.arena360.hub`, and no Windows download.
+  Paid and comp see Hub for Windows 10 or 11, linked from `PUBLIC_HUB_DOWNLOAD_URL`, default
   `/download/hub`, plus "Installing on an Android tablet or phone instead?" to
   `/help/android-hub`), "2 · Install" and "3 · Type the code", which shows the shared
   `PairingCode` card from `@arena/ui`: the code grouped 4 + 4 in `web-display` tabular
@@ -1719,6 +1723,21 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
   service (a Manager's PIN, audited as `settings.set hub.stopped_at`). Test it with
   `adb shell dumpsys deviceidle force-idle`, `adb shell input keyevent KEYCODE_SLEEP`,
   `adb shell am kill in.arena360.hub` and `adb reboot`.
+- **Keystore (Story 4.3):** the device token (`hub-token.bin`) and the branch key
+  (`branch-kek.bin`) are stored wrapped by a non-exportable AES-GCM key in the Android Keystore
+  (`KeystoreBridge.kt`; the file is `nonce || ciphertext`). Rust reaches it through the
+  `SecretWrapper` trait in `arena-tasks`; the shell (`keystore_jni.rs`) injects the JNI
+  implementation into `arena_hub::start_with`, tests inject a fake, and the Hub does not start
+  without it. Pairing writes both files. At start the Hub checks that both open; if a file cannot
+  be unwrapped, or is missing while `hub_identity` exists (the Keystore was reset, or the app
+  data came from another device), the Hub stays up with `branch.db` untouched, mints no new
+  key, answers `HUB_NOT_PAIRED` on every `/ui/*` route except pairing and the snapshot (which
+  carries `needs_repair: true`) and the pairing screen reads "This Hub needs to be paired
+  again". A new code replaces the token, `hub_id`, tier and licence of the same branch and
+  mints a fresh branch key (data encrypted with the lost key stays unreadable until key escrow,
+  Story 9.2). A code for another branch is refused. Replacing a failed Hub from the owner side
+  is Story 9.8. Not runnable locally: the Gradle/Kotlin build and the emulator or device checks
+  (non-exportable key, Keystore reset, files on a rooted image).
 - **Build:** `pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 --target x86_64`
   (debug APK) and `... --aab --target aarch64 --target x86_64` (release AAB). Needs the Android SDK
   (platform 36), the NDK from the pin table (`NDK_HOME`), JDK 17 and the Rust Android targets.
@@ -1727,8 +1746,9 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
   (SOPS, keys `keystore_b64`, `store_password`, `key_alias`, `key_password`) into
   `gen/android/keystore.properties` (ignored). Without that file the AAB is built unsigned and the
   job says so.
-- **Checks:** `node scripts/check-android.mjs manifest` checks the backup rules and the cleartext
-  policy; `node scripts/check-android.mjs aab <dir>` checks an extracted AAB for 16 KB ELF
+- **Checks:** `node scripts/check-android.mjs manifest` checks the backup rules, the cleartext
+  policy, duplicate manifest entries and that `KeystoreBridge.kt` uses `AndroidKeyStore` with
+  AES-GCM and never reads the key out; `node scripts/check-android.mjs aab <dir>` checks an extracted AAB for 16 KB ELF
   alignment and the `arm64-v8a` and `x86_64` libraries.
 
 ## Generated protocol types and the message catalogue

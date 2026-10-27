@@ -7,6 +7,9 @@
   import AccessPrompt from "../../lib/AccessPrompt.svelte";
   import { SNAPSHOT_DEPENDENCY } from "../../lib/snapshot";
   import { closeShellWindow, formatCountdown, pairHub } from "../../lib/pair";
+  import type { LayoutData } from "../$types";
+
+  let { data }: { data: LayoutData } = $props();
 
   const id = $props.id();
   const inputId = id + "-code";
@@ -26,6 +29,9 @@
   let pausedUntil = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
 
+  // The Hub has its branch but lost the key that protected its sign-in: only a new code helps.
+  const needsRepair = $derived(data.hub.ok && data.hub.snapshot.needs_repair === true);
+  const title = $derived(needsRepair ? "hub.pair.repair_title" : "hub.pair.title");
   const paused = $derived(pausedFor > 0);
   const describedBy = $derived(
     [hintId, error || paused || notEntitled ? errorId : null].filter(Boolean).join(" "),
@@ -94,6 +100,11 @@
     input?.focus();
   }
 
+  // Pressing "Pair" must not take focus from the field: on Android that closes the keyboard.
+  function keepFieldFocus(event: Event) {
+    if (document.activeElement === input) event.preventDefault();
+  }
+
   async function quit() {
     if (await closeShellWindow()) return;
     quitShown = true;
@@ -104,12 +115,14 @@
 </script>
 
 <svelte:head>
-  <title>{t("hub.page_title", { screen: t("hub.pair.title") })}</title>
+  <title>{t("hub.page_title", { screen: t(title) })}</title>
 </svelte:head>
 
 <section class="pair" aria-labelledby="pair-title" data-testid="hub-pair">
-  <h1 class="type-hub-numeric" id="pair-title">{t("hub.pair.title")}</h1>
-  <p class="type-hub-body muted">{t("hub.pair.intro")}</p>
+  <h1 class="type-hub-numeric" id="pair-title" data-testid="pair-title">{t(title)}</h1>
+  <p class="type-hub-body muted" data-testid="pair-intro">
+    {t(needsRepair ? "hub.pair.repair_intro" : "hub.pair.intro")}
+  </p>
   <AccessPrompt />
 
   <form class="form" {onsubmit} novalidate>
@@ -163,12 +176,19 @@
     </div>
 
     <div class="actions">
-      <Button
-        label="hub.pair.submit"
-        type="submit"
-        disabled={busy || paused}
-        disabledReason={paused ? "hub.pair.paused" : "hub.pair.pairing"}
-      />
+      <span
+        class="press"
+        role="presentation"
+        onmousedown={keepFieldFocus}
+        onpointerdown={keepFieldFocus}
+      >
+        <Button
+          label="hub.pair.submit"
+          type="submit"
+          disabled={busy || paused}
+          disabledReason={paused ? "hub.pair.paused" : "hub.pair.pairing"}
+        />
+      </span>
       <Button label="hub.pair.quit" variant="secondary" onclick={quit} />
     </div>
   </form>
@@ -267,6 +287,10 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-3);
+  }
+
+  .press {
+    display: contents;
   }
 
   .visually-hidden {

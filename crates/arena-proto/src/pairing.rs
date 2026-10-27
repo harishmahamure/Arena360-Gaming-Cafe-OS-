@@ -67,6 +67,7 @@ pub struct ActivePairingCode {
 pub struct InstallHubState {
     pub active: Option<ActivePairingCode>,
     pub hub_paired: bool,
+    pub tier: crate::tier::Tier,
     #[ts(type = "number")]
     pub server_now: i64,
 }
@@ -451,10 +452,11 @@ mod tests {
             serde_json::to_string(&InstallHubState {
                 active: None,
                 hub_paired: false,
+                tier: crate::tier::Tier::Free,
                 server_now: 7,
             })
             .unwrap(),
-            r#"{"active":null,"hub_paired":false,"server_now":7}"#
+            r#"{"active":null,"hub_paired":false,"tier":"free","server_now":7}"#
         );
     }
 }

@@ -84,7 +84,8 @@ pub use group_bills::{
 };
 pub use identity::{
     CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
-    find_trusted_clock, insert_hub_identity, store_licence, store_trusted_clock,
+    find_trusted_clock, insert_hub_identity, replace_hub_identity, store_licence,
+    store_trusted_clock,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use plans::{

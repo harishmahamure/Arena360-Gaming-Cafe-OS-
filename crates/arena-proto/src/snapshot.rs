@@ -50,6 +50,11 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pairing_revoked: Option<bool>,
+    /// Unpaired because the Hub lost the key that wrapped its secrets: the pairing screen says
+    /// "This Hub needs to be paired again" (the branch data is intact).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub needs_repair: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub licence_unverified: Option<bool>,
@@ -402,6 +407,7 @@ mod tests {
             lan: None,
             paired: true,
             pairing_revoked: None,
+            needs_repair: None,
             licence_unverified: None,
             clock_wrong: None,
             device_cap: None,

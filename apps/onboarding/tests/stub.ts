@@ -563,6 +563,7 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
         body: {
           active: live && live.expires_at > now ? { expires_at: live.expires_at } : null,
           hub_paired: cloud.hubPaired,
+          tier: cloud.tier ?? "free",
           server_now: now,
         },
       };

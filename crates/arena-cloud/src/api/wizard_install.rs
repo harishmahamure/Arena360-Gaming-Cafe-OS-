@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arena_proto::{
     ActivePairingCode, AppError, ErrorCode, InstallHubState, IssuePairingCode, PAIRING_CODE_TTL_MS,
-    PairingCodeIssued, SetupCodeReveal,
+    PairingCodeIssued, SetupCodeReveal, Tier,
 };
 use arena_store::control::{Branch, IssueOutcome, NewPairingCode, RateRule};
 use axum::extract::{Query, State};
@@ -68,6 +68,12 @@ async fn get_install_hub(
         .map(|c| ActivePairingCode {
             expires_at: c.expires_at,
         });
+    let tier = st
+        .db
+        .entitlement(&branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .map_or(Tier::Free, |e| e.tier_at(st.now()));
     let hub_paired = st
         .db
         .active_hub(&branch.id)
@@ -77,6 +83,7 @@ async fn get_install_hub(
     Ok(Json(InstallHubState {
         active,
         hub_paired,
+        tier,
         server_now: st.now(),
     }))
 }

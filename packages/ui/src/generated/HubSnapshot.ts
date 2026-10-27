@@ -56,6 +56,11 @@ export type HubSnapshot = {
   lan: SnapshotLan | null;
   paired: boolean;
   pairing_revoked?: boolean;
+  /**
+   * Unpaired because the Hub lost the key that wrapped its secrets: the pairing screen says
+   * "This Hub needs to be paired again" (the branch data is intact).
+   */
+  needs_repair?: boolean;
   licence_unverified?: boolean;
   clock_wrong?: boolean;
   device_cap?: number;

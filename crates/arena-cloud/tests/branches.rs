@@ -257,7 +257,7 @@ async fn the_list_shows_each_branch_with_its_hub_and_setup_state() {
     let r = h.call("GET", "/v1/branches", None, &a).await;
     assert_eq!(
         r.body[0]["hub"],
-        json!({"paired": true, "last_seen_at": 5000})
+        json!({"paired": true, "platform": "windows", "last_seen_at": 5000})
     );
     assert_eq!(r.body[0]["live"], true);
     assert_eq!(h.call("GET", "/v1/branches", None, "").await.status, 401);

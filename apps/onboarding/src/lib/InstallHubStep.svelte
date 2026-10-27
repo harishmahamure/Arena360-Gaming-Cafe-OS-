@@ -2,16 +2,20 @@
   import { Button, PairingCode, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type { PairingCodeIssued } from "@arena/ui/generated";
-  import { PUBLIC_HUB_DOWNLOAD_URL } from "$app/env/public";
+  import { PUBLIC_ANDROID_HUB_URL, PUBLIC_HUB_DOWNLOAD_URL } from "$app/env/public";
   import { onMount, tick } from "svelte";
   import { getInstallHub, issuePairingCode, type ApiFailure } from "./api";
   import { STEP_NAMES } from "./wizard.svelte";
 
   const id = $props.id();
   const downloadUrl = PUBLIC_HUB_DOWNLOAD_URL || "/download/hub";
+  const playUrl =
+    PUBLIC_ANDROID_HUB_URL || "https://play.google.com/store/apps/details?id=in.arena360.hub";
 
   let issued: PairingCodeIssued | null = $state(null);
   let paired = $state(false);
+  // Free runs on the Android Hub only; paid and comp branches keep Windows first.
+  let free = $state(true);
   let loading = $state(true);
   let loadError: string | null = $state(null);
   let regenerating = $state(false);
@@ -42,6 +46,7 @@
       loading = false;
       return;
     }
+    free = state.data.tier === "free";
     if (state.data.hub_paired) {
       paired = true;
       loading = false;
@@ -82,22 +87,40 @@
 </script>
 
 <h1 tabindex="-1">{t(STEP_NAMES.install_hub)}</h1>
-<p class="intro">{t("onboarding.install.intro")}</p>
+<p class="intro">
+  {t(free ? "onboarding.install.intro_android" : "onboarding.install.intro")}
+</p>
 
 <ol class="parts">
   <li class="part">
     <h2 id="{id}-download">{t("onboarding.install.download.title")}</h2>
-    <p>{t("onboarding.install.download.platform")}</p>
-    <div class="links">
-      <a class="download" href={downloadUrl} rel="external" data-testid="hub-download">
-        {t("onboarding.install.download.link")}
-      </a>
-      <a class="link" href="/help/android-hub">{t("onboarding.install.download.android")}</a>
-    </div>
+    {#if free}
+      <p>{t("onboarding.install.download.platform_android")}</p>
+      <p class="spec" data-testid="hub-spec">{t("onboarding.install.download.spec_android")}</p>
+      <div class="links">
+        <a
+          class="download"
+          href={playUrl}
+          target="_blank"
+          rel="noopener external"
+          data-testid="hub-download-android"
+        >
+          {t("onboarding.install.download.link_android")}
+        </a>
+      </div>
+    {:else}
+      <p>{t("onboarding.install.download.platform")}</p>
+      <div class="links">
+        <a class="download" href={downloadUrl} rel="external" data-testid="hub-download">
+          {t("onboarding.install.download.link")}
+        </a>
+        <a class="link" href="/help/android-hub">{t("onboarding.install.download.android")}</a>
+      </div>
+    {/if}
   </li>
   <li class="part">
     <h2 id="{id}-install">{t("onboarding.install.install.title")}</h2>
-    <p>{t("onboarding.install.install.body")}</p>
+    <p>{t(free ? "onboarding.install.install.body_android" : "onboarding.install.install.body")}</p>
   </li>
   <li class="part">
     <h2 id="{id}-code">{t("onboarding.install.code.title")}</h2>
@@ -201,6 +224,11 @@
     color: var(--accent-text);
     text-decoration: underline;
     overflow-wrap: anywhere;
+  }
+
+  .spec {
+    color: var(--text-muted);
+    font-size: var(--type-hub-label-size);
   }
 
   .waiting {

@@ -10,7 +10,7 @@ use arena_proto::{
 use arena_store::HubIdentity;
 
 use crate::connectivity::CloudHost;
-use crate::keystore::Keystore;
+use crate::keystore::{Keystore, mint_kek};
 
 pub const CLOUD_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_RETRY_AFTER_S: u32 = 60;
@@ -295,6 +295,7 @@ pub struct CloudPairer {
     platform: HubPlatform,
     hub_instance_id: String,
     version: String,
+    kek_store: Option<Arc<dyn Keystore>>,
     busy: tokio::sync::Mutex<()>,
 }
 
@@ -319,8 +320,23 @@ impl CloudPairer {
             platform,
             hub_instance_id,
             version,
+            kek_store: None,
             busy: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Pairing also writes a fresh branch key here (the Android Hub, whose keystore holds the
+    /// token and the key together). Without it the key is minted lazily on first use.
+    pub fn with_kek_store(mut self, kek_store: Arc<dyn Keystore>) -> Self {
+        self.kek_store = Some(kek_store);
+        self
+    }
+
+    async fn write_secret(&self, store: Arc<dyn Keystore>, secret: Vec<u8>) -> Result<(), UiError> {
+        tokio::task::spawn_blocking(move || store.put(&secret))
+            .await
+            .map_err(|e| internal(&format!("keystore task: {e}")))?
+            .map_err(|e| internal(&format!("keystore write: {e}")))
     }
 
     async fn run(&self, raw: &str) -> Result<(), UiError> {
@@ -351,12 +367,6 @@ impl CloudPairer {
             })
             .await
             .map_err(map_failure)?;
-        let token = paired.token.clone().into_bytes();
-        let keystore = Arc::clone(&self.keystore);
-        tokio::task::spawn_blocking(move || keystore.put(&token))
-            .await
-            .map_err(|e| internal(&format!("keystore task: {e}")))?
-            .map_err(|e| internal(&format!("keystore write: {e}")))?;
         let identity = HubIdentity {
             tenant_id: paired.tenant_id.clone(),
             branch_id: paired.branch_id.clone(),
@@ -364,6 +374,44 @@ impl CloudPairer {
             tier: paired.tier,
             paired_at: self.clock.now_ms(),
         };
+        if self.gate.needs_repair() {
+            // The key that wrapped the secrets is lost. The branch data stays as it is: only the
+            // identity and licence change, then the token and a fresh branch key are wrapped.
+            if !writer
+                .record_repairing(identity, paired.licence.clone())
+                .await
+                .map_err(|e| internal(&format!("{}: {}", e.code.as_str(), e.message)))?
+            {
+                tracing::warn!("re-pair refused: the code belongs to another branch");
+                return Err(invalid_code());
+            }
+            self.write_secret(
+                Arc::clone(&self.keystore),
+                paired.token.clone().into_bytes(),
+            )
+            .await?;
+            if let Some(kek) = &self.kek_store {
+                let fresh = mint_kek().map_err(|e| internal(&format!("branch key: {e}")))?;
+                self.write_secret(Arc::clone(kek), fresh.to_vec()).await?;
+            }
+            self.gate.mark_paired();
+            tracing::info!(
+                hub_id = %paired.hub_id,
+                tier = paired.tier.as_str(),
+                platform = self.platform.as_str(),
+                "hub paired again after its keys were lost"
+            );
+            return Ok(());
+        }
+        self.write_secret(
+            Arc::clone(&self.keystore),
+            paired.token.clone().into_bytes(),
+        )
+        .await?;
+        if let Some(kek) = &self.kek_store {
+            let fresh = mint_kek().map_err(|e| internal(&format!("branch key: {e}")))?;
+            self.write_secret(Arc::clone(kek), fresh.to_vec()).await?;
+        }
         let written = writer
             .record_pairing(identity, paired.licence, Some(paired.bootstrap))
             .await

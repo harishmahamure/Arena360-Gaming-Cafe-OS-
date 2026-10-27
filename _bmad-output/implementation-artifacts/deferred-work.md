@@ -332,3 +332,11 @@
 ## Deferred from: story 3-14-undo-for-end-and-settle
 - `effect.recorded` Hub event has no sender until Epic 5 records receipt/drawer/invoice effects; the server already rejects Undo when an effect exists.
 - Undoing a Settle does not re-lock the kiosk back to "Pay at counter".
+
+## Deferred from: Story 4.3
+
+- The Gradle/Kotlin build, the JNI call into `KeystoreBridge` and the device checks (key is non-exportable, Keystore reset shows "This Hub needs to be paired again", token and key absent in clear on a rooted image) were not run: no Android target or SDK here. `keystore_jni.rs` was type-checked on the host only.
+- An Android Hub paired before 4.3 holds a plain token file; it fails to unwrap and asks to pair again.
+- Data encrypted with a lost branch key stays unreadable after a re-pair until key escrow and restore (Story 9.2); the owner cannot yet replace a failed Hub from Account → Branches (Story 9.8).
+- The key is not StrongBox-backed and not bound to a lock screen; a device with no secure lock screen still keeps it in the hardware or software Keystore.
+- "branch.db untouched while lost" is tested on the branch's data (staff, settings, change log); the file bytes still change on start (lease and WAL bookkeeping).

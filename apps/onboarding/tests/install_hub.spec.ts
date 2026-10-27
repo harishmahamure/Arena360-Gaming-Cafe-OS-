@@ -51,13 +51,15 @@ test("step 3 shows the three parts and a code grouped 4 + 4 with a 15:00 countdo
   ] as const) {
     await expect(page.getByRole("heading", { level: 2, name: t(key) })).toBeVisible();
   }
-  await expect(page.getByText(t("onboarding.install.download.platform"))).toBeVisible();
+  await expect(page.getByText(t("onboarding.install.download.platform_android"))).toBeVisible();
+  await expect(page.getByTestId("hub-spec")).toHaveText(
+    "Android 9 or later · 3 GB RAM · 20 GB free",
+  );
   await expect(
-    page.getByRole("link", { name: t("onboarding.install.download.link") }),
-  ).toHaveAttribute("href", "/download/hub");
-  await expect(
-    page.getByRole("link", { name: t("onboarding.install.download.android") }),
-  ).toHaveAttribute("href", "/help/android-hub");
+    page.getByRole("link", { name: t("onboarding.install.download.link_android") }),
+  ).toHaveAttribute("href", "https://play.google.com/store/apps/details?id=in.arena360.hub");
+  await expect(page.getByTestId("hub-download")).toHaveCount(0);
+  await expect(page.getByText(t("onboarding.install.download.platform"))).toHaveCount(0);
 
   await expect(value(page)).toHaveText(grouped(PAIR_CODES[0]));
   const groups = await value(page).locator("span").allTextContents();
@@ -362,3 +364,25 @@ test("without the event stream, polling moves step 3 to step 4 within 5 s", asyn
   await expect(nextHeading(page)).toBeFocused();
   await expect(page).toHaveURL(/\/setup\/devices$/);
 });
+
+for (const tier of ["basic", "premium"] as const) {
+  test(`a ${tier} branch gets Windows first and the Android help link second`, async ({ page }) => {
+    await stubCloud(page, { ...ready, wizard: { ...ready.wizard, tier } });
+    await page.goto("/setup/install_hub");
+    await expect(value(page)).toBeVisible();
+    await expect(page.getByText(t("onboarding.install.download.platform"))).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: t("onboarding.install.download.link") }),
+    ).toHaveAttribute("href", "/download/hub");
+    await expect(
+      page.getByRole("link", { name: t("onboarding.install.download.android") }),
+    ).toHaveAttribute("href", "/help/android-hub");
+    await expect(page.getByTestId("hub-spec")).toHaveCount(0);
+    await expect(page.getByTestId("hub-download-android")).toHaveCount(0);
+    const links = await page.locator(".links a").allTextContents();
+    expect(links.map((l) => l.trim())).toEqual([
+      t("onboarding.install.download.link"),
+      t("onboarding.install.download.android"),
+    ]);
+  });
+}

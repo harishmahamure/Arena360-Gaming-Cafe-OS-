@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   checkAab,
+  checkDuplicates,
+  checkKeystore,
   checkManifest,
   checkRepoManifest,
   checkService,
@@ -219,4 +221,65 @@ test("the boot receiver must listen for boot and for a package update", () => {
   assert.deepEqual(checkService(serviceManifest(["replaced"])), [
     "manifest: .BootReceiver does not listen for MY_PACKAGE_REPLACED",
   ]);
+});
+
+test("a manifest that declares a permission, service or receiver twice fails", () => {
+  const once = serviceManifest();
+  assert.deepEqual(checkDuplicates(once), []);
+  assert.deepEqual(checkDuplicates(once + once), [
+    "manifest: <uses-permission android.permission.FOREGROUND_SERVICE> is declared more than once",
+    "manifest: <uses-permission android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE> is declared more than once",
+    "manifest: <uses-permission android.permission.WAKE_LOCK> is declared more than once",
+    "manifest: <uses-permission android.permission.POST_NOTIFICATIONS> is declared more than once",
+    "manifest: <uses-permission android.permission.RECEIVE_BOOT_COMPLETED> is declared more than once",
+    "manifest: <uses-permission android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS> is declared more than once",
+    "manifest: <service .HubService> is declared more than once",
+    "manifest: <receiver .BootReceiver> is declared more than once",
+  ]);
+});
+
+const bridge = `
+  // The key never leaves the Keystore; never call getEncoded() on it.
+  private const val PROVIDER = "AndroidKeyStore"
+  private const val TRANSFORMATION = "AES/GCM/NoPadding"
+  KeyGenParameterSpec.Builder(ALIAS, PURPOSES).build()
+`;
+
+test("a bridge that keeps an AES-GCM key in the AndroidKeyStore passes", () => {
+  assert.deepEqual(checkKeystore(bridge), []);
+});
+
+test("a missing bridge, provider, mode or in-Keystore key generation fails", () => {
+  assert.deepEqual(checkKeystore(undefined), ["keystore: KeystoreBridge.kt is missing"]);
+  assert.deepEqual(checkKeystore(bridge.replace('"AndroidKeyStore"', '"BC"')), [
+    "keystore: the bridge must use the AndroidKeyStore provider",
+  ]);
+  assert.deepEqual(checkKeystore(bridge.replace("AES/GCM/NoPadding", "AES/CBC/PKCS7Padding")), [
+    "keystore: the bridge must use AES/GCM/NoPadding",
+  ]);
+  assert.deepEqual(checkKeystore(bridge.replace("KeyGenParameterSpec.Builder", "Other.Builder")), [
+    "keystore: the key must be generated in the Keystore (KeyGenParameterSpec)",
+  ]);
+});
+
+test("a bridge that exports, imports or loosens the key fails", () => {
+  for (const [code, what] of [
+    ["val raw = key.encoded", "reads the key bytes"],
+    ["val raw = key.getEncoded()", "reads the key bytes"],
+    ['SecretKeySpec(bytes, "AES")', "builds a key from raw bytes"],
+    [".setRandomizedEncryptionRequired(false)", "turns off randomised encryption"],
+    [".setUserAuthenticationRequired(false)", "loosens user authentication"],
+    ["store.setEntry(ALIAS, entry, null)", "imports a key"],
+  ]) {
+    const errors = checkKeystore(bridge + code);
+    assert.equal(errors.length, 1, code);
+    assert.match(errors[0], new RegExp(what), code);
+  }
+});
+
+test("the committed bridge keeps the key in the Keystore", () => {
+  assert.deepEqual(
+    checkRepoManifest(ROOT).filter((e) => e.startsWith("keystore:")),
+    [],
+  );
 });

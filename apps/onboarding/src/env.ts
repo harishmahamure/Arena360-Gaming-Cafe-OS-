@@ -16,4 +16,8 @@ export const variables = defineEnvVars({
     public: true,
     schema: (value) => value || "/download/hub",
   },
+  PUBLIC_ANDROID_HUB_URL: {
+    public: true,
+    schema: (value) => value || "https://play.google.com/store/apps/details?id=in.arena360.hub",
+  },
 });

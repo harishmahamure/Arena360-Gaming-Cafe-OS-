@@ -46,6 +46,7 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
         live: b.live_at.is_some(),
         hub: BranchHub {
             paired: hub.is_some(),
+            platform: hub.as_ref().map(|h| h.platform),
             last_seen_at: hub.and_then(|h| h.last_seen_at),
         },
         waiting: st

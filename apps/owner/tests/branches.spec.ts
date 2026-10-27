@@ -3,7 +3,11 @@ import { FREE, PAID, stubCloud, t } from "./stub";
 
 test("each branch shows name, code, plan, setup state and Hub status", async ({ page }) => {
   const live = [
-    { ...PAID[0], live: true, hub: { paired: true, last_seen_at: Date.now() - 180_000 } },
+    {
+      ...PAID[0],
+      live: true,
+      hub: { paired: true, platform: "android" as const, last_seen_at: Date.now() - 180_000 },
+    },
     PAID[1],
   ];
   await stubCloud(page, live);
@@ -14,7 +18,11 @@ test("each branch shows name, code, plan, setup state and Hub status", async ({ 
   await expect(first).toContainText(
     t("owner.branches.hub.seen", { age: t("owner.age.minutes", { n: 3 }) }),
   );
+  await expect(first.getByTestId("hub-platform")).toHaveText(
+    t("owner.branches.hub.platform", { platform: t("owner.branches.hub.platform.android") }),
+  );
   const second = page.getByRole("listitem").filter({ hasText: PAID[1].name });
+  await expect(second.getByTestId("hub-platform")).toHaveCount(0);
   await expect(second).toContainText(t("owner.branches.state.setup"));
   await expect(second).toContainText(t("owner.branches.hub.none"));
 });

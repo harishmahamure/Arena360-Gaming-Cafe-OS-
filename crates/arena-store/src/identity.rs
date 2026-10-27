@@ -70,6 +70,26 @@ pub fn insert_hub_identity(conn: &Connection, id: &HubIdentity) -> Result<bool, 
     Ok(n == 1)
 }
 
+/// Replaces the Hub's identity after a re-pair (the Keystore key was lost): the new hub id, tier
+/// and paired time. Only for the same tenant and branch; `false` (nothing changed) when there is
+/// no identity or the new code belongs to another branch.
+pub fn replace_hub_identity(conn: &Connection, id: &HubIdentity) -> Result<bool, AppError> {
+    let n = conn
+        .execute(
+            "UPDATE hub_identity SET hub_id = ?1, tier = ?2, paired_at = ?3
+             WHERE id = 1 AND tenant_id = ?4 AND branch_id = ?5",
+            params![
+                id.hub_id,
+                id.tier.as_str(),
+                id.paired_at,
+                id.tenant_id,
+                id.branch_id
+            ],
+        )
+        .map_err(db_error)?;
+    Ok(n == 1)
+}
+
 pub fn find_cached_licence(conn: &Connection) -> Result<Option<CachedLicence>, AppError> {
     conn.query_row(
         "SELECT jwt, received_at FROM licence_cache WHERE id = 1",
@@ -127,4 +147,35 @@ pub fn store_trusted_clock(conn: &Connection, c: &TrustedClockRow) -> Result<(),
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(branch: &str, hub: &str, tier: Tier) -> HubIdentity {
+        HubIdentity {
+            tenant_id: "T".into(),
+            branch_id: branch.into(),
+            hub_id: hub.into(),
+            tier,
+            paired_at: 5,
+        }
+    }
+
+    #[test]
+    fn a_re_pair_replaces_the_hub_of_the_same_branch_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../migrations/0012_hub_identity.sql"))
+            .unwrap();
+        let first = identity("B", "H1", Tier::Free);
+        assert!(!replace_hub_identity(&conn, &first).unwrap(), "no identity");
+        assert!(insert_hub_identity(&conn, &first).unwrap());
+        let mut second = identity("B", "H2", Tier::Basic);
+        second.paired_at = 9;
+        assert!(replace_hub_identity(&conn, &second).unwrap());
+        assert_eq!(find_hub_identity(&conn).unwrap(), Some(second));
+        assert!(!replace_hub_identity(&conn, &identity("OTHER", "H3", Tier::Free)).unwrap());
+        assert_eq!(find_hub_identity(&conn).unwrap().unwrap().hub_id, "H2");
+    }
 }

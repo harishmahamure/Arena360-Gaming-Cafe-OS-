@@ -2,7 +2,7 @@
 title: 'Story 3.29: Dynamic Pricing Rules by Weekday Hours and by Date'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'bc03c22'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -95,3 +95,7 @@ Status: review
 Verified: fmt, clippy, hub and kiosk check, string/token/contrast/protocol/layer checks and prettier pass; arena-core (18 resolver golden tests, 11 `rules` apply tests, proptest with `Op::Rule`), arena-api (`/ui/rules`), arena-replay and arena-store tests pass; `rules`, `plans` and `settings` Playwright specs pass on desktop and phone. Known unrelated failures as before: arena-cloud (`a_hung_run_times_out_with_its_own_code`, the `binary` test) and arena-tasks timing tests (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reading_times_out`). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: scope is group only (the LLD allows `plan` scope; no story needs it yet); the permission is `catalog.edit` like plans; the field is `rule_kind` because a bare `kind` collides with the intent tag; conflicts are derived on read, not stored, and compared on active rules of one group; `other_wins` is true when the other rule outranks this one; a date rule has no hour range (whole days, per the LLD); -100% is allowed (free) while below it is refused; the resolver takes the rules and base rate as arguments so it stays pure, and `next_change_at` counts every boundary of the group's active rules, not only those that change the result.
 Left for later: calling the resolver at session start and extend and the `chip-rule` header (3.30); rate segments and the `rule_id` on them (3.31); owner-side rule management (8.23); a delete intent.
+
+## Code Review Result
+
+Reviewed against the spec and ACs; no blocking findings in the story code. Fixed one pre-existing flaky test (`owner_staff_and_device_edits_win_over_a_stale_base_rev` picked an arbitrary role, sometimes the unassignable Kiosk-device role); it now uses the Counter role. fmt, clippy, arena-core/store/proto/replay/api tests, hub check, strings, prettier and the `rules`/`settings` Playwright specs pass.

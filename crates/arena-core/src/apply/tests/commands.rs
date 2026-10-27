@@ -181,8 +181,8 @@ async fn owner_staff_and_device_edits_win_over_a_stale_base_rev() {
         .rows(Table::Roles)
         .unwrap()
         .iter()
+        .find(|r| text(r, "name") == crate::rbac::ROLE_COUNTER)
         .map(|r| text(r, "role_id"))
-        .next()
         .unwrap();
     let pw = crate::staff::hash_secret("pw").unwrap();
     let staff = |id: i64, extra: serde_json::Value| {

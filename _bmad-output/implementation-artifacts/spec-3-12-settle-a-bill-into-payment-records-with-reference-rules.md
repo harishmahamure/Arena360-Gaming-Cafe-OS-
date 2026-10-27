@@ -2,7 +2,7 @@
 title: 'Story 3.12: Settle a bill into payment records with reference rules'
 type: 'feature'
 created: '2026-10-27'
-status: 'in-review'
+status: 'done'
 baseline_revision: '852310c1690f2d7fffba4672e1177339855b864d'
 review_loop_iteration: 0
 followup_review_recommended: false

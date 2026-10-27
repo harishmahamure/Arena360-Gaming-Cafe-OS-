@@ -83,7 +83,7 @@ development_status:
   3-16-wallet-top-up-and-paying-from-the-wallet: done
   3-17-convert-a-guest-to-a-profile-including-at-settle-and-list-se: done
   3-18-enable-credit-for-a-player-and-settle-the-remainder-on-credi: done
-  3-19-collect-credit-with-partial-payments-and-undo: review
+  3-19-collect-credit-with-partial-payments-and-undo: done
   3-20-credit-aging-shown-first-and-auto-pause-at-15-days-overdue: backlog
   3-21-time-packs-blocks-and-passes-per-device-group: backlog
   3-22-sell-a-pack-or-pass-at-the-counter-and-see-owned-plans-on-th: backlog

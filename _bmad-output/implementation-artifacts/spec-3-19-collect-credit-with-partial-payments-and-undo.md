@@ -2,7 +2,7 @@
 title: 'Story 3.19: Collect Credit with Partial Payments and Undo'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: '6cdc737'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -82,6 +82,7 @@ deferred: []
 ## Review Triage Log
 
 - Fixed: `a_collection_can_be_paid_from_the_wallet_and_by_upi` asserted payment rows in table order, which varies with random ids and failed about half the runs; it now compares the sorted methods.
+- Fixed (review): `session.settle.reverted` had no order-kind check and could reopen a `credit_collect` order; it now refuses non-session orders with `VALIDATION_FAILED` (test `a_settle_undo_cannot_target_a_collection`).
 
 ## Verification
 
@@ -92,7 +93,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: the full Hub Playwright suite (849 passed, 11 skipped; two `players.spec.ts` tests failed under load and pass alone); `cargo fmt --check`; clippy `-D warnings` clean for every crate except `arena-kiosk-svc` tests (pre-existing unused imports in `tests/discovery.rs`; its lib and bins are clean); `cargo test --workspace --exclude arena-e2e --no-fail-fast` passes for proto, store (incl. the v31 upgrade test), core (incl. seven collection tests and the proptest with `CreditCollect`), replay, and api (incl. the collection event and permission tests); `pnpm run gen:types`; Hub check, check:strings, check:tokens-used, check:contrast, check:protocol, check:layers, format:check; Hub Playwright `credit-collect.spec.ts`, `credit`, `wallet`, `undo` and `players` specs.
 Not run: `arena-e2e` (Unix-only). These fail the same way on the untouched baseline: `arena-cloud` `backup::a_hung_run_times_out_with_its_own_code` and `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token`, and the Windows-admin `arena-kiosk-svc` lockdown, pipe, config, DPAPI and procs tests.
 Left for later: aging buckets and auto-pause (Story 3.20); the allocation is computed from the ledger order (insertion order of `wallet_txns`), so a future import of ledger rows must keep that order.

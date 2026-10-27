@@ -3058,3 +3058,20 @@ async fn a_credit_settle_cannot_be_undone_once_its_credit_was_collected() {
         ErrorCode::UndoNotAllowed
     );
 }
+
+#[tokio::test]
+async fn a_settle_undo_cannot_target_a_collection() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 50_000).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    end(&f, collect_cash(&p, 4_000)).await.unwrap();
+    let order = collection_order(&f);
+    let rev = rev_of(&f, Table::Orders, &order);
+    let before = reopen(&f).changes().unwrap().len();
+    assert_eq!(
+        refusal(end(&f, settle_revert_intent(&order, Some(rev))).await).0,
+        ErrorCode::ValidationFailed
+    );
+    nothing_changed(&f, before);
+    assert_eq!(owed(&f, &p), 8_000);
+}

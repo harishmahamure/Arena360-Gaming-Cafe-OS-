@@ -28,6 +28,7 @@ const ROUNDING = "billing.rounding_min";
 const MINIMUM = "billing.minimum_min";
 const GRACE = "billing.grace_min";
 const MODE = "billing.time_up_mode";
+const CREDIT_PAUSE = "billing.credit_auto_pause";
 
 type Row = { value: string; rev: number };
 type Hub = {
@@ -44,6 +45,7 @@ function newHub(): Hub {
       [MINIMUM, { value: "30", rev: 1 }],
       [GRACE, { value: "2", rev: 1 }],
       [MODE, { value: "clean_up", rev: 1 }],
+      [CREDIT_PAUSE, { value: "true", rev: 1 }],
     ]),
     intents: [],
     elevations: [],
@@ -215,6 +217,25 @@ test("a valid save stores every changed key at its revision", async ({ page }) =
     { key: MODE, value: "staff_handles", base_rev: 1 },
   ]);
   await expect(save(page)).toHaveAttribute("aria-disabled", "true");
+});
+
+test("auto-pause credit is on by default and can be turned off", async ({ page }) => {
+  const hub = await open(page);
+  await expect(page.getByText(en["hub.settings.billing.credit_pause"])).toBeVisible();
+  await expect(page.getByText(en["hub.settings.billing.credit_pause_help"])).toBeVisible();
+  await expect(
+    page.getByRole("radio", { name: en["hub.settings.billing.credit_pause_on"], exact: true }),
+  ).toBeChecked();
+  await page
+    .getByRole("radio", { name: en["hub.settings.billing.credit_pause_off"], exact: true })
+    .check();
+  await save(page).click();
+  await expect(status(page)).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents).toEqual([{ key: CREDIT_PAUSE, value: "false", base_rev: 1 }]);
+  await expect(
+    page.getByRole("radio", { name: en["hub.settings.billing.credit_pause_off"], exact: true }),
+  ).toBeChecked();
+  await axe(page);
 });
 
 test("the bounds are accepted", async ({ page }) => {

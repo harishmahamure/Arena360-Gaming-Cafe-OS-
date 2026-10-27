@@ -3,9 +3,10 @@ use arena_proto::{
 };
 use arena_store::{
     ChangeOp, CreditRow, NewPayment, NewTopupOrder, NewWalletTxn, OrderRow, OrderTxn, RowKey,
-    StoreTx, Table, adjust_outstanding, adjust_wallet, delete_row, effect_recorded, find_credit,
-    find_order, find_wallet, forward_intent_id, insert_payment, insert_topup_order,
-    insert_wallet_txn, list_order_wallet_txns, list_payment_ids, read_row,
+    StoreTx, Table, adjust_outstanding, adjust_wallet, credit_aging_with, delete_row,
+    effect_recorded, find_credit, find_order, find_wallet, forward_intent_id, insert_payment,
+    insert_topup_order, insert_wallet_txn, list_order_wallet_txns, list_payment_ids, read_row,
+    set_credit_paused,
 };
 
 use super::mutate::Written;
@@ -13,16 +14,20 @@ use super::session::{
     MAX_PAYMENTS, check_reference, check_rev, in_window, invalid, same_staff, undo_denied,
 };
 
+const REOPENED: &str = "reopened";
+
 #[derive(Default)]
 pub(crate) struct CollectTarget {
     credit: Option<CreditRow>,
     wallet_minor: i64,
+    pause_rule: bool,
 }
 
 pub(super) fn load_collect(tx: &StoreTx<'_>, c: &CreditCollect) -> Result<CollectTarget, AppError> {
     Ok(CollectTarget {
         credit: find_credit(tx, &c.player_id)?,
         wallet_minor: find_wallet(tx, &c.player_id)?.map_or(0, |w| w.balance_minor),
+        pause_rule: super::credit_pause::rule_on(tx)?,
     })
 }
 
@@ -104,6 +109,7 @@ pub(super) fn mutate_collect(
     tx: &StoreTx<'_>,
     intent: &Intent,
     c: &CreditCollect,
+    t: &CollectTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
@@ -192,6 +198,9 @@ pub(super) fn mutate_collect(
         });
     }
     let txn_id = ulid::Ulid::generate().to_string();
+    let reopen = t.credit.as_ref().is_some_and(|credit| credit.paused)
+        && (!t.pause_rule
+            || !credit_aging_with(tx, &c.player_id, &business_day, c.amount_minor)?.overdue());
     insert_wallet_txn(
         tx,
         &NewWalletTxn {
@@ -199,7 +208,7 @@ pub(super) fn mutate_collect(
             player_id: &c.player_id,
             delta_minor: -c.amount_minor,
             reason: "credit",
-            method: None,
+            method: reopen.then_some(REOPENED),
             staff_id: &intent.actor.id,
             order_id: &order_id,
             business_day: &business_day,
@@ -207,6 +216,9 @@ pub(super) fn mutate_collect(
         },
     )?;
     adjust_outstanding(tx, &c.player_id, -c.amount_minor)?;
+    if reopen {
+        set_credit_paused(tx, &c.player_id, false)?;
+    }
     written.push(Written {
         key: RowKey::WalletTxns { id: txn_id },
         op: ChangeOp::Insert,
@@ -340,6 +352,9 @@ pub(super) fn mutate_collect_reverted(
         });
         if txn.reason == "credit" {
             adjust_outstanding(tx, &player_id, -txn.delta_minor)?;
+            if txn.method.as_deref() == Some(REOPENED) {
+                set_credit_paused(tx, &player_id, true)?;
+            }
             written.push(Written {
                 key: RowKey::CreditBalances {
                     player_id: player_id.clone(),

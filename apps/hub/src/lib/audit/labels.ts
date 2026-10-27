@@ -48,6 +48,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "wallet.topup.reverted": "hub.audit.intent.wallet.topup.reverted",
   "credit.collect": "hub.audit.intent.credit.collect",
   "credit.collect.reverted": "hub.audit.intent.credit.collect.reverted",
+  "credit.auto_pause": "hub.audit.intent.credit.auto_pause",
   "session.pause": "hub.audit.intent.session.pause",
   "session.assign_player": "hub.audit.intent.session.assign_player",
   "session.resume": "hub.audit.intent.session.resume",

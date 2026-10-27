@@ -307,9 +307,13 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::CreditCollect(c) => match target {
-            Target::CreditCollect(_) => {
-                super::credit_collect::mutate_collect(tx, intent, c, now_ms)
+            Target::CreditCollect(t) => {
+                super::credit_collect::mutate_collect(tx, intent, c, t, now_ms)
             }
+            _ => Err(mismatch()),
+        },
+        IntentPayload::CreditAutoPause(_) => match target {
+            Target::CreditAutoPause(t) => super::credit_pause::mutate(tx, t),
             _ => Err(mismatch()),
         },
         IntentPayload::CreditCollectReverted(_) => match target {

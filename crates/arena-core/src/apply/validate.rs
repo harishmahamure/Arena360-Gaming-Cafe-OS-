@@ -220,6 +220,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::CreditCollect(t) => super::credit_collect::validate_collect(intent, c, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::CreditAutoPause(_) => match target {
+            Target::CreditAutoPause(t) => super::credit_pause::validate(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::CreditCollectReverted(_) => match target {
             Target::CreditCollectReverted(t) => {
                 super::credit_collect::validate_collect_reverted(intent, t)

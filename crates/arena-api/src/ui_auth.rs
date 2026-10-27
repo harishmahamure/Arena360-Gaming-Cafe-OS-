@@ -869,6 +869,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::CreditLimit
         | ErrorCode::CreditBelowOutstanding
         | ErrorCode::OverrideUsedToday
+        | ErrorCode::CreditPaused
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -1861,6 +1862,19 @@ impl UiAuth {
             .map_err(ui_error)
     }
 
+    /// Pauses `player_id`'s credit when it is 15+ days overdue (the lookup half of Story 3.20's
+    /// check). A refusal or a follower leaves the credit as it was.
+    async fn pause_overdue_credit(&self, player_id: Option<String>) {
+        let Some(writer) = &self.writer else {
+            return;
+        };
+        match writer.credit_auto_pause(player_id).await {
+            Ok(_) => {}
+            Err(e) if e.code == ErrorCode::NotPrimary => {}
+            Err(e) => tracing::warn!(code = e.code.as_str(), "credit auto-pause failed"),
+        }
+    }
+
     /// Ends every ticket of the session `token`.
     fn drop_tickets(&self, token: &str) {
         if let Ok(mut tickets) = self.tickets.lock() {
@@ -2575,24 +2589,41 @@ async fn player_read<T: serde::Serialize + Send + 'static>(
     + Send
     + 'static,
 ) -> Response {
+    match player_read_value(auth, headers, read).await {
+        Ok(v) => Json(v).into_response(),
+        Err(r) => r,
+    }
+}
+
+async fn player_read_value<T: Send + 'static>(
+    auth: Arc<UiAuth>,
+    headers: HeaderMap,
+    read: impl FnOnce(
+        &mut arena_core::players::PlayerIndex,
+        &arena_core::SnapshotReader,
+        &[u8; arena_core::players::KEK_LEN],
+    ) -> Result<T, AppError>
+    + Send
+    + 'static,
+) -> Result<T, Response> {
     let Some(token) = bearer(&headers) else {
-        return fail(auth_failed());
+        return Err(fail(auth_failed()));
     };
     let me = match auth.acting_session(token).await {
         Ok(me) => me,
-        Err(e) => return fail(e),
+        Err(e) => return Err(fail(e)),
     };
     if !me.permissions.contains(&Permission::PlayerView) {
-        return fail(ui_error(AppError::new(
+        return Err(fail(ui_error(AppError::new(
             ErrorCode::PermissionDenied,
             "looking up players needs the player.view permission",
-        )));
+        ))));
     }
     let Some(kek) = auth.kek.clone() else {
-        return fail(ui_error(AppError::new(
+        return Err(fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
             "this hub has no key store for profiles",
-        )));
+        ))));
     };
     let (reader, index) = (Arc::clone(&auth.reader), Arc::clone(&auth.player_index));
     let done = tokio::task::spawn_blocking(move || {
@@ -2604,9 +2635,9 @@ async fn player_read<T: serde::Serialize + Send + 'static>(
     })
     .await;
     match done {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => fail(ui_error(e)),
-        Err(_) => fail(internal()),
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(fail(ui_error(e))),
+        Err(_) => Err(fail(internal())),
     }
 }
 
@@ -2616,7 +2647,18 @@ async fn player_search(
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
     let q = q.get("q").cloned().unwrap_or_default();
-    player_read(auth, headers, move |i, r, k| i.search(r, k, &q)).await
+    let hits = match player_read_value(Arc::clone(&auth), headers, move |i, r, k| {
+        i.search(r, k, &q)
+    })
+    .await
+    {
+        Ok(hits) => hits,
+        Err(r) => return r,
+    };
+    for hit in hits.iter().filter(|h| h.outstanding_minor > 0) {
+        auth.pause_overdue_credit(Some(hit.player_id.clone())).await;
+    }
+    Json(hits).into_response()
 }
 
 async fn player_profile(
@@ -2653,7 +2695,9 @@ async fn player_wallet(
         Arc::clone(&auth.reader),
         q.get("id").cloned().unwrap_or_default(),
     );
-    match tokio::task::spawn_blocking(move || reader.wallet(&id)).await {
+    auth.pause_overdue_credit(Some(id.clone())).await;
+    let now_ms = auth.clock.now_ms();
+    match tokio::task::spawn_blocking(move || reader.wallet(&id, now_ms)).await {
         Ok(Ok(view)) => Json(view).into_response(),
         Ok(Err(e)) => fail(ui_error(e)),
         Err(_) => fail(internal()),

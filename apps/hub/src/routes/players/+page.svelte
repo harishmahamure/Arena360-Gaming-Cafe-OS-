@@ -7,6 +7,7 @@
   import { SESSION_DEPENDENCY, hasPermission, loadPlayer, loadWallet } from "../../lib/auth";
   import type { MessageKey } from "@arena/ui/messages";
   import CreditBlock from "../../lib/players/CreditBlock.svelte";
+  import OutstandingSection from "../../lib/players/OutstandingSection.svelte";
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
   import EditProfile from "../../lib/players/EditProfile.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
@@ -137,6 +138,9 @@
   {#if profile}
     {@const p = profile.player}
     {@const c = profile.consent}
+    {#key p.player_id}
+      <OutstandingSection playerId={p.player_id} />
+    {/key}
     <section class="profile" aria-labelledby="player-profile-title" data-testid="player-profile">
       <h2 class="type-hub-title" id="player-profile-title">{t("hub.players.profile.title")}</h2>
       <dl class="type-hub-body">

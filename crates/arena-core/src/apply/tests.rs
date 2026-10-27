@@ -6514,13 +6514,17 @@ mod billing {
         assert_eq!(read(&f).await, BillingRules::defaults());
         while f.events.try_recv().is_ok() {}
         let applied = f.writer.seed_defaults().await.unwrap().unwrap();
-        assert_eq!(applied.changes.len(), 4);
+        assert_eq!(applied.changes.len(), 5);
         for (key, value) in KEYS.into_iter().zip(["15", "30", "2", "clean_up"]) {
             assert_eq!(
                 setting(&reopen(&f), key)["value"],
                 RowValue::Text(value.into())
             );
         }
+        assert_eq!(
+            setting(&reopen(&f), arena_proto::KEY_BILLING_CREDIT_AUTO_PAUSE)["value"],
+            RowValue::Text("true".into())
+        );
         assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
     }
 

@@ -13,7 +13,7 @@
   } from "../auth";
   import { branchLocale } from "../locale.svelte";
   import { amountText, headroomOf, parseAmount } from "../settle";
-  import { walletEvents } from "../wallet.svelte";
+  import { applyWalletChanged, walletEvents } from "../wallet.svelte";
   import CollectCredit from "./CollectCredit.svelte";
   import CollectionSummary from "./CollectionSummary.svelte";
 
@@ -142,12 +142,6 @@
       <dt>{t("hub.credit.days")}</dt>
       <dd data-testid="credit-days">{credit.reminder_days.join(", ")}</dd>
     </dl>
-    {#if credit.paused}
-      <p class="type-hub-label" role="status" data-testid="credit-paused">
-        <span aria-hidden="true">⚠</span>
-        {t("hub.credit.paused")}
-      </p>
-    {/if}
   {/if}
 
   {#if saved}
@@ -210,7 +204,7 @@
       ondone={(done) => {
         collecting = false;
         collection = done;
-        void refresh();
+        applyWalletChanged(playerId);
       }}
       oncancel={() => (collecting = false)}
     />

@@ -13,7 +13,7 @@
     newIdempotencyKey,
     submitIntent,
   } from "../../../../lib/auth";
-  import { FIELDS, KEYS, MODES, validField, type Field } from "../../../../lib/billing";
+  import { FIELDS, KEYS, MODES, SWITCH, validField, type Field } from "../../../../lib/billing";
   import { branchLocale } from "../../../../lib/locale.svelte";
   import { sessionStaff } from "../../../../lib/operating";
 
@@ -22,6 +22,7 @@
     minimum: "hub.settings.billing.invalid.minimum",
     grace: "hub.settings.billing.invalid.grace",
     mode: "hub.settings.billing.invalid.mode",
+    credit_pause: "hub.settings.billing.invalid.credit_pause",
   };
   const NUMBERS = [
     [
@@ -43,6 +44,10 @@
       "hub.settings.billing.grace_help",
     ],
   ] as const satisfies readonly (readonly [Field, MessageKey, MessageKey, MessageKey])[];
+  const SWITCH_LABELS: Record<(typeof SWITCH)[number], MessageKey> = {
+    true: "hub.settings.billing.credit_pause_on",
+    false: "hub.settings.billing.credit_pause_off",
+  };
   const MODE_LABELS: Record<(typeof MODES)[number], MessageKey> = {
     clean_up: "hub.settings.billing.time_up_clean_up",
     staff_handles: "hub.settings.billing.time_up_staff_handles",
@@ -54,6 +59,7 @@
     minimum: "30",
     grace: "2",
     mode: "clean_up",
+    credit_pause: "true",
   });
   let errors: Partial<Record<Field, MessageKey>> = $state({});
   let loading = $state(true);
@@ -300,6 +306,31 @@
           {t("hub.settings.billing.time_up_help")}
         </p>
         {@render fieldError("mode")}
+      </fieldset>
+
+      <fieldset
+        class="field group"
+        aria-describedby={describedBy("credit_pause", "billing-credit-pause-help")}
+      >
+        <legend class="label type-hub-label">{t("hub.settings.billing.credit_pause")}</legend>
+        <div class="options">
+          {#each SWITCH as value (value)}
+            <label class="option type-hub-body">
+              <input
+                type="radio"
+                name="credit-auto-pause"
+                {value}
+                bind:group={form.credit_pause}
+                disabled={!canEdit || locked}
+              />
+              <span>{t(SWITCH_LABELS[value])}</span>
+            </label>
+          {/each}
+        </div>
+        <p class="hint type-hub-label" id="billing-credit-pause-help">
+          {t("hub.settings.billing.credit_pause_help")}
+        </p>
+        {@render fieldError("credit_pause")}
       </fieldset>
 
       <div class="actions">

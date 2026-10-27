@@ -152,6 +152,8 @@ enum Op {
         undo: bool,
         late: bool,
     },
+    /// The system check that pauses credit 15+ days overdue (a no-op is `STALE`).
+    CreditAutoPause,
     /// A Settle of an open bill wholly on credit, maybe with the manager override.
     CreditPay {
         slot: u8,
@@ -323,6 +325,7 @@ fn op() -> impl Strategy<Value = Op> {
                 undo,
                 late
             }),
+        1 => Just(Op::CreditAutoPause),
         2 => (0..3u8, prop::bool::weighted(0.5)).prop_map(|(slot, over_ride)| Op::CreditPay {
             slot,
             over_ride
@@ -1548,6 +1551,30 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
             }
         }
+        Op::CreditAutoPause => {
+            let before = hub.change_count();
+            let mut intent = hub.intent(
+                IntentPayload::CreditAutoPause(arena_proto::CreditAutoPause { player_id: None }),
+                None,
+            );
+            intent.actor.kind = ActorKind::System;
+            let out = hub.submit_new(intent);
+            match code(&out) {
+                None => {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert!(hub.change_count() > before);
+                }
+                Some(refused) => {
+                    prop_assert_eq!(refused, (ErrorCode::Stale, None));
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+            }
+            for c in hub.reader.rows(Table::CreditBalances).unwrap() {
+                if int(&c, "credit_paused") == 1 {
+                    prop_assert!(int(&c, "outstanding_minor") > 0);
+                }
+            }
+        }
         Op::CreditPay { slot, over_ride } => {
             let open: Vec<_> = hub
                 .reader
@@ -1590,6 +1617,12 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }),
                 Some(rev),
             ));
+            if let Some((ErrorCode::CreditPaused, field)) = code(&out) {
+                prop_assert_eq!(field, Some("payments[0].method"));
+                prop_assert!(credit.is_some());
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
             match credit {
                 None => {
                     prop_assert_eq!(

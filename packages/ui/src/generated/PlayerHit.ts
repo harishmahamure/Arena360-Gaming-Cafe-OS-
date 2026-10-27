@@ -6,4 +6,5 @@ export type PlayerHit = {
   username: string;
   phone: string;
   tags: Array<string>;
+  outstanding_minor: number;
 };

@@ -248,6 +248,37 @@ pub const CREDIT_LIMIT_MAX_MINOR: i64 = 10_000_000;
 pub const CREDIT_DAYS_MAX: usize = 10;
 pub const CREDIT_DAY_MAX: u16 = 365;
 pub const DEFAULT_REMINDER_DAYS: [u16; 3] = [3, 7, 14];
+pub const CREDIT_OVERDUE_DAYS: i64 = 15;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditAging {
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub oldest_unpaid_day: Option<String>,
+    #[ts(type = "number")]
+    pub oldest_age_days: i64,
+    #[ts(type = "number")]
+    pub bucket_0_7_minor: i64,
+    #[ts(type = "number")]
+    pub bucket_8_14_minor: i64,
+    #[ts(type = "number")]
+    pub bucket_15_plus_minor: i64,
+}
+
+impl CreditAging {
+    pub fn overdue(&self) -> bool {
+        self.bucket_15_plus_minor > 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditAutoPause {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub player_id: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -353,6 +384,9 @@ pub struct WalletView {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub credit: Option<CreditView>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub aging: Option<CreditAging>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

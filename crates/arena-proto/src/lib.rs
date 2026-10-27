@@ -63,10 +63,10 @@ pub use audit::{
 };
 pub use billing::{
     BILLING_GRACE_RANGE, BILLING_MINIMUM_RANGE, BILLING_ROUNDING_RANGE, BillingRules,
-    DEFAULT_BILLING_GRACE_MIN, DEFAULT_BILLING_MINIMUM_MIN, DEFAULT_BILLING_ROUNDING_MIN,
-    DEFAULT_BILLING_TIME_UP_MODE, KEY_BILLING_GRACE_MIN, KEY_BILLING_MINIMUM_MIN,
-    KEY_BILLING_ROUNDING_MIN, KEY_BILLING_TIME_UP_MODE, KIOSK_BILLING_KEYS, TIME_UP_MODES,
-    TimeUpMode,
+    DEFAULT_BILLING_CREDIT_AUTO_PAUSE, DEFAULT_BILLING_GRACE_MIN, DEFAULT_BILLING_MINIMUM_MIN,
+    DEFAULT_BILLING_ROUNDING_MIN, DEFAULT_BILLING_TIME_UP_MODE, KEY_BILLING_CREDIT_AUTO_PAUSE,
+    KEY_BILLING_GRACE_MIN, KEY_BILLING_MINIMUM_MIN, KEY_BILLING_ROUNDING_MIN,
+    KEY_BILLING_TIME_UP_MODE, KIOSK_BILLING_KEYS, TIME_UP_MODES, TimeUpMode,
 };
 pub use catalog::{
     BundleComponent, CatalogEntry, ComponentView, IMAGE_PREFIX, MAX_BARCODE_CHARS,
@@ -182,14 +182,14 @@ pub use process::{
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
     BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,
-    CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, ClearedSpend, CreditCollect, CreditCollectReverted,
-    CreditCollection, CreditSetLimit, CreditView, DEFAULT_REMINDER_DAYS, EndOutcome,
-    PAUSE_NOTE_MAX, PauseReason, PaymentMethod, PaymentRow, SessionAssignPlayer, SessionEnd,
-    SessionEndReverted, SessionListRow, SessionListState, SessionListView, SessionMode,
-    SessionPause, SessionResume, SessionScreen, SessionSettle, SessionSettleReverted, SessionStart,
-    SessionStartedEvent, SettleOutcome, SnapshotBill, SnapshotSession, UNDO_WINDOW_MS,
-    UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup,
-    WalletTopupReverted, WalletTxnView, WalletView,
+    CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, CREDIT_OVERDUE_DAYS, ClearedSpend, CreditAging,
+    CreditAutoPause, CreditCollect, CreditCollectReverted, CreditCollection, CreditSetLimit,
+    CreditView, DEFAULT_REMINDER_DAYS, EndOutcome, PAUSE_NOTE_MAX, PauseReason, PaymentMethod,
+    PaymentRow, SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionListRow,
+    SessionListState, SessionListView, SessionMode, SessionPause, SessionResume, SessionScreen,
+    SessionSettle, SessionSettleReverted, SessionStart, SessionStartedEvent, SettleOutcome,
+    SnapshotBill, SnapshotSession, UNDO_WINDOW_MS, UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR,
+    WalletChangedEvent, WalletTopup, WalletTopupReverted, WalletTxnView, WalletView,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,

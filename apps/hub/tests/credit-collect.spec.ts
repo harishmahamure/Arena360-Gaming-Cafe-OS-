@@ -29,6 +29,7 @@ const ASHA: PlayerHit = {
   username: "asha_9",
   phone: "+919876543210",
   tags: [],
+  outstanding_minor: 0,
 };
 
 const CREDIT: CreditView = {

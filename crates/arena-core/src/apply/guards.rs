@@ -182,7 +182,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::WalletTopupReverted(_)
             | Target::CreditSetLimit(_)
             | Target::CreditCollect(_)
-            | Target::CreditCollectReverted(_),
+            | Target::CreditCollectReverted(_)
+            | Target::CreditAutoPause(_),
             _,
         ) => Ok(()),
     }
@@ -246,6 +247,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
         Target::CreditSetLimit(_) => Ok(()),
         Target::CreditCollect(_) => Ok(()),
+        Target::CreditAutoPause(_) => Ok(()),
         Target::CreditCollectReverted(t) => {
             super::credit_collect::base_rev_collect_reverted(intent, t)
         }

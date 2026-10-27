@@ -417,7 +417,11 @@ impl SnapshotReader {
         store.settlement(order_id)
     }
 
-    pub fn wallet(&self, player_id: &str) -> Result<arena_proto::WalletView, AppError> {
+    pub fn wallet(
+        &self,
+        player_id: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::WalletView, AppError> {
         let store = self
             .reader
             .lock()
@@ -434,12 +438,29 @@ impl SnapshotReader {
                 staff: t.staff,
             })
             .collect();
+        let credit = store.credit(player_id)?;
+        let aging = match &credit {
+            Some(_) => match crate::locale::current_business_day(&store, now_ms)? {
+                Some(today) => Some(store.credit_aging(player_id, &today)?),
+                None => None,
+            },
+            None => None,
+        };
         Ok(arena_proto::WalletView {
             player_id: player_id.to_owned(),
             balance_minor: store.wallet_balance(player_id)?,
-            credit: store.credit(player_id)?.as_ref().map(credit_view),
+            credit: credit.as_ref().map(credit_view),
+            aging,
             txns,
         })
+    }
+
+    pub fn outstanding(&self, player_id: &str) -> Result<i64, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store.credit(player_id)?.map_or(0, |c| c.outstanding_minor))
     }
 
     pub fn sessions_today(&self, now_ms: i64) -> Result<arena_proto::SessionListView, AppError> {

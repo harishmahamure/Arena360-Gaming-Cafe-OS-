@@ -349,6 +349,7 @@ pub(crate) struct SettleTarget {
     order: Option<OrderRow>,
     wallet_minor: i64,
     credit: Option<CreditRow>,
+    credit_blocked: bool,
     business_day: String,
 }
 
@@ -374,10 +375,19 @@ pub(super) fn load_settle(
     } else {
         String::new()
     };
+    let credit_blocked = match &credit {
+        Some(c) if super::credit_pause::rule_on(tx)? => {
+            c.paused
+                || (c.outstanding_minor > 0
+                    && super::credit_pause::overdue(tx, &c.player_id, &business_day)?)
+        }
+        _ => false,
+    };
     Ok(SettleTarget {
         order,
         wallet_minor,
         credit,
+        credit_blocked,
         business_day,
     })
 }
@@ -1198,8 +1208,12 @@ fn validate_credit(s: &SessionSettle, t: &SettleTarget, has_player: bool) -> Res
     let Some(credit) = t.credit.as_ref().filter(|c| c.limit_minor > 0) else {
         return Err(invalid(&method, "credit is not enabled for this player"));
     };
-    if credit.paused {
-        return Err(invalid(&method, "credit is paused for this player"));
+    if t.credit_blocked {
+        return Err(AppError::with_field(
+            ErrorCode::CreditPaused,
+            method,
+            "Credit paused — 15+ days overdue.",
+        ));
     }
     let owed = credit
         .outstanding_minor

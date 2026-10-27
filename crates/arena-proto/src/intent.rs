@@ -157,13 +157,17 @@ pub enum IntentKind {
     CreditCollect,
     #[serde(rename = "credit.collect.reverted")]
     CreditCollectReverted,
+    /// Pauses credit for players 15+ days overdue, or reopens it when the branch rule is off
+    /// (system only; the Hub submits it at business-day start and when a player is looked up).
+    #[serde(rename = "credit.auto_pause")]
+    CreditAutoPause,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 51] = [
+    pub const ALL: [IntentKind; 52] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -215,6 +219,7 @@ impl IntentKind {
         Self::CreditSetLimit,
         Self::CreditCollect,
         Self::CreditCollectReverted,
+        Self::CreditAutoPause,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -270,6 +275,7 @@ impl IntentKind {
             Self::CreditSetLimit => "credit.set_limit",
             Self::CreditCollect => "credit.collect",
             Self::CreditCollectReverted => "credit.collect.reverted",
+            Self::CreditAutoPause => "credit.auto_pause",
             Self::SessionAssignPlayer => "session.assign_player",
         }
     }
@@ -328,6 +334,7 @@ impl IntentKind {
             | Self::CreditSetLimit
             | Self::CreditCollect
             | Self::CreditCollectReverted
+            | Self::CreditAutoPause
             | Self::SessionAssignPlayer => IntentCategory::Session,
         }
     }
@@ -352,9 +359,10 @@ impl IntentKind {
             | Self::RateUpsert => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke | Self::DevicePower => Requirement::Perm(Permission::DeviceRemote),
             Self::DeviceScreen => Requirement::Perm(Permission::DeviceScreen),
-            Self::DeviceVersionReported | Self::LicenceApply | Self::StaffSetCredentials => {
-                Requirement::System
-            }
+            Self::DeviceVersionReported
+            | Self::LicenceApply
+            | Self::StaffSetCredentials
+            | Self::CreditAutoPause => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert => Requirement::Perm(Permission::UserManage),
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
@@ -460,6 +468,7 @@ impl IntentKind {
             | Self::CreditSetLimit
             | Self::CreditCollect
             | Self::CreditCollectReverted
+            | Self::CreditAutoPause
             | Self::SessionAssignPlayer => None,
         }
     }
@@ -922,6 +931,8 @@ pub enum IntentPayload {
     CreditCollect(crate::CreditCollect),
     #[serde(rename = "credit.collect.reverted")]
     CreditCollectReverted(crate::CreditCollectReverted),
+    #[serde(rename = "credit.auto_pause")]
+    CreditAutoPause(crate::CreditAutoPause),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
 }
@@ -979,6 +990,7 @@ impl IntentPayload {
             Self::CreditSetLimit(_) => IntentKind::CreditSetLimit,
             Self::CreditCollect(_) => IntentKind::CreditCollect,
             Self::CreditCollectReverted(_) => IntentKind::CreditCollectReverted,
+            Self::CreditAutoPause(_) => IntentKind::CreditAutoPause,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
         }
     }
@@ -1193,7 +1205,8 @@ mod tests {
                 | "branch.seed_defaults"
                 | "device.version_reported"
                 | "licence.apply"
-                | "audit.read_granted" => Requirement::System,
+                | "audit.read_granted"
+                | "credit.auto_pause" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }

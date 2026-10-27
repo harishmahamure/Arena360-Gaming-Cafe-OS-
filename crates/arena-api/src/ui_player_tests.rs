@@ -787,3 +787,43 @@ async fn counter_staff_may_collect_but_only_what_is_owed() {
     assert_eq!(over["code"], "VALIDATION_FAILED");
     assert_eq!(over["field"], "amount_minor");
 }
+
+#[tokio::test]
+async fn the_wallet_route_carries_aging_and_lookup_hits_carry_outstanding() {
+    let hub = hub().await;
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let manager = token_for(&hub, "manager", "m-pass").await;
+    let (_, reply) = create(
+        &hub,
+        &counter,
+        body(form("Asha_9", "+91 98765 43210"), None),
+    )
+    .await;
+    let player = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let wallet = format!("/ui/players/wallet?id={player}");
+
+    let (_, none) = call(&hub, "GET", &wallet, Some(&counter), None).await;
+    assert!(none["aging"].is_null());
+
+    let (status, ok) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&manager),
+        Some(credit_body(&hub, &player, 50_000)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+    let (_, shown) = call(&hub, "GET", &wallet, Some(&counter), None).await;
+    assert_eq!(shown["aging"]["oldest_unpaid_day"], Value::Null);
+    assert_eq!(shown["aging"]["bucket_0_7_minor"], 0);
+    assert_eq!(shown["aging"]["bucket_8_14_minor"], 0);
+    assert_eq!(shown["aging"]["bucket_15_plus_minor"], 0);
+    assert_eq!(shown["credit"]["paused"], false);
+
+    let (_, hits) = call(&hub, "GET", "/ui/players?q=98765", Some(&counter), None).await;
+    assert_eq!(hits[0]["outstanding_minor"], 0);
+}

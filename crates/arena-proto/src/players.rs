@@ -173,6 +173,9 @@ pub struct PlayerHit {
     pub username: String,
     pub phone: String,
     pub tags: Vec<String>,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub outstanding_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

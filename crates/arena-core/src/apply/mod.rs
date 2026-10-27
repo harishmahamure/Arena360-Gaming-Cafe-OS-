@@ -28,6 +28,7 @@ mod branch_code;
 mod changes;
 mod credit;
 mod credit_collect;
+pub(crate) mod credit_pause;
 mod devices;
 mod frame;
 mod groups;
@@ -164,6 +165,7 @@ pub(crate) enum Target {
     CreditSetLimit(Box<credit::LimitTarget>),
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
+    CreditAutoPause(Box<credit_pause::PauseTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -230,6 +232,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::CreditCollectReverted(r) => Target::CreditCollectReverted(Box::new(
             credit_collect::load_collect_reverted(tx, r, now)?,
         )),
+        P::CreditAutoPause(p) => Target::CreditAutoPause(Box::new(credit_pause::load(tx, p, now)?)),
         P::StockIn(_) | P::StockInReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }

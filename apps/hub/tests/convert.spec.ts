@@ -32,6 +32,7 @@ const ASHA: PlayerHit = {
   username: "asha_9",
   phone: "+919876543210",
   tags: [],
+  outstanding_minor: 0,
 };
 
 type Sent = { kind: string; session_id?: string; player_id?: string };

@@ -118,14 +118,15 @@ mod tests {
             hub_instance_id: "01JHUB".into(),
             provisional: true,
             renewed_at: T0,
-            expires_at: T0 + 15_000,
+            expires_at: i64::MAX,
         };
         store.write_tx(|tx| write_lease(tx, &lease)).unwrap();
         let mut status = HubStatus::opened(store.schema_version().unwrap(), "01JHUB");
         status.role = Role::Primary;
         status.lease = Some(LeaseInfo::from(&lease));
         let (_tx, rx) = status_channel(status);
-        let writer = Writer::spawn(store, Arc::new(ManualClock::new(T0)), rx).unwrap();
+        let clock = Arc::new(ManualClock::new(T0));
+        let writer = Writer::spawn(store, clock.clone(), rx).unwrap();
         writer
             .submit_intent(Intent {
                 intent_id: ulid::Ulid::generate().to_string(),
@@ -754,6 +755,12 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            clock.advance(16 * 24 * 60 * 60 * 1000);
+            writer
+                .credit_auto_pause(None)
+                .await
+                .unwrap()
+                .expect("the overdue tab is paused");
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

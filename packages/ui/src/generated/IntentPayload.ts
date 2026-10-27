@@ -3,6 +3,7 @@ import type { AdsConsentSet } from "./AdsConsentSet";
 import type { AuditReadGranted } from "./AuditReadGranted";
 import type { BranchBootstrap } from "./BranchBootstrap";
 import type { BranchSeedDefaults } from "./BranchSeedDefaults";
+import type { CreditAutoPause } from "./CreditAutoPause";
 import type { CreditCollect } from "./CreditCollect";
 import type { CreditCollectReverted } from "./CreditCollectReverted";
 import type { CreditSetLimit } from "./CreditSetLimit";
@@ -103,4 +104,5 @@ export type IntentPayload =
   | ({ kind: "credit.set_limit" } & CreditSetLimit)
   | ({ kind: "credit.collect" } & CreditCollect)
   | ({ kind: "credit.collect.reverted" } & CreditCollectReverted)
+  | ({ kind: "credit.auto_pause" } & CreditAutoPause)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer);

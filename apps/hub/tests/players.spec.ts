@@ -57,6 +57,7 @@ const ASHA: PlayerHit = {
   username: "asha_9",
   phone: "+919876543210",
   tags: ["vip"],
+  outstanding_minor: 0,
 };
 
 const newHub = (): Hub => ({

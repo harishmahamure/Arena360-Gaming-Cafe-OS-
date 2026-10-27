@@ -28,6 +28,9 @@ use tokio::time::{Instant, MissedTickBehavior};
 pub const DEDUPE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// How often housekeeping runs after the first run at start.
 pub const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// How often the credit auto-pause check runs, so a pause lands within an hour of the business
+/// day (or the 15-day mark) turning over.
+pub const CREDIT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// The most records one prune job deletes.
 pub const PRUNE_BATCH: usize = 500;
 
@@ -104,6 +107,23 @@ impl HousekeepingTask {
         }
     }
 
+    /// Story 3.20: pauses credit for players 15+ days overdue (and reopens it when the branch
+    /// rule is off), while primary; logs the outcome.
+    pub async fn credit_sweep_and_log(&self) {
+        if !self.is_primary() {
+            return;
+        }
+        match self.writer.credit_auto_pause(None).await {
+            Ok(Some(applied)) => tracing::info!(
+                rows = applied.changes.len(),
+                "credit.auto_pause: credit pauses updated"
+            ),
+            Ok(None) => {}
+            Err(e) if e.code == ErrorCode::NotPrimary => {}
+            Err(e) => tracing::warn!(code = e.code.as_str(), "credit.auto_pause failed"),
+        }
+    }
+
     /// Seeds missing default rows (see the module docs); logs the outcome.
     pub async fn seed_and_log(&self) {
         if !self.is_primary() {
@@ -125,11 +145,14 @@ impl HousekeepingTask {
     pub async fn run(mut self) {
         let mut interval = tokio::time::interval_at(Instant::now(), self.interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut sweep = tokio::time::interval_at(Instant::now(), CREDIT_SWEEP_INTERVAL);
+        sweep.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut was_primary = self.is_primary();
         self.seed_and_log().await;
         while !self.writer.is_closed() {
             tokio::select! {
                 _ = interval.tick() => self.tick_and_log().await,
+                _ = sweep.tick() => self.credit_sweep_and_log().await,
                 changed = self.status.changed() => {
                     if changed.is_err() {
                         break;
@@ -138,6 +161,7 @@ impl HousekeepingTask {
                     if primary && !was_primary {
                         self.seed_and_log().await;
                         self.tick_and_log().await;
+                        self.credit_sweep_and_log().await;
                     }
                     was_primary = primary;
                 }

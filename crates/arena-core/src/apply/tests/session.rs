@@ -3075,3 +3075,208 @@ async fn a_settle_undo_cannot_target_a_collection() {
     nothing_changed(&f, before);
     assert_eq!(owed(&f, &p), 8_000);
 }
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn paused(f: &Fixture, player: &str) -> bool {
+    int(&credit_row(f, player), "credit_paused") == 1
+}
+
+fn aging_of(f: &Fixture, player: &str) -> arena_proto::CreditAging {
+    crate::SnapshotReader::open(&f.path)
+        .unwrap()
+        .wallet(player, f.clock.now_ms())
+        .unwrap()
+        .aging
+        .unwrap()
+}
+
+async fn sweep(f: &Fixture) -> Option<Applied> {
+    f.writer.credit_auto_pause(None).await.unwrap()
+}
+
+async fn auto_pause_rule(f: &Fixture, value: &str) {
+    let rev = int(
+        &setting(&reopen(f), arena_proto::KEY_BILLING_CREDIT_AUTO_PAUSE),
+        "rev",
+    );
+    end(
+        f,
+        set(arena_proto::KEY_BILLING_CREDIT_AUTO_PAUSE, value, Some(rev)),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn aging_buckets_follow_the_oldest_unpaid_spend_first() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 100_000).await;
+    auto_pause_rule(&f, "false").await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    f.clock.advance(3 * DAY_MS);
+    owing(&f, &p, &[(6_000, 60)]).await;
+    f.clock.advance(13 * DAY_MS);
+    owing(&f, &p, &[(3_000, 60)]).await;
+    let a = aging_of(&f, &p);
+    assert_eq!(
+        (
+            a.bucket_0_7_minor,
+            a.bucket_8_14_minor,
+            a.bucket_15_plus_minor
+        ),
+        (3_000, 6_000, 12_000)
+    );
+    assert!(a.oldest_age_days >= 16 && a.overdue());
+    end(&f, collect_cash(&p, 12_000)).await.unwrap();
+    let a = aging_of(&f, &p);
+    assert_eq!(
+        (
+            a.bucket_0_7_minor,
+            a.bucket_8_14_minor,
+            a.bucket_15_plus_minor
+        ),
+        (3_000, 6_000, 0)
+    );
+    assert!(!a.overdue());
+}
+
+#[tokio::test]
+async fn the_check_pauses_players_15_days_overdue_and_refuses_new_credit() {
+    let f = bootstrapped().await;
+    let late = credit_player(&f, "asha", "+919876543210", 100_000).await;
+    let fresh = credit_player(&f, "ben", "+919876543211", 100_000).await;
+    owing(&f, &late, &[(12_000, 60)]).await;
+    f.clock.advance(14 * DAY_MS);
+    owing(&f, &fresh, &[(12_000, 60)]).await;
+    assert!(sweep(&f).await.is_none());
+    f.clock.advance(2 * DAY_MS);
+    let a = sweep(&f).await.expect("one player is overdue");
+    assert!(a.changes.iter().all(|c| c.tbl == "credit_balances"));
+    assert!(paused(&f, &late) && !paused(&f, &fresh));
+    assert!(sweep(&f).await.is_none());
+    let (order, rev) = billed_for(&f, &late, 6_000, 60).await;
+    let before = reopen(&f).changes().unwrap().len();
+    for over in [false, true] {
+        let e = refusal(end(&f, settle_on_credit(&order, rev, 6_000, over)).await);
+        assert_eq!(e.0, ErrorCode::CreditPaused);
+    }
+    nothing_changed(&f, before);
+}
+
+#[tokio::test]
+async fn settling_on_credit_is_refused_for_an_overdue_player_the_check_has_not_reached() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 100_000).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    f.clock.advance(20 * DAY_MS);
+    assert!(!paused(&f, &p));
+    let (order, rev) = billed_for(&f, &p, 6_000, 60).await;
+    assert_eq!(
+        refusal(end(&f, settle_on_credit(&order, rev, 6_000, false)).await).0,
+        ErrorCode::CreditPaused
+    );
+}
+
+#[tokio::test]
+async fn a_lookup_check_for_one_player_leaves_the_others_alone() {
+    let f = bootstrapped().await;
+    let a = credit_player(&f, "asha", "+919876543210", 100_000).await;
+    let b = credit_player(&f, "ben", "+919876543211", 100_000).await;
+    owing(&f, &a, &[(12_000, 60)]).await;
+    owing(&f, &b, &[(12_000, 60)]).await;
+    f.clock.advance(16 * DAY_MS);
+    f.writer
+        .credit_auto_pause(Some(a.clone()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(paused(&f, &a) && !paused(&f, &b));
+}
+
+#[tokio::test]
+async fn switching_the_rule_off_reopens_paused_players_and_stops_pausing() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 100_000).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    f.clock.advance(16 * DAY_MS);
+    sweep(&f).await.unwrap();
+    assert!(paused(&f, &p));
+    auto_pause_rule(&f, "false").await;
+    let (order, rev) = billed_for(&f, &p, 6_000, 60).await;
+    sweep(&f).await.unwrap();
+    assert!(!paused(&f, &p));
+    assert!(sweep(&f).await.is_none());
+    end(&f, settle_on_credit(&order, rev, 6_000, false))
+        .await
+        .unwrap();
+    auto_pause_rule(&f, "true").await;
+    sweep(&f).await.unwrap();
+    assert!(paused(&f, &p));
+}
+
+#[tokio::test]
+async fn a_collection_reopens_credit_and_its_undo_pauses_it_again() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 100_000).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    f.clock.advance(10 * DAY_MS);
+    owing(&f, &p, &[(6_000, 60)]).await;
+    f.clock.advance(6 * DAY_MS);
+    sweep(&f).await.unwrap();
+    assert!(paused(&f, &p));
+
+    end(&f, collect_cash(&p, 5_000)).await.unwrap();
+    assert!(paused(&f, &p));
+
+    end(&f, collect_cash(&p, 7_000)).await.unwrap();
+    assert!(!paused(&f, &p));
+    let order = collection_order(&f);
+    let txn = table(&f, Table::WalletTxns)
+        .into_iter()
+        .find(|t| text(t, "order_id") == order && text(t, "reason") == "credit")
+        .unwrap();
+    assert_eq!(text(&txn, "method"), "reopened");
+    let rev = rev_of(&f, Table::Orders, &order);
+    end(&f, collect_revert_intent(&order, Some(rev)))
+        .await
+        .unwrap();
+    assert!(paused(&f, &p));
+    assert_eq!(owed(&f, &p), 13_000);
+    assert!(sweep(&f).await.is_none());
+
+    end(&f, collect_cash(&p, 13_000)).await.unwrap();
+    assert!(!paused(&f, &p));
+    assert_eq!(owed(&f, &p), 0);
+}
+
+#[tokio::test]
+async fn a_collection_leaves_an_unpaused_player_unpaused_and_its_undo_changes_nothing() {
+    let f = bootstrapped().await;
+    let p = credit_player(&f, "asha", "+919876543210", 100_000).await;
+    owing(&f, &p, &[(12_000, 60)]).await;
+    end(&f, collect_cash(&p, 4_000)).await.unwrap();
+    assert!(!paused(&f, &p));
+    let order = collection_order(&f);
+    let rev = rev_of(&f, Table::Orders, &order);
+    end(&f, collect_revert_intent(&order, Some(rev)))
+        .await
+        .unwrap();
+    assert!(!paused(&f, &p));
+}
+
+#[tokio::test]
+async fn the_auto_pause_intent_is_system_only() {
+    let f = bootstrapped().await;
+    let e = refusal(
+        end(
+            &f,
+            intent(
+                owner(),
+                IntentPayload::CreditAutoPause(arena_proto::CreditAutoPause { player_id: None }),
+            ),
+        )
+        .await,
+    );
+    assert_eq!(e.0, ErrorCode::PermissionDenied);
+}

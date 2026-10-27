@@ -223,6 +223,7 @@ fn hit(kek: &[u8; KEK_LEN], row: PlayerRow, wrapped: &str) -> Result<PlayerHit, 
         tags: serde_json::from_str(&row.tags).unwrap_or_default(),
         player_id: row.player_id,
         username: row.username,
+        outstanding_minor: 0,
     })
 }
 
@@ -270,11 +271,15 @@ impl PlayerIndex {
             .filter_map(|e| e.digits.find(&q).map(|at| (at, &e.folded, &e.hit)))
             .collect();
         found.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-        Ok(found
+        let mut hits: Vec<PlayerHit> = found
             .into_iter()
             .take(SEARCH_LIMIT)
             .map(|(_, _, h)| h.clone())
-            .collect())
+            .collect();
+        for hit in &mut hits {
+            hit.outstanding_minor = reader.outstanding(&hit.player_id)?;
+        }
+        Ok(hits)
     }
 }
 

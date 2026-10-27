@@ -56,6 +56,8 @@ export type { ComponentView } from "./ComponentView";
 export type { Connectivity } from "./Connectivity";
 export type { ConnectivityState } from "./ConnectivityState";
 export type { Country } from "./Country";
+export type { CreditAging } from "./CreditAging";
+export type { CreditAutoPause } from "./CreditAutoPause";
 export type { CreditCollect } from "./CreditCollect";
 export type { CreditCollectReverted } from "./CreditCollectReverted";
 export type { CreditCollection } from "./CreditCollection";

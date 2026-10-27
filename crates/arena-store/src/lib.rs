@@ -50,8 +50,9 @@ pub use commands::{
     max_applied_command_id, unreported_commands,
 };
 pub use credit::{
-    CreditRow, adjust_outstanding, credit_collection, decode_days, encode_days, find_credit,
-    insert_credit, set_override_day, update_credit_limit,
+    CreditRow, adjust_outstanding, civil_day_number, credit_aging, credit_aging_with,
+    credit_collection, decode_days, encode_days, fifo_aging, find_credit, insert_credit,
+    list_credit_debtors, set_credit_paused, set_override_day, update_credit_limit,
 };
 pub use dedupe::{
     AppliedIntentRecord, StoredIntent, count_applied_intents, find_applied_intent,
@@ -732,6 +733,21 @@ impl Store {
             return Ok(None);
         }
         find_credit(&self.conn, player_id)
+    }
+
+    pub fn credit_aging(
+        &self,
+        player_id: &str,
+        today: &str,
+    ) -> Result<arena_proto::CreditAging, AppError> {
+        credit_aging(&self.conn, player_id, today)
+    }
+
+    pub fn credit_debtors(&self) -> Result<Vec<CreditRow>, AppError> {
+        if !self.table_exists("credit_balances")? {
+            return Ok(Vec::new());
+        }
+        list_credit_debtors(&self.conn)
     }
 
     pub fn credit_collection(

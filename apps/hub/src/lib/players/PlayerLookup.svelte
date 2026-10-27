@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Button, t } from "@arena/ui";
+  import { Button, formatMoney, t } from "@arena/ui";
   import type { PlayerHit } from "@arena/ui/generated";
   import { invalidate } from "$app/navigation";
   import { SESSION_DEPENDENCY, findPlayers } from "../auth";
+  import { branchLocale } from "../locale.svelte";
 
   let {
     onpick,
@@ -102,6 +103,14 @@
             class="ui-interactive hit type-hub-body"
             onclick={() => onpick(hit)}
           >
+            {#if hit.outstanding_minor > 0 && branchLocale.current}
+              <span class="owes tabular-nums" data-testid="hit-owes">
+                <span aria-hidden="true">⚠</span>
+                {t("hub.players.lookup.owes", {
+                  amount: formatMoney(hit.outstanding_minor, branchLocale.current),
+                })}
+              </span>
+            {/if}
             <span>{hit.name}</span>
             <span class="phone">{hit.phone}</span>
           </button>
@@ -170,5 +179,10 @@
 
   .phone {
     font-variant-numeric: tabular-nums;
+  }
+
+  .owes {
+    color: var(--warning-text);
+    font-weight: 600;
   }
 </style>

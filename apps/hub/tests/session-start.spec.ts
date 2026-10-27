@@ -32,7 +32,14 @@ const STAFF: Record<string, SessionStaff> = {
 };
 
 const PLAYERS: PlayerHit[] = [
-  { player_id: "P1", name: "Asha Rao", username: "asha", phone: "+91 98765 43210", tags: [] },
+  {
+    player_id: "P1",
+    name: "Asha Rao",
+    username: "asha",
+    phone: "+91 98765 43210",
+    tags: [],
+    outstanding_minor: 0,
+  },
 ];
 
 type Sent = { payload: Record<string, unknown> & { kind: string }; key: string; ticket?: string };

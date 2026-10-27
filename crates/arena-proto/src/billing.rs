@@ -2,11 +2,13 @@ pub const KEY_BILLING_ROUNDING_MIN: &str = "billing.rounding_min";
 pub const KEY_BILLING_MINIMUM_MIN: &str = "billing.minimum_min";
 pub const KEY_BILLING_GRACE_MIN: &str = "billing.grace_min";
 pub const KEY_BILLING_TIME_UP_MODE: &str = "billing.time_up_mode";
+pub const KEY_BILLING_CREDIT_AUTO_PAUSE: &str = "billing.credit_auto_pause";
 
 pub const DEFAULT_BILLING_ROUNDING_MIN: &str = "15";
 pub const DEFAULT_BILLING_MINIMUM_MIN: &str = "30";
 pub const DEFAULT_BILLING_GRACE_MIN: &str = "2";
 pub const DEFAULT_BILLING_TIME_UP_MODE: &str = "clean_up";
+pub const DEFAULT_BILLING_CREDIT_AUTO_PAUSE: &str = "true";
 
 pub const BILLING_ROUNDING_RANGE: (i64, i64) = (1, 60);
 pub const BILLING_MINIMUM_RANGE: (i64, i64) = (0, 240);

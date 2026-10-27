@@ -2,7 +2,7 @@
 title: 'Story 4.7: The Android Hub saves backups to a folder the owner chooses'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '87c4a592892fc9db6aebd9e87fc1b57569d7c6b9'
 review_loop_iteration: 0
 followup_review_recommended: false

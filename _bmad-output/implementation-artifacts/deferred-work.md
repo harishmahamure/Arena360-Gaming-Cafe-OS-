@@ -383,3 +383,7 @@
 - The availability watch runs only when the shell supplies a `BackupFolder` (Android); a Windows path that goes missing after it was saved is not rechecked.
 - A `PIN_REQUIRED` answer to a Manager-less save after the picker closed drops the picked folder (the page asks for the PIN, then opens the picker again); the Counter path asks for the PIN first, so this only happens if permissions change mid-flow.
 - `backup_jni.rs`, `BackupFolderBridge.kt`, the folder picker, a USB OTG drive and an unplug are not exercised here (no Android build or device).
+
+## Deferred from: code review of Story 4.7
+
+- A picked folder the Hub refuses (probe failed) keeps its persisted grant until the next accepted save calls `keepBackupFolder`; repeated failed picks could accumulate grants (Android caps them). The page could call `keepBackupFolder(current)` after a refusal.

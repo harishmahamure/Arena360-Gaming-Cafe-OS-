@@ -2,7 +2,7 @@
 title: 'Story 3.23: Session Timer Engine with Time Warnings'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: '6dc7835'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -87,6 +87,10 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: fmt, clippy (including `arena-kiosk-svc`), hub and kiosk check, string/token/contrast/protocol/layer checks and prettier pass; arena-core (engine, apply matrix, proptest), arena-tasks (timer task) and arena-api tests pass; `session-timer.spec.ts` passes on desktop and phone. Unrelated failures as before: arena-tasks (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reading_times_out`), arena-cloud timing tests, and 14 privileged Windows tests in `arena-kiosk-svc` (lockdown, DPAPI, pipe). `session-end` "End works by keyboard" on phone failed once in a parallel run and passes alone.
 Left for later: grace and clean-up at time-up (3.26), the prepaid session start that sets `ends_at` (3.24), alerts (3.25). The proptest op covers refusals only; the success path is covered by the apply tests.
+
+## Code Review (2026-10-27)
+
+Four layers ran (blind, edge cases, verification gaps, acceptance). No acceptance violations. Fixed: permanent expiry refusals (`VALIDATION_FAILED`, `PERMISSION_DENIED`) are no longer retried every tick; timer event channel depth raised to 1024 and dropped events are logged in the Hub relay; audit label added for `session.expire`. Left as follow-ups (not blocking): grace and `time_up_mode` at time-up (3.26), kiosk warning pipeline and `push_timer_event` integration tests, paused timed tile shows elapsed time.

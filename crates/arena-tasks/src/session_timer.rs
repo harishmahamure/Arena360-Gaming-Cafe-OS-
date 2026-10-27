@@ -11,7 +11,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 pub const TIMER_TICK: Duration = Duration::from_secs(1);
 pub const TIMER_RESYNC_TICKS: u32 = 30;
-pub const TIMER_EVENTS_DEPTH: usize = 64;
+pub const TIMER_EVENTS_DEPTH: usize = 1024;
 
 pub struct SessionTimerTask {
     writer: WriterHandle,
@@ -87,6 +87,17 @@ impl SessionTimerTask {
                 });
             }
             Err(e) if e.code == ErrorCode::Stale || e.code == ErrorCode::NotFound => {}
+            Err(e)
+                if matches!(
+                    e.code,
+                    ErrorCode::ValidationFailed | ErrorCode::PermissionDenied
+                ) =>
+            {
+                tracing::error!(
+                    code = e.code.as_str(),
+                    "session expiry refused; not retried"
+                );
+            }
             Err(e) => {
                 tracing::warn!(code = e.code.as_str(), "session expiry not recorded");
                 engine.requeue(&s, self.clock.now_ms());

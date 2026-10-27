@@ -403,7 +403,9 @@ async fn run(cfg: config::Config, clock: Arc<dyn Clock>) -> Result<(), AppError>
                     Ok(event) => {
                         presence.push_timer_event(event);
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "timer events dropped");
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }
             }

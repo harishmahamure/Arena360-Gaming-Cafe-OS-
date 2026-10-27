@@ -1477,6 +1477,7 @@
   "hub.sheet.done.resumed": "Session resumed. The PC is unlocked.",
   "hub.audit.intent.session.pause": "Session paused",
   "hub.audit.intent.session.resume": "Session resumed",
+  "hub.audit.intent.session.expire": "Session time ran out",
   "hub.audit.intent.wallet.topup": "Wallet top-up",
   "hub.audit.intent.wallet.topup.reverted": "Wallet top-up undone",
   "hub.settle.method.wallet": "Wallet",

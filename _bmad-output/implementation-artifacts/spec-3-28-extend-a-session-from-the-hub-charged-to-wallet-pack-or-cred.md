@@ -2,7 +2,7 @@
 title: 'Story 3.28: Extend a Session from the Hub, Charged to Wallet, Pack or Credit'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: 'd14754a'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -97,3 +97,9 @@ Status: review
 Verified: fmt, clippy, hub and kiosk check, string/token/contrast/protocol/layer/hex/secrets checks and prettier pass; arena-core (19 new `extend` tests, proptest with `SessionExtend`) and the other workspace tests pass; `extend`, `prepaid-start`, `session-start`, `session-end`, `session-timer`, `pause`, `tile-sheet`, `convert`, `settle` and `audit` Playwright specs pass on desktop and phone (194). Known unrelated failures as before: arena-cloud (`a_hung_run_times_out_with_its_own_code`, `unreachable_at_start_retries_then_exits_1_without_logging_the_token`). `owner_staff_and_device_edits_win_over_a_stale_base_rev` failed once under full-suite load and passes alone. `check:generated` reports the generated files as stale only until they are committed. `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: the extension is its own settled order (kind `session`, `session_id` null, `extends_session_id` set) because an order per session is unique and the order kind CHECK cannot change without rebuilding `orders`; pass and block sessions are not extendable (fixed windows) and prepaid sessions cannot be paused so a paused extend is only defensive; the pack minutes are taken when the extend applies and an early End refunds nothing; the pack a session runs on is not a source; the closing check uses the next closing after now; `session.extend` has no Undo; the credit override reuses the settle rule through `guards::overriding_credit`.
 Left for later: kiosk-originated extend (6.21) and the rate resolver (3.30 switches the live price); extending pass and block sessions if the product wants it; replay coverage of extends; the LLD `session.extended` event; an owned-pack ledger row instead of a direct minutes deduction.
+
+## Review Triage Log (code review)
+
+- Fixed: extending a paused session failed with INTERNAL (no open segment) and would have unlocked the kiosk; paused is now refused `VALIDATION_FAILED` on `session_id` ("resume first") and Extend is no longer offered on paused tiles. Test added.
+- Fixed: `credit_override` on a wallet or pack extend no longer triggers the `credit.manage` guard.
+- Deferred (non-blocking): picker greys-out of unusable sources, load-failure retry state, extra Playwright/override/snapshot/kiosk-push tests, migration index.

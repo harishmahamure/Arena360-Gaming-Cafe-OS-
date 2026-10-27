@@ -237,7 +237,7 @@
     session?.player_id != null &&
       group !== undefined &&
       (session.mode === "pack" || session.mode === "wallet") &&
-      ["active", "grace", "paused"].includes(session.state),
+      ["active", "grace"].includes(session.state),
   );
 
   $effect(() => {

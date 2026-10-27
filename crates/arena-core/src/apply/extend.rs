@@ -140,7 +140,13 @@ pub(super) fn validate(
     if !EXTEND_OPTIONS_MIN.contains(&e.minutes) {
         return Err(invalid("minutes", "extend by 30 min, 1 h or 2 h"));
     }
-    if !["active", "paused", "grace"].contains(&s.state.as_str()) {
+    if s.state == "paused" {
+        return Err(invalid(
+            "session_id",
+            "resume the session before extending it",
+        ));
+    }
+    if !["active", "grace"].contains(&s.state.as_str()) {
         return Err(AppError::with_field(
             ErrorCode::Stale,
             "session_id",

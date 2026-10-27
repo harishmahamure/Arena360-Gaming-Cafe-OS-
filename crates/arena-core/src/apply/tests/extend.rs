@@ -620,3 +620,27 @@ async fn a_retried_extend_with_the_same_key_applies_once() {
     assert_eq!(ends_at(&f, &s), T0 + 90 * MIN);
     assert_eq!(balance(&f, &p), 7_000);
 }
+
+#[tokio::test]
+async fn a_paused_session_must_be_resumed_before_it_is_extended() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    topped_up(&f, &p, 10_000).await;
+    let pack = owned_pack(&f, &p, &[group_of(&f, &d)], 60).await;
+    let s = pack_session(&f, &d, &p, &pack).await;
+    sql(
+        &f,
+        format!("UPDATE sessions SET state = 'paused' WHERE id = '{s}'"),
+    )
+    .await;
+    let e = extend(&f, &s, 30, ExtendSource::Wallet, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (e.code, e.field.as_deref()),
+        (ErrorCode::ValidationFailed, Some("session_id"))
+    );
+    assert_eq!(balance(&f, &p), 10_000);
+    assert!(extension_orders(&f, &s).is_empty());
+}

@@ -53,7 +53,9 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
 fn overriding_credit(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     let credit_override = match &intent.payload {
         IntentPayload::SessionSettle(s) => s.credit_override,
-        IntentPayload::SessionExtend(e) => e.credit_override,
+        IntentPayload::SessionExtend(e) if e.source == arena_proto::ExtendSource::Credit => {
+            e.credit_override
+        }
         _ => return Ok(()),
     };
     if credit_override != Some(true) || intent.actor.kind == ActorKind::Owner {

@@ -2,7 +2,7 @@
 title: 'Story 3.34: Forced End with Manager PIN and Reason'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_revision: 'fb616274a813bb86365b80d0d02ba9e7e0121462'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -83,7 +83,11 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: fmt, clippy; workspace tests (arena-core 653 lib tests incl. 6 `force_end` and 1 rbac, proptest with a `ForceEnd` op, arena-api 221 incl. the forced-end lock); hub and kiosk check; `check:strings`, `check:tokens-used`, `check:contrast`, `check:hex`, `check:protocol`, `check:layers`, `format:check`; Playwright 250 (force-end, undo, pause, group-bill, transfer, session-end/start, extend, prepaid-start, tile-sheet, floor, audit). Known unrelated failures as before: arena-cloud (2) and arena-tasks (2). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: a separate intent kind (`session.force_end`) instead of a `forced` flag on `session.end`, because elevation is matched by kind and the manager must hold `session.force_end`; the reason picker comes before the PIN (the same order as Pause) and the ticket is spent at once; the minutes left are taken from `ends_at` (to the pause moment when paused, 0 for postpaid); after an undo the time between the end and the undo counts as played, as for a postpaid undo.
 Deferred: server-side refusal of a plain `session.end` on a prepaid session with time left; a forced end on a group member other than the last cannot be undone; the audit viewer shows `forced_*` through the session row image only, with no dedicated summary.
+
+## Code Review Result
+
+Reviewed 2026-10-28: no blocking findings. Fixed two doc-comment defects (`restore_pack_minutes` had stolen `deduct_pack_minutes`'s doc line; stray backslash-escaped backticks in `force_end.rs`). fmt, clippy, arena-core/store/proto/api tests, hub check and format:check green.

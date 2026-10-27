@@ -40,7 +40,7 @@ pub(super) fn base_rev(intent: &Intent, t: &ForceEndTarget) -> Result<(), AppErr
     super::session::base_rev_end(intent, &t.end)
 }
 
-/// The session must still run, and \`other\` needs a note of 1 to 140 characters (any other reason
+/// The session must still run, and `other` needs a note of 1 to 140 characters (any other reason
 /// takes none).
 pub(super) fn validate(
     intent: &Intent,
@@ -140,7 +140,7 @@ pub(super) fn base_rev_reverted(intent: &Intent, t: &ForceEndRevertTarget) -> Re
     check_rev(intent, s.rev, "session.force_end.reverted")
 }
 
-/// Only a session ended by \`session.force_end\` comes back, by the staff member who ended it
+/// Only a session ended by `session.force_end` comes back, by the staff member who ended it
 /// within the undo window, with its PC free and no receipt, drawer kick or invoice recorded. A
 /// postpaid one needs its bill still open and unpaid.
 pub(super) fn validate_reverted(intent: &Intent, t: &ForceEndRevertTarget) -> Result<(), AppError> {

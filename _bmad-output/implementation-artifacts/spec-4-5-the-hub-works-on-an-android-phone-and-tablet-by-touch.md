@@ -2,7 +2,7 @@
 title: 'Story 4.5: The Hub works on an Android phone and tablet by touch'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 baseline_commit: '1e401824d3e46b5485fc0a35bb80b55ee6404f48'
 review_loop_iteration: 0
 followup_review_recommended: false

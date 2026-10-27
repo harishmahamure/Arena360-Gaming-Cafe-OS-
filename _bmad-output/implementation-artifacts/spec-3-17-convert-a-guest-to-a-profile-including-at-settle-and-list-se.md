@@ -2,7 +2,7 @@
 title: 'Story 3.17: Convert a Guest to a Profile, Including at Settle, and List Sessions'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: '015786f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -82,7 +82,7 @@ Re-run 2026-10-27: no open findings; fmt, clippy, hub check, strings, protocol, 
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Verified: `cargo fmt --check`; clippy `-D warnings` clean for every crate except `arena-kiosk-svc` (its `tests/discovery.rs` has unused imports on this Windows machine, unchanged by this story); `cargo test` for proto, store, core (incl. the new conversion tests and the proptest with `SessionAssign`), replay and api (incl. convert and Sessions-list route tests); `pnpm run gen:types`; `pnpm --filter @arena/hub check`, check:strings, check:tokens-used, check:contrast, check:protocol, check:layers, format:check; the full Hub Playwright suite (827 passed, 11 skipped), including the new `convert.spec.ts`.
 Not run: `arena-e2e` (Unix-only). These fail the same way on the untouched baseline: `arena-cloud` `backup::a_hung_run_times_out_with_its_own_code` and `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token`, `arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::tests::a_printer_that_stops_reading_times_out`.
 Left for later: other open Hub windows see a conversion with their next snapshot (no dedicated push event); the Sessions screen has no search and no date picker (today's business day only); credit options on a converted bill arrive with Story 3.18.

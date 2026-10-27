@@ -2,7 +2,7 @@
 title: 'Story 3.31: A Rule Change Mid-Session Opens a New Rate Segment'
 type: 'feature'
 created: '2026-10-27'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'd5c27c27acf0b9a0d817d385f44782442219cb2f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -81,6 +81,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review: no blocking findings. fmt, clippy, tests (only the known unrelated arena-cloud and arena-tasks failures) and the repo checks pass.
+
 ## Design Notes
 
 `wallet_end_after_flip`: closed segments plus a new segment of `k` whole minutes from the flip; the largest `k` whose `bill` total is within the reserve, rounded down so the total minutes are a whole rounding unit; ends at `flip + k min`.
@@ -94,7 +96,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 Verified: fmt, clippy, workspace tests (arena-core 615 incl. 13 `rate_flip` apply tests, `due_flip` and `wallet_end_after_flip` goldens, 4 timer-task tests, proptest `RateFlip` op), hub and kiosk check, string/token/contrast/protocol/layer checks, prettier and `gen:types` pass; `rule-chip` and `tile-sheet` Playwright specs pass on desktop and phone (56). Known unrelated failures as before: arena-cloud (`a_hung_run_times_out_with_its_own_code`, `unreachable_at_start_retries_then_exits_1_without_logging_the_token`) and arena-tasks (`trusted_time_is_cloud_time_plus_monotonic_elapsed`, `a_printer_that_stops_reading_times_out`). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: a postpaid flip writes only `session_segments` (no `sessions.rev` bump, so a staff End with `base_rev` is not made stale); a wallet flip also rewrites `sessions` (`ends_at`, `reserved_minor`); the Hub UI reloads on `session_segments` writes so timer-driven flips show; no closing-time cap on a lengthened wallet end; a wallet rise with no reserve ends the session at the flip instant.
 Left for later: kiosk lock-time push relies on the existing periodic session tick (not changed or tested); transfer (3.32) and group bills (3.33).

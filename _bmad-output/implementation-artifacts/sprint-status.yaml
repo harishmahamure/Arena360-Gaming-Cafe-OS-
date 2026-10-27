@@ -95,7 +95,7 @@ development_status:
   3-28-extend-a-session-from-the-hub-charged-to-wallet-pack-or-cred: done
   3-29-dynamic-pricing-rules-by-weekday-hours-and-by-date: done
   3-30-the-active-rule-prices-new-sessions-and-shows-in-the-header: done
-  3-31-a-rule-change-mid-session-opens-a-new-rate-segment: review
+  3-31-a-rule-change-mid-session-opens-a-new-rate-segment: done
   3-32-transfer-a-session-to-another-device: backlog
   3-33-group-sessions-under-one-bill-and-one-payer: backlog
   3-34-forced-end-with-manager-pin-and-reason: backlog

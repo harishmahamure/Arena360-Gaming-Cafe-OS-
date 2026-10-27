@@ -520,3 +520,44 @@ async fn starting_in_a_group_is_refused_for_a_prepaid_session_or_a_missing_host(
     assert!(table(&f, Table::GroupBills).is_empty());
     assert_eq!(table(&f, Table::Sessions).len(), 1);
 }
+
+#[tokio::test]
+async fn a_grouped_session_cannot_be_converted_to_a_player() {
+    let Trio { f, a, b, .. } = trio().await;
+    let sa = postpaid(&f, &a, "2027-01-15 15:00").await;
+    let sb = postpaid(&f, &b, "2027-01-15 15:05").await;
+    group(&f, &sa, &[&sb]).await.unwrap();
+    let (id, create) = super::session::new_profile("grouped", "9000000001");
+    let rev = rev_of(&f, Table::Sessions, &sa);
+    let denied = end(
+        &f,
+        super::session::assign_intent(&sa, &id, Some(create), Some(rev)),
+    )
+    .await;
+    assert_eq!(
+        refusal(denied),
+        (ErrorCode::ValidationFailed, Some("session_id".into()))
+    );
+}
+
+#[tokio::test]
+async fn the_group_stays_in_the_snapshot_until_its_bill_settles() {
+    let Trio { f, a, b, .. } = trio().await;
+    let sa = postpaid(&f, &a, "2027-01-15 15:00").await;
+    let sb = postpaid(&f, &b, "2027-01-15 15:05").await;
+    group(&f, &sa, &[&sb]).await.unwrap();
+    finish(&f, &sa, "2027-01-15 15:30").await.unwrap();
+    finish(&f, &sb, "2027-01-15 16:00").await.unwrap();
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(snap.group_bills.len(), 1);
+    assert!(snap.group_bills[0].member_ids.is_empty());
+    let o = table(&f, Table::Orders).pop().unwrap();
+    let order = text(&o, "id");
+    let rev = int(&o, "rev");
+    let both = || vec![pay(Cash, int(&o, "total_minor"), None)];
+    end(&f, settle_intent(&order, Some(rev), both()))
+        .await
+        .unwrap();
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert!(snap.group_bills.is_empty());
+}

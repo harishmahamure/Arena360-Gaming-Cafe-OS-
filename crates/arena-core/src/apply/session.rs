@@ -1076,6 +1076,11 @@ pub(super) fn validate_end_reverted(intent: &Intent, t: &EndRevertTarget) -> Res
     if s.state != "ended" || s.mode != SessionMode::Postpaid.as_str() {
         return Err(undo_denied("this session has not ended"));
     }
+    if t.order.is_none() && s.group_bill_id.is_some() {
+        return Err(undo_denied(
+            "only the last session of a group to end can be undone",
+        ));
+    }
     if t.order.as_ref().is_none_or(|o| o.status != "open") || t.paid {
         return Err(undo_denied("the bill is no longer open and unpaid"));
     }
@@ -1359,6 +1364,12 @@ pub(super) fn validate_assign(a: &SessionAssignPlayer, t: &AssignTarget) -> Resu
     };
     if s.player_id.is_some() {
         return Err(invalid("session_id", "this session already has a player"));
+    }
+    if s.group_bill_id.is_some() {
+        return Err(invalid(
+            "session_id",
+            "a session in a group bill cannot be converted; change the group payer",
+        ));
     }
     if t.order.as_ref().is_some_and(|o| o.status != "open") {
         return Err(invalid("session_id", "this bill is already settled"));

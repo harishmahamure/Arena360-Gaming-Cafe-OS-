@@ -2099,7 +2099,7 @@ async fn a_wallet_never_goes_negative_when_two_bills_race_for_the_same_balance()
     assert_eq!(ledger_sum(&f, &p), 0);
 }
 
-fn assign_intent(
+pub(super) fn assign_intent(
     session: &str,
     player: &str,
     create: Option<arena_proto::PlayerCreate>,
@@ -2117,7 +2117,7 @@ fn assign_intent(
     i
 }
 
-fn new_profile(username: &str, phone: &str) -> (String, arena_proto::PlayerCreate) {
+pub(super) fn new_profile(username: &str, phone: &str) -> (String, arena_proto::PlayerCreate) {
     match super::players::create(&form(username, phone)) {
         (id, IntentPayload::PlayerCreate(c)) => (id, c),
         _ => unreachable!(),

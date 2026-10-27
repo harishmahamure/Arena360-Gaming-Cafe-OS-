@@ -2,7 +2,7 @@
 title: 'Story 3.33: Group Sessions Under One Bill and One Payer'
 type: 'feature'
 created: '2026-10-27'
-status: 'review'
+status: 'done'
 baseline_revision: '08d6ad037ff6887f240469e294326f129ae086d6'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -85,3 +85,9 @@ deferred: []
 Status: review
 Verified: fmt, clippy; arena-core (656 lib tests incl. 14 `group_bill`, proptest with a `Group` op), arena-store, arena-proto, arena-api and arena-replay tests; hub and kiosk check; `check:strings`, `check:tokens-used`, `check:contrast`, `check:hex`, `check:protocol`, `check:layers`, `format:check`; Playwright (244 across group-bill, transfer, billing, session-start/end, pause, convert, extend, prepaid-start, floor, tile-sheet). `check:generated` reports the new generated files until they are committed. Known unrelated failures as before: arena-cloud (2) and arena-tasks (2). `arena-e2e` and `arena-kiosk-svc` tests not run.
 Decisions: an earlier member's end is not undoable (only the last, which owns the bill); "Start in group" is a guest session (`group_with`), filed under the host sheet's status line; after the group bill exists the payer panel offers player lookup only; guest conversion is hidden on a group bill.
+
+## Code Review Result
+
+Status: done. Four parallel reviewers (blind, edge case, verification gap, acceptance). Fixed: `session.assign_player` is refused on a grouped session (it would desync the group payer); per-device subtotals only show on a group bill (they leaked onto transfer bills); "Add to group" no longer highlights sessions already in another group; the group marker is hidden when the group is not in the snapshot; undo of an earlier member's end gives a specific message; tests added for convert-in-group and the group staying in the snapshot until its bill settles.
+Deferred: the group order takes its business day/fiscal year from the last member to end; a payer pick of an already-ended member (lookup only); no leave-group intent; "Start in group" guest-only; permission gating in the UI buttons.
+Verified: fmt, clippy, workspace tests (only the known arena-cloud and arena-tasks failures), hub check, format:check, check:strings, Playwright (146).

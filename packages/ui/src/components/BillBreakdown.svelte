@@ -25,6 +25,7 @@
 
   const money = (n: number) => formatMoney(n, locale);
   const perDevice = $derived.by(() => {
+    if (!group) return [];
     const totals = new Map<string, number>();
     for (const l of lines) totals.set(l.device_id, (totals.get(l.device_id) ?? 0) + l.amount_minor);
     return totals.size > 1 ? [...totals] : [];

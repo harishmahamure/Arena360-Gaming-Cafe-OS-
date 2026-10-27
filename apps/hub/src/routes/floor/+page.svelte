@@ -176,8 +176,7 @@
     const s = sessionOf(d);
     if (s) {
       const open = s.mode === "postpaid" && ["active", "paused"].includes(s.state);
-      const joined = s.group_bill_id != null && s.group_bill_id === activeSession?.group_bill_id;
-      return open && !joined ? "add" : null;
+      return open && s.group_bill_id == null ? "add" : null;
     }
     return d.kind === "pc" && d.status === "online" && groups.some((g) => g.id === d.group_id)
       ? "start"
@@ -200,7 +199,8 @@
   }
   const payerOf = (id: string | undefined) => {
     const g = snapshot?.group_bills?.find((x) => x.id === id);
-    return g?.payer_username ?? t("hub.session.guest", { n: g?.payer_guest_no ?? 0 });
+    if (!g) return "";
+    return g.payer_username ?? t("hub.session.guest", { n: g.payer_guest_no ?? 0 });
   };
   const groupViewOf = (id: string | undefined) => {
     const g = snapshot?.group_bills?.find((x) => x.id === id);
@@ -357,7 +357,7 @@
         <span data-testid="session-line"
           >{session.username ?? t("hub.session.guest", { n: session.guest_no ?? 0 })}</span
         >
-        {#if session.group_bill_id}
+        {#if session.group_bill_id && payerOf(session.group_bill_id)}
           <span data-testid="group-marker"
             >{t("hub.group.marker", { payer: payerOf(session.group_bill_id) })}</span
           >

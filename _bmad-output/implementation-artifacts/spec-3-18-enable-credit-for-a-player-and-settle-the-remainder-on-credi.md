@@ -81,7 +81,7 @@ deferred: []
 
 ## Review Triage Log
 
-Re-run 2026-10-27: no open findings; fmt, clippy (all crates except arena-kiosk-svc), proto/store/core/replay tests, hub check, strings, protocol and format all pass.
+Re-run 2026-10-27 (second pass, core/store credit logic re-read): no open findings; fmt, clippy (all crates except arena-kiosk-svc), proto/store/core/replay tests, hub check, strings, protocol and format all pass.
 
 ## Verification
 

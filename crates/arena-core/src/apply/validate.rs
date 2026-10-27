@@ -76,6 +76,12 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Branch(b) => super::licence::validate(intent, p, b.as_ref()),
             _ => Err(internal_target()),
         },
+        IntentPayload::AdImpressionRecorded(_) | IntentPayload::AdRequestRecorded(_) => {
+            match target {
+                Target::Branch(b) => super::ad::validate(intent, b.as_ref()),
+                _ => Err(internal_target()),
+            }
+        }
         IntentPayload::AuditReadGranted(g) => match target {
             Target::Branch(b) => super::read_grants::validate(intent, g, b.as_ref()),
             _ => Err(internal_target()),

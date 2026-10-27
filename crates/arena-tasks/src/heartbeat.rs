@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arena_core::{CloudTime, HubStatus, PairGate, PairingState, Role, WriterHandle};
+use arena_core::{AdPending, CloudTime, HubStatus, PairGate, PairingState, Role, WriterHandle};
 use arena_proto::{
     Entitlement, ErrorCode, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S, HeartbeatRequest,
-    HeartbeatResponse, LicenceStanding, VerifyKey,
+    HeartbeatResponse, LicenceStanding, Tier, VerifyKey,
 };
 use arena_store::TrustedClockRow;
 use tokio::sync::{Notify, watch};
@@ -197,19 +197,43 @@ impl HeartbeatTask {
                 return interval;
             }
         };
+        // A Free branch uploads nothing but its heartbeat, which carries the ad totals after the
+        // cursors. A paid branch, or one with no new rows, sends neither block.
+        let ads = if self.status.borrow().tier == Some(Tier::Free) {
+            writer.ad_pending().await.unwrap_or_else(|e| {
+                tracing::warn!(code = e.code.as_str(), "heartbeat: no ad totals");
+                AdPending::default()
+            })
+        } else {
+            AdPending::default()
+        };
         let req = HeartbeatRequest {
             epoch: lease.epoch().to_string(),
             version: self.version.clone(),
             schema_version,
             last_seq_uploaded: 0,
             setup,
+            ad_impressions: ads.impressions,
+            ad_requests: ads.requests,
         };
         let sent = Instant::now();
         match self.cloud.heartbeat(&token, &req).await {
             Ok(res) => {
                 self.fails = 0;
                 let at = sent + sent.elapsed() / 2;
+                let ack = (
+                    req.ad_impressions.as_ref().and(res.ad_impressions_through),
+                    req.ad_requests.as_ref().and(res.ad_requests_through),
+                );
                 self.accept(&writer, &lease, res, at).await;
+                if ack != (None, None)
+                    && let Err(e) = writer.ad_ack(ack.0, ack.1).await
+                {
+                    tracing::warn!(
+                        code = e.code.as_str(),
+                        "heartbeat: could not move the ad cursors"
+                    );
+                }
                 interval
             }
             Err(CloudFailure::Refused { error, .. })
@@ -602,6 +626,7 @@ mod tests {
                     "opening_hours_set": false,
                     "backup_location_set": false,
                     "ad_consent": "missing",
+                    "ad_rating": "pg",
                     "printer": "unset",
                     "products_count": 0,
                     "groups_without_rate": 0,
@@ -1089,5 +1114,182 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(saved.cloud_ms >= T0 + 1_000);
+    }
+
+    // ---- Story 4.14: ad totals ------------------------------------------------------------
+
+    use arena_store::{AdKind, insert_ad};
+
+    fn acked(
+        reply: (u16, String),
+        impressions: Option<i64>,
+        requests: Option<i64>,
+    ) -> (u16, String) {
+        let mut body: serde_json::Value = serde_json::from_str(&reply.1).unwrap();
+        if let Some(n) = impressions {
+            body["ad_impressions_through"] = n.into();
+        }
+        if let Some(n) = requests {
+            body["ad_requests_through"] = n.into();
+        }
+        (reply.0, body.to_string())
+    }
+
+    async fn record(writer: &WriterHandle, kind: AdKind, slot: &'static str, n: usize, at: i64) {
+        writer
+            .submit(move |tx| {
+                for i in 0..n {
+                    insert_ad(tx, kind, slot, at + i as i64)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    fn sent(seen: &Arc<Mutex<Vec<String>>>, i: usize) -> serde_json::Value {
+        let raw = seen.lock().unwrap()[i].clone();
+        serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_free_heartbeat_carries_the_totals_after_the_cursors_and_moves_them_on_the_answer() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(
+            vec![
+                acked(answer(true, Tier::Free), Some(2), Some(5)),
+                answer(true, Tier::Free),
+                acked(answer(true, Tier::Free), None, Some(6)),
+            ],
+            false,
+            Arc::clone(&seen),
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.restore().await;
+        record(&f.writer, AdKind::Request, "banner", 4, T0).await;
+        record(&f.writer, AdKind::Request, "interstitial", 1, T0 + 100).await;
+        record(&f.writer, AdKind::Impression, "banner", 2, T0 + 200).await;
+
+        f.task.beat().await;
+        let first = sent(&seen, 0);
+        assert_eq!(first["last_seq_uploaded"], 0);
+        assert_eq!(
+            first["ad_requests"],
+            serde_json::json!({
+                "after_id": 0, "through_id": 5,
+                "counts": [
+                    {"business_day": "2027-01-15", "slot": "banner", "n": 4},
+                    {"business_day": "2027-01-15", "slot": "interstitial", "n": 1},
+                ]
+            })
+        );
+        assert_eq!(
+            first["ad_impressions"],
+            serde_json::json!({
+                "after_id": 0, "through_id": 2,
+                "counts": [{"business_day": "2027-01-15", "slot": "banner", "n": 2}]
+            })
+        );
+
+        // The answer moved both cursors: the next heartbeat carries neither block.
+        f.task.beat().await;
+        let second = sent(&seen, 1);
+        assert!(second.get("ad_requests").is_none() && second.get("ad_impressions").is_none());
+
+        // A new row goes out alone, after the cursor.
+        record(&f.writer, AdKind::Request, "banner", 1, T0 + 300).await;
+        f.task.beat().await;
+        let third = sent(&seen, 2);
+        assert_eq!(third["ad_requests"]["after_id"], 5);
+        assert_eq!(third["ad_requests"]["through_id"], 6);
+        assert!(third.get("ad_impressions").is_none());
+        // Free sends nothing but heartbeats: no presign, batch, summary or rollup call.
+        assert_eq!(seen.lock().unwrap().len(), 3);
+        for raw in seen.lock().unwrap().iter() {
+            assert!(raw.to_ascii_lowercase().starts_with("post /v1/heartbeat "));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_cursor_moves_only_on_an_acknowledgement() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(
+            vec![
+                answer(true, Tier::Free),
+                refused(500, "INTERNAL"),
+                acked(answer(true, Tier::Free), Some(1), None),
+            ],
+            false,
+            Arc::clone(&seen),
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.restore().await;
+        record(&f.writer, AdKind::Impression, "interstitial", 1, T0).await;
+        // An answer without a cursor, and a failed heartbeat, acknowledge nothing: the same
+        // totals go out again.
+        f.task.beat().await;
+        f.task.beat().await;
+        f.task.beat().await;
+        assert_eq!(
+            sent(&seen, 0)["ad_impressions"],
+            sent(&seen, 1)["ad_impressions"]
+        );
+        assert_eq!(
+            sent(&seen, 1)["ad_impressions"],
+            sent(&seen, 2)["ad_impressions"]
+        );
+        assert_eq!(sent(&seen, 0)["ad_impressions"]["through_id"], 1);
+        f.task.beat().await;
+        assert!(sent(&seen, 3).get("ad_impressions").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_paid_branch_sends_no_ad_block_even_with_rows() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Basic)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Basic));
+        record(&f.writer, AdKind::Request, "banner", 3, T0).await;
+        record(&f.writer, AdKind::Impression, "banner", 3, T0).await;
+        f.task.beat().await;
+        let body = sent(&seen, 1);
+        assert!(body.get("ad_requests").is_none() && body.get("ad_impressions").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_ad_blocks_hold_no_device_creative_or_player_data() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Free)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.task.restore().await;
+        record(&f.writer, AdKind::Request, "banner", 2, T0).await;
+        record(&f.writer, AdKind::Impression, "banner", 1, T0).await;
+        f.task.beat().await;
+        let body = sent(&seen, 0);
+        for block in ["ad_requests", "ad_impressions"] {
+            let keys: std::collections::BTreeSet<_> = body[block]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(keys, ["after_id", "counts", "through_id"].into());
+            let day: std::collections::BTreeSet<_> = body[block]["counts"][0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(day, ["business_day", "n", "slot"].into());
+        }
+        let blocks = format!("{} {}", body["ad_requests"], body["ad_impressions"]).to_lowercase();
+        for word in [
+            "device", "creative", "advertis", "player", "kiosk", "tenant",
+        ] {
+            assert!(!blocks.contains(word), "{word} in {blocks}");
+        }
     }
 }

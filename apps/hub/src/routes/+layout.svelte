@@ -4,7 +4,7 @@
   import { onMount, tick, untrack, type Snippet } from "svelte";
   import { goto, invalidate } from "$app/navigation";
   import { page } from "$app/state";
-  import AdSlot from "../lib/AdSlot.svelte";
+  import AdBanner from "../lib/AdSlot.svelte";
   import AlertList from "../lib/AlertList.svelte";
   import Clock from "../lib/Clock.svelte";
   import RuleChips from "../lib/RuleChips.svelte";
@@ -53,6 +53,7 @@
   import { catalog } from "../lib/catalog.svelte";
   import { alertCount, refreshAccess, service } from "../lib/service.svelte";
   import { adRatingOf, ads } from "../lib/ads";
+  import { AdMetrics } from "../lib/ad-metrics";
   import { InterstitialPolicy } from "../lib/interstitial";
   import { KEY_ADS_CONSENT, KEY_ADS_RATING } from "../lib/operating";
   import { connectEvents, uiOf } from "../lib/events";
@@ -119,6 +120,12 @@
   );
   /** The idle lock is up: the shell stays mounted but inert behind the overlay. */
   let locked = $state(false);
+  // Every counted plugin event goes to the Hub once (Story 4.14); the gate keeps a paid or
+  // Windows Hub from ever receiving one.
+  $effect(() => {
+    const metrics = new AdMetrics(ads);
+    return () => metrics.dispose();
+  });
   /**
    * When a full-screen ad may follow a PIN unlock (Story 4.13). `adShowing` holds the idle
    * countdown while Google's interstitial is on screen; it restarts from zero when it ends.
@@ -737,7 +744,7 @@
       {/if}
     </main>
     {#if adsOn}
-      <div class="ad-area"><AdSlot /></div>
+      <div class="ad-area"><AdBanner /></div>
     {/if}
   </div>
 {:else}
@@ -828,7 +835,7 @@
     </main>
 
     {#if adsOn}
-      <div class="ad-area"><AdSlot /></div>
+      <div class="ad-area"><AdBanner /></div>
     {/if}
 
     <nav class="hub-bottom-bar" aria-label={t("hub.nav.label")} inert={viewport.sheetFull}>

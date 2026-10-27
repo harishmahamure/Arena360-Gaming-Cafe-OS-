@@ -5,6 +5,7 @@
 pub mod health;
 pub mod lan;
 pub mod pairing;
+mod ui_ads;
 pub mod ui_audit;
 pub mod ui_auth;
 pub mod ui_events;

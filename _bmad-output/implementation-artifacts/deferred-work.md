@@ -446,3 +446,15 @@
 - The Kotlin side needed no change (`interstitialPreload`/`interstitialShow` and their events already existed) and, like the rest of the plugin, has not been run on a device: whether the Hub's alert sound and `devices.changed` handling keep running in the WebView while the SDK's full-screen activity is on top is only covered by a Playwright test that plays the plugin's events.
 - Leaving through the ad is detected by `ad.dismissed`/`ad.failed`, a `visibilitychange` back to visible, or a 2-minute safety limit; the real behaviour of the SDK's close callback after a click-through is unverified on a device.
 - The `phone-cart-bar` and POS cart (Epic 5) must call `registerAdExclusion` when they are built.
+
+## Deferred from: Story 4.14
+
+- The Grafana Cloud export of daily impressions and requests per slot is not built: it waits for Story 2.3's exporter. The cloud holds the totals (`gz_control.ad_impression_daily`, `ad_request_daily`) and `ControlDb::ad_fill` for fill rate; nothing calls the query yet.
+- A replacement Hub restarts its row ids at 1 while the cloud cursor for the branch stays where it was: the cloud answers its older cursor, the Hub holds its cursor to the ids it has given, and counts are not added until the new ids pass the stored cursor (they are lost, never doubled). Needs an epoch or Hub id on the cursor.
+- `after_id` is an addition to the block shape in the story (`{through_id, counts}`): without it a lost answer makes the Hub resend rows the cloud already added under a larger `through_id`, and they would count twice. A block without `after_id` is still accepted, held only to `through_id` beyond the stored cursor.
+- The event post needs no staff session and the loopback guard lets a request with no `Origin` header through, so another app on the device could add counts to `ad_requests` / `ad_impressions`. The counts are advisory; nothing is billed on them.
+- A post that cannot reach the Hub after five tries (about 3 minutes), or a page reload while one waits, loses that event: the waiting list is in memory.
+- `hub_tier()` in `arena-core` is still a stub that answers Free, so the Hub does not itself refuse to record an ad on a paid tier; the UI gate keeps a paid or Windows Hub from posting, and the heartbeat sends the blocks only while the effective tier is Free.
+- The cloud `record_ads` guard (an `UPDATE ... WHERE` that must change one row) was run against the local SQLite backend only; the remote (sqld) variant of the test skips without a server.
+- Kotlin (`EventIds`, the `id` in the event script, `emit`) is uncompiled and unrun (no Android toolchain): check on a device that every `arena:ad` event carries a 26-character `id`.
+- `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` fails on a Windows machine that booted less than 8 days ago (`Instant::checked_sub`), and `arena-cloud` `binary`/`backup` timeout tests and `printer::lan` `a_printer_that_stops_reading_times_out` fail in this sandbox; none touch this story.

@@ -4,7 +4,7 @@ use arena_proto::{
     AppError, ErrorCode, HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest,
     HeartbeatResponse,
 };
-use arena_store::control::{Beat, HubRow, RateRule};
+use arena_store::control::{AdMetric, Beat, HubRow, RateRule};
 use axum::extract::State;
 use axum::http::{HeaderMap, header::AUTHORIZATION};
 use axum::routing::post;
@@ -156,6 +156,17 @@ async fn heartbeat(
     let claims =
         crate::licence::claims_for(&branch.tenant_id, &branch.id, entitlement.as_ref(), now);
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
+    // Ad totals never hold the heartbeat back: a block that cannot be recorded is simply not
+    // acknowledged, and the Hub sends it again.
+    let ad_impressions_through = record_ads(
+        &st,
+        &hub,
+        AdMetric::Impressions,
+        body.ad_impressions.as_ref(),
+    )
+    .await;
+    let ad_requests_through =
+        record_ads(&st, &hub, AdMetric::Requests, body.ad_requests.as_ref()).await;
     let pending = st
         .db
         .pending_commands(&hub.branch_id)
@@ -170,7 +181,27 @@ async fn heartbeat(
         },
         cloud_time: now,
         pending_commands: Some(pending).filter(|n| *n > 0),
+        ad_impressions_through,
+        ad_requests_through,
     }))
+}
+
+/// Adds a well-formed block under the branch's cursor and answers the stored cursor, which the
+/// Hub moves to (Story 4.14).
+async fn record_ads(
+    st: &AuthState,
+    hub: &HubRow,
+    metric: AdMetric,
+    block: Option<&arena_proto::AdCounts>,
+) -> Option<i64> {
+    let block = block.filter(|b| b.valid())?;
+    st.db
+        .record_ads(&hub.branch_id, metric, block)
+        .await
+        .inspect_err(
+            |e| tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: ad totals not recorded"),
+        )
+        .ok()
 }
 
 pub(super) fn router(st: Arc<AuthState>) -> Router {

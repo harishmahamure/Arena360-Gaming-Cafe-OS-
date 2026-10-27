@@ -210,11 +210,17 @@ pub enum IntentKind {
     /// also raises a `controller_missing` alert for the manager.
     #[serde(rename = "controller.check")]
     ControllerCheck,
+    /// One ad was shown (system only; the Hub records one local row, never a change record).
+    #[serde(rename = "ad.impression_recorded")]
+    AdImpressionRecorded,
+    /// An ad was asked for, whether or not one came back (system only, like the impression).
+    #[serde(rename = "ad.request_recorded")]
+    AdRequestRecorded,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 68] = [
+    pub const ALL: [IntentKind; 70] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -283,6 +289,8 @@ impl IntentKind {
         Self::AlertRaise,
         Self::AlertAck,
         Self::ControllerCheck,
+        Self::AdImpressionRecorded,
+        Self::AdRequestRecorded,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -356,6 +364,8 @@ impl IntentKind {
             Self::AlertRaise => "alert.raise",
             Self::AlertAck => "alert.ack",
             Self::ControllerCheck => "controller.check",
+            Self::AdImpressionRecorded => "ad.impression_recorded",
+            Self::AdRequestRecorded => "ad.request_recorded",
         }
     }
 
@@ -368,9 +378,12 @@ impl IntentKind {
     pub fn category(self) -> IntentCategory {
         match self {
             Self::BranchBootstrap | Self::BranchSeedDefaults => IntentCategory::Branch,
-            Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus | Self::LicenceApply => {
-                IntentCategory::Settings
-            }
+            Self::SettingsSet
+            | Self::AdsConsent
+            | Self::PrinterStatus
+            | Self::LicenceApply
+            | Self::AdImpressionRecorded
+            | Self::AdRequestRecorded => IntentCategory::Settings,
             Self::DeviceRegister
             | Self::DeviceRevoke
             | Self::DeviceVersionReported
@@ -457,6 +470,8 @@ impl IntentKind {
             Self::DeviceScreen => Requirement::Perm(Permission::DeviceScreen),
             Self::DeviceVersionReported
             | Self::LicenceApply
+            | Self::AdImpressionRecorded
+            | Self::AdRequestRecorded
             | Self::StaffSetCredentials
             | Self::CreditAutoPause
             | Self::AlertRaise
@@ -555,6 +570,8 @@ impl IntentKind {
             | Self::GroupDelete
             | Self::DeviceAssign
             | Self::LicenceApply
+            | Self::AdImpressionRecorded
+            | Self::AdRequestRecorded
             | Self::ZoneUpsert
             | Self::ZoneDelete
             | Self::DevicePlace
@@ -1121,6 +1138,10 @@ pub enum IntentPayload {
     AlertAck(crate::AlertAck),
     #[serde(rename = "controller.check")]
     ControllerCheck(crate::ControllerCheck),
+    #[serde(rename = "ad.impression_recorded")]
+    AdImpressionRecorded(crate::AdImpressionRecorded),
+    #[serde(rename = "ad.request_recorded")]
+    AdRequestRecorded(crate::AdRequestRecorded),
 }
 
 impl IntentPayload {
@@ -1194,6 +1215,8 @@ impl IntentPayload {
             Self::AlertRaise(_) => IntentKind::AlertRaise,
             Self::AlertAck(_) => IntentKind::AlertAck,
             Self::ControllerCheck(_) => IntentKind::ControllerCheck,
+            Self::AdImpressionRecorded(_) => IntentKind::AdImpressionRecorded,
+            Self::AdRequestRecorded(_) => IntentKind::AdRequestRecorded,
         }
     }
 }
@@ -1404,6 +1427,8 @@ mod tests {
                 | "branch.seed_defaults"
                 | "device.version_reported"
                 | "licence.apply"
+                | "ad.impression_recorded"
+                | "ad.request_recorded"
                 | "audit.read_granted"
                 | "credit.auto_pause"
                 | "alert.raise"

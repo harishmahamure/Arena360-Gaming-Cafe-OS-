@@ -40,4 +40,18 @@ class AdsConfigTest {
     val s = AdEvents.script(AdEvents.SHOWN, AdEvents.BANNER)
     assertEquals(true, s.contains("\"ad.shown\"") && s.contains("\"banner\"") && s.contains("arena:ad"))
   }
+
+  @Test
+  fun `an event script carries the id it is given`() {
+    val s = AdEvents.script(AdEvents.REQUESTED, AdEvents.INTERSTITIAL, "01JADEVENT0000000000000001")
+    assertEquals(true, s.contains("id: \"01JADEVENT0000000000000001\""))
+  }
+
+  @Test
+  fun `an event id is a 26 character ULID and differs each time`() {
+    val ulid = Regex("""^[0-7][0-9A-HJKMNP-TV-Z]{25}$""")
+    val ids = (1..50).map { EventIds.next(1_800_000_000_000L) }
+    assertEquals(true, ids.all { ulid.matches(it) })
+    assertEquals(50, ids.toSet().size)
+  }
 }

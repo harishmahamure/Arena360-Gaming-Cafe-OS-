@@ -6,7 +6,7 @@
 // off the plugin is never initialised, no request is made and nothing is rendered; on any other
 // platform every call below does nothing.
 
-import type { AdRating, Tier } from "@arena/ui/generated";
+import type { AdRating, AdSlot, Tier } from "@arena/ui/generated";
 
 /** The page-side name of the plugin's JavaScript interface (Android WebView only). */
 export const BRIDGE_NAME = "ArenaAds";
@@ -22,8 +22,11 @@ export const AD_EVENTS = [
   "ad.dismissed",
 ] as const;
 export type AdEventName = (typeof AD_EVENTS)[number];
-export type AdSlot = "banner" | "interstitial";
-export type AdEvent = { event: AdEventName; slot: AdSlot };
+export type AdEvent = {
+  event: AdEventName;
+  slot: AdSlot;
+  /** The plugin's id for this event (a ULID); the Hub counts an id once. */ id?: string;
+};
 
 /** A banner rectangle in CSS pixels of the page. */
 export type AdRect = { x: number; y: number; width: number; height: number };

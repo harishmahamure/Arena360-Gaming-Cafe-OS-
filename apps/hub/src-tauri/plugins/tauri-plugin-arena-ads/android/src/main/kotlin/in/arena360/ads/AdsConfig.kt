@@ -63,8 +63,31 @@ object AdEvents {
   const val BANNER = "banner"
   const val INTERSTITIAL = "interstitial"
 
-  /** The script that delivers one event; `slot` is `banner` or `interstitial`. */
-  fun script(event: String, slot: String): String =
+  /**
+   * The script that delivers one event; `slot` is `banner` or `interstitial`. `id` is the event's
+   * own ULID: the Hub uses it to count the event once, however often it is delivered. It names
+   * the event only, never a device, creative or advertiser.
+   */
+  fun script(event: String, slot: String, id: String = EventIds.next()): String =
     "window.dispatchEvent(new CustomEvent('arena:ad', { detail: { event: " +
-      JSONObject.quote(event) + ", slot: " + JSONObject.quote(slot) + " } }))"
+      JSONObject.quote(event) + ", slot: " + JSONObject.quote(slot) + ", id: " + JSONObject.quote(id) +
+      " } }))"
+}
+
+/** ULIDs for events: 48 bits of time then 80 random bits, in Crockford base32 (26 characters). */
+object EventIds {
+  private const val ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+  private val random = java.security.SecureRandom()
+
+  fun next(now: Long = System.currentTimeMillis()): String {
+    val out = CharArray(26)
+    var t = now
+    for (i in 9 downTo 0) {
+      out[i] = ALPHABET[(t % 32).toInt()]
+      t /= 32
+    }
+    val bytes = ByteArray(16).also { random.nextBytes(it) }
+    for (i in 0 until 16) out[10 + i] = ALPHABET[(bytes[i].toInt() and 0xff) % 32]
+    return String(out)
+  }
 }

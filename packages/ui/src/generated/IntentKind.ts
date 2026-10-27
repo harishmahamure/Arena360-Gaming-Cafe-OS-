@@ -71,4 +71,6 @@ export type IntentKind =
   | "session.assign_player"
   | "alert.raise"
   | "alert.ack"
-  | "controller.check";
+  | "controller.check"
+  | "ad.impression_recorded"
+  | "ad.request_recorded";

@@ -530,6 +530,40 @@ impl WriterHandle {
     /// default settings, built-in roles or their permission rows, submits `branch.seed_defaults`
     /// (system actor) through `apply()` in the same transaction as the check, then emits. With
     /// nothing missing (or no branch) it writes nothing, submits no intent and answers `None`.
+    /// The ad rows after the cursors, as the totals the next Free heartbeat carries (Story 4.14).
+    /// Reads only; `NOT_PRIMARY` unless this writer still holds its epoch.
+    pub async fn ad_pending(&self) -> Result<crate::AdPending, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                crate::ad_metrics::pending(tx)
+            })
+        })
+        .await
+    }
+
+    /// Moves the ad cursors to what the cloud acknowledged (one transaction; a cursor never moves
+    /// past a row that exists, and rows it covers are dropped).
+    pub async fn ad_ack(
+        &self,
+        impressions: Option<i64>,
+        requests: Option<i64>,
+    ) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                crate::ad_metrics::acknowledge(tx, impressions, requests)
+            })
+        })
+        .await
+    }
+
     pub async fn seed_defaults(&self) -> Result<Option<Applied>, AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();

@@ -3,6 +3,7 @@
 //! [`Store::open`] opens SQLite in WAL mode with `synchronous=FULL` (both verified by reading
 //! them back), refuses a schema newer than this binary and applies the embedded migrations.
 
+mod ad;
 mod admin;
 mod alerts;
 mod audit;
@@ -33,6 +34,7 @@ use std::time::Duration;
 use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+pub use ad::{AdKind, AdRow, ad_acknowledge, ad_cursor, ad_rows_after, insert_ad};
 pub use admin::{
     AdminExitRow, META_VERIFIER_COUNTER, NewAdminExit, find_admin_exit, insert_admin_exit,
     insert_verifier_version, latest_verifier, max_pin_verifier_version, set_admin_exit_relocked,

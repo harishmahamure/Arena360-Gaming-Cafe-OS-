@@ -22,6 +22,7 @@
 //! nothing is written then, and the Writer does not emit. A success is recorded in
 //! `applied_intents` right after append_changes, in the same transaction.
 
+mod ad;
 mod admin_exit;
 mod ads_consent;
 mod alert;
@@ -211,6 +212,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::RoleUpsert(r) => Target::Role(Box::new(staff_roles::load_role(tx, intent, r)?)),
         P::AuditReadGranted(_) => read_grants::load(tx)?,
         P::LicenceApply(_) => kiosk_log::load(tx)?,
+        P::AdImpressionRecorded(_) | P::AdRequestRecorded(_) => ad::load(tx)?,
         P::KioskLog(_) | P::KioskProcessBlocked(_) => kiosk_log::load(tx)?,
         P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
         P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,

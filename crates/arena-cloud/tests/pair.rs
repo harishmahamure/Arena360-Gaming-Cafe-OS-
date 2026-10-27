@@ -2301,3 +2301,203 @@ async fn a_paid_branch_goes_live_without_ad_consent_and_a_live_one_stays_live() 
         .await;
     assert_eq!(r.status, 200, "{}", r.body);
 }
+
+// ---- Story 4.14: ad totals in the heartbeat -------------------------------------------------
+
+impl Harness {
+    async fn beat_ads(&self, token: &str, extra: Value) -> Reply {
+        let mut body = json!({"epoch": "1:HUBA", "version": "0.2.0", "schema_version": 12, "last_seq_uploaded": 0});
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/heartbeat")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+}
+
+fn counts(after: i64, through: i64, rows: &[(&str, &str, i64)]) -> Value {
+    json!({
+        "after_id": after,
+        "through_id": through,
+        "counts": rows
+            .iter()
+            .map(|(d, s, n)| json!({"business_day": d, "slot": s, "n": n}))
+            .collect::<Vec<_>>(),
+    })
+}
+
+#[tokio::test]
+async fn a_heartbeat_adds_the_ad_totals_once_and_answers_the_cursors() {
+    use arena_store::control::AdMetric;
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+
+    // No block: no ad fields in the answer.
+    let plain = h.beat(&token, "1:HUBA").await;
+    assert_eq!(plain.status, 200);
+    assert!(plain.body.get("ad_impressions_through").is_none());
+    assert!(plain.body.get("ad_requests_through").is_none());
+
+    let impressions = counts(
+        0,
+        4,
+        &[
+            ("2026-10-26", "banner", 3),
+            ("2026-10-27", "interstitial", 1),
+        ],
+    );
+    let requests = counts(
+        0,
+        9,
+        &[("2026-10-26", "banner", 5), ("2026-10-27", "banner", 4)],
+    );
+    h.advance(5_000);
+    let r = h
+        .beat_ads(
+            &token,
+            json!({"ad_impressions": impressions, "ad_requests": requests}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["ad_impressions_through"], 4);
+    assert_eq!(r.body["ad_requests_through"], 9);
+    assert_eq!(
+        h.db.ad_totals(&branch, AdMetric::Impressions)
+            .await
+            .unwrap(),
+        [
+            ("2026-10-26".into(), "banner".into(), 3),
+            ("2026-10-27".into(), "interstitial".into(), 1)
+        ]
+    );
+    assert_eq!(
+        h.db.ad_cursor(&branch, AdMetric::Requests).await.unwrap(),
+        9
+    );
+
+    // The same heartbeat again (the answer was lost): nothing is added, the cursors come back.
+    h.advance(5_000);
+    let again = h
+        .beat_ads(
+            &token,
+            json!({"ad_impressions": impressions, "ad_requests": requests}),
+        )
+        .await;
+    assert_eq!(again.status, 200);
+    assert_eq!(again.body["ad_impressions_through"], 4);
+    assert_eq!(again.body["ad_requests_through"], 9);
+    assert_eq!(
+        h.db.ad_totals(&branch, AdMetric::Requests).await.unwrap(),
+        [
+            ("2026-10-26".into(), "banner".into(), 5),
+            ("2026-10-27".into(), "banner".into(), 4)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_three_day_outage_is_added_once_whatever_is_lost_on_the_way() {
+    use arena_store::control::AdMetric;
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    let days = [
+        ("2026-10-26", "banner", 4),
+        ("2026-10-27", "banner", 3),
+        ("2026-10-28", "banner", 2),
+    ];
+
+    // The Hub was offline for three days: its first heartbeat after sends every day once.
+    h.advance(5_000);
+    let r = h
+        .beat_ads(&token, json!({"ad_requests": counts(0, 9, &days)}))
+        .await;
+    assert_eq!(r.body["ad_requests_through"], 9);
+
+    // Rows 10..12 arrive, but the answer to this heartbeat is lost; the Hub resends from its
+    // old cursor with more rows. The cloud will not count 1..9 twice and says where it is.
+    h.advance(5_000);
+    let lost = h
+        .beat_ads(
+            &token,
+            json!({"ad_requests": counts(9, 12, &[("2026-10-28", "banner", 3)])}),
+        )
+        .await;
+    assert_eq!(lost.body["ad_requests_through"], 12);
+    h.advance(5_000);
+    let resent = h
+        .beat_ads(
+            &token,
+            json!({"ad_requests": counts(9, 14, &[("2026-10-28", "banner", 5)])}),
+        )
+        .await;
+    assert_eq!(
+        resent.body["ad_requests_through"], 12,
+        "refused: it starts before 12"
+    );
+    // The Hub moves to 12 and sends what follows.
+    h.advance(5_000);
+    let next = h
+        .beat_ads(
+            &token,
+            json!({"ad_requests": counts(12, 14, &[("2026-10-28", "banner", 2)])}),
+        )
+        .await;
+    assert_eq!(next.body["ad_requests_through"], 14);
+    assert_eq!(
+        h.db.ad_totals(&branch, AdMetric::Requests).await.unwrap(),
+        [
+            ("2026-10-26".into(), "banner".into(), 4),
+            ("2026-10-27".into(), "banner".into(), 3),
+            ("2026-10-28".into(), "banner".into(), 2 + 3 + 2),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_ad_block_is_ignored_and_the_heartbeat_still_answers() {
+    use arena_store::control::AdMetric;
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    for bad in [
+        counts(0, 3, &[("2026-13-40", "banner", 3)]),
+        counts(0, 3, &[("2026-10-26", "banner", 0)]),
+        counts(0, 3, &[("2026-10-26", "banner", 9_000)]),
+        counts(3, 3, &[("2026-10-26", "banner", 3)]),
+        counts(0, 0, &[("2026-10-26", "banner", 3)]),
+    ] {
+        h.advance(5_000);
+        let r = h.beat_ads(&token, json!({"ad_impressions": bad})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(r.body.get("ad_impressions_through").is_none(), "{bad}");
+    }
+    // An unknown slot does not even parse.
+    h.advance(5_000);
+    let r = h
+        .beat_ads(
+            &token,
+            json!({"ad_impressions": counts(0, 3, &[("2026-10-26", "rewarded", 3)])}),
+        )
+        .await;
+    assert_eq!(r.status, 400);
+    assert!(
+        h.db.ad_totals(&branch, AdMetric::Impressions)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        h.db.ad_cursor(&branch, AdMetric::Impressions)
+            .await
+            .unwrap(),
+        0
+    );
+}

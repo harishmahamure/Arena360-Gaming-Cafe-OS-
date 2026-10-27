@@ -6,4 +6,13 @@ export type HeartbeatResponse = {
   fence: HeartbeatFence;
   cloud_time: number;
   pending_commands?: number;
+  /**
+   * The cloud's stored impression cursor, when the request carried a block: the block's
+   * `through_id` once added, else the cursor the cloud already held.
+   */
+  ad_impressions_through?: number;
+  /**
+   * The same for requests.
+   */
+  ad_requests_through?: number;
 };

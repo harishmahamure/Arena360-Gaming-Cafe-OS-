@@ -3,9 +3,9 @@
 #[path = "support/sqld.rs"]
 mod sqld;
 
-use arena_proto::{HubPlatform, Tier};
+use arena_proto::{AdCounts, AdDayCount, AdSlot, HubPlatform, Tier};
 use arena_store::control::{
-    BranchProfile, CompGrant, ControlDb, IssueOutcome, NewHub, NewOtpChallenge, NewOwner,
+    AdMetric, BranchProfile, CompGrant, ControlDb, IssueOutcome, NewHub, NewOtpChallenge, NewOwner,
     NewOwnerSession, NewPairingCode, NewSetupCode, NewTenantBranch, PairOutcome, RateRule,
     SignupCompletion, SignupOutcome,
 };
@@ -329,4 +329,138 @@ async fn hubs_on_the_remote_backend() {
     db.migrate(1).await.unwrap();
     let second = ControlDb::connect(&t.url, "").await.unwrap();
     exercise(&db, &second).await;
+}
+
+fn block(after: Option<i64>, through: i64, rows: &[(&str, AdSlot, i64)]) -> AdCounts {
+    AdCounts {
+        after_id: after,
+        through_id: through,
+        counts: rows
+            .iter()
+            .map(|(d, s, n)| AdDayCount {
+                business_day: (*d).to_owned(),
+                slot: *s,
+                n: *n,
+            })
+            .collect(),
+    }
+}
+
+async fn totals(db: &ControlDb, metric: AdMetric, branch_id: &str) -> Vec<(String, String, i64)> {
+    db.ad_totals(branch_id, metric).await.unwrap()
+}
+
+async fn exercise_ads(db: &ControlDb) {
+    owner(db, "o1", "+919876543210").await;
+    branch(db, "o1", "t1", "b1", "PAG").await;
+    owner(db, "o2", "+919876543211").await;
+    branch(db, "o2", "t2", "b2", "PAH").await;
+    let imp = AdMetric::Impressions;
+    let req = AdMetric::Requests;
+    assert_eq!(db.ad_cursor("b1", imp).await.unwrap(), 0);
+
+    // The first block is added and its cursor stored with it.
+    let first = block(
+        Some(0),
+        5,
+        &[
+            ("2026-10-26", AdSlot::Banner, 3),
+            ("2026-10-26", AdSlot::Interstitial, 1),
+            ("2026-10-27", AdSlot::Banner, 1),
+        ],
+    );
+    assert_eq!(db.record_ads("b1", imp, &first).await.unwrap(), 5);
+    assert_eq!(db.ad_cursor("b1", imp).await.unwrap(), 5);
+    assert_eq!(
+        totals(db, imp, "b1").await,
+        [
+            ("2026-10-26".into(), "banner".into(), 3),
+            ("2026-10-26".into(), "interstitial".into(), 1),
+            ("2026-10-27".into(), "banner".into(), 1),
+        ]
+    );
+
+    // Sent again (the answer was lost), or an older range: nothing is added, the stored cursor
+    // comes back.
+    assert_eq!(db.record_ads("b1", imp, &first).await.unwrap(), 5);
+    let older = block(None, 4, &[("2026-10-26", AdSlot::Banner, 4)]);
+    assert_eq!(db.record_ads("b1", imp, &older).await.unwrap(), 5);
+    let same = block(None, 5, &[("2026-10-26", AdSlot::Banner, 5)]);
+    assert_eq!(db.record_ads("b1", imp, &same).await.unwrap(), 5);
+    assert_eq!(totals(db, imp, "b1").await.len(), 3);
+    assert_eq!(totals(db, imp, "b1").await[0].2, 3);
+
+    // A range that starts before the stored cursor but reaches past it would count rows 1..5
+    // again: refused, with the cursor to resume from.
+    let overlap = block(Some(2), 8, &[("2026-10-27", AdSlot::Banner, 6)]);
+    assert_eq!(db.record_ads("b1", imp, &overlap).await.unwrap(), 5);
+    // A range that starts beyond it would skip rows: refused too.
+    let gap = block(Some(7), 9, &[("2026-10-27", AdSlot::Banner, 2)]);
+    assert_eq!(db.record_ads("b1", imp, &gap).await.unwrap(), 5);
+    assert_eq!(totals(db, imp, "b1").await[2].2, 1);
+
+    // The next range starts where the cursor is: the same day and slot adds to its total.
+    let next = block(Some(5), 8, &[("2026-10-27", AdSlot::Banner, 3)]);
+    assert_eq!(db.record_ads("b1", imp, &next).await.unwrap(), 8);
+    assert_eq!(totals(db, imp, "b1").await[2].2, 4);
+
+    // A block with no `after_id` is held only to `through_id` beyond the cursor.
+    let bare = block(None, 9, &[("2026-10-28", AdSlot::Banner, 1)]);
+    assert_eq!(db.record_ads("b1", imp, &bare).await.unwrap(), 9);
+
+    // Requests have their own cursor and table; another branch has its own cursors.
+    assert_eq!(db.ad_cursor("b1", req).await.unwrap(), 0);
+    let r = block(
+        Some(0),
+        10,
+        &[
+            ("2026-10-26", AdSlot::Banner, 6),
+            ("2026-10-26", AdSlot::Interstitial, 2),
+            ("2026-10-27", AdSlot::Banner, 2),
+        ],
+    );
+    assert_eq!(db.record_ads("b1", req, &r).await.unwrap(), 10);
+    assert_eq!(db.ad_cursor("b2", imp).await.unwrap(), 0);
+    let other = block(Some(0), 2, &[("2026-10-26", AdSlot::Banner, 2)]);
+    assert_eq!(db.record_ads("b2", req, &other).await.unwrap(), 2);
+
+    // Fill rate across branches, per day and slot, with no branch or tenant in the rows.
+    let fill = db.ad_fill("2026-10-26", "2026-10-28").await.unwrap();
+    let flat: Vec<_> = fill
+        .iter()
+        .map(|f| (f.day.as_str(), f.slot.as_str(), f.requests, f.impressions))
+        .collect();
+    assert_eq!(
+        flat,
+        [
+            ("2026-10-26", "banner", 8, 3),
+            ("2026-10-26", "interstitial", 2, 1),
+            ("2026-10-27", "banner", 2, 4),
+            ("2026-10-28", "banner", 0, 1),
+        ]
+    );
+    assert_eq!(fill[0].fill_rate(), Some(3.0 / 8.0));
+    assert_eq!(fill[3].fill_rate(), None);
+    assert_eq!(
+        db.ad_fill("2026-10-27", "2026-10-27").await.unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ad_totals_on_the_local_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ControlDb::open_local(&dir.path().join("gz_control.db"))
+        .await
+        .unwrap();
+    db.migrate(1).await.unwrap();
+    exercise_ads(&db).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ad_totals_on_the_remote_backend() {
+    let Some(t) = sqld::fresh().await else { return };
+    let db = ControlDb::connect(&t.url, "").await.unwrap();
+    db.migrate(1).await.unwrap();
+    exercise_ads(&db).await;
 }

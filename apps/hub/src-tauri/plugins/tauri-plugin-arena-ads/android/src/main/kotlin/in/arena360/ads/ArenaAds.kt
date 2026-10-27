@@ -280,7 +280,9 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
     }
 
   private fun emit(event: String, slot: String) {
-    webView.post { webView.evaluateJavascript(AdEvents.script(event, slot), null) }
+    // One id per event, minted here: the page forwards it so the Hub counts the event once.
+    val id = EventIds.next()
+    webView.post { webView.evaluateJavascript(AdEvents.script(event, slot, id), null) }
   }
 }
 

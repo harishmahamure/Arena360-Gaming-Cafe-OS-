@@ -5,6 +5,7 @@
 
 mod account;
 mod actor;
+mod ad_metrics;
 mod admin;
 mod alert;
 mod audit;
@@ -54,6 +55,10 @@ pub use account::{
     SetPassword, TOTP_DIGITS, TOTP_PERIOD_S, TotpCode, TotpStarted,
 };
 pub use actor::{Actor, ActorKind, ElevatedBy, ElevationKind, ElevationMode};
+pub use ad_metrics::{
+    AD_BATCH_ROWS, AdCounts, AdDayCount, AdEventKind, AdImpressionRecorded, AdRequestRecorded,
+    AdSlot, UiAdEvent,
+};
 pub use admin::{
     ADMIN_EXIT_FAILED_CODE, ADMIN_EXIT_MS, AdminExitMode, AdminPinOk, AdminUnlockAck,
     AdminUnlockAckEvent, DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock,

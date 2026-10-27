@@ -286,6 +286,15 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub setup: Option<crate::BranchSetup>,
+    /// A Free branch's ad impression totals after its cursor (Story 4.14); absent on a paid
+    /// branch or when there is nothing new.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ad_impressions: Option<crate::AdCounts>,
+    /// The same for ad requests, with their own cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ad_requests: Option<crate::AdCounts>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -305,6 +314,15 @@ pub struct HeartbeatResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pending_commands: Option<u32>,
+    /// The cloud's stored impression cursor, when the request carried a block: the block's
+    /// `through_id` once added, else the cursor the cloud already held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub ad_impressions_through: Option<i64>,
+    /// The same for requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub ad_requests_through: Option<i64>,
 }
 
 impl std::fmt::Debug for HeartbeatResponse {

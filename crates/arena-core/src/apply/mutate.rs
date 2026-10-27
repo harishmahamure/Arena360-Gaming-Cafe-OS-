@@ -185,6 +185,12 @@ pub(super) fn mutate(
             Target::Branch(b) => super::licence::mutate(tx, p, b.as_ref()),
             _ => Err(mismatch()),
         },
+        IntentPayload::AdImpressionRecorded(_) | IntentPayload::AdRequestRecorded(_) => {
+            match target {
+                Target::Branch(_) => super::ad::mutate(tx, intent, now_ms),
+                _ => Err(mismatch()),
+            }
+        }
         IntentPayload::AuditReadGranted(g) => match target {
             Target::Branch(b) => super::read_grants::mutate(tx, g, b.as_ref()),
             _ => Err(mismatch()),

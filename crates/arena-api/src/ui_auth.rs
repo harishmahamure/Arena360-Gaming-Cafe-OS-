@@ -3034,6 +3034,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/audit", get(crate::ui_audit::list))
         .route("/ui/audit/item", get(crate::ui_audit::item))
         .route("/ui/audit/facets", get(crate::ui_audit::facets))
+        .route("/ui/ads/event", post(crate::ui_ads::event))
         .route("/ui/events", get(crate::ui_events::events))
         .with_state(Arc::clone(&auth))
         .layer(axum::middleware::from_fn_with_state(

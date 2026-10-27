@@ -1,6 +1,7 @@
 //! `arena-core`: the Hub domain. Time comes from an injected [`Clock`]; every write goes
 //! through the single [`Writer`] actor, and every branch write goes through [`apply`].
 
+mod ad_metrics;
 mod apply;
 pub mod audit;
 pub mod billing;
@@ -29,6 +30,7 @@ mod writer;
 use arena_proto::AppError;
 use arena_store::{META_HUB_INSTANCE_ID, Store, insert_meta_if_absent, set_meta};
 
+pub use ad_metrics::AdPending;
 pub use apply::{
     Applied, ApplyCtx, ChangeMeta, INTENT_TTL_MS, MAX_CLOCK_SKEW_MS, MAX_KIOSK_LOG_CODE_LEN,
     MAX_KIOSK_LOG_DETAIL_CHARS, MAX_SETTING_VALUE_CHARS, MAX_VERSION_LEN, PROCESS_BLOCKED_CODE,

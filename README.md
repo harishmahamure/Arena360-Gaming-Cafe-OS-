@@ -1886,6 +1886,33 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   `settle-bar`, `undo-toast`, `inline-pin`, `more-sheet` and `alert-list`; the Epic 5 cart and
   `phone-cart-bar` register themselves the same way. A settle, its undo window or a closed bill never
   triggers an ad.
+- **Ad requests and impressions (Story 4.14).** Counted without ids and sent with the heartbeat only.
+  The plugin gives each `ad.requested` (every banner load or refresh and every interstitial load,
+  filled or not) and `ad.shown` (the SDK impression callback) an `id` of its own (a ULID,
+  `EventIds` in `AdsConfig.kt`; the page makes one when absent). `apps/hub/src/lib/ad-metrics.ts`
+  (`AdMetrics`) forwards each once to `POST /ui/ads/event` `{kind: request|impression, slot, id}`
+  (no staff session: ads also run on the sign-in and lock screens; same loopback origin guard as the
+  rest of `/ui`), repeating a post the Hub could not take (5xx, 429, unreachable; 2 s, 10 s, 30 s,
+  2 min, at most 500 waiting) with the same id. The Hub applies a system intent
+  (`ad.request_recorded` / `ad.impression_recorded`, actor `system`/`hub-ads`) with the event id as
+  its idempotency key, so a repeat writes nothing; it inserts one row into `ad_requests` /
+  `ad_impressions` (`id`, `slot` CHECK `banner`/`interstitial`, `at`: no device, creative,
+  advertiser or advertising id; migration `0043_ad_metrics.sql`). The rows are local bookkeeping
+  outside the change log (like the licence cache): no change record, replay does not rebuild them.
+  The heartbeat of a Free branch (`status.tier == free`) carries `ad_impressions` / `ad_requests`
+  `{after_id, through_id, counts: [{business_day, slot, n}]}` for the rows after the single-row
+  cursors `ad_upload_cursor` / `ad_request_cursor` (business day from the branch locale when the
+  heartbeat is built; at most 5 000 rows per block, the rest follow); a paid branch or one with no
+  new rows sends neither, and `last_seq_uploaded` stays 0 with no presign, batch, summary or rollup
+  call. The cloud (`gz_control` migration 15: `ad_impression_daily`, `ad_request_daily`,
+  `ad_cursor`) adds the counts and stores the cursor in one transaction when `through_id` is beyond
+  its stored cursor and `after_id` (when sent) is that cursor, and answers
+  `ad_impressions_through` / `ad_requests_through` (the stored cursor either way); the Hub moves its
+  cursor to that and drops the rows it covers. A repeated or older block adds nothing; a block that
+  starts before the stored cursor but reaches past it is refused (it would count rows twice) and
+  the answer says where to resume. `ControlDb::ad_fill` sums requests and impressions per day and slot
+  over all branches (no tenant or branch in the rows) so fill rate (impressions ÷ requests) is
+  computable for NFR27; the Grafana export is deferred with Story 2.3's exporter.
 - **Free café end to end (Story 4.8).** `crates/arena-hub/tests/free_android_golive.rs` (feature
   `dev-fixtures`) starts a real cloud and the real `arena-hub` binary with `--platform android`,
   with a kiosk speaking the LAN protocol, and walks sign-up → Free (no comp entitlement) → a

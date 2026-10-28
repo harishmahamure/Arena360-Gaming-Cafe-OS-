@@ -202,7 +202,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionExpire(_)
             | Target::SessionRateFlip(_)
             | Target::Alert(_)
-            | Target::ControllerCheck(_),
+            | Target::ControllerCheck(_)
+            | Target::Shift(_),
             _,
         ) => Ok(()),
     }
@@ -252,6 +253,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         | Target::Credentials(_)
         | Target::Deactivate(_)
         | Target::Stock(_)
+        | Target::Shift(_)
         | Target::TestSession(_)
         | Target::Pc(_)
         | Target::Session(_)

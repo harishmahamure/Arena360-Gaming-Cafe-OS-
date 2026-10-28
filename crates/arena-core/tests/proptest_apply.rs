@@ -145,6 +145,11 @@ enum Op {
     WriteOff {
         pick: u8,
     },
+    /// `shift.open` (a float in or out of range): before the branch exists it is refused, and
+    /// afterwards the shift the bootstrap opened is still open, so it is refused too.
+    ShiftOpen {
+        float: i64,
+    },
     /// `stock.threshold` (valid or not) on the first tracked product: the open "Low stock" alert
     /// exists exactly when the quantity is at or under the new threshold.
     Threshold {
@@ -517,6 +522,8 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..8i64, 1..=20i64).prop_map(|(days, qty)| Op::ExpiringStock { days, qty }),
         1 => Just(Op::ExpiryCheck),
         2 => (0..6u8).prop_map(|pick| Op::WriteOff { pick }),
+        1 => prop_oneof![4 => 0..=50_000i64, 1 => -2..=-1i64, 1 => Just(arena_proto::MAX_FLOAT_MINOR + 1)]
+            .prop_map(|float| Op::ShiftOpen { float }),
         2 => prop_oneof![
             1 => Just(None),
             5 => (0..=60i64).prop_map(Some),
@@ -819,6 +826,12 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 3 + roles
                 );
                 hub.bootstrapped = true;
+                // Cash flows need an open shift; the one drawer is opened with a float.
+                let shift = hub.submit_new(hub.intent(
+                    IntentPayload::ShiftOpen(arena_proto::ShiftOpen { float_minor: 5_000 }),
+                    None,
+                ));
+                prop_assert!(shift.is_ok(), "{:?}", shift);
                 // One staff member per built-in role (outside the history: not retried).
                 let applied = out.unwrap();
                 let role_ids: Vec<String> = applied
@@ -852,7 +865,13 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
                 prop_assert_eq!(
                     hub.change_count(),
-                    1 + DEFAULT_SETTINGS.len() + LOCALE_KEYS.len() + 3 + roles + STAFF_ROLES.len()
+                    // The shift and its float event are the two rows after the bootstrap.
+                    1 + DEFAULT_SETTINGS.len()
+                        + LOCALE_KEYS.len()
+                        + 3
+                        + roles
+                        + STAFF_ROLES.len()
+                        + 2
                 );
             }
         }
@@ -1539,6 +1558,34 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert_eq!(emptied.qty_remaining, 0);
             prop_assert_eq!(after.iter().map(|l| l.qty_remaining).sum::<i64>(), left);
         }
+        Op::ShiftOpen { float } => {
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::ShiftOpen(arena_proto::ShiftOpen {
+                    float_minor: *float,
+                }),
+                None,
+            ));
+            let (kind, field) = code(&out).unzip();
+            prop_assert!(out.is_err(), "{:?}", out);
+            if !(0..=arena_proto::MAX_FLOAT_MINOR).contains(float) {
+                prop_assert_eq!(kind, Some(ErrorCode::ValidationFailed));
+                prop_assert_eq!(field.flatten(), Some("float_minor"));
+            } else if hub.bootstrapped {
+                prop_assert_eq!(kind, Some(ErrorCode::ShiftAlreadyOpen));
+            } else {
+                prop_assert_eq!(kind, Some(ErrorCode::ValidationFailed));
+                prop_assert_eq!(field.flatten(), Some("branch"));
+            }
+            prop_assert_eq!(hub.change_count(), changes_before);
+            let shifts = hub.reader.rows(Table::Shifts).unwrap();
+            prop_assert_eq!(shifts.len(), usize::from(hub.bootstrapped));
+            // A cash event never falls outside a shift, and the float is the first of them.
+            let events = hub.reader.rows(Table::CashEvents).unwrap();
+            let inside = events
+                .iter()
+                .all(|e| shifts.iter().any(|s| s["id"] == e["shift_id"]));
+            prop_assert!(inside);
+        }
         Op::Threshold { value } => {
             let Some(row) = hub.reader.tracked_thresholds().unwrap().into_iter().next() else {
                 return Ok(());
@@ -2159,6 +2206,11 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 (false, false) => vec![row(arena_proto::PaymentMethod::Card, total, Some("T1"))],
             };
             let rows = payments.len();
+            // Each cash row also writes a `sale` cash event.
+            let cash = payments
+                .iter()
+                .filter(|p| p.method == arena_proto::PaymentMethod::Cash)
+                .count();
             let payload = IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 order_id: id.clone(),
                 credit_override: None,
@@ -2173,10 +2225,10 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
-                prop_assert_eq!(hub.change_count(), before + rows + 1);
+                prop_assert_eq!(hub.change_count(), before + rows + 1 + cash);
                 let again = hub.submit_new(hub.intent(payload, Some(rev + 1)));
                 prop_assert_eq!(code(&again), Some((ErrorCode::Stale, Some("order_id"))));
-                prop_assert_eq!(hub.change_count(), before + rows + 1);
+                prop_assert_eq!(hub.change_count(), before + rows + 1 + cash);
             }
             for o in hub.reader.rows(Table::Orders).unwrap() {
                 if text(&o, "status") != "settled" {
@@ -2228,7 +2280,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 None,
             ));
             prop_assert!(out.is_ok(), "{:?}", out);
-            prop_assert_eq!(hub.change_count(), before + 4);
+            prop_assert_eq!(hub.change_count(), before + 5);
             prop_assert_eq!(held(hub), balance + amount_minor);
             if *undo {
                 let order = hub
@@ -2254,7 +2306,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(held(hub), balance + amount_minor);
                 } else {
                     prop_assert!(out.is_ok(), "{:?}", out);
-                    prop_assert_eq!(hub.change_count(), after_forward + 4);
+                    prop_assert_eq!(hub.change_count(), after_forward + 5);
                     prop_assert_eq!(held(hub), balance);
                 }
             }
@@ -2330,7 +2382,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 return Ok(());
             }
             prop_assert!(out.is_ok(), "{:?}", out);
-            prop_assert_eq!(hub.change_count(), before + 4);
+            prop_assert_eq!(hub.change_count(), before + 5);
             if *undo {
                 let order = hub
                     .reader
@@ -2354,7 +2406,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(hub.change_count(), after_forward);
                 } else {
                     prop_assert!(out.is_ok(), "{:?}", out);
-                    prop_assert_eq!(hub.change_count(), after_forward + 4);
+                    prop_assert_eq!(hub.change_count(), after_forward + 5);
                 }
             }
             let packs = hub.reader.rows(Table::PlayerPacks).unwrap();
@@ -2527,7 +2579,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
                 Some(owed) => {
                     prop_assert!(out.is_ok(), "{:?}", out);
-                    prop_assert_eq!(hub.change_count(), before + 4);
+                    prop_assert_eq!(hub.change_count(), before + 5);
                     let order = hub
                         .reader
                         .rows(Table::Orders)
@@ -2563,7 +2615,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                             prop_assert_eq!(owed_now(hub), Some(owed - wanted));
                         } else {
                             prop_assert!(out.is_ok(), "{:?}", out);
-                            prop_assert_eq!(hub.change_count(), after_forward + 4);
+                            prop_assert_eq!(hub.change_count(), after_forward + 5);
                             prop_assert_eq!(owed_now(hub), Some(owed));
                         }
                     }
@@ -3525,6 +3577,35 @@ fn assert_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// The cash ledger agrees with the payments: the net `sale` events (each `sale_reverted` row
+/// cancels its sale) equal the cash payment rows that exist, and the float is counted in once.
+fn assert_cash_holds(hub: &Hub) -> Result<(), TestCaseError> {
+    let events = hub.reader.rows(Table::CashEvents).unwrap();
+    let net = |kind: &str| -> i64 {
+        events
+            .iter()
+            .filter(|e| text(e, "kind") == kind)
+            .map(|e| int(e, "amount_minor"))
+            .sum()
+    };
+    let cash: i64 = hub
+        .reader
+        .rows(Table::Payments)
+        .unwrap()
+        .iter()
+        .filter(|p| text(p, "method") == "cash")
+        .map(|p| int(p, "amount_minor"))
+        .sum();
+    prop_assert_eq!(net("sale") + net("sale_reverted"), cash);
+    let shifts = hub.reader.rows(Table::Shifts).unwrap();
+    prop_assert_eq!(
+        net("float_in"),
+        shifts.iter().map(|s| int(s, "float_minor")).sum::<i64>()
+    );
+    prop_assert!(shifts.iter().filter(|s| text(s, "state") == "open").count() <= 1);
+    Ok(())
+}
+
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()
@@ -3548,6 +3629,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_credit_holds(&hub)?;
                 assert_sessions_hold(&hub)?;
                 assert_orders_hold(&hub)?;
+                assert_cash_holds(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

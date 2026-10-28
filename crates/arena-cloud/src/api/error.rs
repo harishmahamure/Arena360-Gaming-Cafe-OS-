@@ -73,6 +73,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PassOutsideWindow
         | ErrorCode::PastClosing
         | ErrorCode::OutOfStock
+        | ErrorCode::ShiftAlreadyOpen
+        | ErrorCode::ShiftNotOpen
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {

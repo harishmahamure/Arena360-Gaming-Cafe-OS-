@@ -34,6 +34,7 @@ pub fn build_snapshot(
         sessions: Vec::new(),
         bills: Vec::new(),
         group_bills: Vec::new(),
+        shift: None,
         alerts: Vec::new(),
         locale,
         ui,
@@ -293,6 +294,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         group_rows,
         ended_group,
         unchecked,
+        shift,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -312,10 +314,12 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.group_bills()?,
             s.ended_group_sessions()?,
             s.unchecked_consoles()?,
+            s.shift_state()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
     snapshot.setup = setup;
+    snapshot.shift = Some(shift);
     for (device_id, session_id) in unchecked {
         if let Some(d) = snapshot
             .devices
@@ -1138,6 +1142,10 @@ mod tests {
                 sessions: vec![],
                 bills: vec![],
                 group_bills: vec![],
+                shift: Some(arena_proto::ShiftState {
+                    open: None,
+                    carried_minor: 0,
+                }),
                 alerts: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
@@ -1222,6 +1230,10 @@ mod tests {
                 sessions: vec![],
                 bills: vec![],
                 group_bills: vec![],
+                shift: Some(arena_proto::ShiftState {
+                    open: None,
+                    carried_minor: 0,
+                }),
                 alerts: vec![],
                 devices: vec![],
                 locale: None,

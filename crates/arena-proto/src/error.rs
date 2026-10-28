@@ -144,6 +144,10 @@ pub enum ErrorCode {
     PastClosing,
     /// A stock decrement (waste, sale or write-off) above the quantity on hand.
     OutOfStock,
+    /// A `shift.open` while a shift is already open at the branch; the message names whose.
+    ShiftAlreadyOpen,
+    /// An intent with a cash payment row while no shift is open.
+    ShiftNotOpen,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -238,6 +242,8 @@ impl ErrorCode {
             Self::PassOutsideWindow => "PASS_OUTSIDE_WINDOW",
             Self::PastClosing => "PAST_CLOSING",
             Self::OutOfStock => "OUT_OF_STOCK",
+            Self::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
+            Self::ShiftNotOpen => "SHIFT_NOT_OPEN",
         }
     }
 }
@@ -393,6 +399,8 @@ mod tests {
             (ErrorCode::PassOutsideWindow, "PASS_OUTSIDE_WINDOW"),
             (ErrorCode::PastClosing, "PAST_CLOSING"),
             (ErrorCode::OutOfStock, "OUT_OF_STOCK"),
+            (ErrorCode::ShiftAlreadyOpen, "SHIFT_ALREADY_OPEN"),
+            (ErrorCode::ShiftNotOpen, "SHIFT_NOT_OPEN"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

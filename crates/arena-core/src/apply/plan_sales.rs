@@ -306,6 +306,12 @@ pub(super) fn mutate_sell_reverted(
         ));
     };
     let mut written = Vec::with_capacity(t.payments.len() + t.txns.len() + 3);
+    super::shift::reverse_sales(
+        tx,
+        o.settled_by.as_deref().unwrap_or_default(),
+        &o.id,
+        &mut written,
+    )?;
     if let Some(pack) = &t.pack {
         let key = RowKey::PlayerPacks {
             id: pack.id.clone(),

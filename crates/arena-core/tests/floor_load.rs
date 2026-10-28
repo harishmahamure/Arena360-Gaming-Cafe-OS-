@@ -124,6 +124,12 @@ async fn floor_at(path: std::path::PathBuf, dir: Option<tempfile::TempDir>) -> F
         }),
     )
     .await;
+    // Cash settles need an open shift.
+    must(
+        &writer,
+        IntentPayload::ShiftOpen(arena_proto::ShiftOpen { float_minor: 0 }),
+    )
+    .await;
     writer
         .apply_licence(arena_proto::LicenceApply {
             standing: arena_proto::LicenceStanding::Verified,

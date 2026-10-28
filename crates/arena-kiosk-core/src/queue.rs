@@ -86,6 +86,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PassOutsideWindow
         | ErrorCode::PastClosing
         | ErrorCode::OutOfStock
+        | ErrorCode::ShiftAlreadyOpen
+        | ErrorCode::ShiftNotOpen
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame

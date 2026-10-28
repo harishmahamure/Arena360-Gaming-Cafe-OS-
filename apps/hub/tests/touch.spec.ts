@@ -466,7 +466,7 @@ for (const [name, viewport] of [
       await audit(page);
     });
 
-    test("Shift placeholder", async ({ page }) => {
+    test("Shift", async ({ page }) => {
       await open(page, "/shift");
       await expect(
         page.getByRole("heading", { level: 1, name: en["hub.nav.shift"] }),

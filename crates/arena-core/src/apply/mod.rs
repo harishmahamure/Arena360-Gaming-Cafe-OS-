@@ -58,6 +58,7 @@ pub(crate) mod seed_defaults;
 mod session;
 pub(crate) mod session_expire;
 mod settings_set;
+mod shift;
 mod staff_credentials;
 mod staff_deactivate;
 mod staff_roles;
@@ -196,6 +197,7 @@ pub(crate) enum Target {
     SessionRateFlip(Box<rate_flip::FlipTarget>),
     Alert(Box<alert::AlertTarget>),
     ControllerCheck(Box<controller_check::CheckTarget>),
+    Shift(Box<shift::ShiftTarget>),
 }
 
 fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError> {
@@ -287,6 +289,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }
         P::ControllerCheck(c) => Target::ControllerCheck(Box::new(controller_check::load(tx, c)?)),
+        P::ShiftOpen(_) => Target::Shift(Box::new(shift::load(tx)?)),
         P::StockIn(_)
         | P::StockInReverted(_)
         | P::StockWaste(_)

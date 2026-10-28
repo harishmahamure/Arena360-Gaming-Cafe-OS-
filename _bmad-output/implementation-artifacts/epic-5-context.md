@@ -83,3 +83,9 @@ Staff sell products and bundles at the Hub, keep stock, issue GST invoices, refu
 - 5.27 (Reports screen) precedes 5.28-5.32; 5.32 exports all reports.
 - 5.33 (CSV import) precedes 5.34-5.36; 5.37 and 5.38 build on 5.36.
 - 5.39 verifies the whole epic end to end.
+
+## Story 5.10 (Hub-B lane): open a shift with a confirmed float, and cash needs an open shift
+
+- **Decisions taken.** One open shift per branch (partial unique index plus `SHIFT_ALREADY_OPEN`). `shift.open` stores the confirmed float and the carried one (the last shift's opening float) on the `shifts` row so the audit shows both. `cash_events` is append-only; kinds `float_in`, `sale`, `sale_reverted` (a compensating row, `reverses` the sale, against the sale's own shift). The gate lives where each intent validates its payments (`SettleTarget.shift_open`, `TopupTarget`, `CollectTarget`); sale events are written next to the payment rows. The snapshot carries `shift {open, carried_minor}` and never an expected drawer amount. Migration `0046_shifts.sql`.
+- **For later stories.** 5.11 `pos.sale` must go through `shift::gate`/`record_sales` and its Undo through `reverse_sales`; 5.24 refunds and 5.25 deposits and expenses add cash event kinds against the open shift; 5.26 closes a shift (`state = 'closed'`) and must settle how an Undo after close writes its compensating row.
+- **Fixtures.** Core test fixtures open a shift (`primary()`, `DEFAULT_SHIFT`); `primary_closed()` and `bootstrapped_closed()` do not. The proptest bootstrap opens a shift and the new `ShiftOpen` op and `assert_cash_holds` invariant check the ledger against the payments.

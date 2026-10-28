@@ -33,6 +33,10 @@ pub struct HubSnapshot {
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<crate::SnapshotAlert>>")]
     pub alerts: Vec<crate::SnapshotAlert>,
+    /// The branch's shift: who has the drawer open, and the float to prefill for the next one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub shift: Option<crate::ShiftState>,
     /// The branch locale in effect now, or `null` before the branch is set up.
     pub locale: Option<SnapshotLocale>,
     /// Hub UI behaviour settings.
@@ -403,6 +407,7 @@ mod tests {
             bills: vec![],
             group_bills: vec![],
             alerts: vec![],
+            shift: None,
             devices: vec![SnapshotDevice {
                 device_id: "D".into(),
                 label: "Dev Kiosk".into(),

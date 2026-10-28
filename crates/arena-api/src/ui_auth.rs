@@ -901,6 +901,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PassOutsideWindow
         | ErrorCode::PastClosing
         | ErrorCode::OutOfStock
+        | ErrorCode::ShiftAlreadyOpen
+        | ErrorCode::ShiftNotOpen
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
@@ -3286,6 +3288,15 @@ pub(crate) mod tests {
                     device_cap: 20,
                     user_cap: 10,
                 }),
+                None,
+            ))
+            .await
+            .unwrap();
+        // Cash settles need an open shift.
+        writer
+            .submit_intent(intent_as(
+                owner.clone(),
+                IntentPayload::ShiftOpen(arena_proto::ShiftOpen { float_minor: 0 }),
                 None,
             ))
             .await

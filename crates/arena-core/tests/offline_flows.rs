@@ -119,6 +119,13 @@ async fn run_flow(state: ConnectivityState) -> Outcome {
         None,
     )
     .await;
+    // Cash settles need an open shift.
+    send(
+        &w,
+        IntentPayload::ShiftOpen(arena_proto::ShiftOpen { float_minor: 0 }),
+        None,
+    )
+    .await;
     let hash = arena_core::staff::hash_secret("pw").unwrap();
     let group = send(
         &w,

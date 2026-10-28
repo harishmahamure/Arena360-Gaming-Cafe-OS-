@@ -69,7 +69,7 @@ const RAIL = [
   ["system", en["hub.nav.system"]],
 ] as const;
 // Settings (settings.spec.ts), System (audit.spec.ts), Inventory (products.spec.ts) and
-// Players (players.spec.ts), Sessions (convert.spec.ts) and POS (pos.spec.ts) have their own sections; every other unbuilt screen is a placeholder.
+// Players (players.spec.ts), Sessions (convert.spec.ts), POS (pos.spec.ts) and Shift (shift.spec.ts) have their own sections; every other unbuilt screen is a placeholder.
 const PLACEHOLDERS = RAIL.filter(
   ([id]) =>
     id !== "floor" &&
@@ -78,7 +78,8 @@ const PLACEHOLDERS = RAIL.filter(
     id !== "inventory" &&
     id !== "players" &&
     id !== "sessions" &&
-    id !== "pos",
+    id !== "pos" &&
+    id !== "shift",
 );
 const BAR = [
   en["hub.nav.floor_short"],

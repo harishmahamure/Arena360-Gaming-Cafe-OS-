@@ -34,6 +34,7 @@ mod rule_pricing;
 mod rules;
 mod session;
 mod session_expire;
+mod shift;
 mod stock;
 mod test_session;
 mod transfer;
@@ -60,13 +61,39 @@ struct Fixture {
     events: broadcast::Receiver<Applied>,
 }
 
-/// A primary writer holding the lease `(1, HUB)`.
+/// The id of the shift `primary()` opens straight in the database (no intent), so cash flows
+/// settle in the tests that are not about shifts.
+const DEFAULT_SHIFT: &str = "SHIFT0";
+
+/// A primary writer holding the lease `(1, HUB)`, with a shift open.
 fn primary() -> Fixture {
+    primary_with_shift(true)
+}
+
+/// A primary writer holding the lease `(1, HUB)` and no open shift.
+fn primary_closed() -> Fixture {
+    primary_with_shift(false)
+}
+
+fn primary_with_shift(shift: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("branch.db");
     let mut store = Store::open(&path, T0).unwrap();
     let row = lease_row(1, HUB);
     store.write_tx(|tx| write_lease(tx, &row)).unwrap();
+    if shift {
+        store
+            .write_tx(|tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO shifts (id, staff_id, opened_at, float_minor, carried_minor, state,
+                                         rev, created_at, updated_at)
+                     VALUES ('{DEFAULT_SHIFT}', 'test', {T0}, 0, 0, 'open', 0, 0, 0)"
+                ))
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+    }
     let mut initial = HubStatus::opened(store.schema_version().unwrap(), HUB);
     initial.role = Role::Primary;
     initial.lease = Some(LeaseInfo::from(&row));
@@ -657,6 +684,23 @@ fn primary_long_lease() -> Fixture {
 /// A bootstrapped branch (its bootstrap event already drained).
 async fn bootstrapped() -> Fixture {
     let f = bootstrapped_free().await;
+    user_cap(&f, 50).await;
+    f
+}
+
+/// A bootstrapped branch with no shift open.
+async fn bootstrapped_closed() -> Fixture {
+    let f = primary_closed();
+    let row = LeaseRow {
+        expires_at: i64::MAX,
+        ..lease_row(1, HUB)
+    };
+    reopen(&f).write_tx(|tx| write_lease(tx, &row)).unwrap();
+    f.status
+        .send_modify(|s| s.lease = Some(LeaseInfo::from(&row)));
+    let mut f = f;
+    f.writer.submit_intent(bootstrap()).await.unwrap();
+    f.events.try_recv().unwrap();
     user_cap(&f, 50).await;
     f
 }

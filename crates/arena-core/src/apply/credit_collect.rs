@@ -21,6 +21,7 @@ pub(crate) struct CollectTarget {
     credit: Option<CreditRow>,
     wallet_minor: i64,
     pause_rule: bool,
+    shift_open: bool,
 }
 
 pub(super) fn load_collect(tx: &StoreTx<'_>, c: &CreditCollect) -> Result<CollectTarget, AppError> {
@@ -28,6 +29,7 @@ pub(super) fn load_collect(tx: &StoreTx<'_>, c: &CreditCollect) -> Result<Collec
         credit: find_credit(tx, &c.player_id)?,
         wallet_minor: super::session::available_wallet(tx, &c.player_id)?,
         pause_rule: super::credit_pause::rule_on(tx)?,
+        shift_open: arena_store::open_shift_id(tx)?.is_some(),
     })
 }
 
@@ -58,6 +60,7 @@ pub(super) fn validate_collect(
     if c.payments.is_empty() || c.payments.len() > MAX_PAYMENTS {
         return Err(invalid("payments", "add one to eight payments"));
     }
+    super::shift::gate(&c.payments, t.shift_open)?;
     let mut wallet_rows = 0;
     for (i, p) in c.payments.iter().enumerate() {
         if p.method == PaymentMethod::Credit {
@@ -163,6 +166,7 @@ pub(super) fn mutate_collect(
             before: None,
         });
     }
+    super::shift::record_sales(tx, &intent.actor.id, &order_id, &c.payments, &mut written)?;
     if let Some(w) = c
         .payments
         .iter()
@@ -331,6 +335,12 @@ pub(super) fn mutate_collect_reverted(
         ));
     };
     let mut written = Vec::with_capacity(t.payments.len() + t.txns.len() + 3);
+    super::shift::reverse_sales(
+        tx,
+        o.settled_by.as_deref().unwrap_or_default(),
+        &o.id,
+        &mut written,
+    )?;
     for id in &t.payments {
         let key = RowKey::Payments { id: id.clone() };
         let before = read_row(tx, &key)?;

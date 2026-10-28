@@ -63,6 +63,7 @@
   import { notePairingCode } from "../lib/pairing";
   import type { Connectivity, ConnectivityState, UnlockOk } from "@arena/ui/generated";
   import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
+  import { setShift } from "../lib/shift.svelte";
   import type { LayoutData } from "./$types";
 
   let { data, children }: { data: LayoutData; children: Snippet } = $props();
@@ -291,9 +292,11 @@
     const locale = data.hub.ok ? (data.hub.snapshot.locale ?? null) : null;
     const ui = data.hub.ok && data.hub.snapshot.paired !== false ? data.hub.snapshot.ui : null;
     const connectivity = data.hub.ok ? data.hub.snapshot.connectivity : null;
+    const shift = data.hub.ok ? data.hub.snapshot.shift : null;
     if (data.hub.ok)
       untrack(() => {
         setLocale(locale);
+        setShift(shift);
         setUiSettings(ui);
         if (connectivity) takeLink(connectivity);
       });

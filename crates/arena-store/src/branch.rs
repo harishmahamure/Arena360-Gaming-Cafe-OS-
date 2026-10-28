@@ -61,11 +61,13 @@ pub enum Table {
     Alerts,
     PricingRules,
     GroupBills,
+    Shifts,
+    CashEvents,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 34] = [
+    pub const ALL: [Table; 36] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -100,6 +102,8 @@ impl Table {
         Table::Alerts,
         Table::PricingRules,
         Table::GroupBills,
+        Table::Shifts,
+        Table::CashEvents,
     ];
 
     /// The SQL table name.
@@ -139,6 +143,8 @@ impl Table {
             Self::Alerts => "alerts",
             Self::PricingRules => "pricing_rules",
             Self::GroupBills => "group_bills",
+            Self::Shifts => "shifts",
+            Self::CashEvents => "cash_events",
         }
     }
 
@@ -165,7 +171,11 @@ impl Table {
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
             Self::Wallets | Self::CreditBalances => &["player_id"],
-            Self::PlayerPacks | Self::Alerts | Self::GroupBills => &["id"],
+            Self::PlayerPacks
+            | Self::Alerts
+            | Self::GroupBills
+            | Self::Shifts
+            | Self::CashEvents => &["id"],
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
             Self::PlanGroups => &["plan_id", "group_id"],
@@ -211,6 +221,8 @@ impl Table {
             | Self::Alerts
             | Self::PricingRules
             | Self::GroupBills
+            | Self::Shifts
+            | Self::CashEvents
             | Self::Plans => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents | Self::PlanGroups => false,
         }
@@ -340,6 +352,12 @@ pub enum RowKey {
     GroupBills {
         id: String,
     },
+    Shifts {
+        id: String,
+    },
+    CashEvents {
+        id: String,
+    },
 }
 
 impl RowKey {
@@ -369,6 +387,8 @@ impl RowKey {
             Self::PlayerPacks { .. } => Table::PlayerPacks,
             Self::Alerts { .. } => Table::Alerts,
             Self::GroupBills { .. } => Table::GroupBills,
+            Self::Shifts { .. } => Table::Shifts,
+            Self::CashEvents { .. } => Table::CashEvents,
             Self::Players { .. } => Table::Players,
             Self::Consents { .. } => Table::Consents,
             Self::Sessions { .. } => Table::Sessions,
@@ -422,6 +442,8 @@ impl RowKey {
             | Self::PlayerPacks { id }
             | Self::Alerts { id }
             | Self::GroupBills { id }
+            | Self::Shifts { id }
+            | Self::CashEvents { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => id.clone(),
         }
@@ -511,6 +533,8 @@ impl RowKey {
             Table::PlayerPacks => Self::PlayerPacks { id: text("id")? },
             Table::Alerts => Self::Alerts { id: text("id")? },
             Table::GroupBills => Self::GroupBills { id: text("id")? },
+            Table::Shifts => Self::Shifts { id: text("id")? },
+            Table::CashEvents => Self::CashEvents { id: text("id")? },
             Table::Sessions => Self::Sessions { id: text("id")? },
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
             Table::Orders => Self::Orders { id: text("id")? },
@@ -565,6 +589,8 @@ impl RowKey {
             | Self::PlayerPacks { id }
             | Self::Alerts { id }
             | Self::GroupBills { id }
+            | Self::Shifts { id }
+            | Self::CashEvents { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => vec![id],
         }

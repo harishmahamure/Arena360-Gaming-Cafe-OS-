@@ -521,6 +521,7 @@ pub(crate) struct SettleTarget {
     pub(super) credit: Option<CreditRow>,
     pub(super) credit_blocked: bool,
     pub(super) business_day: String,
+    pub(super) shift_open: bool,
 }
 
 pub(super) fn load_settle(
@@ -575,6 +576,7 @@ pub(super) fn load_payer(
         credit,
         credit_blocked,
         business_day,
+        shift_open: arena_store::open_shift_id(tx)?.is_some(),
     })
 }
 
@@ -670,6 +672,7 @@ pub(super) fn validate_payments(
     if payments.len() > MAX_PAYMENTS {
         return Err(invalid("payments", "too many payments"));
     }
+    super::shift::gate(payments, t.shift_open)?;
     for (i, p) in payments.iter().enumerate() {
         if p.amount_minor <= 0 {
             return Err(invalid(
@@ -754,7 +757,7 @@ pub(super) fn insert_payments(
             before: None,
         });
     }
-    Ok(())
+    super::shift::record_sales(tx, stamp.staff_id, stamp.order_id, payments, written)
 }
 
 pub(super) fn record_payer_txns(
@@ -1320,6 +1323,12 @@ pub(super) fn mutate_settle_reverted(
         ));
     };
     let mut written = Vec::with_capacity(t.payments.len() + 1);
+    super::shift::reverse_sales(
+        tx,
+        o.settled_by.as_deref().unwrap_or_default(),
+        &o.id,
+        &mut written,
+    )?;
     for id in &t.payments {
         let key = RowKey::Payments { id: id.clone() };
         let before = read_row(tx, &key)?;

@@ -168,6 +168,14 @@ mod tests {
                 reason: None,
                 payload,
             };
+            // The cash settles below need an open shift.
+            writer
+                .submit_intent(submit(
+                    IntentPayload::ShiftOpen(arena_proto::ShiftOpen { float_minor: 1_000 }),
+                    None,
+                ))
+                .await
+                .unwrap();
             let device = writer
                 .submit_intent(submit(
                     IntentPayload::DeviceRegister(arena_proto::DeviceRegister {

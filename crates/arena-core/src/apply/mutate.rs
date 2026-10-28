@@ -269,6 +269,10 @@ pub(super) fn mutate(
             Target::Stock(t) => stock::mutate_write_off(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::ShiftOpen(s) => match target {
+            Target::Shift(t) => super::shift::mutate_open(tx, intent, s, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::StockThreshold(w) => match target {
             Target::Stock(t) => stock::mutate_threshold(tx, intent, w, t, now_ms),
             _ => Err(mismatch()),

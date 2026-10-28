@@ -135,6 +135,9 @@ pub enum IntentKind {
     StockExpiryCheck,
     #[serde(rename = "stock.threshold")]
     StockThreshold,
+    /// Opens the branch's shift with a confirmed cash float.
+    #[serde(rename = "shift.open")]
+    ShiftOpen,
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance,
     #[serde(rename = "rate.upsert")]
@@ -230,7 +233,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 75] = [
+    pub const ALL: [IntentKind; 76] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -270,6 +273,7 @@ impl IntentKind {
         Self::StockWriteOff,
         Self::StockExpiryCheck,
         Self::StockThreshold,
+        Self::ShiftOpen,
         Self::DeviceMaintenance,
         Self::RateUpsert,
         Self::DeviceTestSessionStart,
@@ -350,6 +354,7 @@ impl IntentKind {
             Self::StockWriteOff => "stock.write_off",
             Self::StockExpiryCheck => "stock.expiry_check",
             Self::StockThreshold => "stock.threshold",
+            Self::ShiftOpen => "shift.open",
             Self::DeviceMaintenance => "device.maintenance",
             Self::RateUpsert => "rate.upsert",
             Self::DeviceTestSessionStart => "device.test_session.start",
@@ -440,6 +445,7 @@ impl IntentKind {
             | Self::StockWriteOff
             | Self::StockExpiryCheck
             | Self::StockThreshold => IntentCategory::Catalog,
+            Self::ShiftOpen => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -519,6 +525,7 @@ impl IntentKind {
             | Self::PlanUpsert
             | Self::RuleUpsert
             | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
+            Self::ShiftOpen => Requirement::Perm(Permission::ShiftOpen),
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
             Self::StockWaste | Self::StockWasteReverted | Self::StockWriteOff => {
                 Requirement::Perm(Permission::StockAdjust)
@@ -620,7 +627,8 @@ impl IntentKind {
             | Self::StockWasteReverted
             | Self::StockWriteOff
             | Self::StockExpiryCheck
-            | Self::StockThreshold => None,
+            | Self::StockThreshold
+            | Self::ShiftOpen => None,
             Self::DeviceMaintenance
             | Self::RateUpsert
             | Self::DeviceTestSessionStart
@@ -1136,6 +1144,8 @@ pub enum IntentPayload {
     StockExpiryCheck(crate::StockExpiryCheck),
     #[serde(rename = "stock.threshold")]
     StockThreshold(crate::StockThreshold),
+    #[serde(rename = "shift.open")]
+    ShiftOpen(crate::ShiftOpen),
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance(DeviceMaintenance),
     #[serde(rename = "rate.upsert")]
@@ -1252,6 +1262,7 @@ impl IntentPayload {
             Self::StockWriteOff(_) => IntentKind::StockWriteOff,
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
             Self::StockThreshold(_) => IntentKind::StockThreshold,
+            Self::ShiftOpen(_) => IntentKind::ShiftOpen,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
             Self::RateUpsert(_) => IntentKind::RateUpsert,
             Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
@@ -1371,7 +1382,6 @@ mod tests {
         Permission::DiscountManual,
         Permission::KitchenUse,
         Permission::StockOverride,
-        Permission::ShiftOpen,
         Permission::ShiftClose,
         Permission::CashManage,
         Permission::DevicePair,
@@ -1529,6 +1539,7 @@ mod tests {
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
                 | "stock.threshold" => Requirement::Perm(Permission::CatalogEdit),
+                "shift.open" => Requirement::Perm(Permission::ShiftOpen),
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
                 "stock.waste" | "stock.waste.reverted" | "stock.write_off" => {
                     Requirement::Perm(Permission::StockAdjust)

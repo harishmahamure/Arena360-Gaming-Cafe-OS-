@@ -1,6 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { PaymentRow, SessionStaff, SnapshotBill, SnapshotDevice } from "@arena/ui/generated";
+import type {
+  PaymentRow,
+  SessionStaff,
+  ShiftState,
+  SnapshotBill,
+  SnapshotDevice,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { amountText, parseAmount, rowErrors, tally, toPayments, type Row } from "../src/lib/settle";
 import { CORS, HUB, device, json, snapshot } from "./floor-fixture";
@@ -13,7 +19,12 @@ const SELLER: SessionStaff = {
 };
 
 type Sent = { payload: { kind: string; order_id?: string; payments?: PaymentRow[] }; rev?: number };
-type Hub = { devices: SnapshotDevice[]; bills: SnapshotBill[]; sent: Sent[] };
+type Hub = {
+  devices: SnapshotDevice[];
+  bills: SnapshotBill[];
+  sent: Sent[];
+  shift?: ShiftState;
+};
 
 const FREE = device(1, { status: "online" });
 const BILL: SnapshotBill = {
@@ -38,6 +49,7 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
         const snap = snapshot(hub.devices);
         snap.sessions = [];
         snap.bills = hub.bills;
+        if (hub.shift) snap.shift = hub.shift;
         return json(route, snap);
       }
       case "/ui/me":
@@ -247,4 +259,43 @@ test("a row can be removed and the remainder returns", async ({ page }) => {
   await bar(page).getByRole("button", { name: "Remove Cash" }).click();
   await expect(bar(page).getByTestId("split-row")).toHaveCount(0);
   await expect(page.getByTestId("settle-remainder")).toContainText("Remaining ₹75.00");
+});
+
+test("with no open shift the bar offers no cash, says why, and UPI still settles", async ({
+  page,
+}) => {
+  const hub = await open(page, { shift: { open: null, carried_minor: 0 } });
+  await expect(bar(page).locator("[data-method]")).toHaveText(["UPI", "Card"]);
+  const notice = page.getByTestId("settle-shift-closed");
+  await expect(notice).toContainText(en["hub.settle.shift_closed"]);
+  await expect(notice.getByRole("link", { name: en["hub.settle.shift_link"] })).toHaveAttribute(
+    "href",
+    "/shift",
+  );
+  await method(page, "upi").click();
+  await field(page, "hub.settle.amount.upi").fill("75");
+  await bar(page).getByLabel(en["hub.settle.reference.upi"], { exact: true }).fill("1234");
+  await settleButton(page).click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload.payments).toEqual([
+    { method: "upi", amount_minor: 7500, reference: "1234" },
+  ]);
+});
+
+test("with an open shift the bar offers cash and no shift notice", async ({ page }) => {
+  await open(page, {
+    shift: {
+      open: {
+        id: "SH1",
+        staff_id: "S1",
+        staff_name: "Ravi",
+        opened_at: 1,
+        float_minor: 0,
+        events: 1,
+      },
+      carried_minor: 0,
+    },
+  });
+  await expect(bar(page).locator("[data-method]")).toHaveText(["Cash", "UPI", "Card"]);
+  await expect(page.getByTestId("settle-shift-closed")).toHaveCount(0);
 });

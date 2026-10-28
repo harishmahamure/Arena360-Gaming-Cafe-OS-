@@ -18,12 +18,14 @@ use super::session::{
 pub(crate) struct TopupTarget {
     player: bool,
     wallet: bool,
+    shift_open: bool,
 }
 
 pub(super) fn load_topup(tx: &StoreTx<'_>, t: &WalletTopup) -> Result<TopupTarget, AppError> {
     Ok(TopupTarget {
         player: find_player(tx, &t.player_id)?.is_some(),
         wallet: find_wallet(tx, &t.player_id)?.is_some(),
+        shift_open: arena_store::open_shift_id(tx)?.is_some(),
     })
 }
 
@@ -48,6 +50,7 @@ pub(super) fn validate_topup(
     if t.payments.is_empty() || t.payments.len() > MAX_PAYMENTS {
         return Err(invalid("payments", "add one to eight payments"));
     }
+    super::shift::gate(&t.payments, target.shift_open)?;
     for (i, p) in t.payments.iter().enumerate() {
         if matches!(p.method, PaymentMethod::Wallet | PaymentMethod::Credit) {
             return Err(invalid(
@@ -136,6 +139,7 @@ pub(super) fn mutate_topup(
             before: None,
         });
     }
+    super::shift::record_sales(tx, &intent.actor.id, &order_id, &t.payments, &mut written)?;
     let method = match t.payments.first() {
         Some(first) if t.payments.iter().all(|p| p.method == first.method) => first.method.as_str(),
         _ => "mixed",
@@ -275,6 +279,12 @@ pub(super) fn mutate_topup_reverted(
         ));
     };
     let mut written = Vec::with_capacity(t.payments.len() + t.txns.len() + 2);
+    super::shift::reverse_sales(
+        tx,
+        o.settled_by.as_deref().unwrap_or_default(),
+        &o.id,
+        &mut written,
+    )?;
     for id in &t.payments {
         let key = RowKey::Payments { id: id.clone() };
         let before = read_row(tx, &key)?;

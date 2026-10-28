@@ -23,6 +23,7 @@ mod players;
 mod pricing_rules;
 mod products;
 mod sessions;
+mod shifts;
 mod staff;
 mod stock;
 mod wallet;
@@ -131,6 +132,10 @@ pub use sessions::{
     resume_session,
 };
 pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
+pub use shifts::{
+    NewCashEvent, NewShift, OpenSale, ShiftRow, count_cash_events, insert_cash_event, insert_shift,
+    last_opening_float, open_sales_of_order, open_shift, open_shift_id,
+};
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,
     count_active_staff_with_role, deactivate_staff, find_role, find_role_by_name, find_staff,
@@ -933,6 +938,32 @@ impl Store {
 
     pub fn find_pack_for_order(&self, order_id: &str) -> Result<Option<PlayerPackRow>, AppError> {
         find_pack_for_order(&self.conn, order_id)
+    }
+
+    /// The branch's open shift and the float the next one would offer, with the number of cash
+    /// events so far. An older database without the tables reads as no shift and a float of 0.
+    pub fn shift_state(&self) -> Result<arena_proto::ShiftState, AppError> {
+        if !self.table_exists("shifts")? {
+            return Ok(arena_proto::ShiftState {
+                open: None,
+                carried_minor: 0,
+            });
+        }
+        let open = match open_shift(&self.conn)? {
+            Some(s) => Some(arena_proto::SnapshotShift {
+                events: count_cash_events(&self.conn, &s.id)?,
+                id: s.id,
+                staff_id: s.staff_id,
+                staff_name: s.staff_name,
+                opened_at: s.opened_at,
+                float_minor: s.float_minor,
+            }),
+            None => None,
+        };
+        Ok(arena_proto::ShiftState {
+            open,
+            carried_minor: last_opening_float(&self.conn)?,
+        })
     }
 
     /// Group bills still open or unsettled.

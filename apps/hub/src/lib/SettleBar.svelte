@@ -15,6 +15,7 @@
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { tick, type Snippet } from "svelte";
+  import { cashBlocked } from "./shift.svelte";
   import {
     amountText,
     creditOffered,
@@ -54,7 +55,11 @@
   const total = $derived(bill.remaining_minor);
   const sums = $derived(tally(total, rows, exponent));
   const wallet = $derived(bill.wallet_minor ?? 0);
-  const methods = $derived(methodsFor(bill.wallet_minor, bill.credit));
+  // Cash needs an open shift; every other method settles without one.
+  const noCash = $derived(cashBlocked());
+  const methods = $derived(
+    methodsFor(bill.wallet_minor, bill.credit).filter((m) => !(noCash && m === "cash")),
+  );
   const credit = $derived(creditOffered(bill.credit) ? bill.credit : null);
   const closed = $derived(sums.remaining === 0 && !sums.overpaid);
   const money = (minor: number) => formatMoney(minor, locale);
@@ -158,6 +163,14 @@
       >
     {/each}
   </div>
+
+  {#if noCash}
+    <p class="type-hub-label shift-closed" data-testid="settle-shift-closed">
+      <span aria-hidden="true">⚠</span>
+      {t("hub.settle.shift_closed")}
+      <a class="shift-link" href="/shift">{t("hub.settle.shift_link")}</a>
+    </p>
+  {/if}
 
   {@render extra?.()}
 
@@ -287,6 +300,15 @@
   .method[aria-pressed="true"] {
     border-width: 2px;
     border-color: var(--accent);
+  }
+
+  .shift-closed {
+    color: var(--text);
+  }
+
+  .shift-link {
+    color: var(--text);
+    text-decoration: underline;
   }
 
   .split {

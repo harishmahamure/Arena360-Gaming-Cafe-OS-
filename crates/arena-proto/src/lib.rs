@@ -37,6 +37,7 @@ mod process;
 mod scope;
 mod session;
 mod setup_devices;
+mod shift;
 mod signin;
 mod signup;
 mod snapshot;
@@ -217,6 +218,10 @@ pub use session::{
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
     SetupDevicesView, SetupGroup,
+};
+pub use shift::{
+    CASH_FLOAT_IN, CASH_SALE, CASH_SALE_REVERTED, MAX_FLOAT_MINOR, ShiftOpen, ShiftState,
+    SnapshotShift,
 };
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,

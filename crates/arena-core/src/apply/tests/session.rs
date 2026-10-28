@@ -610,7 +610,7 @@ pub(super) fn settle_intent(
     i
 }
 
-async fn billed(f: &Fixture, rate: i64, minutes: i64) -> (String, String, i64) {
+pub(super) async fn billed(f: &Fixture, rate: i64, minutes: i64) -> (String, String, i64) {
     let d = pc(f, DeviceKind::Pc, "pc", Some(rate)).await;
     start(f, &d, None).await.unwrap();
     f.clock.advance(minutes * 60_000);
@@ -637,7 +637,7 @@ async fn settling_writes_payments_and_closes_the_order() {
     let a = end(&f, i.clone()).await.unwrap();
     assert_eq!(
         a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
-        ["payments", "payments", "orders"]
+        ["payments", "payments", "cash_events", "orders"]
     );
     let o = &table(&f, Table::Orders)[0];
     assert_eq!(text(o, "status"), "settled");
@@ -995,6 +995,7 @@ async fn undoing_a_settle_deletes_the_payments_and_reopens_the_order() {
             .map(|c| (c.tbl.as_str(), c.op))
             .collect::<Vec<_>>(),
         [
+            ("cash_events", ChangeOp::Insert),
             ("payments", ChangeOp::Delete),
             ("payments", ChangeOp::Delete),
             ("orders", ChangeOp::Update),
@@ -1248,7 +1249,7 @@ async fn a_recorded_effect_blocks_undo_while_a_bill_with_none_stays_undoable() {
         refusal(end(&f, settle_revert_intent(&e.order, Some(rev))).await),
         (ErrorCode::UndoNotAllowed, None)
     );
-    assert_eq!(settled.changes.len(), 2);
+    assert_eq!(settled.changes.len(), 3);
 }
 
 #[tokio::test]
@@ -1288,10 +1289,12 @@ async fn the_audit_links_a_reverted_intent_to_its_forward_intent() {
         .iter()
         .filter(|r| r.intent_id == undone.intent_id)
         .collect();
-    assert_eq!(reverted.len(), 2);
+    assert_eq!(reverted.len(), 3);
     assert!(
+        // The compensating cash event is a new row, so it has no earlier change to link to.
         reverted
             .iter()
+            .filter(|r| r.tbl != "cash_events")
             .all(|r| r.reverts.as_deref() == Some(settled.intent_id.as_str()))
     );
     assert!(
@@ -1303,7 +1306,7 @@ async fn the_audit_links_a_reverted_intent_to_its_forward_intent() {
         .changes()
         .unwrap()
         .into_iter()
-        .find(|c| c.intent_id == undone.intent_id)
+        .find(|c| c.intent_id == undone.intent_id && c.tbl != "cash_events")
         .unwrap();
     let detail = crate::audit::read_detail(&reopen(&f), &change.epoch, change.seq)
         .unwrap()
@@ -1615,7 +1618,11 @@ async fn ending_a_paused_session_folds_the_pause_and_bills_to_the_end_time() {
     assert_eq!(state_of(&f, &d), "in_session");
 }
 
-fn topup_intent(player: &str, amount: i64, payments: Vec<arena_proto::PaymentRow>) -> Intent {
+pub(super) fn topup_intent(
+    player: &str,
+    amount: i64,
+    payments: Vec<arena_proto::PaymentRow>,
+) -> Intent {
     intent(
         owner(),
         IntentPayload::WalletTopup(arena_proto::WalletTopup {
@@ -1708,7 +1715,14 @@ async fn a_top_up_writes_the_order_payments_ledger_row_and_balance() {
     let a = end(&f, split()).await.unwrap();
     assert_eq!(
         a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
-        ["orders", "payments", "payments", "wallets", "wallet_txns"]
+        [
+            "orders",
+            "payments",
+            "payments",
+            "cash_events",
+            "wallets",
+            "wallet_txns"
+        ]
     );
     assert_eq!(balance(&f, &p), 50_000);
     let o = &table(&f, Table::Orders)[0];
@@ -1838,6 +1852,7 @@ async fn undoing_a_top_up_deletes_its_rows_and_lowers_the_balance() {
             .map(|c| (c.tbl.as_str(), c.op))
             .collect::<Vec<_>>(),
         [
+            ("cash_events", ChangeOp::Insert),
             ("payments", ChangeOp::Delete),
             ("wallet_txns", ChangeOp::Delete),
             ("wallets", ChangeOp::Update),
@@ -1972,7 +1987,14 @@ async fn a_bill_is_paid_partly_from_the_wallet_and_the_ledger_follows() {
     .unwrap();
     assert_eq!(
         a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
-        ["payments", "payments", "orders", "wallet_txns", "wallets"]
+        [
+            "payments",
+            "payments",
+            "cash_events",
+            "orders",
+            "wallet_txns",
+            "wallets"
+        ]
     );
     assert_eq!(balance(&f, &p), 13_000);
     assert_eq!(ledger_sum(&f, &p), 13_000);
@@ -3308,7 +3330,7 @@ async fn the_auto_pause_intent_is_system_only() {
     assert_eq!(e.0, ErrorCode::PermissionDenied);
 }
 
-async fn plan_of(f: &Fixture, kind: &str, price: i64, active: bool) -> String {
+pub(super) async fn plan_of(f: &Fixture, kind: &str, price: i64, active: bool) -> String {
     let g = submit(
         f,
         owner(),
@@ -3402,7 +3424,13 @@ async fn selling_a_pack_writes_the_bill_line_payment_and_owned_copy() {
         .unwrap();
     assert_eq!(
         a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
-        ["orders", "order_lines", "payments", "player_packs"]
+        [
+            "orders",
+            "order_lines",
+            "payments",
+            "cash_events",
+            "player_packs"
+        ]
     );
     let o = sale_order(&f);
     assert_eq!(

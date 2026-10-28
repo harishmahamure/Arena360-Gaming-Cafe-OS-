@@ -80,4 +80,6 @@ export type ErrorCode =
   | "PLAN_NOT_FOR_GROUP"
   | "PASS_OUTSIDE_WINDOW"
   | "PAST_CLOSING"
-  | "OUT_OF_STOCK";
+  | "OUT_OF_STOCK"
+  | "SHIFT_ALREADY_OPEN"
+  | "SHIFT_NOT_OPEN";

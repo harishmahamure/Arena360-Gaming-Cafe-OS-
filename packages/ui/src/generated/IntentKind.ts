@@ -43,6 +43,7 @@ export type IntentKind =
   | "stock.write_off"
   | "stock.expiry_check"
   | "stock.threshold"
+  | "shift.open"
   | "device.maintenance"
   | "rate.upsert"
   | "device.test_session.start"

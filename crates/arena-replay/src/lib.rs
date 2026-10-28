@@ -998,12 +998,49 @@ mod tests {
                 .submit_intent(raise(arena_proto::AlertKind::TimeUp))
                 .await
                 .unwrap();
+            // A lot that expires two days after T0 (a branch day 2027-01-15).
+            let expiring = writer
+                .submit_intent(submit(
+                    IntentPayload::StockIn(arena_proto::StockIn {
+                        product_id: cola.clone(),
+                        qty: 4,
+                        unit_cost_minor: 150,
+                        supplier: "Acme".into(),
+                        expiry: Some("2027-01-17".into()),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            let lot_id = expiring
+                .changes
+                .iter()
+                .find(|c| c.tbl == "stock_lots")
+                .unwrap()
+                .row_id
+                .clone();
             clock.advance(16 * 24 * 60 * 60 * 1000);
             writer
                 .credit_auto_pause(None)
                 .await
                 .unwrap()
                 .expect("the overdue tab is paused");
+            // The new business day replaces the unacknowledged alert, then the lot is written off.
+            writer
+                .stock_expiry_check()
+                .await
+                .unwrap()
+                .expect("the expired lot raises the alert afresh");
+            writer
+                .submit_intent(arena_proto::Intent {
+                    issued_at: T0 + 16 * 24 * 60 * 60 * 1000,
+                    ..submit(
+                        IntentPayload::StockWriteOff(arena_proto::StockWriteOff { lot_id }),
+                        None,
+                    )
+                })
+                .await
+                .unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

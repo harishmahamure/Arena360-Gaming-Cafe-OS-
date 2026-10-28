@@ -660,7 +660,7 @@ impl Registry {
             return;
         }
         let dir = Arc::clone(devices);
-        match tokio::task::spawn_blocking(move || dir.catalog(&ids)).await {
+        match tokio::task::spawn_blocking(move || dir.catalog(&ids, epoch_ms())).await {
             Ok(Ok(products)) => {
                 let n = self.next_event.fetch_add(1, Ordering::Relaxed);
                 let frame = Frame::new(

@@ -129,6 +129,10 @@ pub enum IntentKind {
     StockWaste,
     #[serde(rename = "stock.waste.reverted")]
     StockWasteReverted,
+    #[serde(rename = "stock.write_off")]
+    StockWriteOff,
+    #[serde(rename = "stock.expiry_check")]
+    StockExpiryCheck,
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance,
     #[serde(rename = "rate.upsert")]
@@ -224,7 +228,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 72] = [
+    pub const ALL: [IntentKind; 74] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -261,6 +265,8 @@ impl IntentKind {
         Self::StockInReverted,
         Self::StockWaste,
         Self::StockWasteReverted,
+        Self::StockWriteOff,
+        Self::StockExpiryCheck,
         Self::DeviceMaintenance,
         Self::RateUpsert,
         Self::DeviceTestSessionStart,
@@ -338,6 +344,8 @@ impl IntentKind {
             Self::StockInReverted => "stock.in.reverted",
             Self::StockWaste => "stock.waste",
             Self::StockWasteReverted => "stock.waste.reverted",
+            Self::StockWriteOff => "stock.write_off",
+            Self::StockExpiryCheck => "stock.expiry_check",
             Self::DeviceMaintenance => "device.maintenance",
             Self::RateUpsert => "rate.upsert",
             Self::DeviceTestSessionStart => "device.test_session.start",
@@ -424,7 +432,9 @@ impl IntentKind {
             | Self::StockIn
             | Self::StockInReverted
             | Self::StockWaste
-            | Self::StockWasteReverted => IntentCategory::Catalog,
+            | Self::StockWasteReverted
+            | Self::StockWriteOff
+            | Self::StockExpiryCheck => IntentCategory::Catalog,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -503,9 +513,10 @@ impl IntentKind {
                 Requirement::Perm(Permission::CatalogEdit)
             }
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
-            Self::StockWaste | Self::StockWasteReverted => {
+            Self::StockWaste | Self::StockWasteReverted | Self::StockWriteOff => {
                 Requirement::Perm(Permission::StockAdjust)
             }
+            Self::StockExpiryCheck => Requirement::System,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 Requirement::Perm(Permission::PlayerManage)
             }
@@ -599,7 +610,9 @@ impl IntentKind {
             | Self::StaffDeactivate
             | Self::StockIn
             | Self::StockInReverted
-            | Self::StockWasteReverted => None,
+            | Self::StockWasteReverted
+            | Self::StockWriteOff
+            | Self::StockExpiryCheck => None,
             Self::DeviceMaintenance
             | Self::RateUpsert
             | Self::DeviceTestSessionStart
@@ -1109,6 +1122,10 @@ pub enum IntentPayload {
     StockWaste(crate::StockWaste),
     #[serde(rename = "stock.waste.reverted")]
     StockWasteReverted(crate::StockWasteReverted),
+    #[serde(rename = "stock.write_off")]
+    StockWriteOff(crate::StockWriteOff),
+    #[serde(rename = "stock.expiry_check")]
+    StockExpiryCheck(crate::StockExpiryCheck),
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance(DeviceMaintenance),
     #[serde(rename = "rate.upsert")]
@@ -1222,6 +1239,8 @@ impl IntentPayload {
             Self::StockInReverted(_) => IntentKind::StockInReverted,
             Self::StockWaste(_) => IntentKind::StockWaste,
             Self::StockWasteReverted(_) => IntentKind::StockWasteReverted,
+            Self::StockWriteOff(_) => IntentKind::StockWriteOff,
+            Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
             Self::RateUpsert(_) => IntentKind::RateUpsert,
             Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
@@ -1473,7 +1492,8 @@ mod tests {
                 | "credit.auto_pause"
                 | "alert.raise"
                 | "session.expire"
-                | "session.rate_flip" => Requirement::System,
+                | "session.rate_flip"
+                | "stock.expiry_check" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }
@@ -1500,7 +1520,7 @@ mod tests {
                     Requirement::Perm(Permission::CatalogEdit)
                 }
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
-                "stock.waste" | "stock.waste.reverted" => {
+                "stock.waste" | "stock.waste.reverted" | "stock.write_off" => {
                     Requirement::Perm(Permission::StockAdjust)
                 }
                 "player.create" | "player.update" | "player.password_reset" => {

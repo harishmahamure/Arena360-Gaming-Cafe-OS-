@@ -41,7 +41,8 @@ pub use admin::{
     verifier_staff, verifier_version_at,
 };
 pub use alerts::{
-    AlertRow, NewAlert, ack_alert, find_alert, find_open_alert, insert_alert, list_open_alerts,
+    AlertRow, NewAlert, ack_alert, find_alert, find_open_alert, insert_alert,
+    latest_branch_alert_at, list_open_alerts,
 };
 pub use audit::{
     AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,
@@ -138,8 +139,9 @@ pub use staff::{
     set_staff_credentials, set_staff_setup_code, update_role_name, update_staff,
 };
 pub use stock::{
-    LotRow, MoveRow, StockRow, find_lot, find_move, find_stock, insert_lot, insert_move,
-    insert_stock, latest_move_id, list_lots, list_moves, set_lot_remaining, update_stock,
+    LotRow, MoveRow, StockRow, expired_qty, find_lot, find_move, find_stock, insert_lot,
+    insert_move, insert_stock, latest_move_id, list_expiring_lots, list_lots, list_moves,
+    set_lot_remaining, update_stock,
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
@@ -866,6 +868,22 @@ impl Store {
             return Ok(Vec::new());
         }
         list_lots(&self.conn, product_id)
+    }
+
+    /// Lots with stock left that expire on or before `until` (with the product name).
+    pub fn expiring_lots(&self, until: &str) -> Result<Vec<(LotRow, String)>, AppError> {
+        if !self.table_exists("stock_lots")? {
+            return Ok(Vec::new());
+        }
+        list_expiring_lots(&self.conn, until)
+    }
+
+    /// How many units of a product are in lots that expired before `today`.
+    pub fn expired_qty(&self, product_id: &str, today: &str) -> Result<i64, AppError> {
+        if !self.table_exists("stock_lots")? {
+            return Ok(0);
+        }
+        expired_qty(&self.conn, product_id, today)
     }
 
     pub fn moves(&self, product_id: &str) -> Result<Vec<MoveRow>, AppError> {

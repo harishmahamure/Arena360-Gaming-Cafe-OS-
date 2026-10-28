@@ -12,6 +12,8 @@ pub const MAX_BARCODE_CHARS: usize = 48;
 pub const MAX_PRICE_MINOR: i64 = 1_000_000_000_000;
 pub const REASON_INACTIVE: &str = "inactive";
 pub const REASON_OUT_OF_STOCK: &str = "out_of_stock";
+/// Every unit left is in a lot past its expiry date (Story 5.7).
+pub const REASON_EXPIRED: &str = "expired";
 pub const REASON_COMPONENT_INACTIVE: &str = "component_inactive";
 pub const MAX_BUNDLE_COMPONENTS: usize = 30;
 pub const MAX_COMPONENT_QTY: i64 = 1000;

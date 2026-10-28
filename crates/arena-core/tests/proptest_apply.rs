@@ -132,6 +132,19 @@ enum Op {
         reason: u8,
         undo: bool,
     },
+    /// `stock.in` of a lot that expires `days` from the business day, into the first tracked
+    /// product (relative to the Hub clock, so advancing it moves lots into and out of the window).
+    ExpiringStock {
+        days: i64,
+        qty: i64,
+    },
+    /// `stock.expiry_check` (system), which must leave at most one open "Expiring soon" alert.
+    ExpiryCheck,
+    /// `stock.write_off` of one of the first tracked product's lots: applies only to an expired
+    /// lot with stock left.
+    WriteOff {
+        pick: u8,
+    },
     Player {
         user: u8,
         phone: u8,
@@ -496,6 +509,9 @@ fn op() -> impl Strategy<Value = Op> {
                 late
             }),
         1 => Just(Op::CreditAutoPause),
+        2 => (0..8i64, 1..=20i64).prop_map(|(days, qty)| Op::ExpiringStock { days, qty }),
+        1 => Just(Op::ExpiryCheck),
+        2 => (0..6u8).prop_map(|pick| Op::WriteOff { pick }),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
         2 => (0..3u8, 0..4u8).prop_map(|(slot, target)| Op::Transfer { slot, target }),
@@ -713,6 +729,16 @@ fn bootstrap_payload() -> IntentPayload {
         fy_start_month: 4,
         onboarding: None,
     })
+}
+
+/// How many "Expiring soon" alerts are open (the schema allows one).
+fn open_expiring_alerts(hub: &Hub) -> usize {
+    hub.reader
+        .alerts()
+        .unwrap()
+        .iter()
+        .filter(|a| a.kind == "stock_expiring")
+        .count()
 }
 
 fn code(r: &Result<Applied, AppError>) -> Option<(ErrorCode, Option<&str>)> {
@@ -1368,6 +1394,115 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(lot_sum(hub), old_qty);
                 prop_assert!(hub.change_count() >= after_waste + 3);
             }
+        }
+        Op::ExpiringStock { days, qty } => {
+            let Some(today) =
+                arena_core::locale::current_business_day(&hub.reader, hub.clock_now()).unwrap()
+            else {
+                return Ok(());
+            };
+            let Some(p) = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .find(|p| !p.bundle && p.track_stock)
+            else {
+                return Ok(());
+            };
+            let id = p.product_id;
+            let old = hub.reader.stock(&id).unwrap().map_or(0, |s| s.qty);
+            let expiry = arena_proto::add_days(&today, *days).unwrap();
+            let intent = hub.intent(
+                IntentPayload::StockIn(arena_proto::StockIn {
+                    product_id: id.clone(),
+                    qty: *qty,
+                    unit_cost_minor: 100,
+                    supplier: "s".into(),
+                    expiry: Some(expiry),
+                }),
+                None,
+            );
+            let out = hub.submit_new(intent);
+            if old + qty > arena_proto::MAX_STOCK_QTY {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::ValidationFailed));
+                prop_assert_eq!(hub.change_count(), changes_before);
+                return assert_gap_free(hub);
+            }
+            prop_assert!(out.is_ok(), "{:?}", out);
+            prop_assert_eq!(hub.reader.stock(&id).unwrap().unwrap().qty, old + qty);
+            if *days <= 3 {
+                prop_assert_eq!(open_expiring_alerts(hub), 1);
+            }
+        }
+        Op::ExpiryCheck => {
+            let before = hub.change_count();
+            let mut intent = hub.intent(
+                IntentPayload::StockExpiryCheck(arena_proto::StockExpiryCheck {}),
+                None,
+            );
+            intent.actor.kind = ActorKind::System;
+            let out = hub.submit_new(intent);
+            match code(&out) {
+                None => prop_assert!(hub.change_count() > before),
+                Some(refused) => {
+                    prop_assert_eq!(refused, (ErrorCode::Stale, None));
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+            }
+            prop_assert!(open_expiring_alerts(hub) <= 1);
+        }
+        Op::WriteOff { pick } => {
+            let Some(today) =
+                arena_core::locale::current_business_day(&hub.reader, hub.clock_now()).unwrap()
+            else {
+                return Ok(());
+            };
+            let Some(p) = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .find(|p| !p.bundle && p.track_stock)
+            else {
+                return Ok(());
+            };
+            let id = p.product_id;
+            let mut lots = hub.reader.lots(&id).unwrap();
+            if lots.is_empty() {
+                return Ok(());
+            }
+            lots.sort_by(|a, b| a.lot_id.cmp(&b.lot_id));
+            let lot = lots[usize::from(*pick) % lots.len()].clone();
+            let old = hub.reader.stock(&id).unwrap().unwrap().qty;
+            let intent = hub.intent(
+                IntentPayload::StockWriteOff(arena_proto::StockWriteOff {
+                    lot_id: lot.lot_id.clone(),
+                }),
+                None,
+            );
+            let out = hub.submit_new(intent);
+            let expired = lot
+                .expiry
+                .as_deref()
+                .is_some_and(|e| arena_proto::lot_expired(e, &today));
+            if lot.qty_remaining == 0 || !expired {
+                let want = if lot.qty_remaining == 0 {
+                    ErrorCode::Stale
+                } else {
+                    ErrorCode::ValidationFailed
+                };
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(want), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), changes_before);
+                return assert_gap_free(hub);
+            }
+            prop_assert!(out.is_ok(), "{:?}", out);
+            let left = hub.reader.stock(&id).unwrap().unwrap().qty;
+            prop_assert_eq!(left, old - lot.qty_remaining);
+            let after = hub.reader.lots(&id).unwrap();
+            let emptied = after.iter().find(|l| l.lot_id == lot.lot_id).unwrap();
+            prop_assert_eq!(emptied.qty_remaining, 0);
+            prop_assert_eq!(after.iter().map(|l| l.qty_remaining).sum::<i64>(), left);
         }
         Op::Player {
             user,

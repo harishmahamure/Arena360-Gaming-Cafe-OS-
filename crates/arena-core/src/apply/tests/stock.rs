@@ -1,8 +1,8 @@
 use super::*;
 use crate::rbac::{ROLE_COUNTER, ROLE_KITCHEN, ROLE_MANAGER};
 use arena_proto::{
-    ProductDelete, ProductUpsert, StaffUpsert, StockIn, StockInReverted, StockWaste,
-    StockWasteReverted,
+    AlertAck, ProductDelete, ProductUpsert, StaffUpsert, StockExpiryCheck, StockIn,
+    StockInReverted, StockWaste, StockWasteReverted, StockWriteOff,
 };
 
 pub(super) fn owner() -> Actor {
@@ -161,7 +161,7 @@ fn field(f: &str) -> (ErrorCode, Option<String>) {
 fn view(f: &Fixture, id: &str) -> arena_proto::Product {
     crate::SnapshotReader::open(&f.path)
         .unwrap()
-        .products()
+        .products(T0)
         .unwrap()
         .into_iter()
         .find(|p| p.id == id)
@@ -554,7 +554,7 @@ async fn bundles_read_component_stock_and_stock_changes_reach_the_catalog() {
     assert_eq!(view(&f, &bundle).quantity, 3);
     let entries = crate::SnapshotReader::open(&f.path)
         .unwrap()
-        .catalog(std::slice::from_ref(&cola))
+        .catalog(std::slice::from_ref(&cola), T0)
         .unwrap();
     let ids: Vec<_> = entries
         .iter()
@@ -889,4 +889,397 @@ async fn stock_moves_with_waste_columns_stay_append_only() {
             Ok(())
         })
         .unwrap();
+}
+
+const DAY_MS: i64 = 24 * 3600 * 1000;
+
+fn today(f: &Fixture, plus_days: i64) -> String {
+    crate::locale::current_business_day(&reopen(f), T0 + plus_days * DAY_MS)
+        .unwrap()
+        .unwrap()
+}
+
+fn day_after(f: &Fixture, days: i64) -> String {
+    arena_proto::add_days(&today(f, 0), days).unwrap()
+}
+
+async fn put_expiring(f: &Fixture, id: &str, qty: i64, cost: i64, expiry: &str) -> Applied {
+    let mut s = sin(id, qty, cost);
+    s.expiry = Some(expiry.into());
+    put(f, owner(), s).await.unwrap()
+}
+
+fn open_alerts(f: &Fixture) -> Vec<arena_store::AlertRow> {
+    reopen(f)
+        .alerts()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == "stock_expiring")
+        .collect()
+}
+
+fn alert_rows(f: &Fixture) -> usize {
+    reopen(f).rows(Table::Alerts).unwrap().len()
+}
+
+async fn ack(f: &Fixture, id: &str) {
+    f.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::AlertAck(AlertAck {
+                alert_id: id.into(),
+            }),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn write_off(f: &Fixture, actor: Actor, lot_id: &str) -> Result<Applied, AppError> {
+    f.writer
+        .submit_intent(Intent {
+            issued_at: f.clock.now_ms(),
+            ..intent(
+                actor,
+                IntentPayload::StockWriteOff(StockWriteOff {
+                    lot_id: lot_id.into(),
+                }),
+            )
+        })
+        .await
+}
+
+fn lot_id_of(f: &Fixture, id: &str, expiry: &str) -> String {
+    reopen(f)
+        .lots(id)
+        .unwrap()
+        .into_iter()
+        .find(|l| l.expiry.as_deref() == Some(expiry))
+        .unwrap()
+        .lot_id
+}
+
+async fn set_warn_days(f: &Fixture, days: &str) {
+    let sql = format!("UPDATE settings SET value = '{days}' WHERE key = 'stock.expiry_warn_days'");
+    f.writer
+        .submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_stock_in_inside_the_window_raises_one_branch_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    let far = day_after(&f, 4);
+    let a = put_expiring(&f, &id, 5, 100, &far).await;
+    assert!(a.changes.iter().all(|c| c.tbl != "alerts"));
+    put(&f, owner(), sin(&id, 1, 100)).await.unwrap();
+    assert!(open_alerts(&f).is_empty());
+    let a = put_expiring(&f, &id, 5, 100, &day_after(&f, 3)).await;
+    assert_eq!(a.changes.iter().filter(|c| c.tbl == "alerts").count(), 1);
+    let open = open_alerts(&f);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].device_id, None);
+    let a = put_expiring(&f, &id, 5, 100, &day_after(&f, 1)).await;
+    assert!(a.changes.iter().all(|c| c.tbl != "alerts"));
+    assert_eq!(alert_rows(&f), 1);
+}
+
+#[tokio::test]
+async fn the_warning_window_is_the_branch_setting_from_zero_to_thirty_days() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    set_warn_days(&f, "0").await;
+    put_expiring(&f, &id, 1, 1, &day_after(&f, 1)).await;
+    assert!(open_alerts(&f).is_empty());
+    put_expiring(&f, &id, 1, 1, &day_after(&f, 0)).await;
+    assert_eq!(open_alerts(&f).len(), 1);
+    let open = open_alerts(&f).remove(0);
+    ack(&f, &open.id).await;
+    set_warn_days(&f, "30").await;
+    put_expiring(&f, &id, 1, 1, &day_after(&f, 30)).await;
+    assert_eq!(open_alerts(&f).len(), 1);
+    // Out of range reads as the default of 3 days.
+    let open = open_alerts(&f).remove(0);
+    ack(&f, &open.id).await;
+    set_warn_days(&f, "31").await;
+    put_expiring(&f, &id, 1, 1, &day_after(&f, 4)).await;
+    assert!(open_alerts(&f).is_empty());
+    put_expiring(&f, &id, 1, 1, &day_after(&f, 3)).await;
+    assert_eq!(open_alerts(&f).len(), 1);
+}
+
+#[tokio::test]
+async fn the_daily_check_raises_once_per_business_day_and_replaces_a_stale_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    assert!(f.writer.stock_expiry_check().await.unwrap().is_none());
+    put_expiring(&f, &id, 5, 100, &day_after(&f, 40)).await;
+    assert!(f.writer.stock_expiry_check().await.unwrap().is_none());
+    put_expiring(&f, &id, 5, 100, &day_after(&f, 2)).await;
+    let first = open_alerts(&f).remove(0);
+    ack(&f, &first.id).await;
+    // Raised today already: nothing more until the business day turns.
+    assert!(f.writer.stock_expiry_check().await.unwrap().is_none());
+    f.clock.advance(DAY_MS);
+    let applied = f.writer.stock_expiry_check().await.unwrap().unwrap();
+    assert_eq!(
+        applied.changes.iter().filter(|c| c.tbl == "alerts").count(),
+        1
+    );
+    let second = open_alerts(&f).remove(0);
+    assert_ne!(second.id, first.id);
+    assert!(f.writer.stock_expiry_check().await.unwrap().is_none());
+    // Left unacknowledged for another day, it is acknowledged by the system and raised afresh.
+    f.clock.advance(DAY_MS);
+    let applied = f.writer.stock_expiry_check().await.unwrap().unwrap();
+    assert_eq!(
+        applied.changes.iter().filter(|c| c.tbl == "alerts").count(),
+        2
+    );
+    let third = open_alerts(&f);
+    assert_eq!(third.len(), 1);
+    assert_ne!(third[0].id, second.id);
+    let rows = reopen(&f).rows(Table::Alerts).unwrap();
+    let old = rows
+        .iter()
+        .find(|r| r["id"] == RowValue::Text(second.id.clone()))
+        .unwrap();
+    assert_eq!(old["acked_by"], RowValue::Text("hub-stock-expiry".into()));
+    let change = reopen(&f).changes().unwrap().pop().unwrap();
+    assert_eq!(change.intent_kind, "stock.expiry_check");
+    assert_eq!(change.actor_id, "hub-stock-expiry");
+}
+
+#[tokio::test]
+async fn the_check_clears_the_alert_once_nothing_is_left_to_expire() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    put_expiring(&f, &id, 5, 100, &day_after(&f, 1)).await;
+    assert_eq!(open_alerts(&f).len(), 1);
+    assert!(f.writer.stock_expiry_check().await.unwrap().is_none());
+    waste(&f, owner(), &id, 5, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert_eq!(open_alerts(&f).len(), 1);
+    let applied = f.writer.stock_expiry_check().await.unwrap().unwrap();
+    assert_eq!(applied.changes.len(), 1);
+    assert!(open_alerts(&f).is_empty());
+    assert!(f.writer.stock_expiry_check().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn only_the_system_runs_the_expiry_check() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    put_expiring(&f, &id, 5, 100, &day_after(&f, 1)).await;
+    let before = state(&f);
+    for actor in [owner(), staff(&f, "ctr", ROLE_COUNTER).await] {
+        let e = f
+            .writer
+            .submit_intent(intent(
+                actor,
+                IntentPayload::StockExpiryCheck(StockExpiryCheck {}),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+    }
+    assert_eq!(state(&f).0, before.0);
+}
+
+#[tokio::test]
+async fn an_expired_lot_is_held_from_sale_and_reported_as_expired() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    put_expiring(&f, &id, 5, 100, &day_after(&f, 0)).await;
+    let r = || crate::SnapshotReader::open(&f.path).unwrap();
+    let p = r().products(T0).unwrap().remove(0);
+    assert_eq!((p.available, p.quantity, p.reason), (true, 5, None));
+    // The expiry date itself is still sellable; the day after is not.
+    let later = T0 + DAY_MS;
+    let p = r().products(later).unwrap().remove(0);
+    assert_eq!(
+        (p.available, p.quantity, p.reason.as_deref()),
+        (false, 5, Some("expired"))
+    );
+    let e = &r().catalog(std::slice::from_ref(&id), later).unwrap()[0];
+    assert_eq!((e.available, e.reason.as_deref()), (false, Some("expired")));
+    // Unexpired stock keeps the product on sale; only the expired lot is held back.
+    put(&f, owner(), sin(&id, 2, 100)).await.unwrap();
+    let p = r().products(later).unwrap().remove(0);
+    assert_eq!((p.available, p.reason), (true, None));
+    // A product with nothing at all left is "out_of_stock", not "expired".
+    waste(&f, owner(), &id, 7, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    let p = r().products(later).unwrap().remove(0);
+    assert_eq!(p.reason.as_deref(), Some("out_of_stock"));
+}
+
+#[tokio::test]
+async fn a_bundle_cannot_be_sold_from_an_expired_component() {
+    let f = bootstrapped().await;
+    let milk = make(&f, up("Milk")).await;
+    let mut b = up("Combo");
+    b.track_stock = false;
+    b.bundle = true;
+    b.components = vec![arena_proto::BundleComponent {
+        product_id: milk.clone(),
+        qty: 1,
+    }];
+    let combo = make(&f, b).await;
+    put_expiring(&f, &milk, 5, 100, &day_after(&f, 0)).await;
+    let r = crate::SnapshotReader::open(&f.path).unwrap();
+    let combo_view = |now| {
+        r.products(now)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == combo)
+            .unwrap()
+    };
+    assert!(combo_view(T0).available);
+    let held = combo_view(T0 + DAY_MS);
+    assert_eq!((held.available, held.quantity), (false, 0));
+}
+
+#[tokio::test]
+async fn the_expiring_and_expired_lists_split_at_the_business_day() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    let soon = day_after(&f, 2);
+    let today = day_after(&f, 0);
+    put_expiring(&f, &id, 4, 150, &soon).await;
+    put_expiring(&f, &id, 3, 100, &today).await;
+    put_expiring(&f, &id, 1, 100, &day_after(&f, 9)).await;
+    put(&f, owner(), sin(&id, 1, 100)).await.unwrap();
+    let r = crate::SnapshotReader::open(&f.path).unwrap();
+    let v = r.expiry(T0).unwrap();
+    assert_eq!((v.warn_days, v.today.as_str()), (3, today.as_str()));
+    let lots: Vec<_> = v
+        .expiring
+        .iter()
+        .map(|l| (l.expiry.as_str(), l.qty))
+        .collect();
+    assert_eq!(lots, [(today.as_str(), 3), (soon.as_str(), 4)]);
+    assert_eq!(v.expiring[1].value_minor, 600);
+    assert_eq!(v.expiring[0].product, "Milk");
+    assert!(v.expired.is_empty());
+    let v = r.expiry(T0 + DAY_MS).unwrap();
+    assert_eq!(v.expired.len(), 1);
+    assert_eq!(v.expired[0].expiry, today);
+    assert_eq!(v.expiring.len(), 1);
+}
+
+#[tokio::test]
+async fn writing_off_an_expired_lot_records_the_move_at_cost_and_clears_the_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    let old = day_after(&f, 0);
+    put_expiring(&f, &id, 4, 100, &old).await;
+    put(&f, owner(), sin(&id, 6, 300)).await.unwrap();
+    assert_eq!(held(&f, &id), (10, 220));
+    assert_eq!(open_alerts(&f).len(), 1);
+    f.clock.advance(DAY_MS);
+    let lot = lot_id_of(&f, &id, &old);
+    let counter = staff(&f, "ctr", ROLE_COUNTER).await;
+    let before = state(&f);
+    let e = write_off(&f, counter, &lot).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::PermissionDenied);
+    assert_eq!(state(&f), before);
+    let applied = write_off(&f, owner(), &lot).await.unwrap();
+    assert_eq!(held(&f, &id), (6, 220));
+    assert_eq!(lots_of(&f, &id), [(None, 6), (Some(old.clone()), 0)]);
+    let m = reopen(&f).moves(&id).unwrap().pop().unwrap();
+    assert_eq!(
+        (
+            m.reason.as_str(),
+            m.delta,
+            m.before_qty,
+            m.unit_cost_minor,
+            m.value_minor
+        ),
+        ("expired", -4, 10, 100, 400)
+    );
+    assert_eq!(m.lot_id.as_deref(), Some(lot.as_str()));
+    assert_eq!(m.staff_id, "o");
+    let used: serde_json::Value = serde_json::from_str(&m.lots_used).unwrap();
+    assert_eq!(used[0]["lot_id"].as_str(), Some(lot.as_str()));
+    assert_eq!(used[0]["qty"].as_i64(), Some(4));
+    // The only lot in or past the window went: the alert clears in the same change set.
+    assert!(open_alerts(&f).is_empty());
+    let tables: Vec<_> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+    assert_eq!(tables, ["stock", "stock_lots", "stock_moves", "alerts"]);
+    // The lot is empty now.
+    let before = state(&f);
+    let e = write_off(&f, owner(), &lot).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Stale);
+    assert_eq!(state(&f), before);
+}
+
+#[tokio::test]
+async fn the_alert_stays_while_another_lot_is_expired_or_expiring() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    let a = day_after(&f, 0);
+    let b = day_after(&f, 1);
+    put_expiring(&f, &id, 2, 100, &a).await;
+    put_expiring(&f, &id, 2, 100, &b).await;
+    f.clock.advance(DAY_MS);
+    write_off(&f, owner(), &lot_id_of(&f, &id, &a))
+        .await
+        .unwrap();
+    assert_eq!(open_alerts(&f).len(), 1);
+    f.clock.advance(DAY_MS);
+    write_off(&f, owner(), &lot_id_of(&f, &id, &b))
+        .await
+        .unwrap();
+    assert!(open_alerts(&f).is_empty());
+    assert_eq!(held(&f, &id).0, 0);
+}
+
+#[tokio::test]
+async fn a_lot_that_is_not_expired_or_unknown_cannot_be_written_off() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    let on_date = day_after(&f, 0);
+    put_expiring(&f, &id, 2, 100, &on_date).await;
+    put(&f, owner(), sin(&id, 2, 100)).await.unwrap();
+    let no_expiry = reopen(&f)
+        .lots(&id)
+        .unwrap()
+        .into_iter()
+        .find(|l| l.expiry.is_none())
+        .unwrap()
+        .lot_id;
+    let before = state(&f);
+    for lot in [lot_id_of(&f, &id, &on_date), no_expiry, "nope".into()] {
+        let e = write_off(&f, owner(), &lot).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("lot_id"))
+        );
+        assert_eq!(state(&f), before);
+    }
+}
+
+#[tokio::test]
+async fn a_replayed_write_off_applies_once() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    let old = day_after(&f, 0);
+    put_expiring(&f, &id, 2, 100, &old).await;
+    f.clock.advance(DAY_MS);
+    let lot = lot_id_of(&f, &id, &old);
+    let i = Intent {
+        issued_at: f.clock.now_ms(),
+        ..intent(
+            owner(),
+            IntentPayload::StockWriteOff(StockWriteOff { lot_id: lot }),
+        )
+    };
+    let first = f.writer.submit_intent(i.clone()).await.unwrap();
+    let again = f.writer.submit_intent(i).await.unwrap();
+    assert_eq!(first.changes.len(), again.changes.len());
+    assert_eq!(reopen(&f).moves(&id).unwrap().len(), 2);
 }

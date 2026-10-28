@@ -238,3 +238,35 @@ pub fn latest_move_id(conn: &Connection, product_id: &str) -> Result<Option<Stri
     .optional()
     .map_err(db_error)
 }
+
+/// Lots with stock left and an expiry date on or before `until` (`YYYY-MM-DD`), earliest
+/// expiry first, each with its product's name.
+pub fn list_expiring_lots(
+    conn: &Connection,
+    until: &str,
+) -> Result<Vec<(LotRow, String)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT l.lot_id, l.product_id, l.qty_in, l.qty_remaining, l.unit_cost_minor,
+                    l.expiry, l.received_at, p.name
+             FROM stock_lots l JOIN products p ON p.product_id = l.product_id
+             WHERE l.qty_remaining > 0 AND l.expiry IS NOT NULL AND l.expiry <= ?1
+             ORDER BY l.expiry, l.lot_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([until], |r| Ok((lot(r)?, r.get::<_, String>(7)?)))
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// How many units of a product sit in lots whose expiry date is before `today`.
+pub fn expired_qty(conn: &Connection, product_id: &str, today: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(qty_remaining), 0) FROM stock_lots
+         WHERE product_id = ?1 AND expiry IS NOT NULL AND expiry < ?2",
+        params![product_id, today],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}

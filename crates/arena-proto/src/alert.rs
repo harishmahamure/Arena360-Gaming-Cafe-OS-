@@ -17,15 +17,19 @@ pub enum AlertKind {
     ControllerMissing,
     /// A Bluetooth printer dropped a job (raised by the Hub's printer dispatch; Story 4.6).
     PrinterOffline,
+    /// A lot with stock left expires within the warning window or already has (raised by
+    /// `stock.expiry_check` and `stock.in`; Story 5.7). A branch-level alert.
+    StockExpiring,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 4] = [
+    pub const ALL: [AlertKind; 5] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
         Self::PrinterOffline,
+        Self::StockExpiring,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -35,6 +39,7 @@ impl AlertKind {
             Self::TimeUp => "time_up",
             Self::ControllerMissing => "controller_missing",
             Self::PrinterOffline => "printer_offline",
+            Self::StockExpiring => "stock_expiring",
         }
     }
 
@@ -50,6 +55,7 @@ impl AlertKind {
             Self::TimeUp => "time-up",
             Self::ControllerMissing => "controller",
             Self::PrinterOffline => "printer",
+            Self::StockExpiring => "expiring",
         }
     }
 }

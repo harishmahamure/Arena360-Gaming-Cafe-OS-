@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 03:00
+last_updated: 10-29-2026 04:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -131,7 +131,7 @@ development_status:
   5-4-bundles-priced-on-their-own: done
   5-5-stock-in-with-expiry-lots-and-weighted-average-cost: done
   5-6-record-waste-with-a-reason: done
-  5-7-expiry-alerts-and-expired-stock-held-from-sale-until-written: backlog
+  5-7-expiry-alerts-and-expired-stock-held-from-sale-until-written: review
   5-8-low-stock-thresholds-and-alerts: backlog
   5-9-pos-screen-product-grid-search-or-scan-and-cart: backlog
   5-10-open-a-shift-with-a-confirmed-float-and-cash-needs-an-open-s: backlog

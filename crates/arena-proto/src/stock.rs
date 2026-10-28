@@ -9,6 +9,13 @@ pub const MOVE_STOCK_IN: &str = "stock_in";
 pub const MOVE_STOCK_IN_REVERTED: &str = "stock_in_reverted";
 pub const MOVE_WASTE: &str = "waste";
 pub const MOVE_WASTE_REVERTED: &str = "waste_reverted";
+pub const MOVE_EXPIRED: &str = "expired";
+
+/// How many days before a lot's expiry date the Hub warns (0 to 30, default 3). Staff set it
+/// through `settings.set`.
+pub const KEY_STOCK_EXPIRY_WARN_DAYS: &str = "stock.expiry_warn_days";
+pub const DEFAULT_STOCK_EXPIRY_WARN_DAYS: &str = "3";
+pub const STOCK_EXPIRY_WARN_RANGE: (i64, i64) = (0, 30);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -46,6 +53,47 @@ pub struct StockWaste {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct StockWasteReverted {
     pub move_id: String,
+}
+
+/// The payload of `stock.write_off`: write the whole remaining quantity of the expired lot
+/// `lot_id` off the books (move reason `expired`, valued at the lot's cost).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StockWriteOff {
+    pub lot_id: String,
+}
+
+/// The payload of `stock.expiry_check` (system only): raises the "Expiring soon" alert when a
+/// lot is inside the warning window (once per business day) and clears it when none is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StockExpiryCheck {}
+
+/// One lot on the Inventory → Expiring and Expired lists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ExpiringLot {
+    pub lot_id: String,
+    pub product_id: String,
+    pub product: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    pub expiry: String,
+    /// What the remaining quantity cost, in minor units.
+    #[ts(type = "number")]
+    pub value_minor: i64,
+}
+
+/// The two Inventory lists at one moment: the lots inside the warning window and the lots
+/// already past their expiry date (both with quantity remaining), earliest expiry first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ExpiryView {
+    pub today: String,
+    #[ts(type = "number")]
+    pub warn_days: i64,
+    pub expiring: Vec<ExpiringLot>,
+    pub expired: Vec<ExpiringLot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +135,52 @@ pub fn valid_date(s: &str) -> bool {
         _ => return false,
     };
     y >= 1 && (1..=days).contains(&d)
+}
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+/// `date` (`YYYY-MM-DD`) moved by `days`; `None` when `date` is not a real day or the result
+/// leaves years 1 to 9999.
+pub fn add_days(date: &str, days: i64) -> Option<String> {
+    if !valid_date(date) {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| date.get(r)?.parse::<i64>().ok();
+    let z = days_from_civil(n(0..4)?, n(5..7)?, n(8..10)?).checked_add(days)?;
+    let (y, m, d) = civil_from_days(z);
+    (1..=9999)
+        .contains(&y)
+        .then(|| format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// Whether a lot expiring on `expiry` is past its date on `today`: the date itself is still
+/// sellable, the day after is not.
+pub fn lot_expired(expiry: &str, today: &str) -> bool {
+    expiry < today
+}
+
+/// Whether a lot expiring on `expiry` is expired, or expires within `warn_days` of `today`.
+pub fn lot_in_window(expiry: &str, today: &str, warn_days: i64) -> bool {
+    add_days(today, warn_days).is_some_and(|last| expiry <= last.as_str())
 }
 
 pub fn consume_plan(lots: &[LotView], qty: i64) -> Option<Vec<(String, i64)>> {
@@ -131,6 +225,31 @@ mod tests {
     #[test]
     fn the_golden_average_is_23_rupees() {
         assert_eq!(weighted_avg_cost(10, 2000, 30, 2400), 2300);
+    }
+
+    #[test]
+    fn days_move_across_months_years_and_leap_days() {
+        assert_eq!(add_days("2026-10-28", 3).as_deref(), Some("2026-10-31"));
+        assert_eq!(add_days("2026-10-28", 4).as_deref(), Some("2026-11-01"));
+        assert_eq!(add_days("2026-12-30", 30).as_deref(), Some("2027-01-29"));
+        assert_eq!(add_days("2028-02-28", 1).as_deref(), Some("2028-02-29"));
+        assert_eq!(add_days("2027-02-28", 1).as_deref(), Some("2027-03-01"));
+        assert_eq!(add_days("2026-03-01", -1).as_deref(), Some("2026-02-28"));
+        assert_eq!(add_days("2026-10-28", 0).as_deref(), Some("2026-10-28"));
+        assert_eq!(add_days("2026-02-30", 1), None);
+        assert_eq!(add_days("9999-12-31", 1), None);
+        assert_eq!(add_days("0001-01-01", -1), None);
+    }
+
+    #[test]
+    fn the_expiry_date_itself_is_sellable_and_inside_the_window() {
+        assert!(!lot_expired("2026-10-28", "2026-10-28"));
+        assert!(lot_expired("2026-10-27", "2026-10-28"));
+        assert!(lot_in_window("2026-10-31", "2026-10-28", 3));
+        assert!(!lot_in_window("2026-11-01", "2026-10-28", 3));
+        assert!(lot_in_window("2026-10-01", "2026-10-28", 3));
+        assert!(lot_in_window("2026-10-28", "2026-10-28", 0));
+        assert!(!lot_in_window("2026-10-29", "2026-10-28", 0));
     }
 
     #[test]

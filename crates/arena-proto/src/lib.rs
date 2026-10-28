@@ -82,7 +82,8 @@ pub use catalog::{
     BundleComponent, CatalogEntry, ComponentView, IMAGE_PREFIX, MAX_BARCODE_CHARS,
     MAX_BUNDLE_COMPONENTS, MAX_CATEGORY_CHARS, MAX_COMPONENT_QTY, MAX_IMAGE_BYTES, MAX_IMAGE_PX,
     MAX_PRICE_MINOR, MAX_PRODUCT_NAME_CHARS, Product, ProductDelete, ProductUpsert,
-    REASON_COMPONENT_INACTIVE, availability, bundle_quantity, hsn_valid, image_problem,
+    REASON_COMPONENT_INACTIVE, REASON_EXPIRED, availability, bundle_quantity, hsn_valid,
+    image_problem,
 };
 pub use commands::{
     COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION, COMMANDS_PAGE, CommandResult, CommandResultAck,
@@ -239,9 +240,12 @@ pub use staff_invite::{
 };
 pub use staff_list::{StaffList, StaffStatus, StaffView, UiStaffDeactivateRequest};
 pub use stock::{
-    LotView, MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_STOCK_IN,
-    MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED, STOCK_UNDO_MS, StockIn,
-    StockInReverted, StockWaste, StockWasteReverted, consume_plan, valid_date, weighted_avg_cost,
+    DEFAULT_STOCK_EXPIRY_WARN_DAYS, ExpiringLot, ExpiryView, KEY_STOCK_EXPIRY_WARN_DAYS, LotView,
+    MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_EXPIRED, MOVE_STOCK_IN,
+    MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED, STOCK_EXPIRY_WARN_RANGE,
+    STOCK_UNDO_MS, StockExpiryCheck, StockIn, StockInReverted, StockWaste, StockWasteReverted,
+    StockWriteOff, add_days, consume_plan, lot_expired, lot_in_window, valid_date,
+    weighted_avg_cost,
 };
 pub use tax::{
     DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,

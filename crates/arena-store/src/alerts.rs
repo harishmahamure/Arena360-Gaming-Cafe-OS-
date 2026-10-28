@@ -97,3 +97,13 @@ pub fn ack_alert(
     .map_err(db_error)?;
     Ok(())
 }
+
+/// When the latest alert of `kind` for the branch (no device) was raised, open or not.
+pub fn latest_branch_alert_at(conn: &Connection, kind: &str) -> Result<Option<i64>, AppError> {
+    conn.query_row(
+        "SELECT MAX(raised_at) FROM alerts WHERE kind = ?1 AND device_id IS NULL",
+        [kind],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}

@@ -8216,7 +8216,7 @@ mod products {
         let off = make(&f, u).await;
         assert_eq!(r().setup().unwrap().unwrap().products_count, 2);
         let by_id = |id: &str| {
-            r().products()
+            r().products(T0)
                 .unwrap()
                 .into_iter()
                 .find(|p| p.id == id)
@@ -8230,7 +8230,7 @@ mod products {
         assert!(by_id(&untracked).available);
         assert_eq!(by_id(&off).reason.as_deref(), Some("inactive"));
         let ids = vec![tracked.clone(), untracked, "gone".into()];
-        let entries = r().catalog(&ids).unwrap();
+        let entries = r().catalog(&ids, T0).unwrap();
         assert_eq!(
             entries
                 .iter()
@@ -8254,7 +8254,7 @@ mod products {
             .unwrap();
         assert_eq!(r().setup().unwrap().unwrap().products_count, 1);
         assert_eq!(
-            r().catalog(&[tracked]).unwrap()[0].reason.as_deref(),
+            r().catalog(&[tracked], T0).unwrap()[0].reason.as_deref(),
             Some("inactive")
         );
     }
@@ -8424,7 +8424,7 @@ mod products {
     fn view(f: &Fixture, id: &str) -> arena_proto::Product {
         crate::SnapshotReader::open(&f.path)
             .unwrap()
-            .products()
+            .products(T0)
             .unwrap()
             .into_iter()
             .find(|p| p.id == id)
@@ -8622,7 +8622,7 @@ mod products {
                 .collect::<Vec<_>>(),
             [("Burger", false)]
         );
-        let ids = r().catalog(std::slice::from_ref(&free)).unwrap();
+        let ids = r().catalog(std::slice::from_ref(&free), T0).unwrap();
         let got: Vec<_> = ids
             .iter()
             .map(|e| (e.product_id.clone(), e.reason.clone()))
@@ -8649,7 +8649,7 @@ mod products {
         let v = view(&f, &mixed);
         assert_eq!(v.reason.as_deref(), Some("component_inactive"));
         assert!(v.components.iter().any(|c| c.name == "Cola" && !c.active));
-        let gone = r().catalog(&[tracked]).unwrap();
+        let gone = r().catalog(&[tracked], T0).unwrap();
         assert!(gone.iter().any(|e| e.product_id == mixed));
 
         let mut dead = combo("Mixed", &[(&free, 1)]);
@@ -8705,7 +8705,7 @@ mod products {
             .await
             .unwrap();
         let r = crate::SnapshotReader::open(&f.path).unwrap();
-        let e = &r.catalog(std::slice::from_ref(&id)).unwrap()[0];
+        let e = &r.catalog(std::slice::from_ref(&id), T0).unwrap()[0];
         assert_eq!(
             (e.available, e.reason.as_deref()),
             (false, Some("inactive"))

@@ -478,3 +478,9 @@
 - Only the reserved probe device's time-up is timed. Time-up locks on kiosks are not asserted (the fake kiosks do not draw), and a kiosk receiving the `pc_command` lock is not checked.
 - `dev seed` now applies a roomy licence (100 devices, 10 users) before the fixture staff: the four fixture staff already broke `dev seed` and `dev_seed`/`lan` tests under the Free user cap (Story 4.9), and the fleet needs 20 devices. The pairing licence recorded at the end puts the Free caps back, so the fleet revokes the seeded "Dev Kiosk" to stay under the cap of 20.
 - The egress check needs gateway captures the lab must provide (`FARM_GATEWAY_SYN`, `FARM_GATEWAY_DNS`); without them the step is skipped. Ad destinations are matched by DNS name from the resolver's log, so a CDN IP shared with a non-ad name fails the check by design.
+
+## Deferred from: Story 5.7
+
+- The expiry check rides the hourly housekeeping sweep, so the "Expiring soon" alert and the `catalog.changed` push for newly expired products land within an hour of the business day turning over, not at the exact start. Availability itself is computed from the business day at read time, so an expired lot is held from sale at once; only the push to already-open kiosk/POS views waits for the sweep.
+- Expiry state is branch-wide: one alert for all lots, no per-lot alert rows, no undo of a write-off, and the Counter-with-PIN path for `stock.write_off` is covered by a mocked Playwright run only.
+- The price of expired stock sitting in waste/stock reports (Story 5.31) will need `stock_moves.reason = 'expired'` grouped with waste.

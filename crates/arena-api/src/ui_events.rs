@@ -392,8 +392,11 @@ impl HubTask {
                         let products = crate::lan::registry::product_ids(&applied);
                         if !products.is_empty() {
                             let reader = Arc::clone(&self.reader);
-                            let entries =
-                                tokio::task::spawn_blocking(move || reader.catalog(&products)).await;
+                            let now_ms = self.clock.now_ms();
+                            let entries = tokio::task::spawn_blocking(move || {
+                                reader.catalog(&products, now_ms)
+                            })
+                            .await;
                             match entries {
                                 Ok(Ok(products)) => {
                                     let data = serde_json::json!({"products": products}).to_string();

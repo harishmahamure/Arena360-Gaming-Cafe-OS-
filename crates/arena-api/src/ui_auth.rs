@@ -2830,8 +2830,22 @@ async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
         return fail(e);
     }
     let reader = Arc::clone(&auth.reader);
-    match tokio::task::spawn_blocking(move || reader.products()).await {
+    let now_ms = auth.clock.now_ms();
+    match tokio::task::spawn_blocking(move || reader.products(now_ms)).await {
         Ok(Ok(list)) => Json(list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+async fn stock_expiry(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(&auth.reader);
+    let now_ms = auth.clock.now_ms();
+    match tokio::task::spawn_blocking(move || reader.expiry(now_ms)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
         Ok(Err(e)) => fail(ui_error(e)),
         Err(_) => fail(internal()),
     }
@@ -3025,6 +3039,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/staff", get(staff_list))
         .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))
+        .route("/ui/stock/expiry", get(stock_expiry))
         .route("/ui/plans", get(plans))
         .route("/ui/rules", get(rules))
         .route("/ui/printer/find", post(crate::ui_printer::find))
@@ -5119,6 +5134,20 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = call(&hub, "GET", "/ui/products", Some(&manager), None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_expiry_lists_need_a_session_and_start_empty() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/stock/expiry", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, view) = call(&hub, "GET", "/ui/stock/expiry", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["warn_days"], 3);
+        assert_eq!(view["expiring"], json!([]));
+        assert_eq!(view["expired"], json!([]));
+        assert_eq!(view["today"].as_str().map(str::len), Some(10));
     }
 
     #[tokio::test]

@@ -341,7 +341,10 @@
   async function pickAlert(row: AlertRow) {
     alertsOpen = false;
     if (row.alertId) void ackAlerts([row.alertId]);
-    if (!row.deviceId) return;
+    if (!row.deviceId) {
+      if (row.href) await goto(row.href);
+      return;
+    }
     requestSheet(row.deviceId);
     if (current?.id !== "floor") {
       await goto("/floor?" + new URLSearchParams({ device: row.deviceId }));

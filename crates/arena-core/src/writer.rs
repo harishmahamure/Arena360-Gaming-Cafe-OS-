@@ -663,6 +663,55 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 5.7: raises the "Expiring soon" alert when a lot is expired or inside the warning
+    /// window (once per business day) and clears it when none is: checks and, only when
+    /// something changes, submits `stock.expiry_check` (system actor) in the same transaction,
+    /// then emits. Reads only the Hub's own clock and business day. `None` when nothing needed
+    /// changing.
+    pub async fn stock_expiry_check(&self) -> Result<Option<Applied>, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        let events = self.events.clone();
+        self.run_then(
+            move |store| {
+                let ctx = ctx_from(clock.as_ref(), &status);
+                store.write_tx_mut(|tx| {
+                    let now = clock.now_ms();
+                    let due = crate::apply::stock::load_check(tx, now)?;
+                    if !crate::apply::stock::check_due(&due) {
+                        return Ok(None);
+                    }
+                    let intent = Intent {
+                        intent_id: ulid::Ulid::generate().to_string(),
+                        kind: arena_proto::IntentKind::StockExpiryCheck,
+                        idempotency_key: ulid::Ulid::generate().to_string(),
+                        issued_at: now,
+                        base_rev: None,
+                        actor: arena_proto::Actor {
+                            kind: arena_proto::ActorKind::System,
+                            id: "hub-stock-expiry".into(),
+                        },
+                        elevated_by: None,
+                        reason: None,
+                        payload: arena_proto::IntentPayload::StockExpiryCheck(
+                            arena_proto::StockExpiryCheck {},
+                        ),
+                    };
+                    match run(tx, &ctx, &intent)? {
+                        Outcome::Fresh(applied) => Ok(Some(applied)),
+                        Outcome::Replayed(_) => Ok(None),
+                    }
+                })
+            },
+            move |out| {
+                if let Some(applied) = out {
+                    emit(&events, applied);
+                }
+            },
+        )
+        .await
+    }
+
     /// How many jobs this writer has been handed (for tests: a `BAD_FRAME` queues none).
     #[cfg(any(test, feature = "test-jobs"))]
     pub fn jobs_submitted(&self) -> u64 {

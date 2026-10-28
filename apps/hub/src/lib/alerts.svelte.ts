@@ -1,6 +1,7 @@
 // Hub alerts: the open alerts the snapshot carries, the header list's rows, the acknowledge job
-// and the sound loop. The sound repeats every 30 s while any open device alert exists; the
-// branch-level conditions (licence unverified, PC clock wrong) are rows with no sound.
+// and the sound loop. The sound repeats every 30 s while any open device alert (or an expiring-
+// stock alert) exists; the branch-level conditions (licence unverified, PC clock wrong) are rows
+// with no sound.
 
 import { t } from "@arena/ui";
 import type { AlertKind, HubSnapshot, SnapshotAlert } from "@arena/ui/generated";
@@ -17,6 +18,7 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   time_up: "hub.alerts.kind.time_up",
   controller_missing: "hub.alerts.kind.controller_missing",
   printer_offline: "hub.alerts.kind.printer_offline",
+  stock_expiring: "hub.alerts.kind.stock_expiring",
 };
 
 // A branch-level alert (no device) has no tile tag.
@@ -25,7 +27,12 @@ export const KIND_TAGS: Record<AlertKind, "new" | "time-up" | "controllers" | nu
   time_up: "time-up",
   controller_missing: "controllers",
   printer_offline: null,
+  stock_expiring: null,
 };
+
+/** Branch-level kinds that also sound, and the screen a pick on them opens. */
+const BRANCH_SOUNDS = new Set<AlertKind>(["stock_expiring"]);
+const KIND_HREFS: Partial<Record<AlertKind, string>> = { stock_expiring: "/inventory/expiring" };
 
 const CONDITIONS = {
   licence: "hub.licence.unverified",
@@ -41,6 +48,8 @@ export type AlertRow = {
   alertId: string | null;
   /** The device whose sheet the row opens (`null` for a branch-level row). */
   deviceId: string | null;
+  /** The screen the row opens when it is not about a device. */
+  href: string | null;
   label: MessageKey;
   /** When the alert was raised (UTC ms; `null` for a condition). */
   since: number | null;
@@ -77,6 +86,7 @@ export function listRows(): AlertRow[] {
       key: a.id,
       alertId: a.id,
       deviceId: a.device_id ?? null,
+      href: KIND_HREFS[a.kind] ?? null,
       label: KIND_LABELS[a.kind],
       since: a.raised_at,
     })),
@@ -84,6 +94,7 @@ export function listRows(): AlertRow[] {
       key: c,
       alertId: null,
       deviceId: null,
+      href: null,
       label: CONDITIONS[c],
       since: null,
     })),
@@ -126,7 +137,9 @@ function play() {
 }
 
 function settleSound() {
-  const ids = new Set(alerts.open.filter((a) => a.device_id).map((a) => a.id));
+  const ids = new Set(
+    alerts.open.filter((a) => a.device_id || BRANCH_SOUNDS.has(a.kind)).map((a) => a.id),
+  );
   const fresh = [...ids].some((id) => !heard.has(id));
   heard = ids;
   if (ids.size === 0) {

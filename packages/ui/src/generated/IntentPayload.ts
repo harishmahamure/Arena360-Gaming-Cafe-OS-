@@ -62,10 +62,12 @@ import type { SettingsSet } from "./SettingsSet";
 import type { StaffDeactivate } from "./StaffDeactivate";
 import type { StaffSetCredentials } from "./StaffSetCredentials";
 import type { StaffUpsert } from "./StaffUpsert";
+import type { StockExpiryCheck } from "./StockExpiryCheck";
 import type { StockIn } from "./StockIn";
 import type { StockInReverted } from "./StockInReverted";
 import type { StockWaste } from "./StockWaste";
 import type { StockWasteReverted } from "./StockWasteReverted";
+import type { StockWriteOff } from "./StockWriteOff";
 import type { WalletTopup } from "./WalletTopup";
 import type { WalletTopupReverted } from "./WalletTopupReverted";
 import type { ZoneDelete } from "./ZoneDelete";
@@ -110,6 +112,8 @@ export type IntentPayload =
   | ({ kind: "stock.in.reverted" } & StockInReverted)
   | ({ kind: "stock.waste" } & StockWaste)
   | ({ kind: "stock.waste.reverted" } & StockWasteReverted)
+  | ({ kind: "stock.write_off" } & StockWriteOff)
+  | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
   | ({ kind: "device.maintenance" } & DeviceMaintenance)
   | ({ kind: "rate.upsert" } & RateUpsert)
   | ({ kind: "device.test_session.start" } & DeviceTestSessionStart)

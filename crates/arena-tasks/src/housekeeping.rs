@@ -124,6 +124,24 @@ impl HousekeepingTask {
         }
     }
 
+    /// Story 5.7: raises the "Expiring soon" alert for stock that is expired or about to expire
+    /// (once per business day, from the Hub's own clock) and clears it when none is, while
+    /// primary; logs the outcome.
+    pub async fn stock_expiry_sweep_and_log(&self) {
+        if !self.is_primary() {
+            return;
+        }
+        match self.writer.stock_expiry_check().await {
+            Ok(Some(applied)) => tracing::info!(
+                rows = applied.changes.len(),
+                "stock.expiry_check: expiry alert updated"
+            ),
+            Ok(None) => {}
+            Err(e) if e.code == ErrorCode::NotPrimary => {}
+            Err(e) => tracing::warn!(code = e.code.as_str(), "stock.expiry_check failed"),
+        }
+    }
+
     /// Seeds missing default rows (see the module docs); logs the outcome.
     pub async fn seed_and_log(&self) {
         if !self.is_primary() {
@@ -152,7 +170,10 @@ impl HousekeepingTask {
         while !self.writer.is_closed() {
             tokio::select! {
                 _ = interval.tick() => self.tick_and_log().await,
-                _ = sweep.tick() => self.credit_sweep_and_log().await,
+                _ = sweep.tick() => {
+                    self.credit_sweep_and_log().await;
+                    self.stock_expiry_sweep_and_log().await;
+                }
                 changed = self.status.changed() => {
                     if changed.is_err() {
                         break;
@@ -162,6 +183,7 @@ impl HousekeepingTask {
                         self.seed_and_log().await;
                         self.tick_and_log().await;
                         self.credit_sweep_and_log().await;
+                        self.stock_expiry_sweep_and_log().await;
                     }
                     was_primary = primary;
                 }

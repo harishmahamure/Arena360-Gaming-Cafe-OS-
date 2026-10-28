@@ -27,6 +27,9 @@ use arena_proto::{
 };
 use arena_proto::{DEFAULT_SETUP_LIVE, DEFAULT_TEST_SESSION, KEY_SETUP_LIVE, KEY_TEST_SESSION};
 use arena_proto::{
+    DEFAULT_STOCK_EXPIRY_WARN_DAYS, KEY_STOCK_EXPIRY_WARN_DAYS, STOCK_EXPIRY_WARN_RANGE,
+};
+use arena_proto::{
     DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME, KEY_TAX, TaxSettings,
 };
 
@@ -115,6 +118,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
         KEY_BILLING_CREDIT_AUTO_PAUSE,
         DEFAULT_BILLING_CREDIT_AUTO_PAUSE,
     ),
+    (KEY_STOCK_EXPIRY_WARN_DAYS, DEFAULT_STOCK_EXPIRY_WARN_DAYS),
 ];
 
 pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
@@ -126,7 +130,7 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 18] = [
+pub const KEYED_FIELD_KEYS: [&str; 19] = [
     KEY_KITCHEN_KOT_MODE,
     KEY_KITCHEN_KOT_PRINTER,
     KEY_KITCHEN_KOT_PAPER_MM,
@@ -145,6 +149,7 @@ pub const KEYED_FIELD_KEYS: [&str; 18] = [
     KEY_BILLING_GRACE_MIN,
     KEY_BILLING_TIME_UP_MODE,
     KEY_BILLING_CREDIT_AUTO_PAUSE,
+    KEY_STOCK_EXPIRY_WARN_DAYS,
 ];
 
 /// The value `branch.seed_defaults` inserts for a default setting an existing branch lacks:
@@ -278,6 +283,13 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     ),
     (KEY_BILLING_TIME_UP_MODE, SettingRule::OneOf(TIME_UP_MODES)),
     (KEY_BILLING_CREDIT_AUTO_PAUSE, SettingRule::Bool),
+    (
+        KEY_STOCK_EXPIRY_WARN_DAYS,
+        SettingRule::Integer {
+            min: STOCK_EXPIRY_WARN_RANGE.0,
+            max: STOCK_EXPIRY_WARN_RANGE.1,
+        },
+    ),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
     (KEY_BRANCH_NAME, SettingRule::BranchName),
     (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),

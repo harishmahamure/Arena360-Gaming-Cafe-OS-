@@ -61,7 +61,7 @@ mod settings_set;
 mod staff_credentials;
 mod staff_deactivate;
 mod staff_roles;
-mod stock;
+pub(crate) mod stock;
 mod test_session;
 mod transfer;
 mod ttl_dedupe;
@@ -287,9 +287,12 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }
         P::ControllerCheck(c) => Target::ControllerCheck(Box::new(controller_check::load(tx, c)?)),
-        P::StockIn(_) | P::StockInReverted(_) | P::StockWaste(_) | P::StockWasteReverted(_) => {
-            Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
-        }
+        P::StockIn(_)
+        | P::StockInReverted(_)
+        | P::StockWaste(_)
+        | P::StockWasteReverted(_)
+        | P::StockWriteOff(_)
+        | P::StockExpiryCheck(_) => Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?)),
     })
 }
 

@@ -265,6 +265,14 @@ pub(super) fn mutate(
             Target::Stock(t) => stock::mutate_waste_revert(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::StockWriteOff(_) => match target {
+            Target::Stock(t) => stock::mutate_write_off(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::StockExpiryCheck(_) => match target {
+            Target::Stock(t) => stock::mutate_check(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceScreen(_) | IntentPayload::DevicePower(_) => match target {
             Target::Pc(t) => super::pc_command::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),

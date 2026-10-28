@@ -690,6 +690,7 @@ mod tests {
                                 reference: Some("0042".into()),
                             },
                         ],
+                        receipt: None,
                     }),
                     Some(rev),
                 )
@@ -802,6 +803,7 @@ mod tests {
                             amount_minor: 6_000,
                             reference: None,
                         }],
+                        receipt: None,
                     }),
                     Some(1),
                 ))
@@ -850,6 +852,7 @@ mod tests {
                             amount_minor: 30_000,
                             reference: None,
                         }],
+                        receipt: None,
                     }),
                     None,
                 )
@@ -927,6 +930,7 @@ mod tests {
                         player_id: None,
                         credit_override: None,
                         stock_override: None,
+                        receipt: None,
                     }),
                     None,
                 )

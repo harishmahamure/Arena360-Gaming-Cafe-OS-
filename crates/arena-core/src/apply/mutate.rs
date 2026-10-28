@@ -318,7 +318,11 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::SessionSettle(s) => match target {
-            Target::SessionSettle(t) => super::session::mutate_settle(tx, intent, s, t, now_ms),
+            Target::SessionSettle(t) => {
+                let mut written = super::session::mutate_settle(tx, intent, s, t, now_ms)?;
+                super::receipt_print::queue_on_settle(tx, intent, epoch, now_ms, &mut written)?;
+                Ok(written)
+            }
             _ => Err(mismatch()),
         },
         IntentPayload::SessionEndReverted(_) => match target {
@@ -366,7 +370,11 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::PlanSell(p) => match target {
-            Target::PlanSell(t) => super::plan_sales::mutate_sell(tx, intent, p, t, now_ms),
+            Target::PlanSell(t) => {
+                let mut written = super::plan_sales::mutate_sell(tx, intent, p, t, now_ms)?;
+                super::receipt_print::queue_on_settle(tx, intent, epoch, now_ms, &mut written)?;
+                Ok(written)
+            }
             _ => Err(mismatch()),
         },
         IntentPayload::PlanSellReverted(_) => match target {
@@ -374,7 +382,11 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::PosSale(p) => match target {
-            Target::PosSale(t) => super::pos_sale::mutate_sale(tx, intent, p, t, now_ms),
+            Target::PosSale(t) => {
+                let mut written = super::pos_sale::mutate_sale(tx, intent, p, t, now_ms)?;
+                super::receipt_print::queue_on_settle(tx, intent, epoch, now_ms, &mut written)?;
+                Ok(written)
+            }
             _ => Err(mismatch()),
         },
         IntentPayload::PosSaleReverted(_) => match target {
@@ -435,6 +447,12 @@ pub(super) fn mutate(
         },
         IntentPayload::InvoiceIssue(_) => match target {
             Target::InvoiceIssue(t) => super::invoice_issue::mutate(tx, intent, t, epoch, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::ReceiptReprint(_)
+        | IntentPayload::ReceiptPrinted(_)
+        | IntentPayload::ReceiptPrintFailed(_) => match target {
+            Target::Receipt(t) => super::receipt_print::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::CreditCollectReverted(_) => match target {

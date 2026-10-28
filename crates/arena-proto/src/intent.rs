@@ -232,6 +232,17 @@ pub enum IntentKind {
     /// `STALE`.
     #[serde(rename = "invoice.issue")]
     InvoiceIssue,
+    /// Prints the receipt of a settled, numbered order again, marked "Reprint" (Story 5.17). The
+    /// audit log records who asked. An order without a number is `STALE`.
+    #[serde(rename = "receipt.reprint")]
+    ReceiptReprint,
+    /// The print task sent a queued receipt to the printer (system only; Story 5.17).
+    #[serde(rename = "receipt.printed")]
+    ReceiptPrinted,
+    /// The printer did not take a queued receipt (system only). The sale stays settled and a
+    /// "Printer offline" alert is raised.
+    #[serde(rename = "receipt.print_failed")]
+    ReceiptPrintFailed,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
     /// Opens an alert on a device or the branch (system only; any feature supplies the kind). One
@@ -255,7 +266,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 83] = [
+    pub const ALL: [IntentKind; 86] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -334,6 +345,9 @@ impl IntentKind {
         Self::SessionExpire,
         Self::SessionRateFlip,
         Self::InvoiceIssue,
+        Self::ReceiptReprint,
+        Self::ReceiptPrinted,
+        Self::ReceiptPrintFailed,
         Self::AlertRaise,
         Self::AlertAck,
         Self::ControllerCheck,
@@ -421,6 +435,9 @@ impl IntentKind {
             Self::SessionExpire => "session.expire",
             Self::SessionRateFlip => "session.rate_flip",
             Self::InvoiceIssue => "invoice.issue",
+            Self::ReceiptReprint => "receipt.reprint",
+            Self::ReceiptPrinted => "receipt.printed",
+            Self::ReceiptPrintFailed => "receipt.print_failed",
             Self::SessionAssignPlayer => "session.assign_player",
             Self::AlertRaise => "alert.raise",
             Self::AlertAck => "alert.ack",
@@ -488,6 +505,9 @@ impl IntentKind {
             | Self::OrderPlaceReverted
             | Self::OrderLineServed
             | Self::InvoiceIssue
+            | Self::ReceiptReprint
+            | Self::ReceiptPrinted
+            | Self::ReceiptPrintFailed
             | Self::OrderLineCancel => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
@@ -551,6 +571,8 @@ impl IntentKind {
             | Self::AlertRaise
             | Self::SessionExpire
             | Self::InvoiceIssue
+            | Self::ReceiptPrinted
+            | Self::ReceiptPrintFailed
             | Self::SessionRateFlip => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert | Self::StaffDeactivate => {
                 Requirement::Perm(Permission::UserManage)
@@ -596,6 +618,7 @@ impl IntentKind {
             | Self::OrderPlace
             | Self::OrderPlaceReverted
             | Self::OrderLineServed
+            | Self::ReceiptReprint
             | Self::OrderLineCancel => Requirement::Perm(Permission::PosSell),
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
             Self::SessionExtend => Requirement::Perm(Permission::SessionExtend),
@@ -714,6 +737,9 @@ impl IntentKind {
             | Self::CreditAutoPause
             | Self::SessionExpire
             | Self::InvoiceIssue
+            | Self::ReceiptReprint
+            | Self::ReceiptPrinted
+            | Self::ReceiptPrintFailed
             | Self::SessionRateFlip
             | Self::AlertRaise
             | Self::AlertAck
@@ -1286,6 +1312,12 @@ pub enum IntentPayload {
     SessionRateFlip(crate::SessionRateFlip),
     #[serde(rename = "invoice.issue")]
     InvoiceIssue(crate::InvoiceIssue),
+    #[serde(rename = "receipt.reprint")]
+    ReceiptReprint(crate::ReceiptReprint),
+    #[serde(rename = "receipt.printed")]
+    ReceiptPrinted(crate::ReceiptPrinted),
+    #[serde(rename = "receipt.print_failed")]
+    ReceiptPrintFailed(crate::ReceiptPrintFailed),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
     #[serde(rename = "alert.raise")]
@@ -1380,6 +1412,9 @@ impl IntentPayload {
             Self::SessionExpire(_) => IntentKind::SessionExpire,
             Self::SessionRateFlip(_) => IntentKind::SessionRateFlip,
             Self::InvoiceIssue(_) => IntentKind::InvoiceIssue,
+            Self::ReceiptReprint(_) => IntentKind::ReceiptReprint,
+            Self::ReceiptPrinted(_) => IntentKind::ReceiptPrinted,
+            Self::ReceiptPrintFailed(_) => IntentKind::ReceiptPrintFailed,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
             Self::AlertRaise(_) => IntentKind::AlertRaise,
             Self::AlertAck(_) => IntentKind::AlertAck,
@@ -1602,6 +1637,8 @@ mod tests {
                 | "session.expire"
                 | "session.rate_flip"
                 | "invoice.issue"
+                | "receipt.printed"
+                | "receipt.print_failed"
                 | "stock.expiry_check" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
@@ -1652,6 +1689,7 @@ mod tests {
                 | "order.place"
                 | "order.place.reverted"
                 | "order.line_served"
+                | "receipt.reprint"
                 | "order.line_cancel" => Requirement::Perm(Permission::PosSell),
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "session.extend" => Requirement::Perm(Permission::SessionExtend),

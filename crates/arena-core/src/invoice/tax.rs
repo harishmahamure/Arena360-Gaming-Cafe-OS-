@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Line {
@@ -8,14 +8,14 @@ pub struct Line {
     pub amount_minor: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RateTax {
     pub rate_bp: u16,
     pub taxable_minor: i64,
     pub tax_minor: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cgst_minor: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sgst_minor: Option<i64>,
 }
 

@@ -333,6 +333,14 @@ pub struct SessionListRow {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub controller_check: Option<ControllerResult>,
+    /// The invoice number of a settled bill; the row offers Reprint (`receipt.reprint`) with
+    /// `receipt_order_id` while it has one (Story 5.17).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub invoice_no: Option<String>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub receipt_order_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -384,6 +392,10 @@ pub struct SessionSettle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub credit_override: Option<bool>,
+    /// The receipt choice (Story 5.17); `print` issues the invoice number in this transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub receipt: Option<crate::ReceiptChoice>,
 }
 
 pub const UNDO_WINDOW_MS: i64 = 8_000;

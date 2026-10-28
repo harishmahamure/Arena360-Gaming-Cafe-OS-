@@ -42,6 +42,7 @@ async fn sale(f: &Fixture, by: &Actor, product: &str) -> String {
             player_id: None,
             credit_override: None,
             stock_override: None,
+            receipt: None,
         }),
     )
     .await

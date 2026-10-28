@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import type {
   PaymentRow,
+  PrinterReady,
   SessionStaff,
   ShiftState,
   SnapshotBill,
@@ -18,12 +19,17 @@ const SELLER: SessionStaff = {
   permissions: ["pos.sell", "session.start", "device.screen"],
 };
 
-type Sent = { payload: { kind: string; order_id?: string; payments?: PaymentRow[] }; rev?: number };
+type Sent = {
+  payload: { kind: string; order_id?: string; payments?: PaymentRow[]; receipt?: string };
+  rev?: number;
+};
 type Hub = {
   devices: SnapshotDevice[];
   bills: SnapshotBill[];
   sent: Sent[];
   shift?: ShiftState;
+  /** What `/ui/printer/ready` answers (Story 5.17); absent means the Hub does not answer. */
+  printer?: PrinterReady;
 };
 
 const FREE = device(1, { status: "online" });
@@ -56,6 +62,10 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
         return json(route, SELLER);
       case "/ui/settings":
         return json(route, []);
+      case "/ui/printer/ready":
+        return hub.printer
+          ? json(route, hub.printer)
+          : route.fulfill({ status: 500, headers: CORS, body: "" });
       case "/ui/intent": {
         const body = req.postDataJSON() as {
           intent: { payload: Sent["payload"]; base_rev?: number };
@@ -64,7 +74,12 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
         hub.bills = [];
         return json(route, {
           applied: { intent_id: "I", changes: [] },
-          settled: { order_id: "O1", settled_at: 1, undo_until: 8001 },
+          settled: {
+            order_id: "O1",
+            settled_at: 1,
+            undo_until: 8001,
+            irreversible: body.intent.payload.receipt === "print",
+          },
         });
       }
       default:
@@ -175,11 +190,39 @@ test("cash for the full total settles and the bar shows the settled state", asyn
         kind: "session.settle",
         order_id: "O1",
         payments: [{ method: "cash", amount_minor: 7500 }],
+        receipt: "none",
       },
       rev: 4,
     },
   ]);
   await expect(bar(page)).toHaveCount(0);
+});
+
+test("a session bill settles with the Print choice, and a printed bill shows no Undo", async ({
+  page,
+}) => {
+  const hub = await open(page, { printer: { ready: true, default_choice: "print" } });
+  await expect(page.getByTestId("printer-ready")).toHaveText(en["hub.settle.printer_ready"]);
+  await expect(bar(page).locator('[data-receipt="print"]')).toHaveAttribute("aria-pressed", "true");
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({ kind: "session.settle", receipt: "print" });
+  await expect(page.getByTestId("undo-toast")).toHaveCount(0);
+});
+
+test("with no printer the bar says nothing will print and the bill still settles", async ({
+  page,
+}) => {
+  const hub = await open(page, {
+    printer: { ready: false, default_choice: "print", reason: "unset" },
+  });
+  await expect(page.getByTestId("printer-missing")).toContainText(en["hub.settle.no_printer"]);
+  await expect(bar(page).locator("[data-receipt]")).toHaveCount(0);
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload.receipt).toBe("none");
 });
 
 test("cash above the remainder shows Change and sends only the bill amount", async ({ page }) => {

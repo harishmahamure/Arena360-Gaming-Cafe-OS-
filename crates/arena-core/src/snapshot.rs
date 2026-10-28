@@ -678,6 +678,45 @@ impl SnapshotReader {
         store.unnumbered_orders(limit)
     }
 
+    /// Receipts waiting on the side-effect outbox, oldest first (Story 5.17).
+    pub fn queued_prints(&self, limit: i64) -> Result<Vec<arena_store::OutboxRow>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.queued_prints(limit)
+    }
+
+    /// The ESC/POS bytes of an order's receipt at the saved paper width, marked "Reprint" when
+    /// `reprint` is set; `None` when there is no such order.
+    pub fn receipt_bytes(
+        &self,
+        order_id: &str,
+        reprint: bool,
+        now_ms: i64,
+    ) -> Result<Option<Vec<u8>>, AppError> {
+        let source = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+            store.receipt_source(order_id)?
+        };
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        let settings = self.settings()?;
+        let snapshot = self.snapshot(now_ms)?;
+        let name = snapshot.branch.as_ref().map_or("", |b| b.name.as_str());
+        Ok(Some(crate::printer::job::render_order(
+            &settings,
+            name,
+            snapshot.locale.as_ref(),
+            &source,
+            reprint,
+        )))
+    }
+
     pub fn settlement(&self, order_id: &str) -> Result<Option<arena_store::Settlement>, AppError> {
         let store = self
             .reader
@@ -835,6 +874,11 @@ impl SnapshotReader {
                     ended_at: s.ended_at,
                     bill_minor: s.total_minor,
                     state,
+                    receipt_order_id: s
+                        .order_id
+                        .clone()
+                        .filter(|_| s.invoice_no.is_some() && state == S::Settled),
+                    invoice_no: s.invoice_no,
                     order_id: s.order_id.filter(|_| state == S::Unpaid),
                     controller_check: s.controller_check.as_deref().and_then(|c| match c {
                         "returned" => Some(arena_proto::ControllerResult::Returned),

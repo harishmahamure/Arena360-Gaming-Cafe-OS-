@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, formatMoney, t } from "@arena/ui";
-  import type { PaymentRow, PlanView, SnapshotBill } from "@arena/ui/generated";
+  import type { PaymentRow, PlanView, ReceiptChoice, SnapshotBill } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount } from "svelte";
   import { invalidate } from "$app/navigation";
@@ -47,7 +47,7 @@
   let credit: SnapshotBill["credit"] = $state(null);
   let error: MessageKey | null = $state(null);
   let busy = $state(false);
-  let attempt: { key: string; payments: PaymentRow[] } | null = null;
+  let attempt: { key: string; payments: unknown } | null = null;
 
   const offered = $derived(plans.filter((p) => p.active && p.plan_kind !== "block"));
   const bill = $derived<SnapshotBill>({
@@ -77,15 +77,16 @@
     })();
   });
 
-  async function settle(payments: PaymentRow[]) {
+  async function settle(payments: PaymentRow[], receipt?: ReceiptChoice) {
     if (busy || !chosen) return;
     busy = true;
     error = null;
-    const same = attempt && JSON.stringify(attempt.payments) === JSON.stringify(payments);
+    const same =
+      attempt && JSON.stringify(attempt.payments) === JSON.stringify([payments, receipt]);
     const key = same && attempt ? attempt.key : newIdempotencyKey();
-    attempt = { key, payments };
+    attempt = { key, payments: [payments, receipt] };
     const outcome = await submitIntent(
-      { kind: "plan.sell", player_id: playerId, plan_id: chosen.id, payments },
+      { kind: "plan.sell", player_id: playerId, plan_id: chosen.id, payments, receipt },
       key,
     ).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
@@ -140,7 +141,14 @@
       <Button label="hub.plans.sell.cancel" variant="secondary" onclick={oncancel} />
     </div>
   {:else if locale}
-    <SettleBar {bill} {locale} {busy} onsettle={(p) => void settle(p)} title="hub.plans.sell.title">
+    <SettleBar
+      {bill}
+      {locale}
+      {busy}
+      onsettle={(p, receipt) => void settle(p, receipt)}
+      title="hub.plans.sell.title"
+      receiptChoice
+    >
       {#snippet extra()}
         <p class="type-hub-body" data-testid="sell-line">
           {chosen?.name} · {formatMoney(chosen?.price_minor ?? 0, locale)}

@@ -1,7 +1,10 @@
 //! Receipt and notification settings (Story 5.15): the keys, their defaults and the text rules.
 //! Messages are sent by Arena 360, so no setting here holds a provider key.
 
-use crate::{IntentPayload, TierGate};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::{IntentPayload, PrinterErrorKind, TierGate};
 
 pub const KEY_RECEIPT_FOOTER: &str = "receipt.footer";
 pub const KEY_RECEIPT_ADDRESS: &str = "receipt.address";
@@ -43,6 +46,55 @@ pub fn valid_receipt_lines(value: &str, max_lines: usize) -> bool {
                 line.chars().count() <= RECEIPT_LINE_MAX_CHARS
                     && !line.chars().any(char::is_control)
             }))
+}
+
+/// The receipt choice on the settle bar (Story 5.17). `print` issues the invoice number inside the
+/// settle transaction, so the bill is never undoable, and queues the receipt on the side-effect
+/// outbox; `none` (and an absent choice) leaves the number to the Undo-window task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum ReceiptChoice {
+    Print,
+    None,
+}
+
+impl ReceiptChoice {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "print" => Some(Self::Print),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+/// The longest print error a result intent keeps.
+pub const RECEIPT_ERROR_MAX_CHARS: usize = 200;
+
+/// The payload of `receipt.reprint`: print the receipt of a settled, numbered order again, marked
+/// "Reprint". The audit log records who asked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ReceiptReprint {
+    pub order_id: String,
+}
+
+/// The payload of `receipt.printed` (system): the print task sent the outbox row to the printer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ReceiptPrinted {
+    pub outbox_id: String,
+}
+
+/// The payload of `receipt.print_failed` (system): the printer did not take the job. The sale
+/// stays settled; a "Printer offline" alert is raised and the order shows Reprint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ReceiptPrintFailed {
+    pub outbox_id: String,
+    pub error_kind: PrinterErrorKind,
+    pub error: String,
 }
 
 /// The tier-locked keys: a write to one on a Free branch is `TIER_LOCKED`.

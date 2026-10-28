@@ -272,6 +272,34 @@ pub struct PrinterHealth {
     pub last_job_failure: Option<PrinterJobFailure>,
 }
 
+/// How long a failed print job keeps the settle bar from offering Print. After this the bar tries
+/// again, so a printer that is back is used without a visit to Settings.
+pub const PRINTER_OFFLINE_HOLD_MS: i64 = 120_000;
+
+/// Why the settle bar does not offer Print.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PrinterUnready {
+    /// No printer is chosen on this Hub.
+    Unset,
+    /// The last print job failed a moment ago.
+    Offline,
+}
+
+/// `GET /ui/printer/ready`: whether the settle bar offers Print (Story 5.17).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PrinterReady {
+    pub ready: bool,
+    /// What the settle bar preselects: the branch's `receipt.default`. Print is only preselected
+    /// while `ready`.
+    pub default_choice: crate::ReceiptChoice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<PrinterUnready>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct PrinterStatusReply {

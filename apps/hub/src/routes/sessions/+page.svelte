@@ -9,11 +9,25 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { goto, invalidate } from "$app/navigation";
   import { SESSION_DEPENDENCY, loadSessions } from "../../lib/auth";
+  import { reprintReceipt } from "../../lib/pos-sales";
   import type { PageData } from "./$types";
 
   let { data }: { data: PageData } = $props();
 
   type Filter = "all" | SessionListState;
+
+  let reprintNote: { text: MessageKey; tone: "ok" | "refusal" } | null = $state(null);
+
+  /** Prints the receipt of a settled bill again (Story 5.17); the Hub marks it "Reprint". */
+  async function reprint(row: SessionListRow) {
+    if (!row.receipt_order_id) return;
+    const outcome = await reprintReceipt(row.receipt_order_id);
+    if (outcome === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    reprintNote =
+      outcome === "queued"
+        ? { tone: "ok", text: "hub.pos.recent.reprint_queued" }
+        : { tone: "refusal", text: "hub.pos.recent.reprint_failed" };
+  }
 
   const FILTERS: { value: Filter; label: MessageKey }[] = [
     { value: "all", label: "hub.sessions.filter.all" },
@@ -105,6 +119,13 @@
     {/if}
   </div>
 
+  {#if reprintNote}
+    <p class="type-hub-label" role="status" data-testid="reprint-note">
+      {#if reprintNote.tone === "refusal"}<span aria-hidden="true">⚠</span>{/if}
+      {t(reprintNote.text)}
+    </p>
+  {/if}
+
   {#if rows.length > 0 && locale}
     <div class="scroll">
       <table class="type-hub-body" data-testid="sessions-table">
@@ -145,6 +166,12 @@
               <td>
                 {#if r.state === "unpaid"}
                   <Button label="hub.sessions.open" variant="secondary" onclick={() => open(r)} />
+                {:else if r.receipt_order_id}
+                  <Button
+                    label="hub.sessions.reprint"
+                    variant="secondary"
+                    onclick={() => void reprint(r)}
+                  />
                 {/if}
               </td>
             </tr>

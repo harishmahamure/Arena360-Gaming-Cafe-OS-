@@ -4,6 +4,7 @@ import type {
   PaymentRow,
   PlayerHit,
   PosSaleView,
+  PrinterReady,
   Product,
   ShiftState,
   SnapshotSession,
@@ -389,6 +390,8 @@ type Hub = {
   wallet: WalletView;
   /** The running sessions the snapshot lists (Story 5.12). */
   sessions?: SnapshotSession[];
+  /** What `/ui/printer/ready` answers (Story 5.17); absent means the Hub does not answer. */
+  printer?: PrinterReady;
 };
 
 const SHIFT: ShiftState = {
@@ -454,6 +457,10 @@ async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS, pat
         return ok(route, [
           { key: "branch.tax", value: JSON.stringify({ ...TAX, ...hub.tax }), rev: 1 },
         ]);
+      case "/ui/printer/ready":
+        return hub.printer
+          ? ok(route, hub.printer)
+          : route.fulfill({ status: 500, headers: CORS, body: "" });
       case "/ui/pos/sales":
         return hub.sales === "fail"
           ? route.fulfill({ status: 500, headers: CORS, body: "" })
@@ -508,7 +515,7 @@ async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS, pat
                   undo_until: now + 8000,
                   order_rev: 1,
                   total_minor: payments.reduce((n, p) => n + p.amount_minor, 0),
-                  irreversible: false,
+                  irreversible: body.intent.payload.receipt === "print",
                 }
               : undefined,
           placed:
@@ -1069,4 +1076,106 @@ test("the attached POS has no serious accessibility violations", async ({ page }
   expect(
     results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
   ).toEqual([]);
+});
+
+// ---- Story 5.17: the receipt choice at settle, and Reprint ----
+
+const READY: PrinterReady = { ready: true, default_choice: "print" };
+
+async function cartOfOneCola(page: Page, info: TestInfo) {
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+}
+
+test("with a printer ready the bar says so, preselects the branch default and a Print settle has no Undo", async ({
+  page,
+}, info) => {
+  const hub = newHub({ printer: READY });
+  await openHub(page, hub);
+  await cartOfOneCola(page, info);
+  await expect(page.getByTestId("printer-ready")).toHaveText(en["hub.settle.printer_ready"]);
+  await expect(page.locator('[data-receipt="print"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('[data-receipt="none"]')).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: en["hub.settle.submit"], exact: true }).click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload).toMatchObject({ kind: "pos.sale", receipt: "print" });
+  // A printed bill is irreversible: the Hub says so and no Undo toast is shown.
+  await expect(page.getByTestId("undo-toast")).toHaveCount(0);
+});
+
+test("choosing None sends none and the sale keeps its Undo", async ({ page }, info) => {
+  const hub = newHub({ printer: READY });
+  await openHub(page, hub);
+  await cartOfOneCola(page, info);
+  await page.locator('[data-receipt="none"]').click();
+  await expect(page.locator('[data-receipt="none"]')).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: en["hub.settle.submit"], exact: true }).click();
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({ kind: "pos.sale", receipt: "none" });
+});
+
+test("a branch whose default is None starts on None", async ({ page }, info) => {
+  const hub = newHub({ printer: { ready: true, default_choice: "none" } });
+  await openHub(page, hub);
+  await cartOfOneCola(page, info);
+  await expect(page.locator('[data-receipt="none"]')).toHaveAttribute("aria-pressed", "true");
+});
+
+test("with no printer Print is not offered, the bar says nothing will print and settle still works", async ({
+  page,
+}, info) => {
+  const hub = newHub({ printer: { ready: false, default_choice: "print", reason: "unset" } });
+  await openHub(page, hub);
+  await cartOfOneCola(page, info);
+  await expect(page.getByTestId("printer-missing")).toContainText(en["hub.settle.no_printer"]);
+  await expect(page.locator("[data-receipt]")).toHaveCount(0);
+  await page.getByRole("button", { name: en["hub.settle.submit"], exact: true }).click();
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({ kind: "pos.sale", receipt: "none" });
+});
+
+test("a Hub that does not answer the printer check never blocks the settle", async ({
+  page,
+}, info) => {
+  const hub = newHub();
+  await openHub(page, hub);
+  await cartOfOneCola(page, info);
+  await expect(page.getByTestId("printer-missing")).toBeVisible();
+  await page.getByRole("button", { name: en["hub.settle.submit"], exact: true }).click();
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+});
+
+test("Recent sales offers Reprint for a numbered sale only, and sends receipt.reprint", async ({
+  page,
+}) => {
+  const sale = (id: string, extra: Partial<PosSaleView>): PosSaleView => ({
+    order_id: id,
+    settled_at: Date.UTC(2026, 9, 28, 9, 45),
+    staff: "Asha",
+    lines: [],
+    payments: [{ method: "cash", amount_minor: 6000 }],
+    subtotal_minor: 6000,
+    tax_minor: 0,
+    total_minor: 6000,
+    invoice_no: null,
+    ...extra,
+  });
+  const hub = newHub({
+    printer: READY,
+    sales: [
+      sale("O2", { invoice_no: "DEV01/26-27/E1k/000002", print_state: "failed" }),
+      sale("O1", {}),
+    ],
+  });
+  await openHub(page, hub);
+  await page.getByTestId("recent-toggle").click();
+  const rows = page.getByTestId("recent-sale");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first().getByTestId("recent-print-failed")).toBeVisible();
+  await expect(rows.first().getByTestId("recent-reprint")).toBeVisible();
+  await expect(rows.nth(1).getByTestId("recent-reprint")).toHaveCount(0);
+  await rows.first().getByTestId("recent-reprint").click();
+  await expect(page.getByTestId("reprint-note")).toHaveText(en["hub.pos.recent.reprint_queued"]);
+  expect(hub.sent).toHaveLength(1);
+  expect(hub.sent[0].payload).toEqual({ kind: "receipt.reprint", order_id: "O2" });
 });

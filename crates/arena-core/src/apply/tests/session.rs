@@ -604,6 +604,7 @@ pub(super) fn settle_intent(
             order_id: order.into(),
             credit_override: None,
             payments,
+            receipt: None,
         }),
     );
     i.base_rev = rev;
@@ -3395,6 +3396,7 @@ pub(super) fn sell_intent(
             plan_id: plan.into(),
             payments,
             credit_override: None,
+            receipt: None,
         }),
     )
 }

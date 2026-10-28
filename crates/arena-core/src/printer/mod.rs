@@ -1,4 +1,5 @@
 mod escpos;
+pub mod job;
 pub mod receipt;
 
 use std::future::Future;
@@ -14,6 +15,34 @@ use arena_proto::{
 pub use escpos::{pc437_text, ruler, test_page, test_page_date};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// What the Hub's printer jobs share: one job at a time to the printer, and the last job that
+/// failed (cleared by the next job that works). The print task and the Settings pages use the same
+/// value, so a receipt that failed shows as "printer offline" on the settle bar.
+#[derive(Default)]
+pub struct PrinterJobs {
+    lock: tokio::sync::Mutex<()>,
+    failure: std::sync::Mutex<Option<arena_proto::PrinterJobFailure>>,
+}
+
+impl PrinterJobs {
+    /// Held for the length of a job.
+    pub fn lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.lock
+    }
+
+    pub fn last_failure(&self) -> Option<arena_proto::PrinterJobFailure> {
+        self.failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Records the result of a job: a failure is kept, a success clears it.
+    pub fn record(&self, failure: Option<arena_proto::PrinterJobFailure>) {
+        *self.failure.lock().unwrap_or_else(|e| e.into_inner()) = failure;
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaperWidth {

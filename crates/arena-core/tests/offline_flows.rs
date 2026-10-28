@@ -259,6 +259,7 @@ async fn run_flow(state: ConnectivityState) -> Outcome {
                 amount_minor: total,
                 reference: None,
             }],
+            receipt: None,
         }),
         Some(int(&order, "rev")),
     )

@@ -1109,6 +1109,8 @@ pub struct SessionListing {
     pub order_status: Option<String>,
     pub total_minor: Option<i64>,
     pub controller_check: Option<String>,
+    /// The invoice number of the settled bill, when it has one (Story 5.17: Reprint).
+    pub invoice_no: Option<String>,
 }
 
 pub fn list_sessions_for_day(
@@ -1119,7 +1121,7 @@ pub fn list_sessions_for_day(
         .prepare(
             "SELECT s.id, s.device_id, COALESCE(m.label, s.device_id), p.username, s.guest_no,
                     s.mode, s.started_at, s.ended_at, s.state, o.id, o.status, o.total_minor,
-                    s.controller_check
+                    s.controller_check, o.invoice_no
              FROM sessions s
              LEFT JOIN players p ON p.player_id = s.player_id
              LEFT JOIN devices_meta m ON m.device_id = s.device_id
@@ -1143,6 +1145,7 @@ pub fn list_sessions_for_day(
             order_status: r.get(10)?,
             total_minor: r.get(11)?,
             controller_check: r.get(12)?,
+            invoice_no: r.get(13)?,
         })
     })
     .map_err(db_error)?
@@ -1459,6 +1462,7 @@ pub fn list_pos_sales(
                 tax_minor: r.get(5)?,
                 total_minor: r.get(6)?,
                 invoice_no: r.get(7)?,
+                print_state: None,
             })
         })
         .map_err(db_error)?
@@ -1504,6 +1508,7 @@ pub fn list_pos_sales(
                 .map_err(db_error)?
                 .collect::<Result<_, _>>()
                 .map_err(db_error)?;
+            sale.print_state = crate::outbox::latest_print_state(conn, &sale.order_id)?;
             Ok(sale)
         })
         .collect()

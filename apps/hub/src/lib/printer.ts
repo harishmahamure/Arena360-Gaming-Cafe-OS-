@@ -3,6 +3,7 @@ import type {
   PrinterFindResult,
   PrinterErrorKind,
   PrinterHealth,
+  PrinterReady,
   PrinterSelected,
   PrinterStatus,
   PrinterStatusReply,
@@ -28,6 +29,8 @@ export const TEST_URL = "http://127.0.0.1:7409/ui/printer/test";
 export const KOT_TEST_URL = "http://127.0.0.1:7409/ui/printer/test-kot";
 export const SKIP_URL = "http://127.0.0.1:7409/ui/printer/skip";
 export const HEALTH_URL = "http://127.0.0.1:7409/ui/printer/health";
+export const READY_URL = "http://127.0.0.1:7409/ui/printer/ready";
+const READY_TIMEOUT_MS = 4_000;
 const BLUETOOTH_ANSWER_MS = 60_000;
 const FIND_TIMEOUT_MS = 15_000;
 const PRINT_TIMEOUT_MS = 12_000;
@@ -76,6 +79,8 @@ export const testPrint = () => call<PrinterStatusReply>(TEST_URL, PRINT_TIMEOUT_
 export const testKotPrint = () => call<PrinterStatusReply>(KOT_TEST_URL, PRINT_TIMEOUT_MS);
 export const skipPrinter = () => call<PrinterStatusReply>(SKIP_URL, PRINT_TIMEOUT_MS);
 export const printerHealth = () => call<PrinterHealth>(HEALTH_URL, PRINT_TIMEOUT_MS, "GET");
+/** Whether the settle bar offers Print, and the branch's default receipt choice (Story 5.17). */
+export const printerReady = () => call<PrinterReady>(READY_URL, READY_TIMEOUT_MS, "GET");
 
 /**
  * On the Android Hub, asks for the Bluetooth permission (Android 12+) when it is not granted yet

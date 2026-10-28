@@ -10,6 +10,7 @@ pub mod keystore;
 pub mod lease;
 pub mod mdns;
 pub mod printer;
+pub mod receipts;
 pub mod session_timer;
 pub mod test_session;
 
@@ -35,5 +36,6 @@ pub use mdns::{
     Advert, Advertiser, BranchSource, Interfaces, MDNS_FAILURE_LOG_INTERVAL, MDNS_POLL_INTERVAL,
     MdnsAdvertiser, MdnsTask, NetworkName, SystemInterfaces, lan_ipv4_addresses, mdns_host_name,
 };
+pub use receipts::{PRINT_BATCH, PRINT_TICK, ReceiptPrintTask};
 pub use session_timer::{SessionTimerTask, TIMER_EVENTS_DEPTH, TIMER_TICK};
 pub use test_session::TestSessionTask;

@@ -57,6 +57,7 @@ mod products;
 pub(crate) mod rate_flip;
 mod rates;
 mod read_grants;
+mod receipt_print;
 mod rules;
 pub(crate) mod seed_defaults;
 mod session;
@@ -206,6 +207,7 @@ pub(crate) enum Target {
     SessionExpire(Box<session_expire::ExpireTarget>),
     SessionRateFlip(Box<rate_flip::FlipTarget>),
     InvoiceIssue(Box<invoice_issue::IssueTarget>),
+    Receipt(Box<receipt_print::ReceiptTarget>),
     Alert(Box<alert::AlertTarget>),
     ControllerCheck(Box<controller_check::CheckTarget>),
     Shift(Box<shift::ShiftTarget>),
@@ -311,6 +313,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
         P::SessionRateFlip(f) => Target::SessionRateFlip(Box::new(rate_flip::load(tx, f, now)?)),
         P::InvoiceIssue(p) => Target::InvoiceIssue(Box::new(invoice_issue::load(tx, p, now)?)),
+        P::ReceiptReprint(_) | P::ReceiptPrinted(_) | P::ReceiptPrintFailed(_) => {
+            Target::Receipt(Box::new(receipt_print::load(tx, &intent.payload)?))
+        }
         P::AlertRaise(_) | P::AlertAck(_) => {
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }

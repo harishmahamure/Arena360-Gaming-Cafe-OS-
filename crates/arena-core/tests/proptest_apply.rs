@@ -218,6 +218,9 @@ enum Op {
         second: bool,
         undo: bool,
         late: bool,
+        /// The receipt choice is Print: the sale is numbered in its own transaction, queues one
+        /// print and can never be undone.
+        print: bool,
     },
     /// Products placed on a running session's bill (stock may refuse), then maybe the
     /// placement's Undo (late or in time).
@@ -533,8 +536,8 @@ fn op() -> impl Strategy<Value = Op> {
                 late
             }
         ),
-        3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3)).prop_map(
-            |(pick, qty, second, undo, late)| Op::PosSale { pick, qty, second, undo, late }
+        3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3), prop::bool::weighted(0.4)).prop_map(
+            |(pick, qty, second, undo, late, print)| Op::PosSale { pick, qty, second, undo, late, print }
         ),
         3 => (0..3u8, any::<u8>(), 1..=6u8, any::<bool>(), prop::bool::weighted(0.3)).prop_map(
             |(slot, pick, qty, undo, late)| Op::OrderPlace { slot, pick, qty, undo, late }
@@ -1607,6 +1610,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             second,
             undo,
             late,
+            print,
         } => {
             let products: Vec<_> = hub
                 .reader
@@ -1674,6 +1678,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         player_id: None,
                         credit_override: None,
                         stock_override: None,
+                        receipt: print.then_some(arena_proto::ReceiptChoice::Print),
                     }),
                     None,
                 ),
@@ -1705,7 +1710,22 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert_eq!(text(&order, "status"), "settled");
             prop_assert_eq!(int(&order, "total_minor"), bill.total_minor);
             prop_assert_eq!(int(&order, "tax_minor"), bill.tax_minor);
-            if *undo {
+            prop_assert_eq!(
+                matches!(order["invoice_no"], RowValue::Text(_)),
+                *print && bill.total_minor > 0,
+                "only a printed sale is numbered at settle"
+            );
+            if *undo && *print {
+                let after_forward = hub.change_count();
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::PosSaleReverted(arena_proto::PosSaleReverted {
+                        order_id: text(&order, "id"),
+                    }),
+                    Some(int(&order, "rev")),
+                ));
+                prop_assert_eq!(code(&out), Some((ErrorCode::UndoNotAllowed, None)));
+                prop_assert_eq!(hub.change_count(), after_forward);
+            } else if *undo {
                 if *late {
                     hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
                 }
@@ -2549,6 +2569,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 order_id: id.clone(),
                 credit_override: None,
                 payments,
+                receipt: None,
             });
             let out = hub.submit_new(hub.intent(payload.clone(), Some(rev)));
             if *short {
@@ -2696,6 +2717,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         amount_minor,
                         reference: None,
                     }],
+                    receipt: None,
                 }),
                 None,
             ));
@@ -2807,6 +2829,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     order_id: id,
                     credit_override: None,
                     payments,
+                    receipt: None,
                 }),
                 Some(rev),
             ));
@@ -3471,6 +3494,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         amount_minor: total,
                         reference: None,
                     }],
+                    receipt: None,
                 }),
                 Some(rev),
             ));
@@ -3693,6 +3717,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                             amount_minor: total,
                             reference: Some("T1".into()),
                         }],
+                        receipt: None,
                     }),
                     Some(int(order, "rev")),
                 ));
@@ -4103,10 +4128,27 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_stock_holds(&hub)?;
                 assert_holds_hold(&hub)?;
                 assert_invoices_hold(&hub)?;
+                assert_prints_hold(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })
         .unwrap();
+}
+
+/// The outbox invariants: a queued print names a settled order, and a settled order with a total
+/// that queued a print has its number.
+fn assert_prints_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let orders = hub.reader.rows(Table::Orders).unwrap();
+    for row in hub.reader.queued_prints(10_000).unwrap() {
+        let order = orders.iter().find(|o| text(o, "id") == row.ref_id);
+        prop_assert!(order.is_some(), "a queued print names a missing order");
+        let order = order.unwrap();
+        prop_assert_eq!(text(order, "status"), "settled");
+        if int(order, "total_minor") > 0 {
+            prop_assert!(matches!(order["invoice_no"], RowValue::Text(_)));
+        }
+    }
+    Ok(())
 }
 
 /// The invoice invariants: a number is unique, only a settled sale has one, and every

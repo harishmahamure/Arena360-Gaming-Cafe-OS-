@@ -81,6 +81,10 @@ pub struct PlanSell {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub credit_override: Option<bool>,
+    /// The receipt choice (Story 5.17); `print` issues the invoice number in this transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub receipt: Option<crate::ReceiptChoice>,
 }
 
 /// The payload of `plan.sell.reverted`: Undo of a plan sale within its window.

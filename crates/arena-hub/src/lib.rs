@@ -393,6 +393,8 @@ async fn run(
         },
     };
     tracing::info!(adapter = ?cfg.printer, "printer adapter ready");
+    let printer_jobs = Arc::new(arena_core::printer::PrinterJobs::default());
+    let receipt_printer = Arc::clone(&printer);
     let backup_folder = options.backup_folder.take();
     let mut ui_auth = arena_api::UiAuth::new(
         Arc::clone(&staff),
@@ -403,6 +405,7 @@ async fn run(
     .with_status(status_rx.clone())
     .with_presence(lan_hub.presence())
     .with_printer(printer)
+    .with_printer_jobs(Arc::clone(&printer_jobs))
     .with_pairing(pairing)
     .with_pair_gate(pair_gate.clone())
     .with_player_kek(Arc::new(
@@ -502,6 +505,18 @@ async fn run(
     let invoice_job = writer.clone().map(|w| {
         tokio::spawn(
             arena_tasks::InvoiceTask::new(w, Arc::clone(&snapshots), Arc::clone(&clock)).run(),
+        )
+    });
+    let receipt_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::ReceiptPrintTask::new(
+                w,
+                Arc::clone(&snapshots),
+                Arc::clone(&clock),
+                receipt_printer,
+                printer_jobs,
+            )
+            .run(),
         )
     });
     let mut cloud_pairer = CloudPairer::new(
@@ -656,6 +671,10 @@ async fn run(
         let _ = job.await;
     }
     if let Some(job) = invoice_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = receipt_job {
         job.abort();
         let _ = job.await;
     }

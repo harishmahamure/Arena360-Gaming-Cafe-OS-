@@ -18,6 +18,7 @@ mod group_bills;
 mod identity;
 mod invoices;
 mod migrations;
+mod outbox;
 mod plans;
 mod player_packs;
 mod players;
@@ -97,6 +98,11 @@ pub use invoices::{
     set_invoice_no, take_sequence,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
+pub use outbox::{
+    KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow, ReceiptSource,
+    STATE_DONE, STATE_FAILED, STATE_QUEUED, find_outbox, finish_outbox, insert_outbox,
+    latest_print_state, list_queued_outbox, load_receipt_source,
+};
 pub use plans::{
     PlanRow, find_plan, insert_plan, insert_plan_group, list_plan_groups, list_plans, update_plan,
 };
@@ -1025,6 +1031,22 @@ impl Store {
             return Ok(Vec::new());
         }
         list_unnumbered(&self.conn, limit)
+    }
+
+    /// Receipts waiting to print on the side-effect outbox, oldest first (Story 5.17).
+    pub fn queued_prints(&self, limit: i64) -> Result<Vec<OutboxRow>, AppError> {
+        if !self.table_exists("side_effect_outbox")? {
+            return Ok(Vec::new());
+        }
+        list_queued_outbox(&self.conn, KIND_PRINT, limit)
+    }
+
+    /// The committed rows a receipt is built from; `None` when there is no such order.
+    pub fn receipt_source(&self, order_id: &str) -> Result<Option<ReceiptSource>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        load_receipt_source(&self.conn, order_id)
     }
 
     /// How many units of a product open holds claim (kitchen lines not yet served).

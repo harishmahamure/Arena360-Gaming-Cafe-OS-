@@ -1446,6 +1446,7 @@ mod tests {
                     amount_minor: 6_000,
                     reference: None,
                 }],
+                receipt: None,
             }),
             Some(1),
         )

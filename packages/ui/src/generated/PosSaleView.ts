@@ -22,4 +22,9 @@ export type PosSaleView = {
    * The invoice number; `null` until Story 5.14 issues one.
    */
   invoice_no?: string | null;
+  /**
+   * What the latest print of this sale came to (`queued`, `done`, `failed`); `null` when no
+   * receipt was asked for. A numbered sale can always be reprinted (Story 5.17).
+   */
+  print_state?: string | null;
 };

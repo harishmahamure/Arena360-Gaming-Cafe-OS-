@@ -46,6 +46,10 @@ pub struct PosSale {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub stock_override: Option<bool>,
+    /// The receipt choice (Story 5.17); `print` issues the invoice number in this transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub receipt: Option<crate::ReceiptChoice>,
 }
 
 /// The payload of `pos.sale.reverted`: Undo of a counter sale within its window.
@@ -104,6 +108,11 @@ pub struct PosSaleView {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub invoice_no: Option<String>,
+    /// What the latest print of this sale came to (`queued`, `done`, `failed`); `null` when no
+    /// receipt was asked for. A numbered sale can always be reprinted (Story 5.17).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub print_state: Option<String>,
 }
 
 /// `GET /ui/pos/sales`: the business day's counter sales, newest first.

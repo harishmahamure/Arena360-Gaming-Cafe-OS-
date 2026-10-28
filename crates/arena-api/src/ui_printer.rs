@@ -6,9 +6,10 @@ use arena_core::printer::{
 use arena_proto::{
     ActorKind, AlertKind, AlertRaise, AppError, ErrorCode, FLAG_KITCHEN, HubSnapshot, Intent,
     IntentPayload, KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_FLAGS,
-    KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, Permission, PrinterErrorKind, PrinterFindResult,
-    PrinterHealth, PrinterJobFailure, PrinterOutcome, PrinterSelected, PrinterState, PrinterStatus,
-    PrinterStatusReply, PrinterStatusSet, SessionStaff, SettingEntry, UiError, has_flag,
+    KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_RECEIPT_DEFAULT, PRINTER_OFFLINE_HOLD_MS,
+    Permission, PrinterErrorKind, PrinterFindResult, PrinterHealth, PrinterJobFailure,
+    PrinterOutcome, PrinterReady, PrinterSelected, PrinterState, PrinterStatus, PrinterStatusReply,
+    PrinterStatusSet, PrinterUnready, ReceiptChoice, SessionStaff, SettingEntry, UiError, has_flag,
     printer_error_text,
 };
 use axum::Json;
@@ -146,12 +147,56 @@ pub(crate) async fn health(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) 
     if let Err(e) = editor(&auth, &headers).await {
         return fail(e);
     }
-    let last_job_failure = auth
-        .printer_failure()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    let last_job_failure = auth.printer_jobs().last_failure();
     Json(PrinterHealth { last_job_failure }).into_response()
+}
+
+/// `GET /ui/printer/ready` (any staff who may sell): whether the settle bar offers Print. It does
+/// not when no printer is chosen or the last job failed within [`PRINTER_OFFLINE_HOLD_MS`]; a
+/// settle is never blocked either way.
+pub(crate) async fn ready(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let me = match async {
+        let token = bearer(&headers).ok_or_else(auth_failed)?.to_owned();
+        auth.acting_session(&token).await
+    }
+    .await
+    {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    if !me.permissions.contains(&Permission::PosSell) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            "only staff who can sell see the printer state",
+        )));
+    }
+    let (settings, _) = match read_state(&auth).await {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    let chosen = value(&settings, KEY_PRINTER_SELECTED)
+        .is_some_and(|v| matches!(PrinterSelected::parse(v), Ok(Some(_))));
+    let now = auth.clock().now_ms();
+    let offline = auth
+        .printer_jobs()
+        .last_failure()
+        .is_some_and(|f| now - f.at < PRINTER_OFFLINE_HOLD_MS);
+    let reason = if !chosen || auth.printer().is_none() {
+        Some(PrinterUnready::Unset)
+    } else if offline {
+        Some(PrinterUnready::Offline)
+    } else {
+        None
+    };
+    let default_choice = value(&settings, KEY_RECEIPT_DEFAULT)
+        .and_then(ReceiptChoice::parse)
+        .unwrap_or(ReceiptChoice::Print);
+    Json(PrinterReady {
+        ready: reason.is_none(),
+        default_choice,
+        reason,
+    })
+    .into_response()
 }
 
 /// Raises the "Printer offline" alert (system actor) for the header alert list. An alert that is
@@ -198,10 +243,7 @@ async fn dispatch(
         at: auth.clock().now_ms(),
     });
     let failed = failure.is_some();
-    *auth
-        .printer_failure()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = failure;
+    auth.printer_jobs().record(failure);
     // Only a link failure means the printer is offline; a refused permission or a switched-off
     // radio is the phone's state, which the settings page explains.
     if failed
@@ -667,6 +709,58 @@ mod tests {
         let counter = sign_in(&r, "counter", "c-pass").await;
         let (status, _) = call_app(&r.app, "GET", "/ui/printer/health", Some(&counter), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn the_settle_bar_offers_print_only_with_a_printer_that_is_not_failing() {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        let counter = sign_in(&r, "counter", "c-pass").await;
+        let ready = |t: &str| {
+            let app = r.app.clone();
+            let t = t.to_owned();
+            async move { call_app(&app, "GET", "/ui/printer/ready", Some(&t), None).await }
+        };
+
+        let (status, body) = ready(&counter).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            json!({"ready": false, "default_choice": "print", "reason": "unset"})
+        );
+
+        select_lan(&r, &token, "192.168.1.250").await;
+        let (_, body) = ready(&counter).await;
+        assert_eq!(body, json!({"ready": true, "default_choice": "print"}));
+
+        fake.fail_with(Some(PrinterError::Refused(
+            "192.168.1.250:9100".parse().unwrap(),
+        )));
+        post(&r, "/ui/printer/test", &token, None).await;
+        let (_, body) = ready(&counter).await;
+        assert_eq!(body["ready"], false);
+        assert_eq!(body["reason"], "offline");
+
+        // The bar tries again once the hold has passed, and a job that works clears the failure.
+        r.hub
+            .clock
+            .advance(arena_proto::PRINTER_OFFLINE_HOLD_MS + 1);
+        let (_, body) = ready(&counter).await;
+        assert_eq!(body["ready"], true);
+        fake.fail_with(None);
+        post(&r, "/ui/printer/test", &token, None).await;
+        let (_, body) = ready(&counter).await;
+        assert_eq!(body["ready"], true);
+
+        // The branch default comes from the setting.
+        let (status, _) = set(&r, &token, "receipt.default", "none").await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = ready(&counter).await;
+        assert_eq!(body["default_choice"], "none");
+
+        let (status, _) = call_app(&r.app, "GET", "/ui/printer/ready", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

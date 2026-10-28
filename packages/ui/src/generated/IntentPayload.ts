@@ -48,6 +48,9 @@ import type { PrinterStatusSet } from "./PrinterStatusSet";
 import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
 import type { RateUpsert } from "./RateUpsert";
+import type { ReceiptPrintFailed } from "./ReceiptPrintFailed";
+import type { ReceiptPrinted } from "./ReceiptPrinted";
+import type { ReceiptReprint } from "./ReceiptReprint";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { RuleUpsert } from "./RuleUpsert";
 import type { SessionAssignPlayer } from "./SessionAssignPlayer";
@@ -162,6 +165,9 @@ export type IntentPayload =
   | ({ kind: "session.expire" } & SessionExpire)
   | ({ kind: "session.rate_flip" } & SessionRateFlip)
   | ({ kind: "invoice.issue" } & InvoiceIssue)
+  | ({ kind: "receipt.reprint" } & ReceiptReprint)
+  | ({ kind: "receipt.printed" } & ReceiptPrinted)
+  | ({ kind: "receipt.print_failed" } & ReceiptPrintFailed)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer)
   | ({ kind: "alert.raise" } & AlertRaise)
   | ({ kind: "alert.ack" } & AlertAck)

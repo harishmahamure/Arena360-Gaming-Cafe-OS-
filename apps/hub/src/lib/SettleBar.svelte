@@ -10,11 +10,14 @@
   import type {
     PaymentMethod,
     PaymentRow,
+    PrinterReady,
+    ReceiptChoice,
     SnapshotBill,
     SnapshotLocale,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { tick, untrack, type Snippet } from "svelte";
+  import { printerReady } from "./printer";
   import { cashBlocked } from "./shift.svelte";
   import {
     amountText,
@@ -38,19 +41,23 @@
     extra,
     prefillCash = false,
     hotkey = false,
+    receiptChoice = false,
   }: {
     bill: SnapshotBill;
     locale: SnapshotLocale;
     busy: boolean;
     /** Why the bill cannot settle yet (placed items still to serve), shown on the button. */
     blockedReason?: MessageKey;
-    onsettle: (payments: PaymentRow[]) => void;
+    /** `receipt` is the choice on the bar, present only when `receiptChoice` is set. */
+    onsettle: (payments: PaymentRow[], receipt?: ReceiptChoice) => void;
     title?: MessageKey;
     extra?: Snippet;
     /** Starts with one Cash row for the whole total (only while cash can be taken). */
     prefillCash?: boolean;
     /** Ctrl+Enter settles from anywhere on the screen. */
     hotkey?: boolean;
+    /** Offers the receipt choice Print · None (a sale; a top-up or a collection has none). */
+    receiptChoice?: boolean;
   } = $props();
 
   let root: HTMLElement | undefined = $state();
@@ -58,6 +65,28 @@
   $effect(() => registerAdExclusion("settle-bar"));
   let rows: Row[] = $state([]);
   let attempted = $state(false);
+  // Whether the printer is ready, asked of the Hub when the bar opens (Story 5.17). A bar with no
+  // answer offers no Print: the printer never blocks a settle.
+  let printer = $state(null as PrinterReady | null);
+  let printerAsked = $state(false);
+  let picked: ReceiptChoice | null = $state(null);
+  const printable = $derived(printer?.ready === true);
+  const receipt: ReceiptChoice = $derived(
+    !printable ? "none" : (picked ?? printer?.default_choice ?? "print"),
+  );
+
+  $effect(() => {
+    if (!receiptChoice) return;
+    let live = true;
+    void printerReady().then((answer) => {
+      if (!live) return;
+      printer = answer.kind === "ok" ? answer.body : null;
+      printerAsked = true;
+    });
+    return () => {
+      live = false;
+    };
+  });
 
   const id = $props.id();
   const exponent = $derived(locale.exponent);
@@ -155,7 +184,7 @@
       focusFirstInvalid(root);
       return;
     }
-    onsettle(toPayments(rows, sums.change, exponent));
+    onsettle(toPayments(rows, sums.change, exponent), receiptChoice ? receipt : undefined);
   }
 </script>
 
@@ -203,6 +232,34 @@
   {/if}
 
   {@render extra?.()}
+
+  {#if receiptChoice && printerAsked}
+    <div class="receipt" data-testid="receipt-choice">
+      {#if printable}
+        <p class="type-hub-label" data-testid="printer-ready">{t("hub.settle.printer_ready")}</p>
+        <div class="methods" role="group" aria-label={t("hub.settle.receipt")}>
+          {#each ["print", "none"] as const as choice (choice)}
+            <button
+              type="button"
+              class="ui-interactive method type-hub-label"
+              data-receipt={choice}
+              aria-pressed={receipt === choice}
+              disabled={busy}
+              onclick={() => (picked = choice)}
+              >{t(
+                choice === "print" ? "hub.settle.receipt.print" : "hub.settle.receipt.none",
+              )}</button
+            >
+          {/each}
+        </div>
+      {:else}
+        <p class="type-hub-label" data-testid="printer-missing">
+          <span aria-hidden="true">⚠</span>
+          {t("hub.settle.no_printer")}
+        </p>
+      {/if}
+    </div>
+  {/if}
 
   {#if rows.length > 0}
     <div class="split" data-component="payment-split" data-testid="payment-split">
@@ -336,6 +393,11 @@
 
   .shift-closed {
     color: var(--text);
+  }
+
+  .receipt {
+    display: grid;
+    gap: var(--space-2);
   }
 
   .shift-link {

@@ -18,4 +18,10 @@ export type SessionListRow = {
    * How a console session's controllers were marked: `returned` or `missing`.
    */
   controller_check?: ControllerResult | null;
+  /**
+   * The invoice number of a settled bill; the row offers Reprint (`receipt.reprint`) with
+   * `receipt_order_id` while it has one (Story 5.17).
+   */
+  invoice_no?: string | null;
+  receipt_order_id?: string | null;
 };

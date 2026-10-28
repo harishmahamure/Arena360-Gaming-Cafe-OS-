@@ -339,6 +339,7 @@ fn next_intent(f: &Floor, rng: &mut Rng) -> Option<Intent> {
                                 amount_minor: total,
                                 reference: None,
                             }],
+                            receipt: None,
                         }),
                         Some(int(o, "rev")),
                     ));

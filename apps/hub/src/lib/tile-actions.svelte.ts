@@ -6,6 +6,7 @@ import type {
   PcAction,
   Permission,
   ReasonCode,
+  ReceiptChoice,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { waitForAck } from "./admin-unlock";
@@ -224,9 +225,14 @@ export const resumeJob = (session_id: string, rev: number) =>
     { track: "none", rev, done: "hub.sheet.done.resumed" },
   );
 
-export const settleJob = (order_id: string, payments: PaymentRow[], rev: number) =>
+export const settleJob = (
+  order_id: string,
+  payments: PaymentRow[],
+  rev: number,
+  receipt?: ReceiptChoice,
+) =>
   job(
-    { kind: "session.settle", order_id, payments },
+    { kind: "session.settle", order_id, payments, receipt },
     { track: "none", rev, done: "hub.sheet.done.settled" },
   );
 

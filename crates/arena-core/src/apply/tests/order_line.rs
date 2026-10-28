@@ -654,6 +654,7 @@ async fn available_stock_is_on_hand_less_open_holds_for_sales_and_the_catalogue(
         player_id: None,
         credit_override: None,
         stock_override: None,
+        receipt: None,
     };
     let before = reopen(&f).changes().unwrap().len();
     let (c, field) = refusal(submit(&f, owner(), IntentPayload::PosSale(sale(2))).await);
@@ -697,6 +698,7 @@ async fn counter_sale_lines_are_served_in_both_modes() {
                 player_id: None,
                 credit_override: None,
                 stock_override: None,
+                receipt: None,
             }),
         )
         .await

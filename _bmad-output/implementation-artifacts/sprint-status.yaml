@@ -141,7 +141,7 @@ development_status:
   5-14-invoice-numbers-in-an-epoch-segmented-series-that-never-repe: done
   5-15-receipt-and-notification-settings: done
   5-16-receipt-tax-invoice-and-payment-receipt-layouts-for-58-and-8: done
-  5-17-choose-print-or-none-at-settle-and-print-through-the-side-ef: backlog
+  5-17-choose-print-or-none-at-settle-and-print-through-the-side-ef: review
   5-18-cash-drawer-kicks-on-cash-sales: backlog
   5-19-whatsapp-receipt-queued-to-the-outbox: backlog
   5-20-b2b-invoice-with-the-customer-s-gstin: backlog

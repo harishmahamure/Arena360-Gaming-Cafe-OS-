@@ -194,10 +194,11 @@ pub use printer::{
     BluetoothAccess, DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_PORT, DEFAULT_PRINTER_SELECTED,
     DEFAULT_PRINTER_STATUS, FoundPrinter, KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED,
     KEY_PRINTER_STATUS, MAX_PRINTER_ERROR_CHARS, MAX_PRINTER_NAME_CHARS, PRINTER_IP_FIELD,
-    PRINTER_PAPER_WIDTHS_MM, PrinterErrorKind, PrinterFindResult, PrinterHealth, PrinterJobFailure,
-    PrinterKind, PrinterOutcome, PrinterSelected, PrinterSelectedError, PrinterState,
-    PrinterStatus, PrinterStatusReply, PrinterStatusSet, parse_bluetooth_address,
-    parse_printer_addr, printer_error_text, valid_printer_error, valid_printer_outcome,
+    PRINTER_OFFLINE_HOLD_MS, PRINTER_PAPER_WIDTHS_MM, PrinterErrorKind, PrinterFindResult,
+    PrinterHealth, PrinterJobFailure, PrinterKind, PrinterOutcome, PrinterReady, PrinterSelected,
+    PrinterSelectedError, PrinterState, PrinterStatus, PrinterStatusReply, PrinterStatusSet,
+    PrinterUnready, parse_bluetooth_address, parse_printer_addr, printer_error_text,
+    valid_printer_error, valid_printer_outcome,
 };
 pub use process::{
     ARENA_SIGNER_CN, BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, DEFAULT_PROCESS_ALLOW,
@@ -213,8 +214,9 @@ pub use receipt::{
     KEY_NOTIFY_CREDIT_REMINDER, KEY_NOTIFY_LOW_BALANCE, KEY_NOTIFY_SESSION_ENDING,
     KEY_NOTIFY_WHATSAPP_RECEIPT, KEY_RECEIPT_ADDRESS, KEY_RECEIPT_DEFAULT, KEY_RECEIPT_FOOTER,
     KEY_RECEIPT_PHONE, NOTIFY_KEYS, RECEIPT_ADDRESS_MAX_LINES, RECEIPT_DEFAULT_CHOICES,
-    RECEIPT_FOOTER_MAX_LINES, RECEIPT_LINE_MAX_CHARS, RECEIPT_PHONE_MAX_LINES, notify_gate,
-    tier_is_paid, valid_receipt_lines,
+    RECEIPT_ERROR_MAX_CHARS, RECEIPT_FOOTER_MAX_LINES, RECEIPT_LINE_MAX_CHARS,
+    RECEIPT_PHONE_MAX_LINES, ReceiptChoice, ReceiptPrintFailed, ReceiptPrinted, ReceiptReprint,
+    notify_gate, tier_is_paid, valid_receipt_lines,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{

@@ -8,6 +8,7 @@
     PlayerHit,
     PosSaleView,
     Product,
+    ReceiptChoice,
     SnapshotBill,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
@@ -47,7 +48,7 @@
     type CartLine,
     type Refusal,
   } from "../../lib/pos";
-  import { loadPosSales } from "../../lib/pos-sales";
+  import { loadPosSales, reprintReceipt } from "../../lib/pos-sales";
   import { cartAmount, orderSessions } from "../../lib/pos-session";
   import { loadProducts, priceText } from "../../lib/products";
   import SettleBar from "../../lib/SettleBar.svelte";
@@ -191,6 +192,19 @@
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     salesState = outcome.kind === "ok" ? "ok" : "failed";
     if (outcome.kind === "ok") sales = outcome.view.sales;
+  }
+
+  let reprintNote: { text: string; tone: "ok" | "refusal" } | null = $state(null);
+
+  /** Prints the receipt of a numbered sale again; the Hub marks it "Reprint". */
+  async function reprint(orderId: string) {
+    const outcome = await reprintReceipt(orderId);
+    if (outcome === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    reprintNote =
+      outcome === "queued"
+        ? { tone: "ok", text: t("hub.pos.recent.reprint_queued") }
+        : { tone: "refusal", text: t("hub.pos.recent.reprint_failed") };
+    void loadSales();
   }
 
   onMount(() => {
@@ -431,6 +445,9 @@
     else void settle(pending.payments, true, ticket);
   }
 
+  // The receipt choice of the settle in flight; a retry with the stock override keeps it.
+  let chosenReceipt: ReceiptChoice | undefined;
+
   /** Settles the cart. `over` sells a short bundle anyway (needs `stock.override`). */
   async function settle(payments: PaymentRow[], over = false, ticket?: string) {
     if (busy || lines.length === 0) return;
@@ -442,6 +459,7 @@
       payments,
       player_id: attached?.player_id,
       stock_override: over ? true : undefined,
+      receipt: chosenReceipt,
     };
     const body = JSON.stringify(payload);
     const key = attempt?.body === body ? attempt.key : newIdempotencyKey();
@@ -709,10 +727,14 @@
       bill={settleBill}
       {locale}
       {busy}
-      onsettle={(payments) => void settle(payments)}
+      onsettle={(payments, receipt) => {
+        chosenReceipt = receipt;
+        void settle(payments);
+      }}
       title="hub.pos.settle.title"
       prefillCash
       hotkey
+      receiptChoice
     />
   {:else}
     <section
@@ -778,6 +800,12 @@
     {:else if sales.length === 0}
       <p class="type-hub-body" data-testid="recent-empty">{t("hub.pos.recent.empty")}</p>
     {:else}
+      <p class="type-hub-label" role="status" data-testid="reprint-note">
+        {#if reprintNote}
+          {#if reprintNote.tone === "refusal"}<span aria-hidden="true">⚠</span>{/if}
+          {reprintNote.text}
+        {/if}
+      </p>
       <ul class="sales" aria-label={t("hub.pos.recent.list")}>
         {#each sales as sale (sale.order_id)}
           {@const opened = openSale === sale.order_id}
@@ -804,6 +832,20 @@
                   ? t("hub.pos.recent.invoice", { number: sale.invoice_no })
                   : t("hub.pos.recent.invoice_pending")}</span
               >
+              {#if sale.print_state === "failed"}
+                <span class="type-hub-label" data-testid="recent-print-failed"
+                  ><span aria-hidden="true">⚠</span> {t("hub.pos.recent.print_failed")}</span
+                >
+              {/if}
+              {#if sale.invoice_no}
+                <button
+                  type="button"
+                  class="ui-interactive link type-hub-label"
+                  data-testid="recent-reprint"
+                  aria-label={t("hub.pos.recent.reprint_named", { number: sale.invoice_no })}
+                  onclick={() => void reprint(sale.order_id)}>{t("hub.pos.recent.reprint")}</button
+                >
+              {/if}
               <button
                 type="button"
                 class="ui-interactive link type-hub-label"

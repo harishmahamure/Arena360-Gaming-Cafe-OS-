@@ -548,10 +548,13 @@ fn encode(rows: &[Row]) -> Vec<u8> {
     out
 }
 
-fn sale_rows(s: &ReceiptSettings, r: &SaleReceipt) -> Vec<Row> {
+fn sale_rows_for(s: &ReceiptSettings, r: &SaleReceipt, reprint: bool) -> Vec<Row> {
     let mut l = Layout::new(s.paper);
     l.header(s, r.gstin.as_deref().filter(|_| r.gst));
     l.centred(Style::Bold, if r.gst { "Tax Invoice" } else { "Invoice" });
+    if reprint {
+        l.centred(Style::Bold, "Reprint");
+    }
     if let Some(no) = &r.invoice_no {
         l.pair(Style::Plain, "Invoice no.", no);
     }
@@ -565,6 +568,11 @@ fn sale_rows(s: &ReceiptSettings, r: &SaleReceipt) -> Vec<Row> {
     l.payments(s, &r.payments);
     l.footer(s);
     l.rows
+}
+
+#[cfg(test)]
+fn sale_rows(s: &ReceiptSettings, r: &SaleReceipt) -> Vec<Row> {
+    sale_rows_for(s, r, false)
 }
 
 fn payment_rows(s: &ReceiptSettings, r: &PaymentReceipt) -> Vec<Row> {
@@ -602,7 +610,13 @@ fn payment_rows(s: &ReceiptSettings, r: &PaymentReceipt) -> Vec<Row> {
 /// A sale as ESC/POS bytes: header, title, invoice number, date, staff, customer, play time,
 /// items, tax per rate, total, payments and footer.
 pub fn render_sale(settings: &ReceiptSettings, sale: &SaleReceipt) -> Vec<u8> {
-    encode(&sale_rows(settings, sale))
+    render_sale_copy(settings, sale, false)
+}
+
+/// [`render_sale`], with a centred "Reprint" line under the title when `reprint` is set (Story
+/// 5.17: the same receipt printed again).
+pub fn render_sale_copy(settings: &ReceiptSettings, sale: &SaleReceipt, reprint: bool) -> Vec<u8> {
+    encode(&sale_rows_for(settings, sale, reprint))
 }
 
 /// A wallet top-up or credit collection as ESC/POS bytes. It never carries an invoice number.

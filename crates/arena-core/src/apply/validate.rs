@@ -314,6 +314,12 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionRateFlip(t) => super::rate_flip::validate(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::ReceiptReprint(_)
+        | IntentPayload::ReceiptPrinted(_)
+        | IntentPayload::ReceiptPrintFailed(_) => match target {
+            Target::Receipt(t) => super::receipt_print::validate(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::InvoiceIssue(_) => match target {
             Target::InvoiceIssue(t) => super::invoice_issue::validate(intent, t),
             _ => Err(internal_target()),

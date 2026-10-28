@@ -27,6 +27,7 @@ fn sale_of(lines: &[(&str, i64)], payments: Vec<PaymentRow>) -> PosSale {
         player_id: None,
         credit_override: None,
         stock_override: None,
+        receipt: None,
     }
 }
 

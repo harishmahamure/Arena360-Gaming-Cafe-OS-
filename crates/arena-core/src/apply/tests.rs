@@ -34,6 +34,7 @@ mod pos_sale;
 mod prepaid;
 mod rate_flip;
 mod rates;
+mod receipt;
 mod rule_pricing;
 mod rules;
 mod session;

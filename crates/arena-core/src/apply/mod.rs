@@ -27,6 +27,7 @@ mod admin_exit;
 mod ads_consent;
 mod alert;
 mod branch_code;
+mod business_invoice;
 mod changes;
 mod controller_check;
 mod credit;

@@ -8,6 +8,7 @@
     t,
   } from "@arena/ui";
   import type {
+    BusinessBuyer,
     PaymentMethod,
     PaymentRow,
     PrinterReady,
@@ -17,6 +18,7 @@
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { tick, untrack, type Snippet } from "svelte";
+  import { buyerErrors, toBuyer } from "./business";
   import { printerReady } from "./printer";
   import { cashBlocked } from "./shift.svelte";
   import {
@@ -48,8 +50,11 @@
     busy: boolean;
     /** Why the bill cannot settle yet (placed items still to serve), shown on the button. */
     blockedReason?: MessageKey;
-    /** `receipt` is the choice on the bar, present only when `receiptChoice` is set. */
-    onsettle: (payments: PaymentRow[], receipt?: ReceiptChoice) => void;
+    /**
+     * `receipt` is the choice on the bar, present only when `receiptChoice` is set; `business`
+     * is the buyer of a business invoice, present only when staff chose one (Story 5.20).
+     */
+    onsettle: (payments: PaymentRow[], receipt?: ReceiptChoice, business?: BusinessBuyer) => void;
     title?: MessageKey;
     extra?: Snippet;
     /** Starts with one Cash row for the whole total (only while cash can be taken). */
@@ -78,6 +83,17 @@
     "none",
     ...(whatsapp ? (["whatsapp"] as const) : []),
   ]);
+  // "Business invoice" is offered on a GST-registered Indian branch (Story 5.20): the customer's
+  // GSTIN and legal name go on the invoice. Settle stays disabled until they are valid or it is off.
+  const businessOffered = $derived(receiptChoice && printer?.business === true);
+  let businessOn = $state(false);
+  let buyerGstin = $state("");
+  let buyerName = $state("");
+  const buyerProblems = $derived(buyerErrors(buyerGstin, buyerName));
+  const businessBlocked = $derived(
+    businessOffered && businessOn && Object.keys(buyerProblems).length > 0,
+  );
+  const buyerShown = $derived(buyerGstin.length > 0 || buyerName.length > 0 || attempted);
   const receipt: ReceiptChoice = $derived(
     picked && choices.includes(picked)
       ? picked
@@ -193,14 +209,18 @@
   }
 
   export async function submit() {
-    if (busy || !closed || blockedReason) return;
+    if (busy || !closed || blockedReason || businessBlocked) return;
     attempted = true;
     if (!rowsValid(rows, exponent, wallet)) {
       await tick();
       focusFirstInvalid(root);
       return;
     }
-    onsettle(toPayments(rows, sums.change, exponent), receiptChoice ? receipt : undefined);
+    onsettle(
+      toPayments(rows, sums.change, exponent),
+      receiptChoice ? receipt : undefined,
+      toBuyer(businessOffered && businessOn, buyerGstin, buyerName),
+    );
   }
 </script>
 
@@ -276,6 +296,37 @@
     </div>
   {/if}
 
+  {#if businessOffered}
+    <div class="receipt" data-testid="business-invoice">
+      <div class="methods" role="group" aria-label={t("hub.settle.business")}>
+        <button
+          type="button"
+          class="ui-interactive method type-hub-label"
+          data-business="toggle"
+          aria-pressed={businessOn}
+          disabled={busy}
+          onclick={() => (businessOn = !businessOn)}>{t("hub.settle.business")}</button
+        >
+      </div>
+      {#if businessOn}
+        <div class="row" data-testid="business-fields">
+          <TextField
+            label="hub.settle.business.gstin"
+            bind:value={buyerGstin}
+            autocomplete="off"
+            error={buyerShown ? (buyerProblems.gstin ?? null) : null}
+          />
+          <TextField
+            label="hub.settle.business.name"
+            bind:value={buyerName}
+            autocomplete="off"
+            error={buyerShown ? (buyerProblems.legal_name ?? null) : null}
+          />
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   {#if rows.length > 0}
     <div class="split" data-component="payment-split" data-testid="payment-split">
       {#each rows as row (row.method)}
@@ -339,14 +390,16 @@
 
   <Button
     label="hub.settle.submit"
-    disabled={busy || !closed || !!blockedReason}
+    disabled={busy || !closed || !!blockedReason || businessBlocked}
     disabledReason={busy
       ? "hub.sheet.waiting"
       : blockedReason
         ? blockedReason
-        : sums.overpaid
-          ? "hub.settle.over"
-          : "hub.settle.remaining"}
+        : businessBlocked
+          ? "hub.settle.business.blocked"
+          : sums.overpaid
+            ? "hub.settle.over"
+            : "hub.settle.remaining"}
     reasonParams={{ amount: money(sums.remaining) }}
     onclick={() => void submit()}
   />

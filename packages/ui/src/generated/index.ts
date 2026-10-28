@@ -52,6 +52,7 @@ export type { BranchHub } from "./BranchHub";
 export type { BranchSeedDefaults } from "./BranchSeedDefaults";
 export type { BranchSetup } from "./BranchSetup";
 export type { BundleComponent } from "./BundleComponent";
+export type { BusinessBuyer } from "./BusinessBuyer";
 export type { CafeDetails } from "./CafeDetails";
 export type { CatalogEntry } from "./CatalogEntry";
 export type { ChangeOpKind } from "./ChangeOpKind";

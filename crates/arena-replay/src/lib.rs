@@ -676,6 +676,7 @@ mod tests {
             let settle = |rev: i64| {
                 submit(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                        business: None,
                         order_id: order_id.clone(),
                         credit_override: None,
                         payments: vec![
@@ -796,6 +797,7 @@ mod tests {
             writer
                 .submit_intent(submit(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                        business: None,
                         order_id: guest_order,
                         credit_override: None,
                         payments: vec![arena_proto::PaymentRow {
@@ -844,6 +846,7 @@ mod tests {
             let sell = || {
                 submit(
                     IntentPayload::PlanSell(arena_proto::PlanSell {
+                        business: None,
                         player_id: player_id.clone(),
                         plan_id: pack_plan.clone(),
                         credit_override: None,
@@ -918,6 +921,7 @@ mod tests {
             let pos = || {
                 submit(
                     IntentPayload::PosSale(arena_proto::PosSale {
+                        business: None,
                         lines: vec![arena_proto::PosSaleLine {
                             product_id: cola.clone(),
                             qty: 2,

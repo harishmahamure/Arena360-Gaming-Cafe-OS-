@@ -117,6 +117,13 @@ pub struct ItemLine {
     pub hsn: Option<String>,
 }
 
+/// The customer of a business (B2B) invoice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Buyer {
+    pub legal_name: String,
+    pub gstin: String,
+}
+
 /// A settled sale: "Tax Invoice" on a GST branch, "Invoice" otherwise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaleReceipt {
@@ -128,6 +135,8 @@ pub struct SaleReceipt {
     pub tax_label: String,
     /// `None` while no number is issued yet: the line is left off.
     pub invoice_no: Option<String>,
+    /// The business a GST invoice is made out to (Story 5.20): printed under the title.
+    pub buyer: Option<Buyer>,
     pub at_ms: i64,
     pub staff: String,
     /// The player's username; `None` prints "Guest".
@@ -555,6 +564,10 @@ fn sale_rows_for(s: &ReceiptSettings, r: &SaleReceipt, reprint: bool) -> Vec<Row
     if reprint {
         l.centred(Style::Bold, "Reprint");
     }
+    if let Some(buyer) = r.buyer.as_ref().filter(|_| r.gst) {
+        l.lines(Style::Plain, &buyer.legal_name);
+        l.lines(Style::Plain, &format!("GSTIN {}", buyer.gstin));
+    }
     if let Some(no) = &r.invoice_no {
         l.pair(Style::Plain, "Invoice no.", no);
     }
@@ -694,6 +707,7 @@ mod tests {
             gstin: Some("29ABCDE1234F1Z5".into()),
             tax_label: "Tax".into(),
             invoice_no: Some("KOR/26-27/E1k/000142".into()),
+            buyer: None,
             at_ms: MS_2026_10_28_0835_UTC,
             staff: "Meera".into(),
             player: Some("shadowfox".into()),
@@ -757,6 +771,7 @@ mod tests {
             gstin: None,
             tax_label: "VAT".into(),
             invoice_no: Some("DUB/26/E2a/000007".into()),
+            buyer: None,
             at_ms: MS_2026_10_28_0835_UTC,
             staff: String::new(),
             player: None,
@@ -796,6 +811,7 @@ mod tests {
     fn jpy_sale() -> SaleReceipt {
         SaleReceipt {
             invoice_no: Some("TKY/26/E1b/000031".into()),
+            buyer: None,
             sessions: vec![SessionLine {
                 device: "VR Rig".into(),
                 minutes: 45,
@@ -951,6 +967,57 @@ mod tests {
                 .any(|r| r.starts_with("Customer") && r.ends_with("Guest"))
         );
         assert!(rows.iter().all(|r| !r.starts_with("Staff")));
+    }
+
+    #[test]
+    fn a_business_invoice_prints_the_buyer_under_the_title_on_gst_only() {
+        let s = settings(PaperWidth::Mm80, "INR");
+        let buyer = Buyer {
+            legal_name: "Tata Consultancy Services".into(),
+            gstin: "29AABCT1332L1ZA".into(),
+        };
+        let sale = SaleReceipt {
+            buyer: Some(buyer.clone()),
+            ..gst_sale()
+        };
+        let rows = text(sale_rows(&s, &sale));
+        let title = rows.iter().position(|r| r.trim() == "Tax Invoice").unwrap();
+        assert_eq!(rows[title + 1].trim(), "Tata Consultancy Services");
+        assert_eq!(rows[title + 2].trim(), "GSTIN 29AABCT1332L1ZA");
+        assert!(
+            rows[title + 3].starts_with("Invoice no."),
+            "the buyer sits directly under the title: {rows:?}"
+        );
+
+        let plain = text(sale_rows(&s, &gst_sale()));
+        assert!(plain.iter().all(|r| !r.contains("29AABCT1332L1ZA")));
+
+        let simple = SaleReceipt {
+            buyer: Some(buyer),
+            ..simple_sale()
+        };
+        assert!(
+            text(sale_rows(&s, &simple))
+                .iter()
+                .all(|r| !r.contains("Tata") && !r.contains("GSTIN")),
+            "a branch that is not on GST prints no buyer"
+        );
+    }
+
+    #[test]
+    fn a_long_legal_name_wraps_on_a_58_mm_receipt() {
+        let s = settings(PaperWidth::Mm58, "INR");
+        let sale = SaleReceipt {
+            buyer: Some(Buyer {
+                legal_name: "Bharat Heavy Electricals Limited Corporate Office".into(),
+                gstin: "29AABCT1332L1ZA".into(),
+            }),
+            ..gst_sale()
+        };
+        let rows = text(sale_rows(&s, &sale));
+        assert!(rows.iter().all(|r| r.chars().count() <= 32), "{rows:?}");
+        assert!(rows.iter().any(|r| r.contains("Limited")));
+        assert!(rows.iter().any(|r| r.trim() == "GSTIN 29AABCT1332L1ZA"));
     }
 
     #[test]

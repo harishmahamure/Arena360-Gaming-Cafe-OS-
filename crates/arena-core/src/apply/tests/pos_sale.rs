@@ -16,6 +16,7 @@ use arena_proto::{
 
 fn sale_of(lines: &[(&str, i64)], payments: Vec<PaymentRow>) -> PosSale {
     PosSale {
+        business: None,
         lines: lines
             .iter()
             .map(|(id, qty)| PosSaleLine {

@@ -216,6 +216,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 52,
         sql: include_str!("../migrations/0052_notify_outbox.sql"),
     },
+    Migration {
+        version: 53,
+        sql: include_str!("../migrations/0053_business_invoice.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -502,5 +506,41 @@ mod tests {
                 .is_err()
         );
         assert!(conn.execute("DELETE FROM stock_moves", []).is_err());
+    }
+
+    /// Migration 53 adds the buyer columns of a business invoice; an existing order has none and a
+    /// name never stands without its GSTIN.
+    #[test]
+    fn the_business_invoice_migration_adds_nullable_buyer_columns_set_together() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 53) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                 created_at, updated_at, kind)
+             VALUES ('O1', 'settled', 5, 5, 'd', 'f', 0, 0, 0, 'pos_sale');",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATIONS[52].sql).unwrap();
+        let buyer: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT buyer_gstin, buyer_name FROM orders WHERE id = 'O1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(buyer, (None, None), "an existing order is a consumer sale");
+        conn.execute_batch(
+            "UPDATE orders SET buyer_gstin = '29AABCT1332L1ZA', buyer_name = 'Acme' WHERE id = 'O1'",
+        )
+        .unwrap();
+        conn.execute_batch("UPDATE orders SET buyer_gstin = NULL, buyer_name = NULL")
+            .unwrap();
+        assert!(
+            conn.execute_batch("UPDATE orders SET buyer_name = 'Acme'")
+                .is_err(),
+            "a name without a GSTIN is refused"
+        );
     }
 }

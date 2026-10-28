@@ -1,6 +1,12 @@
 <script lang="ts">
   import { Button, formatMoney, t } from "@arena/ui";
-  import type { PaymentRow, PlanView, ReceiptChoice, SnapshotBill } from "@arena/ui/generated";
+  import type {
+    BusinessBuyer,
+    PaymentRow,
+    PlanView,
+    ReceiptChoice,
+    SnapshotBill,
+  } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount } from "svelte";
   import { invalidate } from "$app/navigation";
@@ -78,16 +84,16 @@
     })();
   });
 
-  async function settle(payments: PaymentRow[], receipt?: ReceiptChoice) {
+  async function settle(payments: PaymentRow[], receipt?: ReceiptChoice, business?: BusinessBuyer) {
     if (busy || !chosen) return;
     busy = true;
     error = null;
     const same =
-      attempt && JSON.stringify(attempt.payments) === JSON.stringify([payments, receipt]);
+      attempt && JSON.stringify(attempt.payments) === JSON.stringify([payments, receipt, business]);
     const key = same && attempt ? attempt.key : newIdempotencyKey();
-    attempt = { key, payments: [payments, receipt] };
+    attempt = { key, payments: [payments, receipt, business] };
     const outcome = await submitIntent(
-      { kind: "plan.sell", player_id: playerId, plan_id: chosen.id, payments, receipt },
+      { kind: "plan.sell", player_id: playerId, plan_id: chosen.id, payments, receipt, business },
       key,
     ).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
@@ -146,7 +152,7 @@
       {bill}
       {locale}
       {busy}
-      onsettle={(p, receipt) => void settle(p, receipt)}
+      onsettle={(p, receipt, business) => void settle(p, receipt, business)}
       title="hub.plans.sell.title"
       receiptChoice
     >

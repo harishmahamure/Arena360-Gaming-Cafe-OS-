@@ -305,6 +305,11 @@ pub struct PrinterReady {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub whatsapp: Option<bool>,
+    /// Whether the settle bar offers "Business invoice" (Story 5.20): the branch is a GST-registered
+    /// Indian one. Left out when false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub business: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

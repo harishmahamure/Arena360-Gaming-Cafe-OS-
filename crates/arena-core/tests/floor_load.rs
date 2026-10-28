@@ -332,6 +332,7 @@ fn next_intent(f: &Floor, rng: &mut Rng) -> Option<Intent> {
                 if total > 0 {
                     return Some(intent(
                         IntentPayload::SessionSettle(SessionSettle {
+                            business: None,
                             order_id: text(o, "id"),
                             credit_override: None,
                             payments: vec![PaymentRow {

@@ -1439,6 +1439,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         submit(
             IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                business: None,
                 order_id: order.clone(),
                 credit_override: None,
                 payments: vec![arena_proto::PaymentRow {

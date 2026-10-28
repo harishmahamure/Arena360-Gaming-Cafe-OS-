@@ -130,6 +130,8 @@ pub struct ReceiptHead {
     pub staff: String,
     pub player: Option<String>,
     pub invoice_no: Option<String>,
+    /// The business the invoice is made out to (Story 5.20): GSTIN and legal name, B2B only.
+    pub buyer: Option<(String, String)>,
 }
 
 /// One order line: play time (`device` and `minutes` set), a product (`qty`, `hsn`) or a plan
@@ -169,7 +171,7 @@ pub fn load_receipt_source(
         .query_row(
             "SELECT o.kind, o.status, o.subtotal_minor, o.total_minor, o.tax_breakup,
                     COALESCE(o.settled_at, 0), COALESCE(st.display_name, o.settled_by, ''),
-                    p.username, o.invoice_no
+                    p.username, o.invoice_no, o.buyer_gstin, o.buyer_name
              FROM orders o
              LEFT JOIN staff st ON st.staff_id = o.settled_by
              LEFT JOIN players p ON p.player_id = o.player_id
@@ -186,6 +188,9 @@ pub fn load_receipt_source(
                     staff: r.get(6)?,
                     player: r.get(7)?,
                     invoice_no: r.get(8)?,
+                    buyer: r
+                        .get::<_, Option<String>>(9)?
+                        .zip(r.get::<_, Option<String>>(10)?),
                 })
             },
         )

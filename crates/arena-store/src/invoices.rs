@@ -88,6 +88,22 @@ pub fn set_invoice_no(conn: &Connection, order_id: &str, invoice_no: &str) -> Re
     Ok(())
 }
 
+/// Records the business a settled sale is invoiced to (Story 5.20): the buyer's GSTIN and legal
+/// name, written once when the order settles.
+pub fn set_order_buyer(
+    conn: &Connection,
+    order_id: &str,
+    gstin: &str,
+    legal_name: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET buyer_gstin = ?2, buyer_name = ?3 WHERE id = ?1",
+        params![order_id, gstin, legal_name],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 /// Settled sales without a number, oldest settle first: `(order id, settled_at)`.
 pub fn list_unnumbered(conn: &Connection, limit: i64) -> Result<Vec<(String, i64)>, AppError> {
     let mut stmt = conn

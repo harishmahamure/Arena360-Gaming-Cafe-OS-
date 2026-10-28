@@ -1765,6 +1765,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(
                 hub.intent(
                     IntentPayload::PosSale(arena_proto::PosSale {
+                        business: None,
                         lines: lines
                             .iter()
                             .map(|(p, q)| arena_proto::PosSaleLine {
@@ -2717,6 +2718,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .filter(|p| p.method == arena_proto::PaymentMethod::Cash)
                 .count();
             let payload = IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                business: None,
                 order_id: id.clone(),
                 credit_override: None,
                 payments,
@@ -2862,6 +2864,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let before = hub.change_count();
             let out = hub.submit_new(hub.intent(
                 IntentPayload::PlanSell(arena_proto::PlanSell {
+                    business: None,
                     player_id: player_id.clone(),
                     plan_id: chosen.plan_id.clone(),
                     credit_override: None,
@@ -2979,6 +2982,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let before = hub.change_count();
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                    business: None,
                     order_id: id,
                     credit_override: None,
                     payments,
@@ -3640,6 +3644,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let before = hub.change_count();
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                    business: None,
                     order_id: id,
                     credit_override: over_ride.then_some(true),
                     payments: vec![arena_proto::PaymentRow {
@@ -3863,6 +3868,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 let (id, total) = (text(order, "id"), int(order, "total_minor"));
                 let out = hub.submit_new(hub.intent(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                        business: None,
                         order_id: id.clone(),
                         credit_override: None,
                         payments: vec![arena_proto::PaymentRow {

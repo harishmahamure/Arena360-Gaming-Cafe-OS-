@@ -4657,6 +4657,7 @@ pub(crate) mod tests {
                 id: "x".into(),
             },
             IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                business: None,
                 order_id: order_id.into(),
                 credit_override: None,
                 payments: Vec::new(),
@@ -5703,6 +5704,7 @@ pub(crate) mod tests {
             .to_owned();
         let sale = |lines: &[(&str, i64)], total: i64, over: bool| {
             IntentPayload::PosSale(PosSale {
+                business: None,
                 lines: lines
                     .iter()
                     .map(|(id, qty)| PosSaleLine {

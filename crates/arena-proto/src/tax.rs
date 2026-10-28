@@ -59,6 +59,37 @@ pub fn gstin_valid(s: &str) -> bool {
     ALPHABET[(36 - sum % 36) % 36] == b[14]
 }
 
+/// The longest legal name a business invoice keeps.
+pub const BUYER_NAME_MAX_CHARS: usize = 100;
+
+/// The business a B2B invoice is made out to (Story 5.20): the customer's GSTIN and legal name,
+/// stored on the order at settle. Only a GST branch (`TaxMode::GstIn`) takes one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BusinessBuyer {
+    pub gstin: String,
+    pub legal_name: String,
+}
+
+impl BusinessBuyer {
+    /// The first thing wrong with the buyer as `(field, message)`: an invalid GSTIN is
+    /// [`GSTIN_INVALID`], a blank, padded, over-long or control-character name is a message.
+    pub fn check(&self) -> Result<(), (&'static str, &'static str)> {
+        if !gstin_valid(&self.gstin) {
+            return Err(("business.gstin", GSTIN_INVALID));
+        }
+        let name = self.legal_name.trim();
+        if name.is_empty()
+            || name != self.legal_name
+            || name.chars().count() > BUYER_NAME_MAX_CHARS
+            || name.chars().any(char::is_control)
+        {
+            return Err(("business.legal_name", "legal name is 1 to 100 characters"));
+        }
+        Ok(())
+    }
+}
+
 impl TaxSettings {
     pub fn parse(value: &str) -> Option<Self> {
         serde_json::from_str(value).ok()
@@ -151,6 +182,28 @@ mod tests {
         ] {
             assert!(!gstin_valid(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_business_buyer_needs_a_valid_gstin_and_a_plain_legal_name() {
+        let buyer = |gstin: &str, name: &str| BusinessBuyer {
+            gstin: gstin.into(),
+            legal_name: name.into(),
+        };
+        assert_eq!(buyer("27AAPFU0939F1ZV", "Acme Traders").check(), Ok(()));
+        assert_eq!(
+            buyer("27AAPFU0939F1ZW", "Acme").check(),
+            Err(("business.gstin", GSTIN_INVALID))
+        );
+        assert_eq!(buyer("", "Acme").check().unwrap_err().1, GSTIN_INVALID);
+        for bad in ["", " ", " Acme", "Acme ", "A\tB", &"x".repeat(101)] {
+            assert_eq!(
+                buyer("27AAPFU0939F1ZV", bad).check().unwrap_err().0,
+                "business.legal_name",
+                "{bad:?}"
+            );
+        }
+        assert_eq!(buyer("27AAPFU0939F1ZV", &"x".repeat(100)).check(), Ok(()));
     }
 
     #[test]

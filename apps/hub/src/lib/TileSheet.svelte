@@ -23,6 +23,7 @@
     PauseReason,
     PaymentRow,
     ReasonCode,
+    BusinessBuyer,
     ReceiptChoice,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
@@ -391,9 +392,9 @@
   // A session bill settles once every placed line is served or cancelled.
   const unserved = $derived((unpaid?.items ?? []).some((i) => !i.served));
 
-  function settle(payments: PaymentRow[], receipt?: ReceiptChoice) {
+  function settle(payments: PaymentRow[], receipt?: ReceiptChoice, business?: BusinessBuyer) {
     if (unpaid?.order_id && unpaid.order_rev != null) {
-      void go(settleJob(unpaid.order_id, payments, unpaid.order_rev, receipt));
+      void go(settleJob(unpaid.order_id, payments, unpaid.order_rev, receipt, business));
     }
   }
 

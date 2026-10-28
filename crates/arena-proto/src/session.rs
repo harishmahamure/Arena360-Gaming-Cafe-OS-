@@ -396,6 +396,10 @@ pub struct SessionSettle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub receipt: Option<crate::ReceiptChoice>,
+    /// The business the invoice is made out to (Story 5.20); a GST branch only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub business: Option<crate::BusinessBuyer>,
 }
 
 pub const UNDO_WINDOW_MS: i64 = 8_000;

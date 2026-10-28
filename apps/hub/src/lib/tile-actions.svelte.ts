@@ -6,6 +6,7 @@ import type {
   PcAction,
   Permission,
   ReasonCode,
+  BusinessBuyer,
   ReceiptChoice,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
@@ -230,9 +231,10 @@ export const settleJob = (
   payments: PaymentRow[],
   rev: number,
   receipt?: ReceiptChoice,
+  business?: BusinessBuyer,
 ) =>
   job(
-    { kind: "session.settle", order_id, payments, receipt },
+    { kind: "session.settle", order_id, payments, receipt, business },
     { track: "none", rev, done: "hub.sheet.done.settled" },
   );
 

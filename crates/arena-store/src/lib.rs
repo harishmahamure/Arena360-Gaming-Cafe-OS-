@@ -96,7 +96,7 @@ pub use identity::{
 };
 pub use invoices::{
     INVOICED_KINDS, InvoiceOrder, find_invoice_order, find_sequence, list_unnumbered,
-    set_invoice_no, take_sequence,
+    set_invoice_no, set_order_buyer, take_sequence,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{

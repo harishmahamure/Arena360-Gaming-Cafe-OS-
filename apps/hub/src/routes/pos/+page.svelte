@@ -8,6 +8,7 @@
     PlayerHit,
     PosSaleView,
     Product,
+    BusinessBuyer,
     ReceiptChoice,
     SnapshotBill,
   } from "@arena/ui/generated";
@@ -448,6 +449,8 @@
 
   // The receipt choice of the settle in flight; a retry with the stock override keeps it.
   let chosenReceipt: ReceiptChoice | undefined;
+  // The business a "Business invoice" settle is made out to (Story 5.20).
+  let chosenBusiness: BusinessBuyer | undefined;
 
   /** Settles the cart. `over` sells a short bundle anyway (needs `stock.override`). */
   async function settle(payments: PaymentRow[], over = false, ticket?: string) {
@@ -461,6 +464,7 @@
       player_id: attached?.player_id,
       stock_override: over ? true : undefined,
       receipt: chosenReceipt,
+      business: chosenBusiness,
     };
     const body = JSON.stringify(payload);
     const key = attempt?.body === body ? attempt.key : newIdempotencyKey();
@@ -728,8 +732,9 @@
       bill={settleBill}
       {locale}
       {busy}
-      onsettle={(payments, receipt) => {
+      onsettle={(payments, receipt, business) => {
         chosenReceipt = receipt;
+        chosenBusiness = business;
         void settle(payments);
       }}
       title="hub.pos.settle.title"

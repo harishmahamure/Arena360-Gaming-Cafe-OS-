@@ -7,11 +7,11 @@ use arena_proto::{
     ActorKind, AlertKind, AlertRaise, AppError, CONSENT_TRANSACTIONAL, ErrorCode, FLAG_KITCHEN,
     HubSnapshot, Intent, IntentPayload, KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER,
     KEY_LICENCE_FLAGS, KEY_LICENCE_TIER, KEY_NOTIFY_WHATSAPP_RECEIPT, KEY_PRINTER_PAPER_MM,
-    KEY_PRINTER_SELECTED, KEY_RECEIPT_DEFAULT, PRINTER_OFFLINE_HOLD_MS, Permission,
+    KEY_PRINTER_SELECTED, KEY_RECEIPT_DEFAULT, KEY_TAX, PRINTER_OFFLINE_HOLD_MS, Permission,
     PrinterErrorKind, PrinterFindResult, PrinterHealth, PrinterJobFailure, PrinterOutcome,
     PrinterReady, PrinterSelected, PrinterState, PrinterStatus, PrinterStatusReply,
-    PrinterStatusSet, PrinterUnready, ReceiptChoice, SessionStaff, SettingEntry, UiError, has_flag,
-    printer_error_text, whatsapp_refusal,
+    PrinterStatusSet, PrinterUnready, ReceiptChoice, SessionStaff, SettingEntry, TaxMode,
+    TaxSettings, UiError, has_flag, printer_error_text, whatsapp_refusal,
 };
 use axum::Json;
 use axum::extract::{Query, State};
@@ -225,11 +225,16 @@ pub(crate) async fn ready(
         consent,
     )
     .is_none();
+    // A business invoice is offered on a GST-registered Indian branch only (Story 5.20).
+    let business = value(&settings, KEY_TAX)
+        .and_then(TaxSettings::parse)
+        .is_some_and(|t| t.tax_mode() == TaxMode::GstIn);
     Json(PrinterReady {
         ready: reason.is_none(),
         default_choice,
         reason,
         whatsapp: whatsapp.then_some(true),
+        business: business.then_some(true),
     })
     .into_response()
 }
@@ -892,6 +897,26 @@ mod tests {
             "no such player"
         );
         assert_eq!(ready(String::new()).await.get("whatsapp"), None, "a guest");
+    }
+
+    /// Story 5.20: the bar offers "Business invoice" on a GST-registered branch only.
+    #[tokio::test]
+    async fn the_settle_bar_offers_a_business_invoice_on_a_gst_branch_only() {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        let counter = sign_in(&r, "counter", "c-pass").await;
+        let ready = || async {
+            call_app(&r.app, "GET", "/ui/printer/ready", Some(&counter), None)
+                .await
+                .1
+        };
+        assert_eq!(ready().await.get("business"), None, "simple tax");
+
+        let gst = r#"{"country":"IN","gst":true,"gstin":"27AAPFU0939F1ZV","inclusive":true,"product_bp":500,"play_bp":1800,"sac":"","label":"Tax","rate_bp":0}"#;
+        let (status, body) = set(&r, &token, "branch.tax", gst).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(ready().await["business"], true);
     }
 
     #[tokio::test]

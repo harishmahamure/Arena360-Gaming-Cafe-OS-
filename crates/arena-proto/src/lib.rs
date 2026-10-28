@@ -275,8 +275,8 @@ pub use stock::{
     weighted_avg_cost,
 };
 pub use tax::{
-    DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,
-    TaxSettings, gstin_valid,
+    BUYER_NAME_MAX_CHARS, BusinessBuyer, DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX,
+    RATE_RANGE, SIMPLE_MAX_BP, TaxMode, TaxSettings, gstin_valid,
 };
 pub use test_session::{
     DEFAULT_TEST_SESSION, DeviceTestSessionCompleted, DeviceTestSessionStart, KEY_TEST_SESSION,

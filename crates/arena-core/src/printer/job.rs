@@ -11,7 +11,7 @@ use arena_store::{ReceiptLineRow, ReceiptSource};
 
 use super::PaperWidth;
 use super::receipt::{
-    ItemLine, ReceiptMoney, ReceiptSettings, SaleReceipt, SessionLine, render_sale_copy,
+    Buyer, ItemLine, ReceiptMoney, ReceiptSettings, SaleReceipt, SessionLine, render_sale_copy,
 };
 use crate::invoice::tax::RateTax;
 
@@ -105,6 +105,14 @@ pub fn sale_receipt(
             .filter(|l| !l.is_empty())
             .unwrap_or_else(|| "Tax".to_owned()),
         invoice_no,
+        buyer: head
+            .buyer
+            .as_ref()
+            .filter(|_| gst)
+            .map(|(gstin, name)| Buyer {
+                legal_name: name.clone(),
+                gstin: gstin.clone(),
+            }),
         at_ms: head.settled_at,
         staff: head.staff.clone(),
         player: head.player.clone(),
@@ -205,6 +213,7 @@ mod tests {
                 staff: "Asha".into(),
                 player: Some("rohan".into()),
                 invoice_no: Some("DEV01/26-27/E1k/000007".into()),
+                buyer: None,
             },
             lines: vec![
                 line(None, None, Some("PC 4")),

@@ -252,6 +252,7 @@ async fn run_flow(state: ConnectivityState) -> Outcome {
     send(
         &w,
         IntentPayload::SessionSettle(SessionSettle {
+            business: None,
             order_id: text(&order, "id"),
             credit_override: None,
             payments: vec![PaymentRow {

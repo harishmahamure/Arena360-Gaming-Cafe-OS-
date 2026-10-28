@@ -40,6 +40,7 @@ async fn sale_with(
         f,
         by.clone(),
         IntentPayload::PosSale(PosSale {
+            business: None,
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
@@ -507,6 +508,7 @@ async fn the_drawer_off_or_no_cash_row_sends_no_kick() {
         &f,
         by.clone(),
         IntentPayload::PosSale(PosSale {
+            business: None,
             lines: vec![PosSaleLine {
                 product_id: id.clone(),
                 qty: 1,
@@ -675,6 +677,7 @@ async fn whatsapp_sale(
         f,
         by.clone(),
         IntentPayload::PosSale(PosSale {
+            business: None,
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
@@ -913,4 +916,203 @@ async fn a_plan_sale_settles_to_whatsapp_and_its_undo_skips_the_row() {
         .await
         .unwrap();
     assert_eq!(notifies(&f)[0].6, "skipped");
+}
+
+// Story 5.20: business (B2B) invoices.
+
+const GST_ON: &str = r#"{"country":"IN","gst":true,"gstin":"27AAPFU0939F1ZV","inclusive":true,"product_bp":500,"play_bp":1800,"sac":"","label":"Tax","rate_bp":0}"#;
+const BUYER_GSTIN: &str = "29AABCT1332L1ZA";
+
+async fn gst_branch(f: &Fixture) {
+    super::prepaid::sql(
+        f,
+        format!("UPDATE settings SET value = '{GST_ON}' WHERE key = 'branch.tax'"),
+    )
+    .await;
+}
+
+fn buyer(gstin: &str, name: &str) -> arena_proto::BusinessBuyer {
+    arena_proto::BusinessBuyer {
+        gstin: gstin.into(),
+        legal_name: name.into(),
+    }
+}
+
+async fn business_sale(
+    f: &Fixture,
+    by: &Actor,
+    product: &str,
+    business: Option<arena_proto::BusinessBuyer>,
+    receipt: Option<ReceiptChoice>,
+) -> Result<String, AppError> {
+    let applied = submit(
+        f,
+        by.clone(),
+        IntentPayload::PosSale(PosSale {
+            business,
+            lines: vec![PosSaleLine {
+                product_id: product.into(),
+                qty: 1,
+            }],
+            payments: vec![pay(Cash, 4_000, None)],
+            player_id: None,
+            credit_override: None,
+            stock_override: None,
+            receipt,
+        }),
+    )
+    .await?;
+    Ok(applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders" && c.op == ChangeOp::Insert)
+        .unwrap()
+        .row_id
+        .clone())
+}
+
+/// `(buyer_gstin, buyer_name)` of an order, `None` for a consumer sale.
+fn buyer_of(f: &Fixture, id: &str) -> Option<(String, String)> {
+    let o = table(f, Table::Orders)
+        .into_iter()
+        .find(|o| text(o, "id") == id)
+        .unwrap();
+    match (&o["buyer_gstin"], &o["buyer_name"]) {
+        (RowValue::Text(g), RowValue::Text(n)) => Some((g.clone(), n.clone())),
+        (RowValue::Null, RowValue::Null) => None,
+        other => panic!("buyer columns set together or not at all: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_gst_settle_stores_the_business_on_the_order_with_every_receipt_choice() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    gst_branch(&f).await;
+    for choice in [None, Some(ReceiptChoice::None), Some(ReceiptChoice::Print)] {
+        let o = business_sale(
+            &f,
+            &by,
+            &id,
+            Some(buyer(BUYER_GSTIN, "Tata Consultancy Services")),
+            choice,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            buyer_of(&f, &o),
+            Some((BUYER_GSTIN.into(), "Tata Consultancy Services".into())),
+            "{choice:?}"
+        );
+    }
+    let b2c = business_sale(&f, &by, &id, None, None).await.unwrap();
+    assert_eq!(buyer_of(&f, &b2c), None, "a sale without a buyer is B2C");
+}
+
+#[tokio::test]
+async fn a_printed_business_invoice_carries_the_buyer_on_the_receipt_source() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    gst_branch(&f).await;
+    let o = business_sale(
+        &f,
+        &by,
+        &id,
+        Some(buyer(BUYER_GSTIN, "Acme & Sons")),
+        Some(ReceiptChoice::Print),
+    )
+    .await
+    .unwrap();
+    assert!(number_of(&f, &o).is_some(), "a printed sale is numbered");
+    let source = reopen(&f)
+        .write_tx(|tx| arena_store::load_receipt_source(tx, &o))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        source.head.buyer,
+        Some((BUYER_GSTIN.into(), "Acme & Sons".into()))
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_business_refuses_the_settle_and_writes_nothing() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    gst_branch(&f).await;
+    let before = (
+        table(&f, Table::Orders).len(),
+        reopen(&f).changes().unwrap().len(),
+    );
+    for (bad, field, message) in [
+        (
+            buyer("29AABCT1332L1ZX", "Acme"),
+            "business.gstin",
+            "GSTIN_INVALID",
+        ),
+        (buyer("", "Acme"), "business.gstin", "GSTIN_INVALID"),
+        (buyer(BUYER_GSTIN, ""), "business.legal_name", "legal name"),
+        (
+            buyer(BUYER_GSTIN, " Acme"),
+            "business.legal_name",
+            "legal name",
+        ),
+    ] {
+        let e = business_sale(&f, &by, &id, Some(bad), None)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+        assert_eq!(e.field.as_deref(), Some(field));
+        assert!(e.message.contains(message), "{}", e.message);
+    }
+    assert_eq!(
+        (
+            table(&f, Table::Orders).len(),
+            reopen(&f).changes().unwrap().len()
+        ),
+        before,
+        "a refused settle rolls back whole"
+    );
+}
+
+#[tokio::test]
+async fn a_branch_that_is_not_on_gst_takes_no_business_invoice() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    let e = business_sale(&f, &by, &id, Some(buyer(BUYER_GSTIN, "Acme")), None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (e.code, e.field.as_deref()),
+        (ErrorCode::ValidationFailed, Some("business"))
+    );
+}
+
+#[tokio::test]
+async fn a_session_bill_and_a_plan_sale_take_a_business_too() {
+    let f = bootstrapped().await;
+    gst_branch(&f).await;
+    let player = profiled(&f, "asha", true).await;
+
+    let (order, rev) = super::session::player_bill(&f, &player, 10_000, 30).await;
+    let mut i = settle_intent(&order, Some(rev), vec![pay(Cash, 5_000, None)]);
+    if let IntentPayload::SessionSettle(s) = &mut i.payload {
+        s.business = Some(buyer(BUYER_GSTIN, "Acme"));
+    }
+    super::session::end(&f, i).await.unwrap();
+    assert_eq!(
+        buyer_of(&f, &order),
+        Some((BUYER_GSTIN.into(), "Acme".into()))
+    );
+
+    let plan = super::session::plan_of(&f, "pack", 30_000, true).await;
+    let mut i = super::session::sell_intent(&player, &plan, vec![pay(Cash, 30_000, None)]);
+    if let IntentPayload::PlanSell(s) = &mut i.payload {
+        s.business = Some(buyer("29AABCT1332L1ZX", "Acme"));
+    }
+    let e = super::session::end(&f, i).await.unwrap_err();
+    assert_eq!(e.field.as_deref(), Some("business.gstin"));
 }

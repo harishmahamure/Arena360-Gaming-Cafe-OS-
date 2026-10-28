@@ -20,7 +20,13 @@ const SELLER: SessionStaff = {
 };
 
 type Sent = {
-  payload: { kind: string; order_id?: string; payments?: PaymentRow[]; receipt?: string };
+  payload: {
+    kind: string;
+    order_id?: string;
+    payments?: PaymentRow[];
+    receipt?: string;
+    business?: { gstin: string; legal_name: string };
+  };
   rev?: number;
 };
 type Hub = {
@@ -389,4 +395,53 @@ test("with an open shift the bar offers cash and no shift notice", async ({ page
   });
   await expect(bar(page).locator("[data-method]")).toHaveText(["Cash", "UPI", "Card"]);
   await expect(page.getByTestId("settle-shift-closed")).toHaveCount(0);
+});
+
+// Story 5.20: Business invoice on a GST branch.
+const BUSINESS_PRINTER: PrinterReady = { ready: true, default_choice: "print", business: true };
+
+test("a simple-tax branch is not offered Business invoice", async ({ page }) => {
+  await open(page, { printer: { ready: true, default_choice: "print" } });
+  await expect(bar(page).locator("[data-receipt]")).toHaveCount(2);
+  await expect(page.getByTestId("business-invoice")).toHaveCount(0);
+});
+
+test("Business invoice keeps Settle disabled until the GSTIN and legal name are valid", async ({
+  page,
+}) => {
+  const hub = await open(page, { printer: BUSINESS_PRINTER });
+  await method(page, "cash").click();
+  await expect(settleButton(page)).toBeEnabled();
+
+  await page.locator('[data-business="toggle"]').click();
+  await expect(page.getByTestId("business-fields")).toBeVisible();
+  await expect(settleButton(page)).toBeDisabled();
+
+  const fields = page.getByTestId("business-fields");
+  await fields.getByLabel(en["hub.settle.business.gstin"]).fill("29AABCT1332L1ZX");
+  await fields.getByLabel(en["hub.settle.business.name"]).fill("Tata Consultancy Services");
+  await expect(fields).toContainText(en["hub.settle.business.err.gstin"]);
+  await expect(settleButton(page)).toBeDisabled();
+
+  await fields.getByLabel(en["hub.settle.business.gstin"]).fill(" 29aabct1332l1za ");
+  await expect(fields).not.toContainText(en["hub.settle.business.err.gstin"]);
+  await expect(settleButton(page)).toBeEnabled();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({
+    kind: "session.settle",
+    business: { gstin: "29AABCT1332L1ZA", legal_name: "Tata Consultancy Services" },
+  });
+});
+
+test("turning Business invoice off clears the block and sends no buyer", async ({ page }) => {
+  const hub = await open(page, { printer: BUSINESS_PRINTER });
+  await method(page, "cash").click();
+  await page.locator('[data-business="toggle"]').click();
+  await expect(settleButton(page)).toBeDisabled();
+  await page.locator('[data-business="toggle"]').click();
+  await expect(page.getByTestId("business-fields")).toHaveCount(0);
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload.business).toBeUndefined();
 });

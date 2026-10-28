@@ -356,11 +356,12 @@ pub(super) fn queue_on_settle(
     let internal = |m: &str| AppError::new(ErrorCode::Internal, m.to_owned());
     let order_id =
         settled_order_id(intent, written).ok_or_else(|| internal("a settle wrote no order"))?;
+    let total = find_invoice_order(tx, &order_id)?.map_or(0, |o| o.total_minor);
+    super::business_invoice::record_on_settle(tx, intent, &order_id, total)?;
     queue_drawer(tx, intent, &order_id, now_ms)?;
     match choice(intent) {
         Some(ReceiptChoice::Print) => queue_print(tx, intent, epoch, &order_id, now_ms, written)?,
         Some(ReceiptChoice::Whatsapp) => {
-            let total = find_invoice_order(tx, &order_id)?.map_or(0, |o| o.total_minor);
             super::receipt_notify::queue_on_settle(tx, intent, &order_id, total, now_ms, written)?;
         }
         Some(ReceiptChoice::None) | None => {}

@@ -85,6 +85,10 @@ pub struct PlanSell {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub receipt: Option<crate::ReceiptChoice>,
+    /// The business the invoice is made out to (Story 5.20); a GST branch only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub business: Option<crate::BusinessBuyer>,
 }
 
 /// The payload of `plan.sell.reverted`: Undo of a plan sale within its window.

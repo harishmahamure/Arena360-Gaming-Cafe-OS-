@@ -20,4 +20,9 @@ export type PrinterReady = {
    * when false.
    */
   whatsapp?: boolean;
+  /**
+   * Whether the settle bar offers "Business invoice" (Story 5.20): the branch is a GST-registered
+   * Indian one. Left out when false.
+   */
+  business?: boolean;
 };

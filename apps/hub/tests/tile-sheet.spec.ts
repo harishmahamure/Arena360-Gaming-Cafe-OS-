@@ -22,6 +22,12 @@ const STAFF: Record<string, SessionStaff> = {
     role_name: "Counter",
     permissions: ["device.screen", "session.start"],
   },
+  "voider-token": {
+    staff_id: "01JVOIDER00000000000000000",
+    display_name: "Voider",
+    role_name: "Manager",
+    permissions: ["device.screen", "session.start", "pos.sell", "pos.void"],
+  },
   "seller-token": {
     staff_id: "01JSELLER00000000000000000",
     display_name: "Seller",
@@ -757,4 +763,87 @@ test("an ended session's bill cannot settle while a line is unserved", async ({ 
   });
   await expect(submit).toBeDisabled();
   await expect(page.getByTestId("settle-region")).toContainText(en["hub.order.unserved_note"]);
+});
+
+/** The running bill whose placed products sit on an order that can be voided. */
+const voidableBill = (): SnapshotBill => ({ ...orderedBill(), items_order_id: "O1" });
+
+test("Void order asks why; Other needs its text, and the intent carries the reason", async ({
+  page,
+}) => {
+  const hub = await open(page, "voider-token", { bills: [voidableBill()] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: en["hub.order.void"] }).click();
+  const picker = page.getByTestId("order-void-reason");
+  await expect(picker.getByRole("radio")).toHaveCount(3);
+  await expect(picker.getByRole("radio", { name: en["hub.order.void.mistake"] })).toBeVisible();
+  await expect(
+    picker.getByRole("radio", { name: en["hub.order.void.changed_mind"] }),
+  ).toBeVisible();
+  // Nothing is sent without a reason, nor for Other without text.
+  await picker.getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await picker.getByRole("radio", { name: en["hub.order.void.other"] }).check();
+  await picker.getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  expect(hub.sent).toHaveLength(0);
+  await picker.getByRole("textbox").fill("Wrong table");
+  await picker.getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload).toEqual({ kind: "order.void", order_id: "O1", note: "Wrong table" });
+  expect(hub.sent[0].reason).toBe("other");
+  expect(hub.elevations).toHaveLength(0);
+});
+
+test("a void with Entered by mistake sends no note", async ({ page }) => {
+  const hub = await open(page, "voider-token", { bills: [voidableBill()] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: en["hub.order.void"] }).click();
+  await page.getByRole("radio", { name: en["hub.order.void.mistake"] }).check();
+  await page.getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload).toEqual({ kind: "order.void", order_id: "O1" });
+  expect(hub.sent[0].reason).toBe("mistake");
+});
+
+test("without pos.void the void opens the manager PIN in place and carries its ticket", async ({
+  page,
+}) => {
+  const hub = await open(page, "seller-token", { bills: [voidableBill()] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: en["hub.order.void"] }).click();
+  await page.getByRole("radio", { name: en["hub.order.void.changed_mind"] }).check();
+  await page.getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await expect(page.getByRole("group", { name: en["ui.pin.prompt"] })).toBeVisible();
+  expect(hub.sent).toHaveLength(0);
+  await page.keyboard.type("9999");
+  await page.keyboard.press("Enter");
+  await expect(page.getByText(en["ui.pin.rejected"])).toBeVisible();
+  expect(hub.sent).toHaveLength(0);
+  await page.keyboard.type(PIN);
+  await page.keyboard.press("Enter");
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.elevations.at(-1)?.items).toEqual([{ intent_kind: "order.void" }]);
+  expect(hub.sent[0].payload).toEqual({ kind: "order.void", order_id: "O1" });
+  expect(hub.sent[0].reason).toBe("changed_mind");
+  expect(hub.sent[0].ticket).toBe("T1");
+});
+
+test("Void order is offered only where the placed products sit on a voidable order", async ({
+  page,
+}) => {
+  await open(page, "voider-token", { bills: [orderedBill()] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("order-section")).toBeVisible();
+  await expect(page.getByRole("button", { name: en["hub.order.void"] })).toHaveCount(0);
+
+  // An ended session's bill carries play time: it is settled, not voided.
+  const ended: SnapshotBill = { ...orderedBill(), order_id: "O1", order_rev: 4 };
+  await open(page, "voider-token", { bills: [ended], sessions: [] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("order-section")).toBeVisible();
+  await expect(page.getByRole("button", { name: en["hub.order.void"] })).toHaveCount(0);
 });

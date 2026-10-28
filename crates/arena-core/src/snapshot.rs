@@ -166,6 +166,7 @@ fn bills(
             group_bill_id,
             lines,
             items,
+            items_order_id: None,
             subtotal_minor,
             paid_minor: 0,
             remaining_minor: subtotal_minor,
@@ -210,7 +211,11 @@ fn bills(
         for (line, seg) in lines.iter_mut().zip(&own) {
             line.rule_name = rule_name(seg.rule_id.as_deref());
         }
-        bill(
+        let placed = orders
+            .iter()
+            .find(|o| o.session_id.as_deref() == Some(s.id.as_str()) && folded(o))
+            .map(|o| o.id.clone());
+        let mut live_bill = bill(
             s.id.clone(),
             s.device_id.clone(),
             None,
@@ -222,12 +227,10 @@ fn bills(
             s.player_id.clone(),
             s.group_bill_id.clone(),
             lines,
-            orders
-                .iter()
-                .find(|o| o.session_id.as_deref() == Some(s.id.as_str()) && folded(o))
-                .map(|o| items_of(&o.id))
-                .unwrap_or_default(),
-        )
+            placed.as_deref().map(items_of).unwrap_or_default(),
+        );
+        live_bill.items_order_id = placed.filter(|_| !live_bill.items.is_empty());
+        live_bill
     });
     let open = orders.iter().filter(|o| !folded(o)).map(|o| {
         let guest = o.player_id.is_none() && o.session_id.is_some();

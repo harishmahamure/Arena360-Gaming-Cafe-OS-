@@ -2,12 +2,13 @@
   import { Button, ReasonPicker, formatMoney, t } from "@arena/ui";
   import type { BillItem, ReasonCode, SnapshotLocale } from "@arena/ui/generated";
   import { tick } from "svelte";
-  import { CANCEL_LABELS, CANCEL_REASONS } from "./tile-actions.svelte";
+  import { CANCEL_LABELS, CANCEL_REASONS, VOID_LABELS, VOID_REASONS } from "./tile-actions.svelte";
 
   /**
    * The products placed on a session bill (Story 5.13): each line with its state, Mark served for
    * a line that is not served yet, and Cancel (a reason, then "Was it already made?"). A served
-   * line offers neither.
+   * line offers neither. With `onvoid` the whole order can be voided (Story 5.23): a reason (and
+   * the text of Other), then the Hub asks for a manager's PIN when the signed-in member lacks it.
    */
   let {
     items,
@@ -15,21 +16,42 @@
     busy,
     onserve,
     oncancel,
+    onvoid,
   }: {
     items: BillItem[];
     locale: SnapshotLocale;
     busy: boolean;
     onserve: (lineId: string) => void;
     oncancel: (lineId: string, made: boolean, reason: ReasonCode) => void;
+    /** Voids the whole order (a reason, and the text of `other`); absent when it cannot be voided. */
+    onvoid?: (reason: ReasonCode, note?: string) => void;
   } = $props();
 
   const OPTIONS = CANCEL_REASONS.map((value) => ({ value, label: CANCEL_LABELS[value] }));
+  const VOID_OPTIONS = VOID_REASONS.map((value) => ({ value, label: VOID_LABELS[value] }));
   const pending = $derived(items.filter((i) => !i.served).length);
 
   /** The line being cancelled, and the reason once it is chosen (then the made question). */
   let cancelling: string | null = $state(null);
   let reason: ReasonCode | null = $state(null);
   let root: HTMLElement | undefined = $state();
+  let voiding = $state(false);
+
+  $effect(() => {
+    // An order that left the bill closes its flow.
+    if (!onvoid) voiding = false;
+  });
+
+  async function stopVoid() {
+    voiding = false;
+    await tick();
+    root?.querySelector<HTMLElement>('[data-testid="order-void"] button')?.focus(); // i18n-ignore (a selector)
+  }
+
+  function chooseVoid(value: string, note?: string) {
+    voiding = false;
+    onvoid?.(value as ReasonCode, note);
+  }
 
   $effect(() => {
     // A line that left the bill or was served closes its flow.
@@ -139,6 +161,30 @@
     <p class="type-hub-label muted" data-testid="order-pending">
       {t("hub.order.unserved_note")}
     </p>
+  {/if}
+  {#if onvoid}
+    {#if voiding}
+      <div data-testid="order-void-reason">
+        <ReasonPicker
+          options={VOID_OPTIONS}
+          legend="hub.order.void_legend"
+          noteFor="other"
+          noteLabel="hub.order.void_note"
+          onconfirm={chooseVoid}
+          oncancel={() => void stopVoid()}
+        />
+      </div>
+    {:else}
+      <div class="actions" data-testid="order-void">
+        <Button
+          label="hub.order.void"
+          variant="secondary"
+          disabled={busy}
+          disabledReason="hub.sheet.waiting"
+          onclick={() => (voiding = true)}
+        />
+      </div>
+    {/if}
   {/if}
 </section>
 

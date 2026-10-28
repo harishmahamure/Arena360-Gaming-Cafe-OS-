@@ -30,6 +30,7 @@ mod group_bill;
 mod invoice;
 mod order_line;
 mod order_place;
+mod order_void;
 mod plans;
 mod players;
 mod pos_sale;

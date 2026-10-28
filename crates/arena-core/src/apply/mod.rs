@@ -49,6 +49,7 @@ mod maintenance;
 mod mutate;
 mod order_line;
 mod order_place;
+mod order_void;
 mod pc_command;
 mod plan_sales;
 mod plans;
@@ -207,6 +208,7 @@ pub(crate) enum Target {
     OrderPlaceReverted(Box<order_place::RevertTarget>),
     OrderLineServed(Box<order_line::LineTarget>),
     OrderLineCancel(Box<order_line::LineTarget>),
+    OrderVoid(Box<order_void::VoidTarget>),
     CreditSetLimit(Box<credit::LimitTarget>),
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
@@ -310,6 +312,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::OrderLineCancel(c) => {
             Target::OrderLineCancel(Box::new(order_line::load_line(tx, &c.line_id, now)?))
         }
+        P::OrderVoid(v) => Target::OrderVoid(Box::new(order_void::load_void(tx, v, now)?)),
         P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),
         P::CreditCollect(c) => {
             Target::CreditCollect(Box::new(credit_collect::load_collect(tx, c)?))

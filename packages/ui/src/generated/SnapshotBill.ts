@@ -26,6 +26,11 @@ export type SnapshotBill = {
    * The products placed on the bill, after the session lines.
    */
   items?: Array<BillItem>;
+  /**
+   * The order those items sit on when it is not a bill to settle yet (a running postpaid
+   * session's placed products): what `order.void` names (Story 5.23).
+   */
+  items_order_id?: string;
   subtotal_minor: number;
   paid_minor: number;
   remaining_minor: number;

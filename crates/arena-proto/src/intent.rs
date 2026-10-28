@@ -136,6 +136,9 @@ pub enum IntentKind {
     /// An unserved placed line cancelled, with a reason.
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel,
+    /// An unsettled session order voided with an approver and a reason (Story 5.23).
+    #[serde(rename = "order.void")]
+    OrderVoid,
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials,
     #[serde(rename = "staff.deactivate")]
@@ -276,7 +279,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 89] = [
+    pub const ALL: [IntentKind; 90] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -314,6 +317,7 @@ impl IntentKind {
         Self::OrderPlaceReverted,
         Self::OrderLineServed,
         Self::OrderLineCancel,
+        Self::OrderVoid,
         Self::StaffSetCredentials,
         Self::StaffDeactivate,
         Self::StockIn,
@@ -408,6 +412,7 @@ impl IntentKind {
             Self::OrderPlaceReverted => "order.place.reverted",
             Self::OrderLineServed => "order.line_served",
             Self::OrderLineCancel => "order.line_cancel",
+            Self::OrderVoid => "order.void",
             Self::StaffSetCredentials => "staff.set_credentials",
             Self::StaffDeactivate => "staff.deactivate",
             Self::StockIn => "stock.in",
@@ -527,7 +532,8 @@ impl IntentKind {
             | Self::ReceiptPrintFailed
             | Self::DrawerKicked
             | Self::DrawerKickFailed
-            | Self::OrderLineCancel => IntentCategory::Money,
+            | Self::OrderLineCancel
+            | Self::OrderVoid => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -642,6 +648,7 @@ impl IntentKind {
             | Self::OrderLineServed
             | Self::ReceiptReprint
             | Self::OrderLineCancel => Requirement::Perm(Permission::PosSell),
+            Self::OrderVoid => Requirement::Perm(Permission::PosVoid),
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
             Self::SessionExtend => Requirement::Perm(Permission::SessionExtend),
             Self::SessionTransfer => Requirement::Perm(Permission::SessionTransfer),
@@ -679,6 +686,7 @@ impl IntentKind {
             ]),
             Self::StockWaste => Some(&ReasonCode::WASTE),
             Self::OrderLineCancel => Some(&ReasonCode::CANCEL),
+            Self::OrderVoid => Some(&ReasonCode::VOID),
             Self::SessionForceEnd => Some(&[
                 ReasonCode::RuleViolation,
                 ReasonCode::HardwareIssue,
@@ -811,6 +819,9 @@ impl ReasonCode {
 
     /// The reasons `order.line_cancel` takes, in the order the Hub offers them.
     pub const CANCEL: [ReasonCode; 3] = [Self::ChangedMind, Self::Mistake, Self::Other];
+
+    /// The reasons `order.void` takes, in the order the Hub offers them.
+    pub const VOID: [ReasonCode; 3] = [Self::Mistake, Self::ChangedMind, Self::Other];
 
     /// Every code.
     pub const ALL: [ReasonCode; 13] = [
@@ -1257,6 +1268,8 @@ pub enum IntentPayload {
     OrderLineServed(crate::OrderLineServed),
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel(crate::OrderLineCancel),
+    #[serde(rename = "order.void")]
+    OrderVoid(crate::OrderVoid),
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials(StaffSetCredentials),
     #[serde(rename = "staff.deactivate")]
@@ -1403,6 +1416,7 @@ impl IntentPayload {
             Self::OrderPlaceReverted(_) => IntentKind::OrderPlaceReverted,
             Self::OrderLineServed(_) => IntentKind::OrderLineServed,
             Self::OrderLineCancel(_) => IntentKind::OrderLineCancel,
+            Self::OrderVoid(_) => IntentKind::OrderVoid,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
             Self::StaffDeactivate(_) => IntentKind::StaffDeactivate,
             Self::StockIn(_) => IntentKind::StockIn,
@@ -1533,7 +1547,6 @@ mod tests {
     const USED_BY_LATER_STORIES: &[Permission] = &[
         Permission::PlayerView,
         Permission::BookingManage,
-        Permission::PosVoid,
         Permission::RefundIssue,
         Permission::DiscountManual,
         Permission::KitchenUse,
@@ -1727,6 +1740,7 @@ mod tests {
                 | "order.line_served"
                 | "receipt.reprint"
                 | "order.line_cancel" => Requirement::Perm(Permission::PosSell),
+                "order.void" => Requirement::Perm(Permission::PosVoid),
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "session.extend" => Requirement::Perm(Permission::SessionExtend),
                 "session.transfer" => Requirement::Perm(Permission::SessionTransfer),
@@ -1813,12 +1827,13 @@ mod tests {
     }
 
     #[test]
-    fn only_device_revoke_force_end_waste_and_cancel_require_a_reason() {
+    fn only_device_revoke_force_end_waste_cancel_and_void_require_a_reason() {
         for kind in IntentKind::ALL {
             let want: Option<&[ReasonCode]> = match kind {
                 IntentKind::DeviceRevoke => Some(&ReasonCode::ALL[..4]),
                 IntentKind::StockWaste => Some(&ReasonCode::WASTE),
                 IntentKind::OrderLineCancel => Some(&ReasonCode::CANCEL),
+                IntentKind::OrderVoid => Some(&ReasonCode::VOID),
                 IntentKind::SessionForceEnd => Some(&[
                     ReasonCode::RuleViolation,
                     ReasonCode::HardwareIssue,
@@ -1850,6 +1865,7 @@ mod tests {
             serde_json::json!({
                 "device.revoke": ["lost", "stolen", "replaced", "other"],
                 "order.line_cancel": ["changed_mind", "mistake", "other"],
+                "order.void": ["mistake", "changed_mind", "other"],
                 "session.force_end": ["rule_violation", "hardware_issue", "closing", "other"],
                 "stock.waste": ["spoiled", "broken", "free", "cancelled_order"],
             })

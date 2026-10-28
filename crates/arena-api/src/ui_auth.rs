@@ -880,6 +880,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ConsentRequired
         | ErrorCode::CouponInvalid => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Stale
+        | ErrorCode::OrderSettled
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked
         | ErrorCode::IdempotencyConflict
@@ -2159,10 +2160,19 @@ async fn run_intent(
     };
     // A cancelled line may take its order with it: read its session first, so the kiosk's
     // "Ordered: n items" can follow.
+    // A voided order leaves its session, so the same applies.
     let cancelling = match &intent.payload {
         arena_proto::IntentPayload::OrderLineCancel(c) => {
             let (reader, id) = (Arc::clone(&auth.reader), c.line_id.clone());
             tokio::task::spawn_blocking(move || reader.line_session(&id))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        }
+        arena_proto::IntentPayload::OrderVoid(v) => {
+            let (reader, id) = (Arc::clone(&auth.reader), v.order_id.clone());
+            tokio::task::spawn_blocking(move || reader.order_session(&id))
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -4215,7 +4225,7 @@ pub(crate) mod tests {
         let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
         let burger = listed[0]["id"].as_str().unwrap().to_owned();
         let (status, _) = post(
-            manager,
+            manager.clone(),
             IntentPayload::StockIn(StockIn {
                 product_id: burger.clone(),
                 qty: 5,
@@ -4297,6 +4307,79 @@ pub(crate) mod tests {
         .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
         assert_eq!(reply["code"], "VALIDATION_FAILED");
+
+        // Story 5.23: the live bill names the order a void takes. The counter holds no `pos.void`
+        // and a void needs a reason and, for Other, a note.
+        let (status, _) = post(token.clone(), place(1), None).await;
+        assert_eq!(status, StatusCode::OK);
+        while rx.try_recv().is_ok() {}
+        let order_id = items_order(&hub, &session_id);
+        let void = |note: Option<&str>| {
+            IntentPayload::OrderVoid(arena_proto::OrderVoid {
+                order_id: order_id.clone(),
+                note: note.map(str::to_owned),
+            })
+        };
+        let (status, reply) = post(token.clone(), void(None), Some(ReasonCode::Mistake)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        assert_eq!(reply["code"], "PERMISSION_DENIED");
+        let (status, reply) = post(manager.clone(), void(None), None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["code"], "REASON_REQUIRED");
+        let (status, reply) = post(manager.clone(), void(None), Some(ReasonCode::Other)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(
+            (&reply["code"], &reply["field"]),
+            (&json!("VALIDATION_FAILED"), &json!("note"))
+        );
+
+        // A manager voids it: the served units come back, the bill empties and the kiosk hears.
+        let (status, reply) = post(
+            manager.clone(),
+            void(Some("Wrong table")),
+            Some(ReasonCode::Other),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        assert_eq!(listed[0]["quantity"], 5);
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the screen pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::SessionStarted { session, .. },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a session.started event")
+        };
+        assert_eq!(session.ordered_items, 0);
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        let bill = snapshot
+            .bills
+            .into_iter()
+            .find(|b| b.session_id == session_id)
+            .unwrap();
+        assert!(bill.items.is_empty() && bill.items_order_id.is_none());
+        // Voided already: STALE.
+        let (status, reply) = post(manager, void(Some("again")), Some(ReasonCode::Other)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "STALE");
+    }
+
+    /// The order the session's live bill says its placed products sit on.
+    fn items_order(hub: &Hub, session_id: &str) -> String {
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        snapshot
+            .bills
+            .into_iter()
+            .find(|b| b.session_id == session_id)
+            .unwrap()
+            .items_order_id
+            .expect("the bill names its order")
     }
 
     #[tokio::test]

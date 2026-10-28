@@ -41,6 +41,7 @@ export type IntentKind =
   | "order.place.reverted"
   | "order.line_served"
   | "order.line_cancel"
+  | "order.void"
   | "staff.set_credentials"
   | "staff.deactivate"
   | "stock.in"

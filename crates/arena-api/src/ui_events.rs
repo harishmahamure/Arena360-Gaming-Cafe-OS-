@@ -16,6 +16,8 @@
 //! - `event: order.line_changed`, data [`OrderLineEvent`](arena_proto::OrderLineEvent): an
 //!   `order.line_served` or `order.line_cancel` committed (`cancelled` tells which); open bills and the
 //!   floor reload. A cancel sends no `bill.reverted`.
+//! - `event: order.voided`, data [`OrderVoidEvent`](arena_proto::OrderVoidEvent): an `order.void` committed;
+//!   open bills and the floor reload.
 //! - `event: wallet.changed`, data [`WalletChangedEvent`]: a wallet balance moved (a top-up, a credit spend, a
 //!   wallet payment or an undo of either); open profiles and bills reload.
 //! - `event: bill.reverted`, data [`BillRevertedEvent`]: a `session.end.reverted` or
@@ -58,7 +60,8 @@ use std::time::Duration;
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
 use arena_proto::{
     AppliedEvent, BillRevertedEvent, BillSettledEvent, OrderLineEvent, OrderPlacedEvent,
-    SessionStartedEvent, SettingsChangedEvent, SnapshotLocale, SnapshotUi, WalletChangedEvent,
+    OrderVoidEvent, SessionStartedEvent, SettingsChangedEvent, SnapshotLocale, SnapshotUi,
+    WalletChangedEvent,
 };
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -282,6 +285,20 @@ fn line_candidate(applied: &Applied) -> Option<(String, bool)> {
     Some((line.row_id.clone(), line.op == arena_core::ChangeOp::Delete))
 }
 
+/// The order a commit changed without touching its lines or payments (a candidate void; the
+/// caller looks the intent kind up).
+fn void_candidate(applied: &Applied) -> Option<String> {
+    let touched = |tbl: &str| applied.changes.iter().any(|c| c.tbl == tbl);
+    if touched("payments") || touched("order_lines") || touched("sessions") {
+        return None;
+    }
+    applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders" && c.op == arena_core::ChangeOp::Update)
+        .map(|c| c.row_id.clone())
+}
+
 fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
     applied
         .changes
@@ -459,6 +476,19 @@ impl HubTask {
                         } else if let Some(reverted) = bill_reverted(&applied) {
                             let data = serde_json::to_string(&reverted).unwrap_or_default();
                             self.send("bill.reverted", data, false);
+                        }
+                        if let Some(order_id) = void_candidate(&applied) {
+                            let (reader, id) = (Arc::clone(&self.reader), applied.intent_id.clone());
+                            let kind = tokio::task::spawn_blocking(move || reader.intent_kind(&id))
+                                .await
+                                .ok()
+                                .and_then(Result::ok)
+                                .flatten();
+                            if kind.as_deref() == Some("order.void") {
+                                let data = serde_json::to_string(&OrderVoidEvent { order_id })
+                                    .unwrap_or_default();
+                                self.send("order.voided", data, false);
+                            }
                         }
                         if let Some(changed) = wallet_changed(&applied) {
                             let data = serde_json::to_string(&changed).unwrap_or_default();

@@ -151,9 +151,10 @@ pub use sessions::{
     reopen_segments, reopen_session, settle_order, sum_reserved_minor,
 };
 pub use sessions::{
-    LineRow, PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines,
+    LineRow, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines,
     count_unserved_lines, find_line, find_placed_order, list_ordered_counts, list_placement_lines,
     list_segment_line_ids, mark_line_served, next_product_position, sum_segment_amounts,
+    void_order,
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,

@@ -194,8 +194,9 @@ pub use players::{
 pub use pos::{
     InvoiceIssue, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST, MOVE_RETURN, MOVE_SALE,
     MOVE_SALE_REVERTED, NOTE_SALE_OVERRIDE, OrderLineCancel, OrderLineEvent, OrderLineServed,
-    OrderPlace, OrderPlaceReverted, OrderPlacedEvent, PlaceOutcome, PosSale, PosSaleLine,
-    PosSaleLineView, PosSalePaymentView, PosSaleReverted, PosSaleView, PosSalesView,
+    OrderPlace, OrderPlaceReverted, OrderPlacedEvent, OrderVoid, OrderVoidEvent, PlaceOutcome,
+    PosSale, PosSaleLine, PosSaleLineView, PosSalePaymentView, PosSaleReverted, PosSaleView,
+    PosSalesView, VOID_NOTE_MAX_CHARS,
 };
 pub use pricing::{
     RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,

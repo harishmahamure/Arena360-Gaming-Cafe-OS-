@@ -794,6 +794,28 @@ pub fn add_order_amount(
     Ok(())
 }
 
+/// What a void records on the order (Story 5.23).
+pub struct OrderVoid<'a> {
+    pub at: i64,
+    /// The approving staff member (the elevating manager, else the actor).
+    pub by: &'a str,
+    pub reason: &'a str,
+    pub note: Option<&'a str>,
+}
+
+/// Marks an open session order void. The order is detached from its session (the session may
+/// open a fresh bill) and keeps the session id in `void_session_id`; its lines stay.
+pub fn void_order(conn: &Connection, order_id: &str, v: &OrderVoid<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET status = 'void', void_session_id = session_id, session_id = NULL,
+                voided_at = ?2, voided_by = ?3, void_reason = ?4, void_note = ?5
+         WHERE id = ?1 AND status = 'open'",
+        params![order_id, v.at, v.by, v.reason, v.note],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 /// A product line as serve and cancel need it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineRow {

@@ -213,6 +213,29 @@ pub struct OrderLineCancel {
     pub made: bool,
 }
 
+/// The longest note an `other` void reason takes, in characters.
+pub const VOID_NOTE_MAX_CHARS: usize = 140;
+
+/// The payload of `order.void` (Story 5.23): an unsettled session order is cancelled whole. The
+/// intent's `reason` (`mistake`, `changed_mind`, `other`) is required; `note` is required, 1 to
+/// [`VOID_NOTE_MAX_CHARS`] plain characters, for `other` and ignored otherwise. The approver is the
+/// actor, or the manager whose PIN elevated the intent (permission `pos.void`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderVoid {
+    pub order_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+/// An order was voided and left its session's bill (the `order.voided` UI event).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderVoidEvent {
+    pub order_id: String,
+}
+
 /// A line was served or cancelled on a session bill (the `order.line_changed` UI event).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]

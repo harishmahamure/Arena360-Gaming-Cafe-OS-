@@ -75,6 +75,7 @@
     settleJob,
     startJob,
     transferJob,
+    voidJob,
     type ExtendChoice,
     type Job,
     type StartChoice,
@@ -396,6 +397,12 @@
 
   function cancelLine(lineId: string, made: boolean, reason: ReasonCode) {
     if (!busy) void go(cancelLineJob(lineId, made, reason));
+  }
+
+  /** Voids the products placed on a running session's bill; `go` asks for `pos.void` by PIN. */
+  function voidOrder(reason: ReasonCode, note?: string) {
+    const orderId = bill?.items_order_id;
+    if (orderId && !busy) void go(voidJob(orderId, reason, note));
   }
 
   // A session bill settles once every placed line is served or cancelled.
@@ -790,6 +797,7 @@
               {busy}
               onserve={serveLine}
               oncancel={cancelLine}
+              onvoid={bill.items_order_id ? voidOrder : undefined}
             />
           {/if}
         {/if}

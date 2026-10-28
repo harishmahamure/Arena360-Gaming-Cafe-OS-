@@ -181,6 +181,8 @@ export type { OrderLineServed } from "./OrderLineServed";
 export type { OrderPlace } from "./OrderPlace";
 export type { OrderPlaceReverted } from "./OrderPlaceReverted";
 export type { OrderPlacedEvent } from "./OrderPlacedEvent";
+export type { OrderVoid } from "./OrderVoid";
+export type { OrderVoidEvent } from "./OrderVoidEvent";
 export type { OwnedPlanView } from "./OwnedPlanView";
 export type { OwnerBranch } from "./OwnerBranch";
 export type { PairHubOk } from "./PairHubOk";

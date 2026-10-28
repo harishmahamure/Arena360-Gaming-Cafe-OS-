@@ -42,6 +42,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PinRejected => StatusCode::FORBIDDEN,
         ErrorCode::SessionLocked => StatusCode::LOCKED,
         ErrorCode::Stale
+        | ErrorCode::OrderSettled
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked
         | ErrorCode::IdempotencyConflict

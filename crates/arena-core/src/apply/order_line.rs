@@ -230,17 +230,20 @@ fn waste(
     Ok(())
 }
 
-pub(super) fn mutate_cancel(
+/// Gives a line's stock back: a held line closes its holds, a line that took its stock (at
+/// placement, or when it was served) returns the units through a `return` move. `made` also writes
+/// the units off as waste `cancelled_order`. Used by cancel and by void (Story 5.23).
+pub(super) fn give_back(
     tx: &StoreTx<'_>,
     intent: &Intent,
-    c: &OrderLineCancel,
     t: &LineTarget,
+    made: bool,
     now_ms: i64,
-) -> Result<Vec<Written>, AppError> {
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
     let (Some(line), Some(order)) = (&t.line, &t.order) else {
-        return Err(internal("a cancel validated without its line"));
+        return Err(internal("a line was given back without its row"));
     };
-    let mut written = Vec::new();
     if t.holds.is_empty() {
         // The line took its stock at placement: give it back, and write it off when it was made.
         let tag = StockFor {
@@ -257,7 +260,7 @@ pub(super) fn mutate_cancel(
                 &intent.actor.id,
                 now_ms,
             )?);
-            if c.made {
+            if made {
                 waste(
                     tx,
                     intent,
@@ -265,7 +268,7 @@ pub(super) fn mutate_cancel(
                     *qty,
                     &order.id,
                     now_ms,
-                    &mut written,
+                    written,
                 )?;
             }
         }
@@ -274,19 +277,26 @@ pub(super) fn mutate_cancel(
             release_hold(tx, &h.id, now_ms)?;
             written.push(update(RowKey::StockHolds { id: h.id.clone() }));
             written.extend(super::stock::touch(tx, &h.item_id)?);
-            if c.made {
-                waste(
-                    tx,
-                    intent,
-                    &h.item_id,
-                    h.qty,
-                    &order.id,
-                    now_ms,
-                    &mut written,
-                )?;
+            if made {
+                waste(tx, intent, &h.item_id, h.qty, &order.id, now_ms, written)?;
             }
         }
     }
+    Ok(())
+}
+
+pub(super) fn mutate_cancel(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    c: &OrderLineCancel,
+    t: &LineTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let (Some(line), Some(order)) = (&t.line, &t.order) else {
+        return Err(internal("a cancel validated without its line"));
+    };
+    let mut written = Vec::new();
+    give_back(tx, intent, t, c.made, now_ms, &mut written)?;
     let key = RowKey::OrderLines {
         id: line.id.clone(),
     };

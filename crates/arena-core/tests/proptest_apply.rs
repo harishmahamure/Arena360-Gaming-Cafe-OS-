@@ -265,6 +265,15 @@ enum Op {
         cancel: bool,
         made: bool,
     },
+    /// `order.void` of an open session order by the owner or a staff member of a built-in role,
+    /// with a good, missing or wrong reason and note. Only the owner and managers may void; a
+    /// voided order is detached from its session, keeps its lines and holds no stock.
+    Void {
+        pick: u8,
+        reason: u8,
+        note: u8,
+        who: Index,
+    },
     /// A cash top-up for a player, then maybe its Undo (late or in time).
     WalletTopup {
         player: u8,
@@ -602,6 +611,9 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         2 => (any::<u8>(), any::<bool>(), any::<bool>()).prop_map(
             |(pick, cancel, made)| Op::OrderLine { pick, cancel, made }
+        ),
+        2 => (any::<u8>(), 0..5u8, 0..3u8, any::<Index>()).prop_map(
+            |(pick, reason, note, who)| Op::Void { pick, reason, note, who }
         ),
         2 => (any::<u8>(), 0..3000u16).prop_map(|(player, limit)| Op::CreditSet { player, limit }),
         2 => (
@@ -2454,6 +2466,116 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(e.code, ErrorCode::OutOfStock, "{:?}", e);
                     prop_assert!(!*cancel);
                     prop_assert_eq!(stock_image(hub), stock_before);
+                }
+            }
+        }
+        Op::Void {
+            pick,
+            reason,
+            note,
+            who,
+        } => {
+            let orders: Vec<_> = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .filter(|o| text(o, "status") == "open" && text(o, "kind") == "session")
+                .filter(|o| o["session_id"] != RowValue::Null)
+                .collect();
+            let Some(o) = orders.get(usize::from(*pick) % orders.len().max(1)) else {
+                return Ok(());
+            };
+            let id = text(o, "id");
+            let (reason_code, note_text) = (
+                match reason {
+                    0 => Some(arena_proto::ReasonCode::Mistake),
+                    1 => Some(arena_proto::ReasonCode::ChangedMind),
+                    2 => Some(arena_proto::ReasonCode::Other),
+                    3 => None,
+                    _ => Some(arena_proto::ReasonCode::Lost),
+                },
+                match note {
+                    0 => None,
+                    1 => Some("Wrong table".to_owned()),
+                    _ => Some("x".repeat(141)),
+                },
+            );
+            let bad_reason = matches!(*reason, 3 | 4) || (*reason == 2 && *note != 1);
+            let mut intent = hub.intent(
+                IntentPayload::OrderVoid(arena_proto::OrderVoid {
+                    order_id: id.clone(),
+                    note: note_text,
+                }),
+                None,
+            );
+            intent.reason = reason_code;
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len()) {
+                    Some(staff) => Actor {
+                        kind: ActorKind::Staff,
+                        id: staff.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            if bad_reason {
+                prop_assert!(out.is_err(), "{:?}", out);
+            }
+            let now = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .find(|x| text(x, "id") == id)
+                .unwrap();
+            match out {
+                Ok(_) => {
+                    prop_assert_eq!(text(&now, "status"), "void");
+                    prop_assert_eq!(&now["session_id"], &RowValue::Null);
+                    prop_assert!(matches!(now["void_reason"], RowValue::Text(_)));
+                    // A voided order holds no stock.
+                    let lines: Vec<String> = hub
+                        .reader
+                        .rows(Table::OrderLines)
+                        .unwrap()
+                        .iter()
+                        .filter(|l| text(l, "order_id") == id)
+                        .map(|l| text(l, "id"))
+                        .collect();
+                    prop_assert!(
+                        hub.reader
+                            .rows(Table::StockHolds)
+                            .unwrap()
+                            .iter()
+                            .all(|h| h["released_at"] != RowValue::Null
+                                || !lines.contains(&text(h, "order_line_id")))
+                    );
+                }
+                Err(e) => {
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::ReasonRequired | ErrorCode::ValidationFailed
+                        ),
+                        "{:?}",
+                        e
+                    );
+                    prop_assert_eq!(hub.change_count(), before);
+                    prop_assert_eq!(text(&now, "status"), "open");
                 }
             }
         }
@@ -4705,6 +4827,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_invoices_hold(&hub)?;
                 assert_coupons_hold(&hub)?;
                 assert_discounts_hold(&hub)?;
+                assert_voids_hold(&hub)?;
                 assert_prints_hold(&hub)?;
                 assert_drawers_hold(&hub)?;
                 assert_notifications_hold(&hub)?;
@@ -4740,9 +4863,8 @@ fn assert_drawers_hold(hub: &Hub) -> Result<(), TestCaseError> {
         prop_assert!(order.is_some(), "a queued kick names a missing order");
         prop_assert_eq!(text(order.unwrap(), "status"), "settled");
         prop_assert!(
-            events
-                .iter()
-                .any(|e| text(e, "order_id") == row.ref_id && text(e, "kind") == "sale"),
+            events.iter().any(|e| text(e, "kind") == "sale"
+                && e["order_id"] == RowValue::Text(row.ref_id.clone())),
             "a queued kick names an order that took no cash"
         );
     }
@@ -4800,6 +4922,34 @@ fn assert_discounts_hold(hub: &Hub) -> Result<(), TestCaseError> {
         if set[0] {
             prop_assert!(int(o, "discount_minor") > 0);
             prop_assert_eq!(text(o, "status"), "settled");
+        }
+    }
+    Ok(())
+}
+
+/// A voided order records when, by whom and why, and has left its session; an order that is not
+/// void carries none of it.
+fn assert_voids_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    for o in &hub.reader.rows(Table::Orders).unwrap() {
+        let set = [
+            matches!(o["voided_at"], RowValue::Integer(_)),
+            matches!(o["voided_by"], RowValue::Text(_)),
+            matches!(o["void_reason"], RowValue::Text(_)),
+            matches!(o["void_session_id"], RowValue::Text(_)),
+        ];
+        let void = text(o, "status") == "void";
+        prop_assert!(set.iter().all(|s| *s == void), "void columns of {:?}", o);
+        if void {
+            prop_assert_eq!(&o["session_id"], &RowValue::Null);
+        }
+    }
+    let payments = hub.reader.rows(Table::Payments).unwrap();
+    for o in hub.reader.rows(Table::Orders).unwrap() {
+        if text(&o, "status") == "void" {
+            prop_assert!(
+                payments.iter().all(|p| p["order_id"] != o["id"]),
+                "a voided order was never paid"
+            );
         }
     }
     Ok(())

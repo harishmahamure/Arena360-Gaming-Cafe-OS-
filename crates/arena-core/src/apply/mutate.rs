@@ -419,6 +419,10 @@ pub(super) fn mutate(
             }
             _ => Err(mismatch()),
         },
+        IntentPayload::OrderVoid(v) => match target {
+            Target::OrderVoid(t) => super::order_void::mutate_void(tx, intent, v, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditSetLimit(c) => match target {
             Target::CreditSetLimit(t) => super::credit::mutate_set_limit(tx, c, t),
             _ => Err(mismatch()),

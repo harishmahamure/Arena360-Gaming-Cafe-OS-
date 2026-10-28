@@ -116,6 +116,10 @@ const REFUSALS: Record<string, MessageKey> = {
   "OUT_OF_STOCK:order.line_served": "hub.order.serve_short",
   "VALIDATION_FAILED:order.line_cancel": "hub.order.line_refused",
   "NOT_FOUND:order.line_cancel": "hub.order.line_refused",
+  "VALIDATION_FAILED:order.void": "hub.order.void_refused",
+  "NOT_FOUND:order.void": "hub.order.void_refused",
+  "STALE:order.void": "hub.order.void_refused",
+  "ORDER_SETTLED:order.void": "hub.order.void_settled",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -262,6 +266,22 @@ export const cancelLineJob = (line_id: string, made: boolean, reason: ReasonCode
     { track: "none", reason, done: "hub.sheet.done.line_cancelled" },
   );
 
+/** The reasons an unsettled order is voided for, in the order the sheet offers them. */
+export const VOID_REASONS: ReasonCode[] = ["mistake", "changed_mind", "other"];
+
+export const VOID_LABELS: Record<string, MessageKey> = {
+  mistake: "hub.order.void.mistake",
+  changed_mind: "hub.order.void.changed_mind",
+  other: "hub.order.void.other",
+};
+
+/** Voids an unsettled session order; `note` is the text of an `other` reason. */
+export const voidJob = (order_id: string, reason: ReasonCode, note?: string) =>
+  job(
+    { kind: "order.void", order_id, note },
+    { track: "none", reason, done: "hub.sheet.done.order_voided" },
+  );
+
 export const adminUnlockJob = (device_id: string) =>
   job(
     { kind: "device.admin_unlock", device_id },
@@ -319,15 +339,17 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
                         kind === "order.line_served" ||
                         kind === "order.line_cancel"
                       ? "pos.sell"
-                      : kind === "credit.collect" || kind === "credit.collect.reverted"
-                        ? "credit.collect"
-                        : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-                          ? "wallet.topup"
-                          : kind === "device.screen"
-                            ? "device.screen"
-                            : kind === "device.power" || kind === "device.admin_unlock"
-                              ? "device.remote"
-                              : "device.manage";
+                      : kind === "order.void"
+                        ? "pos.void"
+                        : kind === "credit.collect" || kind === "credit.collect.reverted"
+                          ? "credit.collect"
+                          : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+                            ? "wallet.topup"
+                            : kind === "device.screen"
+                              ? "device.screen"
+                              : kind === "device.power" || kind === "device.admin_unlock"
+                                ? "device.remote"
+                                : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 

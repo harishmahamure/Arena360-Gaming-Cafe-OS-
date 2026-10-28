@@ -689,6 +689,11 @@ pub struct SnapshotBill {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<BillItem>>")]
     pub items: Vec<BillItem>,
+    /// The order those items sit on when it is not a bill to settle yet (a running postpaid
+    /// session's placed products): what `order.void` names (Story 5.23).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub items_order_id: Option<String>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,
     #[ts(type = "number")]

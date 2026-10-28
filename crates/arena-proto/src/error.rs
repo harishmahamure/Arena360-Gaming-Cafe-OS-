@@ -124,6 +124,8 @@ pub enum ErrorCode {
     ConsentRequired,
     /// A coupon that cannot be applied to the bill; the message says why (Story 5.21).
     CouponInvalid,
+    /// A void of an order that is already settled; settled orders are refunded (Story 5.23).
+    OrderSettled,
     /// An Undo that is late, from other staff, or blocked by an irreversible effect or a changed
     /// state.
     UndoNotAllowed,
@@ -239,6 +241,7 @@ impl ErrorCode {
             Self::ReferenceRequired => "REFERENCE_REQUIRED",
             Self::ConsentRequired => "CONSENT_REQUIRED",
             Self::CouponInvalid => "COUPON_INVALID",
+            Self::OrderSettled => "ORDER_SETTLED",
             Self::UndoNotAllowed => "UNDO_NOT_ALLOWED",
             Self::InsufficientBalance => "INSUFFICIENT_BALANCE",
             Self::CreditLimit => "CREDIT_LIMIT",
@@ -396,6 +399,7 @@ mod tests {
             (ErrorCode::ReferenceRequired, "REFERENCE_REQUIRED"),
             (ErrorCode::ConsentRequired, "CONSENT_REQUIRED"),
             (ErrorCode::CouponInvalid, "COUPON_INVALID"),
+            (ErrorCode::OrderSettled, "ORDER_SETTLED"),
             (ErrorCode::UndoNotAllowed, "UNDO_NOT_ALLOWED"),
             (ErrorCode::InsufficientBalance, "INSUFFICIENT_BALANCE"),
             (ErrorCode::CreditLimit, "CREDIT_LIMIT"),

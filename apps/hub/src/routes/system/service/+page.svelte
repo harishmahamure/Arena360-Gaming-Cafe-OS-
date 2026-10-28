@@ -13,6 +13,7 @@
     newIdempotencyKey,
     submitIntent,
   } from "../../../lib/auth";
+  import { snapshotOf } from "../../../lib/operating";
   import { bridge, refreshAccess, service } from "../../../lib/service.svelte";
   import {
     canInstall,
@@ -29,12 +30,8 @@
   });
   const canStop = $derived(hasPermission(staff, "settings.edit"));
 
-  const open = $derived(
-    openSessions(
-      (page.data as { hub?: { ok: boolean; snapshot?: { sessions?: { state: string }[] } } }).hub
-        ?.snapshot?.sessions,
-    ),
-  );
+  const snapshot = $derived(snapshotOf(page.data));
+  const open = $derived(snapshot ? openSessions(snapshot.sessions) : null);
   let update: UpdateStatus = $state("none");
   const installable = $derived(canInstall(update, open));
 

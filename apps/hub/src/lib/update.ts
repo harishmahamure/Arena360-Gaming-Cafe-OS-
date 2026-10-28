@@ -20,7 +20,10 @@ export function parseUpdateStatus(raw: unknown): UpdateStatus {
   return raw === "downloading" || raw === "ready" ? raw : "none";
 }
 
-/** May the install start now? Only a downloaded update, and only with no open session. */
-export function canInstall(status: UpdateStatus, open: number): boolean {
+/**
+ * May the install start now? Only a downloaded update, and only with no open session. An unknown
+ * count (`null`: no snapshot of the floor) waits too, since a session might be running.
+ */
+export function canInstall(status: UpdateStatus, open: number | null): boolean {
   return status === "ready" && open === 0;
 }

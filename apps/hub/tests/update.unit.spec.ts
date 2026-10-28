@@ -21,6 +21,7 @@ test("active, paused and grace sessions are open; ended ones are not", () => {
 test("an update installs only when it is ready and nothing is open", () => {
   expect(canInstall("ready", 0)).toBe(true);
   expect(canInstall("ready", 1)).toBe(false);
+  expect(canInstall("ready", null)).toBe(false);
   expect(canInstall("downloading", 0)).toBe(false);
   expect(canInstall("none", 0)).toBe(false);
 });

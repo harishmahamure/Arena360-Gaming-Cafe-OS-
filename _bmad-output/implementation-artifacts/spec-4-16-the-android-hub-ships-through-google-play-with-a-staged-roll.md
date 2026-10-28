@@ -2,7 +2,7 @@
 title: 'Story 4.16: The Android Hub ships through Google Play with a staged rollout that never interrupts a session'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'b0472f068bb2e11a99c4e9fc82f65ba667916576'
 review_loop_iteration: 0
 context:
@@ -70,3 +70,8 @@ deferred: []
 - `node --test scripts/play-release.test.mjs`, `pnpm run check:play`, `check:strings`, `check:pins`, `check:secrets`, `check:ads`, `check:generated`, `check:layers`, prettier, `pnpm --filter @arena/hub check`: pass.
 - Hub Playwright `service`, `update.unit`: pass (desktop and phone). `pnpm run test:scripts`: all pass except the 12 `check-deploy` tests (no `kubectl` here).
 - Not run: the Gradle/Kotlin build, the workflow, the Play API against a real account.
+
+## Code review (2026-10-28)
+
+- Fixed: the "Install and restart" button was enabled when the Hub snapshot was unavailable (open-session count fell back to 0). It now fails closed (`canInstall(status, null)` is false), with a unit test.
+- Not verifiable here: Gradle/Kotlin build, workflow run, Play API against a real account (as noted in Verification).

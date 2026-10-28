@@ -2,7 +2,7 @@
 title: 'Story 4.15: Upgrading removes ads within one heartbeat, and a lapse brings them back only after expiry'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_revision: '7c2c82d5d46ab4a9835009209e4f69abf31d9de9'
 review_loop_iteration: 0
 context:

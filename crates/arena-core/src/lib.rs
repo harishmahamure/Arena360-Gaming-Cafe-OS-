@@ -17,6 +17,7 @@ pub mod players;
 mod pricing;
 pub mod printer;
 pub mod rbac;
+mod reports;
 mod session_screen;
 mod session_timer;
 mod settings_defaults;

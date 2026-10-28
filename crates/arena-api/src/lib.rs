@@ -16,6 +16,7 @@ mod ui_pairing;
 mod ui_player_tests;
 mod ui_printer;
 mod ui_refund;
+mod ui_report;
 #[cfg(test)]
 mod ui_setup_tests;
 mod ui_shift;

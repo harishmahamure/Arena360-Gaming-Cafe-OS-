@@ -290,6 +290,16 @@ pub fn current_business_day(
     Ok(Some(resolve(&rows, now_ms).0.to_string()))
 }
 
+/// The branch time zone in effect at `now_ms` (UTC before the branch has a locale): reports bucket
+/// hours of the day with it.
+pub fn current_tz(store: &arena_store::Store, now_ms: i64) -> Result<Tz, AppError> {
+    let Some(branch) = store.branch_locale()? else {
+        return Ok(Tz::UTC);
+    };
+    let rows = locale_rows(&branch, &store.settings()?);
+    Ok(resolve(&rows, now_ms).1.tz)
+}
+
 /// The locale block of the Hub snapshot at `now_ms`: what is in effect now, and each tz,
 /// day-start or financial-year change still waiting for its business day.
 pub fn snapshot_locale(rows: &[LocaleSetting], now_ms: i64) -> SnapshotLocale {

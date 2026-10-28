@@ -968,6 +968,41 @@ impl SnapshotReader {
         })
     }
 
+    /// Daily sales for the business days `from` to `to` (Story 5.27), `VALIDATION_FAILED` on a
+    /// bad range.
+    pub fn daily_sales(
+        &self,
+        from: &str,
+        to: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::DailySales, AppError> {
+        crate::reports::parse_range(from, to)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let tz = crate::locale::current_tz(&store, now_ms)?;
+        let rows = store.sales_report_rows(from, to)?;
+        Ok(crate::reports::daily_sales(&rows, from, to, tz))
+    }
+
+    /// Sessions for the business days `from` to `to` (Story 5.27).
+    pub fn sessions_report(
+        &self,
+        from: &str,
+        to: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::SessionsReport, AppError> {
+        let days = crate::reports::parse_range(from, to)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let tz = crate::locale::current_tz(&store, now_ms)?;
+        let rows = store.sessions_report_rows(from, to, now_ms)?;
+        Ok(crate::reports::sessions_report(&rows, from, to, days, tz))
+    }
+
     /// The invoice numbered `invoice_no` for the Refund screen: `INVOICE_NOT_FOUND` when no settled
     /// order carries that number.
     pub fn refund_invoice(&self, invoice_no: &str) -> Result<arena_proto::RefundInvoice, AppError> {

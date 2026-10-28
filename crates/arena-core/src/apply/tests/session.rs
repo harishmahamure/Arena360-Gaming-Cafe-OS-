@@ -3680,3 +3680,86 @@ async fn the_wallet_view_lists_owned_plans_with_an_expired_flag() {
     let late = reader.wallet(&p, now + 8 * 24 * 60 * 60_000).unwrap();
     assert!(late.plans[0].expired);
 }
+
+/// Story 5.27: Sessions counts a session's time and the play-time revenue of its settled bill.
+#[tokio::test]
+async fn the_sessions_report_counts_minutes_and_revenue_once_the_bill_is_settled() {
+    use arena_proto::PaymentMethod::Cash;
+    let f = bootstrapped().await;
+    let (order, device, rev) = billed(&f, 10_000, 41).await;
+    let reader = crate::SnapshotReader::open(&f.path).unwrap();
+    let day = "2027-01-15";
+    let r = reader.sessions_report(day, day, f.clock.now_ms()).unwrap();
+    assert_eq!((r.sessions, r.minutes, r.revenue_minor), (1, 41, 0));
+    assert_eq!(r.by_device[0].device_id, device);
+    assert_eq!(r.by_group.len(), 1);
+    assert_eq!(r.by_group[0].utilisation_bp.len(), 24);
+    assert!(r.by_group[0].utilisation_bp.iter().any(|u| *u > 0));
+
+    let total = int(&table(&f, Table::Orders)[0], "total_minor");
+    end(
+        &f,
+        settle_intent(&order, Some(rev), vec![pay(Cash, total, None)]),
+    )
+    .await
+    .unwrap();
+    let r = reader.sessions_report(day, day, f.clock.now_ms()).unwrap();
+    // Billed minutes: 41 rounded up to the branch step.
+    assert_eq!((r.sessions, r.minutes, r.revenue_minor), (1, 45, total));
+    assert_eq!(r.by_device[0].revenue_minor, total);
+    assert_eq!(r.by_group[0].revenue_minor, total);
+    let sales = reader.daily_sales(day, day, f.clock.now_ms()).unwrap();
+    assert_eq!((sales.orders, sales.sales_minor), (1, total));
+    let play = sales.by_type.iter().find(|t| t.key == "play_time").unwrap();
+    assert_eq!(play.amount_minor, total);
+    assert_eq!(sales.by_group[0].id, r.by_group[0].group_id);
+}
+
+/// Story 5.27: a 90-day range over a busy branch (about 43,000 settled sessions, 480 a day, like
+/// 60 devices at 8 sessions each) reads and renders inside the 2 s budget, off `apply()`.
+#[tokio::test]
+async fn a_ninety_day_report_over_a_busy_branch_builds_inside_two_seconds() {
+    let f = bootstrapped().await;
+    let (_, _, _) = billed(&f, 10_000, 41).await;
+    let conn = arena_store::DbConn::open(&f.path).unwrap();
+    conn.execute_batch(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 43000)
+         INSERT INTO sessions (id, player_id, guest_no, device_id, group_id, mode, state,
+             started_at, ended_at, rounding_min, minimum_min, grace_min, time_up_mode, epoch,
+             business_day, fy, rev, created_at, updated_at)
+         SELECT 'load-' || n.i, NULL, NULL, s.device_id, s.group_id, 'postpaid', 'ended',
+             s.started_at, s.ended_at, s.rounding_min, s.minimum_min, s.grace_min, s.time_up_mode,
+             s.epoch, date(s.business_day, '-' || (n.i % 90) || ' days'), s.fy, 0, 0, 0
+         FROM sessions s, n WHERE s.id NOT LIKE 'load-%';
+         INSERT INTO session_segments (id, session_id, from_at, to_at, device_id,
+             rate_minor_per_hour, rev, created_at, updated_at)
+         SELECT 'seg-' || s.id, s.id, s.started_at + (abs(random()) % 86400000), NULL,
+             s.device_id, 10000, 0, 0, 0
+         FROM sessions s WHERE s.id LIKE 'load-%';
+         UPDATE session_segments SET to_at = from_at + 2700000 WHERE id LIKE 'seg-load-%';
+         INSERT INTO orders (id, session_id, status, subtotal_minor, total_minor, business_day, fy,
+             rev, created_at, updated_at, settled_at, kind)
+         SELECT 'o-' || s.id, s.id, 'settled', 7500, 7500, s.business_day, s.fy, 0, 0, 0,
+             s.started_at, 'session'
+         FROM sessions s WHERE s.id LIKE 'load-%';
+         INSERT INTO order_lines (id, order_id, from_at, to_at, minutes, rate_minor_per_hour,
+             amount_minor, position, rev, created_at, updated_at)
+         SELECT 'l-' || s.id, 'o-' || s.id, 0, 0, 45, 10000, 7500, 0, 0, 0, 0
+         FROM sessions s WHERE s.id LIKE 'load-%';",
+    )
+    .unwrap();
+    drop(conn);
+    let reader = crate::SnapshotReader::open(&f.path).unwrap();
+    let (from, to) = ("2026-10-18", "2027-01-15");
+    let started = std::time::Instant::now();
+    let sales = reader.daily_sales(from, to, f.clock.now_ms()).unwrap();
+    let sessions = reader.sessions_report(from, to, f.clock.now_ms()).unwrap();
+    let took = started.elapsed();
+    assert_eq!(sales.orders, 43_000);
+    assert_eq!(sales.sales_minor, 43_000 * 7_500);
+    assert_eq!(
+        (sessions.sessions, sessions.minutes),
+        (43_001, 43_000 * 45 + 41)
+    );
+    assert!(took.as_secs_f64() < 2.0, "two reports took {took:?}");
+}

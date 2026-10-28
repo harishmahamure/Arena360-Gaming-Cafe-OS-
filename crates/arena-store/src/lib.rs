@@ -27,6 +27,7 @@ mod players;
 mod pricing_rules;
 mod products;
 mod refunds;
+mod reports;
 mod sessions;
 mod shifts;
 mod staff;
@@ -144,6 +145,9 @@ pub use refunds::{
     load_refund_invoice, pack_ever_used, paid_by_method, plan_refusal, sum_refunded,
 };
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`), and the connection it derefs to.
+pub use reports::{
+    ReceivedRow, ReportDevice, SalesLineRow, SalesOrderRow, SegmentSpan, SessionReportRow,
+};
 pub use rusqlite::{Connection as DbConn, Transaction};
 pub use sessions::{
     Ending, ForcedEnd, LiveSession, NewExtensionOrder, NewOrder, NewOrderLine, NewPayment,
@@ -206,6 +210,27 @@ pub const META_HUB_INSTANCE_ID: &str = "hub_instance_id";
 pub const META_TLS_FINGERPRINT: &str = "tls_fingerprint";
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What Daily sales reads (Story 5.27).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SalesReportRows {
+    pub orders: Vec<SalesOrderRow>,
+    pub lines: Vec<SalesLineRow>,
+    pub received: Vec<ReceivedRow>,
+    pub refunded_minor: i64,
+    /// `(group id, name)`.
+    pub groups: Vec<(String, String)>,
+}
+
+/// What Sessions reads (Story 5.27).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionsReportRows {
+    pub sessions: Vec<SessionReportRow>,
+    pub spans: Vec<SegmentSpan>,
+    pub devices: Vec<ReportDevice>,
+    /// `(group id, name)`.
+    pub groups: Vec<(String, String)>,
+}
 
 /// Maps a SQLite failure to an `INTERNAL` error.
 pub fn db_error(err: rusqlite::Error) -> AppError {
@@ -1140,6 +1165,49 @@ impl Store {
             Some(id) => Ok(Some(shifts::shift_count(&self.conn, &id, counted_minor)?)),
             None => Ok(None),
         }
+    }
+
+    /// The rows Daily sales is built from, for the business days `from` to `to` (Story 5.27), in
+    /// one read snapshot. An older database without the tables reads as no sales.
+    pub fn sales_report_rows(&self, from: &str, to: &str) -> Result<SalesReportRows, AppError> {
+        if !self.table_exists("orders")? || !self.table_exists("device_groups")? {
+            return Ok(SalesReportRows::default());
+        }
+        let refunds = self.table_exists("refunds")?;
+        self.read_consistent(|s| {
+            Ok(SalesReportRows {
+                orders: reports::sales_orders(&s.conn, from, to)?,
+                lines: reports::sales_lines(&s.conn, from, to)?,
+                received: reports::received(&s.conn, from, to)?,
+                refunded_minor: if refunds {
+                    reports::refunded(&s.conn, from, to)?
+                } else {
+                    0
+                },
+                groups: reports::group_names(&s.conn)?,
+            })
+        })
+    }
+
+    /// The rows Sessions is built from, for the business days `from` to `to` (Story 5.27); an open
+    /// time slice runs to `now_ms`.
+    pub fn sessions_report_rows(
+        &self,
+        from: &str,
+        to: &str,
+        now_ms: i64,
+    ) -> Result<SessionsReportRows, AppError> {
+        if !self.table_exists("sessions")? || !self.table_exists("session_segments")? {
+            return Ok(SessionsReportRows::default());
+        }
+        self.read_consistent(|s| {
+            Ok(SessionsReportRows {
+                sessions: reports::session_rows(&s.conn, from, to)?,
+                spans: reports::segment_spans(&s.conn, from, to, now_ms)?,
+                devices: reports::report_devices(&s.conn)?,
+                groups: reports::group_names(&s.conn)?,
+            })
+        })
     }
 
     /// The branch's open shift and the float the next one would offer, with the number of cash

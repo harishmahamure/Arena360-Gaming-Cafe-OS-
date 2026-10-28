@@ -521,3 +521,11 @@
 - The blind count is a UI convention: `GET /ui/shift/count` reveals the expected cash for any stated count and is not rate-limited or logged. A deposit at close needs only `shift.close`, not `cash.manage`, as the spec states. The count cap is `MAX_CASH_MOVE_MINOR` (a drawer holding more can not be closed).
 - The variance threshold is stored in minor units and defaults to `10000` whatever the branch currency's decimals; Settings → Shift edits it in the currency's own units.
 - Owner alert for an over-threshold close (`shift.closed` carrying variance, reason, staff and approver) is Epic 8; the shifts row already holds all four.
+
+## Story 5.27 (reports screen)
+
+- Hour-of-day buckets and utilisation use the branch time zone in effect now, not the one in effect on each past day; a branch that changed zone mid-range shows slightly shifted hours for the older days. Money, sessions and revenue are unaffected (they use the stamped business day).
+- Utilisation divides by every device currently in the group for all `days`; a device added or removed inside the range makes the percentage approximate for that range. Sessions on a since-deleted device still count, labelled by device id.
+- Daily sales by hour, group and category use the bill's total (by hour, group) and the line amounts before coupon and discount (by category and by type); a coupon or manual discount is shown as its own row in by-type but is not spread over categories.
+- A refund is shown as one negative total dated by the credit note's business day; it is not split by type, hour or group. Story 5.28 (Shifts) and 5.32 (CSV/PDF export) read the same row types.
+- The range picker uses the browser's date input; the "Today" preset is computed from the device clock and the snapshot's tz and day start.

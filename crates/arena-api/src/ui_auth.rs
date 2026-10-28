@@ -3228,6 +3228,11 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/coupons", get(crate::ui_coupons::list))
         .route("/ui/refund/invoice", get(crate::ui_refund::invoice))
         .route("/ui/shift/count", get(crate::ui_shift::count))
+        .route(
+            "/ui/reports/daily-sales",
+            get(crate::ui_report::daily_sales),
+        )
+        .route("/ui/reports/sessions", get(crate::ui_report::sessions))
         .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
         .route(
             "/ui/discount/preview",
@@ -6050,6 +6055,87 @@ pub(crate) mod tests {
         assert_eq!(reveal["threshold_minor"], 10_000);
         assert_eq!(reveal["over_threshold"], false);
         assert_eq!(reveal["breakdown"]["float_minor"], 0);
+    }
+
+    /// Story 5.27: the Reports reads need `report.view` (the counter lacks it) and a valid range.
+    #[tokio::test]
+    async fn the_report_reads_need_report_view_and_a_valid_range() {
+        let hub = hub().await;
+        let url =
+            |kind: &str, from: &str, to: &str| format!("/ui/reports/{kind}?from={from}&to={to}");
+        let (status, _) = call(
+            &hub,
+            "GET",
+            &url("daily-sales", "2027-01-15", "2027-01-15"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, _) = call(
+            &hub,
+            "GET",
+            &url("sessions", "2027-01-15", "2027-01-15"),
+            Some(&counter),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let (status, sales) = call(
+            &hub,
+            "GET",
+            &url("daily-sales", "2027-01-15", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{sales}");
+        assert_eq!(sales["sales_minor"], 0);
+        assert_eq!(sales["by_hour"].as_array().map(Vec::len), Some(24));
+        assert_eq!(sales["received"].as_array().map(Vec::len), Some(2));
+        let (status, sessions) = call(
+            &hub,
+            "GET",
+            &url("sessions", "2027-01-15", "2027-01-16"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{sessions}");
+        assert_eq!(sessions["days"], 2);
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            &url("daily-sales", "2027-01-16", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "to");
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            &url("sessions", "2026-01-01", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            &url("sessions", "soon", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (status, reply["field"].as_str()),
+            (StatusCode::UNPROCESSABLE_ENTITY, Some("from"))
+        );
     }
 
     #[tokio::test]

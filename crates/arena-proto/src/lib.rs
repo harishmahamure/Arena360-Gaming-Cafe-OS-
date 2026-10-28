@@ -39,6 +39,7 @@ mod printer;
 mod process;
 mod receipt;
 mod refund;
+mod report;
 mod scope;
 mod session;
 mod setup_devices;
@@ -236,6 +237,11 @@ pub use receipt::{
 pub use refund::{
     MAX_REFUND_LINES, REFUND_NOTE_MAX_CHARS, RefundCreate, RefundInvoice, RefundLineReq,
     RefundLineView, RefundSummary,
+};
+pub use report::{
+    DailySales, DeviceSessions, GroupSessions, HourSales, NamedSales, RECEIVED_CREDIT_COLLECT,
+    RECEIVED_TOPUP, REPORT_MAX_DAYS, ReportAmount, SALES_DISCOUNTS, SALES_PLANS, SALES_PLAY_TIME,
+    SALES_PRODUCTS, SALES_TAX_ADDED, SessionsReport,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{

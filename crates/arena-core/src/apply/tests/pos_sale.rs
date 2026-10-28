@@ -1134,3 +1134,68 @@ async fn a_credit_override_at_the_counter_needs_credit_manage() {
     assert_eq!(changes(&f), before);
     sell(&f, owner(), s).await.unwrap();
 }
+
+/// Story 5.27: Daily sales reads the stored totals; an undone sale nets to zero.
+#[tokio::test]
+async fn daily_sales_count_settled_counter_sales_and_net_an_undone_one_to_zero() {
+    let f = bootstrapped().await;
+    let id = cola(&f, 4_000, 20).await;
+    let first = sell(
+        &f,
+        owner(),
+        sale_of(&[(&id, 1)], vec![pay(Cash, 4_000, None)]),
+    )
+    .await
+    .unwrap()
+    .changes[0]
+        .row_id
+        .clone();
+    f.clock.advance(1_000);
+    let second = sell(
+        &f,
+        owner(),
+        sale_of(&[(&id, 2)], vec![pay(Upi, 8_000, Some("1234"))]),
+    )
+    .await
+    .unwrap()
+    .changes[0]
+        .row_id
+        .clone();
+    let reader = crate::SnapshotReader::open(&f.path).unwrap();
+    let day = "2027-01-15";
+    let now = f.clock.now_ms();
+    let r = reader.daily_sales(day, day, now).unwrap();
+    assert_eq!((r.orders, r.sales_minor, r.net_minor), (2, 12_000, 12_000));
+    let of = |k: &str| r.by_type.iter().find(|t| t.key == k).unwrap().amount_minor;
+    assert_eq!(
+        (of("products"), of("play_time"), of("plans")),
+        (12_000, 0, 0)
+    );
+    assert_eq!(
+        r.by_type.iter().map(|t| t.amount_minor).sum::<i64>(),
+        12_000
+    );
+    assert_eq!(
+        r.by_hour.iter().map(|h| h.amount_minor).sum::<i64>(),
+        12_000
+    );
+    assert_eq!(r.by_category.len(), 1);
+    assert_eq!(r.by_category[0].amount_minor, 12_000);
+    assert_eq!(r.by_category[0].count, 3);
+    assert_eq!(r.by_group.len(), 1, "counter sales have no group");
+    assert_eq!(r.by_group[0].id, "");
+
+    revert(&f, owner(), &second).await.unwrap();
+    let r = reader.daily_sales(day, day, f.clock.now_ms()).unwrap();
+    assert_eq!((r.orders, r.sales_minor), (1, 4_000));
+    // The day after sees nothing; a bad range is refused.
+    let next = reader
+        .daily_sales("2027-01-16", "2027-01-16", f.clock.now_ms())
+        .unwrap();
+    assert_eq!((next.orders, next.sales_minor), (0, 0));
+    assert!(reader.daily_sales(day, "2026-01-01", now).is_err());
+    assert_ne!(first, second);
+
+    let s = reader.sessions_report(day, day, now).unwrap();
+    assert_eq!((s.sessions, s.minutes, s.revenue_minor), (0, 0, 0));
+}

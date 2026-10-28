@@ -79,6 +79,7 @@ const PLACEHOLDERS = RAIL.filter(
     id !== "players" &&
     id !== "sessions" &&
     id !== "pos" &&
+    id !== "reports" &&
     id !== "shift",
 );
 const BAR = [
@@ -501,14 +502,14 @@ test("Ctrl+1–4 open Floor, POS, Players and Shift", async ({ page }) => {
 
 test("Ctrl+3 is ignored while a text field has focus", async ({ page }) => {
   await open(page, "/reports");
-  // A test-only field on the placeholder screen.
+  // A test-only field on the screen.
   for (const markup of [
     '<input data-test-field aria-label="x">',
     '<textarea data-test-field aria-label="x"></textarea>',
     '<select data-test-field aria-label="x"><option>a</option></select>',
     '<div data-test-field contenteditable="true" tabindex="0">x</div>',
   ]) {
-    await page.locator("[data-screen-placeholder]").evaluate((el, html) => {
+    await page.locator("main").evaluate((el, html) => {
       el.querySelector("[data-test-field]")?.remove();
       el.insertAdjacentHTML("beforeend", html);
     }, markup);

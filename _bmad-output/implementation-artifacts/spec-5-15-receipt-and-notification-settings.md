@@ -2,7 +2,7 @@
 title: 'Story 5.15: Receipt and notification settings'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '974422f'
 review_loop_iteration: 0
 context:
@@ -101,3 +101,5 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Code review (2026-10-28): no blocking findings. Rust tests, clippy, fmt, svelte-check, string/layer/protocol/hex/generated checks, prettier, and the receipt unit, receipts and settings Playwright specs pass. Non-blocking: the client counts line length in UTF-16 units, the Hub in code points, so an astral character is counted stricter in the UI only.

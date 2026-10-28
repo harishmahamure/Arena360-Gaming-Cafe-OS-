@@ -2,7 +2,7 @@
 title: 'Story 5.35: Seed plans and products from a starter template'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '7b91fe0'
 followup_review_recommended: false
@@ -79,6 +79,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-28): no blocking findings. fmt, clippy -D warnings, cargo tests (proto, core, api) and Hub svelte-check re-run green.
 
 Unattended build: fmt, clippy (-D warnings) and cargo tests for proto/store/core/api, Hub `svelte-check`, Playwright `import.spec.ts` and `settings.spec.ts`, `format:check`, `check:strings`, `check:protocol`, `check:layers`, `check:hex` green. `check:generated` passes once the new generated files are committed. `check:tokens-used` fails on `--ad-reserved` in `routes/floor/+page.svelte` and `arena-e2e` does not build on Windows (unix-only); both fail without this story's changes.
 

@@ -1,7 +1,7 @@
 //! Story 4.17: a fleet of 20 fake kiosks and a Hub UI drive a real `arena-hub` with the mixed
 //! start / pause / resume / extend / transfer / end / settle load at 5 intents/s, through public
 //! APIs only (loopback `/ui/*`, the pinned-TLS LAN protocol), and write one JSON report that
-//! `scripts/android-farm.mjs verify` checks against `deploy/android-farm/budgets.json`.
+//! `scripts/android-farm.mjs verify` checks against `deploy/android-farm/farm.json`.
 //!
 //! Two phases, so the farm job can kill the Hub between them:
 //! - `load`: seed a floor, connect the kiosks, run the load (and a timer probe every

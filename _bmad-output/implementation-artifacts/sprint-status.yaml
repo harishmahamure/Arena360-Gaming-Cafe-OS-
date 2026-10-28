@@ -121,7 +121,7 @@ development_status:
   4-14-ad-requests-and-impressions-are-recorded-without-ids-and-sen: done
   4-15-upgrading-removes-ads-within-one-heartbeat-and-a-lapse-bring: done
   4-16-the-android-hub-ships-through-google-play-with-a-staged-roll: done
-  4-17-android-hub-proven-on-a-3-gb-device-with-20-kiosks-doze-and: review
+  4-17-android-hub-proven-on-a-3-gb-device-with-20-kiosks-doze-and: done
   epic-4-retrospective: optional
 
   epic-5: in-progress

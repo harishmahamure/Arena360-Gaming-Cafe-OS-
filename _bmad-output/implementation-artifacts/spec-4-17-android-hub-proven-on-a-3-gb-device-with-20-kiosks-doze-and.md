@@ -2,7 +2,7 @@
 title: 'Story 4.17: Android Hub proven on a 3 GB device with 20 kiosks, Doze and no WAN'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_revision: '58ed238'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'

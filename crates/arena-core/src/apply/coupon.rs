@@ -138,6 +138,16 @@ pub(super) fn validate(u: &CouponUpsert, t: &EditTarget) -> Result<(), AppError>
     {
         return Err(invalid("code", "this code is already used"));
     }
+    // Orders name their coupon by code, so a coupon that was used keeps it (Undo finds it again).
+    if t.coupon
+        .as_ref()
+        .is_some_and(|c| c.used > 0 && c.code != code)
+    {
+        return Err(invalid(
+            "code",
+            "a coupon that has been used keeps its code",
+        ));
+    }
     terms(u)?;
     window(u)?;
     if u.usage_limit
@@ -334,7 +344,12 @@ pub(crate) fn quote(
     if !c.active {
         return Err(refuse("this coupon is not active"));
     }
-    if let Some(today) = ctx.today {
+    if c.valid_from.is_some() || c.valid_to.is_some() {
+        let Some(today) = ctx.today else {
+            return Err(refuse(
+                "the date is not known, so the coupon cannot be checked",
+            ));
+        };
         let day = |v: &Option<String>| v.as_deref().and_then(parse_date);
         if day(&c.valid_from).is_some_and(|from| today < from) {
             return Err(refuse("this coupon is not valid yet"));
@@ -386,7 +401,7 @@ pub(crate) fn quote(
         (None, Some(amount)) => i128::from(amount),
         (None, None) => 0,
     };
-    let discount = wanted.min(eligible);
+    let discount = wanted.min(eligible).min(i128::from(bill_total));
     if discount <= 0 {
         return Err(refuse("this coupon would not take anything off this bill"));
     }

@@ -2,7 +2,7 @@
 title: 'Story 5.21: Coupons applied at settle'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '3ca3f6c9e5c340162679130a873e4330877e4cc3'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -85,6 +85,16 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### Code review (2026-10-28)
+
+Fixed:
+- A coupon that has been used keeps its code (orders name coupons by code, so a rename broke Undo's give-back).
+- A coupon with a validity window is refused when the branch date is unknown (was fail-open).
+- The discount is capped at the bill total as well as the eligible amount.
+- `POST /ui/coupons/preview` for a plan needs `wallet.topup` (what `plan.sell` needs), other bills `pos.sell`.
+
+Deferred (not blocking): group-bill refusal only in the UI; settle-time `COUPON_INVALID` shows a generic reason; Playwright coverage for POS/plan-sale coupon wiring and a GST session-bill case (session orders carry no tax today, per Design Notes); preview rate limiting; retired targets blocking an edit.
 
 ## Design Notes
 

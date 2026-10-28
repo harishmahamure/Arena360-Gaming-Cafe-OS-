@@ -2165,7 +2165,7 @@
   "hub.coupons.used_of": "{used} of {limit} used",
   "hub.coupons.min_text": "Bills of {amount} or more",
   "hub.coupons.stale": "This coupon changed elsewhere. It has been reloaded; try again.",
-  "hub.coupons.invalid.code": "Use 3 to 24 letters, digits, - or _, and a code no other coupon has.",
+  "hub.coupons.invalid.code": "Use 3 to 24 letters, digits, - or _, and a code no other coupon has. A coupon that has been used keeps its code.",
   "hub.coupons.invalid.percent": "Enter a percentage from 0.01 to 100.",
   "hub.coupons.invalid.amount": "Enter an amount above zero.",
   "hub.coupons.invalid.dates": "Enter dates like 2027-03-10, with the last day not before the first.",

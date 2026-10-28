@@ -51,12 +51,18 @@ pub(crate) async fn preview(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    if let Err(e) = staff(&auth, &headers, Permission::PosSell).await {
-        return fail(e);
-    }
     let Ok(req) = serde_json::from_slice::<CouponPreviewRequest>(&body) else {
         return fail(bad_frame(SHAPE));
     };
+    // A plan is sold by `plan.sell` (`wallet.topup`); every other bill by `pos.sell`.
+    let needs = if req.plan_id.is_some() {
+        Permission::WalletTopup
+    } else {
+        Permission::PosSell
+    };
+    if let Err(e) = staff(&auth, &headers, needs).await {
+        return fail(e);
+    }
     let (reader, now_ms) = (Arc::clone(auth.reader()), auth.clock().now_ms());
     match tokio::task::spawn_blocking(move || reader.coupon_preview(&req, now_ms)).await {
         Ok(Ok(view)) => Json(view).into_response(),

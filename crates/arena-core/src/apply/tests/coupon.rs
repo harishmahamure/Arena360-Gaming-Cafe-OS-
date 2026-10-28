@@ -374,6 +374,19 @@ async fn editing_needs_the_current_rev_replaces_targets_and_keeps_the_use_count(
 
     // A deactivated coupon stays listed and the same code can be edited back to itself.
     assert_eq!(reopen(&f).coupons().unwrap().len(), 1);
+
+    // A used coupon keeps its code: orders name it by code and Undo finds it again that way.
+    let renamed = CouponUpsert {
+        id: Some(id),
+        amount_minor: Some(300),
+        percent_bp: None,
+        targets: vec![target("product", &chips)],
+        ..coupon("RENAMED")
+    };
+    assert_eq!(
+        code_of(save(&f, owner(), renamed, Some(rev + 1)).await),
+        (ErrorCode::ValidationFailed, Some("code".into()))
+    );
 }
 
 #[tokio::test]

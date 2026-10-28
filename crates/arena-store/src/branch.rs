@@ -65,11 +65,12 @@ pub enum Table {
     Shifts,
     CashEvents,
     InvoiceSequences,
+    NotifyOutbox,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 38] = [
+    pub const ALL: [Table; 39] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -108,6 +109,7 @@ impl Table {
         Table::Shifts,
         Table::CashEvents,
         Table::InvoiceSequences,
+        Table::NotifyOutbox,
     ];
 
     /// The SQL table name.
@@ -151,6 +153,7 @@ impl Table {
             Self::Shifts => "shifts",
             Self::CashEvents => "cash_events",
             Self::InvoiceSequences => "invoice_sequences",
+            Self::NotifyOutbox => "notify_outbox",
         }
     }
 
@@ -182,7 +185,8 @@ impl Table {
             | Self::GroupBills
             | Self::Shifts
             | Self::CashEvents
-            | Self::StockHolds => &["id"],
+            | Self::StockHolds
+            | Self::NotifyOutbox => &["id"],
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
             Self::PlanGroups => &["plan_id", "group_id"],
@@ -233,6 +237,7 @@ impl Table {
             | Self::Shifts
             | Self::CashEvents
             | Self::InvoiceSequences
+            | Self::NotifyOutbox
             | Self::Plans => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents | Self::PlanGroups => false,
         }
@@ -375,6 +380,9 @@ pub enum RowKey {
         fy: String,
         segment: String,
     },
+    NotifyOutbox {
+        id: String,
+    },
 }
 
 impl RowKey {
@@ -408,6 +416,7 @@ impl RowKey {
             Self::Shifts { .. } => Table::Shifts,
             Self::CashEvents { .. } => Table::CashEvents,
             Self::InvoiceSequences { .. } => Table::InvoiceSequences,
+            Self::NotifyOutbox { .. } => Table::NotifyOutbox,
             Self::Players { .. } => Table::Players,
             Self::Consents { .. } => Table::Consents,
             Self::Sessions { .. } => Table::Sessions,
@@ -465,6 +474,7 @@ impl RowKey {
             | Self::Shifts { id }
             | Self::CashEvents { id }
             | Self::StockHolds { id }
+            | Self::NotifyOutbox { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => id.clone(),
         }
@@ -561,6 +571,7 @@ impl RowKey {
                 segment: text("segment")?,
             },
             Table::StockHolds => Self::StockHolds { id: text("id")? },
+            Table::NotifyOutbox => Self::NotifyOutbox { id: text("id")? },
             Table::Sessions => Self::Sessions { id: text("id")? },
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
             Table::Orders => Self::Orders { id: text("id")? },
@@ -619,6 +630,7 @@ impl RowKey {
             | Self::Shifts { id }
             | Self::CashEvents { id }
             | Self::StockHolds { id }
+            | Self::NotifyOutbox { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => vec![id],
         }

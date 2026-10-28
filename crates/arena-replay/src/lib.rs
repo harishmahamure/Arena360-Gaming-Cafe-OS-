@@ -948,6 +948,52 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            // A paid branch with the WhatsApp receipt on: a sale for the consenting player queues
+            // one message row.
+            let consenting = ulid::Ulid::generate().to_string();
+            let bala = arena_core::players::seal(
+                &[5; 32],
+                &arena_proto::PlayerForm {
+                    username: "bala".into(),
+                    password: "secret1".into(),
+                    phone: "+919123456789".into(),
+                    name: "Bala".into(),
+                    email: String::new(),
+                    dob: String::new(),
+                    notes: String::new(),
+                    tags: Vec::new(),
+                    consent: true,
+                    policy_version: "1".into(),
+                },
+                &consenting,
+                arena_core::staff::hash_secret("pw").unwrap(),
+            )
+            .unwrap();
+            writer
+                .submit_intent(submit(IntentPayload::PlayerCreate(bala), None))
+                .await
+                .unwrap();
+            writer
+                .apply_licence(arena_proto::LicenceApply {
+                    standing: arena_proto::LicenceStanding::Verified,
+                    clock_wrong: false,
+                    tier: arena_proto::Tier::Basic,
+                    flags: String::new(),
+                    device_cap: 60,
+                    user_cap: 10,
+                })
+                .await
+                .unwrap();
+            writer
+                .submit_intent(settings_set("notify.whatsapp_receipt", "true", 1))
+                .await
+                .unwrap();
+            let mut whatsapp = pos();
+            if let IntentPayload::PosSale(sale) = &mut whatsapp.payload {
+                sale.player_id = Some(consenting.clone());
+                sale.receipt = Some(arena_proto::ReceiptChoice::Whatsapp);
+            }
+            writer.submit_intent(whatsapp).await.unwrap();
             let owned_pack = first_sale
                 .changes
                 .iter()

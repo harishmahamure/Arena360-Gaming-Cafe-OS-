@@ -4,16 +4,17 @@ use arena_core::printer::{
     PaperWidth, Printer, PrinterError, PrinterTarget, test_page, test_page_date,
 };
 use arena_proto::{
-    ActorKind, AlertKind, AlertRaise, AppError, ErrorCode, FLAG_KITCHEN, HubSnapshot, Intent,
-    IntentPayload, KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_FLAGS,
-    KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_RECEIPT_DEFAULT, PRINTER_OFFLINE_HOLD_MS,
-    Permission, PrinterErrorKind, PrinterFindResult, PrinterHealth, PrinterJobFailure,
-    PrinterOutcome, PrinterReady, PrinterSelected, PrinterState, PrinterStatus, PrinterStatusReply,
+    ActorKind, AlertKind, AlertRaise, AppError, CONSENT_TRANSACTIONAL, ErrorCode, FLAG_KITCHEN,
+    HubSnapshot, Intent, IntentPayload, KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER,
+    KEY_LICENCE_FLAGS, KEY_LICENCE_TIER, KEY_NOTIFY_WHATSAPP_RECEIPT, KEY_PRINTER_PAPER_MM,
+    KEY_PRINTER_SELECTED, KEY_RECEIPT_DEFAULT, PRINTER_OFFLINE_HOLD_MS, Permission,
+    PrinterErrorKind, PrinterFindResult, PrinterHealth, PrinterJobFailure, PrinterOutcome,
+    PrinterReady, PrinterSelected, PrinterState, PrinterStatus, PrinterStatusReply,
     PrinterStatusSet, PrinterUnready, ReceiptChoice, SessionStaff, SettingEntry, UiError, has_flag,
-    printer_error_text,
+    printer_error_text, whatsapp_refusal,
 };
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 
@@ -151,10 +152,21 @@ pub(crate) async fn health(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) 
     Json(PrinterHealth { last_job_failure }).into_response()
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct ReadyQuery {
+    /// The profiled player the sale is for, when there is one.
+    player_id: Option<String>,
+}
+
 /// `GET /ui/printer/ready` (any staff who may sell): whether the settle bar offers Print. It does
 /// not when no printer is chosen or the last job failed within [`PRINTER_OFFLINE_HOLD_MS`]; a
-/// settle is never blocked either way.
-pub(crate) async fn ready(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+/// settle is never blocked either way. With `player_id` it also says whether WhatsApp is offered
+/// (Story 5.19): a paid branch with the message on and a player whose consent is current.
+pub(crate) async fn ready(
+    State(auth): State<Arc<UiAuth>>,
+    Query(query): Query<ReadyQuery>,
+    headers: HeaderMap,
+) -> Response {
     let me = match async {
         let token = bearer(&headers).ok_or_else(auth_failed)?.to_owned();
         auth.acting_session(&token).await
@@ -191,10 +203,33 @@ pub(crate) async fn ready(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -
     let default_choice = value(&settings, KEY_RECEIPT_DEFAULT)
         .and_then(ReceiptChoice::parse)
         .unwrap_or(ReceiptChoice::Print);
+    let consent = match &query.player_id {
+        Some(player_id) => {
+            let reader = Arc::clone(auth.reader());
+            let player_id = player_id.clone();
+            let found = tokio::task::spawn_blocking(move || {
+                reader.latest_consent(&player_id, CONSENT_TRANSACTIONAL)
+            })
+            .await;
+            match found {
+                Ok(Ok(c)) => c.map(|c| c.0),
+                _ => return fail(internal()),
+            }
+        }
+        None => None,
+    };
+    let whatsapp = whatsapp_refusal(
+        value(&settings, KEY_LICENCE_TIER),
+        value(&settings, KEY_NOTIFY_WHATSAPP_RECEIPT) == Some("true"),
+        query.player_id.is_some(),
+        consent,
+    )
+    .is_none();
     Json(PrinterReady {
         ready: reason.is_none(),
         default_choice,
         reason,
+        whatsapp: whatsapp.then_some(true),
     })
     .into_response()
 }
@@ -761,6 +796,102 @@ mod tests {
 
         let (status, _) = call_app(&r.app, "GET", "/ui/printer/ready", None, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// Story 5.19: the bar adds WhatsApp only for a profiled player with current consent, on a
+    /// paid branch that switched the message on.
+    #[tokio::test]
+    async fn the_settle_bar_offers_whatsapp_for_a_consenting_player_on_a_paid_branch() {
+        let fake = Arc::new(FakePrinter::dev());
+        let r = rig(&fake).await;
+        let token = sign_in(&r, "manager", "m-pass").await;
+        let counter = sign_in(&r, "counter", "c-pass").await;
+        let mut ids = Vec::new();
+        for (name, phone, consent) in [
+            ("asha", "+919876543210", true),
+            ("bala", "+919876543211", false),
+        ] {
+            let form = arena_proto::PlayerForm {
+                username: name.into(),
+                password: "secret1".into(),
+                phone: phone.into(),
+                name: name.into(),
+                email: String::new(),
+                dob: String::new(),
+                notes: String::new(),
+                tags: vec![],
+                consent,
+                policy_version: "1".into(),
+            };
+            let id = ulid::Ulid::generate().to_string();
+            let sealed =
+                arena_core::players::seal(&[9; 32], &form, &id, "$argon2id$stub".into()).unwrap();
+            r.hub
+                .writer
+                .submit_intent(intent_as(
+                    Actor {
+                        kind: ActorKind::Owner,
+                        id: "owner".into(),
+                    },
+                    IntentPayload::PlayerCreate(sealed),
+                    None,
+                ))
+                .await
+                .unwrap();
+            ids.push(id);
+        }
+        let ready = |query: String| {
+            let app = r.app.clone();
+            let t = counter.clone();
+            async move {
+                call_app(
+                    &app,
+                    "GET",
+                    &format!("/ui/printer/ready{query}"),
+                    Some(&t),
+                    None,
+                )
+                .await
+                .1
+            }
+        };
+        let with = |id: &str| format!("?player_id={id}");
+
+        // Free, and the message off: never offered.
+        assert_eq!(ready(with(&ids[0])).await.get("whatsapp"), None);
+
+        r.hub
+            .writer
+            .apply_licence(arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier: arena_proto::Tier::Basic,
+                flags: String::new(),
+                device_cap: 60,
+                user_cap: 10,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            ready(with(&ids[0])).await.get("whatsapp"),
+            None,
+            "the branch has not switched the message on"
+        );
+        let (status, body) = set(&r, &token, "notify.whatsapp_receipt", "true").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        assert_eq!(ready(with(&ids[0])).await["whatsapp"], true);
+        assert_eq!(
+            ready(with(&ids[1])).await.get("whatsapp"),
+            None,
+            "no consent"
+        );
+        assert_eq!(
+            ready(with("nobody")).await.get("whatsapp"),
+            None,
+            "no such player"
+        );
+        assert_eq!(ready(String::new()).await.get("whatsapp"), None, "a guest");
     }
 
     #[tokio::test]

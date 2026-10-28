@@ -54,22 +54,68 @@ pub fn valid_receipt_lines(value: &str, max_lines: usize) -> bool {
 
 /// The receipt choice on the settle bar (Story 5.17). `print` issues the invoice number inside the
 /// settle transaction, so the bill is never undoable, and queues the receipt on the side-effect
-/// outbox; `none` (and an absent choice) leaves the number to the Undo-window task.
+/// outbox; `none` (and an absent choice) leaves the number to the Undo-window task. `whatsapp`
+/// (Story 5.19) queues a `notify_outbox` row for the player's receipt and issues no number: the
+/// number comes when the Undo window closes, and the Epic 8 drain sends after that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub enum ReceiptChoice {
     Print,
     None,
+    Whatsapp,
 }
 
 impl ReceiptChoice {
+    /// The choices a branch can preselect (`receipt.default`): `whatsapp` is per player, so it is
+    /// never a default.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "print" => Some(Self::Print),
             "none" => Some(Self::None),
             _ => None,
         }
+    }
+}
+
+/// The purpose of a `notify_outbox` row sent to a player about their own transaction.
+pub const NOTIFY_PURPOSE_TRANSACTIONAL: &str = "transactional";
+/// The kind of a `notify_outbox` row that carries a settled order's receipt.
+pub const NOTIFY_KIND_RECEIPT: &str = "receipt";
+/// A `notify_outbox` row waiting for the Epic 8 drain.
+pub const NOTIFY_STATE_QUEUED: &str = "queued";
+/// A `notify_outbox` row that will never be sent (its settle was undone).
+pub const NOTIFY_STATE_SKIPPED: &str = "skipped";
+
+/// Why a WhatsApp receipt cannot be offered or accepted for a settle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhatsappRefusal {
+    /// The branch is not on a paid tier (`FEATURE_NOT_ENTITLED`).
+    NotEntitled,
+    /// The sale has no profiled player, or the player's current transactional consent is not
+    /// granted (`CONSENT_REQUIRED`).
+    ConsentRequired,
+    /// The branch has not switched `notify.whatsapp_receipt` on (`VALIDATION_FAILED`).
+    SwitchedOff,
+}
+
+/// Whether a settle may choose WhatsApp: a paid tier first, then a profiled player whose latest
+/// transactional consent is granted, then the branch's own switch. `consent` is `None` for a guest
+/// or a player with no consent row.
+pub fn whatsapp_refusal(
+    tier: Option<&str>,
+    switch_on: bool,
+    has_player: bool,
+    consent: Option<bool>,
+) -> Option<WhatsappRefusal> {
+    if !tier.is_some_and(tier_is_paid) {
+        Some(WhatsappRefusal::NotEntitled)
+    } else if !has_player || consent != Some(true) {
+        Some(WhatsappRefusal::ConsentRequired)
+    } else if !switch_on {
+        Some(WhatsappRefusal::SwitchedOff)
+    } else {
+        None
     }
 }
 
@@ -149,6 +195,42 @@ mod tests {
         assert!(!valid_receipt_lines(&"x".repeat(97), 1));
         assert!(!valid_receipt_lines("a\tb", 1));
         assert!(!valid_receipt_lines("a\r\nb", 2));
+    }
+
+    #[test]
+    fn whatsapp_needs_a_paid_tier_a_profile_with_consent_and_the_branch_switch() {
+        let ok = |tier, on, player, consent| whatsapp_refusal(tier, on, player, consent);
+        assert_eq!(ok(Some("basic"), true, true, Some(true)), None);
+        assert_eq!(ok(Some("premium"), true, true, Some(true)), None);
+        assert_eq!(
+            ok(Some("free"), true, true, Some(true)),
+            Some(WhatsappRefusal::NotEntitled)
+        );
+        assert_eq!(
+            ok(None, true, true, Some(true)),
+            Some(WhatsappRefusal::NotEntitled)
+        );
+        assert_eq!(
+            ok(Some("basic"), true, false, None),
+            Some(WhatsappRefusal::ConsentRequired)
+        );
+        assert_eq!(
+            ok(Some("basic"), true, true, Some(false)),
+            Some(WhatsappRefusal::ConsentRequired)
+        );
+        assert_eq!(
+            ok(Some("basic"), true, true, None),
+            Some(WhatsappRefusal::ConsentRequired)
+        );
+        assert_eq!(
+            ok(Some("basic"), false, true, Some(true)),
+            Some(WhatsappRefusal::SwitchedOff)
+        );
+        assert_eq!(
+            ok(Some("free"), false, false, None),
+            Some(WhatsappRefusal::NotEntitled),
+            "a Free branch is told about the tier first"
+        );
     }
 
     #[test]

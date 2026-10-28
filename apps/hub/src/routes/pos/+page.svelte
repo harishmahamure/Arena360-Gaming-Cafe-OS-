@@ -132,6 +132,7 @@
     remaining_minor: total,
     wallet_minor: attached ? walletMinor : null,
     credit: attached ? credit : null,
+    player_id: attached?.player_id,
   });
   const snapshot = $derived(snapshotOf(page.data));
   const running = $derived(orderSessions(snapshot?.sessions ?? [], snapshot?.devices ?? []));
@@ -832,6 +833,11 @@
                   ? t("hub.pos.recent.invoice", { number: sale.invoice_no })
                   : t("hub.pos.recent.invoice_pending")}</span
               >
+              {#if sale.whatsapp_state === "queued"}
+                <span class="type-hub-label" data-testid="recent-whatsapp-queued"
+                  >{t("hub.pos.recent.whatsapp_queued")}</span
+                >
+              {/if}
               {#if sale.print_state === "failed"}
                 <span class="type-hub-label" data-testid="recent-print-failed"
                   ><span aria-hidden="true">⚠</span> {t("hub.pos.recent.print_failed")}</span

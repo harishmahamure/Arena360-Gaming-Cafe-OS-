@@ -113,6 +113,11 @@ pub struct PosSaleView {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub print_state: Option<String>,
+    /// What the WhatsApp receipt of this sale came to (`queued`, `sent`, `failed`, `skipped`);
+    /// `null` when none was asked for (Story 5.19).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub whatsapp_state: Option<String>,
 }
 
 /// `GET /ui/pos/sales`: the business day's counter sales, newest first.

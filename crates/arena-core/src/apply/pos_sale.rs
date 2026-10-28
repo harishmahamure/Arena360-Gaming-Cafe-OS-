@@ -619,6 +619,7 @@ pub(super) fn mutate_sale_reverted(
         &o.id,
         &mut written,
     )?;
+    super::receipt_notify::skip_on_revert(tx, &o.id, &mut written)?;
     let (stock_rows, changed) =
         super::stock::restore_sale_moves(tx, &t.moves, &o.id, None, &intent.actor.id, now_ms)?;
     written.extend(stock_rows);

@@ -3,6 +3,8 @@
 /**
  * The receipt choice on the settle bar (Story 5.17). `print` issues the invoice number inside the
  * settle transaction, so the bill is never undoable, and queues the receipt on the side-effect
- * outbox; `none` (and an absent choice) leaves the number to the Undo-window task.
+ * outbox; `none` (and an absent choice) leaves the number to the Undo-window task. `whatsapp`
+ * (Story 5.19) queues a `notify_outbox` row for the player's receipt and issues no number: the
+ * number comes when the Undo window closes, and the Epic 8 drain sends after that.
  */
-export type ReceiptChoice = "print" | "none";
+export type ReceiptChoice = "print" | "none" | "whatsapp";

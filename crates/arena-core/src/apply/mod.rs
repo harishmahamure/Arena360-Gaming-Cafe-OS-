@@ -57,6 +57,7 @@ mod products;
 pub(crate) mod rate_flip;
 mod rates;
 mod read_grants;
+mod receipt_notify;
 mod receipt_print;
 mod rules;
 pub(crate) mod seed_defaults;

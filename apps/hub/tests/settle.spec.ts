@@ -30,6 +30,8 @@ type Hub = {
   shift?: ShiftState;
   /** What `/ui/printer/ready` answers (Story 5.17); absent means the Hub does not answer. */
   printer?: PrinterReady;
+  /** The `player_id` the settle bar last asked `/ui/printer/ready` about (Story 5.19). */
+  readyFor?: string | null;
 };
 
 const FREE = device(1, { status: "online" });
@@ -63,6 +65,7 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
       case "/ui/settings":
         return json(route, []);
       case "/ui/printer/ready":
+        hub.readyFor = new URL(req.url()).searchParams.get("player_id");
         return hub.printer
           ? json(route, hub.printer)
           : route.fulfill({ status: 500, headers: CORS, body: "" });
@@ -223,6 +226,51 @@ test("with no printer the bar says nothing will print and the bill still settles
   await settleButton(page).click();
   await expect(page.getByTestId("settle-done")).toBeVisible();
   expect(hub.sent[0].payload.receipt).toBe("none");
+});
+
+test("WhatsApp is added beside Print and None for a profiled player the Hub says it offers", async ({
+  page,
+}) => {
+  const hub = await open(page, {
+    bills: [{ ...BILL, player_id: "P1" }],
+    printer: { ready: true, default_choice: "print", whatsapp: true },
+  });
+  await expect(bar(page).locator("[data-receipt]")).toHaveCount(3);
+  await expect(bar(page).locator('[data-receipt="whatsapp"]')).toHaveText(
+    en["hub.settle.receipt.whatsapp"],
+  );
+  expect(hub.readyFor).toBe("P1");
+  await bar(page).locator('[data-receipt="whatsapp"]').click();
+  await expect(bar(page).locator('[data-receipt="whatsapp"]')).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({ kind: "session.settle", receipt: "whatsapp" });
+});
+
+test("a guest bill is not offered WhatsApp", async ({ page }) => {
+  const guest = await open(page, { printer: { ready: true, default_choice: "print" } });
+  expect(guest.readyFor).toBeNull();
+  await expect(bar(page).locator('[data-receipt="whatsapp"]')).toHaveCount(0);
+  await expect(bar(page).locator("[data-receipt]")).toHaveCount(2);
+});
+
+test("with no printer a player can still take the receipt on WhatsApp", async ({ page }) => {
+  const hub = await open(page, {
+    bills: [{ ...BILL, player_id: "P1" }],
+    printer: { ready: false, default_choice: "print", reason: "unset", whatsapp: true },
+  });
+  await expect(page.getByTestId("printer-missing")).toContainText(en["hub.settle.no_printer"]);
+  await expect(bar(page).locator("[data-receipt]")).toHaveCount(2);
+  await expect(bar(page).locator('[data-receipt="none"]')).toHaveAttribute("aria-pressed", "true");
+  await bar(page).locator('[data-receipt="whatsapp"]').click();
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload.receipt).toBe("whatsapp");
 });
 
 test("cash above the remainder shows Change and sends only the bill amount", async ({ page }) => {

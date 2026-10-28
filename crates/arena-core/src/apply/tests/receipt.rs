@@ -614,3 +614,277 @@ async fn a_failed_kick_keeps_the_sale_raises_the_offline_alert_and_writes_no_cas
         ErrorCode::Stale
     );
 }
+
+// ---- Story 5.19: WhatsApp receipt queued to the notification outbox ----
+
+const PHONE: &str = "+91 98765-43210";
+
+async fn set_key(f: &Fixture, key: &str, value: &str) {
+    let row = reopen(f)
+        .rows(Table::Settings)
+        .unwrap()
+        .into_iter()
+        .find(|r| r["key"] == RowValue::Text(key.into()))
+        .expect("the setting is seeded");
+    let mut i = intent(
+        owner(),
+        IntentPayload::SettingsSet(arena_proto::SettingsSet {
+            key: key.into(),
+            value: value.into(),
+        }),
+    );
+    i.base_rev = Some(match row["rev"] {
+        RowValue::Integer(n) => n,
+        ref other => panic!("{other:?}"),
+    });
+    i.issued_at = f.clock.now_ms();
+    f.writer.submit_intent(i).await.unwrap();
+}
+
+/// A paid branch with the WhatsApp receipt switched on.
+async fn whatsapp_branch(f: &Fixture) {
+    f.writer
+        .apply_licence(arena_proto::LicenceApply {
+            standing: arena_proto::LicenceStanding::Verified,
+            clock_wrong: false,
+            tier: arena_proto::Tier::Basic,
+            flags: String::new(),
+            device_cap: 60,
+            user_cap: 10,
+        })
+        .await
+        .unwrap();
+    set_key(f, arena_proto::KEY_NOTIFY_WHATSAPP_RECEIPT, "true").await;
+}
+
+async fn profiled(f: &Fixture, username: &str, consent: bool) -> String {
+    // One profile per phone: the last digits follow the username.
+    let phone = format!("{PHONE}{}", username.len() + usize::from(consent));
+    let mut form = super::players::form(username, &phone);
+    form.consent = consent;
+    super::players::add(f, owner(), &form).await.unwrap().0
+}
+
+async fn whatsapp_sale(
+    f: &Fixture,
+    by: &Actor,
+    product: &str,
+    player: Option<&str>,
+) -> Result<(String, Applied), AppError> {
+    let applied = submit(
+        f,
+        by.clone(),
+        IntentPayload::PosSale(PosSale {
+            lines: vec![PosSaleLine {
+                product_id: product.into(),
+                qty: 1,
+            }],
+            payments: vec![pay(Cash, 4_000, None)],
+            player_id: player.map(str::to_owned),
+            credit_override: None,
+            stock_override: None,
+            receipt: Some(ReceiptChoice::Whatsapp),
+        }),
+    )
+    .await?;
+    let id = applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders" && c.op == ChangeOp::Insert)
+        .unwrap()
+        .row_id
+        .clone();
+    Ok((id, applied))
+}
+
+type NotifyView = (String, String, String, String, String, i64, String);
+
+/// `(order_id, player_id, kind, purpose, policy_version, not_before, state)` of every row.
+fn notifies(f: &Fixture) -> Vec<NotifyView> {
+    table(f, Table::NotifyOutbox)
+        .iter()
+        .map(|r| {
+            (
+                text(r, "order_id"),
+                text(r, "player_id"),
+                text(r, "kind"),
+                text(r, "purpose"),
+                text(r, "consent_policy_version"),
+                super::session::int(r, "not_before"),
+                text(r, "state"),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_whatsapp_settle_queues_one_row_for_the_player_with_no_phone_in_the_log() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    whatsapp_branch(&f).await;
+    let player = profiled(&f, "asha", true).await;
+    let (o, applied) = whatsapp_sale(&f, &by, &id, Some(&player)).await.unwrap();
+
+    let at = f.clock.now_ms();
+    assert_eq!(
+        notifies(&f),
+        [(
+            o.clone(),
+            player.clone(),
+            "receipt".into(),
+            "transactional".into(),
+            "1".into(),
+            at + UNDO_WINDOW_MS,
+            "queued".into()
+        )]
+    );
+    assert!(
+        applied
+            .changes
+            .iter()
+            .any(|c| c.tbl == "notify_outbox" && c.op == ChangeOp::Insert)
+    );
+    for c in reopen(&f).changes().unwrap() {
+        let blob = format!("{c:?}");
+        assert!(
+            !blob.contains("98765") && !blob.contains("9876543210"),
+            "no phone number in the change log: {blob}"
+        );
+    }
+    assert_eq!(number_of(&f, &o), None, "WhatsApp does not number the sale");
+    assert!(
+        outbox_of(&f, "print").is_empty(),
+        "nothing goes to the printer"
+    );
+    assert!(effect_kinds(&f, &o).is_empty(), "the Undo stays open");
+}
+
+#[tokio::test]
+async fn undoing_a_whatsapp_settle_skips_its_row_for_good() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    whatsapp_branch(&f).await;
+    let player = profiled(&f, "asha", true).await;
+    let (o, _) = whatsapp_sale(&f, &by, &id, Some(&player)).await.unwrap();
+
+    let undone = f
+        .writer
+        .submit_intent(revert_intent(&f, &by, &o))
+        .await
+        .unwrap();
+    assert!(
+        undone
+            .changes
+            .iter()
+            .any(|c| c.tbl == "notify_outbox" && c.op == ChangeOp::Update)
+    );
+    let rows = notifies(&f);
+    assert_eq!(rows.len(), 1, "the skipped row stays as the record");
+    assert_eq!(rows[0].6, "skipped");
+}
+
+#[tokio::test]
+async fn a_session_bill_settles_to_whatsapp_and_its_undo_skips_the_row() {
+    let f = bootstrapped().await;
+    whatsapp_branch(&f).await;
+    let player = profiled(&f, "asha", true).await;
+    let (order, rev) = super::session::player_bill(&f, &player, 10_000, 30).await;
+    let mut i = settle_intent(&order, Some(rev), vec![pay(Cash, 5_000, None)]);
+    if let IntentPayload::SessionSettle(s) = &mut i.payload {
+        s.receipt = Some(ReceiptChoice::Whatsapp);
+    }
+    super::session::end(&f, i).await.unwrap();
+    let rows = notifies(&f);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].0.as_str(), rows[0].6.as_str()),
+        (order.as_str(), "queued")
+    );
+
+    let rev = rev_of(&f, Table::Orders, &order);
+    super::session::end(&f, super::session::settle_revert_intent(&order, Some(rev)))
+        .await
+        .unwrap();
+    assert_eq!(notifies(&f)[0].6, "skipped");
+}
+
+#[tokio::test]
+async fn whatsapp_is_refused_for_a_guest_a_player_without_consent_and_a_free_branch() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    let consenting = profiled(&f, "asha", true).await;
+    let silent = profiled(&f, "bala", false).await;
+
+    // Free branch: the tier is told first, even for a consenting player.
+    let e = whatsapp_sale(&f, &by, &id, Some(&consenting))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::FeatureNotEntitled);
+
+    whatsapp_branch(&f).await;
+    let sales = table(&f, Table::Orders).len();
+    let moves = table(&f, Table::StockMoves).len();
+    let e = whatsapp_sale(&f, &by, &id, None).await.unwrap_err();
+    assert_eq!(
+        (e.code, e.field.as_deref()),
+        (ErrorCode::ConsentRequired, Some("receipt"))
+    );
+    let e = whatsapp_sale(&f, &by, &id, Some(&silent))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConsentRequired);
+
+    set_key(&f, arena_proto::KEY_NOTIFY_WHATSAPP_RECEIPT, "false").await;
+    let e = whatsapp_sale(&f, &by, &id, Some(&consenting))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (e.code, e.field.as_deref()),
+        (ErrorCode::ValidationFailed, Some("receipt"))
+    );
+
+    assert!(notifies(&f).is_empty());
+    assert_eq!(
+        table(&f, Table::Orders).len(),
+        sales,
+        "a refused settle writes no sale"
+    );
+    assert_eq!(
+        table(&f, Table::StockMoves).len(),
+        moves,
+        "and takes no stock"
+    );
+}
+
+#[tokio::test]
+async fn a_withdrawn_consent_closes_whatsapp_for_the_next_settle() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    whatsapp_branch(&f).await;
+    let player = profiled(&f, "asha", true).await;
+    whatsapp_sale(&f, &by, &id, Some(&player)).await.unwrap();
+
+    // The latest consent row decides: withdraw it.
+    let at = f.clock.now_ms() + 1;
+    reopen(&f)
+        .write_tx(|tx| {
+            arena_store::insert_consent(
+                tx,
+                "withdrawn",
+                &player,
+                arena_proto::CONSENT_TRANSACTIONAL,
+                "2",
+                false,
+                at,
+            )
+        })
+        .unwrap();
+    let e = whatsapp_sale(&f, &by, &id, Some(&player))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConsentRequired);
+}

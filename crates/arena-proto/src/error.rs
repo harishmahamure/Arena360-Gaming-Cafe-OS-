@@ -119,6 +119,9 @@ pub enum ErrorCode {
     PaymentShort,
     /// A UPI or card payment is missing its reference.
     ReferenceRequired,
+    /// A WhatsApp receipt for a guest, or for a player whose current transactional consent is not
+    /// granted.
+    ConsentRequired,
     /// An Undo that is late, from other staff, or blocked by an irreversible effect or a changed
     /// state.
     UndoNotAllowed,
@@ -232,6 +235,7 @@ impl ErrorCode {
             Self::ControllersUnchecked => "CONTROLLERS_UNCHECKED",
             Self::PaymentShort => "PAYMENT_SHORT",
             Self::ReferenceRequired => "REFERENCE_REQUIRED",
+            Self::ConsentRequired => "CONSENT_REQUIRED",
             Self::UndoNotAllowed => "UNDO_NOT_ALLOWED",
             Self::InsufficientBalance => "INSUFFICIENT_BALANCE",
             Self::CreditLimit => "CREDIT_LIMIT",
@@ -387,6 +391,7 @@ mod tests {
             (ErrorCode::ControllersUnchecked, "CONTROLLERS_UNCHECKED"),
             (ErrorCode::PaymentShort, "PAYMENT_SHORT"),
             (ErrorCode::ReferenceRequired, "REFERENCE_REQUIRED"),
+            (ErrorCode::ConsentRequired, "CONSENT_REQUIRED"),
             (ErrorCode::UndoNotAllowed, "UNDO_NOT_ALLOWED"),
             (ErrorCode::InsufficientBalance, "INSUFFICIENT_BALANCE"),
             (ErrorCode::CreditLimit, "CREDIT_LIMIT"),

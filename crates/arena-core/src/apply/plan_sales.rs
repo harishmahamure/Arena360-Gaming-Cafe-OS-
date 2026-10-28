@@ -312,6 +312,7 @@ pub(super) fn mutate_sell_reverted(
         &o.id,
         &mut written,
     )?;
+    super::receipt_notify::skip_on_revert(tx, &o.id, &mut written)?;
     if let Some(pack) = &t.pack {
         let key = RowKey::PlayerPacks {
             id: pack.id.clone(),

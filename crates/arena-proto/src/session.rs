@@ -662,6 +662,11 @@ pub struct SnapshotBill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub guest: Option<bool>,
+    /// The profiled player the bill is for; absent for a guest (Story 5.19: the settle bar asks
+    /// the Hub whether WhatsApp is offered for them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub player_id: Option<String>,
     /// The group bill an open order settles for every member of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

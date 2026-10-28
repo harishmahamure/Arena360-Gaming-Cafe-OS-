@@ -1164,13 +1164,17 @@ test("Recent sales offers Reprint for a numbered sale only, and sends receipt.re
     printer: READY,
     sales: [
       sale("O2", { invoice_no: "DEV01/26-27/E1k/000002", print_state: "failed" }),
-      sale("O1", {}),
+      sale("O1", { whatsapp_state: "queued" }),
     ],
   });
   await openHub(page, hub);
   await page.getByTestId("recent-toggle").click();
   const rows = page.getByTestId("recent-sale");
   await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1).getByTestId("recent-whatsapp-queued")).toHaveText(
+    en["hub.pos.recent.whatsapp_queued"],
+  );
+  await expect(rows.first().getByTestId("recent-whatsapp-queued")).toHaveCount(0);
   await expect(rows.first().getByTestId("recent-print-failed")).toBeVisible();
   await expect(rows.first().getByTestId("recent-reprint")).toBeVisible();
   await expect(rows.nth(1).getByTestId("recent-reprint")).toHaveCount(0);

@@ -27,4 +27,9 @@ export type PosSaleView = {
    * receipt was asked for. A numbered sale can always be reprinted (Story 5.17).
    */
   print_state?: string | null;
+  /**
+   * What the WhatsApp receipt of this sale came to (`queued`, `sent`, `failed`, `skipped`);
+   * `null` when none was asked for (Story 5.19).
+   */
+  whatsapp_state?: string | null;
 };

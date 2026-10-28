@@ -1395,6 +1395,7 @@ pub(super) fn mutate_settle_reverted(
         &o.id,
         &mut written,
     )?;
+    super::receipt_notify::skip_on_revert(tx, &o.id, &mut written)?;
     for id in &t.payments {
         let key = RowKey::Payments { id: id.clone() };
         let before = read_row(tx, &key)?;

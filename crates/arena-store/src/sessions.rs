@@ -1463,6 +1463,7 @@ pub fn list_pos_sales(
                 total_minor: r.get(6)?,
                 invoice_no: r.get(7)?,
                 print_state: None,
+                whatsapp_state: None,
             })
         })
         .map_err(db_error)?
@@ -1509,6 +1510,7 @@ pub fn list_pos_sales(
                 .collect::<Result<_, _>>()
                 .map_err(db_error)?;
             sale.print_state = crate::outbox::latest_print_state(conn, &sale.order_id)?;
+            sale.whatsapp_state = crate::notify::latest_receipt_state(conn, &sale.order_id)?;
             Ok(sale)
         })
         .collect()

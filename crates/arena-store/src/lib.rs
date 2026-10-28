@@ -18,6 +18,7 @@ mod group_bills;
 mod identity;
 mod invoices;
 mod migrations;
+mod notify;
 mod outbox;
 mod plans;
 mod player_packs;
@@ -98,6 +99,10 @@ pub use invoices::{
     set_invoice_no, take_sequence,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
+pub use notify::{
+    NewNotify, NotifyRow, find_notify, insert_notify, latest_receipt_state, order_player_id,
+    queued_notify_ids, skip_notify,
+};
 pub use outbox::{
     KIND_DRAWER, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
     ReceiptSource, STATE_DONE, STATE_FAILED, STATE_QUEUED, find_outbox, finish_outbox,

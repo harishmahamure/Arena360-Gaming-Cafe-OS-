@@ -1941,7 +1941,12 @@ async fn a_top_up_undo_is_refused_when_late_by_other_staff_stale_effected_or_spe
     );
 }
 
-async fn player_bill(f: &Fixture, player: &str, rate: i64, minutes: i64) -> (String, i64) {
+pub(super) async fn player_bill(
+    f: &Fixture,
+    player: &str,
+    rate: i64,
+    minutes: i64,
+) -> (String, i64) {
     let d = pc(f, DeviceKind::Pc, "pc", Some(rate)).await;
     start(f, &d, Some(player)).await.unwrap();
     f.clock.advance(minutes * 60_000);

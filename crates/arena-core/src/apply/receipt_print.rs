@@ -8,6 +8,9 @@
 //! * `receipt.printed` and `receipt.print_failed` (system) close the row; a failure also raises
 //!   the "Printer offline" alert. The sale stays settled either way.
 //!
+//! A WhatsApp choice (Story 5.19) is handled by `receipt_notify`, which queues a `notify_outbox`
+//! row instead of a print.
+//!
 //! Cash drawer kicks (Story 5.18) ride the same outbox. A settle with a cash row, while
 //! `receipt.drawer` is on, records the irreversible effect "drawer kicked" and queues a `drawer`
 //! row in its own transaction; the print task sends the pulse after commit and `drawer.kicked`
@@ -354,8 +357,13 @@ pub(super) fn queue_on_settle(
     let order_id =
         settled_order_id(intent, written).ok_or_else(|| internal("a settle wrote no order"))?;
     queue_drawer(tx, intent, &order_id, now_ms)?;
-    if choice(intent) == Some(ReceiptChoice::Print) {
-        queue_print(tx, intent, epoch, &order_id, now_ms, written)?;
+    match choice(intent) {
+        Some(ReceiptChoice::Print) => queue_print(tx, intent, epoch, &order_id, now_ms, written)?,
+        Some(ReceiptChoice::Whatsapp) => {
+            let total = find_invoice_order(tx, &order_id)?.map_or(0, |o| o.total_minor);
+            super::receipt_notify::queue_on_settle(tx, intent, &order_id, total, now_ms, written)?;
+        }
+        Some(ReceiptChoice::None) | None => {}
     }
     Ok(())
 }

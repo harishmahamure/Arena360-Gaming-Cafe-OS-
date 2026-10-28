@@ -147,6 +147,7 @@ fn bills(
                 credit: Option<arena_proto::CreditView>,
                 session_rev: Option<i64>,
                 guest: Option<bool>,
+                player_id: Option<String>,
                 group_bill_id: Option<String>,
                 lines: Vec<arena_proto::BillLine>,
                 items: Vec<arena_proto::BillItem>| {
@@ -161,6 +162,7 @@ fn bills(
             credit,
             session_rev,
             guest,
+            player_id,
             group_bill_id,
             lines,
             items,
@@ -217,6 +219,7 @@ fn bills(
             None,
             Some(s.rev),
             s.player_id.is_none().then_some(true),
+            s.player_id.clone(),
             s.group_bill_id.clone(),
             lines,
             orders
@@ -251,6 +254,7 @@ fn bills(
             o.credit.as_ref().map(credit_view),
             o.session_rev,
             guest.then_some(true),
+            o.player_id.clone(),
             o.group_bill_id.clone(),
             lines,
             items,

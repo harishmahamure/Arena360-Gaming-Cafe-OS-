@@ -3,7 +3,8 @@ import type { PrinterUnready } from "./PrinterUnready";
 import type { ReceiptChoice } from "./ReceiptChoice";
 
 /**
- * `GET /ui/printer/ready`: whether the settle bar offers Print (Story 5.17).
+ * `GET /ui/printer/ready[?player_id=…]`: whether the settle bar offers Print (Story 5.17) and,
+ * for the player the sale is for, WhatsApp (Story 5.19).
  */
 export type PrinterReady = {
   ready: boolean;
@@ -13,4 +14,10 @@ export type PrinterReady = {
    */
   default_choice: ReceiptChoice;
   reason?: PrinterUnready;
+  /**
+   * Whether the settle bar adds WhatsApp: the query named a profiled player with current
+   * consent and the branch is on a paid tier with the WhatsApp receipt switched on. Left out
+   * when false.
+   */
+  whatsapp?: boolean;
 };

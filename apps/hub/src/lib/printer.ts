@@ -79,8 +79,15 @@ export const testPrint = () => call<PrinterStatusReply>(TEST_URL, PRINT_TIMEOUT_
 export const testKotPrint = () => call<PrinterStatusReply>(KOT_TEST_URL, PRINT_TIMEOUT_MS);
 export const skipPrinter = () => call<PrinterStatusReply>(SKIP_URL, PRINT_TIMEOUT_MS);
 export const printerHealth = () => call<PrinterHealth>(HEALTH_URL, PRINT_TIMEOUT_MS, "GET");
-/** Whether the settle bar offers Print, and the branch's default receipt choice (Story 5.17). */
-export const printerReady = () => call<PrinterReady>(READY_URL, READY_TIMEOUT_MS, "GET");
+/**
+ * Whether the settle bar offers Print, and the branch's default receipt choice (Story 5.17). With
+ * the profiled player the sale is for, it also says whether WhatsApp is offered (Story 5.19).
+ */
+export const printerReady = (playerId?: string | null) => {
+  const url = new URL(READY_URL);
+  if (playerId) url.searchParams.set("player_id", playerId);
+  return call<PrinterReady>(url.toString(), READY_TIMEOUT_MS, "GET");
+};
 
 /**
  * On the Android Hub, asks for the Bluetooth permission (Android 12+) when it is not granted yet

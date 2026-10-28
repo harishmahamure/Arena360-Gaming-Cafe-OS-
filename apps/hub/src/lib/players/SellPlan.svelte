@@ -59,6 +59,7 @@
     remaining_minor: chosen?.price_minor ?? 0,
     wallet_minor: walletMinor,
     credit,
+    player_id: playerId,
   });
 
   onMount(() => {

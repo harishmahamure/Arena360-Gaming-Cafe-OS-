@@ -13,6 +13,11 @@ export type SnapshotBill = {
   session_rev?: number | null;
   guest?: boolean;
   /**
+   * The profiled player the bill is for; absent for a guest (Story 5.19: the settle bar asks
+   * the Hub whether WhatsApp is offered for them).
+   */
+  player_id?: string;
+  /**
    * The group bill an open order settles for every member of.
    */
   group_bill_id?: string;

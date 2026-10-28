@@ -71,14 +71,25 @@
   let printerAsked = $state(false);
   let picked: ReceiptChoice | null = $state(null);
   const printable = $derived(printer?.ready === true);
+  // WhatsApp is offered for a profiled player with current consent on a paid branch (Story 5.19).
+  const whatsapp = $derived(printer?.whatsapp === true);
+  const choices = $derived<ReceiptChoice[]>([
+    ...(printable ? (["print"] as const) : []),
+    "none",
+    ...(whatsapp ? (["whatsapp"] as const) : []),
+  ]);
   const receipt: ReceiptChoice = $derived(
-    !printable ? "none" : (picked ?? printer?.default_choice ?? "print"),
+    picked && choices.includes(picked)
+      ? picked
+      : printable
+        ? (printer?.default_choice ?? "print")
+        : "none",
   );
 
   $effect(() => {
     if (!receiptChoice) return;
     let live = true;
-    void printerReady().then((answer) => {
+    void printerReady(bill.player_id).then((answer) => {
       if (!live) return;
       printer = answer.kind === "ok" ? answer.body : null;
       printerAsked = true;
@@ -105,6 +116,11 @@
   const errorOf = (row: Row, field: "amount" | "reference"): MessageKey | null =>
     attempted ? (rowErrors(row, exponent, wallet)[field] ?? null) : null;
 
+  const RECEIPT_NAME: Record<ReceiptChoice, MessageKey> = {
+    print: "hub.settle.receipt.print",
+    none: "hub.settle.receipt.none",
+    whatsapp: "hub.settle.receipt.whatsapp",
+  };
   const AMOUNT: Record<PaymentMethod, MessageKey> = {
     cash: "hub.settle.amount.cash",
     upi: "hub.settle.amount.upi",
@@ -237,26 +253,25 @@
     <div class="receipt" data-testid="receipt-choice">
       {#if printable}
         <p class="type-hub-label" data-testid="printer-ready">{t("hub.settle.printer_ready")}</p>
+      {:else}
+        <p class="type-hub-label" data-testid="printer-missing">
+          <span aria-hidden="true">⚠</span>
+          {t("hub.settle.no_printer")}
+        </p>
+      {/if}
+      {#if printable || whatsapp}
         <div class="methods" role="group" aria-label={t("hub.settle.receipt")}>
-          {#each ["print", "none"] as const as choice (choice)}
+          {#each choices as choice (choice)}
             <button
               type="button"
               class="ui-interactive method type-hub-label"
               data-receipt={choice}
               aria-pressed={receipt === choice}
               disabled={busy}
-              onclick={() => (picked = choice)}
-              >{t(
-                choice === "print" ? "hub.settle.receipt.print" : "hub.settle.receipt.none",
-              )}</button
+              onclick={() => (picked = choice)}>{t(RECEIPT_NAME[choice])}</button
             >
           {/each}
         </div>
-      {:else}
-        <p class="type-hub-label" data-testid="printer-missing">
-          <span aria-hidden="true">⚠</span>
-          {t("hub.settle.no_printer")}
-        </p>
       {/if}
     </div>
   {/if}

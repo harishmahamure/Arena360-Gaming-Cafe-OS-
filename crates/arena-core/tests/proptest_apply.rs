@@ -224,6 +224,10 @@ enum Op {
         /// `receipt.drawer` is on for this sale: a cash sale queues one drawer kick and can never
         /// be undone. The setting goes back off straight after.
         drawer: bool,
+        /// The receipt choice is WhatsApp for a player (the branch is made paid, with the message
+        /// on): a player with current consent gets one queued `notify_outbox` row that an in-time
+        /// Undo skips; any other player is refused `CONSENT_REQUIRED` and nothing is written.
+        whatsapp: bool,
     },
     /// Products placed on a running session's bill (stock may refuse), then maybe the
     /// placement's Undo (late or in time).
@@ -539,8 +543,8 @@ fn op() -> impl Strategy<Value = Op> {
                 late
             }
         ),
-        3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3), prop::bool::weighted(0.4), prop::bool::weighted(0.25)).prop_map(
-            |(pick, qty, second, undo, late, print, drawer)| Op::PosSale { pick, qty, second, undo, late, print, drawer }
+        3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3), prop::bool::weighted(0.4), prop::bool::weighted(0.25), prop::bool::weighted(0.25)).prop_map(
+            |(pick, qty, second, undo, late, print, drawer, whatsapp)| Op::PosSale { pick, qty, second, undo, late, print, drawer, whatsapp }
         ),
         3 => (0..3u8, any::<u8>(), 1..=6u8, any::<bool>(), prop::bool::weighted(0.3)).prop_map(
             |(slot, pick, qty, undo, late)| Op::OrderPlace { slot, pick, qty, undo, late }
@@ -796,6 +800,69 @@ fn set_drawer(hub: &mut Hub, on: bool) {
             Some(rev),
         ));
     }
+}
+
+/// Makes the branch paid (Basic) with the WhatsApp receipt switched on.
+fn enable_whatsapp(hub: &mut Hub) {
+    let limits = arena_proto::Tier::Basic.defaults().limits;
+    let licence = arena_proto::LicenceApply {
+        standing: arena_proto::LicenceStanding::Verified,
+        clock_wrong: false,
+        tier: arena_proto::Tier::Basic,
+        flags: String::new(),
+        device_cap: limits.devices,
+        user_cap: limits.users,
+    };
+    let _ = hub.rt.block_on(hub.writer.apply_licence(licence));
+    let rev = hub
+        .reader
+        .rows(Table::Settings)
+        .unwrap()
+        .iter()
+        .find(|s| text(s, "key") == arena_proto::KEY_NOTIFY_WHATSAPP_RECEIPT)
+        .filter(|s| text(s, "value") != "true")
+        .map(|s| int(s, "rev"));
+    if let Some(rev) = rev {
+        let _ = hub.submit_new(hub.intent(
+            set_payload(arena_proto::KEY_NOTIFY_WHATSAPP_RECEIPT, "true"),
+            Some(rev),
+        ));
+    }
+}
+
+/// `(player_id, state)` of the notification rows of one order.
+fn notify_rows(hub: &Hub, order_id: &str) -> Vec<(String, String)> {
+    hub.reader
+        .rows(Table::NotifyOutbox)
+        .unwrap()
+        .iter()
+        .filter(|r| text(r, "order_id") == order_id)
+        .map(|r| (text(r, "player_id"), text(r, "state")))
+        .collect()
+}
+
+/// The notification outbox invariants: every row names an existing player, a receipt row is
+/// transactional, and a row that is still queued belongs to a sale that stands.
+fn assert_notifications_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let orders = hub.reader.rows(Table::Orders).unwrap();
+    let players = hub.reader.rows(Table::Players).unwrap();
+    for r in hub.reader.rows(Table::NotifyOutbox).unwrap() {
+        prop_assert_eq!(text(&r, "purpose"), "transactional");
+        prop_assert!(
+            players
+                .iter()
+                .any(|p| text(p, "player_id") == text(&r, "player_id")),
+            "a message names a missing player"
+        );
+        if text(&r, "state") == "queued" {
+            let order = orders
+                .iter()
+                .find(|o| text(o, "id") == text(&r, "order_id"));
+            prop_assert!(order.is_some(), "a queued message names a missing sale");
+            prop_assert_eq!(text(order.unwrap(), "status"), "settled");
+        }
+    }
+    Ok(())
 }
 
 fn set_payload(key: &str, value: &str) -> IntentPayload {
@@ -1633,6 +1700,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             late,
             print,
             drawer,
+            whatsapp,
         } => {
             let products: Vec<_> = hub
                 .reader
@@ -1680,6 +1748,19 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             if *drawer {
                 set_drawer(hub, true);
             }
+            // WhatsApp needs a profiled player; a printed sale keeps its own choice.
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let wa_player = (*whatsapp && !*print && !players.is_empty())
+                .then(|| text(&players[usize::from(*pick) % players.len()], "player_id"));
+            let consent = wa_player.as_ref().is_some_and(|id| {
+                hub.reader
+                    .latest_consent(id, arena_proto::CONSENT_TRANSACTIONAL)
+                    .unwrap()
+                    .is_some_and(|c| c.0)
+            });
+            if wa_player.is_some() {
+                enable_whatsapp(hub);
+            }
             let before = hub.change_count();
             let out = hub.submit_new(
                 hub.intent(
@@ -1700,10 +1781,14 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         } else {
                             Vec::new()
                         },
-                        player_id: None,
+                        player_id: wa_player.clone(),
                         credit_override: None,
                         stock_override: None,
-                        receipt: print.then_some(arena_proto::ReceiptChoice::Print),
+                        receipt: if wa_player.is_some() {
+                            Some(arena_proto::ReceiptChoice::Whatsapp)
+                        } else {
+                            print.then_some(arena_proto::ReceiptChoice::Print)
+                        },
                     }),
                     None,
                 ),
@@ -1721,10 +1806,14 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                             | ErrorCode::BundleShort
                             | ErrorCode::ValidationFailed
                             | ErrorCode::ShiftNotOpen
+                            | ErrorCode::ConsentRequired
                     ),
                     "{:?}",
                     out
                 );
+                if e.code == ErrorCode::ConsentRequired {
+                    prop_assert!(wa_player.is_some() && !consent);
+                }
                 prop_assert_eq!(stock_image(hub), stock_before);
                 prop_assert_eq!(after, before);
                 return Ok(());
@@ -1736,6 +1825,24 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .into_iter()
                 .rfind(|o| text(o, "kind") == "pos_sale")
                 .unwrap();
+            prop_assert!(
+                wa_player.is_none() || consent,
+                "a WhatsApp receipt for a player without consent was accepted"
+            );
+            let messages = notify_rows(hub, &text(&order, "id"));
+            if let Some(player_id) = &wa_player {
+                prop_assert_eq!(
+                    messages.len(),
+                    usize::from(bill.total_minor > 0),
+                    "a WhatsApp settle queues exactly one row, and none for a bill with no total"
+                );
+                for (player, state) in &messages {
+                    prop_assert_eq!(player, player_id);
+                    prop_assert_eq!(state, "queued");
+                }
+            } else {
+                prop_assert!(messages.is_empty(), "no WhatsApp choice, no message");
+            }
             let kicked = hub
                 .reader
                 .queued_drawers(10_000)
@@ -1783,6 +1890,9 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 } else {
                     prop_assert!(out.is_ok(), "{:?}", out);
                     prop_assert_eq!(stock_image(hub), stock_before);
+                    for (_, state) in notify_rows(hub, &text(&order, "id")) {
+                        prop_assert_eq!(state, "skipped", "an undone sale is never messaged");
+                    }
                 }
             }
         }
@@ -2730,6 +2840,8 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 return Ok(());
             };
             let player_id = text(p, "player_id");
+            // A price of one has nothing to fall short of.
+            let short = &(*short && chosen.price_minor > 1);
             let amount_minor = if *short {
                 chosen.price_minor - 1
             } else {
@@ -4171,6 +4283,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_invoices_hold(&hub)?;
                 assert_prints_hold(&hub)?;
                 assert_drawers_hold(&hub)?;
+                assert_notifications_hold(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

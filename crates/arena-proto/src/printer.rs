@@ -287,7 +287,8 @@ pub enum PrinterUnready {
     Offline,
 }
 
-/// `GET /ui/printer/ready`: whether the settle bar offers Print (Story 5.17).
+/// `GET /ui/printer/ready[?player_id=…]`: whether the settle bar offers Print (Story 5.17) and,
+/// for the player the sale is for, WhatsApp (Story 5.19).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct PrinterReady {
@@ -298,6 +299,12 @@ pub struct PrinterReady {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reason: Option<PrinterUnready>,
+    /// Whether the settle bar adds WhatsApp: the query named a profiled player with current
+    /// consent and the branch is on a paid tier with the WhatsApp receipt switched on. Left out
+    /// when false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub whatsapp: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

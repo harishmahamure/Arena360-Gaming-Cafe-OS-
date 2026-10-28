@@ -876,7 +876,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::ValidationFailed
         | ErrorCode::Expired
         | ErrorCode::HsnRequired
-        | ErrorCode::ReferenceRequired => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::ReferenceRequired
+        | ErrorCode::ConsentRequired => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Stale
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked

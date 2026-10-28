@@ -119,7 +119,8 @@ pub fn next_daily_after(last_ms: i64, tz: Tz) -> i64 {
 /// Whether a scan is due. With no recorded scan it is due once the service has connected to
 /// the Hub; with one, once the daily time after it has passed.
 pub fn is_due(last_scan: Option<i64>, connected_once: bool, now_ms: i64, tz: Tz) -> bool {
-    match last_scan {
+    // A recorded time in the future (the clock was ahead) counts as no record.
+    match last_scan.filter(|l| *l <= now_ms) {
         None => connected_once,
         Some(last) => now_ms >= next_daily_after(last, tz),
     }
@@ -256,7 +257,7 @@ pub(crate) async fn run(ctx: Arc<Ctx>, host: Arc<dyn ScanHost>, mut stop: watch:
     let mut state = ctx.hub_state.subscribe();
     let mut connected_once = *state.borrow() == KioskHubState::Connected;
     let mut retry_at: Option<i64> = None;
-    let mut tick = tokio::time::interval(ctx.timings.scan_tick);
+    let mut tick = tokio::time::interval(ctx.timings.scan_tick.max(Duration::from_millis(1)));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
@@ -371,6 +372,10 @@ mod tests {
         assert!(!is_due(Some(last), true, ms(tz, 2026, 10, 30, 4, 59), tz));
         assert!(is_due(Some(last), false, ms(tz, 2026, 10, 30, 5, 0), tz));
         assert!(is_due(Some(last), false, ms(tz, 2026, 11, 3, 0, 0), tz));
+        assert!(
+            is_due(Some(now + 3_600_000), true, now, tz),
+            "a future record counts as none"
+        );
     }
 
     #[test]

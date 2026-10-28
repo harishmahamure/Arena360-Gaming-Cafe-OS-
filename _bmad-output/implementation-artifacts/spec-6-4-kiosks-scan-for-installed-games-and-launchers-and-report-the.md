@@ -2,7 +2,7 @@
 title: 'Story 6.4: Kiosks scan for installed games and launchers and report them to the Hub'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '10c5ab67d5b7cfe402f0f51a2a031f25371521d7'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -82,6 +82,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Code review (2026-10-29): fixed a panic in `is_exe` on multi-byte names, relative Epic `InstallLocation`, uncounted dropped paths, zero `scan_tick` panic, and a future `scan.last_at` suppressing scans. Deferred: report coalescing in the offline queue, Hub-clock bound on `scanned_at`, Windows runs of `tests/scan.rs`, tests for trim/retry paths.
 
 ## Design Notes
 

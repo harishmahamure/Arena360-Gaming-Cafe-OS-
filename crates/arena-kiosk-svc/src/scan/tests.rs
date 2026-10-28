@@ -606,6 +606,8 @@ fn noise_executables_are_recognised_by_name() {
         assert!(!is_noise_exe(game), "{game}");
     }
     assert!(is_exe("A.EXE") && is_exe("a.exe") && !is_exe("a.dll") && !is_exe(".exe"));
+    assert!(!is_exe("游戏"), "a multi-byte name must not panic");
+    assert!(is_exe("游戏.exe"));
 }
 
 #[test]

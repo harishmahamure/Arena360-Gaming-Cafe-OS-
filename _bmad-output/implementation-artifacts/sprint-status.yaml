@@ -170,7 +170,7 @@ development_status:
   6-1-the-control-plane-publishes-the-global-game-catalogue-to-hub: done
   6-2-the-hub-caches-the-catalogue-and-media-and-serves-them-on-th: done
   6-3-the-branch-game-and-app-library-at-the-hub-applied-to-every: done
-  6-4-kiosks-scan-for-installed-games-and-launchers-and-report-the: review
+  6-4-kiosks-scan-for-installed-games-and-launchers-and-report-the: done
   6-5-the-hub-matches-scanned-games-to-the-catalogue-and-the-manag: backlog
   6-6-game-media-on-the-kiosk-falls-back-from-video-to-cover-to-so: backlog
   6-7-the-attract-screen-shows-branding-rates-and-the-active-rule: backlog

@@ -254,7 +254,7 @@ pub fn is_noise_exe(file_name: &str) -> bool {
 }
 
 fn is_exe(name: &str) -> bool {
-    name.len() > 4 && name[name.len() - 4..].eq_ignore_ascii_case(".exe")
+    name.len() > 4 && name.as_bytes()[name.len() - 4..].eq_ignore_ascii_case(b".exe")
 }
 
 /// Text from a version resource: control characters become spaces, then it is trimmed and cut
@@ -396,6 +396,7 @@ impl<'a> Walker<'a> {
             || name.chars().count() > MAX_SCAN_FILE_NAME_CHARS
             || full.chars().any(char::is_control)
         {
+            self.skipped = self.skipped.saturating_add(1);
             return;
         }
         if !self.seen.insert(full.to_lowercase()) {
@@ -528,6 +529,10 @@ impl<'a> Walker<'a> {
                     continue;
                 }
                 let install = PathBuf::from(install);
+                if !install.is_absolute() {
+                    // A relative location would be read against the service's own directory.
+                    continue;
+                }
                 let exe = text_of("LaunchExecutable");
                 if is_plain_or_relative(exe) {
                     let path = exe

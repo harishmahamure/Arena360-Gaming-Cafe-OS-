@@ -2,7 +2,7 @@
 title: 'Story 5.24: Refund a settled order with a credit note'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '498b3de2fbc1ee3dc5053cb2109a9a57a6dccb3f'
 review_loop_iteration: 0
 followup_review_recommended: true
@@ -90,6 +90,7 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+Code review (2026-10-28): no blocking findings. fmt, clippy -D warnings, cargo test (proto, store, core, api, replay, kiosk-core) and Hub svelte-check pass.
 
 ## Design Notes
 

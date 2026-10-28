@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use arena_proto::{
     GameMatch, LibraryEntryView, ProposalDevice, ProposalView, ProposalsView, ScanEntry,
-    launcher_from_catalogue, proposal_key,
+    is_library_path, launcher_from_catalogue, proposal_key,
 };
 use arena_store::RefSignature;
 
@@ -50,6 +50,7 @@ pub fn match_scan(entries: &[ScanEntry], signatures: &[RefSignature]) -> Vec<Gam
             })
             .max_by(|(a, sa), (b, sb)| a.cmp(b).then_with(|| sb.game_id.cmp(&sa.game_id)));
         if let Some((_, sig)) = best
+            && is_library_path(&e.path)
             && seen.insert(e.path.to_ascii_lowercase())
         {
             out.push(GameMatch {

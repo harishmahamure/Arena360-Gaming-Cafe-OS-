@@ -468,7 +468,8 @@ async fn upsert_installs_are_checked_and_listed_devices_only_are_changed() {
     );
     // The new path is allowed.
     assert!(allow(&f).contains(&r"E:\g.exe".to_owned()));
-    assert!(!allow(&f).contains(&p.to_owned()) || p == r"C:\Games\g.exe");
+    // The entry's own executable path stays allowed.
+    assert!(allow(&f).contains(&p.to_owned()));
 }
 
 #[tokio::test]

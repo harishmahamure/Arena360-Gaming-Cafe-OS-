@@ -21,7 +21,13 @@
   } from "./library";
 
   type Job = { payload: IntentPayload; key: string };
-  type Pending = { op: "approve" | "dismiss" | "clear"; jobs: Job[]; rest: Job[]; done: number };
+  type Pending = {
+    op: "approve" | "dismiss" | "clear";
+    jobs: Job[];
+    rest: Job[];
+    done: number;
+    failed: number;
+  };
 
   /** A change here needs a manager's PIN (the signed-in staff member lacks `games.manage`). */
   let { needsApproval }: { needsApproval: boolean } = $props();
@@ -90,11 +96,12 @@
   async function start(op: Pending["op"], jobs: Job[]) {
     if (busy || jobs.length === 0) return;
     note = null;
-    if (!needsApproval) return void (await execute({ op, jobs, rest: [], done: 0 }, undefined));
+    if (!needsApproval)
+      return void (await execute({ op, jobs, rest: [], done: 0, failed: 0 }, undefined));
     // One PIN approves at most ten intents: the rest ask again.
     const [first, ...others] = chunks(jobs, TICKET_USES);
     prompt = "ui.pin.prompt";
-    pending = { op, jobs: first, rest: others.flat(), done: 0 };
+    pending = { op, jobs: first, rest: others.flat(), done: 0, failed: 0 };
   }
 
   function approveSelected() {
@@ -119,30 +126,32 @@
   async function execute(p: Pending, ticket: string | undefined) {
     busy = true;
     let done = p.done;
-    let failed = 0;
+    let failed = p.failed;
     let signedOut = false;
-    let pinAgain = false;
-    for (const j of p.jobs) {
+    let retry = -1;
+    for (const [i, j] of p.jobs.entries()) {
       const outcome = await submitIntent(j.payload, j.key, undefined, { elevationTicket: ticket });
       if (outcome.kind === "signed_out") {
         signedOut = true;
         break;
       }
       if (outcome.kind === "applied") done += 1;
-      else if (outcome.kind === "error" && outcome.error.code === "PIN_REQUIRED") pinAgain = true;
-      else failed += 1;
+      else if (outcome.kind === "error" && outcome.error.code === "PIN_REQUIRED") {
+        retry = i;
+        break;
+      } else failed += 1;
     }
     busy = false;
     if (signedOut) return void (await invalidate(SESSION_DEPENDENCY));
-    if (pinAgain) {
+    if (retry >= 0) {
       prompt = "ui.pin.again";
-      pending = { ...p, done };
+      pending = { ...p, jobs: p.jobs.slice(retry), done, failed };
       return;
     }
     if (p.rest.length > 0 && needsApproval) {
       const [first, ...others] = chunks(p.rest, TICKET_USES);
       prompt = "ui.pin.prompt";
-      pending = { op: p.op, jobs: first, rest: others.flat(), done };
+      pending = { op: p.op, jobs: first, rest: others.flat(), done, failed };
       note = { tone: "ok", text: t("hub.games.found.more", { count: p.rest.length }) };
       await load();
       return;

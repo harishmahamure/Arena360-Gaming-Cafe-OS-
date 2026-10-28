@@ -2,7 +2,7 @@
 title: 'Story 6.5: The Hub matches scanned games to the catalogue and the manager approves them in bulk'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '0f33df45991e07bd477767b1159858a2fa0d7749'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -105,3 +105,8 @@ Matching lives in the API layer because only it can read `reference.db`; `apply(
 - Not run / pre-existing: 14 `arena-kiosk-svc` Windows lib failures (SYSTEM/Administrators ownership) and the `tests/discovery.rs` unused-import errors; `check:tokens-used` unknown tokens in `+layout.svelte` and `floor/+page.svelte`; `test:scripts` module error — all fail identically at the baseline commit. `proptest_apply` fails intermittently at the baseline commit too (the stock-in change count after `Bootstrap, Import, Threshold, Stock`; `Scan` then `WindowStart` giving `DeviceUnassigned`); the runs that pass include the new `GameMatch` / `Dismiss` operations.
 - `check:generated` compares with the committed files, so it reports the new types as new until they are committed.
 - Deferred: a catalogue update does not re-match stored scans (the next scan does); uninstalled games keep their install rows.
+
+## Review Findings (code review, 2026-10-29)
+
+Fixed: `match_scan` now skips paths `is_library_path` refuses (one unsafe path no longer voids a device's whole `game.matched`); `library.dismiss` refuses any already-dismissed key as specified; Found on PCs keeps only unfinished jobs on "PIN again" and carries failures across chunks (no double count); an always-true test assertion now checks the entry path stays allowed.
+Deferred (not blocking): `load_visible` has no runtime caller until the kiosk UI (Story 6.23); no re-match on catalogue update; stale installs kept; proposals list unpaged; extra `library.changed` push and non-primary Hub tests.

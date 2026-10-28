@@ -50,10 +50,10 @@ pub(super) fn validate_dismiss(
 ) -> Result<(), AppError> {
     no_base_rev(intent)?;
     p.validate()?;
-    let new = fresh(p, current);
-    if new.is_empty() {
+    if p.keys.iter().any(|k| current.contains(k)) {
         return Err(invalid("keys", "these proposals are already dismissed"));
     }
+    let new = fresh(p, current);
     if current.len() + new.len() > MAX_DISMISSED {
         return Err(invalid(
             "keys",

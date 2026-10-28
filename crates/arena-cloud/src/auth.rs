@@ -21,6 +21,7 @@ const OTP_LABEL: &[u8] = b"otp\0";
 /// The HMAC input label of a phone tag.
 const TAG_LABEL: &[u8] = b"tag\0";
 const PAIR_LABEL: &[u8] = b"pair\0";
+const LINK_LABEL: &[u8] = b"tpl\0";
 
 /// What the sign-up and session routes share.
 pub struct AuthState {
@@ -91,6 +92,23 @@ impl AuthState {
         let mut mac = self.mac(PAIR_LABEL);
         mac.update(arena_proto::normalize_pairing_code(code).as_bytes());
         hex(&mac.finalize().into_bytes())
+    }
+
+    /// The signature of a setup-template download link (Story 5.38) over `data`, as hex.
+    pub fn link_signature(&self, data: &str) -> String {
+        let mut mac = self.mac(LINK_LABEL);
+        mac.update(data.as_bytes());
+        hex(&mac.finalize().into_bytes())
+    }
+
+    /// Whether `signature` (hex) signs `data`, in constant time.
+    pub fn link_signed(&self, data: &str, signature: &str) -> bool {
+        let Some(expected) = unhex(signature) else {
+            return false;
+        };
+        let mut mac = self.mac(LINK_LABEL);
+        mac.update(data.as_bytes());
+        mac.verify_slice(&expected).is_ok()
     }
 
     /// Whether `code` matches `stored_hash` (hex) for `challenge_id`, in constant time.

@@ -435,6 +435,7 @@ async fn run(
     ]
     .concat();
     let command_poke = Arc::new(Notify::new());
+    let setup_templates = arena_tasks::SetupTemplateInbox::new();
     let heartbeat_job = tokio::spawn(
         HeartbeatTask::new(
             cloud.clone(),
@@ -446,6 +447,7 @@ async fn run(
             env!("CARGO_PKG_VERSION").to_owned(),
         )
         .with_poke(Arc::clone(&command_poke))
+        .with_templates(Arc::clone(&setup_templates))
         .with_presence({
             let presence = lan_hub.presence();
             Arc::new(move |id| presence.status(id))
@@ -476,6 +478,18 @@ async fn run(
             pair_gate.clone(),
             status_tx.clone(),
             Arc::clone(&clock),
+        )
+        .run(),
+    );
+    let template_apply_job = tokio::spawn(
+        arena_tasks::SetupApplyTask::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            writer.clone(),
+            pair_gate.clone(),
+            status_tx.clone(),
+            Arc::clone(&clock),
+            Arc::clone(&setup_templates),
         )
         .run(),
     );
@@ -541,6 +555,7 @@ async fn run(
         instance_id,
         env!("CARGO_PKG_VERSION").to_owned(),
     );
+    cloud_pairer = cloud_pairer.with_templates(setup_templates);
     if let Some(s) = &secrets {
         cloud_pairer = cloud_pairer.with_kek_store(Arc::clone(&s.kek));
     }
@@ -674,6 +689,8 @@ async fn run(
     let _ = command_job.await;
     template_job.abort();
     let _ = template_job.await;
+    template_apply_job.abort();
+    let _ = template_apply_job.await;
     setup_job.abort();
     let _ = setup_job.await;
     if let Some(job) = backup_job {

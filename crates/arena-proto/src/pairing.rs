@@ -168,6 +168,11 @@ pub struct BranchBootstrapCommand {
     pub idempotency_key: String,
     pub profile: BootstrapProfile,
     pub owner_staff: BootstrapOwner,
+    /// A short-lived link to the setup file of another branch of the tenant, when the owner
+    /// starts this branch from it (Story 5.38). The Hub imports it after the bootstrap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub template: Option<crate::setup_file::SetupTemplateLink>,
 }
 
 pub fn check_bootstrap(
@@ -323,6 +328,11 @@ pub struct HeartbeatResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub ad_requests_through: Option<i64>,
+    /// A fresh link to the setup file the owner asked this branch to start from again
+    /// (Story 5.38).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub setup_template: Option<crate::setup_file::SetupTemplateLink>,
 }
 
 impl std::fmt::Debug for HeartbeatResponse {
@@ -443,6 +453,7 @@ mod tests {
                     setup_code_hash: "h".into(),
                     setup_expires_at: 1,
                 },
+                template: None,
             },
         };
         assert!(!format!("{res:?}").contains("secret"));

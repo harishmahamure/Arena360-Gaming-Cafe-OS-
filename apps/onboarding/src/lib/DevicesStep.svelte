@@ -13,6 +13,7 @@
   import { onMount } from "svelte";
   import { getDevices, getWizard, sendDeviceCommand, type ApiFailure } from "./api";
   import SetupCodeNotice from "./SetupCodeNotice.svelte";
+  import SetupStartPanel from "./SetupStartPanel.svelte";
   import { age, fits, overlay, type Refusal } from "./devices";
   import { validText } from "./validate";
   import { advance, STEP_NAMES, wizard } from "./wizard.svelte";
@@ -174,6 +175,7 @@
 <h1 tabindex="-1">{t(STEP_NAMES.devices)}</h1>
 <SetupCodeNotice />
 <p class="intro">{t("onboarding.devices.intro")}</p>
+<SetupStartPanel />
 
 {#if view && !view.hub_online}
   <p class="offline" role="status" data-testid="hub-offline">

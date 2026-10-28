@@ -20,6 +20,7 @@ const ALL_TABLES: &[&str] = &[
     "ad_request_daily",
     "branch_fence",
     "branch_setup_status",
+    "branch_template_choice",
     "branches",
     "commands",
     "entitlements",

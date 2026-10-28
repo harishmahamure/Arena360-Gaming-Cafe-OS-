@@ -162,7 +162,7 @@ development_status:
   5-35-seed-plans-and-products-from-a-starter-template: done
   5-36-export-and-import-a-branch-setup-file: done
   5-37-paid-hubs-keep-their-setup-template-in-the-cloud: done
-  5-38-a-second-branch-starts-from-the-tenant-s-existing-setup: backlog
+  5-38-a-second-branch-starts-from-the-tenant-s-existing-setup: review
   5-39-pos-and-money-proven-under-load-offline-and-on-real-hardware: backlog
   epic-5-retrospective: optional
 

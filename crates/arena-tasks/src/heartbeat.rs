@@ -44,6 +44,7 @@ pub struct HeartbeatTask {
     rejected: bool,
     poke: Option<Arc<Notify>>,
     presence: Option<Presence>,
+    templates: Option<Arc<crate::SetupTemplateInbox>>,
 }
 
 pub type Presence = Arc<dyn Fn(&str) -> (bool, Option<i64>) + Send + Sync>;
@@ -70,7 +71,15 @@ impl HeartbeatTask {
             rejected: false,
             poke: None,
             presence: None,
+            templates: None,
         }
+    }
+
+    /// Where a setup template link in a heartbeat answer is left for the Hub to apply
+    /// (Story 5.38).
+    pub fn with_templates(mut self, inbox: Arc<crate::SetupTemplateInbox>) -> Self {
+        self.templates = Some(inbox);
+        self
     }
 
     pub fn with_presence(mut self, presence: Presence) -> Self {
@@ -269,6 +278,9 @@ impl HeartbeatTask {
             && res.pending_commands.is_some_and(|n| n > 0)
         {
             poke.notify_one();
+        }
+        if let (Some(inbox), Some(link)) = (&self.templates, res.setup_template.clone()) {
+            inbox.offer(link);
         }
         let Ok(state) = writer.licence_state().await else {
             return;
@@ -566,6 +578,35 @@ mod tests {
                 .await
                 .is_err(),
             "an answer without pending commands pokes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_setup_template_link_in_the_answer_is_left_for_the_apply_task() {
+        let (status, body) = answer(true, Tier::Free);
+        let mut with = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+        with["setup_template"] = serde_json::json!({
+            "path": "/v1/setup-template/B.1.2.3",
+            "version": 1,
+            "sha256": "ab",
+            "bytes": 2,
+            "expires_at": 9,
+        });
+        let port = serve(
+            vec![(status, with.to_string()), answer(true, Tier::Free)],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        let inbox = crate::SetupTemplateInbox::new();
+        f.task.templates = Some(Arc::clone(&inbox));
+        f.task.beat().await;
+        let link = inbox.take().expect("the answer carried a link");
+        assert_eq!(link.path, "/v1/setup-template/B.1.2.3");
+        f.task.beat().await;
+        assert!(
+            inbox.take().is_none(),
+            "an answer without a link leaves none"
         );
     }
 

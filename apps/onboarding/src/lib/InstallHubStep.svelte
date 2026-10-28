@@ -5,6 +5,7 @@
   import { PUBLIC_ANDROID_HUB_URL, PUBLIC_HUB_DOWNLOAD_URL } from "$app/env/public";
   import { onMount, tick } from "svelte";
   import { getInstallHub, issuePairingCode, type ApiFailure } from "./api";
+  import SetupStartPanel from "./SetupStartPanel.svelte";
   import { STEP_NAMES } from "./wizard.svelte";
 
   const id = $props.id();
@@ -91,6 +92,8 @@
 <p class="intro">
   {free === null ? "" : t(free ? "onboarding.install.intro_android" : "onboarding.install.intro")}
 </p>
+
+<SetupStartPanel />
 
 <ol class="parts">
   <li class="part">

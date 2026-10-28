@@ -289,11 +289,12 @@ pub use setup_devices::{
     SetupDevicesView, SetupGroup,
 };
 pub use setup_file::{
-    ImportSetup, SETUP_FILE_NAME, SETUP_FORMAT, SETUP_MAX_BYTES, SETUP_MAX_ENTRIES,
-    SETUP_TEMPLATE_PATH, SETUP_UPDATE_HUB, SETUP_VERSION, SetupBundle, SetupCommitRequest,
-    SetupComponent, SetupCoupon, SetupCouponTarget, SetupFile, SetupFileGroup, SetupFileResult,
-    SetupItem, SetupKindCount, SetupPlan, SetupPreview, SetupPreviewRequest, SetupProduct,
-    SetupRule, SetupTemplateStored,
+    ImportSetup, SETUP_FILE_NAME, SETUP_FORMAT, SETUP_LINK_TTL_MS, SETUP_MAX_BYTES,
+    SETUP_MAX_ENTRIES, SETUP_TEMPLATE_PATH, SETUP_UPDATE_HUB, SETUP_VERSION, SetSetupStart,
+    SetupBundle, SetupCommitRequest, SetupComponent, SetupCoupon, SetupCouponTarget, SetupFile,
+    SetupFileGroup, SetupFileResult, SetupItem, SetupKindCount, SetupPlan, SetupPreview,
+    SetupPreviewRequest, SetupProduct, SetupRule, SetupStartSource, SetupStartView,
+    SetupTemplateLink, SetupTemplateOutcome, SetupTemplateStored, TemplateStatus,
 };
 pub use shift::{
     CASH_DEPOSIT, CASH_DRAWER_OPEN, CASH_EXPENSE, CASH_FLOAT_IN, CASH_REFUND, CASH_SALE,

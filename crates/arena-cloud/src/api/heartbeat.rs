@@ -173,6 +173,7 @@ async fn heartbeat(
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "heartbeat: pending commands unavailable"))
         .unwrap_or(0);
+    let setup_template = super::setup_start::retry_link(&st, &hub.branch_id, now).await;
     Ok(Json(HeartbeatResponse {
         licence,
         fence: HeartbeatFence {
@@ -183,6 +184,7 @@ async fn heartbeat(
         pending_commands: Some(pending).filter(|n| *n > 0),
         ad_impressions_through,
         ad_requests_through,
+        setup_template,
     }))
 }
 

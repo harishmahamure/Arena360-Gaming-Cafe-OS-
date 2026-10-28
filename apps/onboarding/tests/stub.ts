@@ -7,6 +7,7 @@ import type {
   SetupCommandView,
   GoLiveView,
   SetupDevicesView,
+  SetupStartView,
   SignupChallenge,
   StaffInvite,
   StaffInviteView,
@@ -145,6 +146,7 @@ export type WizardStart = {
   invites?: StaffInviteView[];
   devices?: Partial<SetupDevicesView>;
   goLive?: Partial<GoLiveView>;
+  start?: Partial<SetupStartView>;
 };
 
 export const STAFF_CODES = ["K7Q49MZD", "Q4K79MZD", "M3XT8PRW"];
@@ -231,6 +233,8 @@ export type Cloud = {
   goLive: GoLiveView;
   goLivePosts: number;
   reissued: string[];
+  setupStart: SetupStartView;
+  setupStartCalls: string[];
 };
 
 async function fulfil(route: Route, r: Reply) {
@@ -334,6 +338,15 @@ export async function stubCloud(
     },
     goLivePosts: 0,
     reissued: [],
+    setupStart: {
+      other_branches: 0,
+      sources: [],
+      enabled: false,
+      selected: null,
+      status: null,
+      ...start.wizard?.start,
+    },
+    setupStartCalls: [],
   };
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -592,6 +605,21 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
     };
     cloud.deviceView.commands.push(command);
     return { status: 200, body: command };
+  }
+  const starting = /^\/v1\/branches\/([^/]+)\/setup-start(\/retry)?$/.exec(path);
+  if (starting) {
+    const v = cloud.setupStart;
+    if (starting[2]) {
+      cloud.setupStartCalls.push("retry");
+      if (v.status === "failed") v.status = "retry";
+    } else if (method === "PUT") {
+      const b = body as { enabled: boolean; source_branch_id?: string };
+      cloud.setupStartCalls.push(JSON.stringify(b));
+      v.enabled = b.enabled;
+      v.selected = b.enabled ? (b.source_branch_id ?? v.sources[0]?.branch_id ?? null) : null;
+      v.status = null;
+    }
+    return { status: 200, body: v };
   }
   if (path === "/v1/wizard/go-live") {
     if (method === "GET") return { status: 200, body: cloud.goLive };

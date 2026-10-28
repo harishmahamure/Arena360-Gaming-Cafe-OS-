@@ -13,6 +13,7 @@ pub mod printer;
 pub mod receipts;
 pub mod session_timer;
 pub mod template;
+pub mod template_apply;
 pub mod test_session;
 
 pub use cloud::{CloudClient, CloudEndpoint, CloudFailure, CloudPairer};
@@ -40,4 +41,5 @@ pub use mdns::{
 pub use receipts::{PRINT_BATCH, PRINT_TICK, ReceiptPrintTask};
 pub use session_timer::{SessionTimerTask, TIMER_EVENTS_DEPTH, TIMER_TICK};
 pub use template::{NOT_ENTITLED_RETRY, SetupTemplateTask, TIER_RECHECK, UPLOAD_DEBOUNCE};
+pub use template_apply::{SetupApplyTask, SetupTemplateInbox};
 pub use test_session::TestSessionTask;

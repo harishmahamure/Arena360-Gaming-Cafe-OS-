@@ -31,6 +31,7 @@ mod setup_codes;
 mod setup_status;
 mod signin;
 mod staff_invites;
+mod template_choice;
 mod tenant;
 
 pub use ads::{AdFillRow, AdMetric};
@@ -58,6 +59,7 @@ pub use signin::{
     SigninFactor, SigninFailure,
 };
 pub use staff_invites::{NewStaffInvite, StaffInviteRow};
+pub use template_choice::TemplateChoice;
 pub use tenant::{Branch, BranchCodeOutcome, BranchProfile, NewTenantBranch, ProgressRow, Tenant};
 
 use std::fmt;
@@ -137,6 +139,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 15,
         sql: include_str!("../control-migrations/0015_ad_metrics.sql"),
+    },
+    ControlMigration {
+        version: 16,
+        sql: include_str!("../control-migrations/0016_branch_template_choice.sql"),
     },
 ];
 

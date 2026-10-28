@@ -9185,6 +9185,7 @@ mod onboarding {
                 setup_code_hash: hash.into(),
                 ..owner()
             },
+            template: None,
         }
     }
 

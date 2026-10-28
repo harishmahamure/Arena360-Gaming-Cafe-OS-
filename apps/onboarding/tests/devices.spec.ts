@@ -168,3 +168,84 @@ test("step 4 completes by itself once a device is grouped and focus moves to ste
   await expect(page).toHaveURL(/\/setup\/rates$/);
   await expect(h1(page, "ui.wizard.step.rates")).toBeFocused();
 });
+
+const FIRST = { branch_id: "01JFIRST0000000000000000000", name: "Pixel Arena", uploaded_at: 1 };
+const SECOND = {
+  branch_id: "01JSECOND000000000000000000",
+  name: "Pixel Arena Baner",
+  uploaded_at: 2,
+};
+
+async function openStart(page: Page, start: Parameters<typeof stubCloud>[1]["wizard"]) {
+  const cloud = await stubCloud(page, {
+    signedIn: true,
+    owner: READY_OWNER,
+    wizard: {
+      branch: {},
+      done: ["cafe", "tier", "install_hub"],
+      hubPaired: true,
+      devices: { setup: block(), reported_at: Date.now(), now: Date.now() },
+      ...start,
+    },
+  });
+  await page.goto("/setup/devices");
+  await expect(h1(page, "ui.wizard.step.devices")).toBeVisible();
+  return cloud;
+}
+
+test("a café with one branch sees no start-from option", async ({ page }) => {
+  await openStart(page, {});
+  await expect(page.getByTestId("setup-start")).toHaveCount(0);
+});
+
+test("start-from is on by default with a picker and can be turned off", async ({ page }) => {
+  const cloud = await openStart(page, {
+    start: {
+      other_branches: 2,
+      sources: [FIRST, SECOND],
+      enabled: true,
+      selected: FIRST.branch_id,
+      status: "pending",
+    },
+  });
+  const panel = page.getByTestId("setup-start");
+  const use = panel.getByTestId("setup-start-use");
+  await expect(use).toBeChecked();
+  await expect(panel.getByText(t("onboarding.start.use", { name: FIRST.name }))).toBeVisible();
+  await expect(panel.getByTestId("setup-start-status")).toContainText(
+    t("onboarding.start.waiting"),
+  );
+  await panel.getByTestId("setup-start-pick").selectOption(SECOND.branch_id);
+  await expect.poll(() => cloud.setupStartCalls.at(-1)).toContain(SECOND.branch_id);
+  await use.uncheck();
+  await expect(use).not.toBeChecked();
+  expect(JSON.parse(cloud.setupStartCalls.at(-1) ?? "{}")).toEqual({ enabled: false });
+});
+
+test("with no saved setup it explains the file path", async ({ page }) => {
+  await openStart(page, { start: { other_branches: 1, sources: [] } });
+  const panel = page.getByTestId("setup-start");
+  await expect(panel.getByTestId("setup-start-file-path")).toHaveText(
+    t("onboarding.start.file_path"),
+  );
+  await expect(panel.getByTestId("setup-start-use")).toHaveCount(0);
+});
+
+test("a failed copy shows its reason, Retry and the file path", async ({ page }) => {
+  const cloud = await openStart(page, {
+    start: {
+      other_branches: 1,
+      sources: [FIRST],
+      enabled: true,
+      selected: FIRST.branch_id,
+      status: "failed",
+      error: "The link expired. Try again.",
+    },
+  });
+  const panel = page.getByTestId("setup-start");
+  await expect(panel.getByTestId("setup-start-failed")).toContainText("The link expired");
+  await expect(panel.getByTestId("setup-start-file-path")).toBeVisible();
+  await panel.getByRole("button", { name: t("onboarding.start.retry") }).click();
+  await expect(panel.getByTestId("setup-start-status")).toContainText(t("onboarding.start.queued"));
+  expect(cloud.setupStartCalls).toEqual(["retry"]);
+});

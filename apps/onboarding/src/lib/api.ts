@@ -14,10 +14,12 @@ import type {
   InstallHubState,
   PairingCodeIssued,
   SessionInfo,
+  SetSetupStart,
   SetupCodeReveal,
   SetupCommandView,
   GoLiveView,
   SetupDevicesView,
+  SetupStartView,
   StaffInvite,
   StaffInvited,
   StaffInvites,
@@ -254,3 +256,11 @@ export const goLive = () => withRefresh(() => call<WizardState>("POST", "/wizard
 export const getDevices = () => withRefresh(() => call<SetupDevicesView>("GET", "/wizard/devices"));
 export const sendDeviceCommand = (kind: string, payload: unknown) =>
   withRefresh(() => call<SetupCommandView>("POST", "/wizard/devices", { kind, payload }));
+
+const startPath = (branchId: string) => `/branches/${encodeURIComponent(branchId)}/setup-start`;
+export const getSetupStart = (branchId: string) =>
+  withRefresh(() => call<SetupStartView>("GET", startPath(branchId)));
+export const setSetupStart = (branchId: string, choice: SetSetupStart) =>
+  withRefresh(() => call<SetupStartView>("PUT", startPath(branchId), choice));
+export const retrySetupStart = (branchId: string) =>
+  withRefresh(() => call<SetupStartView>("POST", startPath(branchId) + "/retry", {}));

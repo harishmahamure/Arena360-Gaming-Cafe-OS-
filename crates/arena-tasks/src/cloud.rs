@@ -4,8 +4,8 @@ use std::time::Duration;
 use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
     AppError, CommandResult, CommandResultAck, CommandsPage, ErrorCode, HeartbeatRequest,
-    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, SetupTemplateStored, UiError,
-    normalize_pairing_code, valid_pairing_code,
+    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, SETUP_MAX_BYTES,
+    SetupTemplateOutcome, SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 
@@ -176,6 +176,65 @@ impl CloudClient {
         self.send(call).await
     }
 
+    /// Downloads the setup file a signed link leads to (Story 5.38). The link is the proof, so
+    /// no token is sent; the answer is at most `SETUP_MAX_BYTES`.
+    pub async fn download_setup_template(&self, path: &str) -> Result<Vec<u8>, CloudFailure> {
+        if !path.starts_with("/v1/setup-template/") {
+            return Err(CloudFailure::Unreachable("unexpected link".into()));
+        }
+        let res = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .send()
+            .await
+            .map_err(|e| CloudFailure::Unreachable(e.without_url().to_string()))?;
+        let status = res.status().as_u16();
+        if res
+            .content_length()
+            .is_some_and(|n| n > SETUP_MAX_BYTES as u64)
+        {
+            return Err(CloudFailure::Unreachable("the file is too large".into()));
+        }
+        let bytes = res
+            .bytes()
+            .await
+            .map_err(|e| CloudFailure::Unreachable(e.without_url().to_string()))?;
+        if status == 200 {
+            return if bytes.len() > SETUP_MAX_BYTES {
+                Err(CloudFailure::Unreachable("the file is too large".into()))
+            } else {
+                Ok(bytes.to_vec())
+            };
+        }
+        match serde_json::from_slice::<AppError>(&bytes) {
+            Ok(error) => Err(CloudFailure::Refused {
+                status,
+                error,
+                retry_after_s: None,
+            }),
+            Err(_) => Err(CloudFailure::Unreachable(format!(
+                "status {status} without an error body"
+            ))),
+        }
+    }
+
+    /// Tells the cloud how the Hub got on with a setup template link (Story 5.38).
+    pub async fn setup_template_outcome(
+        &self,
+        token: &str,
+        branch_id: &str,
+        outcome: &SetupTemplateOutcome,
+    ) -> Result<(), CloudFailure> {
+        let _: serde_json::Value = self
+            .post(
+                &format!("/v1/branches/{branch_id}/setup-template/outcome"),
+                Some(token),
+                outcome,
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn post<Q: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -316,6 +375,7 @@ pub struct CloudPairer {
     hub_instance_id: String,
     version: String,
     kek_store: Option<Arc<dyn Keystore>>,
+    templates: Option<Arc<crate::SetupTemplateInbox>>,
     busy: tokio::sync::Mutex<()>,
 }
 
@@ -341,6 +401,7 @@ impl CloudPairer {
             hub_instance_id,
             version,
             kek_store: None,
+            templates: None,
             busy: tokio::sync::Mutex::new(()),
         }
     }
@@ -349,6 +410,13 @@ impl CloudPairer {
     /// token and the key together). Without it the key is minted lazily on first use.
     pub fn with_kek_store(mut self, kek_store: Arc<dyn Keystore>) -> Self {
         self.kek_store = Some(kek_store);
+        self
+    }
+
+    /// Where the setup template link of `branch.bootstrap` is left for the Hub to apply
+    /// (Story 5.38).
+    pub fn with_templates(mut self, inbox: Arc<crate::SetupTemplateInbox>) -> Self {
+        self.templates = Some(inbox);
         self
     }
 
@@ -432,6 +500,7 @@ impl CloudPairer {
             let fresh = mint_kek().map_err(|e| internal(&format!("branch key: {e}")))?;
             self.write_secret(Arc::clone(kek), fresh.to_vec()).await?;
         }
+        let template = paired.bootstrap.template.clone();
         let written = writer
             .record_pairing(identity, paired.licence, Some(paired.bootstrap))
             .await
@@ -444,6 +513,9 @@ impl CloudPairer {
                 ErrorCode::AlreadySet,
                 "this hub is already paired",
             ));
+        }
+        if let (Some(inbox), Some(link)) = (&self.templates, template) {
+            inbox.offer(link);
         }
         self.gate.mark_paired();
         tracing::info!(

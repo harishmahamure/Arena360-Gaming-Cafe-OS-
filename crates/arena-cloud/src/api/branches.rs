@@ -19,7 +19,7 @@ use super::owned::{OwnedBranch, not_your_branch};
 use crate::auth::{AuthState, valid_text};
 use crate::branch_code;
 
-async fn tier_of(st: &AuthState, branch_id: &str) -> Result<Tier, ApiError> {
+pub(super) async fn tier_of(st: &AuthState, branch_id: &str) -> Result<Tier, ApiError> {
     Ok(st
         .db
         .entitlement(branch_id)

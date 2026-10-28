@@ -232,6 +232,7 @@ fn bootstrap_of(
             setup_code_hash,
             setup_expires_at,
         },
+        template: None,
     };
     let p = &command.profile;
     check_bootstrap(
@@ -347,7 +348,8 @@ async fn pair(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::internal("pairing left no owner setup code"))?;
-    let bootstrap = bootstrap_of(&c.branch, &owner, setup.code_hash, setup.hub_expires_at)?;
+    let mut bootstrap = bootstrap_of(&c.branch, &owner, setup.code_hash, setup.hub_expires_at)?;
+    bootstrap.template = super::setup_start::bootstrap_link(&st, &c.branch, now).await;
     tracing::info!(
         hub_id = %hub_id,
         tenant_id = %c.branch.tenant_id,

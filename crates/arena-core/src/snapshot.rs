@@ -1135,6 +1135,39 @@ impl SnapshotReader {
         Ok(crate::reports::sessions_report(&rows, from, to, days, tz))
     }
 
+    /// The Players report for the business days `from` to `to` (Story 5.30). Names are opened with
+    /// `kek`; credit is aged as of the business day at `now_ms`.
+    pub fn players_report(
+        &self,
+        from: &str,
+        to: &str,
+        now_ms: i64,
+        kek: &[u8; crate::players::KEK_LEN],
+    ) -> Result<arena_proto::PlayersReport, AppError> {
+        crate::reports::parse_range(from, to)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let today = crate::locale::current_business_day(&store, now_ms)?
+            .unwrap_or_else(|| crate::players::utc_day(now_ms));
+        let rows = store.players_report_rows(from, to, &today)?;
+        Ok(crate::reports::players_report(&rows, from, to, &today, kek))
+    }
+
+    /// The Staff report for the business days `from` to `to` (Story 5.30).
+    pub fn staff_report(&self, from: &str, to: &str) -> Result<arena_proto::StaffReport, AppError> {
+        crate::reports::parse_range(from, to)?;
+        let (shift_from, shift_to) = crate::reports::shift_read_window(from, to)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let day_of = crate::locale::business_day_fn(&store)?;
+        let rows = store.staff_report_rows(from, to, shift_from, shift_to)?;
+        Ok(crate::reports::staff_report(&rows, from, to, &day_of))
+    }
+
     /// The invoice numbered `invoice_no` for the Refund screen: `INVOICE_NOT_FOUND` when no settled
     /// order carries that number.
     pub fn refund_invoice(&self, invoice_no: &str) -> Result<arena_proto::RefundInvoice, AppError> {

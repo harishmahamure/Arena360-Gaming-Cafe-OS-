@@ -2570,7 +2570,7 @@ async fn player_write<T: serde::de::DeserializeOwned>(
     Ok((token, me, request))
 }
 
-fn player_kek(auth: &UiAuth) -> Result<Arc<dyn arena_core::players::Kek>, UiError> {
+pub(crate) fn player_kek(auth: &UiAuth) -> Result<Arc<dyn arena_core::players::Kek>, UiError> {
     auth.kek.clone().ok_or_else(|| {
         ui_error(AppError::new(
             ErrorCode::Unsupported,
@@ -3233,6 +3233,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
             get(crate::ui_report::daily_sales),
         )
         .route("/ui/reports/sessions", get(crate::ui_report::sessions))
+        .route("/ui/reports/players", get(crate::ui_report::players))
+        .route("/ui/reports/staff", get(crate::ui_report::staff))
         .route("/ui/reports/shifts", get(crate::ui_report::shifts))
         .route("/ui/reports/shifts/{id}", get(crate::ui_report::shift))
         .route("/ui/reports/gst", get(crate::ui_report::gst))
@@ -3406,6 +3408,15 @@ pub(crate) mod tests {
 
     /// [`hub`] with the given `/ui/events` timings and buffer.
     pub(crate) async fn hub_with(config: crate::ui_events::EventsConfig) -> Hub {
+        hub_built(config, true).await
+    }
+
+    /// [`hub`] on a Hub with no branch key store (`with_kek` false).
+    pub(crate) async fn hub_without_kek() -> Hub {
+        hub_built(crate::ui_events::EventsConfig::default(), false).await
+    }
+
+    async fn hub_built(config: crate::ui_events::EventsConfig, with_kek: bool) -> Hub {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("branch.db");
         let mut store = Store::open(&path, T0).unwrap();
@@ -3519,19 +3530,21 @@ pub(crate) mod tests {
                 .unwrap()
                 .with_tick(std::time::Duration::from_millis(10)),
         );
-        let auth = Arc::new(
-            UiAuth::new(
-                Arc::new(StaffDirectory::open(&path).unwrap()),
-                Arc::new(SnapshotReader::open(&path).unwrap()),
-                Some(writer.clone()),
-                clock.clone(),
-            )
-            .with_status(status_tx.subscribe())
-            .with_events_config(config)
-            .with_presence(crate::lan::Presence::of(Arc::clone(&lan)))
-            .with_pairing(Arc::clone(&pairing))
-            .with_player_kek(Arc::new(TestKek)),
-        );
+        let auth = UiAuth::new(
+            Arc::new(StaffDirectory::open(&path).unwrap()),
+            Arc::new(SnapshotReader::open(&path).unwrap()),
+            Some(writer.clone()),
+            clock.clone(),
+        )
+        .with_status(status_tx.subscribe())
+        .with_events_config(config)
+        .with_presence(crate::lan::Presence::of(Arc::clone(&lan)))
+        .with_pairing(Arc::clone(&pairing));
+        let auth = Arc::new(if with_kek {
+            auth.with_player_kek(Arc::new(TestKek))
+        } else {
+            auth
+        });
         Hub {
             lan,
             pairing,
@@ -6355,6 +6368,220 @@ pub(crate) mod tests {
             (status, reply["field"].as_str()),
             (StatusCode::UNPROCESSABLE_ENTITY, Some("from"))
         );
+    }
+
+    /// Story 5.30: the Players and Staff reads need `report.view` and a valid range; Players also
+    /// needs the branch key; an erased player (no data key) has no name and nothing else personal.
+    #[tokio::test]
+    async fn the_players_and_staff_reports_need_report_view_and_show_an_erased_player_without_data()
+    {
+        let url =
+            |kind: &str, from: &str, to: &str| format!("/ui/reports/{kind}?from={from}&to={to}");
+        let hub = hub().await;
+        for kind in ["players", "staff"] {
+            let (status, _) = call(
+                &hub,
+                "GET",
+                &url(kind, "2027-01-15", "2027-01-15"),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        for kind in ["players", "staff"] {
+            let (status, reply) = call(
+                &hub,
+                "GET",
+                &url(kind, "2027-01-15", "2027-01-15"),
+                Some(&counter),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+            assert_eq!(reply["code"], "PERMISSION_DENIED");
+        }
+
+        // Empty range: empty lists, zero totals, the three credit buckets.
+        let (status, empty) = call(
+            &hub,
+            "GET",
+            &url("players", "2027-01-15", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(empty["top"].as_array().map(Vec::len), Some(0));
+        assert_eq!(empty["guest"]["bills"], 0);
+        assert_eq!(empty["credit_buckets"].as_array().map(Vec::len), Some(3));
+        let (status, empty) = call(
+            &hub,
+            "GET",
+            &url("staff", "2027-01-15", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(empty["staff"].as_array().map(Vec::len), Some(0));
+
+        // A named player, an erased one (a row with no `player_keys`), a guest and a void.
+        let form = arena_proto::PlayerForm {
+            username: "asha_9".into(),
+            password: "secret1".into(),
+            phone: "+91 98765 43210".into(),
+            name: "Asha Rao".into(),
+            email: String::new(),
+            dob: String::new(),
+            notes: String::new(),
+            tags: Vec::new(),
+            consent: true,
+            policy_version: "1".into(),
+        };
+        let sealed = arena_core::players::seal(&TEST_KEK, &form, "P1", "hash".into()).unwrap();
+        let manager_id = hub.manager_id.clone();
+        // Every value is a ULID or base64url text, so it is safe to write into the SQL.
+        let seed = format!(
+            "INSERT INTO players (player_id, username, password_hash, phone_lookup, name_enc,
+                                  phone_enc, tags, rev, created_at, updated_at)
+             VALUES ('P1', 'asha_9', 'h', 'l1', '{name}', '{phone}', '[]', 1, 0, 0),
+                    ('P2', 'erased_2', 'h', 'l2', 'junk', 'junk', '[]', 1, 0, 0);
+             INSERT INTO player_keys (player_id, dek_wrapped) VALUES ('P1', '{key}');
+             INSERT INTO credit_balances (player_id, limit_minor, outstanding_minor,
+                                          reminder_days, rev, created_at, updated_at)
+             VALUES ('P2', 1000, 100, '', 1, 0, 0);
+             INSERT INTO orders (id, status, kind, subtotal_minor, total_minor, business_day, fy,
+                                 player_id, settled_by, voided_by, rev, created_at, updated_at)
+             VALUES ('O1', 'settled', 'pos_sale', 500, 500, '2027-01-15', 'FY', 'P1', '{by}', NULL, 1, 0, 0),
+                    ('O2', 'settled', 'session', 300, 300, '2027-01-15', 'FY', 'P2', '{by}', NULL, 1, 0, 0),
+                    ('O3', 'settled', 'pos_sale', 70, 70, '2027-01-15', 'FY', NULL, '{by}', NULL, 1, 0, 0),
+                    ('O4', 'void', 'session', 120, 120, '2027-01-15', 'FY', 'P1', NULL, '{by}', 1, 0, 0);
+             INSERT INTO wallet_txns (id, player_id, delta_minor, reason, staff_id, order_id,
+                                      business_day, fy, rev, created_at, updated_at)
+             VALUES ('W1', 'P2', 100, 'credit', 'S', 'O2', '2027-01-15', 'FY', 1, 1, 1);",
+            name = sealed.name_enc,
+            phone = sealed.phone_enc,
+            key = sealed.wrapped_key,
+            by = manager_id,
+        );
+        hub.writer
+            .submit(move |tx| {
+                tx.execute_batch(&seed)
+                    .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))
+            })
+            .await
+            .unwrap();
+
+        let (status, players) = call(
+            &hub,
+            "GET",
+            &url("players", "2027-01-15", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{players}");
+        let top = players["top"].as_array().unwrap();
+        assert_eq!(top.len(), 2, "the guest is never listed as a player");
+        assert_eq!(
+            (top[0]["name"].as_str(), top[0]["erased"].as_bool()),
+            (Some("Asha Rao"), Some(false))
+        );
+        assert_eq!(top[0]["spend_minor"], 500);
+        assert_eq!(
+            (top[1]["name"].as_str(), top[1]["erased"].as_bool()),
+            (Some(""), Some(true)),
+            "no data key: erased, no name"
+        );
+        assert_eq!(
+            (
+                players["guest"]["bills"].clone(),
+                players["guest"]["spend_minor"].clone()
+            ),
+            (json!(1), json!(70))
+        );
+        assert_eq!(players["new_players"]["players"], 2);
+        assert_eq!(players["credit_outstanding_minor"], 100);
+        let debtors = players["debtors"].as_array().unwrap();
+        assert_eq!(debtors.len(), 1);
+        assert_eq!(debtors[0]["erased"], true);
+        let text = players.to_string();
+        assert!(
+            !text.contains("98765") && !text.contains("phone") && !text.contains("junk"),
+            "no personal data beyond the name: {text}"
+        );
+
+        let (status, staff) = call(
+            &hub,
+            "GET",
+            &url("staff", "2027-01-15", "2027-01-15"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{staff}");
+        let rows = staff["staff"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{staff}");
+        assert_eq!(rows[0]["staff_id"], hub.manager_id.as_str());
+        assert_eq!(rows[0]["name"], "Manager");
+        assert_eq!(
+            (
+                rows[0]["sales_minor"].clone(),
+                rows[0]["sales_count"].clone()
+            ),
+            (json!(870), json!(3))
+        );
+        assert_eq!(
+            (
+                rows[0]["voids_count"].clone(),
+                rows[0]["voids_minor"].clone()
+            ),
+            (json!(1), json!(120)),
+            "the void is counted apart and is not in sales"
+        );
+
+        for (kind, from, to, field) in [
+            ("players", "2027-01-16", "2027-01-15", "to"),
+            ("staff", "2026-01-01", "2027-01-15", "to"),
+            ("staff", "soon", "2027-01-15", "from"),
+        ] {
+            let (status, reply) =
+                call(&hub, "GET", &url(kind, from, to), Some(&manager), None).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+            assert_eq!(reply["code"], "VALIDATION_FAILED");
+            assert_eq!(reply["field"], field);
+        }
+    }
+
+    /// Story 5.30: a Hub with no key store cannot open names, so Players answers `UNSUPPORTED`
+    /// while Staff (which holds no personal data) still answers.
+    #[tokio::test]
+    async fn the_players_report_is_unsupported_without_a_key_store() {
+        let hub = hub_without_kek().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let range = "from=2027-01-15&to=2027-01-15";
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            &format!("/ui/reports/players?{range}"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
+        assert_eq!(reply["code"], "UNSUPPORTED");
+        let (status, _) = call(
+            &hub,
+            "GET",
+            &format!("/ui/reports/staff?{range}"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
     }
 
     #[tokio::test]

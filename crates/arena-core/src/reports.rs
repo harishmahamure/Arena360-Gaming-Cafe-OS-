@@ -6,14 +6,22 @@
 use std::collections::BTreeMap;
 
 use arena_proto::{
-    AppError, CASH_DEPOSIT, CASH_DRAWER_OPEN, CASH_EXPENSE, DailySales, DeviceSessions, ErrorCode,
-    GroupSessions, HourSales, NamedSales, RECEIVED_CREDIT_COLLECT, RECEIVED_TOPUP, REPORT_MAX_DAYS,
-    ReportAmount, SALES_DISCOUNTS, SALES_PLANS, SALES_PLAY_TIME, SALES_PRODUCTS, SALES_TAX_ADDED,
-    SessionsReport, ZCashLine, ZReference, ZReferenceGroup, ZRefund, ZReport, ZVoid, ZWaste,
+    AppError, CASH_DEPOSIT, CASH_DRAWER_OPEN, CASH_EXPENSE, CREDIT_BUCKET_0_7, CREDIT_BUCKET_8_14,
+    CREDIT_BUCKET_15_PLUS, CreditBucketRow, CreditDebtor, DailySales, DeviceSessions, ErrorCode,
+    GroupSessions, GuestTotals, HourSales, NamedSales, NewReturning, PLAYERS_DEBTOR_LIMIT,
+    PLAYERS_TOP_LIMIT, PlayerSpend, PlayersReport, RECEIVED_CREDIT_COLLECT, RECEIVED_TOPUP,
+    REPORT_MAX_DAYS, ReportAmount, SALES_DISCOUNTS, SALES_PLANS, SALES_PLAY_TIME, SALES_PRODUCTS,
+    SALES_TAX_ADDED, SessionsReport, ShiftVariance, StaffReport, StaffRow, ZCashLine, ZReference,
+    ZReferenceGroup, ZRefund, ZReport, ZVoid, ZWaste,
 };
-use arena_store::{SalesReportRows, SessionsReportRows, ZCashEventRow, ZReportRows};
+use arena_store::{
+    PlayersReportRows, SalesReportRows, SessionsReportRows, StaffReportRows, ZCashEventRow,
+    ZReportRows,
+};
 use chrono::{NaiveDate, TimeZone, Timelike};
 use chrono_tz::Tz;
+
+use crate::players::{KEK_LEN, open_field};
 
 const HOUR_MS: i64 = 3_600_000;
 const MINUTE_MS: i64 = 60_000;
@@ -495,6 +503,215 @@ pub fn z_report(rows: &ZReportRows, tz: Tz) -> ZReport {
     }
 }
 
+/// A player's name opened with the branch key, or `None` when the data key is absent or will not
+/// open (an erased player): no other personal data is read.
+fn open_name(
+    kek: &[u8; KEK_LEN],
+    player_id: &str,
+    name_enc: Option<&str>,
+    dek_wrapped: Option<&str>,
+) -> Option<String> {
+    let (enc, wrapped) = (name_enc?, dek_wrapped?);
+    open_field(kek, player_id, wrapped, "name", enc).ok()
+}
+
+/// The Players report (Story 5.30): top spenders, the guest total, new against returning players
+/// and credit outstanding by age. `today` is the business day credit is aged as of; names are
+/// opened with `kek` and a player whose key is absent is `erased` with an empty name.
+pub fn players_report(
+    rows: &PlayersReportRows,
+    from: &str,
+    to: &str,
+    today: &str,
+    kek: &[u8; KEK_LEN],
+) -> PlayersReport {
+    let mut top = Vec::with_capacity(rows.players.len());
+    let mut new_players = NewReturning {
+        players: 0,
+        spend_minor: 0,
+    };
+    let mut returning_players = new_players.clone();
+    for p in &rows.players {
+        let name = open_name(
+            kek,
+            &p.player_id,
+            p.name_enc.as_deref(),
+            p.dek_wrapped.as_deref(),
+        );
+        top.push(PlayerSpend {
+            player_id: p.player_id.clone(),
+            erased: name.is_none(),
+            name: name.unwrap_or_default(),
+            visits: p.visits,
+            spend_minor: p.spend_minor,
+        });
+        let group = if p.first_day.as_str() >= from {
+            &mut new_players
+        } else {
+            &mut returning_players
+        };
+        group.players += 1;
+        group.spend_minor += p.spend_minor;
+    }
+    top.sort_by(|a, b| {
+        b.spend_minor
+            .cmp(&a.spend_minor)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.player_id.cmp(&b.player_id))
+    });
+    top.truncate(PLAYERS_TOP_LIMIT);
+
+    let (mut b07, mut b814, mut b15, mut outstanding) = (0i64, 0i64, 0i64, 0i64);
+    let mut debtors = Vec::with_capacity(rows.debtors.len());
+    for d in &rows.debtors {
+        b07 += d.aging.bucket_0_7_minor;
+        b814 += d.aging.bucket_8_14_minor;
+        b15 += d.aging.bucket_15_plus_minor;
+        outstanding += d.outstanding_minor;
+        let name = open_name(
+            kek,
+            &d.player_id,
+            d.name_enc.as_deref(),
+            d.dek_wrapped.as_deref(),
+        );
+        debtors.push(CreditDebtor {
+            player_id: d.player_id.clone(),
+            erased: name.is_none(),
+            name: name.unwrap_or_default(),
+            outstanding_minor: d.outstanding_minor,
+            oldest_age_days: d.aging.oldest_age_days,
+        });
+    }
+    debtors.sort_by(|a, b| {
+        b.outstanding_minor
+            .cmp(&a.outstanding_minor)
+            .then_with(|| b.oldest_age_days.cmp(&a.oldest_age_days))
+            .then_with(|| a.player_id.cmp(&b.player_id))
+    });
+    debtors.truncate(PLAYERS_DEBTOR_LIMIT);
+
+    let bucket = |key: &str, amount_minor: i64| CreditBucketRow {
+        key: key.to_owned(),
+        amount_minor,
+    };
+    PlayersReport {
+        from: from.to_owned(),
+        to: to.to_owned(),
+        top,
+        guest: GuestTotals {
+            bills: rows.guest.bills,
+            spend_minor: rows.guest.spend_minor,
+        },
+        new_players,
+        returning_players,
+        credit_as_of: today.to_owned(),
+        credit_buckets: vec![
+            bucket(CREDIT_BUCKET_0_7, b07),
+            bucket(CREDIT_BUCKET_8_14, b814),
+            bucket(CREDIT_BUCKET_15_PLUS, b15),
+        ],
+        credit_outstanding_minor: outstanding,
+        debtors,
+    }
+}
+
+/// The UTC milliseconds range to read closed shifts from for the business days `from` to `to`: the
+/// range with a day and more either side, because a business day is local time shifted by the
+/// day start and can reach into the neighbouring UTC days.
+pub fn shift_read_window(from: &str, to: &str) -> Result<(i64, i64), AppError> {
+    const DAY_MS: i64 = 86_400_000;
+    let day = |text: &str| {
+        NaiveDate::parse_from_str(text, "%Y-%m-%d")
+            .ok()
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+            .map(|t| t.and_utc().timestamp_millis())
+            .ok_or_else(|| AppError::new(ErrorCode::ValidationFailed, "Pick a valid date."))
+    };
+    Ok((day(from)? - 2 * DAY_MS, day(to)? + 4 * DAY_MS))
+}
+
+/// The Staff report (Story 5.30): per staff member with any activity in the range, what they sold,
+/// started, discounted, voided and refunded, and the variance of the shifts they closed in it.
+/// `day_of` gives the local business day of a UTC time (a shift's `closed_at`). A staff member no
+/// longer in the staff table has an empty name.
+pub fn staff_report(
+    rows: &StaffReportRows,
+    from: &str,
+    to: &str,
+    day_of: &dyn Fn(i64) -> String,
+) -> StaffReport {
+    let mut by_id = BTreeMap::<String, StaffRow>::new();
+    fn entry<'a>(
+        by_id: &'a mut BTreeMap<String, StaffRow>,
+        names: &[(String, String)],
+        id: &str,
+    ) -> &'a mut StaffRow {
+        by_id.entry(id.to_owned()).or_insert_with(|| StaffRow {
+            staff_id: id.to_owned(),
+            name: names
+                .iter()
+                .find(|(staff_id, _)| staff_id == id)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_default(),
+            sales_minor: 0,
+            sales_count: 0,
+            sessions_started: 0,
+            discounts_count: 0,
+            discounts_minor: 0,
+            voids_count: 0,
+            voids_minor: 0,
+            refunds_count: 0,
+            refunds_minor: 0,
+            shifts: Vec::new(),
+            variance_minor: 0,
+        })
+    }
+    for r in &rows.sales {
+        let row = entry(&mut by_id, &rows.names, &r.staff_id);
+        (row.sales_count, row.sales_minor) = (r.count, r.value_minor);
+    }
+    for r in &rows.sessions {
+        entry(&mut by_id, &rows.names, &r.staff_id).sessions_started = r.count;
+    }
+    for r in &rows.discounts {
+        let row = entry(&mut by_id, &rows.names, &r.staff_id);
+        (row.discounts_count, row.discounts_minor) = (r.count, r.value_minor);
+    }
+    for r in &rows.voids {
+        let row = entry(&mut by_id, &rows.names, &r.staff_id);
+        (row.voids_count, row.voids_minor) = (r.count, r.value_minor);
+    }
+    for r in &rows.refunds {
+        let row = entry(&mut by_id, &rows.names, &r.staff_id);
+        (row.refunds_count, row.refunds_minor) = (r.count, r.value_minor);
+    }
+    for s in &rows.shifts {
+        let day = day_of(s.closed_at);
+        if day.as_str() < from || day.as_str() > to {
+            continue;
+        }
+        let row = entry(&mut by_id, &rows.names, &s.staff_id);
+        row.variance_minor += s.variance_minor;
+        row.shifts.push(ShiftVariance {
+            shift_id: s.shift_id.clone(),
+            closed_at: s.closed_at,
+            variance_minor: s.variance_minor,
+        });
+    }
+    let mut staff: Vec<StaffRow> = by_id.into_values().collect();
+    staff.sort_by(|a, b| {
+        b.sales_minor
+            .cmp(&a.sales_minor)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.staff_id.cmp(&b.staff_id))
+    });
+    StaffReport {
+        from: from.to_owned(),
+        to: to.to_owned(),
+        staff,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arena_store::SessionReportRow;
@@ -848,5 +1065,332 @@ mod tests {
         assert_eq!(g.utilisation_bp[19], 1250);
         assert_eq!(g.utilisation_bp[3], 0);
         assert_eq!(r.by_device[0].label, "PC 1");
+    }
+
+    const KEK: [u8; KEK_LEN] = [4; KEK_LEN];
+
+    /// A player's sealed name and wrapped key, as the store hands them to the fold.
+    fn sealed(player_id: &str, name: &str) -> (String, String) {
+        let form = arena_proto::PlayerForm {
+            username: "someone".into(),
+            password: "secret1".into(),
+            phone: "+91 98765 43210".into(),
+            name: name.into(),
+            email: String::new(),
+            dob: String::new(),
+            notes: String::new(),
+            tags: Vec::new(),
+            consent: true,
+            policy_version: "1".into(),
+        };
+        let s = crate::players::seal(&KEK, &form, player_id, "hash".into()).unwrap();
+        (s.name_enc, s.wrapped_key)
+    }
+
+    fn spend_row(
+        id: &str,
+        name: Option<&str>,
+        visits: i64,
+        spend: i64,
+        first: &str,
+    ) -> arena_store::PlayerSalesRow {
+        let (name_enc, dek_wrapped) = match name {
+            Some(n) => {
+                let (e, k) = sealed(id, n);
+                (Some(e), Some(k))
+            }
+            // A player row whose data key is gone.
+            None => (Some("ciphertext".to_owned()), None),
+        };
+        arena_store::PlayerSalesRow {
+            player_id: id.into(),
+            visits,
+            spend_minor: spend,
+            first_day: first.into(),
+            name_enc,
+            dek_wrapped,
+        }
+    }
+
+    fn debtor(
+        id: &str,
+        name: Option<&str>,
+        outstanding: i64,
+        buckets: (i64, i64, i64),
+        age: i64,
+    ) -> arena_store::DebtorRow {
+        let (name_enc, dek_wrapped) = match name {
+            Some(n) => {
+                let (e, k) = sealed(id, n);
+                (Some(e), Some(k))
+            }
+            None => (None, None),
+        };
+        arena_store::DebtorRow {
+            player_id: id.into(),
+            outstanding_minor: outstanding,
+            aging: arena_proto::CreditAging {
+                oldest_unpaid_day: None,
+                oldest_age_days: age,
+                bucket_0_7_minor: buckets.0,
+                bucket_8_14_minor: buckets.1,
+                bucket_15_plus_minor: buckets.2,
+            },
+            name_enc,
+            dek_wrapped,
+        }
+    }
+
+    #[test]
+    fn players_rank_by_spend_then_name_and_split_new_from_returning() {
+        let rows = PlayersReportRows {
+            players: vec![
+                spend_row("P1", Some("Zed"), 3, 900, "2026-10-10"),
+                spend_row("P2", Some("Asha"), 2, 900, "2026-10-12"),
+                spend_row("P3", Some("Bala"), 1, 400, "2026-09-01"),
+                spend_row("P4", None, 4, 1200, "2026-08-01"),
+            ],
+            guest: arena_store::GuestSalesRow {
+                bills: 5,
+                spend_minor: 350,
+            },
+            debtors: Vec::new(),
+        };
+        let r = players_report(&rows, "2026-10-10", "2026-10-20", "2026-10-20", &KEK);
+        let ranked: Vec<_> = r
+            .top
+            .iter()
+            .map(|p| (p.name.as_str(), p.erased, p.visits, p.spend_minor))
+            .collect();
+        assert_eq!(
+            ranked,
+            [
+                ("", true, 4, 1200),
+                ("Asha", false, 2, 900),
+                ("Zed", false, 3, 900),
+                ("Bala", false, 1, 400),
+            ],
+            "spend descending, then name; an erased player has no name"
+        );
+        assert_eq!((r.guest.bills, r.guest.spend_minor), (5, 350));
+        // P1 and P2 made their first sale in the range, P3 and P4 came back.
+        assert_eq!(
+            (r.new_players.players, r.new_players.spend_minor),
+            (2, 1800)
+        );
+        assert_eq!(
+            (r.returning_players.players, r.returning_players.spend_minor),
+            (2, 1600)
+        );
+        assert!(r.top.iter().all(|p| p.player_id != "guest"));
+    }
+
+    #[test]
+    fn the_top_list_stops_at_twenty() {
+        let rows = PlayersReportRows {
+            players: (0..25)
+                .map(|i| {
+                    spend_row(
+                        &format!("P{i:02}"),
+                        Some(&format!("N{i:02}")),
+                        1,
+                        100 + i,
+                        "2026-10-10",
+                    )
+                })
+                .collect(),
+            ..PlayersReportRows::default()
+        };
+        let r = players_report(&rows, "2026-10-10", "2026-10-10", "2026-10-10", &KEK);
+        assert_eq!(r.top.len(), PLAYERS_TOP_LIMIT);
+        assert_eq!(r.top[0].spend_minor, 124);
+        assert_eq!(
+            r.new_players.players, 25,
+            "the cut applies to the list only"
+        );
+    }
+
+    #[test]
+    fn credit_is_summed_over_every_debtor_into_three_buckets() {
+        let rows = PlayersReportRows {
+            debtors: vec![
+                debtor("P1", Some("Asha"), 80, (80, 0, 0), 3),
+                debtor("P2", Some("Bala"), 300, (0, 300, 0), 10),
+                debtor("P3", None, 200, (0, 0, 200), 20),
+                debtor("P4", Some("Chitra"), 300, (100, 0, 200), 25),
+            ],
+            ..PlayersReportRows::default()
+        };
+        let r = players_report(&rows, "2026-10-10", "2026-10-20", "2026-10-20", &KEK);
+        let buckets: Vec<_> = r
+            .credit_buckets
+            .iter()
+            .map(|b| (b.key.as_str(), b.amount_minor))
+            .collect();
+        assert_eq!(buckets, [("0_7", 180), ("8_14", 300), ("15_plus", 400)]);
+        assert_eq!(r.credit_outstanding_minor, 880);
+        assert_eq!(r.credit_as_of, "2026-10-20");
+        let order: Vec<_> = r
+            .debtors
+            .iter()
+            .map(|d| (d.player_id.as_str(), d.name.as_str(), d.erased))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("P4", "Chitra", false),
+                ("P2", "Bala", false),
+                ("P3", "", true),
+                ("P1", "Asha", false),
+            ],
+            "largest outstanding first, the older tab first on a tie"
+        );
+    }
+
+    #[test]
+    fn a_wrong_branch_key_reads_every_player_as_erased() {
+        let rows = PlayersReportRows {
+            players: vec![spend_row("P1", Some("Asha"), 1, 100, "2026-10-10")],
+            debtors: vec![debtor("P1", Some("Asha"), 50, (50, 0, 0), 1)],
+            ..PlayersReportRows::default()
+        };
+        let r = players_report(
+            &rows,
+            "2026-10-10",
+            "2026-10-10",
+            "2026-10-10",
+            &[9; KEK_LEN],
+        );
+        assert!(r.top[0].erased && r.top[0].name.is_empty());
+        assert!(r.debtors[0].erased && r.debtors[0].name.is_empty());
+    }
+
+    #[test]
+    fn an_empty_players_range_is_zeroes_and_empty_lists() {
+        let r = players_report(
+            &PlayersReportRows::default(),
+            "2026-10-10",
+            "2026-10-10",
+            "2026-10-10",
+            &KEK,
+        );
+        assert!(r.top.is_empty() && r.debtors.is_empty());
+        assert_eq!((r.guest.bills, r.guest.spend_minor), (0, 0));
+        assert_eq!(r.credit_buckets.len(), 3);
+        assert!(r.credit_buckets.iter().all(|b| b.amount_minor == 0));
+        assert_eq!((r.new_players.players, r.returning_players.players), (0, 0));
+    }
+
+    fn count(id: &str, count: i64, value: i64) -> arena_store::StaffCountRow {
+        arena_store::StaffCountRow {
+            staff_id: id.into(),
+            count,
+            value_minor: value,
+        }
+    }
+
+    fn shift(staff: &str, id: &str, closed_at: i64, variance: i64) -> arena_store::StaffShiftRow {
+        arena_store::StaffShiftRow {
+            staff_id: staff.into(),
+            shift_id: id.into(),
+            closed_at,
+            variance_minor: variance,
+        }
+    }
+
+    #[test]
+    fn staff_figures_land_on_the_right_member_and_voids_stay_out_of_sales() {
+        let rows = StaffReportRows {
+            sales: vec![count("S1", 3, 1200), count("S2", 1, 300)],
+            sessions: vec![count("S1", 4, 0)],
+            discounts: vec![count("M1", 2, 150)],
+            voids: vec![count("M1", 1, 120)],
+            refunds: vec![count("M1", 1, 90), count("GONE", 1, 10)],
+            shifts: vec![
+                shift("S1", "H1", 1_000, -50),
+                shift("S1", "H2", 2_000, 20),
+                shift("S2", "H3", 9_000_000, 7),
+            ],
+            names: vec![
+                ("S1".into(), "Sita".into()),
+                ("S2".into(), "Ravi".into()),
+                ("M1".into(), "Meera".into()),
+                ("IDLE".into(), "Idle".into()),
+            ],
+        };
+        // Days are 1,000 ms long, so shifts closed at 1,000 and 2,000 are on days 1 and 2.
+        let day_of = |ms: i64| format!("2026-10-{:02}", ms / 1000);
+        let r = staff_report(&rows, "2026-10-01", "2026-10-05", &day_of);
+        let by_id = |id: &str| r.staff.iter().find(|s| s.staff_id == id).unwrap();
+
+        let s1 = by_id("S1");
+        assert_eq!(
+            (
+                s1.name.as_str(),
+                s1.sales_minor,
+                s1.sales_count,
+                s1.sessions_started
+            ),
+            ("Sita", 1200, 3, 4)
+        );
+        assert_eq!(s1.variance_minor, -30);
+        assert_eq!(
+            s1.shifts
+                .iter()
+                .map(|s| (s.shift_id.as_str(), s.variance_minor))
+                .collect::<Vec<_>>(),
+            [("H1", -50), ("H2", 20)]
+        );
+        let m1 = by_id("M1");
+        assert_eq!((m1.discounts_count, m1.discounts_minor), (2, 150));
+        assert_eq!((m1.voids_count, m1.voids_minor), (1, 120));
+        assert_eq!((m1.refunds_count, m1.refunds_minor), (1, 90));
+        assert_eq!(m1.sales_minor, 0, "a void is not a sale");
+
+        let s2 = by_id("S2");
+        assert!(
+            s2.shifts.is_empty(),
+            "closed on day 9000, outside the range"
+        );
+        assert_eq!(s2.variance_minor, 0);
+        assert_eq!(by_id("GONE").name, "", "no longer in the staff table");
+        assert!(
+            r.staff.iter().all(|s| s.staff_id != "IDLE"),
+            "a member with no activity is not listed"
+        );
+        assert_eq!(
+            r.staff
+                .iter()
+                .map(|s| s.staff_id.as_str())
+                .collect::<Vec<_>>(),
+            ["S1", "S2", "GONE", "M1"],
+            "sales descending, then name (empty first)"
+        );
+    }
+
+    #[test]
+    fn a_shift_closed_after_midnight_belongs_to_the_previous_business_day() {
+        // 2026-10-11 01:30 in Kolkata with a 02:00 day start is business day 2026-10-10.
+        let tz = chrono_tz::Asia::Kolkata;
+        let closed_at = tz
+            .with_ymd_and_hms(2026, 10, 11, 1, 30, 0)
+            .unwrap()
+            .timestamp_millis();
+        let rows = StaffReportRows {
+            shifts: vec![shift("S1", "H1", closed_at, -5)],
+            ..StaffReportRows::default()
+        };
+        let day_of = |ms: i64| crate::locale::business_day_of(ms, tz, 120).to_string();
+        let on = |from: &str, to: &str| staff_report(&rows, from, to, &day_of).staff.len();
+        assert_eq!(on("2026-10-10", "2026-10-10"), 1);
+        assert_eq!(on("2026-10-11", "2026-10-11"), 0);
+        let (from_ms, to_ms) = shift_read_window("2026-10-10", "2026-10-10").unwrap();
+        assert!((from_ms..=to_ms).contains(&closed_at));
+    }
+
+    #[test]
+    fn an_empty_staff_range_lists_nobody() {
+        let r = staff_report(&StaffReportRows::default(), "a", "b", &|_| String::new());
+        assert!(r.staff.is_empty());
     }
 }

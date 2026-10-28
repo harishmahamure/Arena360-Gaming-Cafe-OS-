@@ -4,6 +4,7 @@
 //! never holds up `apply()`. Story 5.28 adds `GET /ui/reports/shifts` and
 //! `GET /ui/reports/shifts/{id}` (the Z-report of a closed shift). Story 5.29 adds
 //! `GET /ui/reports/gst` and `POST /ui/reports/gst/export` (the GSTR-1 ZIP, written to a folder).
+//! Story 5.30 adds `GET /ui/reports/players` and `GET /ui/reports/staff` (same range rules).
 
 use std::sync::Arc;
 
@@ -14,7 +15,9 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
-use crate::ui_auth::{UiAuth, auth_failed, bad_frame, bearer, fail, internal, ui_error};
+use crate::ui_auth::{
+    UiAuth, auth_failed, bad_frame, bearer, fail, internal, player_kek, ui_error,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct RangeQuery {
@@ -27,6 +30,8 @@ pub(crate) struct RangeQuery {
 enum Report {
     DailySales,
     Sessions,
+    Players,
+    Staff,
 }
 
 /// `GET /ui/reports/daily-sales?from=&to=`.
@@ -45,6 +50,25 @@ pub(crate) async fn sessions(
     q: Query<RangeQuery>,
 ) -> Response {
     run(state, headers, q, Report::Sessions).await
+}
+
+/// `GET /ui/reports/players?from=&to=` (Story 5.30). Player names are opened with the branch
+/// key, so a Hub with no key store answers `UNSUPPORTED`.
+pub(crate) async fn players(
+    state: State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    q: Query<RangeQuery>,
+) -> Response {
+    run(state, headers, q, Report::Players).await
+}
+
+/// `GET /ui/reports/staff?from=&to=` (Story 5.30).
+pub(crate) async fn staff(
+    state: State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    q: Query<RangeQuery>,
+) -> Response {
+    run(state, headers, q, Report::Staff).await
 }
 
 async fn run(
@@ -66,6 +90,13 @@ async fn run(
             "you do not have permission to view reports",
         )));
     }
+    let kek = match report {
+        Report::Players => match player_kek(&auth) {
+            Ok(kek) => Some(kek),
+            Err(e) => return fail(e),
+        },
+        _ => None,
+    };
     let reader = Arc::clone(auth.reader());
     let now = auth.clock().now_ms();
     let built = tokio::task::spawn_blocking(move || match report {
@@ -74,6 +105,17 @@ async fn run(
             .map(|v| Json(v).into_response()),
         Report::Sessions => reader
             .sessions_report(&q.from, &q.to, now)
+            .map(|v| Json(v).into_response()),
+        Report::Players => {
+            let kek = kek.ok_or_else(|| {
+                AppError::new(ErrorCode::Unsupported, "this hub has no key store")
+            })?;
+            reader
+                .players_report(&q.from, &q.to, now, &kek.kek()?)
+                .map(|v| Json(v).into_response())
+        }
+        Report::Staff => reader
+            .staff_report(&q.from, &q.to)
             .map(|v| Json(v).into_response()),
     })
     .await;

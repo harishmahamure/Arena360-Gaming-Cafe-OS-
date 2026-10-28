@@ -2,10 +2,12 @@ import type {
   DailySales,
   GstExported,
   GstMonth,
+  PlayersReport,
   SessionsReport,
   SettingEntry,
   ShiftList,
   SnapshotLocale,
+  StaffReport,
   ZReport,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
@@ -45,6 +47,18 @@ export const REPORTS: readonly ReportEntry[] = [
     href: "/reports/shifts",
     title: "hub.reports.shifts",
     note: "hub.reports.shifts_note",
+  },
+  {
+    id: "players",
+    href: "/reports/players",
+    title: "hub.reports.players",
+    note: "hub.reports.players_note",
+  },
+  {
+    id: "staff",
+    href: "/reports/staff",
+    title: "hub.reports.staff",
+    note: "hub.reports.staff_note",
   },
   {
     id: "gst",
@@ -171,6 +185,14 @@ export const loadDailySales = (from: string, to: string) =>
 /** `GET /ui/reports/sessions`. */
 export const loadSessionsReport = (from: string, to: string) =>
   loadReport<SessionsReport>("sessions", from, to, (b) => hasList(b, "by_device"));
+
+/** `GET /ui/reports/players`. */
+export const loadPlayersReport = (from: string, to: string) =>
+  loadReport<PlayersReport>("players", from, to, (b) => hasList(b, "top"));
+
+/** `GET /ui/reports/staff`. */
+export const loadStaffReport = (from: string, to: string) =>
+  loadReport<StaffReport>("staff", from, to, (b) => hasList(b, "staff"));
 
 export type ShiftReadOutcome<T> =
   | { kind: "ok"; view: T }

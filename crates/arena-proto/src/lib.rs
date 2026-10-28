@@ -245,10 +245,13 @@ pub use refund::{
     RefundLineView, RefundSummary,
 };
 pub use report::{
-    DailySales, DeviceSessions, GroupSessions, HourSales, NamedSales, RECEIVED_CREDIT_COLLECT,
+    CREDIT_BUCKET_0_7, CREDIT_BUCKET_8_14, CREDIT_BUCKET_15_PLUS, CreditBucketRow, CreditDebtor,
+    DailySales, DeviceSessions, GroupSessions, GuestTotals, HourSales, NamedSales, NewReturning,
+    PLAYERS_DEBTOR_LIMIT, PLAYERS_TOP_LIMIT, PlayerSpend, PlayersReport, RECEIVED_CREDIT_COLLECT,
     RECEIVED_TOPUP, REPORT_MAX_DAYS, ReportAmount, SALES_DISCOUNTS, SALES_PLANS, SALES_PLAY_TIME,
     SALES_PRODUCTS, SALES_TAX_ADDED, SHIFT_LIST_LIMIT, SessionsReport, ShiftList, ShiftListRow,
-    ZCashLine, ZReference, ZReferenceGroup, ZRefund, ZReport, ZVoid, ZWaste,
+    ShiftVariance, StaffReport, StaffRow, ZCashLine, ZReference, ZReferenceGroup, ZRefund, ZReport,
+    ZVoid, ZWaste,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{

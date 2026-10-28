@@ -314,3 +314,157 @@ pub struct ShiftListRow {
 pub struct ShiftList {
     pub shifts: Vec<ShiftListRow>,
 }
+
+/// How many top spenders the Players report lists.
+pub const PLAYERS_TOP_LIMIT: usize = 20;
+/// How many debtors the Players report lists.
+pub const PLAYERS_DEBTOR_LIMIT: usize = 50;
+
+/// `CreditBucketRow.key`: credit taken 0 to 7 days ago.
+pub const CREDIT_BUCKET_0_7: &str = "0_7";
+/// `CreditBucketRow.key`: credit taken 8 to 14 days ago.
+pub const CREDIT_BUCKET_8_14: &str = "8_14";
+/// `CreditBucketRow.key`: credit taken 15 or more days ago.
+pub const CREDIT_BUCKET_15_PLUS: &str = "15_plus";
+
+/// One of the top spenders in the range. A player whose data key is absent has `erased = true` and
+/// an empty `name` (the screen says "Erased player"); no other personal data is ever sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerSpend {
+    pub player_id: String,
+    pub name: String,
+    pub erased: bool,
+    /// Distinct business days with a settled sale in the range.
+    #[ts(type = "number")]
+    pub visits: i64,
+    #[ts(type = "number")]
+    pub spend_minor: i64,
+}
+
+/// Bills settled with no player: one total, never listed as a player.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct GuestTotals {
+    #[ts(type = "number")]
+    pub bills: i64,
+    #[ts(type = "number")]
+    pub spend_minor: i64,
+}
+
+/// A group of players (new, or returning) with what they spent in the range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct NewReturning {
+    #[ts(type = "number")]
+    pub players: i64,
+    #[ts(type = "number")]
+    pub spend_minor: i64,
+}
+
+/// Credit outstanding in one age bucket (`CREDIT_BUCKET_*`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditBucketRow {
+    pub key: String,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+}
+
+/// A player who owes credit today. `erased` and `name` as in [`PlayerSpend`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditDebtor {
+    pub player_id: String,
+    pub name: String,
+    pub erased: bool,
+    #[ts(type = "number")]
+    pub outstanding_minor: i64,
+    /// Days since the oldest unpaid credit was taken (first in, first out).
+    #[ts(type = "number")]
+    pub oldest_age_days: i64,
+}
+
+/// The Players report (Story 5.30) for the business days `from` to `to` inclusive
+/// (`GET /ui/reports/players`). Sales are settled session, plan and counter bills at their stored
+/// totals; voided orders, refunds, top-ups and credit collections are not in them. Credit
+/// outstanding is as of today's business day (`credit_as_of`), not the end of the range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayersReport {
+    pub from: String,
+    pub to: String,
+    /// Up to [`PLAYERS_TOP_LIMIT`] players, spend descending then name.
+    pub top: Vec<PlayerSpend>,
+    pub guest: GuestTotals,
+    /// Players whose first settled sale ever falls in the range.
+    pub new_players: NewReturning,
+    /// Players who had a settled sale before the range.
+    pub returning_players: NewReturning,
+    pub credit_as_of: String,
+    /// Always three rows: 0-7, 8-14 and 15+ days, summed over every debtor.
+    pub credit_buckets: Vec<CreditBucketRow>,
+    #[ts(type = "number")]
+    pub credit_outstanding_minor: i64,
+    /// Up to [`PLAYERS_DEBTOR_LIMIT`] debtors, largest outstanding first.
+    pub debtors: Vec<CreditDebtor>,
+}
+
+/// One closed shift's cash variance (counted minus expected; negative is short).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ShiftVariance {
+    pub shift_id: String,
+    /// When the shift closed (UTC ms).
+    #[ts(type = "number")]
+    pub closed_at: i64,
+    #[ts(type = "number")]
+    pub variance_minor: i64,
+}
+
+/// What one staff member did in the range. `name` is empty for a member no longer in the staff
+/// table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StaffRow {
+    pub staff_id: String,
+    pub name: String,
+    /// Settled bills this member settled (`orders.settled_by`), at their stored totals.
+    #[ts(type = "number")]
+    pub sales_minor: i64,
+    #[ts(type = "number")]
+    pub sales_count: i64,
+    /// Sessions this member started, by the session's business day.
+    #[ts(type = "number")]
+    pub sessions_started: i64,
+    /// Manual discounts approved (`discount_by`): count and value.
+    #[ts(type = "number")]
+    pub discounts_count: i64,
+    #[ts(type = "number")]
+    pub discounts_minor: i64,
+    /// Orders voided (`voided_by`): count and the voided orders' totals (not in sales).
+    #[ts(type = "number")]
+    pub voids_count: i64,
+    #[ts(type = "number")]
+    pub voids_minor: i64,
+    /// Refunds approved (`approved_by`): count and value.
+    #[ts(type = "number")]
+    pub refunds_count: i64,
+    #[ts(type = "number")]
+    pub refunds_minor: i64,
+    /// Closed shifts of this member that closed in the range, oldest first.
+    pub shifts: Vec<ShiftVariance>,
+    /// The sum of the shifts' variances.
+    #[ts(type = "number")]
+    pub variance_minor: i64,
+}
+
+/// The Staff report (Story 5.30): one row per staff member with any activity in the range, sales
+/// total descending then name (`GET /ui/reports/staff`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StaffReport {
+    pub from: String,
+    pub to: String,
+    pub staff: Vec<StaffRow>,
+}

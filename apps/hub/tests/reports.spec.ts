@@ -4,8 +4,10 @@ import type {
   DailySales,
   GstExported,
   GstMonth,
+  PlayersReport,
   SessionsReport,
   ShiftList,
+  StaffReport,
   ZReport,
 } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
@@ -227,11 +229,81 @@ const GST_MONTH: GstMonth = {
   empty: false,
 };
 
+// ---- Story 5.30: Players and Staff ----
+
+const PLAYERS: PlayersReport = {
+  from: "2026-10-28",
+  to: "2026-10-28",
+  top: [
+    { player_id: "P1", name: "Asha Rao", erased: false, visits: 3, spend_minor: 90_000 },
+    { player_id: "P2", name: "", erased: true, visits: 1, spend_minor: 40_000 },
+    { player_id: "P3", name: "Bala", erased: false, visits: 1, spend_minor: 10_000 },
+  ],
+  guest: { bills: 4, spend_minor: 35_000 },
+  new_players: { players: 2, spend_minor: 50_000 },
+  returning_players: { players: 1, spend_minor: 90_000 },
+  credit_as_of: "2026-10-28",
+  credit_buckets: [
+    { key: "0_7", amount_minor: 8_000 },
+    { key: "8_14", amount_minor: 30_000 },
+    { key: "15_plus", amount_minor: 20_000 },
+  ],
+  credit_outstanding_minor: 58_000,
+  debtors: [
+    { player_id: "P2", name: "", erased: true, outstanding_minor: 30_000, oldest_age_days: 10 },
+    {
+      player_id: "P3",
+      name: "Bala",
+      outstanding_minor: 28_000,
+      erased: false,
+      oldest_age_days: 20,
+    },
+  ],
+};
+
+const STAFF: StaffReport = {
+  from: "2026-10-28",
+  to: "2026-10-28",
+  staff: [
+    {
+      staff_id: "S1",
+      name: "Meera",
+      sales_minor: 120_000,
+      sales_count: 6,
+      sessions_started: 4,
+      discounts_count: 2,
+      discounts_minor: 15_000,
+      voids_count: 1,
+      voids_minor: 12_000,
+      refunds_count: 1,
+      refunds_minor: 9_000,
+      shifts: [{ shift_id: "SH1", closed_at: 1_793_000_000_000, variance_minor: -500 }],
+      variance_minor: -500,
+    },
+    {
+      staff_id: "GONE",
+      name: "",
+      sales_minor: 0,
+      sales_count: 0,
+      sessions_started: 0,
+      discounts_count: 0,
+      discounts_minor: 0,
+      voids_count: 0,
+      voids_minor: 0,
+      refunds_count: 2,
+      refunds_minor: 1_000,
+      shifts: [],
+      variance_minor: 0,
+    },
+  ],
+};
+
 type Hub = {
   asked: string[];
   sent: unknown[];
   shiftStatus: number;
   exported: unknown[];
+  empty: boolean;
 };
 
 async function open(
@@ -239,8 +311,9 @@ async function open(
   permissions: string[],
   path = "/reports",
   tax: string = GST_TAX,
+  empty = false,
 ): Promise<Hub> {
-  const hub: Hub = { asked: [], sent: [], shiftStatus: 200, exported: [] };
+  const hub: Hub = { asked: [], sent: [], shiftStatus: 200, exported: [], empty };
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "tok"));
   await page.route(`${HUB}/**`, async (route: Route) => {
     const req = route.request();
@@ -355,6 +428,38 @@ async function open(
           });
         }
         return ok(route, { applied: { intent_id: "I", changes: [] } });
+      case "/ui/reports/players":
+      case "/ui/reports/staff": {
+        const from = url.searchParams.get("from") ?? "";
+        const to = url.searchParams.get("to") ?? "";
+        hub.asked.push(`${url.pathname.split("/").pop()} ${from} ${to}`);
+        if (daySpan(from, to) < 1 || daySpan(from, to) > 90) {
+          return route.fulfill({
+            status: 422,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ code: "VALIDATION_FAILED", message: "no", field: "to" }),
+          });
+        }
+        if (hub.empty) {
+          return ok(
+            route,
+            url.pathname.endsWith("staff")
+              ? { ...STAFF, staff: [] }
+              : {
+                  ...PLAYERS,
+                  top: [],
+                  debtors: [],
+                  guest: { bills: 0, spend_minor: 0 },
+                  new_players: { players: 0, spend_minor: 0 },
+                  returning_players: { players: 0, spend_minor: 0 },
+                  credit_outstanding_minor: 0,
+                  credit_buckets: PLAYERS.credit_buckets.map((b) => ({ ...b, amount_minor: 0 })),
+                },
+          );
+        }
+        return ok(route, url.pathname.endsWith("staff") ? STAFF : PLAYERS);
+      }
       case "/ui/reports/daily-sales":
       case "/ui/reports/sessions": {
         const from = url.searchParams.get("from") ?? "";
@@ -648,4 +753,121 @@ test("the GST screen has no accessibility violations", async ({ page }) => {
   await expect(page.getByTestId("gst-section-hsn")).toBeVisible();
   const gst = await new AxeBuilder({ page }).analyze();
   expect(gst.violations).toEqual([]);
+});
+
+// ---- Story 5.30: Players and Staff ----
+
+test("the list offers Players and Staff after Shifts", async ({ page }) => {
+  await open(page, ["report.view"]);
+  await expect(page.getByTestId("report-link-staff")).toBeVisible();
+  const ids = await page
+    .locator("[data-testid^='report-link-']")
+    .evaluateAll((links) => links.map((l) => l.getAttribute("data-testid")));
+  expect(ids.slice(0, 5)).toEqual([
+    "report-link-daily-sales",
+    "report-link-sessions",
+    "report-link-shifts",
+    "report-link-players",
+    "report-link-staff",
+  ]);
+  await page.getByTestId("report-link-players").click();
+  await expect(page.getByTestId("players-report-screen")).toBeVisible();
+});
+
+test("Players shows top spenders, new and returning, the guest total and credit by age", async ({
+  page,
+}) => {
+  const hub = await open(page, ["report.view"], "/reports/players");
+  await expect(page.getByTestId("players-top")).toBeVisible();
+  expect(hub.asked[0]).toMatch(/^players (\d{4}-\d{2}-\d{2}) \1$/);
+  const rows = page.getByTestId("top-row");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText("Asha Rao");
+  await expect(rows.nth(0)).toContainText("₹900.00");
+  await expect(rows.nth(0)).toContainText("3");
+  await expect(page.getByTestId("new-count")).toHaveText("2");
+  await expect(page.getByTestId("new-spend")).toHaveText("₹500.00");
+  await expect(page.getByTestId("returning-count")).toHaveText("1");
+  await expect(page.getByTestId("returning-spend")).toHaveText("₹900.00");
+  await expect(page.getByTestId("guest-row")).toContainText(en["hub.reports.guest"]);
+  await expect(page.getByTestId("guest-bills")).toHaveText("4");
+  await expect(page.getByTestId("guest-spend")).toHaveText("₹350.00");
+  await expect(page.getByTestId("credit-bucket-0_7")).toHaveText("₹80.00");
+  await expect(page.getByTestId("credit-bucket-8_14")).toHaveText("₹300.00");
+  await expect(page.getByTestId("credit-bucket-15_plus")).toHaveText("₹200.00");
+  await expect(page.getByTestId("credit-total")).toHaveText("₹580.00");
+  await expect(page.getByTestId("debtor-row")).toHaveCount(2);
+  await expect(page.getByTestId("debtor-row").nth(1)).toContainText("20");
+});
+
+test("an erased player reads as Erased player with no personal data", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/players");
+  const erased = page.getByTestId("top-row").nth(1);
+  await expect(erased).toHaveAttribute("data-erased", "true");
+  await expect(erased).toContainText(en["hub.reports.erased_player"]);
+  await expect(page.getByTestId("debtor-row").first()).toContainText(
+    en["hub.reports.erased_player"],
+  );
+  await expect(page.getByTestId("players-report-screen")).not.toContainText("phone");
+});
+
+test("an empty Players range says so and still shows the credit buckets", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/players", GST_TAX, true);
+  await expect(page.getByTestId("players-none")).toHaveText(en["hub.reports.no_players"]);
+  await expect(page.getByTestId("credit-bucket-0_7")).toHaveText("₹0.00");
+  await expect(page.getByTestId("guest-bills")).toHaveText("0");
+  await expect(page.getByTestId("debtors-none")).toBeVisible();
+});
+
+test("Staff shows each member's figures and the variance per shift", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/staff");
+  await expect(page.getByTestId("staff-table")).toBeVisible();
+  expect(hub.asked[0]).toMatch(/^staff (\d{4}-\d{2}-\d{2}) \1$/);
+  const meera = page.getByTestId("staff-row-S1");
+  await expect(meera).toContainText("Meera");
+  await expect(meera.getByTestId("staff-sales")).toHaveText("6 · ₹1,200.00");
+  await expect(meera.getByTestId("staff-sessions")).toHaveText("4");
+  await expect(meera.getByTestId("staff-discounts")).toHaveText("2 · ₹150.00");
+  await expect(meera.getByTestId("staff-voids")).toHaveText("1 · ₹120.00");
+  await expect(meera.getByTestId("staff-refunds")).toHaveText("1 · ₹90.00");
+  await expect(meera.getByTestId("staff-variance")).toHaveText("−₹5.00");
+  // A member no longer in the staff table has an empty name.
+  await expect(page.getByTestId("staff-row-GONE")).toContainText(en["hub.reports.former_staff"]);
+  await expect(page.getByTestId("shift-variance-row")).toHaveCount(1);
+  await expect(page.getByTestId("shift-variance")).toHaveText("−₹5.00");
+  await expect(page.getByTestId("shift-open-SH1")).toHaveAttribute("href", "/reports/shifts/SH1");
+});
+
+test("an empty Staff range says so", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/staff", GST_TAX, true);
+  await expect(page.getByTestId("staff-none")).toHaveText(en["hub.reports.no_staff"]);
+});
+
+test("a preset on Players and Staff asks for the new range", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/staff");
+  await expect(page.getByTestId("staff-table")).toBeVisible();
+  await page.getByRole("button", { name: en["hub.reports.last_7"] }).click();
+  await expect.poll(() => hub.asked.length).toBe(2);
+  const [kind, from, to] = hub.asked[1].split(" ");
+  expect(kind).toBe("staff");
+  expect(daySpan(from, to)).toBe(7);
+});
+
+test("without report.view Players and Staff say so and ask for nothing", async ({ page }) => {
+  const hub = await open(page, ["pos.sell"], "/reports/players");
+  await expect(page.getByTestId("reports-denied")).toHaveText(en["hub.reports.no_access"]);
+  await page.goto("/reports/staff");
+  await expect(page.getByTestId("reports-denied")).toBeVisible();
+  expect(hub.asked).toEqual([]);
+});
+
+test("the Players and Staff screens have no accessibility violations", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/players");
+  await expect(page.getByTestId("players-top")).toBeVisible();
+  const players = await new AxeBuilder({ page }).analyze();
+  expect(players.violations).toEqual([]);
+  await page.goto("/reports/staff");
+  await expect(page.getByTestId("staff-table")).toBeVisible();
+  const staff = await new AxeBuilder({ page }).analyze();
+  expect(staff.violations).toEqual([]);
 });

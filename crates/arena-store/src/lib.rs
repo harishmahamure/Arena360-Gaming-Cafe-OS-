@@ -149,7 +149,8 @@ pub use refunds::{
 };
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`), and the connection it derefs to.
 pub use reports::{
-    ReceivedRow, ReportDevice, SalesLineRow, SalesOrderRow, SegmentSpan, SessionReportRow,
+    DebtorRow, GuestSalesRow, PlayerSalesRow, ReceivedRow, ReportDevice, SalesLineRow,
+    SalesOrderRow, SegmentSpan, SessionReportRow, StaffCountRow, StaffShiftRow,
 };
 pub use rusqlite::{Connection as DbConn, Transaction};
 pub use sessions::{
@@ -237,6 +238,28 @@ pub struct SessionsReportRows {
     pub devices: Vec<ReportDevice>,
     /// `(group id, name)`.
     pub groups: Vec<(String, String)>,
+}
+
+/// What the Players report reads (Story 5.30).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlayersReportRows {
+    pub players: Vec<PlayerSalesRow>,
+    pub guest: GuestSalesRow,
+    pub debtors: Vec<DebtorRow>,
+}
+
+/// What the Staff report reads (Story 5.30): one list per figure, keyed by staff id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaffReportRows {
+    pub sales: Vec<StaffCountRow>,
+    pub sessions: Vec<StaffCountRow>,
+    pub discounts: Vec<StaffCountRow>,
+    pub voids: Vec<StaffCountRow>,
+    pub refunds: Vec<StaffCountRow>,
+    /// Closed shifts near the range (by UTC time); the fold keeps the ones closed in it.
+    pub shifts: Vec<StaffShiftRow>,
+    /// `(staff id, display name)`.
+    pub names: Vec<(String, String)>,
 }
 
 /// Maps a SQLite failure to an `INTERNAL` error.
@@ -1213,6 +1236,76 @@ impl Store {
                 spans: reports::segment_spans(&s.conn, from, to, now_ms)?,
                 devices: reports::report_devices(&s.conn)?,
                 groups: reports::group_names(&s.conn)?,
+            })
+        })
+    }
+
+    /// The rows the Players report is built from, for the business days `from` to `to` (Story
+    /// 5.30), in one read snapshot; credit is aged as of the business day `today`. An older
+    /// database without the tables reads as no players.
+    pub fn players_report_rows(
+        &self,
+        from: &str,
+        to: &str,
+        today: &str,
+    ) -> Result<PlayersReportRows, AppError> {
+        if !self.table_exists("orders")?
+            || !self.table_exists("players")?
+            || !self.table_exists("player_keys")?
+        {
+            return Ok(PlayersReportRows::default());
+        }
+        let credit = self.table_exists("credit_balances")? && self.table_exists("wallet_txns")?;
+        self.read_consistent(|s| {
+            Ok(PlayersReportRows {
+                players: reports::player_sales(&s.conn, from, to)?,
+                guest: reports::guest_sales(&s.conn, from, to)?,
+                debtors: if credit {
+                    reports::debtors(&s.conn, today)?
+                } else {
+                    Vec::new()
+                },
+            })
+        })
+    }
+
+    /// The rows the Staff report is built from, for the business days `from` to `to` (Story
+    /// 5.30), in one read snapshot. Shifts are read from `shift_from_ms` to `shift_to_ms`
+    /// (a slack around the range; the fold keeps the ones that closed on a day in the range).
+    pub fn staff_report_rows(
+        &self,
+        from: &str,
+        to: &str,
+        shift_from_ms: i64,
+        shift_to_ms: i64,
+    ) -> Result<StaffReportRows, AppError> {
+        if !self.table_exists("orders")? || !self.table_exists("staff")? {
+            return Ok(StaffReportRows::default());
+        }
+        let refunds = self.table_exists("refunds")?;
+        let sessions = self.table_exists("sessions")?;
+        let shifts = self.table_exists("shifts")?;
+        self.read_consistent(|s| {
+            Ok(StaffReportRows {
+                sales: reports::staff_sales(&s.conn, from, to)?,
+                sessions: if sessions {
+                    reports::staff_sessions(&s.conn, from, to)?
+                } else {
+                    Vec::new()
+                },
+                discounts: reports::staff_discounts(&s.conn, from, to)?,
+                voids: reports::staff_voids(&s.conn, from, to)?,
+                refunds: if refunds {
+                    reports::staff_refunds(&s.conn, from, to)?
+                } else {
+                    Vec::new()
+                },
+                shifts: if shifts {
+                    reports::closed_shift_variances(&s.conn, shift_from_ms, shift_to_ms)?
+                } else {
+                    Vec::new()
+                },
+                names: reports::staff_names(&s.conn)?,
             })
         })
     }

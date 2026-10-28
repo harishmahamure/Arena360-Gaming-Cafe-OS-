@@ -290,6 +290,21 @@ pub fn current_business_day(
     Ok(Some(resolve(&rows, now_ms).0.to_string()))
 }
 
+/// Maps a UTC time to its business day under the locale rules in effect then (the UTC date before
+/// the branch has a locale), reading the rules once.
+pub fn business_day_fn(
+    store: &arena_store::Store,
+) -> Result<Box<dyn Fn(i64) -> String + Send>, AppError> {
+    let rows = match store.branch_locale()? {
+        Some(branch) => Some(locale_rows(&branch, &store.settings()?)),
+        None => None,
+    };
+    Ok(Box::new(move |ts_ms| match &rows {
+        Some(rows) => resolve(rows, ts_ms).0.to_string(),
+        None => business_day_of(ts_ms, Tz::UTC, 0).to_string(),
+    }))
+}
+
 /// The branch time zone in effect at `now_ms` (UTC before the branch has a locale): reports bucket
 /// hours of the day with it.
 pub fn current_tz(store: &arena_store::Store, now_ms: i64) -> Result<Tz, AppError> {

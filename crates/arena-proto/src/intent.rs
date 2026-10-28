@@ -117,6 +117,11 @@ pub enum IntentKind {
     PlanSell,
     #[serde(rename = "plan.sell.reverted")]
     PlanSellReverted,
+    /// A walk-up sale of products and bundles, settled in the same intent.
+    #[serde(rename = "pos.sale")]
+    PosSale,
+    #[serde(rename = "pos.sale.reverted")]
+    PosSaleReverted,
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials,
     #[serde(rename = "staff.deactivate")]
@@ -233,7 +238,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 76] = [
+    pub const ALL: [IntentKind; 78] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -264,6 +269,8 @@ impl IntentKind {
         Self::RuleUpsert,
         Self::PlanSell,
         Self::PlanSellReverted,
+        Self::PosSale,
+        Self::PosSaleReverted,
         Self::StaffSetCredentials,
         Self::StaffDeactivate,
         Self::StockIn,
@@ -345,6 +352,8 @@ impl IntentKind {
             Self::RuleUpsert => "rule.upsert",
             Self::PlanSell => "plan.sell",
             Self::PlanSellReverted => "plan.sell.reverted",
+            Self::PosSale => "pos.sale",
+            Self::PosSaleReverted => "pos.sale.reverted",
             Self::StaffSetCredentials => "staff.set_credentials",
             Self::StaffDeactivate => "staff.deactivate",
             Self::StockIn => "stock.in",
@@ -445,7 +454,7 @@ impl IntentKind {
             | Self::StockWriteOff
             | Self::StockExpiryCheck
             | Self::StockThreshold => IntentCategory::Catalog,
-            Self::ShiftOpen => IntentCategory::Money,
+            Self::ShiftOpen | Self::PosSale | Self::PosSaleReverted => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -544,9 +553,11 @@ impl IntentKind {
             Self::SessionForceEnd | Self::SessionForceEndReverted => {
                 Requirement::Perm(Permission::SessionForceEnd)
             }
-            Self::SessionSettle | Self::SessionSettleReverted | Self::GroupPayer => {
-                Requirement::Perm(Permission::PosSell)
-            }
+            Self::SessionSettle
+            | Self::SessionSettleReverted
+            | Self::GroupPayer
+            | Self::PosSale
+            | Self::PosSaleReverted => Requirement::Perm(Permission::PosSell),
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
             Self::SessionExtend => Requirement::Perm(Permission::SessionExtend),
             Self::SessionTransfer => Requirement::Perm(Permission::SessionTransfer),
@@ -620,6 +631,8 @@ impl IntentKind {
             | Self::RuleUpsert
             | Self::PlanSell
             | Self::PlanSellReverted
+            | Self::PosSale
+            | Self::PosSaleReverted
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
@@ -1126,6 +1139,10 @@ pub enum IntentPayload {
     PlanSell(crate::PlanSell),
     #[serde(rename = "plan.sell.reverted")]
     PlanSellReverted(crate::PlanSellReverted),
+    #[serde(rename = "pos.sale")]
+    PosSale(crate::PosSale),
+    #[serde(rename = "pos.sale.reverted")]
+    PosSaleReverted(crate::PosSaleReverted),
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials(StaffSetCredentials),
     #[serde(rename = "staff.deactivate")]
@@ -1253,6 +1270,8 @@ impl IntentPayload {
             Self::RuleUpsert(_) => IntentKind::RuleUpsert,
             Self::PlanSell(_) => IntentKind::PlanSell,
             Self::PlanSellReverted(_) => IntentKind::PlanSellReverted,
+            Self::PosSale(_) => IntentKind::PosSale,
+            Self::PosSaleReverted(_) => IntentKind::PosSaleReverted,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
             Self::StaffDeactivate(_) => IntentKind::StaffDeactivate,
             Self::StockIn(_) => IntentKind::StockIn,
@@ -1556,9 +1575,11 @@ mod tests {
                 "session.force_end" | "session.force_end.reverted" => {
                     Requirement::Perm(Permission::SessionForceEnd)
                 }
-                "session.settle" | "session.settle.reverted" | "group.payer" => {
-                    Requirement::Perm(Permission::PosSell)
-                }
+                "session.settle"
+                | "session.settle.reverted"
+                | "group.payer"
+                | "pos.sale"
+                | "pos.sale.reverted" => Requirement::Perm(Permission::PosSell),
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "session.extend" => Requirement::Perm(Permission::SessionExtend),
                 "session.transfer" => Requirement::Perm(Permission::SessionTransfer),

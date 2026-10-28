@@ -210,6 +210,15 @@ enum Op {
         undo: bool,
         late: bool,
     },
+    /// A cash counter sale of one or two products (stock or tax may refuse it), then maybe its
+    /// Undo (late or in time).
+    PosSale {
+        pick: u8,
+        qty: u8,
+        second: bool,
+        undo: bool,
+        late: bool,
+    },
     /// A cash top-up for a player, then maybe its Undo (late or in time).
     WalletTopup {
         player: u8,
@@ -502,6 +511,9 @@ fn op() -> impl Strategy<Value = Op> {
                 undo,
                 late
             }
+        ),
+        3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3)).prop_map(
+            |(pick, qty, second, undo, late)| Op::PosSale { pick, qty, second, undo, late }
         ),
         2 => (any::<u8>(), 0..3000u16).prop_map(|(player, limit)| Op::CreditSet { player, limit }),
         2 => (
@@ -1557,6 +1569,130 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let emptied = after.iter().find(|l| l.lot_id == lot.lot_id).unwrap();
             prop_assert_eq!(emptied.qty_remaining, 0);
             prop_assert_eq!(after.iter().map(|l| l.qty_remaining).sum::<i64>(), left);
+        }
+        Op::PosSale {
+            pick,
+            qty,
+            second,
+            undo,
+            late,
+        } => {
+            let products: Vec<_> = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .filter(|p| p.active)
+                .collect();
+            let tax = hub
+                .reader
+                .settings()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.key == "branch.tax")
+                .and_then(|s| arena_proto::TaxSettings::parse(&s.value));
+            let (false, Some(tax)) = (products.is_empty(), tax) else {
+                return Ok(());
+            };
+            let mut lines = vec![(
+                products[usize::from(*pick) % products.len()].clone(),
+                i64::from(*qty),
+            )];
+            if *second && products.len() > 1 {
+                lines.push((
+                    products[(usize::from(*pick) + 1) % products.len()].clone(),
+                    1,
+                ));
+            }
+            let gst = tax.tax_mode() == arena_proto::TaxMode::GstIn;
+            let taxed: Vec<_> = lines
+                .iter()
+                .map(|(p, q)| arena_core::invoice::tax::Line {
+                    rate_bp: if gst {
+                        u16::try_from(p.tax_rate_bp).unwrap_or(0)
+                    } else {
+                        tax.rate_bp
+                    },
+                    amount_minor: p.price_minor * q,
+                })
+                .collect();
+            let Some(bill) = arena_core::invoice::tax::compute(&taxed, tax.inclusive, gst) else {
+                return Ok(());
+            };
+            let stock_before = stock_image(hub);
+            let before = hub.change_count();
+            let out = hub.submit_new(
+                hub.intent(
+                    IntentPayload::PosSale(arena_proto::PosSale {
+                        lines: lines
+                            .iter()
+                            .map(|(p, q)| arena_proto::PosSaleLine {
+                                product_id: p.product_id.clone(),
+                                qty: *q,
+                            })
+                            .collect(),
+                        payments: if bill.total_minor > 0 {
+                            vec![arena_proto::PaymentRow {
+                                method: arena_proto::PaymentMethod::Cash,
+                                amount_minor: bill.total_minor,
+                                reference: None,
+                            }]
+                        } else {
+                            Vec::new()
+                        },
+                        player_id: None,
+                        credit_override: None,
+                        stock_override: None,
+                    }),
+                    None,
+                ),
+            );
+            if let Err(e) = &out {
+                // A refusal (short stock, a bundle part switched off, no shift) writes nothing.
+                prop_assert!(
+                    matches!(
+                        e.code,
+                        ErrorCode::OutOfStock
+                            | ErrorCode::BundleShort
+                            | ErrorCode::ValidationFailed
+                            | ErrorCode::ShiftNotOpen
+                    ),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(stock_image(hub), stock_before);
+                return Ok(());
+            }
+            let order = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .rfind(|o| text(o, "kind") == "pos_sale")
+                .unwrap();
+            prop_assert_eq!(text(&order, "status"), "settled");
+            prop_assert_eq!(int(&order, "total_minor"), bill.total_minor);
+            prop_assert_eq!(int(&order, "tax_minor"), bill.tax_minor);
+            if *undo {
+                if *late {
+                    hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
+                }
+                let after_forward = hub.change_count();
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::PosSaleReverted(arena_proto::PosSaleReverted {
+                        order_id: text(&order, "id"),
+                    }),
+                    Some(int(&order, "rev")),
+                ));
+                if *late {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::UndoNotAllowed, None)));
+                    prop_assert_eq!(hub.change_count(), after_forward);
+                } else {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert_eq!(stock_image(hub), stock_before);
+                }
+            }
         }
         Op::ShiftOpen { float } => {
             let out = hub.submit_new(hub.intent(
@@ -3606,6 +3742,41 @@ fn assert_cash_holds(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// Every stock row with its lots, for comparing the stock before and after a sale or its Undo.
+type StockImage = Vec<(String, i64, Vec<(String, i64)>)>;
+
+fn stock_image(hub: &Hub) -> StockImage {
+    let mut image: Vec<_> = hub
+        .reader
+        .rows(Table::Stock)
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let id = text(s, "product_id");
+            let mut lots: Vec<_> = hub
+                .reader
+                .lots(&id)
+                .unwrap()
+                .into_iter()
+                .map(|l| (l.lot_id, l.qty_remaining))
+                .collect();
+            lots.sort();
+            (id, int(s, "qty"), lots)
+        })
+        .collect();
+    image.sort();
+    image
+}
+
+/// Stock never goes below zero, and every product's quantity is what its lots hold.
+fn assert_stock_holds(hub: &Hub) -> Result<(), TestCaseError> {
+    for (id, qty, lots) in stock_image(hub) {
+        prop_assert!(qty >= 0, "{id} went below zero");
+        prop_assert_eq!(lots.iter().map(|(_, q)| q).sum::<i64>(), qty, "{} lots", id);
+    }
+    Ok(())
+}
+
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()
@@ -3630,6 +3801,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_sessions_hold(&hub)?;
                 assert_orders_hold(&hub)?;
                 assert_cash_holds(&hub)?;
+                assert_stock_holds(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

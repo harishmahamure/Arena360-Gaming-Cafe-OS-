@@ -88,6 +88,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::OutOfStock
         | ErrorCode::ShiftAlreadyOpen
         | ErrorCode::ShiftNotOpen
+        | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame

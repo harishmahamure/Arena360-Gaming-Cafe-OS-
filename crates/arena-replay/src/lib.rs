@@ -872,6 +872,76 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            // A counter sale of a tracked product (stock moves, an order with tax columns),
+            // one of two undone.
+            let cola = writer
+                .submit_intent(submit(
+                    IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                        id: None,
+                        name: "Cola".into(),
+                        category: String::new(),
+                        price_minor: 4_000,
+                        tax_rate_bp: None,
+                        hsn: String::new(),
+                        track_stock: true,
+                        image: String::new(),
+                        barcode: String::new(),
+                        kitchen: false,
+                        favourite: false,
+                        active: true,
+                        bundle: false,
+                        components: Vec::new(),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::StockIn(arena_proto::StockIn {
+                        product_id: cola.clone(),
+                        qty: 10,
+                        unit_cost_minor: 2_000,
+                        supplier: "Acme".into(),
+                        expiry: None,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            let pos = || {
+                submit(
+                    IntentPayload::PosSale(arena_proto::PosSale {
+                        lines: vec![arena_proto::PosSaleLine {
+                            product_id: cola.clone(),
+                            qty: 2,
+                        }],
+                        payments: vec![arena_proto::PaymentRow {
+                            method: arena_proto::PaymentMethod::Cash,
+                            amount_minor: 8_000,
+                            reference: None,
+                        }],
+                        player_id: None,
+                        credit_override: None,
+                        stock_override: None,
+                    }),
+                    None,
+                )
+            };
+            writer.submit_intent(pos()).await.unwrap();
+            let undone = writer.submit_intent(pos()).await.unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::PosSaleReverted(arena_proto::PosSaleReverted {
+                        order_id: undone.changes[0].row_id.clone(),
+                    }),
+                    Some(1),
+                ))
+                .await
+                .unwrap();
             let owned_pack = first_sale
                 .changes
                 .iter()

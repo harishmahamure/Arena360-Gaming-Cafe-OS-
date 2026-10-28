@@ -45,7 +45,28 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
         None => rbac::check(tx, intent)?,
     }
     creating_player(tx, intent)?;
-    overriding_credit(tx, intent)
+    overriding_credit(tx, intent)?;
+    overriding_stock(tx, intent)
+}
+
+/// A stock override at the counter needs `stock.override` on top of the sale: the actor's own,
+/// or the elevating manager's.
+fn overriding_stock(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    let IntentPayload::PosSale(s) = &intent.payload else {
+        return Ok(());
+    };
+    if s.stock_override != Some(true) || intent.actor.kind == ActorKind::Owner {
+        return Ok(());
+    }
+    let holder = intent
+        .elevated_by
+        .as_ref()
+        .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+    if rbac::staff_allows(tx, holder, arena_proto::Permission::StockOverride)? {
+        Ok(())
+    } else {
+        Err(rbac::denied())
+    }
 }
 
 /// A credit override needs `credit.manage` on top of the settle: the actor's own, or the
@@ -195,6 +216,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::WalletTopupReverted(_)
             | Target::PlanSell(_)
             | Target::PlanSellReverted(_)
+            | Target::PosSale(_)
+            | Target::PosSaleReverted(_)
             | Target::CreditSetLimit(_)
             | Target::CreditCollect(_)
             | Target::CreditCollectReverted(_)
@@ -273,7 +296,8 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionAssign(t) => super::session::base_rev_assign(intent, t),
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
-        Target::PlanSell(_) => Ok(()),
+        Target::PlanSell(_) | Target::PosSale(_) => Ok(()),
+        Target::PosSaleReverted(t) => super::pos_sale::base_rev_sale_reverted(intent, t),
         Target::PlanSellReverted(t) => super::plan_sales::base_rev_sell_reverted(intent, t),
         Target::CreditSetLimit(_) => Ok(()),
         Target::CreditCollect(_) => Ok(()),

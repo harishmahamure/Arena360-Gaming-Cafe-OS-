@@ -6,8 +6,13 @@ import {
   MAX_LINE_QTY,
   SCAN_GAP_MS,
   ScanBurst,
+  DEFAULT_TAX,
+  cartBill,
   cartCount,
   cartTotal,
+  computeBill,
+  lineRate,
+  saleLines,
   findByBarcode,
   lineShortage,
   step,
@@ -163,4 +168,84 @@ test("keys exactly the gap apart are typing, not a scan", () => {
   let t = 1000;
   for (const key of "8901") burst.key(key, (t += SCAN_GAP_MS));
   expect(burst.key("Enter", (t += SCAN_GAP_MS))).toBeNull();
+});
+
+// ---- Story 5.11: the tax port and the sale lines ----
+
+const rate = (rate_bp: number, amount_minor: number) => ({ rate_bp, amount_minor });
+
+test("tax inside the price is carved out; the golden bill matches the Hub", () => {
+  const bill = computeBill([rate(500, 31_000)], true);
+  expect([bill.subtotal_minor, bill.tax_minor, bill.total_minor]).toEqual([29_524, 1_476, 31_000]);
+  expect(bill.breakup).toEqual([{ rate_bp: 500, taxable_minor: 29_524, tax_minor: 1_476 }]);
+});
+
+test("tax outside the price is added after the subtotal", () => {
+  const bill = computeBill([rate(500, 31_000)], false);
+  expect([bill.subtotal_minor, bill.tax_minor, bill.total_minor]).toEqual([31_000, 1_550, 32_550]);
+});
+
+test("tax is computed once per rate, never per line", () => {
+  const lines = [rate(500, 110), rate(500, 110), rate(500, 110), rate(1800, 100), rate(1800, 100)];
+  const bill = computeBill(lines, true);
+  expect(bill.breakup.map((r) => [r.rate_bp, r.tax_minor])).toEqual([
+    [500, 16],
+    [1800, 31],
+  ]);
+  const perLine = lines.reduce((n, l) => n + computeBill([l], true).tax_minor, 0);
+  expect(perLine).toBe(15 + 30);
+});
+
+test("half a minor unit rounds up, and an empty bill is zero", () => {
+  expect(computeBill([rate(500, 1_000)], false).tax_minor).toBe(50);
+  expect(computeBill([rate(100, 1_050)], false).tax_minor).toBe(11);
+  expect(computeBill([rate(50, 10)], false).tax_minor).toBe(0);
+  expect(computeBill([rate(5000, 1)], false).tax_minor).toBe(1);
+  expect(computeBill([], true)).toEqual({
+    subtotal_minor: 0,
+    tax_minor: 0,
+    total_minor: 0,
+    breakup: [],
+  });
+});
+
+test("large lines keep every minor unit", () => {
+  const amount = 999 * 1_000_000_000;
+  const bill = computeBill([rate(1800, amount)], false);
+  const exact = (BigInt(amount) * 1800n + 5000n) / 10_000n;
+  expect(BigInt(bill.tax_minor)).toBe(exact);
+  expect(bill.total_minor).toBe(amount + bill.tax_minor);
+});
+
+test("GST mode taxes each line at its product's rate, simple mode at the branch rate", () => {
+  const cola = product("Cola", { price_minor: 1_180, tax_rate_bp: 1800 });
+  const chips = product("Chips", { price_minor: 105, tax_rate_bp: 500 });
+  const byId = index(cola, chips);
+  const cart = [
+    { productId: "Cola", qty: 1 },
+    { productId: "Chips", qty: 1 },
+  ];
+  const gst = { ...DEFAULT_TAX, gst: true };
+  expect(lineRate(cola, gst)).toBe(1800);
+  const bill = cartBill(cart, byId, gst);
+  expect([bill.subtotal_minor, bill.tax_minor, bill.total_minor]).toEqual([1_100, 185, 1_285]);
+  expect(bill.breakup.map((r) => r.rate_bp)).toEqual([500, 1800]);
+  // Outside India a "gst" flag means nothing: the branch's simple rate applies.
+  const simple = { ...DEFAULT_TAX, country: "AE", gst: true, rate_bp: 700, inclusive: false };
+  expect(lineRate(cola, simple)).toBe(700);
+  expect(cartTotal(cart, byId, simple)).toBe(1_285 + 90);
+  // Before the branch tax loads the cart is priced as listed.
+  expect(cartTotal(cart, byId)).toBe(1_285);
+});
+
+test("a cart becomes the lines of pos.sale", () => {
+  expect(
+    saleLines([
+      { productId: "A", qty: 2 },
+      { productId: "B", qty: 1 },
+    ]),
+  ).toEqual([
+    { product_id: "A", qty: 2 },
+    { product_id: "B", qty: 1 },
+  ]);
 });

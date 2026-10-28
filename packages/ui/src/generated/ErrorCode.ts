@@ -82,4 +82,5 @@ export type ErrorCode =
   | "PAST_CLOSING"
   | "OUT_OF_STOCK"
   | "SHIFT_ALREADY_OPEN"
-  | "SHIFT_NOT_OPEN";
+  | "SHIFT_NOT_OPEN"
+  | "BUNDLE_SHORT";

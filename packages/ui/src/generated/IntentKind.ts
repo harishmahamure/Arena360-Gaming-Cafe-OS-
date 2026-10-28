@@ -34,6 +34,8 @@ export type IntentKind =
   | "rule.upsert"
   | "plan.sell"
   | "plan.sell.reverted"
+  | "pos.sale"
+  | "pos.sale.reverted"
   | "staff.set_credentials"
   | "staff.deactivate"
   | "stock.in"

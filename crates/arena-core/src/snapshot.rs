@@ -750,6 +750,20 @@ impl SnapshotReader {
         })
     }
 
+    /// The business day's settled counter sales, newest first (Recent sales on POS).
+    pub fn pos_sales(&self, now_ms: i64) -> Result<arena_proto::PosSalesView, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let business_day = crate::locale::current_business_day(&store, now_ms)?.unwrap_or_default();
+        let sales = store.pos_sales(&business_day)?;
+        Ok(arena_proto::PosSalesView {
+            business_day,
+            sales,
+        })
+    }
+
     pub fn wallet_balance(&self, player_id: &str) -> Result<i64, AppError> {
         self.reader
             .lock()

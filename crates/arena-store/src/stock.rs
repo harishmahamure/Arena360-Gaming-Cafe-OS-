@@ -40,13 +40,19 @@ pub struct MoveRow {
     pub waste_reason: Option<String>,
     /// What the move was worth at the average cost, in minor units (0 for a stock-in).
     pub value_minor: i64,
+    /// The counter sale a `sale`, `sale_reverted` or sale-override move belongs to.
+    pub order_id: Option<String>,
+    /// Free text a move carries (the override note).
+    pub note: Option<String>,
+    /// The manager who approved the move (a sale override).
+    pub elevated_by: Option<String>,
 }
 
 const LOT_COLUMNS: &str =
     "lot_id, product_id, qty_in, qty_remaining, unit_cost_minor, expiry, received_at";
 const MOVE_COLUMNS: &str = "move_id, product_id, reason, delta, before_qty, before_avg_cost_minor, \
                             unit_cost_minor, supplier, lot_id, lots_used, staff_id, at, \
-                            waste_reason, value_minor";
+                            waste_reason, value_minor, order_id, note, elevated_by";
 
 fn lot(r: &rusqlite::Row<'_>) -> rusqlite::Result<LotRow> {
     Ok(LotRow {
@@ -76,6 +82,9 @@ fn mv(r: &rusqlite::Row<'_>) -> rusqlite::Result<MoveRow> {
         at: r.get(11)?,
         waste_reason: r.get(12)?,
         value_minor: r.get(13)?,
+        order_id: r.get(14)?,
+        note: r.get(15)?,
+        elevated_by: r.get(16)?,
     })
 }
 
@@ -184,9 +193,10 @@ pub fn insert_move(conn: &Connection, m: &MoveRow) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
                                   before_avg_cost_minor, unit_cost_minor, supplier, lot_id,
-                                  lots_used, staff_id, at, waste_reason, value_minor, rev,
-                                  created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, 0, 0)",
+                                  lots_used, staff_id, at, waste_reason, value_minor, order_id,
+                                  note, elevated_by, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                 0, 0, 0)",
         params![
             m.move_id,
             m.product_id,
@@ -201,7 +211,10 @@ pub fn insert_move(conn: &Connection, m: &MoveRow) -> Result<(), AppError> {
             m.staff_id,
             m.at,
             m.waste_reason,
-            m.value_minor
+            m.value_minor,
+            m.order_id,
+            m.note,
+            m.elevated_by
         ],
     )
     .map_err(db_error)?;
@@ -225,6 +238,24 @@ pub fn list_moves(conn: &Connection, product_id: &str) -> Result<Vec<MoveRow>, A
         ))
         .map_err(db_error)?;
     let rows = stmt.query_map([product_id], mv).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// The moves of `order_id` with this `reason`, in the order they were written.
+pub fn list_order_moves(
+    conn: &Connection,
+    order_id: &str,
+    reason: &str,
+) -> Result<Vec<MoveRow>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {MOVE_COLUMNS} FROM stock_moves WHERE order_id = ?1 AND reason = ?2
+             ORDER BY rowid"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![order_id, reason], mv)
+        .map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 

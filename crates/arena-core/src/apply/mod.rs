@@ -47,6 +47,7 @@ mod pc_command;
 mod plan_sales;
 mod plans;
 mod players;
+mod pos_sale;
 mod prepaid;
 mod printer_status;
 mod products;
@@ -189,6 +190,8 @@ pub(crate) enum Target {
     WalletTopupReverted(Box<wallet::TopupRevertTarget>),
     PlanSell(Box<plan_sales::SellTarget>),
     PlanSellReverted(Box<plan_sales::SellRevertTarget>),
+    PosSale(Box<pos_sale::SaleTarget>),
+    PosSaleReverted(Box<pos_sale::RevertTarget>),
     CreditSetLimit(Box<credit::LimitTarget>),
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
@@ -274,6 +277,10 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::PlanSell(s) => Target::PlanSell(Box::new(plan_sales::load_sell(tx, s, now)?)),
         P::PlanSellReverted(r) => {
             Target::PlanSellReverted(Box::new(plan_sales::load_sell_reverted(tx, r, now)?))
+        }
+        P::PosSale(s) => Target::PosSale(Box::new(pos_sale::load_sale(tx, s, now)?)),
+        P::PosSaleReverted(r) => {
+            Target::PosSaleReverted(Box::new(pos_sale::load_sale_reverted(tx, r, now)?))
         }
         P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),
         P::CreditCollect(c) => {

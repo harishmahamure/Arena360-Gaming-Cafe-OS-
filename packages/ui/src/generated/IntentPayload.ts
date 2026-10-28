@@ -37,6 +37,8 @@ import type { PlanUpsert } from "./PlanUpsert";
 import type { PlayerCreate } from "./PlayerCreate";
 import type { PlayerPasswordReset } from "./PlayerPasswordReset";
 import type { PlayerUpdate } from "./PlayerUpdate";
+import type { PosSale } from "./PosSale";
+import type { PosSaleReverted } from "./PosSaleReverted";
 import type { PrinterStatusSet } from "./PrinterStatusSet";
 import type { ProductDelete } from "./ProductDelete";
 import type { ProductUpsert } from "./ProductUpsert";
@@ -108,6 +110,8 @@ export type IntentPayload =
   | ({ kind: "rule.upsert" } & RuleUpsert)
   | ({ kind: "plan.sell" } & PlanSell)
   | ({ kind: "plan.sell.reverted" } & PlanSellReverted)
+  | ({ kind: "pos.sale" } & PosSale)
+  | ({ kind: "pos.sale.reverted" } & PosSaleReverted)
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
   | ({ kind: "staff.deactivate" } & StaffDeactivate)
   | ({ kind: "stock.in" } & StockIn)

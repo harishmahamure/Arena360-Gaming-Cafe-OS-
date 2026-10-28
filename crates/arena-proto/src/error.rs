@@ -148,6 +148,8 @@ pub enum ErrorCode {
     ShiftAlreadyOpen,
     /// An intent with a cash payment row while no shift is open.
     ShiftNotOpen,
+    /// A counter sale of a bundle with a component short of stock; the message names it.
+    BundleShort,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -244,6 +246,7 @@ impl ErrorCode {
             Self::OutOfStock => "OUT_OF_STOCK",
             Self::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
             Self::ShiftNotOpen => "SHIFT_NOT_OPEN",
+            Self::BundleShort => "BUNDLE_SHORT",
         }
     }
 }
@@ -401,6 +404,7 @@ mod tests {
             (ErrorCode::OutOfStock, "OUT_OF_STOCK"),
             (ErrorCode::ShiftAlreadyOpen, "SHIFT_ALREADY_OPEN"),
             (ErrorCode::ShiftNotOpen, "SHIFT_NOT_OPEN"),
+            (ErrorCode::BundleShort, "BUNDLE_SHORT"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

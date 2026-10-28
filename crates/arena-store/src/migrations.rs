@@ -192,6 +192,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 46,
         sql: include_str!("../migrations/0046_shifts.sql"),
     },
+    Migration {
+        version: 47,
+        sql: include_str!("../migrations/0047_pos_sales.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -206,5 +210,96 @@ mod tests {
         for (i, m) in MIGRATIONS.iter().enumerate() {
             assert_eq!(m.version as usize, i + 1);
         }
+    }
+
+    /// Migration 47 rebuilds `orders`: the rows of the tables that point at it must survive, the
+    /// new columns default, and a counter sale is now a legal kind.
+    #[test]
+    fn the_pos_sales_migration_keeps_orders_and_their_children() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 47) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO players (player_id, username, password_hash, phone_lookup, name_enc,
+                                  phone_enc, tags, rev, created_at, updated_at)
+             VALUES ('P1', 'asha', 'h', 'l', 'n', 'p', '', 1, 0, 0);
+             INSERT INTO orders (id, player_id, status, subtotal_minor, total_minor, business_day,
+                                 fy, rev, created_at, updated_at, settled_at, settled_by, kind)
+             VALUES ('O1', 'P1', 'settled', 500, 500, '2027-01-15', '2026-27', 1, 0, 0, 5,
+                     'S', 'topup');
+             INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position,
+                                   business_day, fy, rev, created_at, updated_at)
+             VALUES ('PAY1', 'O1', 'cash', 500, 'S', 0, '2027-01-15', '2026-27', 1, 0, 0);
+             INSERT INTO wallet_txns (id, player_id, delta_minor, reason, staff_id, order_id,
+                                      business_day, fy, rev, created_at, updated_at)
+             VALUES ('T1', 'P1', 500, 'topup', 'S', 'O1', '2027-01-15', '2026-27', 1, 0, 0);
+             INSERT INTO order_lines (id, order_id, from_at, to_at, minutes, rate_minor_per_hour,
+                                      amount_minor, position, rev, created_at, updated_at)
+             VALUES ('L1', 'O1', 0, 0, 0, 0, 500, 0, 1, 0, 0);",
+        )
+        .unwrap();
+        conn.execute_batch("BEGIN").unwrap();
+        conn.execute_batch(MIGRATIONS[46].sql).unwrap();
+        conn.execute_batch("COMMIT").unwrap();
+
+        let count = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            [
+                count("orders"),
+                count("payments"),
+                count("wallet_txns"),
+                count("order_lines")
+            ],
+            [1, 1, 1, 1]
+        );
+        let (kind, tax, breakup, settled_by): (String, i64, Option<String>, String) = conn
+            .query_row(
+                "SELECT kind, tax_minor, tax_breakup, settled_by FROM orders WHERE id = 'O1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (kind.as_str(), tax, breakup, settled_by.as_str()),
+            ("topup", 0, None, "S")
+        );
+        let violations: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
+        let order = |id: &str, kind: &str| {
+            conn.execute(
+                "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                     created_at, updated_at, kind)
+                 VALUES (?1, 'settled', 1, 1, 'd', 'f', 0, 0, 0, ?2)",
+                [id, kind],
+            )
+        };
+        assert!(order("O2", "pos_sale").is_ok());
+        assert!(order("O3", "bogus").is_err());
+        // A stock move can name a sale; the old triggers still hold.
+        conn.execute_batch(
+            "INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
+                                   track_stock, image, active, bundle, favourite, kitchen, rev,
+                                   created_at, updated_at)
+             VALUES ('PR', 'Cola', '', 1, 0, '', 1, '', 1, 0, 0, 0, 0, 0, 0);
+             INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
+                                      before_avg_cost_minor, unit_cost_minor, supplier, lots_used,
+                                      staff_id, at, order_id, note, rev, created_at, updated_at)
+             VALUES ('M1', 'PR', 'sale', -1, 1, 0, 0, '', '[]', 'S', 0, 'O2', NULL, 0, 0, 0);",
+        )
+        .unwrap();
+        assert!(
+            conn.execute("UPDATE stock_moves SET note = 'x'", [])
+                .is_err()
+        );
+        assert!(conn.execute("DELETE FROM stock_moves", []).is_err());
     }
 }

@@ -31,6 +31,7 @@ mod pc_command;
 mod permission;
 mod plans;
 mod players;
+mod pos;
 mod pricing;
 mod printer;
 mod process;
@@ -177,6 +178,11 @@ pub use players::{
     PlayerPasswordForm, PlayerPasswordReset, PlayerProfile, PlayerUpdate, UiPasswordResetRequest,
     UiPlayerEditRequest, UiPlayerRequest, normalize_phone, normalize_username, valid_phone,
     valid_policy_version, valid_tags, valid_username,
+};
+pub use pos::{
+    MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST, MOVE_SALE, MOVE_SALE_REVERTED,
+    NOTE_SALE_OVERRIDE, PosSale, PosSaleLine, PosSaleLineView, PosSalePaymentView, PosSaleReverted,
+    PosSaleView, PosSalesView,
 };
 pub use pricing::{
     RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,

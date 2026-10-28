@@ -1,31 +1,58 @@
 <script lang="ts">
-  import { Button, formatMoney, t } from "@arena/ui";
-  import type { PlayerHit, Product } from "@arena/ui/generated";
+  import { Button, InlinePin, formatMoney, formatTime, t } from "@arena/ui";
+  import type {
+    CreditView,
+    IntentPayload,
+    PaymentMethod,
+    PaymentRow,
+    PlayerHit,
+    PosSaleView,
+    Product,
+    SnapshotBill,
+  } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, tick, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
-  import { SESSION_DEPENDENCY } from "../../lib/auth";
+  import { page } from "$app/state";
+  import {
+    SESSION_DEPENDENCY,
+    dropElevation,
+    elevate,
+    hasPermission,
+    loadSettings,
+    loadWallet,
+    newIdempotencyKey,
+    submitIntent,
+  } from "../../lib/auth";
   import { pushBack } from "../../lib/back";
   import { catalog } from "../../lib/catalog.svelte";
   import { branchLocale } from "../../lib/locale.svelte";
   import { isTextEntry } from "../../lib/nav";
+  import { sessionStaff } from "../../lib/operating";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
   import {
     ALL,
+    DEFAULT_TAX,
     FAVOURITES,
     ScanBurst,
+    cartBill,
     cartCount,
-    cartTotal,
     categoriesOf,
     findByBarcode,
     lineShortage,
+    saleLines,
     step,
     unavailableTag,
     visibleProducts,
     type CartLine,
     type Refusal,
   } from "../../lib/pos";
+  import { loadPosSales } from "../../lib/pos-sales";
   import { loadProducts, priceText } from "../../lib/products";
+  import SettleBar from "../../lib/SettleBar.svelte";
+  import { KEY_TAX, parseTax, type Tax } from "../../lib/tax";
+  import UndoDock from "../../lib/UndoDock.svelte";
+  import { offerUndo, posRestore } from "../../lib/undo.svelte";
   import { viewport } from "../../lib/viewport.svelte";
 
   let products: Product[] = $state([]);
@@ -42,6 +69,23 @@
   let attached = $state<PlayerHit | null>(null);
   let choosing = $state(false);
   let cartOpen = $state(false);
+
+  // Settling (Story 5.11).
+  let tax: Tax = $state(DEFAULT_TAX);
+  let walletMinor: number | null = $state(null);
+  let credit: CreditView | null = $state(null);
+  let busy = $state(false);
+  let error: MessageKey | null = $state(null);
+  let shortfall: { message: string; payments: PaymentRow[] } | null = $state(null);
+  let approvalPrompt: MessageKey = $state("ui.pin.prompt");
+  let attempt: { key: string; body: string } | null = null;
+
+  // Recent sales.
+  let view: "grid" | "recent" = $state("grid");
+  let sales: PosSaleView[] = $state([]);
+  let salesState: "loading" | "ok" | "failed" = $state("loading");
+  let openSale: string | null = $state(null);
+  let salesLoads = 0;
 
   let sheetHeading: HTMLElement | undefined = $state();
   let barButton: HTMLButtonElement | undefined = $state();
@@ -66,11 +110,33 @@
     }),
   );
   const count = $derived(cartCount(cart));
-  const total = $derived(cartTotal(cart, byId));
+  const bill = $derived(cartBill(cart, byId, tax));
+  const total = $derived(bill.total_minor);
+  const staff = $derived(sessionStaff(page.data));
   const locale = $derived(branchLocale.current);
   const money = (minor: number) => (locale ? formatMoney(minor, locale) : priceText(minor, 2));
+  // What the settle bar shows: the server's figure, ported (the wallet and credit rows appear
+  // once a player is attached).
+  const settleBill = $derived<SnapshotBill>({
+    session_id: "",
+    device_id: "",
+    lines: [],
+    subtotal_minor: bill.subtotal_minor,
+    paid_minor: 0,
+    remaining_minor: total,
+    wallet_minor: attached ? walletMinor : null,
+    credit: attached ? credit : null,
+  });
   const sheet = $derived(viewport.phone && cartOpen);
   const who = $derived(attached ? attached.name || attached.username || attached.phone : null);
+
+  const METHOD_NAME: Record<PaymentMethod, MessageKey> = {
+    cash: "hub.settle.method.cash",
+    upi: "hub.settle.method.upi",
+    card: "hub.settle.method.card",
+    wallet: "hub.settle.method.wallet",
+    credit: "hub.settle.method.credit",
+  };
 
   const categoryLabel = (entry: string): string =>
     entry === FAVOURITES ? t("hub.pos.favourites") : entry === ALL ? t("hub.pos.all") : entry;
@@ -85,12 +151,82 @@
     if (outcome.kind !== "ok") return;
     products = outcome.products;
     const known = new Set(outcome.products.map((p) => p.id));
-    cart = cart.filter((l) => known.has(l.productId));
+    const kept = cart.filter((l) => known.has(l.productId));
+    // Only a cart that really lost a line is a new cart (a refusal about it would be stale).
+    if (kept.length !== cart.length) cart = kept;
   }
 
-  onMount(() => void load());
+  async function loadTax() {
+    const outcome = await loadSettings();
+    if (outcome.kind !== "ok") return;
+    const row = outcome.settings.find((s) => s.key === KEY_TAX);
+    const parsed = row ? parseTax(row.value) : null;
+    if (parsed) tax = parsed;
+  }
+
+  async function loadSales() {
+    const mine = ++salesLoads;
+    const outcome = await loadPosSales();
+    if (mine !== salesLoads) return;
+    if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    salesState = outcome.kind === "ok" ? "ok" : "failed";
+    if (outcome.kind === "ok") sales = outcome.view.sales;
+  }
+
+  onMount(() => {
+    void load();
+    void loadTax();
+    void loadSales();
+  });
   $effect(() => {
-    if (catalog.version) untrack(() => void load());
+    if (catalog.version) {
+      untrack(() => {
+        void load();
+        void loadSales();
+      });
+    }
+  });
+
+  // The attached player's wallet and credit join the payment methods.
+  $effect(() => {
+    const id = attached?.player_id ?? null;
+    untrack(() => void loadPayer(id));
+  });
+
+  async function loadPayer(id: string | null) {
+    walletMinor = null;
+    credit = null;
+    if (id === null) return;
+    const outcome = await loadWallet(id);
+    if (attached?.player_id !== id) return;
+    if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    if (outcome.kind !== "ok") return;
+    walletMinor = outcome.value.balance_minor;
+    credit = outcome.value.credit ?? null;
+  }
+
+  // A cart that changed is no longer what a refused sale was about.
+  $effect(() => {
+    void cart;
+    untrack(() => {
+      shortfall = null;
+      error = null;
+    });
+  });
+
+  // An undone sale gives its cart (and player) back.
+  $effect(() => {
+    const restored = posRestore.current;
+    if (!restored) return;
+    untrack(() => {
+      posRestore.current = null;
+      cart = restored.cart;
+      attached = restored.player;
+      refusals = {};
+      notice = null;
+      void load();
+      void loadSales();
+    });
   });
 
   function refusalText({ name, left, cap }: Refusal): string {
@@ -172,6 +308,91 @@
     scan(code);
   }
 
+  const REFUSAL: Record<string, MessageKey> = {
+    PAYMENT_SHORT: "hub.settle.short",
+    INSUFFICIENT_BALANCE: "hub.settle.insufficient",
+    CREDIT_LIMIT: "hub.settle.credit_limit",
+    CREDIT_PAUSED: "hub.plans.sell.credit_paused",
+    REFERENCE_REQUIRED: "hub.settle.reference",
+    OUT_OF_STOCK: "hub.pos.err.out_of_stock",
+    SHIFT_NOT_OPEN: "hub.settle.shift_closed",
+    PERMISSION_DENIED: "hub.refusal.permission",
+    NOT_FOUND: "hub.pos.err.player",
+    VALIDATION_FAILED: "hub.pos.err.lines",
+  };
+
+  /** Settles the cart. `over` sells a short bundle anyway (needs `stock.override`). */
+  async function settle(payments: PaymentRow[], over = false, ticket?: string) {
+    if (busy || lines.length === 0) return;
+    busy = true;
+    error = null;
+    const payload: IntentPayload = {
+      kind: "pos.sale",
+      lines: saleLines(cart),
+      payments,
+      player_id: attached?.player_id,
+      stock_override: over ? true : undefined,
+    };
+    const body = JSON.stringify(payload);
+    const key = attempt?.body === body ? attempt.key : newIdempotencyKey();
+    attempt = { key, body };
+    const sold = { cart: cart.map((l) => ({ ...l })), player: attached };
+    const amount = total;
+    const outcome = await submitIntent(payload, key, undefined, {
+      elevationTicket: ticket,
+    }).finally(() => (busy = false));
+    if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    if (outcome.kind === "applied") {
+      attempt = null;
+      shortfall = null;
+      offerUndo(outcome.result, "pos", "end", sold);
+      cart = [];
+      attached = null;
+      refusals = {};
+      cartOpen = false;
+      notice = { tone: "ok", text: t("hub.pos.sold", { amount: money(amount) }) };
+      void load();
+      void loadSales();
+      return;
+    }
+    if (ticket) void dropElevation(ticket);
+    if (outcome.kind !== "error") {
+      error = "hub.pos.err.unreachable";
+      return;
+    }
+    const { code, message } = outcome.error;
+    if (code === "BUNDLE_SHORT") {
+      approvalPrompt = "hub.pos.override.approves";
+      shortfall = { message, payments };
+      return;
+    }
+    if (code === "PIN_REQUIRED" && over) {
+      approvalPrompt = "ui.pin.again";
+      shortfall = { message: shortfall?.message ?? message, payments };
+      return;
+    }
+    error = REFUSAL[code] ?? "hub.pos.err.failed";
+    if (code === "OUT_OF_STOCK") void load();
+  }
+
+  /** The manager's PIN for selling a short bundle: one approval, one sale. */
+  async function approve(pin: string) {
+    const pending = shortfall;
+    if (!pending) return { ok: false, message: "ui.pin.failed" } as const;
+    const outcome = await elevate([{ intent_kind: "pos.sale" }], pin);
+    if (outcome.kind === "signed_out") {
+      await invalidate(SESSION_DEPENDENCY);
+      return { ok: false, message: "ui.pin.unreachable" } as const;
+    }
+    if (outcome.kind === "rejected") return { ok: false, message: "ui.pin.rejected" } as const;
+    if (outcome.kind === "locked") {
+      return { ok: false, message: "ui.pin.locked", retryAfterS: outcome.retryAfterS } as const;
+    }
+    if (outcome.kind !== "ticket") return { ok: false, message: "ui.pin.unreachable" } as const;
+    void settle(pending.payments, true, outcome.ticket);
+    return { ok: true } as const;
+  }
+
   async function pick(hit: PlayerHit | null) {
     attached = hit;
     choosing = false;
@@ -214,6 +435,8 @@
 </svelte:head>
 
 <svelte:window onkeydown={onWindowKey} />
+
+<UndoDock {staff} />
 
 {#snippet cartPanel()}
   <section class="cart" data-component="cart" data-testid="cart" aria-labelledby="cart-title">
@@ -295,132 +518,291 @@
           </li>
         {/each}
       </ul>
+      {#if bill.tax_minor > 0}
+        <dl class="breakup type-hub-label tabular-nums" data-testid="pos-tax">
+          <div>
+            <dt>{t("hub.pos.subtotal")}</dt>
+            <dd data-testid="pos-subtotal">{money(bill.subtotal_minor)}</dd>
+          </div>
+          {#each bill.breakup.filter((r) => r.tax_minor > 0) as r (r.rate_bp)}
+            <div data-testid="pos-tax-rate">
+              <dt>{t("hub.pos.tax_line", { label: tax.label, rate: r.rate_bp / 100 })}</dt>
+              <dd>{money(r.tax_minor)}</dd>
+            </div>
+          {/each}
+        </dl>
+      {/if}
     {/if}
   </section>
 
-  <section
-    class="settle"
-    data-component="settle-bar"
-    data-testid="settle-bar"
-    aria-labelledby="pos-settle-title"
-  >
-    <h3 class="type-hub-title" id="pos-settle-title">{t("hub.pos.settle.title")}</h3>
-    {#if lines.length > 0}
-      <p class="total">
-        <span class="type-hub-label">{t("hub.settle.total")}</span>
-        <span class="type-hub-numeric tabular-nums" data-testid="settle-total">{money(total)}</span>
-      </p>
-    {/if}
-    <Button
-      label="hub.pos.settle.submit"
-      disabled={true}
-      disabledReason={lines.length === 0 ? "hub.pos.settle.empty" : "hub.pos.settle.soon"}
+  {#if lines.length > 0 && locale}
+    <SettleBar
+      bill={settleBill}
+      {locale}
+      {busy}
+      onsettle={(payments) => void settle(payments)}
+      title="hub.pos.settle.title"
+      prefillCash
+      hotkey
     />
+  {:else}
+    <section
+      class="settle"
+      data-component="settle-bar"
+      data-testid="settle-bar"
+      aria-labelledby="pos-settle-title"
+    >
+      <h3 class="type-hub-title" id="pos-settle-title">{t("hub.pos.settle.title")}</h3>
+      <Button label="hub.pos.settle.submit" disabled={true} disabledReason="hub.pos.settle.empty" />
+    </section>
+  {/if}
+
+  {#if error}
+    <p class="refusal type-hub-label" role="alert" data-testid="pos-error">
+      <span aria-hidden="true">⚠</span>
+      {t(error)}
+    </p>
+  {/if}
+
+  {#if shortfall}
+    <div class="override" role="alert" data-testid="pos-override">
+      <p class="refusal type-hub-label">
+        <span aria-hidden="true">⚠</span>
+        {t("hub.pos.short.title")}
+        <span data-testid="pos-short-message">{shortfall.message}</span>
+      </p>
+      {#if hasPermission(staff, "stock.override")}
+        <div class="override-actions">
+          <Button
+            label="hub.pos.override.sell"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => shortfall && void settle(shortfall.payments, true)}
+          />
+          <Button
+            label="hub.pos.override.cancel"
+            variant="secondary"
+            onclick={() => (shortfall = null)}
+          />
+        </div>
+      {:else}
+        <InlinePin
+          message={approvalPrompt}
+          onsubmit={approve}
+          oncancel={() => (shortfall = null)}
+        />
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet recentSales()}
+  <section class="recent" data-testid="recent-sales" aria-labelledby="recent-title">
+    <h2 class="type-hub-title" id="recent-title">{t("hub.pos.recent.title")}</h2>
+    {#if salesState === "loading"}
+      <p class="type-hub-body" role="status">{t("hub.pos.recent.loading")}</p>
+    {:else if salesState === "failed" && sales.length === 0}
+      <div class="failed" role="alert">
+        <p class="type-hub-body">{t("hub.pos.recent.load_failed")}</p>
+        <Button label="hub.pos.retry" variant="secondary" onclick={() => void loadSales()} />
+      </div>
+    {:else if sales.length === 0}
+      <p class="type-hub-body" data-testid="recent-empty">{t("hub.pos.recent.empty")}</p>
+    {:else}
+      <ul class="sales" aria-label={t("hub.pos.recent.list")}>
+        {#each sales as sale (sale.order_id)}
+          {@const opened = openSale === sale.order_id}
+          <li class="sale" data-testid="recent-sale" data-order-id={sale.order_id}>
+            <div class="sale-row">
+              <span class="type-hub-label tabular-nums"
+                >{formatTime(sale.settled_at, locale?.tz)}</span
+              >
+              <span class="type-hub-body"
+                >{sale.player ?? t("hub.pos.cart.walkup")} · {t("hub.pos.recent.by", {
+                  name: sale.staff,
+                })}</span
+              >
+              <span class="type-hub-numeric tabular-nums" data-testid="recent-total"
+                >{money(sale.total_minor)}</span
+              >
+              <span class="type-hub-label" data-testid="recent-invoice"
+                >{sale.invoice_no
+                  ? t("hub.pos.recent.invoice", { number: sale.invoice_no })
+                  : t("hub.pos.recent.invoice_pending")}</span
+              >
+              <button
+                type="button"
+                class="ui-interactive link type-hub-label"
+                data-testid="recent-toggle-detail"
+                aria-expanded={opened}
+                aria-controls="sale-{sale.order_id}"
+                onclick={() => (openSale = opened ? null : sale.order_id)}
+                >{opened ? t("hub.pos.recent.hide") : t("hub.pos.recent.details")}</button
+              >
+            </div>
+            {#if opened}
+              <div class="detail" id="sale-{sale.order_id}" data-testid="sale-detail">
+                <ul class="detail-lines type-hub-body">
+                  {#each sale.lines as l, i (i)}
+                    <li data-testid="sale-detail-line">
+                      <span
+                        >{t("hub.pos.recent.line", {
+                          qty: l.qty,
+                          name: l.name,
+                          price: money(l.unit_price_minor),
+                        })}</span
+                      >
+                      <span class="tabular-nums">{money(l.amount_minor)}</span>
+                    </li>
+                  {/each}
+                </ul>
+                {#if sale.tax_minor > 0}
+                  <p class="type-hub-label tabular-nums">
+                    {t("hub.pos.subtotal")}: {money(sale.subtotal_minor)} · {tax.label}: {money(
+                      sale.tax_minor,
+                    )}
+                  </p>
+                {/if}
+                <p class="type-hub-label tabular-nums">
+                  {t("hub.pos.recent.total")}: {money(sale.total_minor)}
+                </p>
+                <ul class="detail-lines type-hub-label">
+                  {#each sale.payments as p, i (i)}
+                    <li data-testid="sale-detail-payment">
+                      {t("hub.pos.recent.paid", {
+                        method: t(METHOD_NAME[p.method as PaymentMethod]),
+                      })}
+                      <span class="tabular-nums">{money(p.amount_minor)}</span>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </section>
 {/snippet}
 
 <section class="pos" class:phone={viewport.phone} data-testid="pos">
   {#if !sheet}
     <div class="catalogue" data-component="pos-product-grid" data-testid="pos-product-grid">
-      <h1 class="type-hub-numeric">{t("hub.nav.pos")}</h1>
-
-      <div
-        class="strip"
-        role="group"
-        aria-label={t("hub.pos.categories")}
-        data-testid="pos-categories"
-      >
-        {#each strip as entry (entry)}
-          <button
-            type="button"
-            class="ui-interactive chip type-hub-label"
-            aria-pressed={active === entry && !query.trim()}
-            data-category={entry === FAVOURITES ? "favourites" : entry === ALL ? "all" : entry}
-            onclick={() => {
-              category = entry;
-              query = "";
-            }}>{categoryLabel(entry)}</button
-          >
-        {/each}
+      <div class="head">
+        <h1 class="type-hub-numeric">{t("hub.nav.pos")}</h1>
+        <button
+          type="button"
+          class="ui-interactive link type-hub-label"
+          data-testid="recent-toggle"
+          aria-pressed={view === "recent"}
+          onclick={() => {
+            view = view === "recent" ? "grid" : "recent";
+            if (view === "recent") void loadSales();
+          }}>{view === "recent" ? t("hub.pos.recent.back") : t("hub.pos.recent.toggle")}</button
+        >
       </div>
 
-      <div class="search">
-        <label class="type-hub-label" for="pos-search">{t("hub.pos.search.label")}</label>
-        <input
-          id="pos-search"
-          class="ui-interactive control"
-          type="text"
-          autocomplete="off"
-          data-pos-search
-          bind:value={query}
-          oninput={() => (notice = null)}
-          onkeydown={onSearchKey}
-        />
-      </div>
+      {#if view === "recent"}
+        <div class="results">{@render recentSales()}</div>
+      {:else}
+        <div
+          class="strip"
+          role="group"
+          aria-label={t("hub.pos.categories")}
+          data-testid="pos-categories"
+        >
+          {#each strip as entry (entry)}
+            <button
+              type="button"
+              class="ui-interactive chip type-hub-label"
+              aria-pressed={active === entry && !query.trim()}
+              data-category={entry === FAVOURITES ? "favourites" : entry === ALL ? "all" : entry}
+              onclick={() => {
+                category = entry;
+                query = "";
+              }}>{categoryLabel(entry)}</button
+            >
+          {/each}
+        </div>
 
-      <p
-        class="notice type-hub-label"
-        class:refusal={notice?.tone === "refusal"}
-        role="status"
-        data-testid="pos-notice"
-      >
-        {#if notice}
-          {#if notice.tone === "refusal"}<span aria-hidden="true">⚠</span>{/if}
-          {notice.text}
-        {/if}
-      </p>
+        <div class="search">
+          <label class="type-hub-label" for="pos-search">{t("hub.pos.search.label")}</label>
+          <input
+            id="pos-search"
+            class="ui-interactive control"
+            type="text"
+            autocomplete="off"
+            data-pos-search
+            bind:value={query}
+            oninput={() => (notice = null)}
+            onkeydown={onSearchKey}
+          />
+        </div>
 
-      <div class="results">
-        {#if loading}
-          <p class="type-hub-body" role="status">{t("hub.pos.loading")}</p>
-        {:else if loadFailed && products.length === 0}
-          <div class="failed" role="alert">
-            <p class="type-hub-body">{t("hub.pos.load_failed")}</p>
-            <Button label="hub.pos.retry" variant="secondary" onclick={() => void load()} />
-          </div>
-        {:else if shown.length === 0}
-          <p class="type-hub-body" data-testid="pos-none">
-            {query.trim() ? t("hub.pos.no_match", { query: query.trim() }) : t("hub.pos.empty")}
-          </p>
-        {:else}
-          <ul class="tiles" aria-label={t("hub.pos.grid")} data-testid="pos-tiles">
-            {#each shown as product (product.id)}
-              {@const tag = unavailableTag(product)}
-              <li>
-                <button
-                  type="button"
-                  class="ui-interactive tile"
-                  data-component="hub-tile"
-                  data-testid="pos-tile"
-                  data-product-id={product.id}
-                  disabled={tag !== null}
-                  onclick={() => add(product)}
-                >
-                  <span class="photo" class:dim={tag !== null} aria-hidden="true">
-                    {#if product.image}
-                      <img src={product.image} alt="" />
-                    {:else}
-                      <span class="initial type-hub-numeric">{product.name.slice(0, 1)}</span>
-                    {/if}
-                  </span>
-                  <span class="tile-name type-hub-body">
-                    {product.name}
-                    {#if product.favourite}
-                      <span role="img" aria-label={t("hub.pos.favourite")}>★</span>
-                    {/if}
-                  </span>
-                  <span class="tile-price type-hub-numeric tabular-nums"
-                    >{money(product.price_minor)}</span
+        <p
+          class="notice type-hub-label"
+          class:refusal={notice?.tone === "refusal"}
+          role="status"
+          data-testid="pos-notice"
+        >
+          {#if notice}
+            {#if notice.tone === "refusal"}<span aria-hidden="true">⚠</span>{/if}
+            {notice.text}
+          {/if}
+        </p>
+
+        <div class="results">
+          {#if loading}
+            <p class="type-hub-body" role="status">{t("hub.pos.loading")}</p>
+          {:else if loadFailed && products.length === 0}
+            <div class="failed" role="alert">
+              <p class="type-hub-body">{t("hub.pos.load_failed")}</p>
+              <Button label="hub.pos.retry" variant="secondary" onclick={() => void load()} />
+            </div>
+          {:else if shown.length === 0}
+            <p class="type-hub-body" data-testid="pos-none">
+              {query.trim() ? t("hub.pos.no_match", { query: query.trim() }) : t("hub.pos.empty")}
+            </p>
+          {:else}
+            <ul class="tiles" aria-label={t("hub.pos.grid")} data-testid="pos-tiles">
+              {#each shown as product (product.id)}
+                {@const tag = unavailableTag(product)}
+                <li>
+                  <button
+                    type="button"
+                    class="ui-interactive tile"
+                    data-component="hub-tile"
+                    data-testid="pos-tile"
+                    data-product-id={product.id}
+                    disabled={tag !== null}
+                    onclick={() => add(product)}
                   >
-                  {#if tag}
-                    <span class="tag type-hub-label" data-testid="pos-tag">{t(tag)}</span>
-                  {/if}
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
+                    <span class="photo" class:dim={tag !== null} aria-hidden="true">
+                      {#if product.image}
+                        <img src={product.image} alt="" />
+                      {:else}
+                        <span class="initial type-hub-numeric">{product.name.slice(0, 1)}</span>
+                      {/if}
+                    </span>
+                    <span class="tile-name type-hub-body">
+                      {product.name}
+                      {#if product.favourite}
+                        <span role="img" aria-label={t("hub.pos.favourite")}>★</span>
+                      {/if}
+                    </span>
+                    <span class="tile-price type-hub-numeric tabular-nums"
+                      >{money(product.price_minor)}</span
+                    >
+                    {#if tag}
+                      <span class="tag type-hub-label" data-testid="pos-tag">{t(tag)}</span>
+                    {/if}
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -500,6 +882,83 @@
     min-block-size: 0;
     overflow-y: auto;
     padding: var(--space-1);
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .recent {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .sales,
+  .detail-lines {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .sale {
+    display: grid;
+    gap: var(--space-2);
+    padding-block-end: var(--space-3);
+    border-block-end: 1px solid var(--line);
+  }
+
+  .sale-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .detail {
+    display: grid;
+    gap: var(--space-2);
+    padding-inline-start: var(--space-4);
+  }
+
+  .detail-lines li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .breakup {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .breakup div {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .breakup dt,
+  .breakup dd {
+    margin: 0;
+  }
+
+  .override {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .override-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   .strip {
@@ -726,13 +1185,6 @@
   :global([data-theme="hc"]) .settle {
     border-block-start: var(--settle-bar-border-top-hc);
     background-color: var(--settle-bar-background-hc);
-  }
-
-  .total {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-2);
   }
 
   .phone-cart-bar {

@@ -1,4 +1,10 @@
-import type { IntentPayload, Permission, SessionStaff, UiIntentResult } from "@arena/ui/generated";
+import type {
+  IntentPayload,
+  Permission,
+  PlayerHit,
+  SessionStaff,
+  UiIntentResult,
+} from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { invalidate } from "$app/navigation";
 import {
@@ -9,9 +15,16 @@ import {
   newIdempotencyKey,
   submitIntent,
 } from "./auth";
+import type { CartLine } from "./pos";
 import { SNAPSHOT_DEPENDENCY } from "./snapshot";
 
-export type UndoKind = "end" | "forced" | "settle" | "topup" | "collect" | "plan";
+export type UndoKind = "end" | "forced" | "settle" | "topup" | "collect" | "plan" | "pos";
+
+/** What an undone counter sale gives back to the POS screen: the cart it sold and for whom. */
+export type PosRestore = { cart: CartLine[]; player: PlayerHit | null };
+
+/** Set when a counter sale is undone; the POS screen takes it and refills its cart. */
+export const posRestore: { current: PosRestore | null } = $state({ current: null });
 
 export type Undo = {
   kind: UndoKind;
@@ -27,6 +40,8 @@ export type Undo = {
   notice?: MessageKey;
   refused?: boolean;
   error?: MessageKey;
+  /** For a counter sale: the cart to put back when it is undone. */
+  restore?: PosRestore;
 };
 
 export const undo: { current: Undo | null; now: number } = $state({
@@ -45,6 +60,7 @@ const PERMISSION: Record<UndoKind, Permission> = {
   topup: "wallet.topup",
   collect: "credit.collect",
   plan: "wallet.topup",
+  pos: "pos.sell",
 };
 
 const payloadOf = (u: Undo): IntentPayload =>
@@ -58,7 +74,9 @@ const payloadOf = (u: Undo): IntentPayload =>
           ? { kind: "plan.sell.reverted", order_id: u.id }
           : u.kind === "collect"
             ? { kind: "credit.collect.reverted", order_id: u.id }
-            : { kind: "session.settle.reverted", order_id: u.id };
+            : u.kind === "pos"
+              ? { kind: "pos.sale.reverted", order_id: u.id }
+              : { kind: "session.settle.reverted", order_id: u.id };
 
 const DONE: Record<UndoKind, MessageKey> = {
   end: "hub.undo.done.end",
@@ -67,6 +85,7 @@ const DONE: Record<UndoKind, MessageKey> = {
   topup: "hub.undo.done.topup",
   collect: "hub.undo.done.collect",
   plan: "hub.undo.done.plan",
+  pos: "hub.undo.done.pos",
 };
 
 export const undoPermission = (u: Undo): Permission => PERMISSION[u.kind];
@@ -107,8 +126,9 @@ function open(next: Omit<Undo, "key" | "phase">): void {
  */
 export function offerUndo(
   result: UiIntentResult,
-  settledKind: "settle" | "topup" | "collect" | "plan" = "settle",
+  settledKind: "settle" | "topup" | "collect" | "plan" | "pos" = "settle",
   endKind: "end" | "forced" = "end",
+  restore?: PosRestore,
 ): void {
   const { ended, settled } = result;
   const now = Date.now();
@@ -131,6 +151,7 @@ export function offerUndo(
       rev: settled.order_rev,
       amountMinor: settled.total_minor,
       closesAt: now + (settled.undo_until - settled.settled_at),
+      restore,
     });
   }
 }
@@ -167,6 +188,7 @@ export async function runUndo(staff: SessionStaff | null, ticket?: string): Prom
       refused: false,
     };
     closeSoon();
+    if (u.restore) posRestore.current = u.restore;
     await invalidate(SNAPSHOT_DEPENDENCY);
     return "done";
   }

@@ -258,6 +258,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::PlanSell(t) => super::plan_sales::validate_sell(intent, p, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::PosSale(s) => match target {
+            Target::PosSale(t) => super::pos_sale::validate_sale(intent, s, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::PosSaleReverted(_) => match target {
+            Target::PosSaleReverted(t) => super::pos_sale::validate_sale_reverted(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::PlanSellReverted(_) => match target {
             Target::PlanSellReverted(t) => super::plan_sales::validate_sell_reverted(intent, t),
             _ => Err(internal_target()),

@@ -22,7 +22,7 @@ pub(super) fn intent(actor: Actor, payload: IntentPayload) -> Intent {
     }
 }
 
-fn up(name: &str) -> ProductUpsert {
+pub(super) fn up(name: &str) -> ProductUpsert {
     ProductUpsert {
         id: None,
         name: name.into(),
@@ -41,7 +41,7 @@ fn up(name: &str) -> ProductUpsert {
     }
 }
 
-async fn make(f: &Fixture, u: ProductUpsert) -> String {
+pub(super) async fn make(f: &Fixture, u: ProductUpsert) -> String {
     f.writer
         .submit_intent(intent(owner(), IntentPayload::ProductUpsert(u)))
         .await
@@ -90,7 +90,7 @@ pub(super) async fn staff(f: &Fixture, login: &str, role: &str) -> Actor {
     }
 }
 
-fn sin(id: &str, qty: i64, cost: i64) -> StockIn {
+pub(super) fn sin(id: &str, qty: i64, cost: i64) -> StockIn {
     StockIn {
         product_id: id.into(),
         qty,
@@ -100,13 +100,13 @@ fn sin(id: &str, qty: i64, cost: i64) -> StockIn {
     }
 }
 
-async fn put(f: &Fixture, actor: Actor, s: StockIn) -> Result<Applied, AppError> {
+pub(super) async fn put(f: &Fixture, actor: Actor, s: StockIn) -> Result<Applied, AppError> {
     f.writer
         .submit_intent(intent(actor, IntentPayload::StockIn(s)))
         .await
 }
 
-async fn stock_in(f: &Fixture, id: &str, qty: i64, cost: i64) -> Applied {
+pub(super) async fn stock_in(f: &Fixture, id: &str, qty: i64, cost: i64) -> Applied {
     put(f, owner(), sin(id, qty, cost)).await.unwrap()
 }
 
@@ -130,7 +130,7 @@ async fn undo(f: &Fixture, actor: Actor, move_id: &str) -> Result<Applied, AppEr
         .await
 }
 
-fn held(f: &Fixture, id: &str) -> (i64, i64) {
+pub(super) fn held(f: &Fixture, id: &str) -> (i64, i64) {
     reopen(f)
         .stock(id)
         .unwrap()
@@ -469,7 +469,7 @@ async fn undo_is_refused_once_a_lot_was_drawn_down() {
     assert_eq!(e.code, ErrorCode::Stale);
 }
 
-fn lots_of(f: &Fixture, id: &str) -> Vec<(Option<String>, i64)> {
+pub(super) fn lots_of(f: &Fixture, id: &str) -> Vec<(Option<String>, i64)> {
     let mut v: Vec<_> = reopen(f)
         .lots(id)
         .unwrap()
@@ -614,7 +614,7 @@ async fn waste_undo(f: &Fixture, actor: Actor, move_id: &str) -> Result<Applied,
         .await
 }
 
-async fn manager_with_pin(f: &Fixture) -> String {
+pub(super) async fn manager_with_pin(f: &Fixture) -> String {
     let rid = reopen(f)
         .rows(Table::Roles)
         .unwrap()
@@ -1287,7 +1287,7 @@ async fn a_replayed_write_off_applies_once() {
 
 // ---- Story 5.8: low-stock thresholds and alerts ----
 
-fn low_alerts(f: &Fixture) -> Vec<arena_store::AlertRow> {
+pub(super) fn low_alerts(f: &Fixture) -> Vec<arena_store::AlertRow> {
     reopen(f)
         .alerts()
         .unwrap()
@@ -1305,7 +1305,7 @@ fn low_rows(f: &Fixture) -> usize {
         .count()
 }
 
-async fn set_threshold(
+pub(super) async fn set_threshold(
     f: &Fixture,
     actor: Actor,
     id: &str,

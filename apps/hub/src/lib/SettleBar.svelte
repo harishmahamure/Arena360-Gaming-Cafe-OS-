@@ -14,7 +14,7 @@
     SnapshotLocale,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
-  import { tick, type Snippet } from "svelte";
+  import { tick, untrack, type Snippet } from "svelte";
   import { cashBlocked } from "./shift.svelte";
   import {
     amountText,
@@ -35,6 +35,8 @@
     onsettle,
     title = "hub.settle.title",
     extra,
+    prefillCash = false,
+    hotkey = false,
   }: {
     bill: SnapshotBill;
     locale: SnapshotLocale;
@@ -42,6 +44,10 @@
     onsettle: (payments: PaymentRow[]) => void;
     title?: MessageKey;
     extra?: Snippet;
+    /** Starts with one Cash row for the whole total (only while cash can be taken). */
+    prefillCash?: boolean;
+    /** Ctrl+Enter settles from anywhere on the screen. */
+    hotkey?: boolean;
   } = $props();
 
   let root: HTMLElement | undefined = $state();
@@ -89,6 +95,19 @@
     credit: "hub.settle.method.credit",
   };
 
+  // A new total (or cash becoming available) starts the split again as one Cash row.
+  $effect(() => {
+    if (!prefillCash) return;
+    const wanted = total;
+    const blocked = noCash;
+    untrack(() => {
+      rows =
+        !blocked && wanted > 0
+          ? [{ method: "cash", amount: amountText(wanted, exponent), reference: "" }]
+          : [];
+    });
+  });
+
   async function choose(method: PaymentMethod) {
     if (!rows.some((r) => r.method === method)) {
       const suggested =
@@ -119,6 +138,12 @@
     buttons[(at + step + buttons.length) % buttons.length]?.focus();
   }
 
+  function onHotkey(event: KeyboardEvent) {
+    if (!hotkey || !event.ctrlKey || event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    void submit();
+  }
+
   export async function submit() {
     if (busy || !closed) return;
     attempted = true;
@@ -130,6 +155,8 @@
     onsettle(toPayments(rows, sums.change, exponent));
   }
 </script>
+
+<svelte:window onkeydown={onHotkey} />
 
 <section
   class="bar"

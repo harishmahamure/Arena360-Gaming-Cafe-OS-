@@ -27,6 +27,7 @@ mod force_end;
 mod group_bill;
 mod plans;
 mod players;
+mod pos_sale;
 mod prepaid;
 mod rate_flip;
 mod rates;

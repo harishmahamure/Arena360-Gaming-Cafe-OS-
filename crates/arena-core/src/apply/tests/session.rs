@@ -877,7 +877,12 @@ async fn settled_by(f: &Fixture, actor: Actor, order: &str) -> Applied {
     .unwrap()
 }
 
-async fn record_effect(f: &Fixture, kind: arena_proto::EffectKind, intent: &str, order: &str) {
+pub(super) async fn record_effect(
+    f: &Fixture,
+    kind: arena_proto::EffectKind,
+    intent: &str,
+    order: &str,
+) {
     let (intent, order) = (intent.to_owned(), order.to_owned());
     f.writer
         .submit(move |tx| {
@@ -2370,11 +2375,11 @@ fn credit_row(f: &Fixture, player: &str) -> Row {
         .unwrap()
 }
 
-fn owed(f: &Fixture, player: &str) -> i64 {
+pub(super) fn owed(f: &Fixture, player: &str) -> i64 {
     int(&credit_row(f, player), "outstanding_minor")
 }
 
-async fn credit_player(f: &Fixture, username: &str, phone: &str, limit: i64) -> String {
+pub(super) async fn credit_player(f: &Fixture, username: &str, phone: &str, limit: i64) -> String {
     let p = player(f, username, phone).await;
     end(f, credit_intent(&p, limit, &[3, 7, 14])).await.unwrap();
     p

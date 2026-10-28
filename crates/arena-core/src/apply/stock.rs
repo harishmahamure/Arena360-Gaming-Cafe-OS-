@@ -1,10 +1,11 @@
 use arena_proto::{
     AlertKind, AppError, DEFAULT_STOCK_EXPIRY_WARN_DAYS, ErrorCode, Intent, IntentPayload,
     KEY_STOCK_EXPIRY_WARN_DAYS, MAX_PRICE_MINOR, MAX_STOCK_IN_QTY, MAX_STOCK_QTY,
-    MAX_SUPPLIER_CHARS, MOVE_EXPIRED, MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, MOVE_WASTE,
-    MOVE_WASTE_REVERTED, STOCK_EXPIRY_WARN_RANGE, STOCK_UNDO_MS, StockIn, StockInReverted,
-    StockThreshold, StockWaste, StockWasteReverted, StockWriteOff, add_days, consume_plan,
-    lot_expired, lot_in_window, valid_date, weighted_avg_cost,
+    MAX_SUPPLIER_CHARS, MOVE_COUNT_ADJUST, MOVE_EXPIRED, MOVE_SALE, MOVE_SALE_REVERTED,
+    MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED, NOTE_SALE_OVERRIDE,
+    STOCK_EXPIRY_WARN_RANGE, STOCK_UNDO_MS, StockIn, StockInReverted, StockThreshold, StockWaste,
+    StockWasteReverted, StockWriteOff, add_days, consume_plan, lot_expired, lot_in_window,
+    valid_date, weighted_avg_cost,
 };
 use arena_store::{
     AlertRow, ChangeOp, LotRow, MoveRow, NewAlert, ProductRow, RowKey, StockRow, StoreTx, Table,
@@ -217,6 +218,9 @@ pub(super) fn mutate_in(
             at: now,
             waste_reason: None,
             value_minor: 0,
+            order_id: None,
+            note: None,
+            elevated_by: None,
         },
     )?;
     let mut out = vec![
@@ -279,6 +283,9 @@ pub(super) fn mutate_revert(
             at: now,
             waste_reason: None,
             value_minor: 0,
+            order_id: None,
+            note: None,
+            elevated_by: None,
         },
     )?;
     let mut out = vec![
@@ -459,6 +466,9 @@ pub(super) fn mutate_waste_revert(
             at: now,
             waste_reason: m.waste_reason.clone(),
             value_minor: m.value_minor,
+            order_id: None,
+            note: None,
+            elevated_by: None,
         },
     )?;
     out.push(write(
@@ -553,6 +563,9 @@ fn consume(
             at: now,
             waste_reason: waste_reason.map(str::to_owned),
             value_minor: qty.saturating_mul(stock.avg_cost_minor),
+            order_id: None,
+            note: None,
+            elevated_by: None,
         },
     )?;
     out.push(write(
@@ -720,6 +733,9 @@ pub(super) fn mutate_write_off(
             at: now,
             waste_reason: None,
             value_minor: qty.saturating_mul(lot.unit_cost_minor),
+            order_id: None,
+            note: None,
+            elevated_by: None,
         },
     )?;
     let mut out = vec![
@@ -962,4 +978,239 @@ pub(crate) fn low_after_change(
         }
         None => Ok(Vec::new()),
     }
+}
+
+/// A counter sale override: raises a short product's stock by `raise` units in a new lot (no
+/// expiry, at the average cost) and appends the `count_adjust` move, so the sale that follows
+/// never takes stock below zero. The note names the override and `elevated_by` the manager who
+/// approved it, when the actor did not hold the right themselves. The raise stays when the sale is
+/// undone: it corrects the stock record, which is not the sale's to take back.
+pub(super) fn raise_for_sale(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    raise: i64,
+    order_id: &str,
+    staff_id: &str,
+    elevated_by: Option<&str>,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let stock = find_stock(tx, product_id)?;
+    let (qty, avg) = stock.as_ref().map_or((0, 0), |s| (s.qty, s.avg_cost_minor));
+    let stock_op = if stock.is_some() {
+        update_stock(tx, product_id, qty + raise, avg)?;
+        ChangeOp::Update
+    } else {
+        insert_stock(tx, product_id, qty + raise, avg)?;
+        ChangeOp::Insert
+    };
+    let lot_id = ulid::Ulid::generate().to_string();
+    insert_lot(
+        tx,
+        &LotRow {
+            lot_id: lot_id.clone(),
+            product_id: product_id.to_owned(),
+            qty_in: raise,
+            qty_remaining: raise,
+            unit_cost_minor: avg,
+            expiry: None,
+            received_at: now,
+        },
+    )?;
+    let move_id = ulid::Ulid::generate().to_string();
+    insert_move(
+        tx,
+        &MoveRow {
+            move_id: move_id.clone(),
+            product_id: product_id.to_owned(),
+            reason: MOVE_COUNT_ADJUST.to_owned(),
+            delta: raise,
+            before_qty: qty,
+            before_avg_cost_minor: avg,
+            unit_cost_minor: avg,
+            supplier: String::new(),
+            lot_id: Some(lot_id.clone()),
+            lots_used: "[]".to_owned(),
+            staff_id: staff_id.to_owned(),
+            at: now,
+            waste_reason: None,
+            value_minor: raise.saturating_mul(avg),
+            order_id: Some(order_id.to_owned()),
+            note: Some(NOTE_SALE_OVERRIDE.to_owned()),
+            elevated_by: elevated_by.map(str::to_owned),
+        },
+    )?;
+    Ok(vec![
+        write(
+            RowKey::Stock {
+                product_id: product_id.to_owned(),
+            },
+            stock_op,
+            None,
+        ),
+        write(RowKey::StockLots { lot_id }, ChangeOp::Insert, None),
+        write(RowKey::StockMoves { move_id }, ChangeOp::Insert, None),
+    ])
+}
+
+/// A counter sale's stock: lowers a product by `qty` from its lots, earliest expiry first, never
+/// from a lot past its expiry date on `today`, and appends the `sale` move valued at the average
+/// cost. `OUT_OF_STOCK` when the usable lots hold less (the sale validated this already).
+pub(super) fn take_for_sale(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    qty: i64,
+    order_id: &str,
+    staff_id: &str,
+    today: &str,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let short = || AppError::with_field(ErrorCode::OutOfStock, "lines", "not enough stock on hand");
+    let stock = find_stock(tx, product_id)?.ok_or_else(short)?;
+    let lots = list_lots(tx, product_id)?;
+    let views: Vec<_> = lots
+        .iter()
+        .filter(|l| l.expiry.as_deref().is_none_or(|e| !lot_expired(e, today)))
+        .map(LotRow::view)
+        .collect();
+    let plan = consume_plan(&views, qty).ok_or_else(short)?;
+    if qty > stock.qty {
+        return Err(short());
+    }
+    update_stock(tx, product_id, stock.qty - qty, stock.avg_cost_minor)?;
+    let mut out = vec![write(
+        RowKey::Stock {
+            product_id: product_id.to_owned(),
+        },
+        ChangeOp::Update,
+        None,
+    )];
+    for (lot_id, take) in &plan {
+        let left = lots
+            .iter()
+            .find(|l| &l.lot_id == lot_id)
+            .map_or(0, |l| l.qty_remaining)
+            - take;
+        set_lot_remaining(tx, lot_id, left)?;
+        out.push(write(
+            RowKey::StockLots {
+                lot_id: lot_id.clone(),
+            },
+            ChangeOp::Update,
+            None,
+        ));
+    }
+    let move_id = ulid::Ulid::generate().to_string();
+    insert_move(
+        tx,
+        &MoveRow {
+            move_id: move_id.clone(),
+            product_id: product_id.to_owned(),
+            reason: MOVE_SALE.to_owned(),
+            delta: -qty,
+            before_qty: stock.qty,
+            before_avg_cost_minor: stock.avg_cost_minor,
+            unit_cost_minor: stock.avg_cost_minor,
+            supplier: String::new(),
+            lot_id: None,
+            lots_used: used_json(&plan),
+            staff_id: staff_id.to_owned(),
+            at: now,
+            waste_reason: None,
+            value_minor: qty.saturating_mul(stock.avg_cost_minor),
+            order_id: Some(order_id.to_owned()),
+            note: None,
+            elevated_by: None,
+        },
+    )?;
+    out.push(write(
+        RowKey::StockMoves { move_id },
+        ChangeOp::Insert,
+        None,
+    ));
+    Ok(out)
+}
+
+/// What an Undo of a sale needs to know about the stock it took: whether every lot it drew from
+/// still exists with room to take the units back.
+pub(super) fn sale_restorable(
+    moves: &[MoveRow],
+    stocks: &std::collections::BTreeMap<String, StockRow>,
+    lots: &std::collections::BTreeMap<String, Vec<LotRow>>,
+) -> bool {
+    moves.iter().all(|m| {
+        let used = parse_used(&m.lots_used);
+        let held = lots.get(&m.product_id).map_or(&[][..], Vec::as_slice);
+        stocks.contains_key(&m.product_id)
+            && !used.is_empty()
+            && used.iter().all(|(id, qty)| {
+                held.iter()
+                    .find(|l| &l.lot_id == id)
+                    .is_some_and(|l| l.qty_remaining + qty <= l.qty_in)
+            })
+    })
+}
+
+/// A product's quantity before and after a sale or its Undo, for the low-stock hook.
+pub(super) type StockChange = (String, i64, i64);
+
+/// Undo of a sale's stock: gives each `sale` move's quantity back to the lots it came from and
+/// appends the compensating `sale_reverted` move (positive delta, same lots and value). Returns
+/// the rows written, and per product the quantity before and after, for the low-stock hook.
+pub(super) fn restore_sale_moves(
+    tx: &StoreTx<'_>,
+    moves: &[MoveRow],
+    order_id: &str,
+    staff_id: &str,
+    now: i64,
+) -> Result<(Vec<Written>, Vec<StockChange>), AppError> {
+    let incomplete = || AppError::new(ErrorCode::Internal, "the sale's stock is incomplete");
+    let mut out = Vec::new();
+    let mut changed = Vec::new();
+    for m in moves {
+        let stock = find_stock(tx, &m.product_id)?.ok_or_else(incomplete)?;
+        let give = -m.delta;
+        update_stock(tx, &m.product_id, stock.qty + give, stock.avg_cost_minor)?;
+        out.push(write(
+            RowKey::Stock {
+                product_id: m.product_id.clone(),
+            },
+            ChangeOp::Update,
+            None,
+        ));
+        for (lot_id, qty) in parse_used(&m.lots_used) {
+            let lot = find_lot(tx, &lot_id)?.ok_or_else(incomplete)?;
+            set_lot_remaining(tx, &lot_id, lot.qty_remaining + qty)?;
+            out.push(write(RowKey::StockLots { lot_id }, ChangeOp::Update, None));
+        }
+        let move_id = ulid::Ulid::generate().to_string();
+        insert_move(
+            tx,
+            &MoveRow {
+                move_id: move_id.clone(),
+                product_id: m.product_id.clone(),
+                reason: MOVE_SALE_REVERTED.to_owned(),
+                delta: give,
+                before_qty: stock.qty,
+                before_avg_cost_minor: stock.avg_cost_minor,
+                unit_cost_minor: m.unit_cost_minor,
+                supplier: String::new(),
+                lot_id: None,
+                lots_used: m.lots_used.clone(),
+                staff_id: staff_id.to_owned(),
+                at: now,
+                waste_reason: None,
+                value_minor: m.value_minor,
+                order_id: Some(order_id.to_owned()),
+                note: None,
+                elevated_by: None,
+            },
+        )?;
+        out.push(write(
+            RowKey::StockMoves { move_id },
+            ChangeOp::Insert,
+            None,
+        ));
+        changed.push((m.product_id.clone(), stock.qty, stock.qty + give));
+    }
+    Ok((out, changed))
 }

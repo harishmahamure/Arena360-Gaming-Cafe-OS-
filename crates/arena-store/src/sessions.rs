@@ -862,6 +862,7 @@ pub fn find_settlement(conn: &Connection, order_id: &str) -> Result<Option<Settl
         "topup" => "wallet.topup",
         "credit_collect" => "credit.collect",
         "plan_sale" => "plan.sell",
+        "pos_sale" => "pos.sale",
         _ => "session.settle",
     };
     let forward = forward_intent_id(conn, "orders", order_id, intent_kind)?;
@@ -1135,4 +1136,160 @@ pub fn move_open_orders(
     )
     .map_err(db_error)?;
     Ok(ids)
+}
+
+/// A counter sale's order, written settled with its tax breakup.
+pub struct NewPosOrder<'a> {
+    pub id: &'a str,
+    pub player_id: Option<&'a str>,
+    pub subtotal_minor: i64,
+    pub tax_minor: i64,
+    pub total_minor: i64,
+    /// The per-rate breakup as JSON.
+    pub tax_breakup: &'a str,
+    pub settled_at: i64,
+    pub settled_by: &'a str,
+    pub business_day: &'a str,
+    pub fy: &'a str,
+}
+
+pub fn insert_pos_order(conn: &Connection, o: &NewPosOrder<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO orders (id, session_id, player_id, guest_no, device_id, status, subtotal_minor,
+                             total_minor, business_day, fy, kind, settled_at, settled_by,
+                             tax_minor, tax_breakup, rev, created_at, updated_at)
+         VALUES (?1, NULL, ?2, NULL, NULL, 'settled', ?3, ?4, ?5, ?6, 'pos_sale', ?7, ?8, ?9, ?10,
+                 0, 0, 0)",
+        params![
+            o.id,
+            o.player_id,
+            o.subtotal_minor,
+            o.total_minor,
+            o.business_day,
+            o.fy,
+            o.settled_at,
+            o.settled_by,
+            o.tax_minor,
+            o.tax_breakup
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// One product line of a counter sale.
+pub struct NewProductLine<'a> {
+    pub id: &'a str,
+    pub order_id: &'a str,
+    pub product_id: &'a str,
+    pub label: &'a str,
+    pub qty: i64,
+    pub unit_price_minor: i64,
+    pub tax_rate_bp: i64,
+    pub amount_minor: i64,
+    pub position: i64,
+    pub at: i64,
+}
+
+pub fn insert_product_line(conn: &Connection, l: &NewProductLine<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO order_lines (id, order_id, session_segment_id, device_id, from_at, to_at,
+                                  minutes, rate_minor_per_hour, amount_minor, position, rev,
+                                  created_at, updated_at, label, product_id, qty,
+                                  unit_price_minor, tax_rate_bp)
+         VALUES (?1, ?2, NULL, NULL, ?3, ?3, 0, 0, ?4, ?5, 0, 0, 0, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            l.id,
+            l.order_id,
+            l.at,
+            l.amount_minor,
+            l.position,
+            l.label,
+            l.product_id,
+            l.qty,
+            l.unit_price_minor,
+            l.tax_rate_bp
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The business day's settled counter sales, newest first, with their lines and payments.
+pub fn list_pos_sales(
+    conn: &Connection,
+    business_day: &str,
+) -> Result<Vec<arena_proto::PosSaleView>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.id, o.settled_at, COALESCE(st.display_name, o.settled_by), p.username,
+                    o.subtotal_minor, o.tax_minor, o.total_minor
+             FROM orders o
+             LEFT JOIN staff st ON st.staff_id = o.settled_by
+             LEFT JOIN players p ON p.player_id = o.player_id
+             WHERE o.kind = 'pos_sale' AND o.status = 'settled' AND o.business_day = ?1
+             ORDER BY o.settled_at DESC, o.id DESC",
+        )
+        .map_err(db_error)?;
+    let heads = stmt
+        .query_map([business_day], |r| {
+            Ok(arena_proto::PosSaleView {
+                order_id: r.get(0)?,
+                settled_at: r.get::<_, Option<i64>>(1)?.unwrap_or_default(),
+                staff: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                player: r.get(3)?,
+                lines: Vec::new(),
+                payments: Vec::new(),
+                subtotal_minor: r.get(4)?,
+                tax_minor: r.get(5)?,
+                total_minor: r.get(6)?,
+                invoice_no: None,
+            })
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    let mut lines = conn
+        .prepare(
+            "SELECT COALESCE(product_id, ''), COALESCE(label, ''), COALESCE(qty, 1),
+                    COALESCE(unit_price_minor, amount_minor), COALESCE(tax_rate_bp, 0),
+                    amount_minor
+             FROM order_lines WHERE order_id = ?1 ORDER BY position, id",
+        )
+        .map_err(db_error)?;
+    let mut payments = conn
+        .prepare(
+            "SELECT method, amount_minor FROM payments WHERE order_id = ?1 ORDER BY position, id",
+        )
+        .map_err(db_error)?;
+    heads
+        .into_iter()
+        .map(|mut sale| {
+            sale.lines = lines
+                .query_map([&sale.order_id], |r| {
+                    Ok(arena_proto::PosSaleLineView {
+                        product_id: r.get(0)?,
+                        name: r.get(1)?,
+                        qty: r.get(2)?,
+                        unit_price_minor: r.get(3)?,
+                        rate_bp: r.get(4)?,
+                        amount_minor: r.get(5)?,
+                    })
+                })
+                .map_err(db_error)?
+                .collect::<Result<_, _>>()
+                .map_err(db_error)?;
+            sale.payments = payments
+                .query_map([&sale.order_id], |r| {
+                    Ok(arena_proto::PosSalePaymentView {
+                        method: r.get(0)?,
+                        amount_minor: r.get(1)?,
+                    })
+                })
+                .map_err(db_error)?
+                .collect::<Result<_, _>>()
+                .map_err(db_error)?;
+            Ok(sale)
+        })
+        .collect()
 }

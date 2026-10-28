@@ -373,6 +373,16 @@ pub(super) fn mutate(
             Target::PlanSellReverted(t) => super::plan_sales::mutate_sell_reverted(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::PosSale(p) => match target {
+            Target::PosSale(t) => super::pos_sale::mutate_sale(tx, intent, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::PosSaleReverted(_) => match target {
+            Target::PosSaleReverted(t) => {
+                super::pos_sale::mutate_sale_reverted(tx, intent, t, now_ms)
+            }
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditSetLimit(c) => match target {
             Target::CreditSetLimit(t) => super::credit::mutate_set_limit(tx, c, t),
             _ => Err(mismatch()),

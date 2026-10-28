@@ -3,17 +3,25 @@
   import type { SessionStaff } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { branchLocale } from "./locale.svelte";
-  import { approveUndo, cancelApproval, runUndo, secondsLeft, undo } from "./undo.svelte";
+  import {
+    approveUndo,
+    cancelApproval,
+    runUndo,
+    secondsLeft,
+    undo,
+    type UndoKind,
+  } from "./undo.svelte";
 
   let { staff }: { staff: SessionStaff | null } = $props();
 
-  const MESSAGE: Record<"end" | "forced" | "settle" | "topup" | "collect" | "plan", MessageKey> = {
+  const MESSAGE: Record<UndoKind, MessageKey> = {
     end: "hub.undo.ended",
     forced: "hub.undo.forced",
     settle: "hub.undo.settled",
     topup: "hub.undo.topped_up",
     collect: "hub.undo.collected",
     plan: "hub.undo.plan_sold",
+    pos: "hub.undo.pos_sold",
   };
 </script>
 

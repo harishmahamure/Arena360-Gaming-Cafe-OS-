@@ -903,6 +903,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::OutOfStock
         | ErrorCode::ShiftAlreadyOpen
         | ErrorCode::ShiftNotOpen
+        | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
@@ -1475,8 +1476,16 @@ fn item_permissions(items: &[ElevationItem]) -> Result<Needs, UiError> {
         }
         match kind.requirement() {
             Requirement::Perm(p) => {
-                if !perms.contains(&p) {
-                    perms.push(p);
+                // A counter sale is only ever approved to override short stock, which also
+                // needs `stock.override` (`apply()` checks it on the approver).
+                let wanted = [
+                    Some(p),
+                    (kind == IntentKind::PosSale).then_some(Permission::StockOverride),
+                ];
+                for p in wanted.into_iter().flatten() {
+                    if !perms.contains(&p) {
+                        perms.push(p);
+                    }
                 }
             }
             _ => all_perms = false,
@@ -2108,6 +2117,7 @@ async fn run_intent(
         arena_proto::IntentPayload::WalletTopup(_)
             | arena_proto::IntentPayload::CreditCollect(_)
             | arena_proto::IntentPayload::PlanSell(_)
+            | arena_proto::IntentPayload::PosSale(_)
     );
     let settling = match &intent.payload {
         arena_proto::IntentPayload::SessionSettle(s) => Some(s.order_id.clone()),
@@ -2840,6 +2850,19 @@ async fn products(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
     }
 }
 
+/// `GET /ui/pos/sales`: the business day's counter sales, newest first, for Recent sales on POS.
+async fn pos_sales(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let (reader, now_ms) = (Arc::clone(&auth.reader), auth.clock.now_ms());
+    match tokio::task::spawn_blocking(move || reader.pos_sales(now_ms)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 async fn stock_expiry(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -3053,6 +3076,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/staff", get(staff_list))
         .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))
+        .route("/ui/pos/sales", get(pos_sales))
         .route("/ui/stock/expiry", get(stock_expiry))
         .route("/ui/stock/low", get(stock_low))
         .route("/ui/plans", get(plans))
@@ -5172,6 +5196,194 @@ pub(crate) mod tests {
         assert_eq!(view["expiring"], json!([]));
         assert_eq!(view["expired"], json!([]));
         assert_eq!(view["today"].as_str().map(str::len), Some(10));
+    }
+
+    #[tokio::test]
+    async fn a_counter_sale_settles_lists_in_recent_sales_and_a_short_bundle_overrides_with_a_pin()
+    {
+        use arena_proto::{
+            BundleComponent, PaymentMethod, PaymentRow, PosSale, PosSaleLine, PosSaleReverted,
+            ProductUpsert, StockIn,
+        };
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/pos/sales", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, view) = call(&hub, "GET", "/ui/pos/sales", Some(&counter), None).await;
+        assert_eq!((status, &view["sales"]), (StatusCode::OK, &json!([])));
+        assert_eq!(view["business_day"].as_str().map(str::len), Some(10));
+
+        let who = || Actor {
+            kind: ActorKind::Staff,
+            id: "x".into(),
+        };
+        let post = |token: String, payload: IntentPayload, rev: Option<i64>| {
+            let hub = &hub;
+            async move {
+                call(
+                    hub,
+                    "POST",
+                    "/ui/intent",
+                    Some(&token),
+                    Some(json!({ "intent": intent_as(who(), payload, rev) })),
+                )
+                .await
+            }
+        };
+        let product = |name: &str, price: i64, bundle: Option<(&str, i64)>| {
+            IntentPayload::ProductUpsert(ProductUpsert {
+                id: None,
+                name: name.into(),
+                category: String::new(),
+                price_minor: price,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: bundle.is_none(),
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+                bundle: bundle.is_some(),
+                components: bundle
+                    .map(|(id, qty)| {
+                        vec![BundleComponent {
+                            product_id: id.into(),
+                            qty,
+                        }]
+                    })
+                    .unwrap_or_default(),
+            })
+        };
+        let (status, made) = post(manager.clone(), product("Chips", 1_000, None), None).await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&counter), None).await;
+        let chips = listed[0]["id"].as_str().unwrap().to_owned();
+        let (status, made) = post(
+            manager.clone(),
+            IntentPayload::StockIn(StockIn {
+                product_id: chips.clone(),
+                qty: 3,
+                unit_cost_minor: 400,
+                supplier: String::new(),
+                expiry: None,
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        let (status, made) = post(
+            manager.clone(),
+            product("Combo", 3_000, Some((&chips, 2))),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&counter), None).await;
+        let combo = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "Combo")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let sale = |lines: &[(&str, i64)], total: i64, over: bool| {
+            IntentPayload::PosSale(PosSale {
+                lines: lines
+                    .iter()
+                    .map(|(id, qty)| PosSaleLine {
+                        product_id: (*id).into(),
+                        qty: *qty,
+                    })
+                    .collect(),
+                payments: vec![PaymentRow {
+                    method: PaymentMethod::Cash,
+                    amount_minor: total,
+                    reference: None,
+                }],
+                player_id: None,
+                credit_override: None,
+                stock_override: over.then_some(true),
+            })
+        };
+
+        // A plain sale: the reply carries the settled outcome for the Undo toast.
+        let (status, reply) = post(counter.clone(), sale(&[(&chips, 1)], 1_000, false), None).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let settled = &reply["settled"];
+        assert_eq!(settled["total_minor"], 1_000);
+        assert_eq!(settled["irreversible"], false);
+        assert_eq!(
+            settled["undo_until"].as_i64().unwrap() - settled["settled_at"].as_i64().unwrap(),
+            arena_proto::UNDO_WINDOW_MS
+        );
+        let order = settled["order_id"].as_str().unwrap().to_owned();
+        let (_, view) = call(&hub, "GET", "/ui/pos/sales", Some(&counter), None).await;
+        assert_eq!(view["sales"][0]["order_id"], json!(order));
+        assert_eq!(view["sales"][0]["lines"][0]["name"], "Chips");
+        assert_eq!(view["sales"][0]["payments"][0]["method"], "cash");
+        assert!(view["sales"][0]["invoice_no"].is_null());
+
+        // Undo within the window removes it from the list.
+        let (status, reply) = post(
+            counter.clone(),
+            IntentPayload::PosSaleReverted(PosSaleReverted {
+                order_id: order.clone(),
+            }),
+            settled["order_rev"].as_i64(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, view) = call(&hub, "GET", "/ui/pos/sales", Some(&counter), None).await;
+        assert_eq!(view["sales"], json!([]));
+
+        // 3 chips on hand; two combos need 4: refused 409 BUNDLE_SHORT naming the component.
+        let two = sale(&[(&combo, 2)], 6_000, false);
+        let (status, refused) = post(counter.clone(), two, None).await;
+        assert_eq!(
+            (status, refused["code"].as_str()),
+            (StatusCode::CONFLICT, Some("BUNDLE_SHORT"))
+        );
+        assert!(refused["message"].as_str().unwrap().contains("Chips"));
+        // Overriding needs stock.override: the counter alone is denied, with a manager PIN it sells.
+        let over = sale(&[(&combo, 2)], 6_000, true);
+        let (status, denied) = post(counter.clone(), over.clone(), None).await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let (status, elevated) = call(
+            &hub,
+            "POST",
+            "/ui/elevate",
+            Some(&counter),
+            Some(json!({"items": [{"intent_kind": "pos.sale"}], "pin": "2222"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{elevated}");
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&counter),
+            Some(json!({
+                "intent": intent_as(who(), over, None),
+                "elevation_ticket": elevated["ticket"],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&counter), None).await;
+        let left = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == json!(chips))
+            .unwrap();
+        assert_eq!(left["quantity"], 0);
     }
 
     #[tokio::test]

@@ -117,14 +117,15 @@ pub use products::{
 pub use rusqlite::Transaction;
 pub use sessions::{
     Ending, ForcedEnd, LiveSession, NewExtensionOrder, NewOrder, NewOrderLine, NewPayment,
-    NewSession, OpenOrder, OrderLineRow, OrderRow, SegmentRow, Settlement, close_segments,
-    device_has_live_session, effect_recorded, end_session, expire_session, extend_session,
-    find_ending, find_order, find_order_for_session, find_session, find_settlement,
-    forced_pack_minutes, forward_intent_id, grace_session, hold_session_expired, insert_effect,
-    insert_extension_order, insert_order, insert_order_line, insert_payment, insert_segment,
-    insert_session, list_live_sessions, list_open_order_lines, list_open_orders,
-    list_order_line_ids, list_payment_ids, list_segments, mark_forced, next_guest_no, reopen_order,
-    reopen_segments, reopen_session, settle_order, sum_reserved_minor,
+    NewPosOrder, NewProductLine, NewSession, OpenOrder, OrderLineRow, OrderRow, SegmentRow,
+    Settlement, close_segments, device_has_live_session, effect_recorded, end_session,
+    expire_session, extend_session, find_ending, find_order, find_order_for_session, find_session,
+    find_settlement, forced_pack_minutes, forward_intent_id, grace_session, hold_session_expired,
+    insert_effect, insert_extension_order, insert_order, insert_order_line, insert_payment,
+    insert_pos_order, insert_product_line, insert_segment, insert_session, list_live_sessions,
+    list_open_order_lines, list_open_orders, list_order_line_ids, list_payment_ids, list_pos_sales,
+    list_segments, mark_forced, next_guest_no, reopen_order, reopen_segments, reopen_session,
+    settle_order, sum_reserved_minor,
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
@@ -146,8 +147,8 @@ pub use staff::{
 pub use stock::{
     LotRow, MoveRow, StockRow, ThresholdRow, expired_qty, find_lot, find_move, find_stock,
     insert_lot, insert_move, insert_stock, latest_move_id, list_expiring_lots, list_lots,
-    list_low_stock, list_moves, list_tracked_thresholds, low_stock_qty, set_lot_remaining,
-    set_low_stock_qty, update_stock,
+    list_low_stock, list_moves, list_order_moves, list_tracked_thresholds, low_stock_qty,
+    set_lot_remaining, set_low_stock_qty, update_stock,
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
@@ -809,6 +810,14 @@ impl Store {
             return Ok(Vec::new());
         }
         list_sessions_for_day(&self.conn, business_day)
+    }
+
+    /// The business day's settled counter sales, newest first.
+    pub fn pos_sales(&self, business_day: &str) -> Result<Vec<arena_proto::PosSaleView>, AppError> {
+        if !self.table_exists("orders")? || !self.table_exists("shifts")? {
+            return Ok(Vec::new());
+        }
+        list_pos_sales(&self.conn, business_day)
     }
 
     pub fn live_segments(&self) -> Result<Vec<SegmentRow>, AppError> {

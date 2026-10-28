@@ -2,8 +2,9 @@
 // category strip show, the barcode lookup, the keyboard-wedge burst detector and the cart's
 // live availability check. Pure functions over the `/ui/products` list; the page owns the state.
 
-import type { Product } from "@arena/ui/generated";
+import type { PosSaleLine, Product } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
+import type { Tax } from "./tax";
 
 /** The category strip's two fixed entries; every other entry is a product category. */
 export const FAVOURITES = "\u0000favourites";
@@ -123,9 +124,93 @@ export const lineShortage = (
 
 export const cartCount = (cart: CartLine[]): number => cart.reduce((n, l) => n + l.qty, 0);
 
-export function cartTotal(cart: CartLine[], byId: Map<string, Product>): number {
-  return cart.reduce((sum, l) => sum + (byId.get(l.productId)?.price_minor ?? 0) * l.qty, 0);
+/** What the Hub assumes before the branch tax loads: tax inside the price, none charged. */
+export const DEFAULT_TAX: Tax = {
+  country: "IN",
+  gst: false,
+  gstin: "",
+  inclusive: true,
+  product_bp: 500,
+  play_bp: 1800,
+  sac: "",
+  label: "Tax",
+  rate_bp: 0,
+};
+
+/** One rate of a bill: what it was charged on and the tax computed once for it. */
+export type RateTax = { rate_bp: number; taxable_minor: number; tax_minor: number };
+export type Bill = {
+  subtotal_minor: number;
+  tax_minor: number;
+  total_minor: number;
+  breakup: RateTax[];
+};
+
+const roundDiv = (n: bigint, d: bigint): bigint => {
+  const abs = n < 0n ? -n : n;
+  const q = (2n * abs + d) / (2n * d);
+  return n < 0n ? -q : q;
+};
+
+/**
+ * The Hub's tax computation (`invoice::tax::compute`): lines are summed per rate, the tax is
+ * computed once per rate and rounded half-up to the minor unit once. Inclusive tax is carved out
+ * of the price; exclusive tax is added on top. Integers throughout (BigInt), so a large line
+ * cannot lose a minor unit.
+ */
+export function computeBill(
+  lines: { rate_bp: number; amount_minor: number }[],
+  inclusive: boolean,
+): Bill {
+  const perRate = new Map<number, bigint>();
+  for (const l of lines)
+    perRate.set(l.rate_bp, (perRate.get(l.rate_bp) ?? 0n) + BigInt(l.amount_minor));
+  let subtotal = 0n;
+  let taxSum = 0n;
+  const breakup: RateTax[] = [];
+  for (const rate_bp of [...perRate.keys()].sort((a, b) => a - b)) {
+    const amount = perRate.get(rate_bp) ?? 0n;
+    const r = BigInt(rate_bp);
+    const tax = inclusive ? roundDiv(amount * r, 10000n + r) : roundDiv(amount * r, 10000n);
+    const taxable = inclusive ? amount - tax : amount;
+    subtotal += taxable;
+    taxSum += tax;
+    breakup.push({ rate_bp, taxable_minor: Number(taxable), tax_minor: Number(tax) });
+  }
+  return {
+    subtotal_minor: Number(subtotal),
+    tax_minor: Number(taxSum),
+    total_minor: Number(subtotal + taxSum),
+    breakup,
+  };
 }
+
+/** The rate a product line is taxed at: its own in GST mode, the branch's simple rate otherwise. */
+export const lineRate = (product: Product, tax: Tax): number =>
+  tax.country === "IN" && tax.gst ? product.tax_rate_bp : tax.rate_bp;
+
+/** The cart as the server will price it: per-rate tax, subtotal and total. */
+export function cartBill(
+  cart: CartLine[],
+  byId: Map<string, Product>,
+  tax: Tax = DEFAULT_TAX,
+): Bill {
+  const priced = cart.flatMap((l) => {
+    const p = byId.get(l.productId);
+    return p ? [{ rate_bp: lineRate(p, tax), amount_minor: p.price_minor * l.qty }] : [];
+  });
+  return computeBill(priced, tax.inclusive);
+}
+
+export const cartTotal = (
+  cart: CartLine[],
+  byId: Map<string, Product>,
+  tax: Tax = DEFAULT_TAX,
+): number => cartBill(cart, byId, tax).total_minor;
+
+/** The cart as the lines of `pos.sale`. */
+export const saleLines = (cart: CartLine[]): PosSaleLine[] =>
+  cart.map((l) => ({ product_id: l.productId, qty: l.qty }));
 
 /**
  * Tells a barcode scanner (a keyboard wedge) from a person: printable keys under

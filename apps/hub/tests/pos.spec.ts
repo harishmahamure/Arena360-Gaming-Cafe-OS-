@@ -1,7 +1,15 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
-import type { PlayerHit, Product } from "@arena/ui/generated";
+import type {
+  PaymentRow,
+  PlayerHit,
+  PosSaleView,
+  Product,
+  ShiftState,
+  WalletView,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import type { Tax } from "../src/lib/tax";
 import { CORS, HUB, device, json as ok, snapshot } from "./floor-fixture";
 
 // The POS screen (Story 5.9): product grid with a category strip and favourites, search or scan,
@@ -363,4 +371,489 @@ test("a product list that cannot be loaded offers Retry", async ({ page }) => {
   await open(page, [], true);
   await expect(page.getByRole("alert")).toContainText(en["hub.pos.load_failed"]);
   await expect(page.getByRole("button", { name: en["hub.pos.retry"] })).toBeVisible();
+});
+
+// ---- Story 5.11: sell at the counter ----
+
+type Sent = { payload: Record<string, unknown> & { kind: string }; rev?: number; ticket?: string };
+type Hub = {
+  sent: Sent[];
+  elevations: { items: unknown; pin: string }[];
+  permissions: string[];
+  shift: ShiftState;
+  tax: Partial<Tax>;
+  sales: PosSaleView[] | "fail";
+  /** Refusals the next intents answer with, oldest first. */
+  refuse: { status: number; code: string; message?: string }[];
+  wallet: WalletView;
+};
+
+const SHIFT: ShiftState = {
+  open: {
+    id: "SH1",
+    staff_id: "01JMANAGER0000000000000000",
+    staff_name: "Ravi",
+    opened_at: Date.UTC(2026, 9, 28, 9, 30),
+    float_minor: 5000,
+    events: 1,
+  },
+  carried_minor: 5000,
+};
+
+const newHub = (extra: Partial<Hub> = {}): Hub => ({
+  sent: [],
+  elevations: [],
+  permissions: ["pos.sell"],
+  shift: SHIFT,
+  tax: {},
+  sales: [],
+  refuse: [],
+  wallet: { player_id: "PL1", balance_minor: 20000, txns: [] },
+  ...extra,
+});
+
+const TAX: Tax = {
+  country: "IN",
+  gst: false,
+  gstin: "",
+  inclusive: true,
+  product_bp: 500,
+  play_bp: 1800,
+  sac: "",
+  label: "Tax",
+  rate_bp: 0,
+};
+
+async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS) {
+  await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "counter-token"));
+  await page.route(`${HUB}/**`, async (route: Route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
+    switch (new URL(req.url()).pathname) {
+      case "/ui/snapshot": {
+        const snap = snapshot([device(1, {})]);
+        snap.shift = hub.shift;
+        return ok(route, snap);
+      }
+      case "/ui/me":
+        return ok(route, {
+          staff_id: "01JCOUNTER0000000000000000",
+          display_name: "Asha",
+          role_name: "Counter",
+          permissions: hub.permissions,
+          locked: false,
+          has_pin: true,
+        });
+      case "/ui/products":
+        return ok(route, products);
+      case "/ui/settings":
+        return ok(route, [
+          { key: "branch.tax", value: JSON.stringify({ ...TAX, ...hub.tax }), rev: 1 },
+        ]);
+      case "/ui/pos/sales":
+        return hub.sales === "fail"
+          ? route.fulfill({ status: 500, headers: CORS, body: "" })
+          : ok(route, { business_day: "2026-10-28", sales: hub.sales });
+      case "/ui/players": {
+        const digits = (new URL(req.url()).searchParams.get("q") ?? "").replace(/\D/g, "");
+        return ok(route, digits ? PLAYERS.filter((p) => p.phone.includes(digits)) : []);
+      }
+      case "/ui/players/wallet":
+        return ok(route, hub.wallet);
+      case "/ui/elevate": {
+        const body = req.postDataJSON() as { items: unknown; pin: string };
+        hub.elevations.push(body);
+        if (body.pin !== "2222") {
+          return route.fulfill({
+            status: 403,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ code: "PIN_REJECTED", message: "no" }),
+          });
+        }
+        return ok(route, { ticket: "T1", items: body.items, expires_in_s: 60 });
+      }
+      case "/ui/intent": {
+        const body = req.postDataJSON() as {
+          intent: { payload: Sent["payload"]; base_rev?: number };
+          elevation_ticket?: string;
+        };
+        hub.sent.push({
+          payload: body.intent.payload,
+          rev: body.intent.base_rev,
+          ticket: body.elevation_ticket,
+        });
+        const refusal = hub.refuse.shift();
+        if (refusal) {
+          return route.fulfill({
+            status: refusal.status,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ message: "refused", ...refusal }),
+          });
+        }
+        const payments = (body.intent.payload.payments ?? []) as PaymentRow[];
+        const now = Date.now();
+        return ok(route, {
+          applied: { intent_id: "I", changes: [] },
+          settled:
+            body.intent.payload.kind === "pos.sale"
+              ? {
+                  order_id: "O1",
+                  settled_at: now,
+                  undo_until: now + 8000,
+                  order_rev: 1,
+                  total_minor: payments.reduce((n, p) => n + p.amount_minor, 0),
+                  irreversible: false,
+                }
+              : undefined,
+        });
+      }
+      case "/ui/events":
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          headers: CORS,
+          body: `retry: 300\n\n`,
+        });
+      default:
+        return route.fulfill({ status: 404, headers: CORS, body: "{}" });
+    }
+  });
+  await page.goto("/pos");
+  await expect(page.getByTestId("pos")).toBeVisible();
+}
+
+const cashInput = (page: Page): Locator => page.locator('[data-row="cash"] input');
+
+test("a walk-up sale: the cash row is prefilled and Ctrl+Enter settles it", async ({
+  page,
+}, info) => {
+  const hub = newHub();
+  await openHub(page, hub);
+  await tile(page, "Cola").click();
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await expect(page.getByTestId("settle-total")).toContainText("120.00");
+  await expect(cashInput(page)).toHaveValue("120.00");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  await expect(page.getByTestId("undo-message")).toContainText("120.00");
+  expect(hub.sent).toHaveLength(1);
+  expect(hub.sent[0].payload).toMatchObject({
+    kind: "pos.sale",
+    lines: [{ product_id: "P1", qty: 2 }],
+    payments: [{ method: "cash", amount_minor: 12000 }],
+  });
+  expect(hub.sent[0].payload.player_id).toBeUndefined();
+  expect(hub.sent[0].payload.stock_override).toBeUndefined();
+  expect(hub.sent[0].rev).toBeUndefined();
+  // The cart is empty again.
+  if (isPhone(info)) await expect(page.getByTestId("phone-cart-bar")).toHaveCount(0);
+  else await expect(page.getByTestId("cart-empty")).toBeVisible();
+});
+
+test("a mixed sale sends one cash row and one UPI row with its reference", async ({
+  page,
+}, info) => {
+  const hub = newHub();
+  await openHub(page, hub);
+  await page.getByRole("button", { name: en["hub.pos.all"], exact: true }).click();
+  await tile(page, "Cola").click();
+  await tile(page, "Chips").click();
+  await openCart(page, info);
+  await expect(cashInput(page)).toHaveValue("90.00");
+  await cashInput(page).fill("50");
+  await page.locator('[data-method="upi"]').click();
+  await expect(page.locator('[data-row="upi"] input').first()).toHaveValue("40.00");
+  await page.locator('[data-row="upi"] [data-reference] input').fill("1234");
+  await page.getByRole("button", { name: en["hub.settle.submit"], exact: true }).click();
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.sent[0].payload.payments).toEqual([
+    { method: "cash", amount_minor: 5000 },
+    { method: "upi", amount_minor: 4000, reference: "1234" },
+  ]);
+});
+
+test("with no shift open there is no Cash row; UPI settles the sale", async ({ page }, info) => {
+  const hub = newHub({ shift: { open: null, carried_minor: 0 } });
+  await openHub(page, hub);
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await expect(page.getByTestId("settle-shift-closed")).toBeVisible();
+  await expect(page.locator('[data-method="cash"]')).toHaveCount(0);
+  await expect(page.locator('[data-row="cash"]')).toHaveCount(0);
+  await page.locator('[data-method="upi"]').click();
+  await page.locator('[data-row="upi"] [data-reference] input').fill("4321");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.sent[0].payload.payments).toEqual([
+    { method: "upi", amount_minor: 6000, reference: "4321" },
+  ]);
+});
+
+test("an exclusive branch tax is added to the total and shown per rate", async ({ page }, info) => {
+  const hub = newHub({ tax: { inclusive: false, rate_bp: 500 } });
+  await openHub(page, hub);
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await expect(page.getByTestId("pos-subtotal")).toContainText("60.00");
+  await expect(page.getByTestId("pos-tax-rate")).toContainText("Tax 5%");
+  await expect(page.getByTestId("pos-tax-rate")).toContainText("3.00");
+  await expect(page.getByTestId("settle-total")).toContainText("63.00");
+  await expect(cashInput(page)).toHaveValue("63.00");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.sent[0].payload.payments).toEqual([{ method: "cash", amount_minor: 6300 }]);
+});
+
+test("wallet and credit appear once a player is attached, and the sale names them", async ({
+  page,
+}, info) => {
+  const hub = newHub({
+    wallet: {
+      player_id: "PL1",
+      balance_minor: 20000,
+      txns: [],
+      credit: {
+        limit_minor: 50000,
+        outstanding_minor: 0,
+        paused: false,
+        reminder_days: [3, 7, 14],
+      } as WalletView["credit"],
+    },
+  });
+  await openHub(page, hub);
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await expect(page.locator('[data-method="wallet"]')).toHaveCount(0);
+  await expect(page.locator('[data-method="credit"]')).toHaveCount(0);
+  await page.getByTestId("cart-change").click();
+  const chooser = page.getByTestId("cart-chooser");
+  await chooser.locator("[data-player-lookup]").fill("9876");
+  await chooser.getByTestId("player-hits").getByRole("button", { name: /Asha/ }).click();
+  await expect(page.locator('[data-method="wallet"]')).toHaveCount(1);
+  await expect(page.locator('[data-method="credit"]')).toHaveCount(1);
+  await cashInput(page).fill("10");
+  await page.locator('[data-method="wallet"]').click();
+  await expect(page.locator('[data-row="wallet"] input').first()).toHaveValue("50.00");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({
+    player_id: "PL1",
+    payments: [
+      { method: "cash", amount_minor: 1000 },
+      { method: "wallet", amount_minor: 5000 },
+    ],
+  });
+});
+
+test("a refused short bundle offers a manager PIN and sells with the override", async ({
+  page,
+}, info) => {
+  const hub = newHub({
+    refuse: [{ status: 409, code: "BUNDLE_SHORT", message: "Not enough Chips for Combo." }],
+  });
+  await openHub(page, hub);
+  await page.getByRole("button", { name: "Combos", exact: true }).click();
+  await tile(page, "Combo").click();
+  await openCart(page, info);
+  await page.keyboard.press("Control+Enter");
+  const panel = page.getByTestId("pos-override");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId("pos-short-message")).toHaveText("Not enough Chips for Combo.");
+  await expect(panel.locator("[data-component=inline-pin]")).toBeVisible();
+  expect(hub.sent).toHaveLength(1);
+  expect(hub.sent[0].payload.stock_override).toBeUndefined();
+  // A wrong PIN is refused and nothing is sent.
+  await page.keyboard.type("1111");
+  await page.keyboard.press("Enter");
+  await expect(panel).toContainText(en["ui.pin.rejected"]);
+  expect(hub.sent).toHaveLength(1);
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.elevations.at(-1)).toMatchObject({
+    items: [{ intent_kind: "pos.sale" }],
+    pin: "2222",
+  });
+  expect(hub.sent).toHaveLength(2);
+  expect(hub.sent[1].payload).toMatchObject({
+    kind: "pos.sale",
+    stock_override: true,
+    lines: [{ product_id: "P6", qty: 1 }],
+  });
+  expect(hub.sent[1].ticket).toBe("T1");
+  await expect(panel).toHaveCount(0);
+});
+
+test("staff who hold stock.override sell a short bundle anyway without a PIN", async ({
+  page,
+}, info) => {
+  const hub = newHub({
+    permissions: ["pos.sell", "stock.override"],
+    refuse: [{ status: 409, code: "BUNDLE_SHORT", message: "Not enough Chips for Combo." }],
+  });
+  await openHub(page, hub);
+  await page.getByRole("button", { name: "Combos", exact: true }).click();
+  await tile(page, "Combo").click();
+  await openCart(page, info);
+  await page.keyboard.press("Control+Enter");
+  const panel = page.getByTestId("pos-override");
+  await expect(panel.locator("[data-component=inline-pin]")).toHaveCount(0);
+  await panel.getByRole("button", { name: en["hub.pos.override.sell"] }).click();
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.elevations).toHaveLength(0);
+  expect(hub.sent[1].payload.stock_override).toBe(true);
+  expect(hub.sent[1].ticket).toBeUndefined();
+});
+
+test("a plain refusal says why and keeps the cart", async ({ page }, info) => {
+  const hub = newHub({ refuse: [{ status: 409, code: "OUT_OF_STOCK", message: "only 1 left" }] });
+  await openHub(page, hub);
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("pos-error")).toHaveText(
+    new RegExp(en["hub.pos.err.out_of_stock"]),
+  );
+  await expect(page.getByTestId("undo-toast")).toHaveCount(0);
+  await expect(lineOf(page, "Cola")).toBeVisible();
+});
+
+test("Undo sends pos.sale.reverted with the order rev and puts the cart and player back", async ({
+  page,
+}, info) => {
+  const hub = newHub();
+  await openHub(page, hub);
+  await tile(page, "Cola").click();
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await page.getByTestId("cart-change").click();
+  const chooser = page.getByTestId("cart-chooser");
+  await chooser.locator("[data-player-lookup]").fill("9876");
+  await chooser.getByTestId("player-hits").getByRole("button", { name: /Asha/ }).click();
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  if (isPhone(info)) await expect(page.getByTestId("phone-cart-bar")).toHaveCount(0);
+  else await expect(page.getByTestId("cart-empty")).toBeVisible();
+
+  await page.getByTestId("undo-action").click();
+  await expect(page.getByTestId("undo-notice")).toHaveText(en["hub.undo.done.pos"]);
+  expect(hub.sent[1].payload).toEqual({ kind: "pos.sale.reverted", order_id: "O1" });
+  expect(hub.sent[1].rev).toBe(1);
+  await openCart(page, info);
+  await expect(lineOf(page, "Cola").getByTestId("line-qty")).toHaveText("2");
+  await expect(page.getByTestId("cart-for")).toHaveText("Asha");
+  await expect(page.getByTestId("settle-total")).toContainText("120.00");
+});
+
+test("Recent sales lists the day's counter sales with a read-only detail", async ({
+  page,
+}, info) => {
+  const sale = (id: string, extra: Partial<PosSaleView>): PosSaleView => ({
+    order_id: id,
+    settled_at: Date.UTC(2026, 9, 28, 9, 45),
+    staff: "Asha",
+    lines: [
+      {
+        product_id: "P1",
+        name: "Cola",
+        qty: 2,
+        unit_price_minor: 6000,
+        rate_bp: 0,
+        amount_minor: 12000,
+      },
+    ],
+    payments: [{ method: "cash", amount_minor: 12000 }],
+    subtotal_minor: 12000,
+    tax_minor: 0,
+    total_minor: 12000,
+    invoice_no: null,
+    ...extra,
+  });
+  const hub = newHub({
+    sales: [
+      sale("O2", {
+        player: "asha_9",
+        total_minor: 6300,
+        subtotal_minor: 6000,
+        tax_minor: 300,
+        lines: [
+          {
+            product_id: "P2",
+            name: "Chips",
+            qty: 2,
+            unit_price_minor: 3000,
+            rate_bp: 500,
+            amount_minor: 6000,
+          },
+        ],
+        payments: [
+          { method: "cash", amount_minor: 3300 },
+          { method: "upi", amount_minor: 3000 },
+        ],
+      }),
+      sale("O1", {}),
+    ],
+  });
+  await openHub(page, hub);
+  await page.getByTestId("recent-toggle").click();
+  const rows = page.getByTestId("recent-sale");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("asha_9");
+  await expect(rows.first()).toContainText("63.00");
+  await expect(rows.nth(1)).toContainText(en["hub.pos.cart.walkup"]);
+  await expect(rows.first().getByTestId("recent-invoice")).toHaveText(
+    en["hub.pos.recent.invoice_pending"],
+  );
+  await expect(page.getByTestId("sale-detail")).toHaveCount(0);
+  await rows.first().getByTestId("recent-toggle-detail").click();
+  const detail = rows.first().getByTestId("sale-detail");
+  await expect(detail.getByTestId("sale-detail-line")).toHaveText([/2 × Chips at ₹30.00/]);
+  await expect(detail.getByTestId("sale-detail-payment")).toHaveText([/Cash/, /UPI/]);
+  await expect(detail).toContainText("63.00");
+  // Read-only: nothing in the detail changes the sale.
+  await expect(detail.getByRole("button")).toHaveCount(0);
+  await page.getByTestId("recent-toggle").click();
+  await expect(page.getByTestId("pos-tiles")).toBeVisible();
+});
+
+test("Recent sales says so when there are none", async ({ page }) => {
+  await openHub(page, newHub());
+  await page.getByTestId("recent-toggle").click();
+  await expect(page.getByTestId("recent-empty")).toHaveText(en["hub.pos.recent.empty"]);
+});
+
+test("Recent sales offers Retry when the list cannot be loaded", async ({ page }) => {
+  await openHub(page, newHub({ sales: "fail" }));
+  await page.getByTestId("recent-toggle").click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: en["hub.pos.recent.load_failed"] }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: en["hub.pos.retry"] })).toBeVisible();
+});
+
+test("scan, pay cash and settle takes well under 10 s", async ({ page }, info) => {
+  const hub = newHub();
+  await openHub(page, hub);
+  const started = Date.now();
+  await page.getByLabel(en["hub.pos.search.label"]).fill("8901");
+  await page.keyboard.press("Enter");
+  await openCart(page, info);
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(Date.now() - started).toBeLessThan(10_000);
+  expect(hub.sent[0].payload).toMatchObject({ lines: [{ product_id: "P1", qty: 1 }] });
+});
+
+test("the live settle bar has no serious accessibility violations", async ({ page }, info) => {
+  await openHub(page, newHub());
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  const results = await new AxeBuilder({ page }).analyze();
+  const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual(
+    [],
+  );
 });

@@ -324,7 +324,21 @@ pub(super) fn mutate_sell_reverted(
             before: Some(before),
         });
     }
-    for id in &t.payments {
+    delete_sale_rows(tx, &o.id, &t.payments, &t.txns, &t.lines, &mut written)?;
+    Ok(written)
+}
+
+/// Removes what an Undone sale wrote: its payments, wallet and credit rows (putting the balances
+/// back), lines and the order itself.
+pub(super) fn delete_sale_rows(
+    tx: &StoreTx<'_>,
+    order_id: &str,
+    payments: &[String],
+    txns: &[OrderTxn],
+    lines: &[String],
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    for id in payments {
         let key = RowKey::Payments { id: id.clone() };
         let before = read_row(tx, &key)?;
         delete_row(tx, Table::Payments, &before)?;
@@ -334,7 +348,7 @@ pub(super) fn mutate_sell_reverted(
             before: Some(before),
         });
     }
-    for txn in &t.txns {
+    for txn in txns {
         let key = RowKey::WalletTxns { id: txn.id.clone() };
         let before = read_row(tx, &key)?;
         delete_row(tx, Table::WalletTxns, &before)?;
@@ -366,7 +380,7 @@ pub(super) fn mutate_sell_reverted(
             });
         }
     }
-    for id in &t.lines {
+    for id in lines {
         let key = RowKey::OrderLines { id: id.clone() };
         let before = read_row(tx, &key)?;
         delete_row(tx, Table::OrderLines, &before)?;
@@ -376,7 +390,9 @@ pub(super) fn mutate_sell_reverted(
             before: Some(before),
         });
     }
-    let key = RowKey::Orders { id: o.id.clone() };
+    let key = RowKey::Orders {
+        id: order_id.to_owned(),
+    };
     let before = read_row(tx, &key)?;
     delete_row(tx, Table::Orders, &before)?;
     written.push(Written {
@@ -384,5 +400,5 @@ pub(super) fn mutate_sell_reverted(
         op: ChangeOp::Delete,
         before: Some(before),
     });
-    Ok(written)
+    Ok(())
 }

@@ -719,6 +719,9 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
             "Mark served or cancel unserved items first",
         ));
     }
+    if s.discount.is_some() && o.group_bill_id.is_some() {
+        return Err(invalid("discount", "a group bill takes no discount"));
+    }
     let total = match &t.coupon {
         Some(bill) => o.total_minor - bill.price(o.total_minor, s.discount.as_ref())?.off(),
         None => o.total_minor,

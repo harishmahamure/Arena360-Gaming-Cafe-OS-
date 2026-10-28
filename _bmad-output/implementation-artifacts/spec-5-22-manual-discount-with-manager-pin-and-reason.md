@@ -2,7 +2,7 @@
 title: 'Story 5.22: Manual discount with manager PIN and reason'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '07294c26d40daaba305f609e79fca41da5e0e458'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -81,6 +81,18 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-28, four layers): fixed in code
+- POS counter settle dropped the PIN ticket: the single-use ticket handling sat in `place()` (order.place) instead of `settle()` (pos.sale), so a counter without `discount.manual` got `PERMISSION_DENIED` after a valid PIN. Moved to `settle()`.
+- Group-bill exclusion was UI-only: `validate_settle` now refuses a discount on a group bill (`VALIDATION_FAILED`, field `discount`).
+- Added a core test for `session.settle` and `plan.sell` permission (counter denied, non-holder approver denied, manager approves, `discount_by` = manager).
+
+Deferred / dismissed
+- The actor-or-elevator check follows the existing credit/stock override convention (elevator else actor); the Hub flags `discount: true` on the elevation. Kept.
+- Session bills carry no tax breakup to recompute (spec: the total is just reduced). Kept.
+- A `pos.sale` elevation requires `stock.override` as well as `discount.manual` on the approver (existing counter-sale rule). Kept.
+- Low-risk follow-ups: stale-ticket re-prompt Playwright case, POS/plan Playwright discount cases, partly-paid core test, label "1 to 100" vs the backend's 0.01% minimum, unused `hub.settle.discount.refused` key.
+- `ui_auth::lock_and_unlock_log_the_staff_ids_and_never_the_pin` is flaky when the whole `arena-api` suite runs in parallel (global tracing subscriber) and passes alone; unrelated to this story.
 
 ## Design Notes
 

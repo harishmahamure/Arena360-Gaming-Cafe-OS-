@@ -392,11 +392,8 @@
       player: null,
       session: target.session.id,
     };
-    // A discount approval is single use: the next try asks for the PIN again.
-    const approved = ticket ?? chosenDiscount?.ticket;
-    chosenDiscount = chosenDiscount && { discount: chosenDiscount.discount };
     const outcome = await submitIntent(payload, key, undefined, {
-      elevationTicket: approved,
+      elevationTicket: ticket,
     }).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (outcome.kind === "applied") {
@@ -413,7 +410,7 @@
       void load();
       return;
     }
-    if (approved) void dropElevation(approved);
+    if (ticket) void dropElevation(ticket);
     if (outcome.kind !== "error") {
       error = "hub.pos.err.unreachable";
       return;
@@ -482,8 +479,11 @@
     attempt = { key, body };
     const sold = { cart: cart.map((l) => ({ ...l })), player: attached };
     const amount = total;
+    // A discount approval is single use: the next try asks for the PIN again.
+    const approved = ticket ?? chosenDiscount?.ticket;
+    chosenDiscount = chosenDiscount && { discount: chosenDiscount.discount };
     const outcome = await submitIntent(payload, key, undefined, {
-      elevationTicket: ticket,
+      elevationTicket: approved,
     }).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (outcome.kind === "applied") {
@@ -499,7 +499,7 @@
       void loadSales();
       return;
     }
-    if (ticket) void dropElevation(ticket);
+    if (approved) void dropElevation(approved);
     if (outcome.kind !== "error") {
       error = "hub.pos.err.unreachable";
       return;

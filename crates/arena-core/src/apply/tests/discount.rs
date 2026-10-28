@@ -657,3 +657,69 @@ async fn stock_is_taken_for_the_full_quantity_whatever_the_discount() {
     let stock = reopen(&f).rows(Table::Stock).unwrap();
     assert_eq!(int(&stock[0], "qty"), 17);
 }
+
+/// `i` as `counter`, approved by `manager` when one is named.
+fn acting(mut i: Intent, counter: &Actor, manager: Option<&str>) -> Intent {
+    i.actor = counter.clone();
+    i.elevated_by = manager.map(|id| ElevatedBy {
+        kind: ElevationKind::Pin,
+        id: id.into(),
+        mode: ElevationMode::Hub,
+        verifier_version: 1,
+    });
+    i
+}
+
+#[tokio::test]
+async fn a_session_settle_and_a_plan_sale_discount_need_the_approving_managers_permission() {
+    let f = bootstrapped().await;
+    let counter = staff(&f, "ctr", ROLE_COUNTER).await;
+    let manager = manager_with_pin(&f).await;
+
+    let (order, _, rev) = billed(&f, 10_000, 41).await;
+    let settle = |paid: i64| {
+        let mut i = settle_intent(&order, Some(rev), vec![pay(Cash, paid, None)]);
+        if let IntentPayload::SessionSettle(s) = &mut i.payload {
+            s.discount = Some(percent(1_000));
+        }
+        i
+    };
+    let before = changes(&f);
+    assert_eq!(
+        refusal(end(&f, acting(settle(6_750), &counter, None)).await).0,
+        ErrorCode::PermissionDenied
+    );
+    // A staff member without `discount.manual` cannot approve it either.
+    assert_eq!(
+        refusal(end(&f, acting(settle(6_750), &counter, Some(&counter.id))).await).0,
+        ErrorCode::PermissionDenied
+    );
+    assert_eq!(changes(&f), before);
+    end(&f, acting(settle(6_750), &counter, Some(&manager)))
+        .await
+        .unwrap();
+    assert_eq!(
+        text(&table(&f, Table::Orders)[0], "discount_by"),
+        manager.clone()
+    );
+
+    let p = super::session::player(&f, "asha", "+919876543210").await;
+    let plan = plan_of(&f, "pack", 30_000, true).await;
+    let sell = || {
+        let mut i = sell_intent(&p, &plan, vec![pay(Cash, 25_000, None)]);
+        if let IntentPayload::PlanSell(s) = &mut i.payload {
+            s.discount = Some(amount(5_000));
+        }
+        i
+    };
+    let before = changes(&f);
+    assert_eq!(
+        refusal(end(&f, acting(sell(), &counter, None)).await).0,
+        ErrorCode::PermissionDenied
+    );
+    assert_eq!(changes(&f), before);
+    end(&f, acting(sell(), &counter, Some(&manager)))
+        .await
+        .unwrap();
+    assert_eq!(text(&sale_order(&f), "discount_by"), manager);
+}

@@ -2,7 +2,7 @@
 title: 'Story 5.29: GSTR-1 export'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '01816a0'
 followup_review_recommended: false
@@ -83,6 +83,9 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- 2026-10-28 code review (patched): `month_range` rejects non-digit parts (`2026-+1`); export button sends the month on screen (`view.month`) and a failed load clears the stale view; `gst_export` checks the session before parsing the body; blank `buyer_gstin` is treated as B2C; untaxed credit notes count in the untaxed warning.
+- Deferred/accepted: tests for cross-month refunds, unnumbered SQL filter and inter-state CDNR split; a folder allow-list and audit event for the export; HSN-missing warning; Cancelled-at-month-edge nuance; BOM for Excel; singular plurals.
 
 ## Design Notes
 

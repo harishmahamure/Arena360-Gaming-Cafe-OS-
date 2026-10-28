@@ -148,7 +148,10 @@ const STATES: [(&str, &str); 38] = [
 pub fn month_range(month: &str) -> Result<(String, String), AppError> {
     let bad = || AppError::with_field(ErrorCode::ValidationFailed, "month", "Pick a valid month.");
     let (year, mon) = month.split_once('-').ok_or_else(bad)?;
-    if year.len() != 4 || mon.len() != 2 {
+    if year.len() != 4
+        || mon.len() != 2
+        || !year.bytes().chain(mon.bytes()).all(|b| b.is_ascii_digit())
+    {
         return Err(bad());
     }
     let first = NaiveDate::from_ymd_opt(
@@ -734,6 +737,7 @@ fn invoice_doc(r: &GstInvoiceRow) -> Doc<'_> {
         buyer: r
             .buyer_gstin
             .as_deref()
+            .filter(|g| !g.trim().is_empty())
             .map(|g| (g, r.buyer_name.as_deref().unwrap_or(""))),
         rates,
         credit: false,
@@ -752,6 +756,7 @@ fn credit_doc(r: &GstCreditRow) -> Doc<'_> {
         buyer: r
             .buyer_gstin
             .as_deref()
+            .filter(|g| !g.trim().is_empty())
             .map(|g| (g, r.buyer_name.as_deref().unwrap_or(""))),
         rates,
         credit: true,
@@ -1273,6 +1278,8 @@ mod tests {
             "2026-00",
             "26-10",
             "2026-1",
+            "2026-+1",
+            "+026-10",
             "2026/10",
             "",
             "2026-10-01",

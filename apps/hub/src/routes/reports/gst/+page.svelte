@@ -58,7 +58,7 @@
           : outcome.kind === "denied"
             ? "hub.reports.no_access"
             : "hub.gst.failed";
-    if (outcome.kind === "ok") view = outcome.view;
+    view = outcome.kind === "ok" ? outcome.view : null;
   }
 
   async function prefillFolder() {
@@ -78,8 +78,10 @@
       folderError = "hub.gst.folder_required";
       return;
     }
+    // The month on screen, not whatever the picker holds since the last "Show month".
+    const shown = view?.month ?? month;
     exporting = true;
-    const outcome = await exportGst(month, folder.trim());
+    const outcome = await exportGst(shown, folder.trim());
     exporting = false;
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (outcome.kind === "ok") {

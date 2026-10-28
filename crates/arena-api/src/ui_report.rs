@@ -190,12 +190,12 @@ pub(crate) async fn gst_export(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let Ok(req) = serde_json::from_slice::<arena_proto::GstExportRequest>(&body) else {
-        return fail(bad_frame(EXPORT_SHAPE));
-    };
     if let Err(denied) = gate(&auth, &headers).await {
         return denied;
     }
+    let Ok(req) = serde_json::from_slice::<arena_proto::GstExportRequest>(&body) else {
+        return fail(bad_frame(EXPORT_SHAPE));
+    };
     let reader = Arc::clone(auth.reader());
     let job = tokio::task::spawn_blocking(move || {
         let (file_name, zip, month) = reader.gst_export(&req.month)?;

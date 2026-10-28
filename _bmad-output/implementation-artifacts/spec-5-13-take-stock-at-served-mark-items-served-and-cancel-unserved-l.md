@@ -2,7 +2,7 @@
 title: 'Story 5.13: Take stock at served, mark items served, and cancel unserved lines into waste'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '8dcfc80bd09e622fe7917108c6e4810b5a086f69'
 baseline_revision: '8dcfc80bd09e622fe7917108c6e4810b5a086f69'
 review_loop_iteration: 0

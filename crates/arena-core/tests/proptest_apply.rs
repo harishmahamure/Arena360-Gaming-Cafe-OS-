@@ -125,6 +125,13 @@ enum Op {
         past: bool,
         undo: bool,
     },
+    /// `stock.waste` of a quantity (valid or not, sometimes without a reason) from the first
+    /// tracked product, then maybe `stock.waste.reverted` straight after.
+    Waste {
+        qty: i64,
+        reason: u8,
+        undo: bool,
+    },
     Player {
         user: u8,
         phone: u8,
@@ -414,6 +421,12 @@ fn op() -> impl Strategy<Value = Op> {
             any::<bool>(),
         )
             .prop_map(|(qty, cost, past, undo)| Op::Stock { qty, cost, past, undo }),
+        2 => (
+            prop_oneof![4 => 1..=60i64, 1 => -2..=0i64, 1 => 1000..=2000i64],
+            0..5u8,
+            any::<bool>(),
+        )
+            .prop_map(|(qty, reason, undo)| Op::Waste { qty, reason, undo }),
         2 => (0..4u8, 0..4u8, any::<bool>()).prop_map(|(user, phone, consent)| Op::Player {
             user,
             phone,
@@ -1281,6 +1294,81 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .sum();
             prop_assert_eq!(lots, held(hub).0);
         }
+        Op::Waste { qty, reason, undo } => {
+            let Some(p) = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .find(|p| !p.bundle && p.track_stock)
+            else {
+                return Ok(());
+            };
+            let id = p.product_id;
+            let held = |hub: &Hub| {
+                hub.reader
+                    .stock(&id)
+                    .unwrap()
+                    .map_or((0, 0), |s| (s.qty, s.avg_cost_minor))
+            };
+            let lot_sum = |hub: &Hub| -> i64 {
+                hub.reader
+                    .lots(&id)
+                    .unwrap()
+                    .iter()
+                    .map(|l| l.qty_remaining)
+                    .sum()
+            };
+            let (old_qty, old_avg) = held(hub);
+            let mut intent = hub.intent(
+                IntentPayload::StockWaste(arena_proto::StockWaste {
+                    product_id: id.clone(),
+                    qty: *qty,
+                }),
+                None,
+            );
+            intent.reason = arena_proto::ReasonCode::WASTE
+                .get(usize::from(*reason))
+                .copied();
+            let had_reason = intent.reason.is_some();
+            let out = hub.submit_new(intent);
+            if !had_reason || *qty < 1 || *qty > old_qty {
+                let want = if !had_reason {
+                    ErrorCode::ReasonRequired
+                } else if *qty < 1 {
+                    ErrorCode::ValidationFailed
+                } else {
+                    ErrorCode::OutOfStock
+                };
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(want), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), changes_before);
+                return assert_gap_free(hub);
+            }
+            prop_assert!(out.is_ok(), "{:?}", out);
+            prop_assert_eq!(held(hub), (old_qty - qty, old_avg));
+            prop_assert_eq!(lot_sum(hub), old_qty - qty);
+            prop_assert!(hub.change_count() >= changes_before + 3);
+            if *undo {
+                let after_waste = hub.change_count();
+                let move_id = out
+                    .unwrap()
+                    .changes
+                    .iter()
+                    .find(|c| c.tbl == "stock_moves")
+                    .unwrap()
+                    .row_id
+                    .clone();
+                let revert = hub.intent(
+                    IntentPayload::StockWasteReverted(arena_proto::StockWasteReverted { move_id }),
+                    None,
+                );
+                let out = hub.submit_new(revert);
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(held(hub), (old_qty, old_avg));
+                prop_assert_eq!(lot_sum(hub), old_qty);
+                prop_assert!(hub.change_count() >= after_waste + 3);
+            }
+        }
         Op::Player {
             user,
             phone,
@@ -1803,7 +1891,10 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert!(out.is_ok(), "{:?}", out);
             let prepaid = text(&session, "mode") != "postpaid";
             let wanted = if prepaid { "settled" } else { "open" };
-            if prepaid {
+            // A grouped session also touches its group bill, so only an ungrouped postpaid
+            // end has an exact change count.
+            let grouped = session["group_bill_id"] != RowValue::Null;
+            if prepaid || grouped {
                 prop_assert!(hub.change_count() > before + 5);
             } else {
                 prop_assert_eq!(hub.change_count(), before + 5);

@@ -125,6 +125,10 @@ pub enum IntentKind {
     StockIn,
     #[serde(rename = "stock.in.reverted")]
     StockInReverted,
+    #[serde(rename = "stock.waste")]
+    StockWaste,
+    #[serde(rename = "stock.waste.reverted")]
+    StockWasteReverted,
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance,
     #[serde(rename = "rate.upsert")]
@@ -220,7 +224,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 70] = [
+    pub const ALL: [IntentKind; 72] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -255,6 +259,8 @@ impl IntentKind {
         Self::StaffDeactivate,
         Self::StockIn,
         Self::StockInReverted,
+        Self::StockWaste,
+        Self::StockWasteReverted,
         Self::DeviceMaintenance,
         Self::RateUpsert,
         Self::DeviceTestSessionStart,
@@ -330,6 +336,8 @@ impl IntentKind {
             Self::StaffDeactivate => "staff.deactivate",
             Self::StockIn => "stock.in",
             Self::StockInReverted => "stock.in.reverted",
+            Self::StockWaste => "stock.waste",
+            Self::StockWasteReverted => "stock.waste.reverted",
             Self::DeviceMaintenance => "device.maintenance",
             Self::RateUpsert => "rate.upsert",
             Self::DeviceTestSessionStart => "device.test_session.start",
@@ -414,7 +422,9 @@ impl IntentKind {
             | Self::PlanUpsert
             | Self::RuleUpsert
             | Self::StockIn
-            | Self::StockInReverted => IntentCategory::Catalog,
+            | Self::StockInReverted
+            | Self::StockWaste
+            | Self::StockWasteReverted => IntentCategory::Catalog,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -493,6 +503,9 @@ impl IntentKind {
                 Requirement::Perm(Permission::CatalogEdit)
             }
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
+            Self::StockWaste | Self::StockWasteReverted => {
+                Requirement::Perm(Permission::StockAdjust)
+            }
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 Requirement::Perm(Permission::PlayerManage)
             }
@@ -544,6 +557,7 @@ impl IntentKind {
                 ReasonCode::Replaced,
                 ReasonCode::Other,
             ]),
+            Self::StockWaste => Some(&ReasonCode::WASTE),
             Self::SessionForceEnd => Some(&[
                 ReasonCode::RuleViolation,
                 ReasonCode::HardwareIssue,
@@ -584,7 +598,8 @@ impl IntentKind {
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
-            | Self::StockInReverted => None,
+            | Self::StockInReverted
+            | Self::StockWasteReverted => None,
             Self::DeviceMaintenance
             | Self::RateUpsert
             | Self::DeviceTestSessionStart
@@ -640,11 +655,23 @@ pub enum ReasonCode {
     RuleViolation,
     HardwareIssue,
     Closing,
+    Spoiled,
+    Broken,
+    Free,
+    CancelledOrder,
 }
 
 impl ReasonCode {
+    /// The reasons `stock.waste` takes, in the order the Hub offers them.
+    pub const WASTE: [ReasonCode; 4] = [
+        Self::Spoiled,
+        Self::Broken,
+        Self::Free,
+        Self::CancelledOrder,
+    ];
+
     /// Every code.
-    pub const ALL: [ReasonCode; 7] = [
+    pub const ALL: [ReasonCode; 11] = [
         Self::Lost,
         Self::Stolen,
         Self::Replaced,
@@ -652,6 +679,10 @@ impl ReasonCode {
         Self::RuleViolation,
         Self::HardwareIssue,
         Self::Closing,
+        Self::Spoiled,
+        Self::Broken,
+        Self::Free,
+        Self::CancelledOrder,
     ];
 
     /// The stored and wire form, e.g. `stolen`.
@@ -664,6 +695,10 @@ impl ReasonCode {
             Self::RuleViolation => "rule_violation",
             Self::HardwareIssue => "hardware_issue",
             Self::Closing => "closing",
+            Self::Spoiled => "spoiled",
+            Self::Broken => "broken",
+            Self::Free => "free",
+            Self::CancelledOrder => "cancelled_order",
         }
     }
 }
@@ -1070,6 +1105,10 @@ pub enum IntentPayload {
     StockIn(crate::StockIn),
     #[serde(rename = "stock.in.reverted")]
     StockInReverted(crate::StockInReverted),
+    #[serde(rename = "stock.waste")]
+    StockWaste(crate::StockWaste),
+    #[serde(rename = "stock.waste.reverted")]
+    StockWasteReverted(crate::StockWasteReverted),
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance(DeviceMaintenance),
     #[serde(rename = "rate.upsert")]
@@ -1181,6 +1220,8 @@ impl IntentPayload {
             Self::StaffDeactivate(_) => IntentKind::StaffDeactivate,
             Self::StockIn(_) => IntentKind::StockIn,
             Self::StockInReverted(_) => IntentKind::StockInReverted,
+            Self::StockWaste(_) => IntentKind::StockWaste,
+            Self::StockWasteReverted(_) => IntentKind::StockWasteReverted,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
             Self::RateUpsert(_) => IntentKind::RateUpsert,
             Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
@@ -1299,7 +1340,6 @@ mod tests {
         Permission::RefundIssue,
         Permission::DiscountManual,
         Permission::KitchenUse,
-        Permission::StockAdjust,
         Permission::StockOverride,
         Permission::ShiftOpen,
         Permission::ShiftClose,
@@ -1460,6 +1500,9 @@ mod tests {
                     Requirement::Perm(Permission::CatalogEdit)
                 }
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
+                "stock.waste" | "stock.waste.reverted" => {
+                    Requirement::Perm(Permission::StockAdjust)
+                }
                 "player.create" | "player.update" | "player.password_reset" => {
                     Requirement::Perm(Permission::PlayerManage)
                 }
@@ -1561,10 +1604,11 @@ mod tests {
     }
 
     #[test]
-    fn only_device_revoke_and_force_end_require_a_reason() {
+    fn only_device_revoke_force_end_and_waste_require_a_reason() {
         for kind in IntentKind::ALL {
             let want: Option<&[ReasonCode]> = match kind {
                 IntentKind::DeviceRevoke => Some(&ReasonCode::ALL[..4]),
+                IntentKind::StockWaste => Some(&ReasonCode::WASTE),
                 IntentKind::SessionForceEnd => Some(&[
                     ReasonCode::RuleViolation,
                     ReasonCode::HardwareIssue,
@@ -1596,6 +1640,7 @@ mod tests {
             serde_json::json!({
                 "device.revoke": ["lost", "stolen", "replaced", "other"],
                 "session.force_end": ["rule_violation", "hardware_issue", "closing", "other"],
+                "stock.waste": ["spoiled", "broken", "free", "cancelled_order"],
             })
         );
     }

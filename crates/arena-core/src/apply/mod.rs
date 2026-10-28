@@ -287,7 +287,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }
         P::ControllerCheck(c) => Target::ControllerCheck(Box::new(controller_check::load(tx, c)?)),
-        P::StockIn(_) | P::StockInReverted(_) => {
+        P::StockIn(_) | P::StockInReverted(_) | P::StockWaste(_) | P::StockWasteReverted(_) => {
             Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?))
         }
     })

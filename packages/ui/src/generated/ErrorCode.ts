@@ -79,4 +79,5 @@ export type ErrorCode =
   | "PACK_EXPIRED"
   | "PLAN_NOT_FOR_GROUP"
   | "PASS_OUTSIDE_WINDOW"
-  | "PAST_CLOSING";
+  | "PAST_CLOSING"
+  | "OUT_OF_STOCK";

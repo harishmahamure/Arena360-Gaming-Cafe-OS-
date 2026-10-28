@@ -515,6 +515,19 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            writer
+                .submit_intent(arena_proto::Intent {
+                    reason: Some(arena_proto::ReasonCode::Spoiled),
+                    ..submit(
+                        IntentPayload::StockWaste(arena_proto::StockWaste {
+                            product_id: cola.clone(),
+                            qty: 3,
+                        }),
+                        None,
+                    )
+                })
+                .await
+                .unwrap();
             let player_id = ulid::Ulid::generate().to_string();
             let player = arena_core::players::seal(
                 &[5; 32],

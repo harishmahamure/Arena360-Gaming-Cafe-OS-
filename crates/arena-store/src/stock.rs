@@ -36,12 +36,17 @@ pub struct MoveRow {
     pub lots_used: String,
     pub staff_id: String,
     pub at: i64,
+    /// The waste reason (`spoiled`, `broken`, `free`, `cancelled_order`) of a waste move.
+    pub waste_reason: Option<String>,
+    /// What the move was worth at the average cost, in minor units (0 for a stock-in).
+    pub value_minor: i64,
 }
 
 const LOT_COLUMNS: &str =
     "lot_id, product_id, qty_in, qty_remaining, unit_cost_minor, expiry, received_at";
 const MOVE_COLUMNS: &str = "move_id, product_id, reason, delta, before_qty, before_avg_cost_minor, \
-                            unit_cost_minor, supplier, lot_id, lots_used, staff_id, at";
+                            unit_cost_minor, supplier, lot_id, lots_used, staff_id, at, \
+                            waste_reason, value_minor";
 
 fn lot(r: &rusqlite::Row<'_>) -> rusqlite::Result<LotRow> {
     Ok(LotRow {
@@ -69,6 +74,8 @@ fn mv(r: &rusqlite::Row<'_>) -> rusqlite::Result<MoveRow> {
         lots_used: r.get(9)?,
         staff_id: r.get(10)?,
         at: r.get(11)?,
+        waste_reason: r.get(12)?,
+        value_minor: r.get(13)?,
     })
 }
 
@@ -177,8 +184,9 @@ pub fn insert_move(conn: &Connection, m: &MoveRow) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
                                   before_avg_cost_minor, unit_cost_minor, supplier, lot_id,
-                                  lots_used, staff_id, at, rev, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, 0, 0)",
+                                  lots_used, staff_id, at, waste_reason, value_minor, rev,
+                                  created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, 0, 0)",
         params![
             m.move_id,
             m.product_id,
@@ -191,7 +199,9 @@ pub fn insert_move(conn: &Connection, m: &MoveRow) -> Result<(), AppError> {
             m.lot_id,
             m.lots_used,
             m.staff_id,
-            m.at
+            m.at,
+            m.waste_reason,
+            m.value_minor
         ],
     )
     .map_err(db_error)?;

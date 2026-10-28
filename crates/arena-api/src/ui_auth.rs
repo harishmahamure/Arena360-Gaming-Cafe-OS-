@@ -900,6 +900,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PlanNotForGroup
         | ErrorCode::PassOutsideWindow
         | ErrorCode::PastClosing
+        | ErrorCode::OutOfStock
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {

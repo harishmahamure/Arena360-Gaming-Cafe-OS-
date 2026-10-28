@@ -281,6 +281,7 @@
   <h2 class="type-hub-title">{t("hub.products.title")}</h2>
   <p class="intro type-hub-body">{t("hub.products.intro")}</p>
   <a class="link type-hub-label" href="/inventory/stock-in">{t("hub.products.stock_link")}</a>
+  <a class="link type-hub-label" href="/inventory/waste">{t("hub.products.waste_link")}</a>
 
   <form class="form" bind:this={formEl} onsubmit={save} data-testid="product-form">
     <TextField label="hub.products.name" bind:value={form.name} error={errors.name} required />

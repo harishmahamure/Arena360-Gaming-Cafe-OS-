@@ -240,8 +240,8 @@ pub use staff_invite::{
 pub use staff_list::{StaffList, StaffStatus, StaffView, UiStaffDeactivateRequest};
 pub use stock::{
     LotView, MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_STOCK_IN,
-    MOVE_STOCK_IN_REVERTED, STOCK_UNDO_MS, StockIn, StockInReverted, consume_plan, valid_date,
-    weighted_avg_cost,
+    MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED, STOCK_UNDO_MS, StockIn,
+    StockInReverted, StockWaste, StockWasteReverted, consume_plan, valid_date, weighted_avg_cost,
 };
 pub use tax::{
     DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,

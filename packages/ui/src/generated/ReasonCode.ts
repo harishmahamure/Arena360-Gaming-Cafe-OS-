@@ -5,4 +5,14 @@
  * each code through the catalogue key `reason.<code>`.
  */
 export type ReasonCode =
-  "lost" | "stolen" | "replaced" | "other" | "rule_violation" | "hardware_issue" | "closing";
+  | "lost"
+  | "stolen"
+  | "replaced"
+  | "other"
+  | "rule_violation"
+  | "hardware_issue"
+  | "closing"
+  | "spoiled"
+  | "broken"
+  | "free"
+  | "cancelled_order";

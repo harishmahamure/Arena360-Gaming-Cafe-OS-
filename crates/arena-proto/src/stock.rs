@@ -7,6 +7,8 @@ pub const MAX_SUPPLIER_CHARS: usize = 80;
 pub const STOCK_UNDO_MS: i64 = 8_000;
 pub const MOVE_STOCK_IN: &str = "stock_in";
 pub const MOVE_STOCK_IN_REVERTED: &str = "stock_in_reverted";
+pub const MOVE_WASTE: &str = "waste";
+pub const MOVE_WASTE_REVERTED: &str = "waste_reverted";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -26,6 +28,23 @@ pub struct StockIn {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct StockInReverted {
+    pub move_id: String,
+}
+
+/// The payload of `stock.waste`: `qty` of a tracked product written off. The waste reason
+/// (`spoiled`, `broken`, `free`, `cancelled_order`) is the intent's `reason`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StockWaste {
+    pub product_id: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+}
+
+/// The payload of `stock.waste.reverted`: undo the waste move `move_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StockWasteReverted {
     pub move_id: String,
 }
 

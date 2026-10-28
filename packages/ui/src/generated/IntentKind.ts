@@ -38,6 +38,8 @@ export type IntentKind =
   | "staff.deactivate"
   | "stock.in"
   | "stock.in.reverted"
+  | "stock.waste"
+  | "stock.waste.reverted"
   | "device.maintenance"
   | "rate.upsert"
   | "device.test_session.start"

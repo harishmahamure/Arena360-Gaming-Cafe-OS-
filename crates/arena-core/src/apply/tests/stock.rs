@@ -1,6 +1,9 @@
 use super::*;
-use crate::rbac::{ROLE_COUNTER, ROLE_KITCHEN};
-use arena_proto::{ProductDelete, ProductUpsert, StaffUpsert, StockIn, StockInReverted};
+use crate::rbac::{ROLE_COUNTER, ROLE_KITCHEN, ROLE_MANAGER};
+use arena_proto::{
+    ProductDelete, ProductUpsert, StaffUpsert, StockIn, StockInReverted, StockWaste,
+    StockWasteReverted,
+};
 
 pub(super) fn owner() -> Actor {
     Actor {
@@ -571,4 +574,319 @@ async fn replayed_stock_in_is_idempotent_and_writes_once() {
     assert_eq!(held(&f, &id), (4, 50));
     assert_eq!(reopen(&f).moves(&id).unwrap().len(), 1);
     assert_eq!(again.changes.len(), 3);
+}
+
+// ---- Story 5.6: waste ----
+
+fn waste_intent(actor: Actor, id: &str, qty: i64, reason: Option<ReasonCode>) -> Intent {
+    Intent {
+        reason,
+        ..intent(
+            actor,
+            IntentPayload::StockWaste(StockWaste {
+                product_id: id.into(),
+                qty,
+            }),
+        )
+    }
+}
+
+async fn waste(
+    f: &Fixture,
+    actor: Actor,
+    id: &str,
+    qty: i64,
+    reason: ReasonCode,
+) -> Result<Applied, AppError> {
+    f.writer
+        .submit_intent(waste_intent(actor, id, qty, Some(reason)))
+        .await
+}
+
+async fn waste_undo(f: &Fixture, actor: Actor, move_id: &str) -> Result<Applied, AppError> {
+    f.writer
+        .submit_intent(intent(
+            actor,
+            IntentPayload::StockWasteReverted(StockWasteReverted {
+                move_id: move_id.into(),
+            }),
+        ))
+        .await
+}
+
+async fn manager_with_pin(f: &Fixture) -> String {
+    let rid = reopen(f)
+        .rows(Table::Roles)
+        .unwrap()
+        .into_iter()
+        .find(|r| r["name"] == RowValue::Text(ROLE_MANAGER.into()))
+        .map(|r| match &r["role_id"] {
+            RowValue::Text(t) => t.clone(),
+            other => panic!("{other:?}"),
+        })
+        .unwrap();
+    f.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::StaffUpsert(StaffUpsert {
+                staff_id: None,
+                login: "mgr".into(),
+                display_name: "mgr".into(),
+                role_id: rid,
+                password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
+                pin_hash: Some(crate::staff::hash_secret("4321").unwrap()),
+                active: true,
+                setup_code_hash: None,
+                setup_expires_at: None,
+            }),
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone()
+}
+
+fn kinds(a: &Applied) -> Vec<(&str, ChangeOp)> {
+    a.changes.iter().map(|c| (c.tbl.as_str(), c.op)).collect()
+}
+
+#[tokio::test]
+async fn waste_takes_lots_earliest_expiry_first_and_records_reason_value_and_staff() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    let mut s = sin(&id, 10, 100);
+    put(&f, owner(), s.clone()).await.unwrap();
+    s.qty = 5;
+    s.unit_cost_minor = 200;
+    s.expiry = Some("2027-03-01".into());
+    put(&f, owner(), s.clone()).await.unwrap();
+    s.qty = 3;
+    s.expiry = Some("2027-02-01".into());
+    put(&f, owner(), s).await.unwrap();
+    let avg = held(&f, &id).1;
+    let a = waste(&f, owner(), &id, 7, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert_eq!(
+        kinds(&a),
+        [
+            ("stock", ChangeOp::Update),
+            ("stock_lots", ChangeOp::Update),
+            ("stock_lots", ChangeOp::Update),
+            ("stock_moves", ChangeOp::Insert)
+        ]
+    );
+    assert_eq!(
+        lots_of(&f, &id),
+        [
+            (None, 10),
+            (Some("2027-02-01".into()), 0),
+            (Some("2027-03-01".into()), 1)
+        ]
+    );
+    assert_eq!(held(&f, &id), (11, avg));
+    let m = reopen(&f).moves(&id).unwrap().pop().unwrap();
+    assert_eq!(
+        (
+            m.reason.as_str(),
+            m.waste_reason.as_deref(),
+            m.delta,
+            m.staff_id.as_str(),
+            m.unit_cost_minor,
+            m.value_minor
+        ),
+        ("waste", Some("spoiled"), -7, "o", avg, 7 * avg)
+    );
+    let used: serde_json::Value = serde_json::from_str(&m.lots_used).unwrap();
+    assert_eq!(used.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn waste_over_stock_is_out_of_stock_and_bad_input_writes_nothing() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    let untracked = make(
+        &f,
+        ProductUpsert {
+            track_stock: false,
+            ..up("Water")
+        },
+    )
+    .await;
+    let never = make(&f, up("Gum")).await;
+    stock_in(&f, &id, 18, 100).await;
+    let before = state(&f);
+    let out_of_stock = (ErrorCode::OutOfStock, Some("qty"));
+    let bad_qty = (ErrorCode::ValidationFailed, Some("qty"));
+    let bad_product = (ErrorCode::ValidationFailed, Some("product_id"));
+    let broken = Some(ReasonCode::Broken);
+    let cases = [
+        (id.as_str(), 19, broken, out_of_stock),
+        (never.as_str(), 1, Some(ReasonCode::Free), out_of_stock),
+        (id.as_str(), 0, broken, bad_qty),
+        (id.as_str(), -3, broken, bad_qty),
+        (untracked.as_str(), 1, broken, bad_product),
+        ("nope", 1, broken, bad_product),
+        (
+            id.as_str(),
+            1,
+            None,
+            (ErrorCode::ReasonRequired, Some("reason")),
+        ),
+        (
+            id.as_str(),
+            1,
+            Some(ReasonCode::Lost),
+            (ErrorCode::ValidationFailed, Some("reason")),
+        ),
+    ];
+    for (pid, qty, reason, want) in cases {
+        let e = f
+            .writer
+            .submit_intent(waste_intent(owner(), pid, qty, reason))
+            .await
+            .unwrap_err();
+        assert_eq!((e.code, e.field.as_deref()), want, "{pid} {qty} {reason:?}");
+        assert_eq!(state(&f), before);
+    }
+    waste(&f, owner(), &id, 18, ReasonCode::CancelledOrder)
+        .await
+        .unwrap();
+    assert_eq!(held(&f, &id).0, 0);
+}
+
+#[tokio::test]
+async fn a_counter_needs_a_manager_pin_for_waste_and_both_people_are_audited() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    let counter = staff(&f, "ctr", ROLE_COUNTER).await;
+    let manager = manager_with_pin(&f).await;
+    stock_in(&f, &id, 5, 100).await;
+    let before = state(&f);
+    let e = waste(&f, counter.clone(), &id, 1, ReasonCode::Broken)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::PermissionDenied);
+    assert_eq!(state(&f), before);
+    let elevated = Intent {
+        elevated_by: Some(ElevatedBy {
+            kind: ElevationKind::Pin,
+            id: manager.clone(),
+            mode: ElevationMode::Hub,
+            verifier_version: 1,
+        }),
+        ..waste_intent(counter.clone(), &id, 2, Some(ReasonCode::Broken))
+    };
+    f.writer.submit_intent(elevated).await.unwrap();
+    assert_eq!(held(&f, &id).0, 3);
+    let change = reopen(&f).changes().unwrap().pop().unwrap();
+    assert_eq!(change.actor_id, counter.id);
+    assert_eq!(change.elevated_by_id.as_deref(), Some(manager.as_str()));
+    assert_eq!(change.reason.as_deref(), Some("broken"));
+    let last = reopen(&f).moves(&id).unwrap().pop().unwrap();
+    assert_eq!(last.staff_id, counter.id);
+}
+
+#[tokio::test]
+async fn waste_undo_returns_the_quantity_to_the_same_lots() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    let mut s = sin(&id, 4, 100);
+    s.expiry = Some("2027-02-01".into());
+    put(&f, owner(), s).await.unwrap();
+    stock_in(&f, &id, 6, 300).await;
+    let before = (held(&f, &id), lots_of(&f, &id));
+    let a = waste(&f, owner(), &id, 7, ReasonCode::Free).await.unwrap();
+    assert_ne!((held(&f, &id), lots_of(&f, &id)), before);
+    f.clock.advance(8_000);
+    let u = waste_undo(&f, owner(), &move_of(&a)).await.unwrap();
+    assert_eq!(
+        kinds(&u),
+        [
+            ("stock", ChangeOp::Update),
+            ("stock_lots", ChangeOp::Update),
+            ("stock_lots", ChangeOp::Update),
+            ("stock_moves", ChangeOp::Insert)
+        ]
+    );
+    assert_eq!((held(&f, &id), lots_of(&f, &id)), before);
+    let last = reopen(&f).moves(&id).unwrap().pop().unwrap();
+    assert_eq!(
+        (
+            last.reason.as_str(),
+            last.delta,
+            last.waste_reason.as_deref()
+        ),
+        ("waste_reverted", 7, Some("free"))
+    );
+    let e = waste_undo(&f, owner(), &move_of(&a)).await.unwrap_err();
+    assert_eq!(
+        (e.code, e.field.as_deref()),
+        (ErrorCode::Stale, Some("move_id"))
+    );
+}
+
+#[tokio::test]
+async fn waste_undo_is_refused_late_by_others_after_anything_else_and_for_other_moves() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    let manager = staff(&f, "m1", ROLE_MANAGER).await;
+    let other = staff(&f, "m2", ROLE_MANAGER).await;
+    let first = stock_in(&f, &id, 20, 100).await;
+    let a = waste(&f, manager.clone(), &id, 2, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    let m = move_of(&a);
+    let before = state(&f);
+    let denied = waste_undo(&f, other, &m).await.unwrap_err();
+    assert_eq!(denied.code, ErrorCode::PermissionDenied);
+    let wrong_move = (ErrorCode::ValidationFailed, Some("move_id"));
+    for e in [
+        waste_undo(&f, manager.clone(), "nope").await.unwrap_err(),
+        waste_undo(&f, manager.clone(), &move_of(&first))
+            .await
+            .unwrap_err(),
+        undo(&f, manager.clone(), &m).await.unwrap_err(),
+    ] {
+        assert_eq!((e.code, e.field.as_deref()), wrong_move);
+    }
+    f.clock.advance(8_001);
+    let e = waste_undo(&f, manager.clone(), &m).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Expired);
+    assert_eq!(state(&f), before);
+
+    let b = waste(&f, manager.clone(), &id, 1, ReasonCode::Broken)
+        .await
+        .unwrap();
+    waste(&f, manager.clone(), &id, 1, ReasonCode::Broken)
+        .await
+        .unwrap();
+    let before = state(&f);
+    let e = waste_undo(&f, manager, &move_of(&b)).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Stale);
+    assert_eq!(state(&f), before);
+}
+
+#[tokio::test]
+async fn stock_moves_with_waste_columns_stay_append_only() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 5, 100).await;
+    waste(&f, owner(), &id, 1, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    let mut store = reopen(&f);
+    store
+        .write_tx(|tx| {
+            for sql in [
+                "UPDATE stock_moves SET waste_reason = 'free'",
+                "UPDATE stock_moves SET value_minor = 1",
+                "DELETE FROM stock_moves",
+            ] {
+                assert!(tx.execute(sql, []).is_err(), "{sql}");
+            }
+            Ok(())
+        })
+        .unwrap();
 }

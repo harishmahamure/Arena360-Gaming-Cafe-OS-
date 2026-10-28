@@ -1,7 +1,8 @@
 use arena_proto::{
     AppError, ErrorCode, Intent, IntentPayload, MAX_PRICE_MINOR, MAX_STOCK_IN_QTY, MAX_STOCK_QTY,
-    MAX_SUPPLIER_CHARS, MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, STOCK_UNDO_MS, StockIn,
-    StockInReverted, consume_plan, valid_date, weighted_avg_cost,
+    MAX_SUPPLIER_CHARS, MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED,
+    STOCK_UNDO_MS, StockIn, StockInReverted, StockWaste, StockWasteReverted, consume_plan,
+    valid_date, weighted_avg_cost,
 };
 use arena_store::{
     ChangeOp, LotRow, MoveRow, ProductRow, RowKey, StockRow, StoreTx, Table, delete_row, find_lot,
@@ -19,6 +20,7 @@ pub(crate) struct StockTarget {
     mv: Option<MoveRow>,
     lot: Option<LotRow>,
     latest: Option<String>,
+    lots: Vec<LotRow>,
     now: i64,
 }
 
@@ -45,6 +47,15 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload, now: i64) -> Result<Stoc
                     .map(|l| find_lot(tx, l))
                     .transpose()?
                     .flatten();
+                t.latest = latest_move_id(tx, &m.product_id)?;
+            }
+            t.mv.as_ref().map(|m| m.product_id.clone())
+        }
+        IntentPayload::StockWaste(w) => Some(w.product_id.clone()),
+        IntentPayload::StockWasteReverted(r) => {
+            t.mv = find_move(tx, &r.move_id)?;
+            if let Some(m) = &t.mv {
+                t.lots = list_lots(tx, &m.product_id)?;
                 t.latest = latest_move_id(tx, &m.product_id)?;
             }
             t.mv.as_ref().map(|m| m.product_id.clone())
@@ -168,6 +179,8 @@ pub(super) fn mutate_in(
             lots_used: "[]".to_owned(),
             staff_id: intent.actor.id.clone(),
             at: now,
+            waste_reason: None,
+            value_minor: 0,
         },
     )?;
     Ok(vec![
@@ -216,6 +229,8 @@ pub(super) fn mutate_revert(
             lots_used: used_json(&[(lot.lot_id.clone(), lot.qty_remaining)]),
             staff_id: intent.actor.id.clone(),
             at: now,
+            waste_reason: None,
+            value_minor: 0,
         },
     )?;
     Ok(vec![
@@ -239,6 +254,164 @@ fn used_json(used: &[(String, i64)]) -> String {
     format!("[{}]", items.join(","))
 }
 
+#[derive(serde::Deserialize)]
+struct LotUse {
+    lot_id: String,
+    qty: i64,
+}
+
+fn parse_used(json: &str) -> Vec<(String, i64)> {
+    serde_json::from_str::<Vec<LotUse>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|u| (u.lot_id, u.qty))
+        .collect()
+}
+
+pub(super) fn validate_waste(w: &StockWaste, t: &StockTarget) -> Result<(), AppError> {
+    match &t.product {
+        Some(p) if !p.bundle && p.track_stock => {}
+        _ => {
+            return Err(invalid(
+                "product_id",
+                "waste is recorded for tracked products that are not bundles",
+            ));
+        }
+    }
+    if w.qty < 1 {
+        return Err(invalid("qty", "quantity must be at least 1"));
+    }
+    if w.qty > t.stock.as_ref().map_or(0, |s| s.qty) {
+        return Err(AppError::with_field(
+            ErrorCode::OutOfStock,
+            "qty",
+            "not enough stock on hand",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn mutate_waste(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    w: &StockWaste,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let reason = intent.reason.map(|r| r.as_str());
+    consume(
+        tx,
+        &w.product_id,
+        w.qty,
+        MOVE_WASTE,
+        reason,
+        &intent.actor.id,
+        now,
+    )
+}
+
+pub(super) fn validate_waste_revert(
+    intent: &Intent,
+    r: &StockWasteReverted,
+    t: &StockTarget,
+) -> Result<(), AppError> {
+    let Some(m) = t.mv.as_ref().filter(|m| m.reason == MOVE_WASTE) else {
+        return Err(invalid("move_id", "no such waste entry"));
+    };
+    if intent.actor.id != m.staff_id {
+        return Err(crate::rbac::denied());
+    }
+    if t.now - m.at > STOCK_UNDO_MS {
+        return Err(AppError::with_field(
+            ErrorCode::Expired,
+            "move_id",
+            "the undo window has closed",
+        ));
+    }
+    let used = parse_used(&m.lots_used);
+    let intact = !used.is_empty()
+        && used.iter().all(|(id, qty)| {
+            t.lots
+                .iter()
+                .find(|l| &l.lot_id == id)
+                .is_some_and(|l| l.qty_remaining + qty <= l.qty_in)
+        });
+    if t.latest.as_deref() != Some(r.move_id.as_str()) || !intact || t.stock.is_none() {
+        return Err(AppError::with_field(
+            ErrorCode::Stale,
+            "move_id",
+            "the stock changed since this waste entry",
+        ));
+    }
+    Ok(())
+}
+
+/// Gives the quantity back to the lots the waste took it from, and appends the compensating
+/// move (same reason and value, positive delta).
+pub(super) fn mutate_waste_revert(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    t: &StockTarget,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let (Some(m), Some(stock)) = (&t.mv, &t.stock) else {
+        return Err(AppError::new(
+            ErrorCode::Internal,
+            "the stock target is incomplete",
+        ));
+    };
+    let used = parse_used(&m.lots_used);
+    let mut out = Vec::new();
+    update_stock(tx, &m.product_id, m.before_qty, stock.avg_cost_minor)?;
+    out.push(write(
+        RowKey::Stock {
+            product_id: m.product_id.clone(),
+        },
+        ChangeOp::Update,
+        None,
+    ));
+    for (lot_id, qty) in &used {
+        let held = t
+            .lots
+            .iter()
+            .find(|l| &l.lot_id == lot_id)
+            .map_or(0, |l| l.qty_remaining);
+        set_lot_remaining(tx, lot_id, held + qty)?;
+        out.push(write(
+            RowKey::StockLots {
+                lot_id: lot_id.clone(),
+            },
+            ChangeOp::Update,
+            None,
+        ));
+    }
+    let move_id = ulid::Ulid::generate().to_string();
+    insert_move(
+        tx,
+        &MoveRow {
+            move_id: move_id.clone(),
+            product_id: m.product_id.clone(),
+            reason: MOVE_WASTE_REVERTED.to_owned(),
+            delta: -m.delta,
+            before_qty: stock.qty,
+            before_avg_cost_minor: stock.avg_cost_minor,
+            unit_cost_minor: m.unit_cost_minor,
+            supplier: String::new(),
+            lot_id: None,
+            lots_used: m.lots_used.clone(),
+            staff_id: intent.actor.id.clone(),
+            at: now,
+            waste_reason: m.waste_reason.clone(),
+            value_minor: m.value_minor,
+        },
+    )?;
+    out.push(write(
+        RowKey::StockMoves { move_id },
+        ChangeOp::Insert,
+        None,
+    ));
+    Ok(out)
+}
+
 pub fn decrement(
     tx: &StoreTx<'_>,
     product_id: &str,
@@ -247,9 +420,27 @@ pub fn decrement(
     staff_id: &str,
     now: i64,
 ) -> Result<Vec<Written>, AppError> {
-    let short = || invalid("qty", "not enough stock");
+    consume(tx, product_id, qty, reason, None, staff_id, now)
+}
+
+/// Lowers a product's stock in lot order (earliest expiry first) and appends the move, valued
+/// at the average cost. `OUT_OF_STOCK` above the quantity on hand, `VALIDATION_FAILED qty` for
+/// a quantity below 1.
+fn consume(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    qty: i64,
+    reason: &str,
+    waste_reason: Option<&str>,
+    staff_id: &str,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let short = || AppError::with_field(ErrorCode::OutOfStock, "qty", "not enough stock on hand");
+    if qty <= 0 {
+        return Err(invalid("qty", "quantity must be at least 1"));
+    }
     let stock = find_stock(tx, product_id)?.ok_or_else(short)?;
-    if qty <= 0 || qty > stock.qty {
+    if qty > stock.qty {
         return Err(short());
     }
     let lots = list_lots(tx, product_id)?;
@@ -295,6 +486,8 @@ pub fn decrement(
             lots_used: used_json(&plan),
             staff_id: staff_id.to_owned(),
             at: now,
+            waste_reason: waste_reason.map(str::to_owned),
+            value_minor: qty.saturating_mul(stock.avg_cost_minor),
         },
     )?;
     out.push(write(

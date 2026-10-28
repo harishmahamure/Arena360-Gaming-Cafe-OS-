@@ -257,6 +257,14 @@ pub(super) fn mutate(
             Target::Stock(t) => stock::mutate_revert(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::StockWaste(w) => match target {
+            Target::Stock(_) => stock::mutate_waste(tx, intent, w, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::StockWasteReverted(_) => match target {
+            Target::Stock(t) => stock::mutate_waste_revert(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceScreen(_) | IntentPayload::DevicePower(_) => match target {
             Target::Pc(t) => super::pc_command::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),

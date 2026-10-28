@@ -304,6 +304,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Stock(t) => stock::validate_revert(intent, r, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::StockWaste(w) => match target {
+            Target::Stock(t) => stock::validate_waste(w, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::StockWasteReverted(r) => match target {
+            Target::Stock(t) => stock::validate_waste_revert(intent, r, t),
+            _ => Err(internal_target()),
+        },
     }
 }
 

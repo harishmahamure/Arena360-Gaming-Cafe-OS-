@@ -297,6 +297,8 @@ export type { StaffView } from "./StaffView";
 export type { StepState } from "./StepState";
 export type { StockIn } from "./StockIn";
 export type { StockInReverted } from "./StockInReverted";
+export type { StockWaste } from "./StockWaste";
+export type { StockWasteReverted } from "./StockWasteReverted";
 export type { SymbolPosition } from "./SymbolPosition";
 export type { TaxMode } from "./TaxMode";
 export type { TestSessionOutcome } from "./TestSessionOutcome";

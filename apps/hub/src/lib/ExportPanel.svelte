@@ -29,6 +29,14 @@
   let problem: MessageKey | null = $state(null);
   let saved = $state("");
 
+  // A saved file belongs to the selection it was written for: another range, month or filter
+  // is not exported yet.
+  $effect(() => {
+    void JSON.stringify(selection);
+    saved = "";
+    problem = null;
+  });
+
   onMount(async () => {
     if (folder) return;
     const outcome = await loadSettings();

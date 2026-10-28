@@ -6683,7 +6683,7 @@ pub(crate) mod tests {
             done["file_name"]
                 .as_str()
                 .unwrap()
-                .ends_with("_stock-on-hand.csv"),
+                .contains("_stock-on-hand_"),
             "{done}"
         );
         assert_eq!(done["format"], "csv");
@@ -6736,6 +6736,23 @@ pub(crate) mod tests {
             csv.contains(",Cola,Stock in,,25,375.00,Manager,INR"),
             "{csv}"
         );
+        // The Movements tab's reason filter narrows the file as it narrows the screen.
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            Some(&manager),
+            Some(ask(
+                "stock-moves",
+                "csv",
+                json!({"from": "2027-01-15", "to": "2027-01-15", "reason": "waste"}),
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        let csv = read(&done);
+        assert!(csv.contains(",Cola,Waste,Spoiled,-4,-60.00,Manager,INR"));
+        assert!(!csv.contains("Stock in"), "{csv}");
 
         // The PDF: an A4 file in the bundled font that shows the same figures, grouped the
         // branch's way.
@@ -6749,7 +6766,10 @@ pub(crate) mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{done}");
         let name = done["file_name"].as_str().unwrap();
-        assert!(name.ends_with("_stock-on-hand.pdf"), "{name}");
+        assert!(
+            name.contains("_stock-on-hand_") && name.ends_with(".pdf"),
+            "{name}"
+        );
         let pdf = std::fs::read(dir.path().join(name)).unwrap();
         assert_eq!(done["bytes"], pdf.len());
         assert!(pdf.starts_with(b"%PDF-1.5"));

@@ -2,7 +2,7 @@
 title: 'Story 5.32: Export every Hub report to CSV and PDF'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: 'd554543'
 followup_review_recommended: false
@@ -90,3 +90,16 @@ The figures cannot drift because there is no second computation: the screens, th
 ## Auto Run Result
 
 Status: in-review. Implemented and verified.
+
+## Code Review (2026-10-28)
+
+Four layers (blind, edge-case, verification-gap, acceptance). Patched in code:
+
+- As-of reports (`shifts`, `stock-on-hand`, `stock-expiring`) now carry the branch-local day in the file name, so a later export no longer silently replaces an earlier snapshot.
+- A cut Stock movements list (`truncated`) now writes a "Shown / the newest N of M movements" table into the CSV (the CSV has no range line).
+- The Staff export now includes the per-shift cash variance table the screen shows; the Z-report export carries the `rebuilt` flag.
+- A blank `Total` cell no longer left-aligns a figure column in the PDF; `percent` keeps the sign of small negatives.
+- `ExportPanel` clears the "Saved" line when its selection changes.
+- Tests: reason-filtered movements export, sign, alignment, truncation note and staff variance unit tests.
+
+Deferred (not caused by a defect in this change or low value): non-Latin glyphs print as `?` in the PDF (documented font limit); figure columns alone wider than the page at the minimum size; unsubsetted/uncompressed PDF font; English-only file labels (a design note); Z-report/GST content tests with a seeded closed shift; PDF xref structural test.

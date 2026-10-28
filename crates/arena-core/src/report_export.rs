@@ -65,13 +65,17 @@ impl ExportSection {
             .any(|c| matches!(c, Cell::Money(_)))
     }
 
-    /// A column of figures (right-aligned) when it has rows and every cell is one.
+    /// A column of figures (right-aligned) when it has rows and every cell is one; an empty
+    /// cell (the blank of a `Total` row) does not break the column.
     fn is_figure_column(&self, c: usize) -> bool {
-        !self.rows.is_empty()
+        let blank = |cell: &Cell| matches!(cell, Cell::Text(s) if s.is_empty());
+        self.rows
+            .iter()
+            .any(|r| r.get(c).is_some_and(Cell::is_figure))
             && self
                 .rows
                 .iter()
-                .all(|r| r.get(c).is_some_and(Cell::is_figure))
+                .all(|r| r.get(c).is_some_and(|x| x.is_figure() || blank(x)))
     }
 }
 
@@ -156,11 +160,12 @@ impl ExportFormatting {
 
     /// Basis points as a percentage in tenths, as the screens show them (`62.5`, `62`).
     fn percent(bp: i64) -> String {
-        let tenths = (bp as f64 / 10.0 + 0.5).floor() as i64;
-        if tenths % 10 == 0 {
-            (tenths / 10).to_string()
+        let tenths = (bp.unsigned_abs() as f64 / 10.0 + 0.5).floor() as u64;
+        let sign = if bp < 0 && tenths != 0 { "-" } else { "" };
+        if tenths.is_multiple_of(10) {
+            format!("{sign}{}", tenths / 10)
         } else {
-            format!("{}.{}", tenths / 10, (tenths % 10).abs())
+            format!("{sign}{}.{}", tenths / 10, tenths % 10)
         }
     }
 
@@ -566,6 +571,9 @@ fn z_report_doc(z: &arena_proto::ZReport, f: &ExportFormatting) -> ExportDoc {
     if let Some(approver) = &z.approver {
         cash.push(("Approved by", t(approver)));
     }
+    if z.rebuilt {
+        cash.push(("Rebuilt from the rows", t("Yes")));
+    }
     let when = f.local_time(z.closed_at);
     ExportDoc {
         title: "Z-report".to_owned(),
@@ -690,11 +698,29 @@ fn staff_doc(r: &arena_proto::StaffReport) -> ExportDoc {
             Cell::Money(x.variance_minor),
         ]);
     }
+    let mut sections = vec![s];
+    let mut shifts = ExportSection::new(
+        "Shift cash variance",
+        &["Staff", "Shift", "Closed", "Variance"],
+    );
+    for x in &r.staff {
+        for v in &x.shifts {
+            shifts.row(vec![
+                t(&x.name),
+                t(&v.shift_id),
+                Cell::Time(v.closed_at),
+                Cell::Money(v.variance_minor),
+            ]);
+        }
+    }
+    if !shifts.rows.is_empty() {
+        sections.push(shifts);
+    }
     ExportDoc {
         title: "Staff".to_owned(),
         range: span(&r.from, &r.to),
         slug: format!("staff_{}", span(&r.from, &r.to).replace(" to ", "_")),
-        sections: vec![s],
+        sections,
     }
 }
 
@@ -752,13 +778,14 @@ fn stock_moves_doc(r: &arena_proto::StockMoves) -> ExportDoc {
             t(&m.staff),
         ]);
     }
+    let mut sections = vec![s];
     let shown = if r.truncated {
-        format!(
-            "{} (the newest {} of {} movements)",
-            span(&r.from, &r.to),
-            r.moves.len(),
-            r.total
-        )
+        let note = format!("the newest {} of {} movements", r.moves.len(), r.total);
+        // The CSV has no range line, so a cut list says so as a table of its own.
+        let mut cut = ExportSection::new("Shown", &["Note"]);
+        cut.row(vec![t(&note)]);
+        sections.push(cut);
+        format!("{} ({note})", span(&r.from, &r.to))
     } else {
         span(&r.from, &r.to)
     };
@@ -766,7 +793,7 @@ fn stock_moves_doc(r: &arena_proto::StockMoves) -> ExportDoc {
         title: "Stock movements".to_owned(),
         range: shown,
         slug: format!("stock-moves_{}", span(&r.from, &r.to).replace(" to ", "_")),
-        sections: vec![s],
+        sections,
     }
 }
 
@@ -930,7 +957,7 @@ impl SnapshotReader {
         let range = || -> Result<(&str, &str), AppError> {
             Ok((need(&req.from, "from")?, need(&req.to, "to")?))
         };
-        let doc = match req.report.as_str() {
+        let mut doc = match req.report.as_str() {
             "daily-sales" => {
                 let (from, to) = range()?;
                 daily_sales_doc(&self.daily_sales(from, to, now_ms)?)
@@ -981,10 +1008,19 @@ impl SnapshotReader {
                 ));
             }
         };
+        if matches!(
+            req.report.as_str(),
+            "shifts" | "stock-on-hand" | "stock-expiring"
+        ) {
+            // An "as of now" report: the day is in the name so a later export keeps this one.
+            let day: String = f.local_time(now_ms).chars().take(10).collect();
+            doc.slug = format!("{}_{day}", doc.slug);
+        }
         Ok((doc, f))
     }
 
-    /// The file for `req`: its name and bytes. The name is `<branch code>_<report>_<range>.<ext>`.
+    /// The file for `req`: its name and bytes. The name is `<branch code>_<report>_<range or
+    /// day>.<ext>`.
     pub fn export_report(
         &self,
         req: &ReportExportRequest,
@@ -1110,5 +1146,66 @@ mod tests {
         assert_eq!(sales_label("tax_added"), "Tax added");
         assert_eq!(ExportFormatting::percent(6_250), "62.5");
         assert_eq!(ExportFormatting::percent(0), "0");
+    }
+
+    #[test]
+    fn a_small_negative_percentage_keeps_its_sign() {
+        assert_eq!(ExportFormatting::percent(-25), "-0.3");
+        assert_eq!(ExportFormatting::percent(-3), "0");
+        assert_eq!(ExportFormatting::percent(-6_250), "-62.5");
+    }
+
+    #[test]
+    fn a_blank_total_cell_keeps_a_figure_column_right_aligned() {
+        let mut s = ExportSection::new("Stock", &["Product", "Quantity"]);
+        s.row(vec![t("Cola"), Cell::Int(20)]);
+        s.row(vec![t("Total"), t("")]);
+        assert!(!s.is_figure_column(0));
+        assert!(s.is_figure_column(1));
+    }
+
+    #[test]
+    fn a_cut_movement_list_says_so_in_the_csv() {
+        let moves = arena_proto::StockMoves {
+            from: "2027-01-15".to_owned(),
+            to: "2027-01-15".to_owned(),
+            moves: Vec::new(),
+            total: 900,
+            truncated: true,
+        };
+        let doc = stock_moves_doc(&moves);
+        assert!(doc.range.contains("the newest 0 of 900 movements"));
+        let csv = String::from_utf8(to_csv(&doc, &fmt())).unwrap();
+        assert!(csv.contains("Shown\r\nNote\r\nthe newest 0 of 900 movements\r\n"));
+    }
+
+    #[test]
+    fn the_staff_export_lists_each_shift_variance() {
+        let r = arena_proto::StaffReport {
+            from: "2027-01-15".to_owned(),
+            to: "2027-01-15".to_owned(),
+            staff: vec![arena_proto::StaffRow {
+                staff_id: "S1".to_owned(),
+                name: "Asha".to_owned(),
+                sales_minor: 0,
+                sales_count: 0,
+                sessions_started: 0,
+                discounts_count: 0,
+                discounts_minor: 0,
+                voids_count: 0,
+                voids_minor: 0,
+                refunds_count: 0,
+                refunds_minor: 0,
+                variance_minor: -500,
+                shifts: vec![arena_proto::ShiftVariance {
+                    shift_id: "SH1".to_owned(),
+                    closed_at: 0,
+                    variance_minor: -500,
+                }],
+            }],
+        };
+        let csv = String::from_utf8(to_csv(&staff_doc(&r), &fmt())).unwrap();
+        assert!(csv.contains("Shift cash variance\r\nStaff,Shift,Closed,Variance,Currency\r\n"));
+        assert!(csv.contains("Asha,SH1,1970-01-01 05:30,-5.00,INR"), "{csv}");
     }
 }

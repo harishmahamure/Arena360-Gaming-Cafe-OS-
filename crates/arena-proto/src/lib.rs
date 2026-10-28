@@ -38,6 +38,7 @@ pub mod pairing;
 mod pc_command;
 mod permission;
 mod plans;
+mod player_login;
 mod players;
 mod pos;
 mod pricing;
@@ -232,6 +233,10 @@ pub use permission::{Permission, Requirement};
 pub use plans::{
     MINUTES_PER_DAY, OwnedPlanView, PLAN_KINDS, PLAN_MAX_GROUPS, PLAN_MAX_MINUTES,
     PLAN_MAX_VALIDITY_DAYS, PlanSell, PlanSellReverted, PlanUpsert, PlanView,
+};
+pub use player_login::{
+    LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILURES, MAX_LOGIN_PASSWORD_BYTES, MAX_LOGIN_USERNAME_BYTES,
+    PLAYER_LOGIN_CODE, PlayerAuthResult, PlayerAuthenticate, PlayerContext,
 };
 pub use players::{
     CONSENT_TRANSACTIONAL, PLAYER_EMAIL_MAX_CHARS, PLAYER_NAME_MAX_CHARS, PLAYER_NOTES_MAX_CHARS,

@@ -97,6 +97,25 @@ async fn admin_exit(
         .await)
 }
 
+/// A player's login (Story 6.8): the username and password go to the service only, as IPC
+/// `player_login`, and are dropped here. The answer is the Hub's outcome (`{outcome, ...}`);
+/// `None` when the service did not answer.
+#[tauri::command]
+async fn player_login(
+    username: String,
+    password: String,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let password = arena_kiosk_core::ipc::SecretPin::new(password);
+    Ok(bridge
+        .request(move |rid| arena_kiosk_core::ipc::IpcMsg::PlayerLogin {
+            rid,
+            username,
+            password,
+        })
+        .await)
+}
+
 /// Whether the admin-exit prompt is paused (`retry_after_s`) and whether an exit runs (`until`).
 #[tauri::command]
 async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
@@ -254,7 +273,8 @@ fn main() {
             pair_info,
             pc_screen,
             pc_dismiss,
-            attract
+            attract,
+            player_login
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

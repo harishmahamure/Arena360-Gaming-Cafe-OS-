@@ -24,17 +24,21 @@ pub enum AlertKind {
     /// any stock decrement and by `stock.threshold`; Story 5.8). One open per product; it records
     /// the product, the quantity and the threshold.
     StockLow,
+    /// A kiosk's player login was paused after five wrong tries in a row (raised by the Hub's
+    /// LAN layer, once while open; Story 6.8). A device alert: the tile shows `locked-out`.
+    LoginLockout,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 6] = [
+    pub const ALL: [AlertKind; 7] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
         Self::PrinterOffline,
         Self::StockExpiring,
         Self::StockLow,
+        Self::LoginLockout,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -46,6 +50,7 @@ impl AlertKind {
             Self::PrinterOffline => "printer_offline",
             Self::StockExpiring => "stock_expiring",
             Self::StockLow => "stock_low",
+            Self::LoginLockout => "login_lockout",
         }
     }
 
@@ -63,6 +68,7 @@ impl AlertKind {
             Self::PrinterOffline => "printer",
             Self::StockExpiring => "expiring",
             Self::StockLow => "low-stock",
+            Self::LoginLockout => "locked-out",
         }
     }
 }
@@ -167,5 +173,7 @@ mod tests {
         assert_eq!(AlertKind::parse("nope"), None);
         assert_eq!(AlertKind::Fixture.tag(), "new");
         assert_eq!(AlertKind::TimeUp.tag(), "time-up");
+        assert_eq!(AlertKind::LoginLockout.as_str(), "login_lockout");
+        assert_eq!(AlertKind::LoginLockout.tag(), "locked-out");
     }
 }

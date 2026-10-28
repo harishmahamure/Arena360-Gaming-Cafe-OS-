@@ -13,6 +13,7 @@
 pub mod listener;
 mod media;
 mod pair;
+mod player_login;
 pub(crate) mod registry;
 mod scan_match;
 mod session;
@@ -175,12 +176,17 @@ pub struct LanHub {
     pub pairing: Option<Arc<crate::pairing::Pairing>>,
     /// The game media cache `GET /media/<sha256>` serves from (Story 6.2).
     pub media: Option<Arc<arena_core::media_cache::MediaCache>>,
+    /// Opens a player's sealed name for `player.authenticate`; without it that frame is
+    /// `UNSUPPORTED` (Story 6.8).
+    pub player_kek: Option<Arc<dyn arena_core::players::Kek>>,
     registry: Arc<registry::Registry>,
     /// Bounds concurrent argon2id token checks across all connections.
     verify_permits: Arc<tokio::sync::Semaphore>,
     throttle: throttle::HelloThrottle,
     kiosk_log_rate: throttle::KioskLogRate,
     admin_pin: throttle::AdminPinThrottle,
+    /// Per-device throttle on wrong player logins (the admin-PIN type, a second instance).
+    login_throttle: throttle::AdminPinThrottle,
 }
 
 impl LanHub {
@@ -203,17 +209,26 @@ impl LanHub {
             info: None,
             pairing: None,
             media: None,
+            player_kek: None,
             registry: Arc::new(registry::Registry::default()),
             verify_permits: Arc::new(tokio::sync::Semaphore::new(VERIFY_CONCURRENCY)),
             throttle: throttle::HelloThrottle::default(),
             kiosk_log_rate: throttle::KioskLogRate::default(),
             admin_pin: throttle::AdminPinThrottle::default(),
+            login_throttle: throttle::AdminPinThrottle::default(),
         }
     }
 
     /// Checks kiosk admin-exit PINs against `staff` (Story 1.20).
     pub fn with_staff(mut self, staff: Arc<StaffDirectory>) -> Self {
         self.staff = Some(staff);
+        self
+    }
+
+    /// Checks kiosk player logins (`player.authenticate`, Story 6.8) and opens the player's name
+    /// with `kek`.
+    pub fn with_player_kek(mut self, kek: Arc<dyn arena_core::players::Kek>) -> Self {
+        self.player_kek = Some(kek);
         self
     }
 

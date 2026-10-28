@@ -194,6 +194,24 @@ pub fn device_has_live_session(conn: &Connection, device_id: &str) -> Result<boo
     .map_err(db_error)
 }
 
+/// The device a player has a live session on (`active`, `paused`, `grace`, or `expired` and not
+/// yet ended), if any. If several (which the engine does not allow), the earliest started.
+pub fn live_session_device_of_player(
+    conn: &Connection,
+    player_id: &str,
+) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT device_id FROM sessions
+         WHERE player_id = ?1 AND (state IN ('active', 'paused', 'grace')
+                                   OR (state = 'expired' AND ended_at IS NULL))
+         ORDER BY started_at, id LIMIT 1",
+        [player_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 pub fn next_guest_no(conn: &Connection, business_day: &str) -> Result<i64, AppError> {
     conn.query_row(
         "SELECT COALESCE(MAX(guest_no), 0) + 1 FROM sessions WHERE business_day = ?1",

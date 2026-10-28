@@ -110,6 +110,11 @@ fn dummy_hash() -> &'static str {
     })
 }
 
+/// Spends the argon2id work of one wrong check, for a login that has no hash to check against.
+pub fn burn_check(secret: &str) {
+    let _ = verify_secret(secret, dummy_hash());
+}
+
 /// The catalogue permissions among a role's `allow` rows, in catalogue order.
 fn allowed(rows: &[(String, String)]) -> Vec<Permission> {
     Permission::ALL

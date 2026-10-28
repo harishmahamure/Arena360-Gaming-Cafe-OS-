@@ -15,6 +15,7 @@ use crate::admin::{AdminPinOk, AdminUnlockAck, ManagerVerifier, VerifyAdminPin};
 use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::pc_command::{LockReason, PcAck, PcAction};
+use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
 use crate::scope::ClientClass;
 use crate::session::SessionScreen;
 use crate::ui_auth::SettingEntry;
@@ -72,13 +73,19 @@ pub enum FrameBody {
     AdminUnlockAck(AdminUnlockAck),
     #[serde(rename = "kiosk.pc_ack")]
     PcAck(PcAck),
+    /// A player's username and password typed at the kiosk (paired sessions only; Story 6.8).
+    #[serde(rename = "player.authenticate")]
+    PlayerAuthenticate(PlayerAuthenticate),
+    /// The Hub's typed answer to `player.authenticate`.
+    #[serde(rename = "player.auth_result")]
+    PlayerAuthResult(PlayerAuthResult),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 15] = [
+pub const FRAME_KINDS: [&str; 17] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -93,6 +100,8 @@ pub const FRAME_KINDS: [&str; 15] = [
     "kiosk.admin_pin_ok",
     "kiosk.admin_unlock_ack",
     "kiosk.pc_ack",
+    "player.authenticate",
+    "player.auth_result",
     "ack",
 ];
 
@@ -114,6 +123,8 @@ impl FrameBody {
             Self::AdminPinOk(_) => "kiosk.admin_pin_ok",
             Self::AdminUnlockAck(_) => "kiosk.admin_unlock_ack",
             Self::PcAck(_) => "kiosk.pc_ack",
+            Self::PlayerAuthenticate(_) => "player.authenticate",
+            Self::PlayerAuthResult(_) => "player.auth_result",
             Self::Ack => "ack",
         }
     }

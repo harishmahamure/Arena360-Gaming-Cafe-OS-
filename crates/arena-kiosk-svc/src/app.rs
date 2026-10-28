@@ -22,6 +22,9 @@
 //!   own task and answered with `reply`. While an exit runs the app gets
 //!   `admin_exit_started{until}`, and `admin_exit_ended` when it is over; every new connection
 //!   gets one of the two (idempotent on the app side).
+//! - `player_login{username, password}` (the login panel, Story 6.8) is forwarded to the Hub by
+//!   [`crate::player_login`] on its own task and answered with `reply` (the Hub's outcome as the
+//!   body). The service keeps no player context.
 
 use std::sync::Arc;
 
@@ -501,6 +504,29 @@ async fn serve(
                                 error: Some(error),
                             }
                         }
+                    };
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::PlayerLogin {
+                rid,
+                username,
+                password,
+            }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = match crate::player_login::request(&ctx, username, password).await {
+                        Ok(body) => IpcMsg::Reply {
+                            rid,
+                            body,
+                            error: None,
+                        },
+                        Err(error) => IpcMsg::Reply {
+                            rid,
+                            body: Value::Null,
+                            error: Some(error),
+                        },
                     };
                     let _ = out.send(reply).await;
                 });

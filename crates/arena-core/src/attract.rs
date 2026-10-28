@@ -62,8 +62,8 @@ pub fn attract_views(
     now_ms: i64,
     lookup: MediaLookup<'_>,
 ) -> Result<Vec<(String, AttractView)>, AppError> {
-    let (branch, meta, groups, rates, rules, locale_branch, settings) =
-        store.read_consistent(|s| {
+    let (branch, meta, groups, rates, rules, locale_branch, settings, zones) = store
+        .read_consistent(|s| {
             Ok((
                 s.branch_summary()?,
                 s.devices_meta()?,
@@ -72,6 +72,7 @@ pub fn attract_views(
                 s.pricing_rules()?,
                 s.branch_locale()?,
                 s.settings()?,
+                s.zones()?,
             ))
         })?;
     let (Some(branch), Some(locale_branch)) = (branch, locale_branch) else {
@@ -83,9 +84,20 @@ pub fn attract_views(
     Ok(device_ids
         .iter()
         .map(|id| {
-            let group = meta
+            let device = meta
                 .iter()
-                .find(|m| &m.device_id == id && m.deleted_at.is_none() && m.state != "maintenance")
+                .find(|m| &m.device_id == id && m.deleted_at.is_none());
+            let zone = device
+                .and_then(|m| m.zone_id.as_deref())
+                .and_then(|zid| {
+                    zones
+                        .iter()
+                        .find(|z| z.zone_id == zid && z.deleted_at.is_none())
+                })
+                .map(|z| z.name.clone())
+                .unwrap_or_default();
+            let group = device
+                .filter(|m| m.state != "maintenance")
                 .and_then(|m| m.group_id.as_deref())
                 .and_then(|gid| groups.iter().find(|g| g.group_id == gid));
             let base = group.and_then(|g| rates.iter().find(|r| r.group_id == g.group_id));
@@ -115,6 +127,8 @@ pub fn attract_views(
             };
             let view = AttractView {
                 branch_name: branch.name.clone(),
+                device_name: device.map(|m| m.label.clone()).unwrap_or_default(),
+                zone,
                 state,
                 rate_minor,
                 group_name: group

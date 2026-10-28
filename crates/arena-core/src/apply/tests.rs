@@ -38,6 +38,7 @@ mod import_setup;
 mod invoice;
 mod kiosk_scan;
 mod library;
+mod login;
 mod order_line;
 mod order_place;
 mod order_void;

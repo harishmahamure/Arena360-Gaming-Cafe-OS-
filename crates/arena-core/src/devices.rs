@@ -151,6 +151,26 @@ pub fn check_device_token(
     })
 }
 
+/// What a kiosk login needs about the player who claims a username (Story 6.8): the stored
+/// password hash, the sealed name with the key that opens it, and the label of the PC where the
+/// player already has a live session, if any.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LoginCandidate {
+    pub player_id: String,
+    pub password_hash: String,
+    pub name_enc: String,
+    pub wrapped_key: String,
+    pub busy_device_name: Option<String>,
+}
+
+impl std::fmt::Debug for LoginCandidate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginCandidate")
+            .field("player_id", &self.player_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Reads the `devices` table on its own read-only connection (never through the writer), so
 /// LAN sessions can verify tokens on a primary or a follower.
 pub struct DeviceDirectory {
@@ -213,6 +233,39 @@ impl DeviceDirectory {
             .lock()
             .map_err(|_| internal("device directory lock poisoned"))?;
         crate::attract::attract_views(&store, device_ids, now_ms, lookup)
+    }
+
+    /// The live player with this username (normalised by the caller), for a kiosk login: their
+    /// stored hash and sealed name, and the label of the PC where they have a live session
+    /// (`active`, `paused`, `grace` or unended `expired`), read in one snapshot. `None` for an
+    /// unknown or deleted username.
+    pub fn login_candidate(&self, username: &str) -> Result<Option<LoginCandidate>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        store.read_consistent(|s| {
+            let Some((player, wrapped_key)) = s.player_by_username(username)? else {
+                return Ok(None);
+            };
+            let busy_device_name = match s.live_session_device_of_player(&player.player_id)? {
+                Some(device_id) => Some(
+                    s.devices_meta()?
+                        .into_iter()
+                        .find(|m| m.device_id == device_id)
+                        .map(|m| m.label)
+                        .unwrap_or(device_id),
+                ),
+                None => None,
+            };
+            Ok(Some(LoginCandidate {
+                player_id: player.player_id,
+                password_hash: player.password_hash,
+                name_enc: player.name_enc,
+                wrapped_key,
+                busy_device_name,
+            }))
+        })
     }
 
     /// The branch settings among `keys` that exist, with their `rev`, in `keys` order (what a

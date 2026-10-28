@@ -9,6 +9,14 @@ import type { SnapshotLocale } from "./SnapshotLocale";
  */
 export type AttractView = {
   branch_name: string;
+  /**
+   * This PC's label (the login panel's footer, Story 6.8).
+   */
+  device_name: string;
+  /**
+   * This PC's floor zone label, empty when it has none.
+   */
+  zone: string;
   state: AttractState;
   /**
    * The hourly rate in minor units now: the active rule's when one applies (`None` when

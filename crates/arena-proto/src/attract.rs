@@ -58,6 +58,12 @@ pub struct AttractMedia {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct AttractView {
     pub branch_name: String,
+    /// This PC's label (the login panel's footer, Story 6.8).
+    #[serde(default)]
+    pub device_name: String,
+    /// This PC's floor zone label, empty when it has none.
+    #[serde(default)]
+    pub zone: String,
     pub state: AttractState,
     /// The hourly rate in minor units now: the active rule's when one applies (`None` when
     /// `state` is `ask_counter`).
@@ -446,6 +452,8 @@ mod tests {
     fn view() -> AttractView {
         AttractView {
             branch_name: "Level Up".into(),
+            device_name: "PC 1".into(),
+            zone: "Main hall".into(),
             state: AttractState::Ready,
             rate_minor: Some(12_000),
             group_name: Some("PC".into()),
@@ -473,6 +481,16 @@ mod tests {
         let v = view();
         let json = serde_json::to_value(&v).unwrap();
         assert_eq!(json["state"], "ready");
+        assert_eq!(
+            (json["device_name"].as_str(), json["zone"].as_str()),
+            (Some("PC 1"), Some("Main hall"))
+        );
+        // A view cached before the footer fields existed still reads (empty label and zone).
+        let mut old = json.clone();
+        old.as_object_mut().unwrap().remove("device_name");
+        old.as_object_mut().unwrap().remove("zone");
+        let old: AttractView = serde_json::from_value(old).unwrap();
+        assert_eq!((old.device_name.as_str(), old.zone.as_str()), ("", ""));
         assert_eq!(json["rate_minor"], 12_000);
         assert!(json.get("rule").is_none());
         assert!(json["media"][0].get("cover").is_none());

@@ -29,6 +29,7 @@
     "pairInfo": "pair_info",
     "pcScreen": "pc_screen",
     "pcDismiss": "pc_dismiss",
-    "attract": "attract"
+    "attract": "attract",
+    "playerLogin": "player_login"
   }
 }

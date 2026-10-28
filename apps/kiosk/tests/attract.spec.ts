@@ -28,6 +28,8 @@ const SIX_PM = Date.UTC(2027, 0, 15, 12, 30);
 function view(over: Partial<AttractView> = {}): AttractView {
   return {
     branch_name: "Level Up Gaming",
+    device_name: "PC 1",
+    zone: "Main hall",
     state: "ready",
     rate_minor: 12000,
     group_name: "Gaming PCs",
@@ -281,9 +283,9 @@ test("any key, click or tap opens the login panel over the media; Esc closes it"
   await expect(
     panel.getByRole("heading", { name: en["player.attract.login.title"] }),
   ).toBeVisible();
-  await expect(panel).toContainText(en["player.attract.login.hint"]);
+  // The form is the panel body (Story 6.8); it opens with the cursor on the username.
   expect(en["player.attract.login.hint"]).toBe("Ask at the counter to start your time.");
-  await expect(panel).toBeFocused();
+  await expect(panel.getByTestId("login-username")).toBeFocused();
   // The media screen stays behind the panel.
   await expect(screen(page)).toBeVisible();
   expect(await serious(page)).toEqual([]);

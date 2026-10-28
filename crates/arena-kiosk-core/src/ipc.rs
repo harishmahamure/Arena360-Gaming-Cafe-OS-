@@ -4,7 +4,9 @@
 //! The service sends `ping`, `hub_status`, `restore_state`, `toast`, `admin_exit_started`,
 //! `admin_exit_ended`, `test_session_started`, `test_session_ended`, `pc_screen`, `attract` and
 //! `reply`; the app sends `pong`, `app_state`, `request` and `admin_exit` (a manager PIN,
-//! answered with `reply`; the [`SecretPin`] never prints). The app never talks to the Hub:
+//! answered with `reply`; the [`SecretPin`] never prints) and `player_login` (a player's
+//! username and password, answered with `reply`; the password is a [`SecretPin`] too). The app
+//! never talks to the Hub:
 //! everything it needs from the Hub goes through a `request` the service answers. A line longer
 //! than the reader's limit ([`MAX_LINE_BYTES`] for the service, [`MAX_APP_LINE_BYTES`] for the
 //! app) or that does not parse is an error the reader skips (the connection stays up).
@@ -165,6 +167,14 @@ pub enum IpcMsg {
     AdminExit {
         rid: String,
         pin: SecretPin,
+    },
+    /// App → service: a player's username and password typed at the login panel (Story 6.8). The
+    /// answer is `reply` `rid`: the Hub's `player.auth_result` as the body (`{outcome, ...}`),
+    /// or an `error` when the Hub could not be asked or could not answer.
+    PlayerLogin {
+        rid: String,
+        username: String,
+        password: SecretPin,
     },
     /// Service → app: an admin exit runs until `until` (UTC ms): drop topmost and the keyboard
     /// lockdown and show the countdown badge. Also sent on every connection while one runs.
@@ -399,6 +409,22 @@ mod tests {
         let mut pin = SecretPin::new("1234");
         pin.clear();
         assert_eq!(pin.expose(), "");
+    }
+
+    #[test]
+    fn the_player_login_message_never_prints_the_password() {
+        let msg = IpcMsg::PlayerLogin {
+            rid: "l".into(),
+            username: "asha".into(),
+            password: SecretPin::new("hunter2-secret"),
+        };
+        assert!(!format!("{msg:?}").contains("hunter2"));
+        assert_eq!(
+            msg.to_line(),
+            "{\"type\":\"player_login\",\"rid\":\"l\",\"username\":\"asha\",\"password\":\"hunter2-secret\"}
+"
+        );
+        assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
     }
 
     #[test]

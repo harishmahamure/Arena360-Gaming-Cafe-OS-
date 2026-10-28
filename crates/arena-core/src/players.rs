@@ -234,6 +234,29 @@ pub fn open_field(
     String::from_utf8(plain).map_err(|_| internal("bad plaintext"))
 }
 
+/// Whether `password` is the one `hash` was made from (Story 6.8). Only an argon2id PHC string
+/// verifies: an imported player's placeholder (`!`) or any other value never does. When there is
+/// nothing to verify against, a dummy check keeps the time alike. Blocking (argon2id).
+pub fn check_password(password: &str, hash: Option<&str>) -> bool {
+    match hash {
+        Some(h) if h.starts_with("$argon2id$") => crate::staff::verify_secret(password, h),
+        _ => {
+            crate::staff::burn_check(password);
+            false
+        }
+    }
+}
+
+/// The player's name as they gave it (opened with `kek`).
+pub fn open_name(
+    kek: &[u8; KEK_LEN],
+    player_id: &str,
+    wrapped_key: &str,
+    name_enc: &str,
+) -> Result<String, AppError> {
+    open_field(kek, player_id, wrapped_key, "name", name_enc)
+}
+
 pub const SEARCH_LIMIT: usize = 8;
 
 struct Entry {
@@ -405,6 +428,29 @@ mod tests {
         );
         assert_eq!(open("dob", p.dob_enc.as_deref().unwrap()), "2000-01-02");
         assert_eq!(open("notes", p.notes_enc.as_deref().unwrap()), "likes FPS");
+    }
+
+    #[test]
+    fn only_an_argon2id_hash_of_the_password_verifies() {
+        let hash = crate::staff::hash_secret("pw-plain-1").unwrap();
+        assert!(check_password("pw-plain-1", Some(&hash)));
+        assert!(!check_password("pw-plain-2", Some(&hash)));
+        assert!(!check_password("", Some(&hash)));
+        // An imported player has the placeholder; a stub, an empty hash and none never verify.
+        for bad in [Some("!"), Some(""), Some("plain"), Some("$argon2i$x"), None] {
+            assert!(!check_password("!", bad), "{bad:?}");
+            assert!(!check_password("pw-plain-1", bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_name_opens_with_its_player_and_key() {
+        let p = seal(&KEK, &form(), "P1", "h".into()).unwrap();
+        assert_eq!(
+            open_name(&KEK, "P1", &p.wrapped_key, &p.name_enc).unwrap(),
+            "Asha Rao"
+        );
+        assert!(open_name(&KEK, "P2", &p.wrapped_key, &p.name_enc).is_err());
     }
 
     #[test]

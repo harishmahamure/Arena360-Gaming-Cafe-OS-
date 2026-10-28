@@ -15,6 +15,7 @@ import type {
 } from "@arena/ui/generated";
 // The event and command names, shared with the Rust shell (its tests read the same file).
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
+import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
 
 export const HUB_STATUS_EVENT = names.events.hubStatus;
 export const RESTORE_STATE_EVENT = names.events.restoreState;
@@ -365,6 +366,29 @@ export async function onAttract(cb: (s: AttractShown) => void): Promise<() => vo
     const s = attractOf(e.payload);
     if (s) cb(s);
   });
+}
+
+/**
+ * A player's username and password for the Hub to check (Story 6.8). They go to the Kiosk service
+ * through the shell and nowhere else; the caller drops its own copy. Outside Tauri, on an error or
+ * when nothing answers in time the outcome is `unreachable`.
+ */
+export async function playerLogin(username: string, password: string): Promise<LoginOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const answer = await Promise.race([
+      invoke<unknown>(CMD.playerLogin, { username, password }),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), LOGIN_TIMEOUT_MS);
+      }),
+    ]);
+    return outcomeOf(answer);
+  } catch {
+    return { kind: "unreachable" };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function dismissPcMessage(): void {

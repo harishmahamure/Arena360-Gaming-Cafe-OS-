@@ -1,7 +1,7 @@
 <script lang="ts" module>
   import type { MessageKey } from "../messages/index.js";
 
-  export type AlertTag = "new" | "call" | "time-up" | "request" | "controllers";
+  export type AlertTag = "new" | "call" | "time-up" | "request" | "controllers" | "locked-out";
 
   export const ALERT_TAGS: Record<AlertTag, MessageKey> = {
     new: "ui.alert.tag.new",
@@ -9,6 +9,7 @@
     "time-up": "ui.alert.tag.time_up",
     request: "ui.alert.tag.request",
     controllers: "ui.alert.tag.controllers",
+    "locked-out": "ui.alert.tag.locked_out",
   };
 </script>
 

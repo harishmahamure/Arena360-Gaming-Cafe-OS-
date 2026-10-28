@@ -156,6 +156,8 @@ pub(crate) mod tests {
     pub(crate) fn view(rate: i64) -> AttractView {
         AttractView {
             branch_name: "Level Up".into(),
+            device_name: "PC 1".into(),
+            zone: "Main hall".into(),
             state: AttractState::Ready,
             rate_minor: Some(rate),
             group_name: Some("PC".into()),

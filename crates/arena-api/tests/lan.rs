@@ -142,6 +142,27 @@ async fn start_with(
     primary: bool,
     media: Option<Arc<arena_core::media_cache::MediaCache>>,
 ) -> TestHub {
+    start_full(version, primary, media, true).await
+}
+
+/// The player key the test hub opens names with.
+const PLAYER_KEK: [u8; 32] = [6; 32];
+
+struct TestKek;
+
+impl arena_core::players::Kek for TestKek {
+    fn kek(&self) -> Result<[u8; 32], arena_proto::AppError> {
+        Ok(PLAYER_KEK)
+    }
+}
+
+/// [`start_with`], optionally without a player key (a Hub with no player directory).
+async fn start_full(
+    version: &str,
+    primary: bool,
+    media: Option<Arc<arena_core::media_cache::MediaCache>>,
+    player_kek: bool,
+) -> TestHub {
     logs();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("branch.db");
@@ -205,6 +226,9 @@ async fn start_with(
     });
     if let Some(cache) = media {
         lan_hub = lan_hub.with_media(cache);
+    }
+    if player_kek {
+        lan_hub = lan_hub.with_player_kek(Arc::new(TestKek));
     }
     let hub = Arc::new(lan_hub);
     let presence = hub.presence();
@@ -2029,6 +2053,397 @@ async fn a_kds_session_may_not_verify_admin_pins() {
     send(
         &mut ws,
         r#"{"v":1,"kind":"kiosk.verify_admin_pin","rid":"v","pin_proof":"2222"}"#,
+    )
+    .await;
+    let frame = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
+}
+
+// ---- Story 6.8: player login ----
+
+/// A player with a real argon2id password; returns the player id.
+async fn add_player(hub: &TestHub, username: &str, password: &str, name: &str) -> String {
+    let id = ulid::Ulid::generate().to_string();
+    let form = arena_proto::PlayerForm {
+        username: username.into(),
+        password: password.into(),
+        phone: format!(
+            "+9198{:08}",
+            id.bytes().map(u64::from).sum::<u64>() % 100_000_000
+        ),
+        name: name.into(),
+        email: String::new(),
+        dob: String::new(),
+        notes: String::new(),
+        tags: vec![],
+        consent: true,
+        policy_version: "1".into(),
+    };
+    let hash = arena_core::staff::hash_secret(password).unwrap();
+    let sealed = arena_core::players::seal(&PLAYER_KEK, &form, &id, hash).unwrap();
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(owner(), IntentPayload::PlayerCreate(sealed), None))
+        .await
+        .unwrap();
+    id
+}
+
+async fn login(
+    client: &HubClient,
+    username: &str,
+    password: &str,
+) -> arena_proto::PlayerAuthResult {
+    let frame = client
+        .request(
+            "player.authenticate",
+            serde_json::json!({ "username": username, "password": password }),
+        )
+        .await
+        .unwrap();
+    let FrameBody::PlayerAuthResult(result) = frame.body else {
+        panic!("{frame:?}")
+    };
+    result
+}
+
+async fn login_error(client: &HubClient, username: &str, password: &str) -> ErrorCode {
+    match client
+        .request(
+            "player.authenticate",
+            serde_json::json!({ "username": username, "password": password }),
+        )
+        .await
+    {
+        Err(ClientError::Hub(e)) => e.code,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn device_events(hub: &TestHub, code: &str) -> Vec<arena_store::Row> {
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .rows(arena_store::Table::DeviceEvents)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["code"] == arena_store::RowValue::Text(code.into()))
+        .collect()
+}
+
+fn lockout_alerts(hub: &TestHub) -> Vec<arena_store::AlertRow> {
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .alerts()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == "login_lockout")
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_logs_in_and_the_login_is_audited_without_the_password() {
+    use arena_proto::PlayerAuthResult;
+    let hub = start("0.1.0", true).await;
+    let id = add_player(&hub, "asha_9", "hunter2-secret", "Asha Rao").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let started = Instant::now();
+    // The username is normalised.
+    let result = login(&client, " Asha_9 ", "hunter2-secret").await;
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(
+        result,
+        PlayerAuthResult::Ok {
+            player: arena_proto::PlayerContext {
+                player_id: id.clone(),
+                name: "Asha Rao".into(),
+            }
+        }
+    );
+    let rows = device_events(&hub, "kiosk.player_login");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["detail"],
+        arena_store::RowValue::Text(format!("player {id}"))
+    );
+    assert_eq!(rows[0]["level"], arena_store::RowValue::Text("info".into()));
+    assert_eq!(
+        rows[0]["device_id"],
+        arena_store::RowValue::Text(hub.paired_id.clone())
+    );
+    let log = log_text();
+    assert!(
+        !log.contains("hunter2") && !log.contains("Asha Rao"),
+        "the credentials and the name are never logged"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wrong_password_an_unknown_user_and_an_imported_player_are_all_rejected_alike() {
+    use arena_proto::PlayerAuthResult;
+    let hub = start("0.1.0", true).await;
+    add_player(&hub, "asha", "right-password", "Asha").await;
+    let imported = ulid::Ulid::generate().to_string();
+    let row = arena_core::players::seal_import(
+        &PLAYER_KEK,
+        &imported,
+        "ravi",
+        "+919000000001",
+        "Ravi",
+        0,
+        0,
+    )
+    .unwrap();
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ImportPlayers(arena_proto::ImportPlayers { rows: vec![row] }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for (u, p) in [
+        ("asha", "wrong-password"),
+        ("nobody", "right-password"),
+        ("ravi", "!"),
+        ("ravi", "anything"),
+    ] {
+        assert_eq!(
+            login(&client, u, p).await,
+            PlayerAuthResult::Rejected,
+            "{u}"
+        );
+    }
+    assert!(device_events(&hub, "kiosk.player_login").is_empty());
+    assert!(lockout_alerts(&hub).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn five_wrong_tries_pause_the_kiosk_and_raise_one_lockout_alert() {
+    use arena_proto::PlayerAuthResult;
+    let hub = start("0.1.0", true).await;
+    add_player(&hub, "asha", "right-password", "Asha").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        assert_eq!(
+            login(&client, "asha", "nope-nope").await,
+            PlayerAuthResult::Rejected
+        );
+    }
+    assert!(lockout_alerts(&hub).is_empty());
+    assert_eq!(
+        login(&client, "asha", "nope-nope").await,
+        PlayerAuthResult::Locked { retry_s: 60 },
+        "the fifth wrong try answers locked"
+    );
+    let alerts = lockout_alerts(&hub);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].device_id.as_deref(), Some(hub.paired_id.as_str()));
+    assert!(alerts[0].acked_at.is_none());
+    // Paused even for the right password, and nothing is recorded.
+    match login(&client, "asha", "right-password").await {
+        PlayerAuthResult::Locked { retry_s } => assert!((1..=60).contains(&retry_s)),
+        other => panic!("{other:?}"),
+    }
+    assert!(device_events(&hub, "kiosk.player_login").is_empty());
+    assert_eq!(lockout_alerts(&hub).len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_correct_login_resets_the_count() {
+    use arena_proto::PlayerAuthResult;
+    let hub = start("0.1.0", true).await;
+    add_player(&hub, "asha", "right-password", "Asha").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        assert_eq!(
+            login(&client, "asha", "nope-nope").await,
+            PlayerAuthResult::Rejected
+        );
+    }
+    assert!(matches!(
+        login(&client, "asha", "right-password").await,
+        PlayerAuthResult::Ok { .. }
+    ));
+    for _ in 0..4 {
+        assert_eq!(
+            login(&client, "asha", "nope-nope").await,
+            PlayerAuthResult::Rejected
+        );
+    }
+    assert!(lockout_alerts(&hub).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_wrong_logins_cannot_get_past_the_limit() {
+    use arena_proto::PlayerAuthResult;
+    let hub = start("0.1.0", true).await;
+    add_player(&hub, "asha", "right-password", "Asha").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let attempts = (0..8).map(|_| login(&client, "asha", "nope-nope"));
+    let results = futures_util::future::join_all(attempts).await;
+    let rejected = results
+        .iter()
+        .filter(|r| **r == PlayerAuthResult::Rejected)
+        .count();
+    assert!(rejected <= 4, "{results:?}");
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r, PlayerAuthResult::Locked { .. })),
+        "{results:?}"
+    );
+    assert!(matches!(
+        login(&client, "asha", "right-password").await,
+        PlayerAuthResult::Locked { .. }
+    ));
+    assert_eq!(lockout_alerts(&hub).len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_with_a_live_session_on_another_pc_is_busy_and_nothing_is_recorded() {
+    use arena_proto::{
+        DeviceAssign, GroupUpsert, PlayerAuthResult, RateUpsert, SessionMode, SessionStart,
+    };
+    let hub = start("0.1.0", true).await;
+    let id = add_player(&hub, "asha", "right-password", "Asha").await;
+    let w = hub.writer.as_ref().unwrap();
+    let (other, _) = register(w, ClientClass::Paired, "PC 3").await;
+    let group = w
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::GroupUpsert(GroupUpsert {
+                id: None,
+                name: "PC".into(),
+                group_kind: "pc".into(),
+                colour: "teal".into(),
+                sort_order: 1,
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::RateUpsert(RateUpsert {
+            group_id: group.clone(),
+            price_per_hour_minor: 12_000,
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::DeviceAssign(DeviceAssign {
+            device_id: other.clone(),
+            group_id: Some(group),
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::SessionStart(SessionStart {
+            group_with: None,
+            device_id: other,
+            mode: SessionMode::Postpaid,
+            player_id: Some(id),
+            pack_id: None,
+            plan_id: None,
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    // A wrong password is still just rejected: the busy answer needs the right one.
+    assert_eq!(
+        login(&client, "asha", "nope-nope").await,
+        PlayerAuthResult::Rejected
+    );
+    assert_eq!(
+        login(&client, "asha", "right-password").await,
+        PlayerAuthResult::Busy {
+            device_name: "PC 3".into()
+        }
+    );
+    assert!(device_events(&hub, "kiosk.player_login").is_empty());
+    // Busy is not a failure: six of them never lock the kiosk.
+    for _ in 0..6 {
+        assert!(matches!(
+            login(&client, "asha", "right-password").await,
+            PlayerAuthResult::Busy { .. }
+        ));
+    }
+    assert!(lockout_alerts(&hub).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bad_login_frame_is_bad_frame_and_a_hub_that_cannot_check_answers_an_error() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    assert_eq!(login_error(&client, "asha", "").await, ErrorCode::BadFrame);
+    assert_eq!(login_error(&client, "", "pw").await, ErrorCode::BadFrame);
+    assert_eq!(
+        login_error(&client, "asha", &"p".repeat(2000)).await,
+        ErrorCode::BadFrame
+    );
+    let bare = start_full("0.1.0", true, None, false).await;
+    let client = HubClient::connect(&bare.url(), &bare.fingerprint, bare.paired())
+        .await
+        .unwrap();
+    assert_eq!(
+        login_error(&client, "asha", "pw").await,
+        ErrorCode::Unsupported
+    );
+    let follower = start("0.1.0", false).await;
+    let client = HubClient::connect(&follower.url(), &follower.fingerprint, follower.paired())
+        .await
+        .unwrap();
+    assert_eq!(
+        login_error(&client, "asha", "pw").await,
+        ErrorCode::NotPrimary
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_a_paired_session_may_authenticate_a_player() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    send(
+        &mut ws,
+        r#"{"v":1,"kind":"player.authenticate","rid":"v","username":"asha","password":"pw"}"#,
     )
     .await;
     let frame = recv(&mut ws).await.unwrap();

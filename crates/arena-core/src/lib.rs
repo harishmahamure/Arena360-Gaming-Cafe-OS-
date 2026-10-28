@@ -56,7 +56,7 @@ pub use arena_store::{ChangeOp, META_TLS_FINGERPRINT};
 pub use audit::{AuditQuery, AuditReader};
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use commands::command_intent;
-pub use devices::{DeviceDirectory, VerifiedDevice};
+pub use devices::{DeviceDirectory, LoginCandidate, VerifiedDevice};
 pub use pairing::{HubPairer, PairFuture, PairGate};
 pub use pricing::{Resolved, conflicts as rule_conflicts, resolve as resolve_rate};
 pub use session_screen::session_screens;

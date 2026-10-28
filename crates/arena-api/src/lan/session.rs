@@ -25,6 +25,10 @@
 //! Only `device.admin_exit` keeps the kiosk's `elevated_by` (apply() checks it); every other LAN
 //! intent has it dropped.
 //!
+//! **Player login (Story 6.8).** `player.authenticate{username, password}` (paired sessions only)
+//! answers `player.auth_result{outcome}`; see [`super::player_login`]. The credentials are never
+//! logged.
+//!
 //! **Queues.** Replies and pushes share one bounded queue drained by the session's writer
 //! task, so a slow client only ever stalls itself; the fan-out drops a session whose queue is
 //! full.
@@ -583,6 +587,13 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "player.authenticate" => match self.check_player_authenticate(value) {
+                Ok((device, request)) => {
+                    self.spawn_player_authenticate(rid, device, request, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "kiosk.pc_ack" => {
                 let reply = match self.check_pc_ack(value) {
                     Ok(()) => Frame::new(rid, FrameBody::Ack),
@@ -762,6 +773,44 @@ impl Ctx<'_> {
             return Err(app(ErrorCode::BadFrame, "malformed kiosk.verify_admin_pin"));
         };
         Ok((device, v.pin_proof))
+    }
+
+    fn check_player_authenticate(
+        &self,
+        value: Value,
+    ) -> Result<(String, arena_proto::PlayerAuthenticate), AppError> {
+        let device = self.paired_device("player.authenticate")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PlayerAuthenticate(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed player.authenticate"));
+        };
+        request.validate()?;
+        Ok((device, request))
+    }
+
+    async fn spawn_player_authenticate(
+        &self,
+        rid: String,
+        device: String,
+        request: arena_proto::PlayerAuthenticate,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let hub = Arc::clone(self.hub);
+        let out = self.out.clone();
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_login::authenticate_player(&hub, &device, request).await
+            {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerAuthResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
     }
 
     fn check_unlock_ack(&self, value: Value) -> Result<(String, String), AppError> {

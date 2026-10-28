@@ -20,16 +20,21 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   printer_offline: "hub.alerts.kind.printer_offline",
   stock_expiring: "hub.alerts.kind.stock_expiring",
   stock_low: "hub.alerts.kind.stock_low",
+  login_lockout: "hub.alerts.kind.login_lockout",
 };
 
+/** The tags a device alert puts on its tile (the tile badge's `AlertTag` subset). */
+type TileTag = "new" | "time-up" | "controllers" | "locked-out";
+
 // A branch-level alert (no device) has no tile tag.
-export const KIND_TAGS: Record<AlertKind, "new" | "time-up" | "controllers" | null> = {
+export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
   fixture: "new",
   time_up: "time-up",
   controller_missing: "controllers",
   printer_offline: null,
   stock_expiring: null,
   stock_low: null,
+  login_lockout: "locked-out",
 };
 
 /** Branch-level kinds that also sound, and the screen a pick on them opens. */
@@ -85,7 +90,7 @@ export const requestSheet = (deviceId: string) => {
 export const openFor = (deviceId: string) => alerts.open.filter((a) => a.device_id === deviceId);
 
 /** The tag a device's tile shows: its oldest open alert's. */
-export const tagOf = (deviceId: string): "new" | "time-up" | "controllers" | undefined => {
+export const tagOf = (deviceId: string): TileTag | undefined => {
   const first = openFor(deviceId)[0];
   return first ? (KIND_TAGS[first.kind] ?? undefined) : undefined;
 };

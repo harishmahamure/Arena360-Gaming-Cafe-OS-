@@ -23,6 +23,10 @@
 //!   logo clearing it, and a change becomes the `attract` event. The `attract` command answers
 //!   the latest merge on a cold start, like `pc_screen`. The service may send lines up to
 //!   [`MAX_APP_LINE_BYTES`] (the logo); the app still sends at most 64 KiB.
+//! - **Player login (Story 6.8).** The login panel's username and password go through the
+//!   `player_login` command: to the service as IPC `player_login` only (the password is a
+//!   `SecretPin`, never stored or logged) and the Hub's outcome comes back as the command's
+//!   result. The shell keeps no player context.
 //! - **Windows:** the pipe's server must run as SYSTEM, or the connection is refused.
 
 use std::collections::HashMap;
@@ -61,7 +65,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 16] = [
+const COMMANDS: [&str; 17] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -78,6 +82,7 @@ const COMMANDS: [&str; 16] = [
     "pc_screen",
     "pc_dismiss",
     "attract",
+    "player_login",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -715,6 +720,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_player_login_goes_to_the_service_and_the_hubs_outcome_comes_back() {
+        let b = Arc::new(Bridge::default());
+        let (app, svc) = tokio::io::duplex(4096);
+        let (ar, aw) = tokio::io::split(app);
+        let (sr, mut sw) = tokio::io::split(svc);
+        let served = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move { b.serve(ar, aw, &|_| {}).await })
+        };
+        let mut sr = BufReader::new(sr);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let asking = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move {
+                b.request(|rid| IpcMsg::PlayerLogin {
+                    rid,
+                    username: "asha".into(),
+                    password: arena_kiosk_core::ipc::SecretPin::new("hunter2-secret"),
+                })
+                .await
+            })
+        };
+        let msg = read_msg(&mut sr).await.unwrap();
+        assert!(!format!("{msg:?}").contains("hunter2"));
+        let IpcMsg::PlayerLogin {
+            rid,
+            username,
+            password,
+        } = msg
+        else {
+            panic!("expected player_login")
+        };
+        assert_eq!(
+            (username.as_str(), password.expose()),
+            ("asha", "hunter2-secret")
+        );
+        write_msg(
+            &mut sw,
+            &IpcMsg::Reply {
+                rid,
+                body: serde_json::json!({"outcome": "locked", "retry_s": 60}),
+                error: None,
+            },
+        )
+        .await
+        .unwrap();
+        let answer = asking.await.unwrap().unwrap();
+        assert!(answer.ok);
+        assert_eq!(answer.body["outcome"], "locked");
+        assert_eq!(answer.body["retry_s"], 60);
+        drop(sw);
+        drop(sr);
+        let _ = tokio::time::timeout(Duration::from_secs(2), served).await;
+    }
+
+    #[tokio::test]
     async fn the_theme_is_waited_for_at_most_the_timeout_and_changes_are_emitted_once() {
         let b = Arc::new(Bridge::default());
         let started = Instant::now();
@@ -873,6 +934,8 @@ mod tests {
     fn sample_view() -> arena_proto::AttractView {
         arena_proto::AttractView {
             branch_name: "Level Up".into(),
+            device_name: "PC 1".into(),
+            zone: String::new(),
             state: arena_proto::AttractState::Ready,
             rate_minor: Some(12_000),
             group_name: Some("PC".into()),

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { BrandMark, GameMedia, t } from "@arena/ui";
-  import type { AttractView } from "@arena/ui/generated";
-  import { onMount } from "svelte";
+  import type { AttractView, KioskHubState, PlayerContext } from "@arena/ui/generated";
+  import { onMount, tick } from "svelte";
   import {
     ATTRACT_VIDEO_MS,
     LOGIN_IDLE_MS,
@@ -12,8 +12,18 @@
     rateText,
     ruleChipText,
   } from "./attract";
+  import Login from "./Login.svelte";
 
-  let { view, logo }: { view: AttractView | null; logo: string | null } = $props();
+  let {
+    view,
+    logo,
+    hub = null,
+  }: {
+    view: AttractView | null;
+    logo: string | null;
+    /** The Hub link as the Kiosk service reports it (`null` until it says). */
+    hub?: KioskHubState | null;
+  } = $props();
 
   const MODIFIERS = ["Control", "Alt", "Shift", "Meta", "AltGraph"];
 
@@ -21,6 +31,12 @@
   let index = $state(0);
   /** The login panel is open over the media. */
   let panel = $state(false);
+  /**
+   * The player who logged in, while the panel holds for the counter to start their time (Story
+   * 6.8). Memory only: it is never saved, and it goes with the panel or when a session starts
+   * (the session screen replaces this whole screen).
+   */
+  let player: PlayerContext | null = $state(null);
   /** The logo could not be decoded: the Arena 360 mark shows instead. */
   let brokenLogo: string | null = $state(null);
   let idle: ReturnType<typeof setTimeout> | undefined;
@@ -51,9 +67,20 @@
     return () => clearTimeout(timer);
   });
 
+  /** Closes the panel; a held player is forgotten with it. */
   function close() {
     clearTimeout(idle);
     panel = false;
+    player = null;
+  }
+
+  /** A correct login: the panel holds for this player, with its own 60 s without input. */
+  function hold(who: PlayerContext) {
+    // The panel closed while the Hub was still checking: nobody is waiting for this answer.
+    if (!panel) return;
+    player = who;
+    touch();
+    void tick().then(() => dialog?.focus());
   }
 
   /** Input while the panel is open keeps it open another LOGIN_IDLE_MS. */
@@ -85,7 +112,8 @@
   function onKeyDown(e: KeyboardEvent) {
     if (!mine(e.target)) return;
     if (panel) {
-      if (e.key === "Escape") {
+      // Esc closes the form; the holding step is left with "Not you? Log out" or the idle 60 s.
+      if (e.key === "Escape" && player === null) {
         e.preventDefault();
         close();
       } else {
@@ -95,7 +123,11 @@
     }
     // The hidden admin-exit combination is handled (and stopped) by the layout first, and a
     // modifier alone is the start of a combination, not a request to log in.
-    if (!e.defaultPrevented && !MODIFIERS.includes(e.key)) open();
+    // The key that wakes the screen is not typed into the form that opens.
+    if (offered && !e.defaultPrevented && !MODIFIERS.includes(e.key)) {
+      e.preventDefault();
+      open();
+    }
   }
 
   function onPointer(e: PointerEvent) {
@@ -108,8 +140,9 @@
     if (panel) touch();
   }
 
+  // The panel takes focus when it opens (the form puts it on the username field itself).
   $effect(() => {
-    if (panel) dialog?.focus();
+    if (panel && !dialog?.contains(document.activeElement)) dialog?.focus();
   });
 
   // A panel open when the PC stops being offered (maintenance, no rate) closes at once.
@@ -190,11 +223,24 @@
         data-testid="login-panel"
         bind:this={dialog}
       >
-        <h2 class="type-kiosk-title" id="login-title">{t("player.attract.login.title")}</h2>
-        <p class="type-kiosk-body">{t("player.attract.login.hint")}</p>
-        <button type="button" class="close type-kiosk-label" onclick={close}>
-          {t("player.attract.login.close")}
-        </button>
+        {#if player}
+          <div class="holding" data-testid="login-holding">
+            <h2 class="type-kiosk-title" id="login-title" data-testid="login-holding-title">
+              {t("player.login.holding.title", { name: player.name })}
+            </h2>
+            <p class="type-kiosk-body">{t("player.attract.login.hint")}</p>
+            <button
+              type="button"
+              class="close type-kiosk-label"
+              data-testid="login-logout"
+              onclick={close}
+            >
+              {t("player.login.holding.logout")}
+            </button>
+          </div>
+        {:else}
+          <Login {view} {hub} onplayer={hold} onclose={close} />
+        {/if}
       </div>
     </div>
   {/if}
@@ -282,7 +328,7 @@
     min-width: min(32rem, 80vw);
     padding: var(--space-6) var(--space-7);
     border: var(--login-panel-border);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-xl);
     background-color: var(--login-panel-background);
     color: var(--login-panel-foreground);
     text-align: center;
@@ -290,6 +336,18 @@
 
   .login-panel > * {
     margin: 0;
+  }
+
+  .holding {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: center;
+    max-width: min(32rem, 80vw);
+  }
+
+  .holding > * {
+    margin: 0;
+    overflow-wrap: anywhere;
   }
 
   .login-panel:focus {

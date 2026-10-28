@@ -173,6 +173,40 @@ pub fn find_player(
     .map_err(db_error)
 }
 
+/// The live player with this (already normalised) username and their wrapped key, for a kiosk
+/// login (Story 6.8). A deleted player, or one with no key row, is not found.
+pub fn find_player_by_username(
+    conn: &Connection,
+    username: &str,
+) -> Result<Option<(PlayerRow, String)>, AppError> {
+    conn.query_row(
+        "SELECT p.player_id, p.username, p.password_hash, p.phone_lookup, p.name_enc, p.phone_enc,
+                p.email_enc, p.dob_enc, p.notes_enc, p.tags, k.dek_wrapped
+         FROM players p JOIN player_keys k ON k.player_id = p.player_id
+         WHERE p.username = ?1 AND p.deleted_at IS NULL",
+        [username],
+        |r| {
+            Ok((
+                PlayerRow {
+                    player_id: r.get(0)?,
+                    username: r.get(1)?,
+                    password_hash: r.get(2)?,
+                    phone_lookup: r.get(3)?,
+                    name_enc: r.get(4)?,
+                    phone_enc: r.get(5)?,
+                    email_enc: r.get(6)?,
+                    dob_enc: r.get(7)?,
+                    notes_enc: r.get(8)?,
+                    tags: r.get(9)?,
+                },
+                r.get(10)?,
+            ))
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 pub fn latest_consent(
     conn: &Connection,
     player_id: &str,

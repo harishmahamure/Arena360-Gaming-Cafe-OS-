@@ -148,9 +148,9 @@ pub use player_packs::{
     pack_in_use, restore_pack_minutes,
 };
 pub use players::{
-    PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
-    latest_consent, list_player_revs, phone_holder, player_import_keys, set_player_password,
-    update_player, username_taken,
+    PlayerRow, find_player, find_player_by_username, find_player_key, insert_consent,
+    insert_player, insert_player_key, latest_consent, list_player_revs, phone_holder,
+    player_import_keys, set_player_password, update_player, username_taken,
 };
 pub use pricing_rules::{
     PricingRuleRow, find_pricing_rule, insert_pricing_rule, list_pricing_rules, update_pricing_rule,
@@ -184,8 +184,8 @@ pub use sessions::{
     hold_session_expired, insert_effect, insert_extension_order, insert_order, insert_order_line,
     insert_payment, insert_pos_order, insert_product_line, insert_segment, insert_session,
     list_live_sessions, list_open_order_lines, list_open_orders, list_order_line_ids,
-    list_payment_ids, list_pos_sales, list_segments, mark_forced, next_guest_no, reopen_order,
-    reopen_segments, reopen_session, settle_order, sum_reserved_minor,
+    list_payment_ids, list_pos_sales, list_segments, live_session_device_of_player, mark_forced,
+    next_guest_no, reopen_order, reopen_segments, reopen_session, settle_order, sum_reserved_minor,
 };
 pub use sessions::{
     LineRow, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines,
@@ -876,6 +876,28 @@ impl Store {
             return Ok(None);
         }
         find_player(&self.conn, player_id)
+    }
+
+    /// The live player with this normalised username and their wrapped key (Story 6.8).
+    pub fn player_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<(PlayerRow, String)>, AppError> {
+        if !self.table_exists("players")? || !self.table_exists("player_keys")? {
+            return Ok(None);
+        }
+        find_player_by_username(&self.conn, username)
+    }
+
+    /// The device a player has a live session on, if any (Story 6.8).
+    pub fn live_session_device_of_player(
+        &self,
+        player_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        if !self.table_exists("sessions")? {
+            return Ok(None);
+        }
+        live_session_device_of_player(&self.conn, player_id)
     }
 
     pub fn live_sessions(&self) -> Result<Vec<LiveSession>, AppError> {

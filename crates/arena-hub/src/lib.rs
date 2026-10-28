@@ -374,6 +374,14 @@ async fn run(
         }
     };
     let pairing = Arc::new(arena_api::pairing::Pairing::new(Arc::clone(&clock))?);
+    // The player key: opens profiles for the Hub UI and a player's name for a kiosk login.
+    let player_kek: Arc<dyn arena_core::players::Kek> = Arc::new(
+        arena_tasks::KeystoreKek::new(match &secrets {
+            Some(s) => Box::new(Arc::clone(&s.kek)),
+            None => arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
+        })
+        .refusing_while_lost(pair_gate.clone()),
+    );
     let mut lan_hub = LanHub::new(
         writer.clone(),
         status_rx.clone(),
@@ -383,6 +391,7 @@ async fn run(
         env!("CARGO_PKG_VERSION"),
     )
     .with_staff(Arc::clone(&staff))
+    .with_player_kek(Arc::clone(&player_kek))
     .with_pairing(Arc::clone(&pairing))
     .with_info(HubInfoSource {
         reader: Arc::clone(&snapshots),
@@ -425,13 +434,7 @@ async fn run(
     .with_printer_jobs(Arc::clone(&printer_jobs))
     .with_pairing(pairing)
     .with_pair_gate(pair_gate.clone())
-    .with_player_kek(Arc::new(
-        arena_tasks::KeystoreKek::new(match &secrets {
-            Some(s) => Box::new(Arc::clone(&s.kek)),
-            None => arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
-        })
-        .refusing_while_lost(pair_gate.clone()),
-    ));
+    .with_player_kek(Arc::clone(&player_kek));
     if let Some(folder) = &backup_folder {
         ui_auth = ui_auth.with_backup_folder(Arc::clone(folder));
     }

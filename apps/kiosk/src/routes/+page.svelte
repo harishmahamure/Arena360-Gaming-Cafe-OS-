@@ -1,11 +1,14 @@
 <script lang="ts">
   import { t } from "@arena/ui";
+  import type { KioskHubState } from "@arena/ui/generated";
   import { onMount } from "svelte";
   import {
     currentAttract,
+    currentHubStatus,
     currentPcScreen,
     currentTestSession,
     onAttract,
+    onHubStatus,
     onPcScreen,
     onTestSession,
     onTestSessionEnded,
@@ -16,6 +19,8 @@
 
   /** The idle screen: the last attract view and logo (from the service cache at first). */
   let attract: AttractShown = $state({ view: null, logo: null });
+  /** The Hub link as the Kiosk service reports it (the login needs it connected). */
+  let hub: KioskHubState | null = $state(null);
   let endsAt: number | null = $state(null);
   let now = $state(performance.now());
   const left = $derived(endsAt === null ? 0 : Math.max(0, Math.ceil((endsAt - now) / 1000)));
@@ -87,6 +92,9 @@
       );
       const shown = await currentAttract();
       if (shown && !attracted) attract = shown;
+      add(await onHubStatus((s) => (hub = s.state)));
+      const link = await currentHubStatus();
+      if (link && hub === null) hub = link.state;
       add(await onTestSession(start));
       add(await onTestSessionEnded(() => (endsAt = null)));
       add(await onPcScreen(follow));
@@ -139,7 +147,7 @@
   </main>
 {:else}
   <!-- No session yet: the attract screen (Story 6.7), painted from the cache at once. -->
-  <Attract view={attract.view} logo={attract.logo} />
+  <Attract view={attract.view} logo={attract.logo} {hub} />
 {/if}
 
 <style>

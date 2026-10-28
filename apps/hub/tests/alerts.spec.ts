@@ -128,6 +128,19 @@ test("a raised alert tags the tile, counts in the header and sounds now and ever
   await noSeriousAxe(page);
 });
 
+test("a kiosk login lockout tags the tile LOCKED OUT, sounds and names the alert in the list", async ({
+  page,
+}) => {
+  const hub = await open(page);
+  raise(hub, raised("L1", PC1, { kind: "login_lockout" }));
+  await expect(tile(page, "PC 1").locator("[data-component=alert-badge]")).toHaveText(
+    en["ui.alert.tag.locked_out"],
+  );
+  await expect.poll(async () => (await plays(page)).length).toBe(1);
+  await headerButton(page).click();
+  await expect(page.getByTestId("alert-row")).toContainText(en["hub.alerts.kind.login_lockout"]);
+});
+
 test("a screen reader hears each new alert once", async ({ page }) => {
   const hub = await open(page);
   const region = page.getByTestId("alert-announce");

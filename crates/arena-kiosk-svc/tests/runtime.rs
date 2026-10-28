@@ -219,7 +219,8 @@ impl Hub {
             )
             .with_staff(Arc::new(
                 arena_core::StaffDirectory::open(&self.path).unwrap(),
-            )),
+            ))
+            .with_player_kek(Arc::new(TestKek)),
         );
         self.presence = Some(lan.presence());
         let listeners = loop {
@@ -1879,6 +1880,110 @@ async fn parallel_wrong_pins_at_the_kiosk_cannot_get_past_the_limit() {
     let reply = app.admin_exit("2222").await;
     assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::AuthLocked));
     assert!(hub.exits().is_empty());
+}
+
+// ---- Story 6.8: player login ----
+
+/// The player key the test Hub opens names with.
+const PLAYER_KEK: [u8; 32] = [6; 32];
+
+struct TestKek;
+
+impl arena_core::players::Kek for TestKek {
+    fn kek(&self) -> Result<[u8; 32], arena_proto::AppError> {
+        Ok(PLAYER_KEK)
+    }
+}
+
+impl Hub {
+    /// A player with a real argon2id password; returns the player id.
+    async fn add_player(&self, username: &str, password: &str, name: &str) -> String {
+        let id = ulid::Ulid::generate().to_string();
+        let form = arena_proto::PlayerForm {
+            username: username.into(),
+            password: password.into(),
+            phone: "+919812345678".into(),
+            name: name.into(),
+            email: String::new(),
+            dob: String::new(),
+            notes: String::new(),
+            tags: vec![],
+            consent: true,
+            policy_version: "1".into(),
+        };
+        let hash = arena_core::staff::hash_secret(password).unwrap();
+        let sealed = arena_core::players::seal(&PLAYER_KEK, &form, &id, hash).unwrap();
+        self.writer
+            .submit_intent(intent(owner(), IntentPayload::PlayerCreate(sealed)))
+            .await
+            .unwrap();
+        id
+    }
+}
+
+impl App {
+    /// Sends `player_login` and returns the reply.
+    async fn player_login(&mut self, username: &str, password: &str) -> IpcMsg {
+        self.send(&IpcMsg::PlayerLogin {
+            rid: "login".into(),
+            username: username.into(),
+            password: arena_kiosk_core::ipc::SecretPin::new(password),
+        })
+        .await;
+        self.until(|m| matches!(m, IpcMsg::Reply { rid, .. } if rid == "login"))
+            .await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_login_is_forwarded_to_the_hub_and_its_outcome_comes_back_without_the_password() {
+    let mut hub = Hub::seeded().await;
+    let id = hub
+        .add_player("asha", "sample secret phrase", "Asha Rao")
+        .await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+
+    let reply = app.player_login("asha", "wrong-password").await;
+    let IpcMsg::Reply { body, error, .. } = &reply else {
+        unreachable!()
+    };
+    assert_eq!(
+        (error.is_none(), body["outcome"].as_str()),
+        (true, Some("rejected"))
+    );
+
+    let reply = app.player_login("Asha", "sample secret phrase").await;
+    let IpcMsg::Reply { body, error, .. } = &reply else {
+        unreachable!()
+    };
+    assert!(error.is_none(), "{reply:?}");
+    assert_eq!(body["outcome"], "ok");
+    assert_eq!(body["player"]["player_id"], id.as_str());
+    assert_eq!(body["player"]["name"], "Asha Rao");
+    eventually("the audit row", || {
+        hub.logged_of(&["kiosk.player_login"]).len() == 1
+    })
+    .await;
+    assert!(!log_text().contains("sample secret phrase"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_login_with_the_hub_down_is_hub_slow() {
+    let mut hub = Hub::seeded().await;
+    hub.add_player("asha", "right-password", "Asha").await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    hub.down().await;
+    kiosk.wait_state(KioskHubState::Reconnecting).await;
+    let reply = app.player_login("asha", "right-password").await;
+    assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::HubSlow));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

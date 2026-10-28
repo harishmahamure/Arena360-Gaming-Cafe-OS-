@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 20:00
+last_updated: 10-29-2026 23:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -174,7 +174,7 @@ development_status:
   6-5-the-hub-matches-scanned-games-to-the-catalogue-and-the-manag: done
   6-6-game-media-on-the-kiosk-falls-back-from-video-to-cover-to-so: done
   6-7-the-attract-screen-shows-branding-rates-and-the-active-rule: done
-  6-8-a-player-logs-in-at-the-kiosk-with-username-and-password: backlog
+  6-8-a-player-logs-in-at-the-kiosk-with-username-and-password: review
   6-9-the-plan-picker-starts-a-prepaid-session-from-the-kiosk: backlog
   6-10-a-new-player-signs-up-at-the-kiosk-with-one-consent-box: backlog
   6-11-session-end-cleanup-ends-the-player-s-programs-and-clears-th: backlog

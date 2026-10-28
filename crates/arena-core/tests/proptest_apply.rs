@@ -128,6 +128,16 @@ enum Op {
         undo: bool,
         who: Index,
     },
+    /// A cash counter sale with a manual discount (valid or not) by the owner or a staff member of
+    /// a built-in role, then maybe the sale's Undo. Only the owner and managers may discount; the
+    /// order takes exactly what the preview priced.
+    Discount {
+        percent: i64,
+        fixed: bool,
+        note: u8,
+        undo: bool,
+        who: Index,
+    },
     /// `stock.in` of a quantity and cost (valid or not) into the first tracked product, then
     /// maybe `stock.in.reverted` straight after.
     Stock {
@@ -501,6 +511,20 @@ fn op() -> impl Strategy<Value = Op> {
                 fixed,
                 once,
                 unknown,
+                undo,
+                who,
+            }),
+        2 => (
+            prop_oneof![5 => 1..=10_000i64, 1 => 0..=0i64, 1 => 10_001..=10_002i64],
+            any::<bool>(),
+            0..=2u8,
+            any::<bool>(),
+            any::<Index>(),
+        )
+            .prop_map(|(percent, fixed, note, undo, who)| Op::Discount {
+                percent,
+                fixed,
+                note,
                 undo,
                 who,
             }),
@@ -1794,6 +1818,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     IntentPayload::PosSale(arena_proto::PosSale {
                         business: None,
                         coupon: None,
+                        discount: None,
                         lines: lines
                             .iter()
                             .map(|(p, q)| arena_proto::PosSaleLine {
@@ -2043,6 +2068,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 IntentPayload::PosSale(arena_proto::PosSale {
                     business: None,
                     coupon: Some(applied.to_owned()),
+                    discount: None,
                     lines: lines.clone(),
                     payments,
                     player_id: None,
@@ -2119,6 +2145,162 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 ));
                 prop_assert!(out.is_ok(), "{:?}", out);
                 prop_assert_eq!(used_of(hub), used_before);
+            }
+        }
+        Op::Discount {
+            percent,
+            fixed,
+            note,
+            undo,
+            who,
+        } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let find = |hub: &Hub| {
+                hub.reader
+                    .products()
+                    .unwrap()
+                    .into_iter()
+                    .find(|p| p.active && !p.track_stock && !p.bundle && p.price_minor > 0)
+            };
+            if find(hub).is_none() {
+                let made = hub.submit_new(hub.intent(
+                    IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                        id: None,
+                        name: format!("Discount item {}", hub.change_count()),
+                        category: String::new(),
+                        price_minor: 5_000,
+                        tax_rate_bp: Some(500),
+                        hsn: "210690".into(),
+                        track_stock: false,
+                        image: String::new(),
+                        barcode: String::new(),
+                        kitchen: false,
+                        favourite: false,
+                        active: true,
+                        bundle: false,
+                        components: Vec::new(),
+                    }),
+                    None,
+                ));
+                if made.is_err() {
+                    return Ok(());
+                }
+            }
+            let Some(product) = find(hub) else {
+                return Ok(());
+            };
+            let lines = vec![arena_proto::PosSaleLine {
+                product_id: product.product_id.clone(),
+                qty: 1,
+            }];
+            let discount = arena_proto::ManualDiscount {
+                percent_bp: (!fixed).then_some(*percent),
+                amount_minor: fixed.then_some(percent * 5),
+                reason: if *note == 0 {
+                    arena_proto::DiscountReason::StaffMeal
+                } else {
+                    arena_proto::DiscountReason::Other
+                },
+                note: (*note == 1).then(|| "regular, bulk order".to_owned()),
+            };
+            let request = arena_proto::DiscountPreviewRequest {
+                discount: discount.clone(),
+                coupon: None,
+                order_id: None,
+                lines: Some(lines.clone()),
+                plan_id: None,
+            };
+            let now = hub.clock.now_ms();
+            let preview = hub
+                .reader
+                .read_with(|conn| arena_core::discount_preview(conn, &request, now));
+            let payments = match &preview {
+                Ok(p) if p.total_minor > 0 => vec![arena_proto::PaymentRow {
+                    method: arena_proto::PaymentMethod::Cash,
+                    amount_minor: p.total_minor,
+                    reference: None,
+                }],
+                _ => Vec::new(),
+            };
+            let mut intent = hub.intent(
+                IntentPayload::PosSale(arena_proto::PosSale {
+                    business: None,
+                    coupon: None,
+                    discount: Some(discount.clone()),
+                    lines: lines.clone(),
+                    payments,
+                    player_id: None,
+                    credit_override: None,
+                    stock_override: None,
+                    receipt: None,
+                }),
+                None,
+            );
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len()) {
+                    Some(id) => Actor {
+                        kind: ActorKind::Staff,
+                        id: id.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let actor_id = intent.actor.id.clone();
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            let Ok(preview) = preview else {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            };
+            if let Err(e) = &out {
+                prop_assert!(
+                    matches!(
+                        e.code,
+                        ErrorCode::ShiftNotOpen | ErrorCode::ValidationFailed
+                    ),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            let order = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .rfind(|o| text(o, "kind") == "pos_sale")
+                .unwrap();
+            prop_assert_eq!(int(&order, "discount_minor"), preview.discount_minor);
+            prop_assert_eq!(int(&order, "total_minor"), preview.total_minor);
+            prop_assert_eq!(text(&order, "discount_by"), actor_id);
+            if *undo {
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::PosSaleReverted(arena_proto::PosSaleReverted {
+                        order_id: text(&order, "id"),
+                    }),
+                    Some(int(&order, "rev")),
+                ));
+                prop_assert!(out.is_ok(), "{:?}", out);
             }
         }
         Op::OrderPlace {
@@ -2944,6 +3126,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let payload = IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 business: None,
                 coupon: None,
+                discount: None,
                 order_id: id.clone(),
                 credit_override: None,
                 payments,
@@ -3091,6 +3274,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 IntentPayload::PlanSell(arena_proto::PlanSell {
                     business: None,
                     coupon: None,
+                    discount: None,
                     player_id: player_id.clone(),
                     plan_id: chosen.plan_id.clone(),
                     credit_override: None,
@@ -3210,6 +3394,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 IntentPayload::SessionSettle(arena_proto::SessionSettle {
                     business: None,
                     coupon: None,
+                    discount: None,
                     order_id: id,
                     credit_override: None,
                     payments,
@@ -3873,6 +4058,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 IntentPayload::SessionSettle(arena_proto::SessionSettle {
                     business: None,
                     coupon: None,
+                    discount: None,
                     order_id: id,
                     credit_override: over_ride.then_some(true),
                     payments: vec![arena_proto::PaymentRow {
@@ -4098,6 +4284,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         business: None,
                         coupon: None,
+                        discount: None,
                         order_id: id.clone(),
                         credit_override: None,
                         payments: vec![arena_proto::PaymentRow {
@@ -4517,6 +4704,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_holds_hold(&hub)?;
                 assert_invoices_hold(&hub)?;
                 assert_coupons_hold(&hub)?;
+                assert_discounts_hold(&hub)?;
                 assert_prints_hold(&hub)?;
                 assert_drawers_hold(&hub)?;
                 assert_notifications_hold(&hub)?;
@@ -4593,6 +4781,27 @@ fn assert_invoices_hold(hub: &Hub) -> Result<(), TestCaseError> {
         .map(|s| int(s, "next") - 1)
         .sum();
     prop_assert_eq!(sequences, numbers.len() as i64);
+    Ok(())
+}
+
+/// An order's discount amount, reason and approver are set together; the amount is above zero and
+/// only a settled order has one.
+fn assert_discounts_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    for o in &hub.reader.rows(Table::Orders).unwrap() {
+        let set = [
+            matches!(o["discount_minor"], RowValue::Integer(_)),
+            matches!(o["discount_reason"], RowValue::Text(_)),
+            matches!(o["discount_by"], RowValue::Text(_)),
+        ];
+        prop_assert!(
+            set.iter().all(|s| *s) || set.iter().all(|s| !*s),
+            "an order's discount amount, reason and approver are set together"
+        );
+        if set[0] {
+            prop_assert!(int(o, "discount_minor") > 0);
+            prop_assert_eq!(text(o, "status"), "settled");
+        }
+    }
     Ok(())
 }
 

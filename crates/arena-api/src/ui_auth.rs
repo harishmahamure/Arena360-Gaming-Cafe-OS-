@@ -1480,14 +1480,26 @@ fn item_permissions(items: &[ElevationItem]) -> Result<Needs, UiError> {
                 ));
             }
         }
+        if item.discount == Some(true)
+            && !matches!(
+                kind,
+                IntentKind::SessionSettle | IntentKind::PosSale | IntentKind::PlanSell
+            )
+        {
+            return Err(invalid_items(
+                "only a settle, a counter sale or a plan sale takes a discount",
+            ));
+        }
         match kind.requirement() {
             Requirement::Perm(p) => {
                 // A counter sale is only ever approved to override short stock, which also
-                // needs `stock.override` (`apply()` checks it on the approver).
+                // needs `stock.override`, and a discount needs `discount.manual` (`apply()`
+                // checks both on the approver).
                 let wanted = [
                     Some(p),
                     matches!(kind, IntentKind::PosSale | IntentKind::OrderPlace)
                         .then_some(Permission::StockOverride),
+                    (item.discount == Some(true)).then_some(Permission::DiscountManual),
                 ];
                 for p in wanted.into_iter().flatten() {
                     if !perms.contains(&p) {
@@ -3200,6 +3212,10 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/rules", get(rules))
         .route("/ui/coupons", get(crate::ui_coupons::list))
         .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
+        .route(
+            "/ui/discount/preview",
+            post(crate::ui_coupons::discount_preview),
+        )
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/health", get(crate::ui_printer::health))
         .route("/ui/printer/ready", get(crate::ui_printer::ready))
@@ -4662,6 +4678,7 @@ pub(crate) mod tests {
             IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 business: None,
                 coupon: None,
+                discount: None,
                 order_id: order_id.into(),
                 credit_override: None,
                 payments: Vec::new(),
@@ -5526,6 +5543,159 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
+    /// Story 5.22: anyone who can sell previews a manual discount; applying it needs
+    /// `discount.manual`, which a counter gets from a manager's PIN (asked for with `discount`).
+    #[tokio::test]
+    async fn a_manual_discount_is_previewed_by_sellers_and_approved_by_a_manager_pin() {
+        let hub = hub().await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let product = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "o".into(),
+                },
+                IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                    id: None,
+                    name: "Cola".into(),
+                    category: String::new(),
+                    price_minor: 4_000,
+                    tax_rate_bp: None,
+                    hsn: String::new(),
+                    track_stock: false,
+                    image: String::new(),
+                    barcode: String::new(),
+                    kitchen: false,
+                    favourite: false,
+                    active: true,
+                    bundle: false,
+                    components: Vec::new(),
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let discount = json!({"percent_bp": 1_000, "reason": "regular_customer"});
+        let body = |d: serde_json::Value| json!({"discount": d, "lines": [{"product_id": product, "qty": 2}]});
+        let (status, priced) = call(
+            &hub,
+            "POST",
+            "/ui/discount/preview",
+            Some(&counter),
+            Some(body(discount.clone())),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{priced}");
+        assert_eq!(priced, json!({"discount_minor": 800, "total_minor": 7_200}));
+        let (status, refused) = call(
+            &hub,
+            "POST",
+            "/ui/discount/preview",
+            Some(&counter),
+            Some(body(json!({"percent_bp": 1_000, "reason": "other"}))),
+        )
+        .await;
+        assert_eq!(
+            (status, refused["code"].as_str(), refused["field"].as_str()),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Some("VALIDATION_FAILED"),
+                Some("discount.note")
+            )
+        );
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/discount/preview",
+            None,
+            Some(body(discount.clone())),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/discount/preview",
+            Some(&counter),
+            Some(json!({"nope": 1})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let sale = IntentPayload::PosSale(arena_proto::PosSale {
+            business: None,
+            coupon: None,
+            discount: serde_json::from_value(discount).ok(),
+            lines: vec![arena_proto::PosSaleLine {
+                product_id: product.clone(),
+                qty: 2,
+            }],
+            payments: vec![arena_proto::PaymentRow {
+                method: arena_proto::PaymentMethod::Cash,
+                amount_minor: 7_200,
+                reference: None,
+            }],
+            player_id: None,
+            credit_override: None,
+            stock_override: None,
+            receipt: None,
+        });
+        let who = || Actor {
+            kind: ActorKind::Staff,
+            id: "x".into(),
+        };
+        let (status, denied) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&counter),
+            Some(json!({"intent": intent_as(who(), sale.clone(), None)})),
+        )
+        .await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        // `discount` is only for a settle, a counter sale or a plan sale.
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/elevate",
+            Some(&counter),
+            Some(
+                json!({"items": [{"intent_kind": "stock.waste", "discount": true}], "pin": "2222"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let (status, elevated) = call(
+            &hub,
+            "POST",
+            "/ui/elevate",
+            Some(&counter),
+            Some(json!({"items": [{"intent_kind": "pos.sale", "discount": true}], "pin": "2222"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{elevated}");
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&counter),
+            Some(json!({
+                "intent": intent_as(who(), sale, None),
+                "elevation_ticket": elevated["ticket"],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["settled"]["total_minor"], 7_200);
+    }
+
     #[tokio::test]
     async fn rules_are_listed_with_their_conflicts_and_written_with_catalog_edit() {
         let hub = hub().await;
@@ -5851,6 +6021,7 @@ pub(crate) mod tests {
             IntentPayload::PosSale(PosSale {
                 business: None,
                 coupon: None,
+                discount: None,
                 lines: lines
                     .iter()
                     .map(|(id, qty)| PosSaleLine {

@@ -4,7 +4,10 @@
 
 use std::sync::Arc;
 
-use arena_proto::{AppError, CouponPreviewRequest, ErrorCode, Permission, SessionStaff, UiError};
+use arena_proto::{
+    AppError, CouponPreviewRequest, DiscountPreviewRequest, ErrorCode, Permission, SessionStaff,
+    UiError,
+};
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -65,6 +68,36 @@ pub(crate) async fn preview(
     }
     let (reader, now_ms) = (Arc::clone(auth.reader()), auth.clock().now_ms());
     match tokio::task::spawn_blocking(move || reader.coupon_preview(&req, now_ms)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+const DISCOUNT_SHAPE: &str = "the body must be {\"discount\": {...}, \"coupon\"?: string} plus one of order_id, lines or plan_id";
+
+/// `POST /ui/discount/preview` (`pos.sell`; `wallet.topup` for a plan): the manual discount and the
+/// total to pay if it is applied (after the coupon the body names) to the bill the body names.
+/// Anyone who can sell may preview one; `discount.manual` is checked when the settle carries it. A
+/// discount the bill cannot take is `VALIDATION_FAILED` on `discount`, and nothing changes.
+pub(crate) async fn discount_preview(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Ok(req) = serde_json::from_slice::<DiscountPreviewRequest>(&body) else {
+        return fail(bad_frame(DISCOUNT_SHAPE));
+    };
+    let needs = if req.plan_id.is_some() {
+        Permission::WalletTopup
+    } else {
+        Permission::PosSell
+    };
+    if let Err(e) = staff(&auth, &headers, needs).await {
+        return fail(e);
+    }
+    let (reader, now_ms) = (Arc::clone(auth.reader()), auth.clock().now_ms());
+    match tokio::task::spawn_blocking(move || reader.discount_preview(&req, now_ms)).await {
         Ok(Ok(view)) => Json(view).into_response(),
         Ok(Err(e)) => fail(ui_error(e)),
         Err(_) => fail(internal()),

@@ -16,6 +16,7 @@ mod connectivity;
 mod coupon;
 pub mod currency;
 mod device_spec;
+mod discount;
 mod discovery;
 mod display;
 mod entitlement;
@@ -103,6 +104,10 @@ pub use coupon::{
 pub use device_spec::{
     DeviceSpec, MIN_FREE_BYTES, MIN_FREE_GB, MIN_RAM_BYTES, MIN_RAM_GB, SpecFailure,
     SpecRequirement, check_device, meminfo_total_bytes,
+};
+pub use discount::{
+    DISCOUNT_MAX_PERCENT_BP, DISCOUNT_NOTE_MAX_CHARS, DiscountPreview, DiscountPreviewRequest,
+    DiscountReason, ManualDiscount,
 };
 pub use discovery::{
     DEFAULT_WEB_PORT, DISCOVERY_WINDOW_MS, DiscoveredHub, DiscoveryFound, HUB_PRODUCT, HubInfo,

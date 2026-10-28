@@ -86,6 +86,7 @@ fn sale(lines: &[(&str, i64)], payments: Vec<PaymentRow>, code: Option<&str>) ->
     PosSale {
         business: None,
         coupon: code.map(Into::into),
+        discount: None,
         lines: lines
             .iter()
             .map(|(id, qty)| PosSaleLine {

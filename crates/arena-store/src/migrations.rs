@@ -224,6 +224,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 54,
         sql: include_str!("../migrations/0054_coupons.sql"),
     },
+    Migration {
+        version: 55,
+        sql: include_str!("../migrations/0055_manual_discount.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -610,6 +614,46 @@ mod tests {
             conn.execute_batch("UPDATE orders SET coupon_minor = 0 WHERE id = 'O1'")
                 .is_err(),
             "a coupon takes something off"
+        );
+    }
+
+    /// Migration 55 adds the order's manual-discount columns: an existing order has none, a
+    /// discount takes something off and its reason is one of the four the Hub offers.
+    #[test]
+    fn the_discount_migration_adds_nullable_order_columns_with_a_fixed_reason_set() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 55) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                 created_at, updated_at, kind)
+             VALUES ('O1', 'settled', 5, 5, 'd', 'f', 0, 0, 0, 'pos_sale');",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATIONS[54].sql).unwrap();
+        let none: (Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT discount_minor, discount_reason FROM orders WHERE id = 'O1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(none, (None, None), "an existing order took no discount");
+        conn.execute_batch(
+            "UPDATE orders SET discount_minor = 1, discount_reason = 'staff_meal',
+                               discount_by = 'S1' WHERE id = 'O1'",
+        )
+        .unwrap();
+        assert!(
+            conn.execute_batch("UPDATE orders SET discount_minor = 0 WHERE id = 'O1'")
+                .is_err(),
+            "a discount takes something off"
+        );
+        assert!(
+            conn.execute_batch("UPDATE orders SET discount_reason = 'because' WHERE id = 'O1'")
+                .is_err(),
+            "the reason is one of the four"
         );
     }
 }

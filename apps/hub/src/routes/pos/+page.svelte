@@ -27,6 +27,7 @@
     submitIntent,
   } from "../../lib/auth";
   import { pushBack } from "../../lib/back";
+  import type { AppliedDiscount } from "../../lib/discount";
   import { catalog } from "../../lib/catalog.svelte";
   import { branchLocale } from "../../lib/locale.svelte";
   import { isTextEntry } from "../../lib/nav";
@@ -391,8 +392,11 @@
       player: null,
       session: target.session.id,
     };
+    // A discount approval is single use: the next try asks for the PIN again.
+    const approved = ticket ?? chosenDiscount?.ticket;
+    chosenDiscount = chosenDiscount && { discount: chosenDiscount.discount };
     const outcome = await submitIntent(payload, key, undefined, {
-      elevationTicket: ticket,
+      elevationTicket: approved,
     }).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (outcome.kind === "applied") {
@@ -409,7 +413,7 @@
       void load();
       return;
     }
-    if (ticket) void dropElevation(ticket);
+    if (approved) void dropElevation(approved);
     if (outcome.kind !== "error") {
       error = "hub.pos.err.unreachable";
       return;
@@ -454,6 +458,8 @@
   let chosenBusiness: BusinessBuyer | undefined;
   // The coupon code of the settle in flight (Story 5.21).
   let chosenCoupon: string | undefined;
+  // The manual discount of the settle in flight, with its manager approval (Story 5.22).
+  let chosenDiscount: AppliedDiscount | undefined;
 
   /** Settles the cart. `over` sells a short bundle anyway (needs `stock.override`). */
   async function settle(payments: PaymentRow[], over = false, ticket?: string) {
@@ -469,6 +475,7 @@
       receipt: chosenReceipt,
       business: chosenBusiness,
       coupon: chosenCoupon,
+      discount: chosenDiscount?.discount,
     };
     const body = JSON.stringify(payload);
     const key = attempt?.body === body ? attempt.key : newIdempotencyKey();
@@ -517,7 +524,12 @@
     const pending = shortfall;
     if (!pending) return { ok: false, message: "ui.pin.failed" } as const;
     const outcome = await elevate(
-      [{ intent_kind: attachedSession ? "order.place" : "pos.sale" }],
+      [
+        {
+          intent_kind: attachedSession ? "order.place" : "pos.sale",
+          discount: !attachedSession && chosenDiscount ? true : undefined,
+        },
+      ],
       pin,
     );
     if (outcome.kind === "signed_out") {
@@ -736,10 +748,11 @@
       bill={settleBill}
       {locale}
       {busy}
-      onsettle={(payments, receipt, business, coupon) => {
+      onsettle={(payments, receipt, business, coupon, discount) => {
         chosenReceipt = receipt;
         chosenBusiness = business;
         chosenCoupon = coupon;
+        chosenDiscount = discount;
         void settle(payments);
       }}
       title="hub.pos.settle.title"
@@ -747,6 +760,7 @@
       hotkey
       receiptChoice
       couponSource={{ lines: saleLines(cart) }}
+      discountDirect={hasPermission(staff, "discount.manual")}
     />
   {:else}
     <section

@@ -159,6 +159,11 @@ pub struct ElevationItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<Permission>,
+    /// Also asks the approver for `discount.manual`: set when the intent carries a manual discount
+    /// (Story 5.22), which only `session.settle`, `pos.sale` and `plan.sell` take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub discount: Option<bool>,
 }
 
 impl ElevationItem {
@@ -168,6 +173,7 @@ impl ElevationItem {
             intent_kind: Some(kind),
             key,
             permission: None,
+            discount: None,
         }
     }
 
@@ -177,6 +183,7 @@ impl ElevationItem {
             intent_kind: None,
             key: None,
             permission: Some(permission),
+            discount: None,
         }
     }
 }

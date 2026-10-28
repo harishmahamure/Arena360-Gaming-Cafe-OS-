@@ -37,6 +37,7 @@
     hasPermission,
     newIdempotencyKey,
   } from "./auth";
+  import type { AppliedDiscount } from "./discount";
   import GroupPanel, { type Payer } from "./GroupPanel.svelte";
   import OrderSection from "./OrderSection.svelte";
   import ConvertGuest from "./players/ConvertGuest.svelte";
@@ -223,7 +224,15 @@
   async function approve(pin: string) {
     const job = approving;
     if (!job) return { ok: false, message: "ui.pin.failed" } as const;
-    const outcome = await elevate([{ intent_kind: job.payload.kind }], pin);
+    const outcome = await elevate(
+      [
+        {
+          intent_kind: job.payload.kind,
+          discount: "discount" in job.payload && job.payload.discount ? true : undefined,
+        },
+      ],
+      pin,
+    );
     if (outcome.kind === "signed_out") {
       await invalidate(SESSION_DEPENDENCY);
       return { ok: false, message: "ui.pin.unreachable" } as const;
@@ -397,9 +406,21 @@
     receipt?: ReceiptChoice,
     business?: BusinessBuyer,
     coupon?: string,
+    discount?: AppliedDiscount,
   ) {
     if (unpaid?.order_id && unpaid.order_rev != null) {
-      void go(settleJob(unpaid.order_id, payments, unpaid.order_rev, receipt, business, coupon));
+      void go(
+        settleJob(
+          unpaid.order_id,
+          payments,
+          unpaid.order_rev,
+          receipt,
+          business,
+          coupon,
+          discount?.discount,
+        ),
+        discount?.ticket,
+      );
     }
   }
 
@@ -599,6 +620,7 @@
         blockedReason={unserved ? "hub.order.unserved_note" : undefined}
         onsettle={settle}
         receiptChoice
+        discountDirect={hasPermission(staff, "discount.manual")}
         couponSource={unpaid.order_id && !unpaid.group_bill_id
           ? { order_id: unpaid.order_id }
           : null}

@@ -1,0 +1,52 @@
+{ESC}@{ESC}t{00}{ESC}M{00}{ESC}E{01}{GS}!{11}   Arena 360
+{ESC}E{00}{GS}!{00}{ESC}E{01}{GS}!{11}  Koramangala
+{ESC}E{00}{GS}!{00} 12, 5th Cross, Koramangala 4th
+             Block
+        Bengaluru 560034
+     GSTIN 29ABCDE1234F1Z5
+        +91 98450 12345
+--------------------------------
+{ESC}E{01}{GS}!{00}          Tax Invoice
+{ESC}E{00}{GS}!{00}Invoice no. KOR/26-27/E1k/000142
+Date           28 Oct 2026 14:05
+Staff                      Meera
+Customer               shadowfox
+--------------------------------
+PC-07
+SAC 9996
+90 min x 120.00/h         180.00
+PC-07
+SAC 9996
+30 min x 150.00/h          75.00
+Cold Coffee
+HSN 2101
+2 x 120.00                240.00
+Extra Large Peri Peri Loaded
+Fries With Cheese Dip
+HSN 2005
+1 x 199.00                199.00
+Energy Drink
+HSN 22029990
+12 x 1,25,000.00    15,00,000.00
+--------------------------------
+Coupon DIWALI-10          -50.00
+Discount                  -25.00
+Subtotal            17,50,190.67
+Taxable 5%          15,00,240.00
+CGST 2.5%              37,506.00
+SGST 2.5%              37,506.00
+Taxable 18%          2,54,950.00
+CGST 9%                22,945.50
+SGST 9%                22,945.50
+{ESC}E{01}{GS}!{01}TOTAL             Rs18,71,093.67
+{ESC}E{00}{GS}!{00}--------------------------------
+Cash                      500.00
+UPI ****1234        10,00,000.00
+Card ref HDFC-ref 7781
+                     8,70,593.67
+On credit                   0.00
+--------------------------------
+     Thank you for playing!
+    Goods once sold are not
+          returnable.
+{ESC}d{04}{GS}VB{00}

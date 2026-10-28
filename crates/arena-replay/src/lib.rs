@@ -699,6 +699,7 @@ mod tests {
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         business: None,
                         coupon: None,
+                        discount: None,
                         order_id: order_id.clone(),
                         credit_override: None,
                         payments: vec![
@@ -821,6 +822,7 @@ mod tests {
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         business: None,
                         coupon: None,
+                        discount: None,
                         order_id: guest_order,
                         credit_override: None,
                         payments: vec![arena_proto::PaymentRow {
@@ -871,6 +873,7 @@ mod tests {
                     IntentPayload::PlanSell(arena_proto::PlanSell {
                         business: None,
                         coupon: None,
+                        discount: None,
                         player_id: player_id.clone(),
                         plan_id: pack_plan.clone(),
                         credit_override: None,
@@ -947,6 +950,7 @@ mod tests {
                     IntentPayload::PosSale(arena_proto::PosSale {
                         business: None,
                         coupon: None,
+                        discount: None,
                         lines: vec![arena_proto::PosSaleLine {
                             product_id: cola.clone(),
                             qty: 2,

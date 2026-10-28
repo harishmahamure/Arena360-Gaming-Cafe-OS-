@@ -152,6 +152,8 @@ pub struct SaleReceipt {
     pub items: Vec<ItemLine>,
     /// Printed after the items and before the tax lines.
     pub coupon: Option<Coupon>,
+    /// The manual discount (Story 5.22), printed after the coupon.
+    pub discount_minor: Option<i64>,
     pub subtotal_minor: i64,
     pub tax: Vec<RateTax>,
     pub total_minor: i64,
@@ -591,6 +593,9 @@ fn sale_rows_for(s: &ReceiptSettings, r: &SaleReceipt, reprint: bool) -> Vec<Row
             &format!("-{}", s.money.number(c.amount_minor)),
         );
     }
+    if let Some(d) = r.discount_minor {
+        l.pair(Style::Plain, "Discount", &format!("-{}", s.money.number(d)));
+    }
     l.tax(s, r);
     l.pair(Style::Total, "TOTAL", &s.money.with_symbol(r.total_minor));
     l.rule();
@@ -725,6 +730,7 @@ mod tests {
             invoice_no: Some("KOR/26-27/E1k/000142".into()),
             buyer: None,
             coupon: None,
+            discount_minor: None,
             at_ms: MS_2026_10_28_0835_UTC,
             staff: "Meera".into(),
             player: Some("shadowfox".into()),
@@ -790,6 +796,7 @@ mod tests {
             invoice_no: Some("DUB/26/E2a/000007".into()),
             buyer: None,
             coupon: None,
+            discount_minor: None,
             at_ms: MS_2026_10_28_0835_UTC,
             staff: String::new(),
             player: None,
@@ -831,6 +838,7 @@ mod tests {
             invoice_no: Some("TKY/26/E1b/000031".into()),
             buyer: None,
             coupon: None,
+            discount_minor: None,
             sessions: vec![SessionLine {
                 device: "VR Rig".into(),
                 minutes: 45,
@@ -938,6 +946,18 @@ mod tests {
                             code: "DIWALI-10".into(),
                             amount_minor: 5_000,
                         }),
+                        ..gst_sale()
+                    },
+                ),
+                (
+                    "gst_coupon_discount",
+                    &inr,
+                    SaleReceipt {
+                        coupon: Some(Coupon {
+                            code: "DIWALI-10".into(),
+                            amount_minor: 5_000,
+                        }),
+                        discount_minor: Some(2_500),
                         ..gst_sale()
                     },
                 ),
@@ -1054,6 +1074,28 @@ mod tests {
         }
         let none = text(sale_rows(&settings(PaperWidth::Mm80, "INR"), &gst_sale()));
         assert!(none.iter().all(|r| !r.contains("Coupon")));
+    }
+
+    #[test]
+    fn a_discount_prints_after_the_coupon_and_before_the_tax_lines() {
+        let sale = SaleReceipt {
+            coupon: Some(Coupon {
+                code: "DIWALI-10".into(),
+                amount_minor: 12_345,
+            }),
+            discount_minor: Some(6_789),
+            ..gst_sale()
+        };
+        for paper in [PaperWidth::Mm80, PaperWidth::Mm58] {
+            let rows = text(sale_rows(&settings(paper, "INR"), &sale));
+            let coupon = rows.iter().position(|r| r.starts_with("Coupon")).unwrap();
+            let line = rows.iter().position(|r| r.starts_with("Discount")).unwrap();
+            assert!(rows[line].ends_with("-67.89"), "{rows:?}");
+            let subtotal = rows.iter().position(|r| r.starts_with("Subtotal")).unwrap();
+            assert!(coupon < line && line < subtotal, "{rows:?}");
+        }
+        let none = text(sale_rows(&settings(PaperWidth::Mm80, "INR"), &gst_sale()));
+        assert!(none.iter().all(|r| !r.contains("Discount")));
     }
 
     #[test]

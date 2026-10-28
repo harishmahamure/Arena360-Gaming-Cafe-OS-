@@ -8,4 +8,13 @@ import type { Permission } from "./Permission";
  * [`Permission::READ_ELEVATION`], alone in its request), which grants unlimited reads for a
  * while. Exactly one of `intent_kind` and `permission` is set.
  */
-export type ElevationItem = { intent_kind?: IntentKind; key?: string; permission?: Permission };
+export type ElevationItem = {
+  intent_kind?: IntentKind;
+  key?: string;
+  permission?: Permission;
+  /**
+   * Also asks the approver for `discount.manual`: set when the intent carries a manual discount
+   * (Story 5.22), which only `session.settle`, `pos.sale` and `plan.sell` take.
+   */
+  discount?: boolean;
+};

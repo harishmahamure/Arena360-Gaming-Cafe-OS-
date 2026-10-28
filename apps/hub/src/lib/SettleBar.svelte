@@ -10,6 +10,7 @@
   import type {
     BusinessBuyer,
     CouponPreview,
+    DiscountPreview,
     PaymentMethod,
     PaymentRow,
     PrinterReady,
@@ -21,6 +22,9 @@
   import { tick, untrack, type Snippet } from "svelte";
   import { buyerErrors, toBuyer } from "./business";
   import { normaliseCode, previewCoupon, type CouponSource } from "./coupons";
+  import DiscountEntry from "./DiscountEntry.svelte";
+  import { TICKET_FRESH_MS, previewDiscount, settleKind, type AppliedDiscount } from "./discount";
+  import { dropElevation } from "./auth";
   import { printerReady } from "./printer";
   import { cashBlocked } from "./shift.svelte";
   import {
@@ -47,6 +51,7 @@
     hotkey = false,
     receiptChoice = false,
     couponSource = null,
+    discountDirect = false,
   }: {
     bill: SnapshotBill;
     locale: SnapshotLocale;
@@ -57,12 +62,15 @@
      * `receipt` is the choice on the bar, present only when `receiptChoice` is set; `business`
      * is the buyer of a business invoice, present only when staff chose one (Story 5.20).
      * `coupon` is the applied coupon code, present only when staff applied one (Story 5.21).
+     * `discount` is the manual discount staff chose, with the manager's elevation ticket when the
+     * signed-in member does not hold `discount.manual` themselves (Story 5.22).
      */
     onsettle: (
       payments: PaymentRow[],
       receipt?: ReceiptChoice,
       business?: BusinessBuyer,
       coupon?: string,
+      discount?: AppliedDiscount,
     ) => void;
     title?: MessageKey;
     extra?: Snippet;
@@ -74,6 +82,8 @@
     receiptChoice?: boolean;
     /** The bill a coupon is priced on; when set the bar offers a coupon field (Story 5.21). */
     couponSource?: CouponSource | null;
+    /** The signed-in member holds `discount.manual`: a manual discount needs no PIN (Story 5.22). */
+    discountDirect?: boolean;
   } = $props();
 
   let root: HTMLElement | undefined = $state();
@@ -178,9 +188,81 @@
     });
   });
 
+  // A manual discount (Story 5.22): staff enter a percent or an amount and a reason, and a manager's
+  // PIN approves it unless the signed-in member holds `discount.manual`. The Hub prices it after the
+  // coupon; the ticket the PIN earned is handed to the settle once and then forgotten, so a retry
+  // asks for the PIN again.
+  let discountOpen = $state(false);
+  let discountApplied = $state(null as AppliedDiscount | null);
+  let discountPriced = $state(null as DiscountPreview | null);
+  let discountProblem = $state(null as string | null);
+  let discountBusy = $state(false);
+  let discountPin = $state(false);
+  let ticketAt = 0;
+  let discountRuns = 0;
+  const discountKey = $derived(
+    JSON.stringify([couponSource, bill.remaining_minor, applied?.code, discountApplied?.discount]),
+  );
+
+  function forgetTicket(of: AppliedDiscount | null) {
+    if (of?.ticket) void dropElevation(of.ticket);
+  }
+
+  async function priceDiscount(chosen: AppliedDiscount, source: CouponSource) {
+    const mine = ++discountRuns;
+    discountBusy = true;
+    const answer = await previewDiscount(chosen.discount, applied?.code, source).finally(() => {
+      if (mine === discountRuns) discountBusy = false;
+    });
+    if (mine !== discountRuns) return;
+    if (answer.kind === "ok") {
+      discountPriced = answer.preview;
+      discountProblem = null;
+    } else {
+      forgetTicket(chosen);
+      discountApplied = null;
+      discountPriced = null;
+      discountOpen = true;
+      discountProblem =
+        answer.kind === "refused" ? answer.message : t("hub.settle.discount.unreachable");
+    }
+  }
+
+  function applyDiscount(chosen: AppliedDiscount) {
+    ticketAt = Date.now();
+    discountApplied = chosen;
+    discountOpen = false;
+    discountPin = false;
+    discountProblem = null;
+  }
+
+  function removeDiscount() {
+    discountRuns += 1;
+    discountBusy = false;
+    forgetTicket(discountApplied);
+    discountApplied = null;
+    discountPriced = null;
+    discountProblem = null;
+    discountOpen = false;
+    discountPin = false;
+  }
+
+  $effect(() => {
+    void discountKey;
+    untrack(() => {
+      if (discountApplied && couponSource) void priceDiscount(discountApplied, couponSource);
+    });
+  });
+
   const id = $props.id();
   const exponent = $derived(locale.exponent);
-  const total = $derived(applied ? applied.total_minor : bill.remaining_minor);
+  const total = $derived(
+    discountPriced
+      ? discountPriced.total_minor
+      : applied
+        ? applied.total_minor
+        : bill.remaining_minor,
+  );
   const sums = $derived(tally(total, rows, exponent));
   const wallet = $derived(bill.wallet_minor ?? 0);
   // Cash needs an open shift; every other method settles without one.
@@ -272,18 +354,29 @@
   }
 
   export async function submit() {
-    if (busy || couponBusy || !closed || blockedReason || businessBlocked) return;
+    if (busy || couponBusy || discountBusy || !closed || blockedReason || businessBlocked) return;
     attempted = true;
     if (!rowsValid(rows, exponent, wallet)) {
       await tick();
       focusFirstInvalid(root);
       return;
     }
+    const staffDiscount = discountApplied;
+    const fresh = !!staffDiscount?.ticket && Date.now() - ticketAt < TICKET_FRESH_MS;
+    if (staffDiscount && !discountDirect && !fresh) {
+      // The approval is used up or too old: ask for the PIN again before settling.
+      forgetTicket(staffDiscount);
+      discountApplied = { discount: staffDiscount.discount };
+      discountPin = true;
+      return;
+    }
+    if (staffDiscount && !discountDirect) discountApplied = { discount: staffDiscount.discount };
     onsettle(
       toPayments(rows, sums.change, exponent),
       receiptChoice ? receipt : undefined,
       toBuyer(businessOffered && businessOn, buyerGstin, buyerName),
       applied?.code,
+      staffDiscount ?? undefined,
     );
   }
 </script>
@@ -316,6 +409,24 @@
     </div>
   {/if}
 
+  {#if discountApplied && discountPriced}
+    <div class="coupon" data-testid="discount">
+      <p class="type-hub-label coupon-line tabular-nums" data-testid="discount-line">
+        <span>{t("hub.settle.discount.line")}</span>
+        <span data-testid="discount-amount"
+          >{t("hub.settle.coupon.amount", { amount: money(discountPriced.discount_minor) })}</span
+        >
+      </p>
+      <button
+        type="button"
+        class="ui-interactive method type-hub-label"
+        data-testid="discount-remove"
+        disabled={busy}
+        onclick={removeDiscount}>{t("hub.settle.discount.remove")}</button
+      >
+    </div>
+  {/if}
+
   <p class="total">
     <span class="type-hub-label">{t("hub.settle.total")}</span>
     {#if couponSource && !applied && !couponOpen}
@@ -325,6 +436,15 @@
         data-testid="coupon-toggle"
         disabled={busy}
         onclick={() => (couponOpen = true)}>{t("hub.settle.coupon.add")}</button
+      >
+    {/if}
+    {#if couponSource && !discountApplied && !discountOpen}
+      <button
+        type="button"
+        class="ui-interactive method type-hub-label"
+        data-testid="discount-toggle"
+        disabled={busy}
+        onclick={() => (discountOpen = true)}>{t("hub.settle.discount.add")}</button
       >
     {/if}
     <span class="type-hub-numeric tabular-nums" data-testid="settle-total">{money(total)}</span>
@@ -367,6 +487,39 @@
           {couponProblem}
         </p>
       {/if}
+    </div>
+  {/if}
+
+  {#if couponSource && discountOpen && !discountApplied}
+    <div class="coupon" data-testid="discount-editor">
+      {#if discountProblem}
+        <p class="type-hub-label coupon-problem" role="alert" data-testid="discount-error">
+          <span aria-hidden="true">⚠</span>
+          {discountProblem}
+        </p>
+      {/if}
+      <DiscountEntry
+        kind={settleKind(couponSource)}
+        direct={discountDirect}
+        {exponent}
+        onapply={applyDiscount}
+        oncancel={() => {
+          discountOpen = false;
+          discountProblem = null;
+        }}
+      />
+    </div>
+  {/if}
+  {#if couponSource && discountApplied && discountPin}
+    <div class="coupon" data-testid="discount-pin">
+      <DiscountEntry
+        kind={settleKind(couponSource)}
+        direct={false}
+        resume={discountApplied.discount}
+        {exponent}
+        onapply={applyDiscount}
+        oncancel={() => (discountPin = false)}
+      />
     </div>
   {/if}
 
@@ -501,8 +654,8 @@
 
   <Button
     label="hub.settle.submit"
-    disabled={busy || couponBusy || !closed || !!blockedReason || businessBlocked}
-    disabledReason={busy || couponBusy
+    disabled={busy || couponBusy || discountBusy || !closed || !!blockedReason || businessBlocked}
+    disabledReason={busy || couponBusy || discountBusy
       ? "hub.sheet.waiting"
       : blockedReason
         ? blockedReason

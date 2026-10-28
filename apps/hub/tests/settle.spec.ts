@@ -27,8 +27,10 @@ type Sent = {
     receipt?: string;
     business?: { gstin: string; legal_name: string };
     coupon?: string;
+    discount?: { percent_bp?: number; amount_minor?: number; reason: string; note?: string };
   };
   rev?: number;
+  ticket?: string;
 };
 type Hub = {
   devices: SnapshotDevice[];
@@ -43,6 +45,16 @@ type Hub = {
   coupons?: Record<string, number | string>;
   /** The bodies the bar sent to `/ui/coupons/preview` (Story 5.21). */
   previews?: { code: string; order_id?: string }[];
+  /** Who is signed in; the counter without `discount.manual` unless set (Story 5.22). */
+  staff?: SessionStaff;
+  /** The bodies the bar sent to `/ui/discount/preview` and `/ui/elevate` (Story 5.22). */
+  discountPreviews?: {
+    discount: Sent["payload"]["discount"];
+    coupon?: string;
+    order_id?: string;
+  }[];
+  elevations?: { items: { intent_kind?: string; discount?: boolean }[]; pin: string }[];
+  drops?: number;
 };
 
 const FREE = device(1, { status: "online" });
@@ -72,7 +84,7 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
         return json(route, snap);
       }
       case "/ui/me":
-        return json(route, SELLER);
+        return json(route, hub.staff ?? SELLER);
       case "/ui/settings":
         return json(route, []);
       case "/ui/coupons/preview": {
@@ -97,6 +109,49 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
           }),
         });
       }
+      case "/ui/discount/preview": {
+        const body = req.postDataJSON() as {
+          discount: NonNullable<Sent["payload"]["discount"]>;
+          coupon?: string;
+          order_id?: string;
+        };
+        (hub.discountPreviews ??= []).push(body);
+        const afterCoupon =
+          BILL.remaining_minor -
+          ((hub.coupons?.[body.coupon?.toUpperCase() ?? ""] as number | undefined) ?? 0);
+        const off =
+          body.discount.amount_minor ??
+          Math.round((afterCoupon * (body.discount.percent_bp ?? 0)) / 10000);
+        if (off > afterCoupon) {
+          return route.fulfill({
+            status: 422,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({
+              code: "VALIDATION_FAILED",
+              message: "the discount is more than the bill",
+              field: "discount.amount_minor",
+            }),
+          });
+        }
+        return json(route, { discount_minor: off, total_minor: afterCoupon - off });
+      }
+      case "/ui/elevate": {
+        const body = req.postDataJSON() as NonNullable<Hub["elevations"]>[number];
+        (hub.elevations ??= []).push(body);
+        if (body.pin !== "2222") {
+          return route.fulfill({
+            status: 403,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ code: "PIN_REJECTED", message: "no" }),
+          });
+        }
+        return json(route, { ticket: "T1", items: body.items, expires_in_s: 60 });
+      }
+      case "/ui/elevate/drop":
+        hub.drops = (hub.drops ?? 0) + 1;
+        return route.fulfill({ status: 204, headers: CORS });
       case "/ui/printer/ready":
         hub.readyFor = new URL(req.url()).searchParams.get("player_id");
         return hub.printer
@@ -105,8 +160,13 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
       case "/ui/intent": {
         const body = req.postDataJSON() as {
           intent: { payload: Sent["payload"]; base_rev?: number };
+          elevation_ticket?: string;
         };
-        hub.sent.push({ payload: body.intent.payload, rev: body.intent.base_rev });
+        hub.sent.push({
+          payload: body.intent.payload,
+          rev: body.intent.base_rev,
+          ticket: body.elevation_ticket,
+        });
         hub.bills = [];
         return json(route, {
           applied: { intent_id: "I", changes: [] },
@@ -553,4 +613,152 @@ test("the coupon sits in the total row and opens its field on demand", async ({ 
   await page.getByTestId("coupon-toggle").click();
   await expect(field(page, "hub.settle.coupon")).toBeVisible();
   await expect(page.getByTestId("coupon-toggle")).toHaveCount(0);
+});
+
+// Story 5.22: a manual discount with a reason, approved by a manager's PIN.
+const MANAGER: SessionStaff = {
+  ...SELLER,
+  role_name: "Manager",
+  permissions: [...SELLER.permissions, "discount.manual"],
+};
+
+const keys = async (page: Page, pin: string) => {
+  for (const digit of pin) await page.keyboard.press(digit);
+  await page.keyboard.press("Enter");
+};
+
+/** Opens the editor, enters `value` as a percent or an amount and picks `reason`. */
+const discount = async (
+  page: Page,
+  value: string,
+  opts: { amount?: boolean; reason?: string; note?: string } = {},
+) => {
+  await page.getByTestId("discount-toggle").click();
+  if (opts.amount) {
+    await bar(page).getByRole("button", { name: en["hub.settle.discount.amount"] }).click();
+  }
+  await field(
+    page,
+    opts.amount ? "hub.settle.discount.amount_label" : "hub.settle.discount.percent_label",
+  ).fill(value);
+  await bar(page).getByRole("button", { name: en["hub.settle.discount.next"] }).click();
+  await bar(page)
+    .getByRole("radio", { name: opts.reason ?? en["hub.settle.discount.reason.regular_customer"] })
+    .check();
+  if (opts.note) await bar(page).getByLabel(en["ui.reason.note"]).fill(opts.note);
+  await bar(page).getByRole("button", { name: en["ui.reason.confirm"] }).click();
+};
+
+test("a manager applies a discount with a reason and no PIN; the settle sends it", async ({
+  page,
+}) => {
+  const hub = await open(page, { staff: MANAGER });
+  await discount(page, "10");
+  await expect(page.getByTestId("discount-line")).toContainText("Discount");
+  await expect(page.getByTestId("discount-amount")).toHaveText("−₹7.50");
+  await expect(page.getByTestId("settle-total")).toHaveText("₹67.50");
+  expect(hub.elevations).toBeUndefined();
+  expect(hub.discountPreviews?.[0].discount).toEqual({
+    percent_bp: 1000,
+    reason: "regular_customer",
+  });
+
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({
+    kind: "session.settle",
+    payments: [{ method: "cash", amount_minor: 6750 }],
+    discount: { percent_bp: 1000, reason: "regular_customer" },
+  });
+  expect(hub.sent[0].ticket).toBeUndefined();
+});
+
+test("a counter without the permission is asked for a manager PIN in place", async ({ page }) => {
+  const hub = await open(page);
+  await discount(page, "5", { reason: en["hub.settle.discount.reason.staff_meal"] });
+  await expect(bar(page).getByText(en["hub.settle.discount.pin"])).toBeVisible();
+  await expect(page.getByTestId("discount-line")).toHaveCount(0);
+
+  await keys(page, "0000");
+  await expect(bar(page).getByText(en["ui.pin.rejected"])).toBeVisible();
+  await expect(page.getByTestId("discount-line")).toHaveCount(0);
+
+  await keys(page, "2222");
+  await expect(page.getByTestId("discount-amount")).toHaveText("−₹3.75");
+  await expect(page.getByTestId("settle-total")).toHaveText("₹71.25");
+  expect(hub.elevations?.at(-1)?.items).toEqual([
+    { intent_kind: "session.settle", discount: true },
+  ]);
+
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].ticket).toBe("T1");
+  expect(hub.sent[0].payload.discount).toEqual({ percent_bp: 500, reason: "staff_meal" });
+});
+
+test("Other needs its text, and an amount over the bill is refused inline", async ({ page }) => {
+  const hub = await open(page, { staff: MANAGER });
+  await page.getByTestId("discount-toggle").click();
+  await bar(page).getByRole("button", { name: en["hub.settle.discount.next"] }).click();
+  await expect(bar(page).getByText(en["hub.settle.discount.percent_invalid"])).toBeVisible();
+  await field(page, "hub.settle.discount.percent_label").fill("0");
+  await bar(page).getByRole("button", { name: en["hub.settle.discount.next"] }).click();
+  await expect(bar(page).getByText(en["hub.settle.discount.percent_invalid"])).toBeVisible();
+  await field(page, "hub.settle.discount.percent_label").fill("100.5");
+  await bar(page).getByRole("button", { name: en["hub.settle.discount.next"] }).click();
+  await expect(bar(page).getByText(en["hub.settle.discount.percent_invalid"])).toBeVisible();
+  await field(page, "hub.settle.discount.percent_label").fill("10");
+  await bar(page).getByRole("button", { name: en["hub.settle.discount.next"] }).click();
+  await bar(page).getByRole("radio", { name: en["hub.settle.discount.reason.other"] }).check();
+  await bar(page).getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await expect(bar(page).getByText(en["ui.reason.note_required"])).toBeVisible();
+  await bar(page).getByLabel(en["ui.reason.note"]).fill("fridge was broken");
+  await bar(page).getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await expect(page.getByTestId("discount-line")).toBeVisible();
+  expect(hub.discountPreviews?.[0].discount).toEqual({
+    percent_bp: 1000,
+    reason: "other",
+    note: "fridge was broken",
+  });
+
+  await page.getByTestId("discount-remove").click();
+  await discount(page, "80", { amount: true });
+  await expect(page.getByTestId("discount-error")).toContainText("more than the bill");
+  await expect(page.getByTestId("discount-line")).toHaveCount(0);
+  await expect(page.getByTestId("settle-total")).toHaveText("₹75.00");
+});
+
+test("the discount comes after the coupon", async ({ page }) => {
+  const hub = await open(page, { staff: MANAGER, coupons: { SAVE10: 750 } });
+  await apply(page, "save10");
+  await discount(page, "10");
+  // 10% of the 67.50 left after the coupon is 6.75.
+  await expect(page.getByTestId("discount-amount")).toHaveText("−₹6.75");
+  await expect(page.getByTestId("settle-total")).toHaveText("₹60.75");
+  expect(hub.discountPreviews?.at(-1)?.coupon).toBe("SAVE10");
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({
+    coupon: "SAVE10",
+    discount: { percent_bp: 1000 },
+    payments: [{ amount_minor: 6075 }],
+  });
+});
+
+test("removing the discount drops its approval and sends none", async ({ page }) => {
+  const hub = await open(page);
+  await discount(page, "5");
+  await keys(page, "2222");
+  await expect(page.getByTestId("discount-line")).toBeVisible();
+  await page.getByTestId("discount-remove").click();
+  await expect(page.getByTestId("settle-total")).toHaveText("₹75.00");
+  await expect.poll(() => hub.drops).toBe(1);
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload.discount).toBeUndefined();
+  expect(hub.sent[0].ticket).toBeUndefined();
 });

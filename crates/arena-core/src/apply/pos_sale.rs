@@ -189,32 +189,30 @@ pub(super) struct Priced {
 }
 
 pub(super) fn price(sale: &[PosSaleLine], t: &Basket) -> Result<Priced, AppError> {
-    price_net(sale, t, None)
+    price_net(sale, t, &[])
 }
 
-/// The sale priced with the coupon in `ctx` (when there is one): the net bill and the discount. A
-/// coupon the bill cannot take is `COUPON_INVALID`.
-pub(super) fn price_with_coupon(
+/// The sale priced with the coupon in `ctx` and the manual `discount` (when there are any): the net
+/// bill and what was taken off. A coupon the bill cannot take is `COUPON_INVALID`, a discount it
+/// cannot take `VALIDATION_FAILED` on `discount`.
+pub(super) fn price_adjusted(
     sale: &[PosSaleLine],
     t: &Basket,
     ctx: Option<&super::coupon::CouponCtx>,
-) -> Result<(Priced, Option<super::coupon::Quote>), AppError> {
+    discount: Option<&arena_proto::ManualDiscount>,
+) -> Result<(Priced, super::discount::Adjust), AppError> {
     let gross = price(sale, t)?;
-    let Some(ctx) = ctx else {
-        return Ok((gross, None));
-    };
+    if ctx.is_none() && discount.is_none() {
+        return Ok((gross, super::discount::Adjust::default()));
+    }
     let lines = super::coupon::sale_lines(sale, &gross.lines);
-    let quote = super::coupon::quote(ctx, &lines, gross.bill.total_minor, false)?;
-    Ok((price_net(sale, t, Some(&quote))?, Some(quote)))
+    let adjust = super::discount::price(ctx, discount, &lines, gross.bill.total_minor, false)?;
+    Ok((price_net(sale, t, &adjust.shares())?, adjust))
 }
 
-/// [`price`] with a coupon's discount taken off the eligible lines before tax: each rate's share
-/// reduces that rate's taxable amount, and tax is computed once per rate on what is left.
-fn price_net(
-    sale: &[PosSaleLine],
-    t: &Basket,
-    coupon: Option<&super::coupon::Quote>,
-) -> Result<Priced, AppError> {
+/// [`price`] with the coupon and discount shares taken off before tax: each rate's share reduces
+/// that rate's taxable amount, and tax is computed once per rate on what is left.
+fn price_net(sale: &[PosSaleLine], t: &Basket, shares: &[(u16, i64)]) -> Result<Priced, AppError> {
     let gst = t.tax.tax_mode() == TaxMode::GstIn;
     let mut lines = Vec::with_capacity(sale.len());
     let mut taxed = Vec::with_capacity(sale.len());
@@ -238,7 +236,7 @@ fn price_net(
             amount_minor: amount,
         });
     }
-    for (rate_bp, share) in coupon.map_or(&[][..], |q| q.shares.as_slice()) {
+    for (rate_bp, share) in shares {
         taxed.push(Line {
             rate_bp: *rate_bp,
             amount_minor: -share,
@@ -384,7 +382,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
             "no such player",
         ));
     }
-    let (priced, _) = price_with_coupon(&s.lines, &t.basket, t.coupon.as_ref())?;
+    let (priced, _) = price_adjusted(&s.lines, &t.basket, t.coupon.as_ref(), s.discount.as_ref())?;
     validate_payments(
         &s.payments,
         s.credit_override,
@@ -405,7 +403,8 @@ pub(super) fn mutate_sale(
 ) -> Result<Vec<Written>, AppError> {
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?
         .ok_or_else(|| internal("the branch has not been bootstrapped"))?;
-    let (priced, quote) = price_with_coupon(&s.lines, &t.basket, t.coupon.as_ref())?;
+    let (priced, adjust) =
+        price_adjusted(&s.lines, &t.basket, t.coupon.as_ref(), s.discount.as_ref())?;
     let plan = plan_stock(&s.lines, &t.basket, s.stock_override == Some(true), &[])?;
     let breakup = serde_json::to_string(&priced.bill.breakup)
         .map_err(|_| internal("the tax breakup cannot be written"))?;
@@ -467,8 +466,15 @@ pub(super) fn mutate_sale(
             before: None,
         });
     }
-    if let Some(q) = &quote {
+    if let Some(q) = &adjust.coupon {
         super::coupon::redeem(tx, q, &order_id, false, &mut written)?;
+    }
+    if let Some(d) = &adjust.discount {
+        let by = intent
+            .elevated_by
+            .as_ref()
+            .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+        super::discount::record(tx, d, &order_id, by, false)?;
     }
     let stamp = Stamp {
         staff_id: &intent.actor.id,

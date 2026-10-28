@@ -228,6 +228,46 @@ pub fn clear_order_coupon(conn: &Connection, order_id: &str) -> Result<(), AppEr
     Ok(())
 }
 
+/// Records a manual discount on an order at settle (Story 5.22): the amount, the reason code, the
+/// free text of an `other` reason and the approving staff member. With `reduce_totals` the order's
+/// subtotal and total go down by `minor` too (a session bill); a counter or plan sale is written
+/// net already.
+pub fn set_order_discount(
+    conn: &Connection,
+    order_id: &str,
+    minor: i64,
+    reason: &str,
+    note: Option<&str>,
+    by: &str,
+    reduce_totals: bool,
+) -> Result<(), AppError> {
+    let cut = if reduce_totals { minor } else { 0 };
+    conn.execute(
+        "UPDATE orders SET discount_minor = ?2, discount_reason = ?3, discount_note = ?4,
+                discount_by = ?5, subtotal_minor = subtotal_minor - ?6,
+                total_minor = total_minor - ?6
+         WHERE id = ?1",
+        params![order_id, minor, reason, note, by, cut],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Takes the manual discount off an order again (Undo of a session settle): the amount goes back
+/// onto the subtotal and total and the discount columns clear.
+pub fn clear_order_discount(conn: &Connection, order_id: &str) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET subtotal_minor = subtotal_minor + discount_minor,
+                total_minor = total_minor + discount_minor,
+                discount_minor = NULL, discount_reason = NULL, discount_note = NULL,
+                discount_by = NULL
+         WHERE id = ?1 AND discount_minor IS NOT NULL",
+        [order_id],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 /// One line of a bill as a coupon sees it: its amount, tax rate and what it is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CouponLineRow {

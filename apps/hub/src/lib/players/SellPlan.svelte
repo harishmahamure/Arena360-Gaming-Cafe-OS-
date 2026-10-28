@@ -11,9 +11,17 @@
   import { onMount } from "svelte";
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
-  import { SESSION_DEPENDENCY, loadWallet, newIdempotencyKey, submitIntent } from "../auth";
+  import {
+    SESSION_DEPENDENCY,
+    dropElevation,
+    hasPermission,
+    loadWallet,
+    newIdempotencyKey,
+    submitIntent,
+  } from "../auth";
+  import type { AppliedDiscount } from "../discount";
   import { branchLocale } from "../locale.svelte";
-  import { snapshotOf } from "../operating";
+  import { sessionStaff, snapshotOf } from "../operating";
   import { loadPlans, termsText } from "../plans";
   import SettleBar from "../SettleBar.svelte";
   import { offerUndo } from "../undo.svelte";
@@ -42,6 +50,7 @@
     COUPON_INVALID: "hub.settle.coupon.refused",
   };
 
+  const staff = $derived(sessionStaff(page.data));
   const locale = $derived(branchLocale.current);
   const groups = $derived(snapshotOf(page.data)?.groups ?? []);
   const groupName = (id: string) => groups.find((g) => g.id === id)?.name ?? id;
@@ -90,15 +99,17 @@
     receipt?: ReceiptChoice,
     business?: BusinessBuyer,
     coupon?: string,
+    discount?: AppliedDiscount,
   ) {
     if (busy || !chosen) return;
     busy = true;
     error = null;
     const same =
       attempt &&
-      JSON.stringify(attempt.payments) === JSON.stringify([payments, receipt, business, coupon]);
+      JSON.stringify(attempt.payments) ===
+        JSON.stringify([payments, receipt, business, coupon, discount?.discount]);
     const key = same && attempt ? attempt.key : newIdempotencyKey();
-    attempt = { key, payments: [payments, receipt, business, coupon] };
+    attempt = { key, payments: [payments, receipt, business, coupon, discount?.discount] };
     const outcome = await submitIntent(
       {
         kind: "plan.sell",
@@ -108,14 +119,18 @@
         receipt,
         business,
         coupon,
+        discount: discount?.discount,
       },
       key,
+      undefined,
+      { elevationTicket: discount?.ticket },
     ).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (outcome.kind === "applied") {
       offerUndo(outcome.result, "plan");
       return ondone();
     }
+    if (discount?.ticket) void dropElevation(discount.ticket);
     error =
       outcome.kind === "error"
         ? (REFUSAL[outcome.error.code] ?? "hub.plans.sell.refused")
@@ -167,10 +182,12 @@
       {bill}
       {locale}
       {busy}
-      onsettle={(p, receipt, business, coupon) => void settle(p, receipt, business, coupon)}
+      onsettle={(p, receipt, business, coupon, discount) =>
+        void settle(p, receipt, business, coupon, discount)}
       title="hub.plans.sell.title"
       receiptChoice
       couponSource={{ plan_id: chosen.id }}
+      discountDirect={hasPermission(staff, "discount.manual")}
     >
       {#snippet extra()}
         <p class="type-hub-body" data-testid="sell-line">

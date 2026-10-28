@@ -66,10 +66,10 @@ pub use commands::{
     max_applied_command_id, unreported_commands,
 };
 pub use coupons::{
-    CouponLineRow, CouponRow, CouponWithTargets, clear_order_coupon, find_coupon,
-    find_coupon_by_code, give_coupon_use, insert_coupon, insert_coupon_target, list_coupon_lines,
-    list_coupon_targets, list_coupons, order_coupon, set_order_coupon, take_coupon_use,
-    update_coupon,
+    CouponLineRow, CouponRow, CouponWithTargets, clear_order_coupon, clear_order_discount,
+    find_coupon, find_coupon_by_code, give_coupon_use, insert_coupon, insert_coupon_target,
+    list_coupon_lines, list_coupon_targets, list_coupons, order_coupon, set_order_coupon,
+    set_order_discount, take_coupon_use, update_coupon,
 };
 pub use credit::{
     CreditRow, adjust_outstanding, civil_day_number, credit_aging, credit_aging_with,

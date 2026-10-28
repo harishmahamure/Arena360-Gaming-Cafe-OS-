@@ -134,6 +134,8 @@ pub struct ReceiptHead {
     pub buyer: Option<(String, String)>,
     /// The coupon the sale took (Story 5.21): code and the amount taken off.
     pub coupon: Option<(String, i64)>,
+    /// The manual discount the sale took (Story 5.22): the amount taken off.
+    pub discount: Option<i64>,
 }
 
 /// One order line: play time (`device` and `minutes` set), a product (`qty`, `hsn`) or a plan
@@ -174,7 +176,7 @@ pub fn load_receipt_source(
             "SELECT o.kind, o.status, o.subtotal_minor, o.total_minor, o.tax_breakup,
                     COALESCE(o.settled_at, 0), COALESCE(st.display_name, o.settled_by, ''),
                     p.username, o.invoice_no, o.buyer_gstin, o.buyer_name, o.coupon_code,
-                    o.coupon_minor
+                    o.coupon_minor, o.discount_minor
              FROM orders o
              LEFT JOIN staff st ON st.staff_id = o.settled_by
              LEFT JOIN players p ON p.player_id = o.player_id
@@ -197,6 +199,7 @@ pub fn load_receipt_source(
                     coupon: r
                         .get::<_, Option<String>>(11)?
                         .zip(r.get::<_, Option<i64>>(12)?),
+                    discount: r.get(13)?,
                 })
             },
         )

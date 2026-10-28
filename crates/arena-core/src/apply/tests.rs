@@ -23,6 +23,7 @@ mod alert;
 mod commands;
 mod console;
 mod coupon;
+mod discount;
 mod extend;
 mod force_end;
 mod group_bill;

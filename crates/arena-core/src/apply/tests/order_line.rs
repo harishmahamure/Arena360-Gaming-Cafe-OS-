@@ -648,6 +648,7 @@ async fn available_stock_is_on_hand_less_open_holds_for_sales_and_the_catalogue(
     let sale = |qty: i64| PosSale {
         business: None,
         coupon: None,
+        discount: None,
         lines: vec![PosSaleLine {
             product_id: id.clone(),
             qty,
@@ -690,6 +691,7 @@ async fn counter_sale_lines_are_served_in_both_modes() {
             IntentPayload::PosSale(PosSale {
                 business: None,
                 coupon: None,
+                discount: None,
                 lines: vec![PosSaleLine {
                     product_id: id.clone(),
                     qty: 2,

@@ -58,6 +58,11 @@ pub struct PosSale {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coupon: Option<String>,
+    /// A discount staff give by hand, applied after the coupon (Story 5.22). Needs `discount.manual`
+    /// on the actor or on the approving manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub discount: Option<crate::ManualDiscount>,
 }
 
 /// The payload of `pos.sale.reverted`: Undo of a counter sale within its window.

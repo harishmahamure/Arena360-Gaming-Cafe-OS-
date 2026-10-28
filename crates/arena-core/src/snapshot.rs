@@ -1171,6 +1171,20 @@ impl SnapshotReader {
         store.read_with(|conn| crate::apply::coupon_preview(conn, req, now_ms))
     }
 
+    /// What a manual discount (after the coupon the request names) would do to a bill, by the
+    /// pricing a settle uses (Story 5.22).
+    pub fn discount_preview(
+        &self,
+        req: &arena_proto::DiscountPreviewRequest,
+        now_ms: i64,
+    ) -> Result<arena_proto::DiscountPreview, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| crate::apply::discount_preview(conn, req, now_ms))
+    }
+
     /// The Settings → Staff list: the active and invited members with the `users` limit in
     /// effect (the licence's, else the Free default). Deactivated members are not listed.
     pub fn staff_list(&self) -> Result<arena_proto::StaffList, AppError> {

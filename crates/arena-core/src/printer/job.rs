@@ -139,6 +139,7 @@ pub fn sale_receipt(
             code: code.clone(),
             amount_minor: *amount_minor,
         }),
+        discount_minor: head.discount,
         subtotal_minor: head.subtotal_minor,
         tax: head
             .tax_breakup
@@ -220,6 +221,7 @@ mod tests {
                 invoice_no: Some("DEV01/26-27/E1k/000007".into()),
                 buyer: None,
                 coupon: None,
+                discount: None,
             },
             lines: vec![
                 line(None, None, Some("PC 4")),

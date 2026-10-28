@@ -605,6 +605,7 @@ pub(super) fn settle_intent(
         IntentPayload::SessionSettle(arena_proto::SessionSettle {
             business: None,
             coupon: None,
+            discount: None,
             order_id: order.into(),
             credit_override: None,
             payments,
@@ -3403,6 +3404,7 @@ pub(super) fn sell_intent(
         IntentPayload::PlanSell(arena_proto::PlanSell {
             business: None,
             coupon: None,
+            discount: None,
             player_id: player.into(),
             plan_id: plan.into(),
             payments,

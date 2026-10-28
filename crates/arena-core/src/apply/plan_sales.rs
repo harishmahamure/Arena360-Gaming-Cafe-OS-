@@ -36,10 +36,10 @@ pub(super) fn load_sell(
         Some(p) => list_plan_groups(tx, &p.plan_id)?,
         None => Vec::new(),
     };
-    let coupon = match (&s.coupon, &plan) {
-        (Some(code), Some(p)) => Some(super::coupon::load_plan_bill(
+    let coupon = match (s.coupon.is_some() || s.discount.is_some(), &plan) {
+        (true, Some(p)) => Some(super::coupon::load_plan_bill(
             tx,
-            code,
+            s.coupon.as_deref(),
             &p.plan_id,
             p.price_minor,
             now_ms,
@@ -97,21 +97,22 @@ pub(super) fn validate_sell(intent: &Intent, s: &PlanSell, t: &SellTarget) -> Re
             "This player already has an active pass.",
         ));
     }
-    let total = net_price(t, plan.price_minor)?.0;
+    let total = net_price(t, plan.price_minor, s.discount.as_ref())?.0;
     validate_payments(&s.payments, s.credit_override, &t.payer, true, total)
 }
 
-/// The plan's price after the coupon, with the coupon's discount when there is one.
+/// The plan's price after the coupon and the manual discount, with what was taken off.
 fn net_price(
     t: &SellTarget,
     price_minor: i64,
-) -> Result<(i64, Option<super::coupon::Quote>), AppError> {
+    discount: Option<&arena_proto::ManualDiscount>,
+) -> Result<(i64, super::discount::Adjust), AppError> {
     match &t.coupon {
         Some(bill) => {
-            let q = bill.quote(price_minor)?;
-            Ok((price_minor - q.discount_minor, Some(q)))
+            let a = bill.price(price_minor, discount)?;
+            Ok((price_minor - a.off(), a))
         }
-        None => Ok((price_minor, None)),
+        None => Ok((price_minor, super::discount::Adjust::default())),
     }
 }
 
@@ -131,7 +132,7 @@ pub(super) fn mutate_sell(
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
         AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
     })?;
-    let (total_minor, quote) = net_price(t, plan.price_minor)?;
+    let (total_minor, adjust) = net_price(t, plan.price_minor, s.discount.as_ref())?;
     let order_id = ulid::Ulid::generate().to_string();
     insert_topup_order(
         tx,
@@ -171,8 +172,15 @@ pub(super) fn mutate_sell(
         op: ChangeOp::Insert,
         before: None,
     });
-    if let Some(q) = &quote {
+    if let Some(q) = &adjust.coupon {
         super::coupon::redeem(tx, q, &order_id, false, &mut written)?;
+    }
+    if let Some(d) = &adjust.discount {
+        let by = intent
+            .elevated_by
+            .as_ref()
+            .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+        super::discount::record(tx, d, &order_id, by, false)?;
     }
     let stamp = Stamp {
         staff_id: &intent.actor.id,

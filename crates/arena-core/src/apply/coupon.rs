@@ -272,7 +272,7 @@ pub(crate) struct CouponCtx {
 
 /// What a coupon is applied to: its context, the bill's lines and whether the bill is part-paid.
 pub(crate) struct CouponBill {
-    ctx: CouponCtx,
+    ctx: Option<CouponCtx>,
     lines: Vec<CouponLineRow>,
     partly_paid: bool,
 }
@@ -416,7 +416,11 @@ pub(crate) fn quote(
 /// Splits `discount` over the rates in proportion to their eligible amounts: each rate gets the
 /// floor of its exact share, and the minor units left over go one each to the rates with the
 /// largest remainders (ties to the lower rate).
-fn spread(discount: i128, eligible: i128, per_rate: &BTreeMap<u16, i128>) -> Vec<(u16, i64)> {
+pub(super) fn spread(
+    discount: i128,
+    eligible: i128,
+    per_rate: &BTreeMap<u16, i128>,
+) -> Vec<(u16, i64)> {
     let mut shares: Vec<(u16, i128, i128)> = per_rate
         .iter()
         .map(|(rate, amount)| {
@@ -445,30 +449,31 @@ fn spread(discount: i128, eligible: i128, per_rate: &BTreeMap<u16, i128>) -> Vec
 // The three settles
 // ---------------------------------------------------------------------------------------------
 
-/// What a session bill's settle reads for its coupon, when it names one.
+/// What a session bill's settle reads for its coupon and manual discount: the coupon only when it
+/// names a code.
 pub(super) fn load_session_bill(
     tx: &StoreTx<'_>,
-    code: &str,
+    code: Option<&str>,
     order_id: &str,
     now_ms: i64,
 ) -> Result<CouponBill, AppError> {
     Ok(CouponBill {
-        ctx: load_ctx(tx, code, now_ms)?,
+        ctx: code.map(|c| load_ctx(tx, c, now_ms)).transpose()?,
         lines: list_coupon_lines(tx, order_id)?,
         partly_paid: !list_payment_ids(tx, order_id)?.is_empty(),
     })
 }
 
-/// What a plan sale's settle reads for its coupon.
+/// What a plan sale's settle reads for its coupon and manual discount.
 pub(super) fn load_plan_bill(
     tx: &StoreTx<'_>,
-    code: &str,
+    code: Option<&str>,
     plan_id: &str,
     price_minor: i64,
     now_ms: i64,
 ) -> Result<CouponBill, AppError> {
     Ok(CouponBill {
-        ctx: load_ctx(tx, code, now_ms)?,
+        ctx: code.map(|c| load_ctx(tx, c, now_ms)).transpose()?,
         lines: vec![CouponLineRow {
             amount_minor: price_minor,
             rate_bp: 0,
@@ -481,9 +486,16 @@ pub(super) fn load_plan_bill(
 }
 
 impl CouponBill {
-    /// The coupon's discount on a bill whose total before it is `total_minor`.
-    pub(super) fn quote(&self, total_minor: i64) -> Result<Quote, AppError> {
-        quote(&self.ctx, &self.lines, total_minor, self.partly_paid)
+    pub(super) fn ctx(&self) -> Option<&CouponCtx> {
+        self.ctx.as_ref()
+    }
+
+    pub(super) fn lines(&self) -> &[CouponLineRow] {
+        &self.lines
+    }
+
+    pub(super) fn partly_paid(&self) -> bool {
+        self.partly_paid
     }
 }
 
@@ -587,37 +599,32 @@ pub fn preview(
         if order.status != "open" || order.kind != "session" {
             return Err(invalid("order_id", "this bill is not open"));
         }
-        let bill = CouponBill {
-            ctx,
-            lines: list_coupon_lines(conn, order_id)?,
-            partly_paid: !list_payment_ids(conn, order_id)?.is_empty(),
-        };
-        let q = bill.quote(order.total_minor)?;
+        let lines = list_coupon_lines(conn, order_id)?;
+        let partly_paid = !list_payment_ids(conn, order_id)?.is_empty();
+        let q = quote(&ctx, &lines, order.total_minor, partly_paid)?;
         let total = order.total_minor - q.discount_minor;
         (q, total)
     } else if let Some(lines) = &req.lines {
         let basket = super::pos_sale::load_basket(conn, lines, now_ms)?;
         super::pos_sale::check_lines(lines, &basket)?;
-        let (priced, q) = super::pos_sale::price_with_coupon(lines, &basket, Some(&ctx))?;
-        let q = q.ok_or_else(|| refuse("this coupon does not apply"))?;
+        let (priced, adjust) = super::pos_sale::price_adjusted(lines, &basket, Some(&ctx), None)?;
+        let q = adjust
+            .coupon
+            .ok_or_else(|| refuse("this coupon does not apply"))?;
         (q, priced.bill.total_minor)
     } else {
         let plan_id = req.plan_id.as_deref().unwrap_or_default();
         let plan = find_plan(conn, plan_id)?
             .filter(|p| p.active)
             .ok_or_else(|| invalid("plan_id", "no such plan"))?;
-        let bill = CouponBill {
-            ctx,
-            lines: vec![CouponLineRow {
-                amount_minor: plan.price_minor,
-                rate_bp: 0,
-                group_id: None,
-                plan_id: Some(plan.plan_id.clone()),
-                product_id: None,
-            }],
-            partly_paid: false,
-        };
-        let q = bill.quote(plan.price_minor)?;
+        let lines = [CouponLineRow {
+            amount_minor: plan.price_minor,
+            rate_bp: 0,
+            group_id: None,
+            plan_id: Some(plan.plan_id.clone()),
+            product_id: None,
+        }];
+        let q = quote(&ctx, &lines, plan.price_minor, false)?;
         let total = plan.price_minor - q.discount_minor;
         (q, total)
     };

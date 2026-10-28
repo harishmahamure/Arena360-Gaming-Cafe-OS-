@@ -578,8 +578,13 @@ pub(super) fn load_settle(
         Some(o) => count_unserved_lines(tx, &o.id)? > 0,
         None => false,
     };
-    target.coupon = match (&s.coupon, &order) {
-        (Some(code), Some(o)) => Some(super::coupon::load_session_bill(tx, code, &o.id, now_ms)?),
+    target.coupon = match (s.coupon.is_some() || s.discount.is_some(), &order) {
+        (true, Some(o)) => Some(super::coupon::load_session_bill(
+            tx,
+            s.coupon.as_deref(),
+            &o.id,
+            now_ms,
+        )?),
         _ => None,
     };
     target.order = order;
@@ -715,7 +720,7 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
         ));
     }
     let total = match &t.coupon {
-        Some(bill) => o.total_minor - bill.quote(o.total_minor)?.discount_minor,
+        Some(bill) => o.total_minor - bill.price(o.total_minor, s.discount.as_ref())?.off(),
         None => o.total_minor,
     };
     validate_payments(
@@ -934,8 +939,17 @@ pub(super) fn mutate_settle(
         before: None,
     });
     if let (Some(bill), Some(o)) = (&t.coupon, &t.order) {
-        let quote = bill.quote(o.total_minor)?;
-        super::coupon::redeem(tx, &quote, &s.order_id, true, &mut written)?;
+        let adjust = bill.price(o.total_minor, s.discount.as_ref())?;
+        if let Some(quote) = &adjust.coupon {
+            super::coupon::redeem(tx, quote, &s.order_id, true, &mut written)?;
+        }
+        if let Some(d) = &adjust.discount {
+            let by = intent
+                .elevated_by
+                .as_ref()
+                .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+            super::discount::record(tx, d, &s.order_id, by, true)?;
+        }
     }
     let player_id = t.order.as_ref().and_then(|o| o.player_id.as_deref());
     record_payer_txns(
@@ -1454,6 +1468,7 @@ pub(super) fn mutate_settle_reverted(
         }
     }
     super::coupon::release_on_revert(tx, &o.id, true, &mut written)?;
+    super::discount::release_on_revert(tx, &o.id, true)?;
     reopen_order(tx, &o.id)?;
     written.push(Written {
         key: RowKey::Orders { id: o.id.clone() },

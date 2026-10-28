@@ -46,6 +46,7 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
     }
     creating_player(tx, intent)?;
     overriding_credit(tx, intent)?;
+    manual_discount(tx, intent)?;
     overriding_stock(tx, intent)
 }
 
@@ -65,6 +66,29 @@ fn overriding_stock(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
         .as_ref()
         .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
     if rbac::staff_allows(tx, holder, arena_proto::Permission::StockOverride)? {
+        Ok(())
+    } else {
+        Err(rbac::denied())
+    }
+}
+
+/// A manual discount (Story 5.22) needs `discount.manual` on top of the settle: the actor's own,
+/// or the elevating manager's.
+fn manual_discount(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    let given = match &intent.payload {
+        IntentPayload::SessionSettle(s) => s.discount.is_some(),
+        IntentPayload::PosSale(s) => s.discount.is_some(),
+        IntentPayload::PlanSell(s) => s.discount.is_some(),
+        _ => return Ok(()),
+    };
+    if !given || intent.actor.kind == ActorKind::Owner {
+        return Ok(());
+    }
+    let holder = intent
+        .elevated_by
+        .as_ref()
+        .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+    if rbac::staff_allows(tx, holder, arena_proto::Permission::DiscountManual)? {
         Ok(())
     } else {
         Err(rbac::denied())

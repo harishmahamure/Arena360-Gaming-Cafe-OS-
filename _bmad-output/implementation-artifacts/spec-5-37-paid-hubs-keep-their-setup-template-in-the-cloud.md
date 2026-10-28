@@ -2,7 +2,7 @@
 title: 'Story 5.37: Paid Hubs keep their setup template in the cloud'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '56c725c'
 followup_review_recommended: false
@@ -91,3 +91,5 @@ Metadata is a sidecar object rather than a `gz_control` table: it needs no contr
 Unattended build: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings` and `cargo test --locked --no-fail-fast` for proto/store/cloud/tasks/hub/api/kiosk-core green except four tests that fail the same way on a clean HEAD or only flake in a shared test process: `printer::lan::tests::a_printer_that_stops_reading_times_out`, `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed`, `arena-cloud/tests/binary.rs unreachable_at_start_retries_then_exits_1_without_logging_the_token` (all three fail on HEAD without this story's changes on this Windows host) and `ui_auth::tests::lock_and_unlock_log_the_staff_ids_and_never_the_pin` (passes alone, fails when run beside other logging tests). `check:protocol`, `check:layers`, `check:strings` and `format:check` pass; `check:generated` passes once the regenerated `ErrorCode.ts`, `index.ts` and new `SetupTemplateStored.ts` are committed.
 
 Not done here: an S3/MinIO round trip of `TemplateStore` (the memory store is tested; the S3 store is the backup job's already-tested one), and a Hub status line for "last uploaded" (not in the acceptance criteria).
+
+Code review (unattended, 2026-10-28): no blocking findings. Check order, storage layout, debounce/hash-skip/back-off behaviour match the contract. fmt, clippy (-D warnings) and the story's cloud and Hub task tests pass; `backup::a_hung_run_times_out_with_its_own_code` (zero-duration timer on this Windows host) and `binary::unreachable_at_start...` fail independently of this story's files.

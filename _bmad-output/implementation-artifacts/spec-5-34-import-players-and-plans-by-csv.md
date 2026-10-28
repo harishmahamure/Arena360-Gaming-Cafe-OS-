@@ -2,7 +2,7 @@
 title: 'Story 5.34: Import players and plans by CSV'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: 'd3e2cb7'
 followup_review_recommended: false
@@ -103,3 +103,7 @@ A phone that already has a profile is *matched*, not failed: re-running a file i
 ## Verification
 
 **Commands:** `cargo fmt --check`; `cargo clippy --locked -D warnings --all-targets` and `cargo test` for `arena-proto`, `arena-store`, `arena-core`, `arena-api`; `pnpm gen:types`, `check:generated` (after commit), `check:strings`, `check:protocol`, `check:layers`, `check:hex`, `format:check`; Hub `pnpm check`; Playwright `import.spec.ts`, `settings.spec.ts`, `shell.spec.ts` in `apps/hub`.
+
+## Code Review (2026-10-28)
+
+Reviewed the implementation commit against the spec: apply paths (`import.players`, `import.plans`), permission guards, chunk-key derivation, sealed-chunk cache, migration 0061 and raw-intent refusal. No blocking findings. fmt, clippy (-D warnings) and cargo tests for proto/store/core/api, Hub `svelte-check`, `format:check` and `check:strings` all green.

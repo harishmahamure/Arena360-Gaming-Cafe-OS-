@@ -650,7 +650,8 @@ impl Ctx<'_> {
         };
         debug_assert_eq!(frame.rid, rid);
         // A chatty kiosk cannot flood the change log: 60 events a minute per device, kiosk.log
-        // and kiosk.process_blocked together. Over the limit is HUB_SLOW, which the kiosk treats
+        // and kiosk.process_blocked together (a `kiosk.scan_reported` is one small event a day, so
+        // the limit does not apply to it). Over the limit is HUB_SLOW, which the kiosk treats
         // as transient (it keeps the event queued).
         if matches!(
             submit.intent.payload.kind(),
@@ -677,7 +678,7 @@ impl Ctx<'_> {
     }
 
     /// The keys of a `settings.get` this session may read: paired only, 1–32 `kiosk.*` keys,
-    /// `branch.fulfilment`, the kiosk billing keys or the session's own `display.hc.<device_id>`.
+    /// `branch.fulfilment`, `branch.tz`, the kiosk billing keys or the session's own `display.hc.<device_id>`.
     fn check_settings_get(&self, value: Value) -> Result<Vec<String>, AppError> {
         let class = self.authed.class;
         let frame = parse_frame_value(value).map_err(|e| e.error)?;

@@ -129,6 +129,16 @@ enum Op {
         stale: bool,
         who: Index,
     },
+    /// `kiosk.scan_reported` (Story 6.4) by a registered kiosk: a good report at a random time
+    /// before now, or one with too many entries, a control character, an empty path or a future
+    /// time. It is stored only when it is valid and newer than the device's stored scan; a refusal
+    /// leaves the stored scan as it was, and there is one row per device.
+    Scan {
+        slot: u8,
+        kind: u8,
+        entries: u8,
+        back_ms: i64,
+    },
     /// `coupon.upsert` of a percent or fixed coupon (valid or not) by a staff member of a built-in
     /// role; when it saves, a cash counter sale applies its code (or an unknown one), then maybe the
     /// sale's Undo. A coupon's `used` always equals the settled orders that took it.
@@ -586,6 +596,13 @@ fn op() -> impl Strategy<Value = Op> {
                 enabled,
                 stale,
                 who,
+            }),
+        2 => (0..3u8, 0..8u8, 0..4u8, 1..=60_000i64)
+            .prop_map(|(slot, kind, entries, back_ms)| Op::Scan {
+                slot,
+                kind,
+                entries,
+                back_ms,
             }),
         2 => (
             prop_oneof![5 => 1..=10_000i64, 1 => 0..=0i64, 1 => 10_001..=10_002i64],
@@ -2227,6 +2244,92 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
                 prop_assert!(hub.change_count() > before);
+            }
+        }
+        Op::Scan {
+            slot,
+            kind,
+            entries,
+            back_ms,
+        } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let slot = usize::from(*slot);
+            let devices = hub.reader.rows(Table::Devices).unwrap();
+            let device = match devices.get(slot) {
+                Some(row) => text(row, "device_id"),
+                None => {
+                    let reg = arena_proto::DeviceRegister::new(
+                        arena_proto::ClientClass::Paired,
+                        "PC",
+                        password_hash(),
+                    );
+                    hub.submit_new(hub.intent(IntentPayload::DeviceRegister(reg), None))
+                        .unwrap()
+                        .changes[0]
+                        .row_id
+                        .clone()
+                }
+            };
+            let now = hub.clock_now();
+            let stored_of = |hub: &Hub| {
+                hub.reader
+                    .rows(Table::KioskScans)
+                    .unwrap()
+                    .into_iter()
+                    .find(|r| text(r, "device_id") == device)
+                    .map(|r| (int(&r, "scanned_at"), int(&r, "rev")))
+            };
+            let stored = stored_of(hub);
+            let count = match kind {
+                4 => arena_proto::MAX_SCAN_ENTRIES + 1,
+                _ => usize::from(*entries) * 3,
+            };
+            let mut report = arena_proto::KioskScanReported {
+                scanned_at: if *kind == 3 { now + 1 } else { now - back_ms },
+                entries: (0..count)
+                    .map(|i| arena_proto::ScanEntry {
+                        path: format!(r"C:\Games\g{i}.exe"),
+                        file_name: format!("g{i}.exe"),
+                        product_name: "Game".into(),
+                        publisher: "Maker".into(),
+                        launcher: "none".into(),
+                    })
+                    .collect(),
+                launchers: Vec::new(),
+                skipped: u32::from(*entries),
+            };
+            if let Some(first) = report.entries.first_mut() {
+                match kind {
+                    5 => first.publisher = "bell\u{7}".into(),
+                    6 => first.path = String::new(),
+                    _ => {}
+                }
+            }
+            let well_formed = !(matches!(kind, 3 | 4) || matches!(kind, 5 | 6) && count > 0);
+            let newer = stored.is_none_or(|(at, _)| report.scanned_at > at);
+            let mut intent = hub.intent(IntentPayload::KioskScanReported(report), None);
+            intent.actor = Actor {
+                kind: ActorKind::Device,
+                id: device.clone(),
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            let after = stored_of(hub);
+            if well_formed && newer {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 1);
+                prop_assert_eq!(after.map(|a| a.1), Some(stored.map_or(1, |s| s.1 + 1)));
+            } else {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(after, stored, "a refused report leaves the stored scan");
             }
         }
         Op::Coupon {
@@ -5734,6 +5837,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_invoices_hold(&hub)?;
                 assert_coupons_hold(&hub)?;
                 assert_library_holds(&hub)?;
+                assert_scans_hold(&hub)?;
                 assert_discounts_hold(&hub)?;
                 assert_voids_hold(&hub)?;
                 assert_refunds_hold(&hub)?;
@@ -5747,6 +5851,28 @@ fn apply_invariants_hold_over_random_intent_sequences() {
             assert_replay_reproduces(&hub)
         })
         .unwrap();
+}
+
+/// The scan invariants (Story 6.4): at most one row per device, each for a registered device.
+fn assert_scans_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let devices: Vec<String> = hub
+        .reader
+        .rows(Table::Devices)
+        .unwrap()
+        .iter()
+        .map(|r| text(r, "device_id"))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for row in hub.reader.rows(Table::KioskScans).unwrap() {
+        let id = text(&row, "device_id");
+        prop_assert!(devices.contains(&id));
+        prop_assert!(seen.insert(id));
+        prop_assert!(int(&row, "scanned_at") > 0 && int(&row, "rev") >= 1);
+        let entries: Vec<arena_proto::ScanEntry> =
+            serde_json::from_str(&text(&row, "entries")).unwrap();
+        prop_assert!(entries.len() <= arena_proto::MAX_SCAN_ENTRIES);
+    }
+    Ok(())
 }
 
 /// The library invariants (Story 6.3): `kiosk.library` lists exactly the enabled live entries

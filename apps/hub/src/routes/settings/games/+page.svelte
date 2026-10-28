@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Button, InlinePin, TextField, t } from "@arena/ui";
-  import type { IntentPayload, LibraryEntryView } from "@arena/ui/generated";
+  import { Button, InlinePin, TextField, formatDateTime, t } from "@arena/ui";
+  import type { DeviceScanView, IntentPayload, LibraryEntryView } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, tick, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
@@ -13,6 +13,7 @@
     submitIntent,
   } from "../../../lib/auth";
   import { library } from "../../../lib/catalog.svelte";
+  import { branchLocale } from "../../../lib/locale.svelte";
   import {
     KINDS,
     KIND_LABELS,
@@ -20,6 +21,7 @@
     LAUNCHER_LABELS,
     checkForm,
     loadLibrary,
+    loadScans,
     parseTags,
     tagsText,
     type EntryForm,
@@ -57,6 +59,8 @@
   let entries: LibraryEntryView[] = $state([]);
   let loading = $state(true);
   let loadFailed = $state(false);
+  let scans: DeviceScanView[] = $state([]);
+  let scansFailed = $state(false);
   let editing: LibraryEntryView | null = $state(null);
   let form: EntryForm = $state({ ...BLANK });
   let errors: Record<string, MessageKey> = $state({});
@@ -90,10 +94,28 @@
     if (list.kind === "ok") entries = list.entries;
   }
 
-  onMount(() => void load());
-  // The Hub pushes `library.changed` when anyone writes the library: reload the list.
+  let scanLoads = 0;
+  async function loadScanList() {
+    const mine = ++scanLoads;
+    const list = await loadScans();
+    if (mine !== scanLoads) return;
+    if (list.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    scansFailed = list.kind !== "ok";
+    if (list.kind === "ok") scans = list.devices;
+  }
+
+  onMount(() => {
+    void load();
+    void loadScanList();
+  });
+  // The Hub pushes `library.changed` when anyone writes the library or a PC reports a scan:
+  // reload both lists.
   $effect(() => {
-    if (library.version) untrack(() => void load());
+    if (library.version)
+      untrack(() => {
+        void load();
+        void loadScanList();
+      });
   });
 
   function reset(entry: LibraryEntryView | null = null) {
@@ -217,6 +239,13 @@
 
   const launcherText = (launcher: string) =>
     t(LAUNCHER_LABELS[launcher as keyof typeof LAUNCHER_LABELS] ?? "hub.games.launcher.none");
+  const scanTime = (at: number) => formatDateTime(at, branchLocale.current?.tz);
+  const scanLaunchers = (scan: DeviceScanView) =>
+    scan.launchers && scan.launchers.length > 0
+      ? t("hub.games.scans.launchers", {
+          names: scan.launchers.map((l) => launcherText(l.launcher)).join(", "),
+        })
+      : t("hub.games.scans.no_launchers");
   const kindText = (kind: string) =>
     t(KIND_LABELS[kind as keyof typeof KIND_LABELS] ?? "hub.games.kind.game");
 </script>
@@ -362,6 +391,37 @@
               onclick={() => remove(e)}>{t("hub.games.delete", { name: e.name })}</button
             >
           </div>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  <h2 class="type-hub-title">{t("hub.games.scans.title")}</h2>
+  <p class="intro type-hub-body">{t("hub.games.scans.intro")}</p>
+  {#if scansFailed}
+    <p class="type-hub-body" role="alert">{t("hub.games.scans.load_failed")}</p>
+    <Button label="common.retry" variant="secondary" onclick={() => void loadScanList()} />
+  {:else if scans.length === 0}
+    <p class="type-hub-body" data-testid="scan-empty">{t("hub.games.scans.empty")}</p>
+  {:else}
+    <ul class="rows" data-testid="scan-list">
+      {#each scans as s (s.device_id)}
+        <li class="row" data-testid="scan-row" data-device-id={s.device_id}>
+          <span class="type-hub-title" data-testid="scan-name">{s.name}</span>
+          {#if s.scanned_at === null}
+            <span class="type-hub-label" data-testid="scan-last">{t("hub.games.scans.never")}</span>
+          {:else}
+            <span class="type-hub-label tabular-nums" data-testid="scan-last"
+              >{t("hub.games.scans.last", { date: scanTime(s.scanned_at) })}</span
+            >
+            <span class="type-hub-label" data-testid="scan-count"
+              >{t("hub.games.scans.found", { count: s.entry_count ?? 0 })}</span
+            >
+            <span class="type-hub-label" data-testid="scan-launchers">{scanLaunchers(s)}</span>
+            {#if (s.skipped ?? 0) > 0}<span class="type-hub-label" data-testid="scan-skipped"
+                >{t("hub.games.scans.skipped", { count: s.skipped ?? 0 })}</span
+              >{/if}
+          {/if}
         </li>
       {/each}
     </ul>

@@ -3262,6 +3262,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/settings", get(settings))
         .route("/ui/media-cache", get(media_cache))
         .route("/ui/library", get(crate::ui_library::list))
+        .route("/ui/library/scans", get(crate::ui_library::scans))
         .route("/ui/staff", get(staff_list))
         .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))
@@ -3399,7 +3400,7 @@ pub(crate) mod tests {
         assert_eq!(status_of(ErrorCode::StepNotReady), StatusCode::CONFLICT);
     }
 
-    const T0: i64 = 1_800_000_000_000;
+    pub(crate) const T0: i64 = 1_800_000_000_000;
 
     #[test]
     fn lockout_pauses_after_five_failures_and_resets_on_success() {

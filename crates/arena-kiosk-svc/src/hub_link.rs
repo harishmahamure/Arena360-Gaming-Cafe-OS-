@@ -17,6 +17,8 @@
 //!   (`display.hc.<device_id>`) is read and applied the same way ([`crate::theme`]).
 //! - **Library:** the branch game and app library (`kiosk.library`, Story 6.3) is read and applied
 //!   the same way and cached for cold starts ([`crate::library`]).
+//! - **Branch time zone:** `branch.tz` is read and applied the same way and cached; the daily
+//!   scan ([`crate::scan::schedule`]) runs at 05:00 in it.
 //! - **Admin exit:** the live client is shared with [`crate::admin_exit`] (online PIN checks);
 //!   a pushed `verifier` is stored when newer, and `admin_unlock` grants a remote exit and is
 //!   acknowledged.
@@ -195,6 +197,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
         }
         crate::operating::seed(&q, &mut revs);
         crate::library::seed(&q, &mut revs);
+        crate::scan::schedule::seed(&q, &mut revs);
         revs
     };
     tokio::select! {
@@ -213,6 +216,10 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
     }
     tokio::select! {
         () = fetch_library(ctx, client, &mut revs) => {}
+        _ = stop.changed() => return Ended::Shutdown,
+    }
+    tokio::select! {
+        () = fetch_branch_tz(ctx, client, &mut revs) => {}
         _ = stop.changed() => return Ended::Shutdown,
     }
     // Set once when a replay stops; new events do not push it back.
@@ -258,6 +265,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                         apply_settings(ctx, &values.values, &mut revs);
                         crate::operating::apply(ctx, &values.values, &mut revs);
                         crate::library::apply(ctx, &values.values, &mut revs);
+                        crate::scan::schedule::apply(ctx, &values.values, &mut revs);
                         if let Some(id) = &device_id {
                             crate::theme::apply(ctx, id, &values.values, &mut revs);
                         }
@@ -396,6 +404,25 @@ async fn fetch_library(ctx: &Ctx, client: &HubClient, revs: &mut AppliedRevs) {
         Err(_) => tracing::warn!(
             timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
             "settings.get timed out; keeping the cached game library"
+        ),
+    }
+}
+
+/// Asks the Hub for the branch time zone (the daily scan runs at 05:00 in it) and caches it. A
+/// failure, or no answer within [`SETTINGS_TIMEOUT`], keeps the cached zone (unknown means UTC).
+async fn fetch_branch_tz(ctx: &Ctx, client: &HubClient, revs: &mut AppliedRevs) {
+    let body = serde_json::json!({ "keys": crate::scan::schedule::KEYS });
+    match tokio::time::timeout(SETTINGS_TIMEOUT, client.request("settings.get", body)).await {
+        Ok(Ok(frame)) => match frame.body {
+            FrameBody::SettingsValues(v) => crate::scan::schedule::apply(ctx, &v.values, revs),
+            other => tracing::warn!(kind = other.kind(), "unexpected reply to settings.get"),
+        },
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "settings.get failed; keeping the cached branch time zone")
+        }
+        Err(_) => tracing::warn!(
+            timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
+            "settings.get timed out; keeping the cached branch time zone"
         ),
     }
 }

@@ -6,7 +6,7 @@ use arena_proto::{
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use crate::ui_auth::tests::{Hub, call, hub, intent_as, token_for};
+use crate::ui_auth::tests::{Hub, T0, call, hub, intent_as, token_for};
 
 fn who() -> Actor {
     Actor {
@@ -274,4 +274,104 @@ async fn a_linked_entry_takes_the_catalogues_fields_and_an_unknown_id_is_refused
     again.category = "Shooter".into();
     let (status, done) = post(&hub, &manager, body(again, Some(2), None)).await;
     assert_eq!(status, StatusCode::OK, "{done}");
+}
+
+// ---- Story 6.4: `GET /ui/library/scans` ----
+
+async fn register_pc(hub: &Hub, label: &str) -> String {
+    hub.writer
+        .submit_intent(intent_as(
+            Actor {
+                kind: ActorKind::Owner,
+                id: "owner".into(),
+            },
+            IntentPayload::DeviceRegister(arena_proto::DeviceRegister::new(
+                arena_proto::ClientClass::Paired,
+                label,
+                arena_core::devices::hash_token_secret("s").unwrap(),
+            )),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone()
+}
+
+async fn report_scan(hub: &Hub, device_id: &str, at: i64, paths: &[&str]) {
+    let i = intent_as(
+        Actor {
+            kind: ActorKind::Device,
+            id: device_id.into(),
+        },
+        IntentPayload::KioskScanReported(arena_proto::KioskScanReported {
+            scanned_at: at,
+            entries: paths
+                .iter()
+                .map(|p| arena_proto::ScanEntry {
+                    path: (*p).into(),
+                    file_name: "g.exe".into(),
+                    product_name: String::new(),
+                    publisher: String::new(),
+                    launcher: "none".into(),
+                })
+                .collect(),
+            launchers: vec![arena_proto::ScanLauncher {
+                launcher: "steam".into(),
+                path: r"C:\Program Files (x86)\Steam".into(),
+            }],
+            skipped: 1,
+        }),
+        None,
+    );
+    hub.writer.submit_intent(i).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_scan_list_shows_every_paired_pc_and_null_for_one_never_scanned() {
+    let hub = hub().await;
+    let (status, _) = call(&hub, "GET", "/ui/library/scans", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let (status, v) = call(&hub, "GET", "/ui/library/scans", Some(&counter), None).await;
+    assert_eq!((status, &v), (StatusCode::OK, &json!({"devices": []})));
+
+    let b = register_pc(&hub, "PC-B").await;
+    let a = register_pc(&hub, "PC-A").await;
+    report_scan(
+        &hub,
+        &a,
+        T0 - 2_000,
+        &[r"C:\Games\1.exe", r"C:\Games\2.exe"],
+    )
+    .await;
+    let (status, v) = call(&hub, "GET", "/ui/library/scans", Some(&counter), None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let devices = v["devices"].as_array().unwrap();
+    assert_eq!(devices.len(), 2);
+    assert_eq!(
+        (
+            devices[0]["device_id"].as_str(),
+            devices[0]["name"].as_str()
+        ),
+        (Some(a.as_str()), Some("PC-A"))
+    );
+    assert_eq!(devices[0]["scanned_at"], T0 - 2_000);
+    assert_eq!(devices[0]["entry_count"], 2);
+    assert_eq!(devices[0]["skipped"], 1);
+    assert_eq!(
+        devices[0]["launchers"],
+        json!([{"launcher": "steam", "path": r"C:\Program Files (x86)\Steam"}])
+    );
+    assert_eq!(devices[1]["device_id"], b.as_str());
+    for field in ["scanned_at", "entry_count", "skipped", "launchers"] {
+        assert!(devices[1][field].is_null(), "{field}");
+    }
+
+    // A newer report replaces the PC's row.
+    report_scan(&hub, &a, T0 - 1_000, &[r"C:\Games\3.exe"]).await;
+    let (_, v) = call(&hub, "GET", "/ui/library/scans", Some(&counter), None).await;
+    assert_eq!(v["devices"][0]["scanned_at"], T0 - 1_000);
+    assert_eq!(v["devices"][0]["entry_count"], 1);
 }

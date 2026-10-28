@@ -3,7 +3,7 @@
 
 use arena_proto::{
     Actor, ActorKind, Intent, IntentKind, IntentPayload, KioskLog, KioskLogLevel,
-    KioskProcessBlocked,
+    KioskProcessBlocked, KioskScanReported,
 };
 
 /// A `kiosk.log` intent from `device_id`, issued at `now_ms`. (The Hub replaces the actor with
@@ -32,6 +32,25 @@ pub fn kiosk_log(
             code: code.to_owned(),
             detail: detail.to_owned(),
         }),
+    }
+}
+
+/// A `kiosk.scan_reported` intent from `device_id`, minted at `now_ms` (when the scan finished),
+/// so the offline replay delivers it exactly once.
+pub fn kiosk_scan_reported(device_id: &str, now_ms: i64, report: KioskScanReported) -> Intent {
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::KioskScanReported,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: now_ms,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::Device,
+            id: device_id.to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::KioskScanReported(report),
     }
 }
 

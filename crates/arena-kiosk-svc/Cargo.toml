@@ -26,6 +26,8 @@ ulid.workspace = true
 argon2.workspace = true
 mdns-sd.workspace = true
 if-addrs.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

@@ -76,6 +76,9 @@ pub async fn run_until_with(
         )),
         enforce,
     );
+    // The installed-software scan (Story 6.4) looks at a Windows PC only.
+    #[cfg(windows)]
+    runtime.scan(std::sync::Arc::new(crate::scan::windows::WinHost::new()));
     setup(&mut runtime);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "kiosk service started");
     shutdown.await;

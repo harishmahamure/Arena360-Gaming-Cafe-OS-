@@ -313,6 +313,8 @@ dependencies = [
  "arena-store",
  "arena-tasks",
  "argon2",
+ "chrono",
+ "chrono-tz",
  "if-addrs",
  "mdns-sd",
  "rusqlite",

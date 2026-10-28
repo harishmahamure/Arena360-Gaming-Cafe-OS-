@@ -11,6 +11,7 @@ use crate::pc_command::{DevicePower, DeviceScreen};
 use crate::permission::{Permission, Requirement};
 use crate::printer::PrinterStatusSet;
 use crate::process::KioskProcessBlocked;
+use crate::scan::KioskScanReported;
 use crate::scope::ClientClass;
 use crate::test_session::{DeviceTestSessionCompleted, DeviceTestSessionStart};
 
@@ -77,6 +78,10 @@ pub enum IntentKind {
     /// offline and replayed in order like `kiosk.log`.
     #[serde(rename = "kiosk.process_blocked")]
     KioskProcessBlocked,
+    /// The kiosk scanned its PC for installed games and launchers (device actor); the Hub keeps
+    /// the latest report per device. Queued offline and replayed like `kiosk.log`.
+    #[serde(rename = "kiosk.scan_reported")]
+    KioskScanReported,
     /// A kiosk granted an admin exit after a manager's PIN (device actor, elevated by the
     /// manager: checked by the Hub or, offline, against the cached verifier).
     #[serde(rename = "device.admin_exit")]
@@ -315,7 +320,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 101] = [
+    pub const ALL: [IntentKind; 102] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -328,6 +333,7 @@ impl IntentKind {
         Self::AuditReadGranted,
         Self::KioskLog,
         Self::KioskProcessBlocked,
+        Self::KioskScanReported,
         Self::DeviceAdminExit,
         Self::DeviceAdminRelock,
         Self::DeviceAdminUnlock,
@@ -434,6 +440,7 @@ impl IntentKind {
             Self::AuditReadGranted => "audit.read_granted",
             Self::KioskLog => "kiosk.log",
             Self::KioskProcessBlocked => "kiosk.process_blocked",
+            Self::KioskScanReported => "kiosk.scan_reported",
             Self::DeviceAdminExit => "device.admin_exit",
             Self::DeviceAdminRelock => "device.admin_relock",
             Self::DeviceAdminUnlock => "device.admin_unlock",
@@ -567,7 +574,9 @@ impl IntentKind {
             | Self::StaffSetCredentials
             | Self::StaffDeactivate => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
-            Self::KioskLog | Self::KioskProcessBlocked => IntentCategory::Kiosk,
+            Self::KioskLog | Self::KioskProcessBlocked | Self::KioskScanReported => {
+                IntentCategory::Kiosk
+            }
             Self::ProductUpsert
             | Self::ProductDelete
             | Self::PlanUpsert
@@ -676,9 +685,10 @@ impl IntentKind {
             }
             Self::ConsolePlanRequested => Requirement::Phone,
             Self::AuditReadGranted => Requirement::System,
-            Self::KioskLog | Self::KioskProcessBlocked | Self::DeviceTestSessionCompleted => {
-                Requirement::Device
-            }
+            Self::KioskLog
+            | Self::KioskProcessBlocked
+            | Self::KioskScanReported
+            | Self::DeviceTestSessionCompleted => Requirement::Device,
             // The kiosk itself acts; the approving manager must hold `device.remote`
             // ([`elevator_permission`](Self::elevator_permission)).
             Self::DeviceAdminExit | Self::DeviceAdminRelock => Requirement::Device,
@@ -783,6 +793,7 @@ impl IntentKind {
             | Self::AuditReadGranted
             | Self::KioskLog
             | Self::KioskProcessBlocked
+            | Self::KioskScanReported
             | Self::DeviceAdminExit
             | Self::DeviceAdminRelock
             | Self::DeviceAdminUnlock
@@ -1315,6 +1326,8 @@ pub enum IntentPayload {
     KioskLog(KioskLog),
     #[serde(rename = "kiosk.process_blocked")]
     KioskProcessBlocked(KioskProcessBlocked),
+    #[serde(rename = "kiosk.scan_reported")]
+    KioskScanReported(KioskScanReported),
     #[serde(rename = "device.admin_exit")]
     DeviceAdminExit(DeviceAdminExit),
     #[serde(rename = "device.admin_relock")]
@@ -1510,6 +1523,7 @@ impl IntentPayload {
             Self::AuditReadGranted(_) => IntentKind::AuditReadGranted,
             Self::KioskLog(_) => IntentKind::KioskLog,
             Self::KioskProcessBlocked(_) => IntentKind::KioskProcessBlocked,
+            Self::KioskScanReported(_) => IntentKind::KioskScanReported,
             Self::DeviceAdminExit(_) => IntentKind::DeviceAdminExit,
             Self::DeviceAdminRelock(_) => IntentKind::DeviceAdminRelock,
             Self::DeviceAdminUnlock(_) => IntentKind::DeviceAdminUnlock,
@@ -1782,6 +1796,36 @@ mod tests {
     }
 
     #[test]
+    fn scan_payload_round_trips() {
+        let report = serde_json::json!({
+            "kind": "kiosk.scan_reported", "scanned_at": 5, "skipped": 0,
+            "entries": [{"path": "C:/a.exe", "file_name": "a.exe", "launcher": "none"}],
+            "launchers": [{"launcher": "steam", "path": "C:/Steam"}]
+        });
+        let p: IntentPayload = serde_json::from_value(report.clone()).unwrap();
+        assert_eq!(p.kind(), IntentKind::KioskScanReported);
+        assert_eq!(
+            IntentKind::KioskScanReported.as_str(),
+            "kiosk.scan_reported"
+        );
+        assert_eq!(
+            IntentKind::KioskScanReported.category(),
+            IntentCategory::Kiosk
+        );
+        assert!(IntentKind::KioskScanReported.reasons().is_none());
+        let mut back = serde_json::to_value(&p).unwrap();
+        back["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("product_name");
+        back["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("publisher");
+        assert_eq!(back, report);
+    }
+
+    #[test]
     fn maintenance_payload_round_trips() {
         let on: IntentPayload = serde_json::from_value(
             serde_json::json!({"kind": "device.maintenance", "device_id": "D", "on": true, "note": "fan"}),
@@ -1927,9 +1971,10 @@ mod tests {
                     Requirement::Perm(Permission::CreditCollect)
                 }
                 "console.plan_requested" => Requirement::Phone,
-                "kiosk.log" | "kiosk.process_blocked" | "device.test_session.completed" => {
-                    Requirement::Device
-                }
+                "kiosk.log"
+                | "kiosk.process_blocked"
+                | "kiosk.scan_reported"
+                | "device.test_session.completed" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),
             };
             assert_eq!(kind.requirement(), want, "{}", kind.as_str());

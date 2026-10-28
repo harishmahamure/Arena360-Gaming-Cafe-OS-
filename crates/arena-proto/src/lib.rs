@@ -45,6 +45,7 @@ mod receipt;
 mod refund;
 mod report;
 mod report_export;
+mod scan;
 mod scope;
 mod session;
 mod setup_devices;
@@ -285,6 +286,11 @@ pub use report::{
     ZVoid, ZWaste,
 };
 pub use report_export::{EXPORT_REPORTS, ExportFormat, ReportExportRequest, ReportExported};
+pub use scan::{
+    DeviceScanView, KEY_BRANCH_TZ, KioskScanReported, LibraryScansView, MAX_SCAN_ENTRIES,
+    MAX_SCAN_FILE_NAME_CHARS, MAX_SCAN_PATH_CHARS, MAX_SCAN_TEXT_CHARS, SCAN_ENTRY_LAUNCHERS,
+    SCAN_LAUNCHERS, ScanEntry, ScanLauncher,
+};
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
     BillItem, BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,

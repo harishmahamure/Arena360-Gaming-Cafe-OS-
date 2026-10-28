@@ -1,6 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { HubSnapshot, LibraryEntryView, SessionStaff } from "@arena/ui/generated";
+import type {
+  DeviceScanView,
+  HubSnapshot,
+  LibraryEntryView,
+  SessionStaff,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -28,6 +33,10 @@ const STAFF: Record<string, SessionStaff> = {
 type Payload = Record<string, unknown> & { kind: string };
 type Hub = {
   entries: LibraryEntryView[];
+  /** Every paired PC with its last scan (Story 6.4). */
+  scans: DeviceScanView[];
+  /** The scan list answers 500 while set. */
+  scansDown?: boolean;
   intents: { payload: Payload; base_rev?: number; ticket?: string }[];
   elevations: { items: { intent_kind: string }[]; pin: string }[];
   /** The field a save is refused on (`VALIDATION_FAILED`), if any. */
@@ -37,7 +46,14 @@ type Hub = {
   push: string[];
 };
 
-const newHub = (): Hub => ({ entries: [], intents: [], elevations: [], stale: false, push: [] });
+const newHub = (): Hub => ({
+  entries: [],
+  scans: [],
+  intents: [],
+  elevations: [],
+  stale: false,
+  push: [],
+});
 
 const entry = (over: Partial<LibraryEntryView> = {}): LibraryEntryView => ({
   id: "L1",
@@ -99,6 +115,10 @@ async function open(page: Page, hub: Hub, token = "manager-token") {
         return json(route, 200, STAFF[auth]);
       case "/ui/library":
         return json(route, 200, { entries: hub.entries });
+      case "/ui/library/scans":
+        return hub.scansDown
+          ? json(route, 500, { code: "INTERNAL", message: "no" })
+          : json(route, 200, { devices: hub.scans });
       case "/ui/events": {
         const pushed = hub.push.splice(0).map((e) => `event: ${e}\ndata: {}\n\n`);
         return route.fulfill({
@@ -397,4 +417,103 @@ test("a Counter's save asks a manager's PIN in place and is applied with the tic
     pin: "2222",
   });
   expect(hub.intents[0].ticket).toBe("T1");
+});
+
+// ---- Story 6.4: each PC's last scan ----
+
+const scanned = (over: Partial<DeviceScanView> = {}): DeviceScanView => ({
+  device_id: "D1",
+  name: "PC-01",
+  scanned_at: Date.UTC(2026, 9, 29, 23, 35),
+  entry_count: 42,
+  skipped: 0,
+  launchers: [
+    { launcher: "steam", path: "C:\\Program Files (x86)\\Steam" },
+    { launcher: "riot", path: "C:\\Riot Games\\Riot Client" },
+  ],
+  ...over,
+});
+
+/** The branch-time text the page shows for `at` (the page formats in the branch zone). */
+const branchTime = (at: number) =>
+  new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Kolkata",
+  }).format(at);
+
+test("Settings > Games shows each PC's last scan time, what it found and never-scanned PCs", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.scans = [
+    scanned(),
+    scanned({
+      device_id: "D2",
+      name: "PC-02",
+      scanned_at: null,
+      entry_count: null,
+      skipped: null,
+      launchers: null,
+    }),
+    scanned({
+      device_id: "D3",
+      name: "PC-03",
+      entry_count: 0,
+      skipped: 4,
+      launchers: [],
+    }),
+  ];
+  await open(page, hub);
+  await expect(page.getByTestId("scan-row")).toHaveCount(3);
+  const first = page.getByTestId("scan-row").nth(0);
+  await expect(first.getByTestId("scan-name")).toHaveText("PC-01");
+  await expect(first.getByTestId("scan-last")).toHaveText(
+    en["hub.games.scans.last"].replace("{date}", branchTime(Date.UTC(2026, 9, 29, 23, 35))),
+  );
+  await expect(first.getByTestId("scan-count")).toHaveText(
+    en["hub.games.scans.found"].replace("{count}", "42"),
+  );
+  await expect(first.getByTestId("scan-launchers")).toHaveText(
+    en["hub.games.scans.launchers"].replace(
+      "{names}",
+      `${en["hub.games.launcher.steam"]}, ${en["hub.games.launcher.riot"]}`,
+    ),
+  );
+  await expect(first.getByTestId("scan-skipped")).toHaveCount(0);
+  const never = page.getByTestId("scan-row").nth(1);
+  await expect(never.getByTestId("scan-last")).toHaveText(en["hub.games.scans.never"]);
+  await expect(never.getByTestId("scan-count")).toHaveCount(0);
+  const last = page.getByTestId("scan-row").nth(2);
+  await expect(last.getByTestId("scan-launchers")).toHaveText(en["hub.games.scans.no_launchers"]);
+  await expect(last.getByTestId("scan-skipped")).toHaveText(
+    en["hub.games.scans.skipped"].replace("{count}", "4"),
+  );
+  await expectNoSeriousAxe(page);
+});
+
+test("the scan list reloads when the Hub pushes library.changed after a PC reports", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.scans = [scanned({ scanned_at: null, entry_count: null, skipped: null, launchers: null })];
+  await open(page, hub);
+  await expect(page.getByTestId("scan-last")).toHaveText(en["hub.games.scans.never"]);
+  hub.scans = [scanned()];
+  hub.push.push("library.changed");
+  await expect(page.getByTestId("scan-count")).toHaveText(
+    en["hub.games.scans.found"].replace("{count}", "42"),
+    { timeout: 10_000 },
+  );
+});
+
+test("no paired PCs, and a scan list that cannot be loaded, say so", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  await expect(page.getByTestId("scan-empty")).toHaveText(en["hub.games.scans.empty"]);
+  const down = newHub();
+  down.scansDown = true;
+  await page.unrouteAll();
+  await open(page, down);
+  await expect(page.getByText(en["hub.games.scans.load_failed"])).toBeVisible();
 });

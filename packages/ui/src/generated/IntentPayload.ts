@@ -40,6 +40,7 @@ import type { ImportSetup } from "./ImportSetup";
 import type { InvoiceIssue } from "./InvoiceIssue";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
+import type { KioskScanReported } from "./KioskScanReported";
 import type { LibraryDelete } from "./LibraryDelete";
 import type { LibraryUpsert } from "./LibraryUpsert";
 import type { LicenceApply } from "./LicenceApply";
@@ -115,6 +116,7 @@ export type IntentPayload =
   | ({ kind: "audit.read_granted" } & AuditReadGranted)
   | ({ kind: "kiosk.log" } & KioskLog)
   | ({ kind: "kiosk.process_blocked" } & KioskProcessBlocked)
+  | ({ kind: "kiosk.scan_reported" } & KioskScanReported)
   | ({ kind: "device.admin_exit" } & DeviceAdminExit)
   | ({ kind: "device.admin_relock" } & DeviceAdminRelock)
   | ({ kind: "device.admin_unlock" } & DeviceAdminUnlock)

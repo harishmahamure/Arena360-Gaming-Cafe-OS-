@@ -48,6 +48,7 @@ mod import_players;
 mod import_setup;
 mod invoice_issue;
 mod kiosk_log;
+mod kiosk_scan;
 mod library;
 mod licence;
 mod maintenance;
@@ -172,6 +173,8 @@ pub(crate) enum Target {
     /// `audit.read_granted`, `kiosk.log`, `kiosk.process_blocked`: the branch, if it has been
     /// bootstrapped.
     Branch(Option<String>),
+    /// `kiosk.scan_reported`: the branch and the device's stored scan.
+    KioskScan(Box<kiosk_scan::ScanTarget>),
     /// `device.admin_exit`: the branch and whether the exit id is taken.
     AdminExit(Box<admin_exit::ExitTarget>),
     /// `device.admin_relock`: the exit row, if it exists.
@@ -256,6 +259,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::LicenceApply(_) => kiosk_log::load(tx)?,
         P::AdImpressionRecorded(_) | P::AdRequestRecorded(_) => ad::load(tx)?,
         P::KioskLog(_) | P::KioskProcessBlocked(_) => kiosk_log::load(tx)?,
+        P::KioskScanReported(_) => kiosk_scan::load(tx, intent)?,
         P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
         P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,
         P::DeviceAdminUnlock(p) => admin_exit::load_unlock(tx, p)?,

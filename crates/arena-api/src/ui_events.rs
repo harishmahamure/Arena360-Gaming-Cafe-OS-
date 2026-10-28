@@ -512,7 +512,11 @@ impl HubTask {
                             .unwrap_or(false);
                             self.send("groups.changed", format!(r#"{{"by_owner":{owner}}}"#), false);
                         }
-                        if applied.changes.iter().any(|c| c.tbl == "library_entries") {
+                        if applied
+                            .changes
+                            .iter()
+                            .any(|c| c.tbl == "library_entries" || c.tbl == "kiosk_scans")
+                        {
                             self.send("library.changed", "{}".into(), false);
                         }
                         let products = crate::lan::registry::product_ids(&applied);
@@ -1601,6 +1605,57 @@ mod tests {
             .submit_intent(intent_as(owner, entry, None))
             .await
             .unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            if event == "library.changed" {
+                assert_eq!(data, serde_json::json!({}));
+                break;
+            }
+            seen.push(event);
+            assert!(seen.len() < 6, "{seen:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_kiosk_scan_pushes_library_changed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let device = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "owner".into(),
+                },
+                IntentPayload::DeviceRegister(arena_proto::DeviceRegister::new(
+                    arena_proto::ClientClass::Paired,
+                    "PC-01",
+                    arena_core::devices::hash_token_secret("s").unwrap(),
+                )),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let scan = intent_as(
+            Actor {
+                kind: ActorKind::Device,
+                id: device,
+            },
+            IntentPayload::KioskScanReported(arena_proto::KioskScanReported {
+                scanned_at: 5,
+                entries: Vec::new(),
+                launchers: Vec::new(),
+                skipped: 0,
+            }),
+            None,
+        );
+        hub.writer.submit_intent(scan).await.unwrap();
         let mut seen = Vec::new();
         loop {
             let (event, data) = next_event(&mut frames).await.unwrap();

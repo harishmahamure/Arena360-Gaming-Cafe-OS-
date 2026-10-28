@@ -10,6 +10,7 @@ use crate::billing::KIOSK_BILLING_KEYS;
 use crate::display::{HcTarget, parse_hc_key};
 use crate::intent::IntentKind;
 use crate::operating::KEY_FULFILMENT;
+use crate::scan::KEY_BRANCH_TZ;
 
 /// The kind of client on the other end of a LAN session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -51,6 +52,7 @@ impl ClientClass {
 const PAIRED_SCOPE: &[IntentKind] = &[
     IntentKind::KioskLog,
     IntentKind::KioskProcessBlocked,
+    IntentKind::KioskScanReported,
     IntentKind::DeviceAdminExit,
     IntentKind::DeviceAdminRelock,
     IntentKind::DeviceTestSessionCompleted,
@@ -78,7 +80,7 @@ pub fn in_scope(class: ClientClass, kind: IntentKind) -> bool {
 pub const PAIRED_SETTINGS_PREFIX: &str = "kiosk.";
 
 /// Whether a session of `class`, signed in as `device_id`, may read the branch setting `key`:
-/// only paired apps, and only `kiosk.*` keys, `branch.fulfilment`, the kiosk billing keys and the device's own
+/// only paired apps, and only `kiosk.*` keys, `branch.fulfilment`, `branch.tz`, the kiosk billing keys and the device's own
 /// `display.hc.<device_id>` (never another device's, never the Hub's).
 pub fn may_read_setting(class: ClientClass, key: &str, device_id: Option<&str>) -> bool {
     if class != ClientClass::Paired {
@@ -86,6 +88,7 @@ pub fn may_read_setting(class: ClientClass, key: &str, device_id: Option<&str>) 
     }
     if key.starts_with(PAIRED_SETTINGS_PREFIX)
         || key == KEY_FULFILMENT
+        || key == KEY_BRANCH_TZ
         || KIOSK_BILLING_KEYS.contains(&key)
     {
         return true;
@@ -138,6 +141,7 @@ mod tests {
             &[
                 IntentKind::KioskLog,
                 IntentKind::KioskProcessBlocked,
+                IntentKind::KioskScanReported,
                 IntentKind::DeviceAdminExit,
                 IntentKind::DeviceAdminRelock,
                 IntentKind::DeviceTestSessionCompleted
@@ -164,6 +168,8 @@ mod tests {
         assert!(!paired("branch.currency"));
         assert!(paired("kiosk.volume_default"));
         assert!(paired("branch.fulfilment"));
+        assert!(paired("branch.tz"));
+        assert!(!paired("branch.day_start_min") && !paired("branch.tz2"));
         assert!(paired("billing.grace_min") && paired("billing.time_up_mode"));
         assert!(!paired("billing.rounding_min") && !paired("billing.minimum_min"));
         assert!(!paired("branch.opening_hours"));

@@ -55,7 +55,7 @@ pub const KEY_HUB_STOPPED_AT: &str = "hub.stopped_at";
 pub const KEY_CURRENCY: &str = "branch.currency";
 pub const KEY_SYMBOL_POSITION: &str = "branch.symbol_position";
 pub const KEY_NUMBER_FORMAT: &str = "branch.number_format";
-pub const KEY_TZ: &str = "branch.tz";
+pub const KEY_TZ: &str = arena_proto::KEY_BRANCH_TZ;
 pub const KEY_DAY_START_MIN: &str = "branch.day_start_min";
 pub const KEY_FY_START_MONTH: &str = "branch.fy_start_month";
 

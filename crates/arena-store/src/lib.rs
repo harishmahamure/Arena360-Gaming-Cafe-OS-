@@ -19,6 +19,7 @@ mod group_bills;
 mod gst;
 mod identity;
 mod invoices;
+mod kiosk_scans;
 mod library;
 mod migrations;
 mod notify;
@@ -113,6 +114,10 @@ pub use identity::{
 pub use invoices::{
     INVOICED_KINDS, InvoiceOrder, find_invoice_order, find_sequence, list_unnumbered,
     set_invoice_no, set_order_buyer, take_sequence,
+};
+pub use kiosk_scans::{
+    KioskScanRow, KioskScanSummary, KioskScanWrite, find_kiosk_scan, insert_kiosk_scan,
+    list_kiosk_scan_summaries, replace_kiosk_scan,
 };
 pub use library::{
     LibraryRow, LibraryWrite, find_library_entry, insert_library_entry, list_library_entries,
@@ -1469,6 +1474,14 @@ impl Store {
                 Ok((c, targets))
             })
             .collect()
+    }
+
+    /// Every live paired device with its last scan summary (empty before migration 63).
+    pub fn kiosk_scan_summaries(&self) -> Result<Vec<KioskScanSummary>, AppError> {
+        if !self.table_exists("kiosk_scans")? {
+            return Ok(Vec::new());
+        }
+        list_kiosk_scan_summaries(&self.conn)
     }
 
     /// Every live library entry, ordered by name (empty before migration 62).

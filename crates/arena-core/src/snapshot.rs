@@ -1617,6 +1617,30 @@ impl SnapshotReader {
         })
     }
 
+    /// Every live paired PC with its last installed-software scan, ordered by name (Story 6.4).
+    /// The scan fields are `None` for a PC that was never scanned.
+    pub fn kiosk_scans(&self) -> Result<Vec<arena_proto::DeviceScanView>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            Ok(s.kiosk_scan_summaries()?
+                .into_iter()
+                .map(|r| arena_proto::DeviceScanView {
+                    device_id: r.device_id,
+                    name: r.label,
+                    scanned_at: r.scanned_at,
+                    entry_count: r.entry_count,
+                    skipped: r.skipped,
+                    launchers: r
+                        .launchers
+                        .map(|j| serde_json::from_str(&j).unwrap_or_default()),
+                })
+                .collect())
+        })
+    }
+
     /// Every live entry of the branch game and app library, enabled or not, ordered by name
     /// (Story 6.3). The name, launcher and age rating of a linked entry are as stored; the API
     /// layer shows the catalogue's.

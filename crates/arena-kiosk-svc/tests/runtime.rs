@@ -362,6 +362,7 @@ fn fast() -> Timings {
         ping_interval: Duration::from_millis(100),
         restart_grace: Duration::from_millis(400),
         admin_tick: Duration::from_millis(20),
+        scan_tick: Duration::from_millis(20),
     }
 }
 

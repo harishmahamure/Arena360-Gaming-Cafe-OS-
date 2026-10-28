@@ -70,11 +70,12 @@ pub enum Table {
     CouponTargets,
     Refunds,
     LibraryEntries,
+    KioskScans,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 43] = [
+    pub const ALL: [Table; 44] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -118,6 +119,7 @@ impl Table {
         Table::CouponTargets,
         Table::Refunds,
         Table::LibraryEntries,
+        Table::KioskScans,
     ];
 
     /// The SQL table name.
@@ -166,6 +168,7 @@ impl Table {
             Self::CouponTargets => "coupon_targets",
             Self::Refunds => "refunds",
             Self::LibraryEntries => "library_entries",
+            Self::KioskScans => "kiosk_scans",
         }
     }
 
@@ -181,7 +184,7 @@ impl Table {
             Self::ReadGrants => &["grant_id"],
             Self::DeviceEvents => &["event_id"],
             Self::DeviceAdminExits => &["exit_id"],
-            Self::DevicesMeta => &["device_id"],
+            Self::DevicesMeta | Self::KioskScans => &["device_id"],
             Self::DeviceGroups => &["group_id"],
             Self::FloorZones => &["zone_id"],
             Self::Products => &["product_id"],
@@ -257,6 +260,7 @@ impl Table {
             | Self::Coupons
             | Self::Refunds
             | Self::LibraryEntries
+            | Self::KioskScans
             | Self::Plans => true,
             Self::Settings
             | Self::RolePerms
@@ -412,6 +416,9 @@ pub enum RowKey {
     LibraryEntries {
         id: String,
     },
+    KioskScans {
+        device_id: String,
+    },
     Coupons {
         coupon_id: String,
     },
@@ -456,6 +463,7 @@ impl RowKey {
             Self::NotifyOutbox { .. } => Table::NotifyOutbox,
             Self::Refunds { .. } => Table::Refunds,
             Self::LibraryEntries { .. } => Table::LibraryEntries,
+            Self::KioskScans { .. } => Table::KioskScans,
             Self::Coupons { .. } => Table::Coupons,
             Self::CouponTargets { .. } => Table::CouponTargets,
             Self::Players { .. } => Table::Players,
@@ -486,7 +494,7 @@ impl RowKey {
             Self::ReadGrants { grant_id } => grant_id.clone(),
             Self::DeviceEvents { event_id } => event_id.clone(),
             Self::DeviceAdminExits { exit_id } => exit_id.clone(),
-            Self::DevicesMeta { device_id } => device_id.clone(),
+            Self::DevicesMeta { device_id } | Self::KioskScans { device_id } => device_id.clone(),
             Self::DeviceGroups { group_id } => group_id.clone(),
             Self::FloorZones { zone_id } => zone_id.clone(),
             Self::Products { product_id } => product_id.clone(),
@@ -623,6 +631,9 @@ impl RowKey {
             Table::NotifyOutbox => Self::NotifyOutbox { id: text("id")? },
             Table::Refunds => Self::Refunds { id: text("id")? },
             Table::LibraryEntries => Self::LibraryEntries { id: text("id")? },
+            Table::KioskScans => Self::KioskScans {
+                device_id: text("device_id")?,
+            },
             Table::Coupons => Self::Coupons {
                 coupon_id: text("coupon_id")?,
             },
@@ -660,7 +671,7 @@ impl RowKey {
             Self::ReadGrants { grant_id } => vec![grant_id],
             Self::DeviceEvents { event_id } => vec![event_id],
             Self::DeviceAdminExits { exit_id } => vec![exit_id],
-            Self::DevicesMeta { device_id } => vec![device_id],
+            Self::DevicesMeta { device_id } | Self::KioskScans { device_id } => vec![device_id],
             Self::DeviceGroups { group_id } => vec![group_id],
             Self::FloorZones { zone_id } => vec![zone_id],
             Self::Products { product_id } => vec![product_id],

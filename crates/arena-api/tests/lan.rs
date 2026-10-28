@@ -926,6 +926,132 @@ async fn kiosk_events_share_one_rate_limit() {
     }
 }
 
+// ---- Story 6.4: the kiosk scan report ----
+
+fn scan_body(n: i64) -> serde_json::Value {
+    serde_json::to_value(IntentSubmit {
+        intent: intent(
+            owner(),
+            IntentPayload::KioskScanReported(arena_proto::KioskScanReported {
+                scanned_at: T0 - 10_000 + n,
+                entries: vec![arena_proto::ScanEntry {
+                    path: format!(r"C:\Games\g{n}.exe"),
+                    file_name: format!("g{n}.exe"),
+                    product_name: String::new(),
+                    publisher: String::new(),
+                    launcher: "none".into(),
+                }],
+                launchers: Vec::new(),
+                skipped: 0,
+            }),
+            None,
+        ),
+    })
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_session_reports_scans_as_itself_and_the_device_rate_limit_does_not_apply() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    // More than the 60 a minute a chatty kiosk may log: every report applies.
+    for n in 0..70 {
+        let frame = client
+            .request("intent.submit", scan_body(n))
+            .await
+            .unwrap_or_else(|e| panic!("scan {n}: {e}"));
+        let FrameBody::IntentResult(r) = frame.body else {
+            panic!("{frame:?}")
+        };
+        assert_eq!(r.applied.changes[0].tbl, "kiosk_scans");
+        assert_eq!(r.applied.changes[0].row_id, hub.paired_id);
+    }
+    let change = Store::open_reader(&hub.path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        (change.actor_kind.as_str(), change.actor_id.as_str()),
+        ("device", hub.paired_id.as_str())
+    );
+    // An older report is refused as a validation error naming `scanned_at`.
+    let err = client
+        .request("intent.submit", scan_body(3))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::ValidationFailed));
+    // The log limit is not shared with it: the log bucket is still full.
+    client
+        .request("intent.submit", kiosk_log_body(owner()))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kds_session_may_not_report_a_scan_and_a_paired_one_reads_the_branch_zone() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    hello_ok(
+        &mut ws,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let mut submit = scan_body(1);
+    submit["v"] = 1.into();
+    submit["kind"] = "intent.submit".into();
+    submit["rid"] = "s1".into();
+    send(&mut ws, &submit.to_string()).await;
+    assert_eq!(
+        error_of(&recv(&mut ws).await.unwrap()).1,
+        ErrorCode::Forbidden
+    );
+
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let frame = client
+        .request("settings.get", settings_get_body(&["branch.tz"]))
+        .await
+        .unwrap();
+    let FrameBody::SettingsValues(v) = frame.body else {
+        panic!("{frame:?}")
+    };
+    assert_eq!(
+        (v.values[0].key.as_str(), v.values[0].value.as_str()),
+        ("branch.tz", "Asia/Kolkata")
+    );
+    // The zone is the only locale key a kiosk reads.
+    let err = client
+        .request("settings.get", settings_get_body(&["branch.currency"]))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::Forbidden));
+    // And a change to it is pushed to the paired session.
+    let mut events = client.events().unwrap();
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: "branch.tz".into(),
+                value: "Asia/Dubai".into(),
+            }),
+            Some(v.values[0].rev),
+        ))
+        .await
+        .unwrap();
+    let pushed = next_settings(&mut events, 2_000).await.expect("pushed");
+    assert_eq!(
+        (pushed[0].key.as_str(), pushed[0].value.as_str()),
+        ("branch.tz", "Asia/Dubai")
+    );
+}
+
 // ---- Story 1.18: the kiosk process lists over settings.get and settings.changed ----
 
 fn settings_get_body(keys: &[&str]) -> serde_json::Value {

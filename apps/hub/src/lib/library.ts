@@ -3,11 +3,18 @@
 // and `library.delete`; the Hub shows a catalogue-linked entry with the catalogue's name,
 // launcher and age rating.
 
-import type { LibraryEntryView, LibraryView } from "@arena/ui/generated";
+import type {
+  DeviceScanView,
+  LibraryEntryView,
+  LibraryScansView,
+  LibraryView,
+} from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { authHeaders, getToken, setToken } from "./auth";
 
 export const LIBRARY_URL = "http://127.0.0.1:7409/ui/library";
+/** Each PC's last installed-software scan (Story 6.4). */
+export const SCANS_URL = "http://127.0.0.1:7409/ui/library/scans";
 
 export const KINDS = ["game", "app"] as const;
 export const LAUNCHERS = ["steam", "epic", "riot", "battlenet", "none"] as const;
@@ -54,6 +61,33 @@ export async function loadLibrary(): Promise<LibraryOutcome> {
     const view = body as LibraryView | null;
     return view && Array.isArray(view.entries)
       ? { kind: "ok", entries: view.entries }
+      : { kind: "unreachable" };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+export type ScansOutcome =
+  { kind: "ok"; devices: DeviceScanView[] } | { kind: "signed_out" } | { kind: "unreachable" };
+
+/** Every live paired PC with the time and size of its last scan (`null` when never scanned). */
+export async function loadScans(): Promise<ScansOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  try {
+    const res = await fetch(SCANS_URL, {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(5000),
+      cache: "no-store",
+    });
+    if (res.status === 401) {
+      setToken(null);
+      return { kind: "signed_out" };
+    }
+    const body: unknown = res.ok ? await res.json() : null;
+    const view = body as LibraryScansView | null;
+    return view && Array.isArray(view.devices)
+      ? { kind: "ok", devices: view.devices }
       : { kind: "unreachable" };
   } catch {
     return { kind: "unreachable" };

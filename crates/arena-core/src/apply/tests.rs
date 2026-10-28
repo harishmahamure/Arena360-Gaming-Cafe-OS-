@@ -34,6 +34,7 @@ mod import_players;
 mod import_products;
 mod import_setup;
 mod invoice;
+mod kiosk_scan;
 mod library;
 mod order_line;
 mod order_place;

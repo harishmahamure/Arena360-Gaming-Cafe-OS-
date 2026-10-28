@@ -38,6 +38,9 @@ pub struct Timings {
     pub restart_grace: Duration,
     /// How often the admin-exit timer re-reads the clock (at most).
     pub admin_tick: Duration,
+    /// How often the scan schedule checks whether a scan is due (and whether a session still
+    /// blocks it).
+    pub scan_tick: Duration,
 }
 
 impl Default for Timings {
@@ -50,6 +53,7 @@ impl Default for Timings {
             ping_interval: PING_INTERVAL,
             restart_grace: RESTART_GRACE,
             admin_tick: Duration::from_secs(1),
+            scan_tick: Duration::from_secs(60),
         }
     }
 }
@@ -233,6 +237,16 @@ impl Runtime {
             Arc::clone(&self.ctx),
             api,
             opts,
+            self.stop.subscribe(),
+        )));
+    }
+
+    /// Starts the installed-software scan schedule (Story 6.4) on `host` (Windows: the real
+    /// PC; tests: a fixed one). Without this call nothing is ever scanned.
+    pub fn scan(&mut self, host: Arc<dyn crate::scan::ScanHost>) {
+        self.tasks.push(tokio::spawn(crate::scan::schedule::run(
+            Arc::clone(&self.ctx),
+            host,
             self.stop.subscribe(),
         )));
     }

@@ -20,6 +20,24 @@ fn cut(text: &str, max: usize) -> String {
     text.trim().chars().take(max).collect()
 }
 
+/// `GET /ui/library/scans` (same access as `GET /ui/library`): every live paired PC with its last
+/// installed-software scan (Story 6.4), ordered by name. A PC that was never scanned has `null`
+/// scan fields.
+pub(crate) async fn scans(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    if let Err(e) = auth.acting_session(&token).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(auth.reader());
+    match tokio::task::spawn_blocking(move || reader.kiosk_scans()).await {
+        Ok(Ok(devices)) => Json(arena_proto::LibraryScansView { devices }).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 /// `GET /ui/library`: every live entry, enabled or not, ordered by name. For an entry linked to
 /// the catalogue the name, launcher and age rating are the cached catalogue's (an entry whose
 /// game the cache no longer holds shows what it was saved with).

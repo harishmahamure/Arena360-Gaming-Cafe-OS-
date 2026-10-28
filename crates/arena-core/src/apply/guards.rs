@@ -279,6 +279,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::RegisterEdit(_)
             | Target::Device(_)
             | Target::Branch(_)
+            | Target::KioskScan(_)
             | Target::AdminExit(_)
             | Target::AdminUnlock(_)
             | Target::Group(_)
@@ -378,6 +379,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::Setting(row) => settings_set::base_rev(intent, row.as_ref()),
         Target::NewDevice(_)
         | Target::Branch(_)
+        | Target::KioskScan(_)
         | Target::AdminExit(_)
         | Target::AdminRelock(_)
         | Target::AdminUnlock(_)

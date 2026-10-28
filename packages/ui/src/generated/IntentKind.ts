@@ -16,6 +16,7 @@ export type IntentKind =
   | "audit.read_granted"
   | "kiosk.log"
   | "kiosk.process_blocked"
+  | "kiosk.scan_reported"
   | "device.admin_exit"
   | "device.admin_relock"
   | "device.admin_unlock"

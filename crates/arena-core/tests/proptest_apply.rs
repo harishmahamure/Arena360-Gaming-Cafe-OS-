@@ -5335,6 +5335,7 @@ fn assert_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
             .iter()
             .filter(|p| text(p, "order_id") == id)
             .map(|p| int(p, "amount_minor"))
+            .filter(|a| *a > 0) // refunds are negative rows, credited by their notes
             .sum();
         prop_assert_eq!(
             paid,
@@ -5440,6 +5441,120 @@ fn assert_holds_hold(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// Story 5.39: a product's quantity is the sum of its `stock_moves` deltas, so every unit that
+/// came in or went out has a row, and an invoice sits on a settled order (unique and gap-free
+/// numbering is `assert_invoices_hold`).
+fn assert_ledger_holds(hub: &Hub) -> Result<(), TestCaseError> {
+    let moves = hub.reader.rows(Table::StockMoves).unwrap();
+    for (id, qty, _) in stock_image(hub) {
+        let moved: i64 = moves
+            .iter()
+            .filter(|m| text(m, "product_id") == id)
+            .map(|m| int(m, "delta"))
+            .sum();
+        prop_assert_eq!(moved, qty, "{} stock_moves", id);
+    }
+    for o in hub.reader.rows(Table::Orders).unwrap() {
+        if matches!(o["invoice_no"], RowValue::Text(_)) {
+            prop_assert_eq!(
+                text(&o, "status"),
+                "settled",
+                "an invoice on an unsettled order"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Story 5.39: a counter sale's tax is computed once per rate and the order adds up: the
+/// breakup holds each rate once, its tax and taxable amounts are the order's, the total is
+/// subtotal plus tax, and the lines less coupon and discount are the total (tax inside) or the
+/// subtotal (tax added on top).
+fn assert_tax_holds(hub: &Hub) -> Result<(), TestCaseError> {
+    let inclusive = hub
+        .reader
+        .settings()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.key == "branch.tax")
+        .and_then(|s| arena_proto::TaxSettings::parse(&s.value))
+        .map(|t| t.inclusive);
+    let lines = hub.reader.rows(Table::OrderLines).unwrap();
+    for o in hub.reader.rows(Table::Orders).unwrap() {
+        let RowValue::Text(breakup) = &o["tax_breakup"] else {
+            continue;
+        };
+        if text(&o, "kind") != "pos_sale" || text(&o, "status") != "settled" {
+            continue;
+        }
+        let rates: Vec<arena_core::invoice::tax::RateTax> = serde_json::from_str(breakup).unwrap();
+        let mut seen = std::collections::BTreeSet::new();
+        for r in &rates {
+            prop_assert!(seen.insert(r.rate_bp), "a rate is taxed twice");
+        }
+        let (tax, taxable) = rates
+            .iter()
+            .fold((0, 0), |(t, b), r| (t + r.tax_minor, b + r.taxable_minor));
+        prop_assert_eq!(tax, int(&o, "tax_minor"), "order tax");
+        prop_assert_eq!(taxable, int(&o, "subtotal_minor"), "order subtotal");
+        prop_assert_eq!(int(&o, "subtotal_minor") + tax, int(&o, "total_minor"));
+        let id = text(&o, "id");
+        let gross: i64 = lines
+            .iter()
+            .filter(|l| text(l, "order_id") == id)
+            .map(|l| int(l, "amount_minor"))
+            .sum();
+        let off = |col: &str| match &o[col] {
+            RowValue::Integer(n) => *n,
+            _ => 0,
+        };
+        let net = gross - off("coupon_minor") - off("discount_minor");
+        let want = if inclusive == Some(true) {
+            int(&o, "total_minor")
+        } else {
+            int(&o, "subtotal_minor")
+        };
+        prop_assert_eq!(net, want, "order {} lines less discounts", id);
+    }
+    Ok(())
+}
+
+/// Story 5.39: a shift's expected drawer cash is the sum of its cash events (float, sales,
+/// reversals, refunds, deposits and expenses); the zero-amount drawer-open log adds nothing,
+/// and the float row is the shift's float.
+fn assert_drawer_holds(hub: &Hub) -> Result<(), TestCaseError> {
+    let events = hub.reader.rows(Table::CashEvents).unwrap();
+    for s in hub.reader.rows(Table::Shifts).unwrap() {
+        let id = text(&s, "id");
+        let expected = hub
+            .reader
+            .read_with(|conn| arena_store::expected_cash(conn, &id))
+            .unwrap();
+        let own: Vec<_> = events
+            .iter()
+            .filter(|e| text(e, "shift_id") == id)
+            .collect();
+        prop_assert!(
+            own.iter()
+                .filter(|e| text(e, "kind") == "drawer_open")
+                .all(|e| int(e, "amount_minor") == 0)
+        );
+        let counted: i64 = own
+            .iter()
+            .filter(|e| text(e, "kind") != "drawer_open")
+            .map(|e| int(e, "amount_minor"))
+            .sum();
+        prop_assert_eq!(expected, counted, "shift {} drawer", id);
+        let float: i64 = own
+            .iter()
+            .filter(|e| text(e, "kind") == "float_in")
+            .map(|e| int(e, "amount_minor"))
+            .sum();
+        prop_assert_eq!(float, int(&s, "float_minor"), "shift {} float", id);
+    }
+    Ok(())
+}
+
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()
@@ -5474,6 +5589,9 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_prints_hold(&hub)?;
                 assert_drawers_hold(&hub)?;
                 assert_notifications_hold(&hub)?;
+                assert_ledger_holds(&hub)?;
+                assert_tax_holds(&hub)?;
+                assert_drawer_holds(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "test:shell": "playwright test",
     "bench:floor": "playwright test -c playwright.bench.config.ts floor-perf",
-    "bench:flows": "playwright test -c playwright.bench.config.ts flow-timing"
+    "bench:flows": "playwright test -c playwright.bench.config.ts flow-timing",
+    "bench:scanner": "playwright test -c playwright.bench.config.ts scanner --headed"
   },
   "dependencies": {
     "@arena/ui": "workspace:*"

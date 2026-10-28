@@ -765,4 +765,103 @@ mod tests {
         assert_eq!(state(&f, "01J000000000000000000000D1").0, "failed");
         assert!(f.fake.sent().is_empty());
     }
+
+    /// Story 5.39: the rows a killed Hub left queued print once after the restart, and a second
+    /// restart finds nothing to print again.
+    #[tokio::test]
+    async fn rows_left_queued_by_a_crash_print_once_across_restarts() {
+        let f = fixture(Some(LAN)).await;
+        for (row, order) in [
+            ("01J000000000000000000000R1", "O1"),
+            ("01J000000000000000000000R2", "O1"),
+        ] {
+            queued(&f, row, order, r#"{"reprint":false,"by":"s"}"#).await;
+        }
+        task(&f).drain().await;
+        assert_eq!(f.fake.sent().len(), 2);
+        // A restart is a new task over the same database.
+        task(&f).drain().await;
+        task(&f).drain().await;
+        assert_eq!(f.fake.sent().len(), 2);
+        for row in ["01J000000000000000000000R1", "01J000000000000000000000R2"] {
+            assert_eq!(state(&f, row).0, "done");
+        }
+    }
+
+    /// Story 5.39, the monthly hardware job (`.github/workflows/hardware-bench.yml`): a sale
+    /// receipt, the Z-report and a drawer kick go through the real adapter to every printer in
+    /// `ARENA_HW_PRINTERS`, a JSON list of `{kind, id_or_addr, name, paper}` (`paper` is the roll
+    /// loaded, "58" or "80"). Each job must come back `done`. The outcome per printer is written
+    /// to `ARENA_HW_OUT` (default `target/hardware-bench/printers.json`) for the compatibility
+    /// list; whoever loads the paper checks the slips and the drawer by eye.
+    #[tokio::test]
+    #[ignore = "needs the test-café printers: set ARENA_HW_PRINTERS"]
+    async fn hardware_bench_prints_receipts_and_a_z_report_and_kicks_the_drawer() {
+        let list = std::env::var("ARENA_HW_PRINTERS").expect("ARENA_HW_PRINTERS is not set");
+        let printers: Vec<serde_json::Value> = serde_json::from_str(&list).unwrap();
+        assert!(!printers.is_empty(), "ARENA_HW_PRINTERS lists no printer");
+        let mut results = Vec::new();
+        let mut failed = Vec::new();
+        for p in &printers {
+            let text = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
+            let selected = serde_json::json!({
+                "kind": text("kind"),
+                "id_or_addr": text("id_or_addr"),
+                "name": text("name"),
+            })
+            .to_string();
+            let mut outcome = serde_json::Map::new();
+            for job in ["receipt", "z_report", "drawer"] {
+                let f = fixture(Some(&selected)).await;
+                let paper = text("paper");
+                let sql =
+                    format!("UPDATE settings SET value = '{paper}' WHERE key = 'printer.paper_mm'");
+                f.writer
+                    .submit(move |tx| {
+                        tx.execute_batch(&sql).unwrap();
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                let row = "01J000000000000000000000H1";
+                match job {
+                    "receipt" => {
+                        queued(&f, row, "O1", r#"{"reprint":false,"by":"s"}"#).await;
+                    }
+                    "z_report" => queued_z(&f, row, r#"{"reprint":false,"by":"s"}"#).await,
+                    _ => queued_drawer(&f, row).await,
+                }
+                let task = ReceiptPrintTask::new(
+                    f.writer.clone(),
+                    Arc::new(SnapshotReader::open(&f.path).unwrap()),
+                    f.clock.clone(),
+                    Arc::new(crate::printer::SystemPrinter::new()),
+                    f.jobs.clone(),
+                );
+                task.drain().await;
+                let (s, error) = state(&f, row);
+                if s != "done" {
+                    failed.push(format!(
+                        "{} {job}: {}",
+                        text("name"),
+                        error.unwrap_or(s.clone())
+                    ));
+                }
+                outcome.insert(job.into(), serde_json::Value::String(s));
+            }
+            results.push(serde_json::json!({
+                "name": text("name"),
+                "kind": text("kind"),
+                "paper": text("paper"),
+                "jobs": outcome,
+            }));
+        }
+        let out = std::env::var("ARENA_HW_OUT")
+            .unwrap_or_else(|_| "target/hardware-bench/printers.json".into());
+        if let Some(dir) = std::path::Path::new(&out).parent() {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(&out, serde_json::to_string_pretty(&results).unwrap()).unwrap();
+        assert!(failed.is_empty(), "printer jobs failed: {failed:?}");
+    }
 }

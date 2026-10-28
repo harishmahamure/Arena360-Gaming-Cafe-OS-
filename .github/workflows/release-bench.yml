@@ -6,6 +6,9 @@ name: Release benchmark
 # cold open 1 s, paint 2 s, frame 100 ms, input 100 ms or the 30-minute JS heap (250 MB).
 # `floor-load` and `flow-timing` (Story 3.37) fail the run when apply p95 passes 100 ms, a floor
 # update 2 s, a start or settle 10 s or a profile creation 15 s.
+# `counter-load` and `pos-timing` (Story 5.39) do the same for the counter: sale apply p95 and the
+# books after a 10-minute mix, a Hub killed during a sale burst, and a scanned sale and a
+# within-threshold shift close under 10 s each.
 # The `soak` input adds the 8-hour WAN-down soak (Story 1.22).
 
 on:
@@ -153,6 +156,41 @@ jobs:
       - run: pnpm --filter @arena/hub bench:flows
       - name: Profile creation under 15 s
         run: pnpm --filter @arena/hub exec playwright test --project=desktop -g "create a profile in under 15 seconds" players.spec.ts
+
+  counter-load:
+    name: counter sale load and sale-burst kill (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 45
+    env:
+      FLOOR_LOAD_SECONDS: "600"
+      FLOOR_LOAD_BURST_SECONDS: "10"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Counter sales at 5/s for 10 min with 50/s bursts, then the kill during a sale burst
+        run: cargo test --locked --release -p arena-core --test floor_load counter -- --nocapture
+      - name: Sale burst killed, every acknowledged sale, stock move and invoice kept
+        run: cargo test --locked --release -p arena-core --test floor_load sale_burst -- --nocapture
+      - name: Receipts a crash left queued print once
+        run: cargo test --locked --release -p arena-tasks rows_left_queued_by_a_crash
+
+  pos-timing:
+    name: scanned sale and shift close timings (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/hub exec playwright install chromium
+      - name: Scan, pay cash and settle under 10 s
+        run: pnpm --filter @arena/hub exec playwright test --project=desktop -g "scan, pay cash and settle takes well under 10 s" pos.spec.ts
+      - name: A close within the threshold under 10 s from the first tap
+        run: pnpm --filter @arena/hub exec playwright test --project=desktop -g "takes under 10 seconds from the first tap" shift-close.spec.ts
 
   kiosk-installer:
     name: build the Kiosk installer

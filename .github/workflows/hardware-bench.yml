@@ -1,0 +1,94 @@
+name: Hardware bench
+
+# Story 5.39: the monthly proof on the test café's real hardware. On the bench machine (a
+# self-hosted Windows runner labelled `test-cafe`, with the printers on USB and the LAN, a cash
+# drawer on one of them and a USB keyboard-wedge scanner attached) the job sends a sale receipt, the
+# Z-report and a drawer kick to every printer in the `PRINTERS` variable at the paper width loaded,
+# then waits for a scan of the sheet's barcode. Results go to the compatibility list at
+# docs/compat/hardware.md as a pull request, and a job or scan that fails fails the run.
+#
+# Repository variables (Settings > Variables):
+#   PRINTERS  JSON list of {kind: usb|lan, id_or_addr, name, paper: "58"|"80"}
+#   SCANNER   the scanner model, for its row in the list
+# Not part of ci-ok: it needs the attached hardware.
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: hardware-bench
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bench:
+    name: printers, drawer and scanner (test café)
+    runs-on: [self-hosted, windows, test-cafe]
+    timeout-minutes: 30
+    env:
+      ARENA_HW_PRINTERS: ${{ vars.PRINTERS }}
+      ARENA_HW_SCANNER: ${{ vars.SCANNER }}
+      ARENA_HW_OUT: ${{ github.workspace }}/target/hardware-bench/printers.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/hub exec playwright install chromium
+      # Each step runs even when an earlier one failed, so the list shows every result; the last
+      # step fails the run.
+      - name: Receipts at 58 and 80 mm, the Z-report and the drawer kick
+        id: printers
+        continue-on-error: true
+        run: cargo test --locked --release -p arena-tasks hardware_bench -- --ignored --nocapture
+      - name: A scanned barcode adds the item
+        id: scanner
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/hardware-bench | Out-Null
+          $log = Join-Path $PWD "target/hardware-bench/scanner.log"
+          pnpm --filter @arena/hub bench:scanner 2>&1 | Tee-Object -FilePath $log
+          $line = Select-String -Path $log -Pattern '^\s*HW_SCANNER (.*)$' | Select-Object -Last 1
+          if (-not $line) { throw "the scanner check printed no result" }
+          $line.Matches[0].Groups[1].Value | Set-Content -Encoding utf8 target/hardware-bench/scanner.json
+      - name: Publish to the compatibility list
+        id: publish
+        continue-on-error: true
+        shell: pwsh
+        run: node scripts/hardware-compat.mjs target/hardware-bench/printers.json target/hardware-bench/scanner.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hardware-bench
+          path: |
+            target/hardware-bench/
+            docs/compat/hardware.md
+      - name: Open a pull request with the new list
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git diff --quiet docs/compat/hardware.md
+          if ($LASTEXITCODE -eq 0) { Write-Host "the list is unchanged"; exit 0 }
+          $branch = "hardware-bench/" + (Get-Date -Format "yyyy-MM-dd")
+          git config user.name "arena-hardware-bench"
+          git config user.email "hardware-bench@users.noreply.github.com"
+          git switch -c $branch
+          git add docs/compat/hardware.md
+          git commit -m "docs(compat): hardware bench results"
+          git push origin $branch
+          gh pr create --title "Hardware bench results" --body "Written by the monthly hardware job." --base master
+      - name: Fail the run if any step failed
+        if: steps.printers.outcome == 'failure' || steps.scanner.outcome == 'failure' || steps.publish.outcome == 'failure'
+        shell: pwsh
+        run: exit 1

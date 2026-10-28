@@ -78,6 +78,9 @@ struct Floor {
     reader: Store,
     devices: Vec<String>,
     player: String,
+    clock: Arc<ManualClock>,
+    /// Tracked products with their prices, for the counter-sale mix (Story 5.39).
+    products: Vec<(String, i64)>,
 }
 
 async fn must(writer: &WriterHandle, payload: IntentPayload) -> Applied {
@@ -108,7 +111,7 @@ async fn floor_at(path: std::path::PathBuf, dir: Option<tempfile::TempDir>) -> F
     status.lease = Some(LeaseInfo::from(&lease));
     let (status_tx, rx) = status_channel(status);
     let clock = Arc::new(ManualClock::new(T0));
-    let writer = Writer::spawn(store, clock, rx).unwrap();
+    let writer = Writer::spawn(store, clock.clone(), rx).unwrap();
     let reader = Store::open(&path, T0).unwrap();
 
     must(
@@ -223,6 +226,44 @@ async fn floor_at(path: std::path::PathBuf, dir: Option<tempfile::TempDir>) -> F
         }),
     )
     .await;
+    let mut products = Vec::new();
+    for (name, price_minor) in [("Cola", 4_000), ("Chips", 2_500), ("Water", 1_000)] {
+        let id = must(
+            &writer,
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: name.into(),
+                category: String::new(),
+                price_minor,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+                bundle: false,
+                components: Vec::new(),
+            }),
+        )
+        .await
+        .changes[0]
+            .row_id
+            .clone();
+        must(
+            &writer,
+            IntentPayload::StockIn(arena_proto::StockIn {
+                product_id: id.clone(),
+                qty: arena_proto::MAX_STOCK_IN_QTY,
+                unit_cost_minor: price_minor / 2,
+                supplier: "Wholesale".into(),
+                expiry: None,
+            }),
+        )
+        .await;
+        products.push((id, price_minor));
+    }
     Floor {
         _dir: dir,
         _status: status_tx,
@@ -230,6 +271,8 @@ async fn floor_at(path: std::path::PathBuf, dir: Option<tempfile::TempDir>) -> F
         reader,
         devices,
         player,
+        clock,
+        products,
     }
 }
 
@@ -376,11 +419,285 @@ fn expected_refusal(e: &AppError) -> bool {
             | ErrorCode::InsufficientBalance
             | ErrorCode::PaymentShort
             | ErrorCode::PastClosing
+            | ErrorCode::RefundExceedsPaid
+            | ErrorCode::InvoiceNotFound
+            | ErrorCode::OutOfStock
     )
+}
+
+/// Top-ups and credit collections are payments, not sales: they never take an invoice number.
+fn numbered_kind(order: &Row) -> bool {
+    matches!(
+        text(order, "kind").as_str(),
+        "session" | "plan_sale" | "pos_sale"
+    )
+}
+
+/// Which intents a run sends: the session floor of Story 3.37, or the counter of Story 5.39.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mix {
+    Floor,
+    Counter,
+}
+
+/// What the counter mix remembers between intents: numbered cash sales that can still be
+/// refunded once.
+struct Picker {
+    mix: Mix,
+    refundable: Vec<String>,
+}
+
+impl Picker {
+    fn new(mix: Mix) -> Self {
+        Self {
+            mix,
+            refundable: Vec::new(),
+        }
+    }
+
+    fn next(&mut self, f: &Floor, rng: &mut Rng) -> Option<Intent> {
+        match self.mix {
+            Mix::Floor => next_intent(f, rng),
+            Mix::Counter => Some(self.next_counter(f, rng)),
+        }
+    }
+
+    /// Notes an acknowledged intent; a printed cash sale is numbered at once and refundable.
+    fn acked(&mut self, sent: &Intent, applied: &Applied) {
+        if let IntentPayload::PosSale(s) = &sent.payload
+            && s.receipt.is_some()
+            && s.payments.iter().all(|p| p.method == PaymentMethod::Cash)
+        {
+            self.refundable.push(applied.changes[0].row_id.clone());
+        }
+    }
+
+    fn next_counter(&mut self, f: &Floor, rng: &mut Rng) -> Intent {
+        f.clock.advance(250);
+        let roll = rng.below(100);
+        if (80..90).contains(&roll)
+            && let Some(order) = self.refundable.pop()
+            && let Some(line) = f
+                .reader
+                .rows(Table::OrderLines)
+                .unwrap()
+                .into_iter()
+                .find(|l| text(l, "order_id") == order)
+        {
+            let mut refund = intent(
+                IntentPayload::RefundCreate(arena_proto::RefundCreate {
+                    invoice_no: f
+                        .reader
+                        .rows(Table::Orders)
+                        .unwrap()
+                        .iter()
+                        .find(|o| text(o, "id") == order)
+                        .map(|o| text(o, "invoice_no"))
+                        .unwrap(),
+                    lines: vec![arena_proto::RefundLineReq {
+                        line_id: text(&line, "id"),
+                        qty: 1,
+                        return_to_stock: Some(true),
+                    }],
+                    method: Some(PaymentMethod::Cash),
+                    reference: None,
+                    note: None,
+                    receipt: None,
+                }),
+                None,
+            );
+            refund.reason = Some(arena_proto::ReasonCode::ChangedMind);
+            return refund;
+        }
+        if (70..80).contains(&roll) {
+            let mut waste = intent(
+                IntentPayload::StockWaste(arena_proto::StockWaste {
+                    product_id: f.products[rng.below(f.products.len())].0.clone(),
+                    qty: 1,
+                }),
+                None,
+            );
+            waste.reason = arena_proto::ReasonCode::WASTE.first().copied();
+            return waste;
+        }
+        if roll >= 90
+            && let Some(order) = f.reader.rows(Table::Orders).unwrap().iter().find(|o| {
+                text(o, "status") == "settled"
+                    && numbered_kind(o)
+                    && o["invoice_no"] == RowValue::Null
+                    && int(o, "total_minor") > 0
+            })
+        {
+            let mut issue = intent(
+                IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
+                    order_id: text(order, "id"),
+                }),
+                None,
+            );
+            issue.actor.kind = ActorKind::System;
+            return issue;
+        }
+        let mut lines = Vec::new();
+        let mut total = 0;
+        for _ in 0..=rng.below(3) {
+            let (id, price) = &f.products[rng.below(f.products.len())];
+            if lines
+                .iter()
+                .any(|l: &arena_proto::PosSaleLine| &l.product_id == id)
+            {
+                continue;
+            }
+            let qty = 1 + rng.below(3) as i64;
+            total += price * qty;
+            lines.push(arena_proto::PosSaleLine {
+                product_id: id.clone(),
+                qty,
+            });
+        }
+        let upi = (55..70).contains(&roll);
+        let discount = (!upi && roll.is_multiple_of(8)).then_some(arena_proto::ManualDiscount {
+            percent_bp: None,
+            amount_minor: Some(100),
+            reason: arena_proto::DiscountReason::RegularCustomer,
+            note: None,
+        });
+        if discount.is_some() {
+            total -= 100;
+        }
+        intent(
+            IntentPayload::PosSale(arena_proto::PosSale {
+                lines,
+                payments: vec![PaymentRow {
+                    method: if upi {
+                        PaymentMethod::Upi
+                    } else {
+                        PaymentMethod::Cash
+                    },
+                    amount_minor: total,
+                    reference: upi.then(|| "1234".to_owned()),
+                }],
+                player_id: None,
+                credit_override: None,
+                stock_override: None,
+                receipt: (!upi && roll.is_multiple_of(3))
+                    .then_some(arena_proto::ReceiptChoice::Print),
+                business: None,
+                coupon: None,
+                discount,
+            }),
+            None,
+        )
+    }
+}
+
+/// The books after any run: stock equals its lots and its `stock_moves`, settled orders are
+/// paid in full, invoice and credit-note numbers are unique and gap-free per series, the tax
+/// of a counter sale adds up, and the cash ledger agrees with the cash payments and the shift.
+fn assert_books(store: &Store) {
+    let moves = store.rows(Table::StockMoves).unwrap();
+    for s in store.rows(Table::Stock).unwrap() {
+        let id = text(&s, "product_id");
+        let qty = int(&s, "qty");
+        assert!(qty >= 0, "{id} went below zero");
+        let lots: i64 = store
+            .lots(&id)
+            .unwrap()
+            .iter()
+            .map(|l| l.qty_remaining)
+            .sum();
+        assert_eq!(lots, qty, "{id} lots");
+        let moved: i64 = moves
+            .iter()
+            .filter(|m| text(m, "product_id") == id)
+            .map(|m| int(m, "delta"))
+            .sum();
+        assert_eq!(moved, qty, "{id} stock_moves");
+    }
+    let payments = store.rows(Table::Payments).unwrap();
+    let mut numbers = HashSet::new();
+    let mut series = std::collections::BTreeMap::<String, Vec<i64>>::new();
+    let mut note = |no: String| {
+        assert!(numbers.insert(no.clone()), "{no} issued twice");
+        let (prefix, seq) = no.rsplit_once('/').unwrap();
+        series
+            .entry(prefix.to_owned())
+            .or_default()
+            .push(seq.parse().unwrap());
+    };
+    for o in store.rows(Table::Orders).unwrap() {
+        if text(&o, "kind") == "pos_sale" && text(&o, "status") == "settled" {
+            assert_eq!(
+                int(&o, "total_minor"),
+                int(&o, "subtotal_minor") + int(&o, "tax_minor"),
+                "counter sale tax"
+            );
+        }
+        if text(&o, "status") == "settled" {
+            let id = text(&o, "id");
+            let paid: i64 = payments
+                .iter()
+                .filter(|p| text(p, "order_id") == id)
+                .map(|p| int(p, "amount_minor"))
+                .filter(|a| *a > 0) // refunds are negative rows, credited by their notes
+                .sum();
+            assert_eq!(paid, int(&o, "total_minor"), "settled order {id} payments");
+        }
+        if let RowValue::Text(no) = &o["invoice_no"] {
+            assert_eq!(text(&o, "status"), "settled", "an invoice on an open order");
+            note(no.clone());
+        }
+    }
+    for r in store.rows(Table::Refunds).unwrap() {
+        note(text(&r, "credit_note_no"));
+    }
+    for seqs in series.values_mut() {
+        seqs.sort_unstable();
+        let want: Vec<i64> = (1..=seqs.len() as i64).collect();
+        assert_eq!(*seqs, want, "an invoice series has a gap or a repeat");
+    }
+    let events = store.rows(Table::CashEvents).unwrap();
+    let net = |kinds: &[&str]| -> i64 {
+        events
+            .iter()
+            .filter(|e| kinds.contains(&text(e, "kind").as_str()))
+            .map(|e| int(e, "amount_minor"))
+            .sum()
+    };
+    let cash: i64 = payments
+        .iter()
+        .filter(|p| text(p, "method") == "cash")
+        .map(|p| int(p, "amount_minor"))
+        .sum();
+    assert_eq!(
+        net(&["sale", "sale_reverted", "refund"]),
+        cash,
+        "cash events"
+    );
+    for shift in store.rows(Table::Shifts).unwrap() {
+        let id = text(&shift, "id");
+        let expected = store
+            .read_with(|conn| arena_store::expected_cash(conn, &id))
+            .unwrap();
+        let own: i64 = events
+            .iter()
+            .filter(|e| text(e, "shift_id") == id)
+            .map(|e| int(e, "amount_minor"))
+            .sum();
+        assert_eq!(expected, own, "shift {id} drawer");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mixed_floor_load_holds_apply_p95_and_loses_nothing() {
+    load(Mix::Floor).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn counter_sale_load_holds_apply_p95_and_the_books() {
+    load(Mix::Counter).await;
+}
+
+async fn load(mix: Mix) {
     let seconds = env_u64("FLOOR_LOAD_SECONDS", 6);
     let burst_seconds = env_u64("FLOOR_LOAD_BURST_SECONDS", 2);
     let p95_budget = Duration::from_millis(env_u64("FLOOR_LOAD_P95_MS", 100));
@@ -398,6 +715,7 @@ async fn mixed_floor_load_holds_apply_p95_and_loses_nothing() {
     });
 
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut picker = Picker::new(mix);
     let mut apply = Vec::new();
     let mut sent: Vec<(Instant, Sent)> = Vec::new();
     let mut refused = 0usize;
@@ -415,7 +733,7 @@ async fn mixed_floor_load_holds_apply_p95_and_loses_nothing() {
         } else {
             SUSTAINED_PER_S
         };
-        let Some(next) = next_intent(&f, &mut rng) else {
+        let Some(next) = picker.next(&f, &mut rng) else {
             tokio::time::sleep(Duration::from_millis(10)).await;
             continue;
         };
@@ -427,6 +745,7 @@ async fn mixed_floor_load_holds_apply_p95_and_loses_nothing() {
         match out {
             Ok(applied) => {
                 let seqs = applied.changes.iter().map(|c| c.seq).collect();
+                picker.acked(&next, &applied);
                 if sent_count.is_multiple_of(7) {
                     let again = f
                         .writer
@@ -488,6 +807,7 @@ async fn mixed_floor_load_holds_apply_p95_and_loses_nothing() {
         "slowest update took {slow:?}, budget {delivery_budget:?}"
     );
 
+    assert_books(&f.reader);
     let got_p95 = p95(&mut apply);
     println!(
         "floor load: {} intents, {refused} refused, {resent} resent, apply p95 {got_p95:?}, slowest update {slow:?}",
@@ -500,21 +820,31 @@ async fn mixed_floor_load_holds_apply_p95_and_loses_nothing() {
 }
 
 const CHILD_ENV: &str = "ARENA_FLOOR_CRASH_CHILD_DB";
-const CRASH_TEST: &str = "a_hub_killed_during_a_burst_keeps_every_acknowledged_row";
+const FLOOR_CRASH_TEST: &str = "a_hub_killed_during_a_burst_keeps_every_acknowledged_row";
+const COUNTER_CRASH_TEST: &str =
+    "a_hub_killed_during_a_sale_burst_keeps_every_sale_stock_move_and_invoice";
 const ACKS_BEFORE_KILL: usize = 80;
 
 /// The child: builds the floor, then submits intents flat out, printing the sequence numbers of
-/// each acknowledged one, until the parent kills it.
-async fn burst_until_killed(db: std::path::PathBuf) -> ! {
+/// each acknowledged one (and the order of each acknowledged Print sale), until the parent kills
+/// it.
+async fn burst_until_killed(db: std::path::PathBuf, mix: Mix) -> ! {
     use std::io::Write;
     let f = floor_at(db, None).await;
     println!("READY");
     let mut rng = Rng(0xDEAD_BEEF_CAFE_F00D);
+    let mut picker = Picker::new(mix);
     loop {
-        let Some(next) = next_intent(&f, &mut rng) else {
+        let Some(next) = picker.next(&f, &mut rng) else {
             continue;
         };
-        if let Ok(applied) = f.writer.submit_intent(next).await {
+        if let Ok(applied) = f.writer.submit_intent(next.clone()).await {
+            picker.acked(&next, &applied);
+            if let IntentPayload::PosSale(s) = &next.payload
+                && s.receipt.is_some()
+            {
+                println!("PRINT {}", applied.changes[0].row_id);
+            }
             let seqs: Vec<String> = applied.changes.iter().map(|c| c.seq.to_string()).collect();
             println!("ACK {}", seqs.join(","));
             std::io::stdout().flush().unwrap();
@@ -522,18 +852,24 @@ async fn burst_until_killed(db: std::path::PathBuf) -> ! {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_hub_killed_during_a_burst_keeps_every_acknowledged_row() {
+/// What the parent read from the child before killing it.
+struct Acked {
+    seqs: Vec<i64>,
+    printed: Vec<String>,
+    count: usize,
+}
+
+async fn crash_drill(mix: Mix, test: &'static str) {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
     if let Some(db) = std::env::var_os(CHILD_ENV) {
-        burst_until_killed(std::path::PathBuf::from(db)).await;
+        burst_until_killed(std::path::PathBuf::from(db), mix).await;
     }
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("branch.db");
     let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", CRASH_TEST, "--nocapture", "--test-threads=1"])
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
         .env(CHILD_ENV, &db)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -541,10 +877,17 @@ async fn a_hub_killed_during_a_burst_keeps_every_acknowledged_row() {
         .unwrap();
     let stdout = child.stdout.take().unwrap();
     let reader = tokio::task::spawn_blocking(move || {
-        let mut acked: Vec<i64> = Vec::new();
-        let mut count = 0usize;
+        let mut acked = Acked {
+            seqs: Vec::new(),
+            printed: Vec::new(),
+            count: 0,
+        };
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            if let Some(order) = line.trim_end().strip_prefix("PRINT ") {
+                acked.printed.push(order.to_owned());
+                continue;
+            }
             let Some(rest) = line
                 .trim_end()
                 .rsplit("ACK ")
@@ -553,23 +896,26 @@ async fn a_hub_killed_during_a_burst_keeps_every_acknowledged_row() {
             else {
                 continue;
             };
-            acked.extend(rest.split(',').filter_map(|s| s.parse::<i64>().ok()));
-            count += 1;
-            if count >= ACKS_BEFORE_KILL {
+            acked
+                .seqs
+                .extend(rest.split(',').filter_map(|s| s.parse::<i64>().ok()));
+            acked.count += 1;
+            if acked.count >= ACKS_BEFORE_KILL {
                 break;
             }
         }
-        (acked, count)
+        acked
     });
-    let (acked, count) = tokio::time::timeout(Duration::from_secs(120), reader)
+    let acked = tokio::time::timeout(Duration::from_secs(120), reader)
         .await
         .expect("the child acknowledged no burst in time")
         .unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
     assert!(
-        count >= ACKS_BEFORE_KILL,
-        "the child died after {count} acks"
+        acked.count >= ACKS_BEFORE_KILL,
+        "the child died after {} acks",
+        acked.count
     );
 
     let store = Store::open(&db, T0 + 1).unwrap();
@@ -584,8 +930,30 @@ async fn a_hub_killed_during_a_burst_keeps_every_acknowledged_row() {
         seqs.windows(2).all(|w| w[1] == w[0] + 1),
         "changes.seq has a gap"
     );
-    for seq in &acked {
+    for seq in &acked.seqs {
         assert!(log.contains(seq), "acknowledged change {seq} is missing");
+    }
+
+    if mix == Mix::Counter {
+        assert_books(&store);
+        let queued = store.queued_prints(100_000).unwrap();
+        for order in &acked.printed {
+            let rows = queued.iter().filter(|r| &r.ref_id == order).count();
+            assert_eq!(rows, 1, "the Print sale {order} has {rows} queued receipts");
+            let row = store
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .find(|o| text(o, "id") == *order)
+                .unwrap();
+            assert!(
+                matches!(row["invoice_no"], RowValue::Text(_)),
+                "a printed sale is numbered in its own settle"
+            );
+        }
+        drop(store);
+        issue_pending_invoices(&db).await;
+        return;
     }
 
     let rows = store.rows(Table::Sessions).unwrap();
@@ -616,4 +984,76 @@ async fn a_hub_killed_during_a_burst_keeps_every_acknowledged_row() {
         "the snapshot a kiosk re-syncs to lacks {} sessions",
         running - snapshot.sessions.len().min(running)
     );
+}
+
+/// The restarted Hub numbers every sale the crash left pending: each once, with no gap, and a
+/// second ask is refused instead of taking another number.
+async fn issue_pending_invoices(db: &std::path::Path) {
+    let mut store = Store::open(db, T0 + 1).unwrap();
+    let lease = LeaseRow {
+        counter: 1,
+        hub_instance_id: HUB.into(),
+        provisional: true,
+        renewed_at: T0,
+        expires_at: i64::MAX,
+    };
+    store.write_tx(|tx| write_lease(tx, &lease)).unwrap();
+    let mut status = HubStatus::opened(store.schema_version().unwrap(), HUB);
+    status.role = Role::Primary;
+    status.lease = Some(LeaseInfo::from(&lease));
+    let (_status, rx) = status_channel(status);
+    let writer = Writer::spawn(store, Arc::new(ManualClock::new(T0 + 3_600_000)), rx).unwrap();
+    let reader = Store::open(db, T0 + 1).unwrap();
+    let pending: Vec<String> = reader
+        .rows(Table::Orders)
+        .unwrap()
+        .iter()
+        .filter(|o| {
+            text(o, "status") == "settled"
+                && numbered_kind(o)
+                && o["invoice_no"] == RowValue::Null
+                && int(o, "total_minor") > 0
+        })
+        .map(|o| text(o, "id"))
+        .collect();
+    let issue = |order: &String| {
+        let mut i = intent(
+            IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
+                order_id: order.clone(),
+            }),
+            None,
+        );
+        i.actor.kind = ActorKind::System;
+        i
+    };
+    for order in &pending {
+        writer
+            .submit_intent(issue(order))
+            .await
+            .expect("a pending invoice is issued after the restart");
+        let again = writer.submit_intent(issue(order)).await;
+        assert!(again.is_err(), "{order} was numbered twice");
+    }
+    assert_books(&reader);
+    assert!(
+        reader
+            .rows(Table::Orders)
+            .unwrap()
+            .iter()
+            .filter(|o| numbered_kind(o)
+                && text(o, "status") == "settled"
+                && int(o, "total_minor") > 0)
+            .all(|o| matches!(o["invoice_no"], RowValue::Text(_))),
+        "a sale is still unnumbered"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hub_killed_during_a_burst_keeps_every_acknowledged_row() {
+    crash_drill(Mix::Floor, FLOOR_CRASH_TEST).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hub_killed_during_a_sale_burst_keeps_every_sale_stock_move_and_invoice() {
+    crash_drill(Mix::Counter, COUNTER_CRASH_TEST).await;
 }

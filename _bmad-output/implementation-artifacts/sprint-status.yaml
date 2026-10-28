@@ -147,7 +147,7 @@ development_status:
   5-20-b2b-invoice-with-the-customer-s-gstin: done
   5-21-coupons-applied-at-settle: done
   5-22-manual-discount-with-manager-pin-and-reason: done
-  5-23-void-an-unsettled-order-with-manager-pin: review
+  5-23-void-an-unsettled-order-with-manager-pin: done
   5-24-refund-a-settled-order-with-a-credit-note: backlog
   5-25-cash-deposits-and-expenses: backlog
   5-26-close-a-shift-with-a-blind-count-and-a-signed-variance: backlog

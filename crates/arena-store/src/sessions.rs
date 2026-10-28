@@ -1,4 +1,4 @@
-use arena_proto::AppError;
+use arena_proto::{AppError, ErrorCode};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db_error;
@@ -806,13 +806,20 @@ pub struct OrderVoid<'a> {
 /// Marks an open session order void. The order is detached from its session (the session may
 /// open a fresh bill) and keeps the session id in `void_session_id`; its lines stay.
 pub fn void_order(conn: &Connection, order_id: &str, v: &OrderVoid<'_>) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE orders SET status = 'void', void_session_id = session_id, session_id = NULL,
-                voided_at = ?2, voided_by = ?3, void_reason = ?4, void_note = ?5
-         WHERE id = ?1 AND status = 'open'",
-        params![order_id, v.at, v.by, v.reason, v.note],
-    )
-    .map_err(db_error)?;
+    let changed = conn
+        .execute(
+            "UPDATE orders SET status = 'void', void_session_id = session_id, session_id = NULL,
+                    voided_at = ?2, voided_by = ?3, void_reason = ?4, void_note = ?5
+             WHERE id = ?1 AND status = 'open'",
+            params![order_id, v.at, v.by, v.reason, v.note],
+        )
+        .map_err(db_error)?;
+    if changed != 1 {
+        return Err(AppError::new(
+            ErrorCode::Stale,
+            "the order is no longer open",
+        ));
+    }
     Ok(())
 }
 

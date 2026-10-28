@@ -2,7 +2,7 @@
 title: 'Story 5.23: Void an unsettled order with manager PIN'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: 'b9afed1e979ef352d9a3fccc9a54ee26a11f4141'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -82,6 +82,7 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+- 2026-10-28 review: `void_order` now fails `STALE` when no open row was updated; unit test for `void_candidate`; audit label for `order.void`; fixed a 5.22 proptest flake (discount undo ran as the owner, not the seller). Dismissed: waste on void (spec: never), note length counter, extra indexes/CHECK, KDS notice, further proptest stock checks (out of scope).
 
 ## Design Notes
 

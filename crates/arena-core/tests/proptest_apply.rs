@@ -2265,6 +2265,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             }
             let allowed = intent.actor.kind == ActorKind::Owner
                 || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let seller = intent.actor.clone();
             let actor_id = intent.actor.id.clone();
             let before = hub.change_count();
             let out = hub.submit_new(intent);
@@ -2306,12 +2307,14 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert_eq!(int(&order, "total_minor"), preview.total_minor);
             prop_assert_eq!(text(&order, "discount_by"), actor_id);
             if *undo {
-                let out = hub.submit_new(hub.intent(
+                let mut undo_intent = hub.intent(
                     IntentPayload::PosSaleReverted(arena_proto::PosSaleReverted {
                         order_id: text(&order, "id"),
                     }),
                     Some(int(&order, "rev")),
-                ));
+                );
+                undo_intent.actor = seller;
+                let out = hub.submit_new(undo_intent);
                 prop_assert!(out.is_ok(), "{:?}", out);
             }
         }

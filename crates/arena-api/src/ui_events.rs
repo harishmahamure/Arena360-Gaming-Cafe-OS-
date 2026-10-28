@@ -896,6 +896,24 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_that_only_updates_an_order_is_a_void_candidate() {
+        use arena_core::ChangeOp::{Delete, Insert, Update};
+        let void = applied(&[
+            ("stock_holds", "H", Update),
+            ("stock", "P", Update),
+            ("stock_moves", "M", Insert),
+            ("orders", "O", Update),
+        ]);
+        assert_eq!(void_candidate(&void), Some("O".into()));
+        let cancelled = applied(&[("order_lines", "L", Delete), ("orders", "O", Update)]);
+        assert!(void_candidate(&cancelled).is_none());
+        let settled = applied(&[("payments", "Y", Insert), ("orders", "O", Update)]);
+        assert!(void_candidate(&settled).is_none());
+        let ended = applied(&[("sessions", "S", Update), ("orders", "O", Update)]);
+        assert!(void_candidate(&ended).is_none());
+    }
+
+    #[test]
     fn an_undo_that_keeps_the_order_is_a_revert_and_a_placement_is_a_candidate() {
         use arena_core::ChangeOp::{Delete, Insert, Update};
         // Undo of End on an order that holds placed products: the order stays, its time lines go.

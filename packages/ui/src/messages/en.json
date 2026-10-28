@@ -794,6 +794,7 @@
   "hub.audit.intent.order.place.reverted": "Session order undone",
   "hub.audit.intent.order.line_served": "Order item marked served",
   "hub.audit.intent.order.line_cancel": "Order item cancelled",
+  "hub.audit.intent.order.void": "Order voided",
   "hub.audit.kind.unknown": "Unknown",
   "hub.audit.mode.unknown": "unknown method",
   "hub.audit.mode.remote": "remote unlock",

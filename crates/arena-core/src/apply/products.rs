@@ -6,7 +6,7 @@ use arena_proto::{
 use arena_store::{
     ChangeOp, ProductRow, RowKey, StoreTx, Table, barcode_holder, delete_row, find_product,
     find_setting, insert_component, insert_product, list_components, live_bundles_with, read_row,
-    set_product_deleted, update_product,
+    set_low_stock_qty, set_product_deleted, update_product,
 };
 
 use super::mutate::Written;
@@ -226,6 +226,7 @@ pub(super) fn mutate_upsert(
     }
     let mut out = written(id.clone(), op);
     if !row.track_stock || row.bundle {
+        set_low_stock_qty(tx, &id, None)?;
         out.extend(super::stock::ack_low_for(
             tx,
             &id,

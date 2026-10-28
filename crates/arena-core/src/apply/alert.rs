@@ -50,8 +50,15 @@ pub(super) fn validate(intent: &Intent, t: &AlertTarget) -> Result<(), AppError>
     }
     match &intent.payload {
         IntentPayload::AlertRaise(r) => {
-            if AlertKind::parse(&r.alert_kind).is_none() {
-                return Err(invalid("alert_kind", "this alert kind is not known"));
+            match AlertKind::parse(&r.alert_kind) {
+                None => return Err(invalid("alert_kind", "this alert kind is not known")),
+                Some(AlertKind::StockLow) => {
+                    return Err(invalid(
+                        "alert_kind",
+                        "low stock is raised by stock changes",
+                    ));
+                }
+                Some(_) => {}
             }
             if r.device_id.is_some() && !t.device {
                 return Err(AppError::with_field(

@@ -1802,6 +1802,15 @@ async fn deleting_or_untracking_a_product_acknowledges_its_open_low_stock_alert(
     )
     .await;
     assert_eq!(a, cola);
+    make(
+        &f,
+        ProductUpsert {
+            id: Some(cola.clone()),
+            ..up("Cola")
+        },
+    )
+    .await;
+    assert_eq!(threshold_of(&f, &cola), None);
     let open = low_alerts(&f);
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].product_id.as_deref(), Some(chips.as_str()));

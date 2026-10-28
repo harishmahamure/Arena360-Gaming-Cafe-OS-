@@ -185,6 +185,20 @@ async fn an_unknown_kind_is_a_validation_failure() {
 }
 
 #[tokio::test]
+async fn a_low_stock_alert_cannot_be_raised_without_a_product() {
+    let f = bootstrapped().await;
+    let before = log_len(&f);
+    let e = raise(&f, system(), AlertKind::StockLow, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (e.code, e.field.as_deref()),
+        (ErrorCode::ValidationFailed, Some("alert_kind"))
+    );
+    assert_eq!(log_len(&f), before);
+}
+
+#[tokio::test]
 async fn acknowledging_keeps_the_row_and_records_who_and_when() {
     let f = bootstrapped().await;
     let d = device(&f).await;

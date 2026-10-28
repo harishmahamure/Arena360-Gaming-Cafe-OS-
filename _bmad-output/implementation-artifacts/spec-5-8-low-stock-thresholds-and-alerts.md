@@ -119,3 +119,10 @@ Status: done
 - **Review:** 3 patches applied (2 medium, 1 low), 1 deferred, the rest rejected with the reasons above. Follow-up review not recommended (no high; 2 medium patched).
 - **Verification:** `cargo fmt --check`, clippy `-D warnings` on arena-core/api/store/proto/replay, `cargo test` on arena-core (716), arena-store, arena-proto, arena-api, arena-replay all pass; `pnpm check` (hub) 0 errors; `format:check`, `check:strings`, `check:protocol`, `check:layers` pass; Playwright `low-stock` (12) passes after the patches; `expiry` and `alerts` passed before them. Known unrelated failures as in spec 5.7 (`arena-tasks` heartbeat/printer timing, `check:tokens-used`, `check:generated` until committed).
 - **Residual risks:** quantity is on hand, not sellable; a system `alert.raise` of kind `stock_low` would make a product-less alert.
+
+### 2026-10-28 — Code review (bmad-code-review)
+- Layers: blind, edge-case, verification-gap, acceptance auditor. No acceptance-criteria violation.
+- `[medium]` `patch` Untracking or bundling a product left its `low_stock_qty`, so re-tracking listed it as low with no alert — `mutate_upsert` now clears the threshold with the ack; extended `deleting_or_untracking_…` test.
+- `[medium]` `patch` `alert.raise` accepted `stock_low` and stored a product-less alert — rejected with `VALIDATION_FAILED alert_kind`; test `a_low_stock_alert_cannot_be_raised_without_a_product`.
+- Rejected/deferred: on-hand vs sellable quantity (already deferred), STALE on same threshold (spec), per-alert product lookup, label fallbacks, extra coverage (cosmetic/unreachable).
+- Verification: fmt, clippy `-D warnings`, `cargo test` arena-core/store/proto/api/replay all green.

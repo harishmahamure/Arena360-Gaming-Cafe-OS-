@@ -1168,6 +1168,48 @@ impl SnapshotReader {
         Ok(crate::reports::staff_report(&rows, from, to, &day_of))
     }
 
+    /// Stock on hand per tracked product with its value at the average cost (Story 5.31).
+    pub fn stock_report(&self) -> Result<arena_proto::StockReport, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(crate::stock_report::stock_report(&store.stock_levels()?))
+    }
+
+    /// Every stock movement of the business days `from` to `to`, newest first, optionally of one
+    /// product and one move reason (Story 5.31).
+    pub fn stock_moves(
+        &self,
+        from: &str,
+        to: &str,
+        product_id: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<arena_proto::StockMoves, AppError> {
+        crate::reports::parse_range(from, to)?;
+        let (from_ms, to_ms) = crate::reports::shift_read_window(from, to)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let day_of = crate::locale::business_day_fn(&store)?;
+        let rows = store.stock_moves_rows(from_ms, to_ms, product_id, reason, false)?;
+        Ok(crate::stock_report::stock_moves(&rows, from, to, &day_of))
+    }
+
+    /// Waste by reason and by product for the business days `from` to `to` (Story 5.31).
+    pub fn waste_report(&self, from: &str, to: &str) -> Result<arena_proto::WasteReport, AppError> {
+        crate::reports::parse_range(from, to)?;
+        let (from_ms, to_ms) = crate::reports::shift_read_window(from, to)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let day_of = crate::locale::business_day_fn(&store)?;
+        let rows = store.stock_moves_rows(from_ms, to_ms, None, None, true)?;
+        Ok(crate::stock_report::waste_report(&rows, from, to, &day_of))
+    }
+
     /// The invoice numbered `invoice_no` for the Refund screen: `INVOICE_NOT_FOUND` when no settled
     /// order carries that number.
     pub fn refund_invoice(&self, invoice_no: &str) -> Result<arena_proto::RefundInvoice, AppError> {

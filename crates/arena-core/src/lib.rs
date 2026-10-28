@@ -26,6 +26,7 @@ pub mod setup;
 mod snapshot;
 pub mod staff;
 mod status;
+mod stock_report;
 pub mod windows;
 mod writer;
 

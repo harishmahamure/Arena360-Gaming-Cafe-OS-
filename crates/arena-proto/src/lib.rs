@@ -51,6 +51,7 @@ mod snapshot;
 mod staff_invite;
 mod staff_list;
 mod stock;
+mod stock_report;
 mod tax;
 mod test_session;
 pub mod tier;
@@ -310,6 +311,10 @@ pub use stock::{
     StockWasteReverted, StockWriteOff, TAKE_STOCK_AT_MODES, TAKE_STOCK_AT_ORDER,
     TAKE_STOCK_AT_SERVED, add_days, consume_plan, lot_expired, lot_in_window, valid_date,
     weighted_avg_cost,
+};
+pub use stock_report::{
+    STOCK_MOVES_LIMIT, StockLevel, StockMoveLine, StockMoves, StockReport, WASTE_EXPIRED,
+    WASTE_REASONS, WasteProductRow, WasteReasonRow, WasteReport,
 };
 pub use tax::{
     BUYER_NAME_MAX_CHARS, BusinessBuyer, DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX,

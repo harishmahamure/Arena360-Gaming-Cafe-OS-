@@ -6,8 +6,12 @@ import type {
   GstMonth,
   PlayersReport,
   SessionsReport,
+  ExpiryView,
   ShiftList,
   StaffReport,
+  StockMoves,
+  StockReport,
+  WasteReport,
   ZReport,
 } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
@@ -298,6 +302,104 @@ const STAFF: StaffReport = {
   ],
 };
 
+const STOCK: StockReport = {
+  items: [
+    { product_id: "PB", name: "Apple", qty: 0, avg_cost_minor: 0, value_minor: 0 },
+    { product_id: "PA", name: "Cola", qty: 20, avg_cost_minor: 1_500, value_minor: 30_000 },
+  ],
+  total_value_minor: 30_000,
+};
+
+const MOVES: StockMoves = {
+  from: "2026-10-28",
+  to: "2026-10-28",
+  moves: [
+    {
+      move_id: "M2",
+      product_id: "PA",
+      product: "Cola",
+      reason: "waste",
+      waste_reason: "spoiled",
+      qty: -4,
+      value_minor: -6_000,
+      staff_id: "S1",
+      staff: "Meera",
+      at: 1_793_194_000_000,
+    },
+    {
+      move_id: "M1",
+      product_id: "PA",
+      product: "Cola",
+      reason: "stock_in",
+      qty: 25,
+      value_minor: 37_500,
+      staff_id: "GONE",
+      staff: "",
+      at: 1_793_190_000_000,
+    },
+  ],
+  total: 2,
+  truncated: false,
+};
+
+const WASTE: WasteReport = {
+  from: "2026-10-28",
+  to: "2026-10-28",
+  by_reason: [
+    { reason: "spoiled", qty: 3, value_minor: 4_500 },
+    { reason: "broken", qty: 1, value_minor: 1_500 },
+    { reason: "free", qty: 0, value_minor: 0 },
+    { reason: "cancelled_order", qty: 0, value_minor: 0 },
+    { reason: "expired", qty: 5, value_minor: 5_000 },
+  ],
+  by_product: [
+    {
+      product_id: "PA",
+      product: "Cola",
+      qty: 4,
+      value_minor: 6_000,
+      reasons: [
+        { reason: "spoiled", qty: 3, value_minor: 4_500 },
+        { reason: "broken", qty: 1, value_minor: 1_500 },
+      ],
+    },
+    {
+      product_id: "PB",
+      product: "Apple",
+      qty: 5,
+      value_minor: 5_000,
+      reasons: [{ reason: "expired", qty: 5, value_minor: 5_000 }],
+    },
+  ],
+  total_qty: 9,
+  total_value_minor: 11_000,
+};
+
+const EXPIRY: ExpiryView = {
+  today: "2026-10-28",
+  warn_days: 3,
+  expiring: [
+    {
+      lot_id: "L1",
+      product_id: "PA",
+      product: "Cola",
+      qty: 6,
+      expiry: "2026-10-30",
+      value_minor: 9_000,
+    },
+  ],
+  expired: [
+    {
+      lot_id: "L2",
+      product_id: "PB",
+      product: "Apple",
+      qty: 2,
+      expiry: "2026-10-25",
+      value_minor: 2_000,
+    },
+  ],
+};
+
 type Hub = {
   asked: string[];
   sent: unknown[];
@@ -460,6 +562,38 @@ async function open(
         }
         return ok(route, url.pathname.endsWith("staff") ? STAFF : PLAYERS);
       }
+      case "/ui/reports/stock":
+        hub.asked.push("stock");
+        return ok(route, hub.empty ? { items: [], total_value_minor: 0 } : STOCK);
+      case "/ui/reports/stock/moves": {
+        const from = url.searchParams.get("from") ?? "";
+        const to = url.searchParams.get("to") ?? "";
+        const product = url.searchParams.get("product") ?? "";
+        const reason = url.searchParams.get("reason") ?? "";
+        hub.asked.push(`moves ${from} ${to} ${product} ${reason}`);
+        if (hub.empty) return ok(route, { ...MOVES, moves: [], total: 0 });
+        const shown = MOVES.moves.filter(
+          (m) => (!product || m.product_id === product) && (!reason || m.reason === reason),
+        );
+        return ok(route, { ...MOVES, moves: shown, total: shown.length });
+      }
+      case "/ui/reports/stock/waste":
+        hub.asked.push(`waste ${url.searchParams.get("from")} ${url.searchParams.get("to")}`);
+        return ok(
+          route,
+          hub.empty
+            ? {
+                ...WASTE,
+                by_reason: WASTE.by_reason.map((r) => ({ ...r, qty: 0, value_minor: 0 })),
+                by_product: [],
+                total_qty: 0,
+                total_value_minor: 0,
+              }
+            : WASTE,
+        );
+      case "/ui/reports/stock/expiring":
+        hub.asked.push("expiring");
+        return ok(route, hub.empty ? { ...EXPIRY, expiring: [], expired: [] } : EXPIRY);
       case "/ui/reports/daily-sales":
       case "/ui/reports/sessions": {
         const from = url.searchParams.get("from") ?? "";
@@ -870,4 +1004,136 @@ test("the Players and Staff screens have no accessibility violations", async ({ 
   await expect(page.getByTestId("staff-table")).toBeVisible();
   const staff = await new AxeBuilder({ page }).analyze();
   expect(staff.violations).toEqual([]);
+});
+
+// ---- Story 5.31: Stock ----
+
+test("the list offers Stock and it opens on stock on hand with the total value", async ({
+  page,
+}) => {
+  const hub = await open(page, ["report.view"]);
+  await page.getByTestId("report-link-stock").click();
+  await expect(page.getByTestId("stock-report-screen")).toBeVisible();
+  await expect(page.getByTestId("stock-table")).toBeVisible();
+  expect(hub.asked).toEqual(["stock"]);
+  await expect(page.getByTestId("stock-row-PA")).toContainText("Cola");
+  await expect(page.getByTestId("stock-row-PA")).toContainText("20");
+  await expect(page.getByTestId("stock-row-PA")).toContainText("₹15.00");
+  await expect(page.getByTestId("stock-row-PA").getByTestId("stock-value")).toHaveText("₹300.00");
+  await expect(page.getByTestId("stock-total")).toHaveText("₹300.00");
+});
+
+test("an empty stock list says so", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/stock", GST_TAX, true);
+  await expect(page.getByTestId("stock-none")).toHaveText(en["hub.stock.none"]);
+});
+
+test("Movements lists every move signed, asks for the range and filters by product and reason", async ({
+  page,
+}) => {
+  const hub = await open(page, ["report.view"], "/reports/stock");
+  await expect(page.getByTestId("stock-table")).toBeVisible();
+  await page.getByRole("tab", { name: en["hub.stock.tab.moves"] }).click();
+  await expect(page.getByTestId("moves-table")).toBeVisible();
+  expect(hub.asked.at(-1)).toMatch(/^moves (\d{4}-\d{2}-\d{2}) \1  $/);
+  const rows = page.getByTestId("moves-table").locator("tbody tr");
+  await expect(rows).toHaveCount(2);
+  const waste = page.getByTestId("move-row-M2");
+  await expect(waste).toContainText(en["hub.stock.move.waste"]);
+  await expect(waste).toContainText(en["reason.spoiled"]);
+  await expect(waste.getByTestId("move-qty")).toHaveText("-4");
+  await expect(waste.getByTestId("move-value")).toHaveText("−₹60.00");
+  const stockIn = page.getByTestId("move-row-M1");
+  await expect(stockIn.getByTestId("move-qty")).toHaveText("+25");
+  await expect(stockIn.getByTestId("move-value")).toHaveText("+₹375.00");
+  await expect(stockIn).toContainText(en["hub.reports.former_staff"]);
+  await page.getByTestId("stock-filter-reason").selectOption("stock_in");
+  await expect(rows).toHaveCount(1);
+  expect(hub.asked.at(-1)).toMatch(/ stock_in$/);
+  await page.getByTestId("stock-filter-product").selectOption("PB");
+  await expect(page.getByTestId("moves-none")).toHaveText(en["hub.stock.moves_none"]);
+  expect(hub.asked.at(-1)).toMatch(/ PB stock_in$/);
+  await page.getByRole("button", { name: en["hub.reports.last_7"] }).click();
+  await expect
+    .poll(() => {
+      const [kind, from, to] = (hub.asked.at(-1) ?? "").split(" ");
+      return kind === "moves" && daySpan(from, to) === 7;
+    })
+    .toBe(true);
+});
+
+test("Waste shows every reason with quantity and value at cost, and per product", async ({
+  page,
+}) => {
+  const hub = await open(page, ["report.view"], "/reports/stock");
+  await page.getByRole("tab", { name: en["hub.stock.tab.waste"] }).click();
+  await expect(page.getByTestId("waste-reasons")).toBeVisible();
+  expect(hub.asked.at(-1)).toMatch(/^waste (\d{4}-\d{2}-\d{2}) \1$/);
+  await expect(page.locator("[data-testid^='waste-reason-']")).toHaveCount(5);
+  const spoiled = page.getByTestId("waste-reason-spoiled");
+  await expect(spoiled).toContainText(en["reason.spoiled"]);
+  await expect(spoiled.getByTestId("waste-qty")).toHaveText("3");
+  await expect(spoiled.getByTestId("waste-value")).toHaveText("₹45.00");
+  await expect(page.getByTestId("waste-reason-expired")).toContainText(
+    en["hub.stock.waste.expired"],
+  );
+  await expect(page.getByTestId("waste-reason-free").getByTestId("waste-value")).toHaveText(
+    "₹0.00",
+  );
+  await expect(page.getByTestId("waste-total-qty")).toHaveText("9");
+  await expect(page.getByTestId("waste-total-value")).toHaveText("₹110.00");
+  await expect(page.getByTestId("waste-product-PA")).toContainText("Cola");
+  await expect(page.getByTestId("waste-product-PA")).toContainText("₹60.00");
+  await expect(page.getByTestId("waste-product-PB")).toContainText(en["hub.stock.waste.expired"]);
+});
+
+test("an empty Waste range says so and still lists the five reasons", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/stock", GST_TAX, true);
+  await page.getByRole("tab", { name: en["hub.stock.tab.waste"] }).click();
+  await expect(page.getByTestId("waste-none")).toHaveText(en["hub.stock.waste_none"]);
+  await expect(page.locator("[data-testid^='waste-reason-']")).toHaveCount(5);
+});
+
+test("Expiring lists lots in the warning window and expired lots not yet written off", async ({
+  page,
+}) => {
+  const hub = await open(page, ["report.view"], "/reports/stock");
+  await page.getByRole("tab", { name: en["hub.stock.tab.expiring"] }).click();
+  await expect(page.getByTestId("expiring-table")).toBeVisible();
+  expect(hub.asked.at(-1)).toBe("expiring");
+  await expect(page.getByTestId("expiring-row-L1")).toContainText("Cola");
+  await expect(page.getByTestId("expiring-row-L1")).toContainText("₹90.00");
+  await expect(page.getByTestId("expired-row-L2")).toContainText("Apple");
+});
+
+test("an empty Expiring tab says nothing is expiring or expired", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/stock", GST_TAX, true);
+  await page.getByRole("tab", { name: en["hub.stock.tab.expiring"] }).click();
+  await expect(page.getByTestId("expiring-none")).toHaveText(en["hub.stock.expiring_none"]);
+  await expect(page.getByTestId("expired-none")).toHaveText(en["hub.stock.expired_none"]);
+});
+
+test("without report.view Stock says so and asks for nothing", async ({ page }) => {
+  const hub = await open(page, ["pos.sell"], "/reports/stock");
+  await expect(page.getByTestId("reports-denied")).toHaveText(en["hub.reports.no_access"]);
+  expect(hub.asked).toEqual([]);
+});
+
+test("the Stock screen has no accessibility violations on any tab", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/stock");
+  await expect(page.getByTestId("stock-table")).toBeVisible();
+  await page.waitForTimeout(250); // the tab's 120 ms fill transition must finish before axe samples it
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole("tab", { name: en["hub.stock.tab.moves"] }).click();
+  await expect(page.getByTestId("moves-table")).toBeVisible();
+  await page.waitForTimeout(250); // the tab's 120 ms fill transition must finish before axe samples it
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole("tab", { name: en["hub.stock.tab.waste"] }).click();
+  await expect(page.getByTestId("waste-reasons")).toBeVisible();
+  await page.waitForTimeout(250); // the tab's 120 ms fill transition must finish before axe samples it
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole("tab", { name: en["hub.stock.tab.expiring"] }).click();
+  await expect(page.getByTestId("expiring-table")).toBeVisible();
+  await page.waitForTimeout(250); // the tab's 120 ms fill transition must finish before axe samples it
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });

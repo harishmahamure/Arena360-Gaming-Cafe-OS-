@@ -5,6 +5,7 @@
 //! `GET /ui/reports/shifts/{id}` (the Z-report of a closed shift). Story 5.29 adds
 //! `GET /ui/reports/gst` and `POST /ui/reports/gst/export` (the GSTR-1 ZIP, written to a folder).
 //! Story 5.30 adds `GET /ui/reports/players` and `GET /ui/reports/staff` (same range rules).
+//! Story 5.31 adds `GET /ui/reports/stock` and its `/moves`, `/waste` and `/expiring` reads.
 
 use std::sync::Arc;
 
@@ -252,6 +253,93 @@ pub(crate) async fn gst_export(
     .await;
     match job {
         Ok(Ok(done)) => Json(done).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `GET /ui/reports/stock` (`report.view`): stock on hand per tracked product with its value at
+/// the average cost (Story 5.31).
+pub(crate) async fn stock(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(denied) = gate(&auth, &headers).await {
+        return denied;
+    }
+    let reader = Arc::clone(auth.reader());
+    match tokio::task::spawn_blocking(move || reader.stock_report()).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MovesQuery {
+    from: String,
+    to: String,
+    product: Option<String>,
+    reason: Option<String>,
+}
+
+/// An empty filter value means no filter.
+fn filter(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.is_empty())
+}
+
+/// `GET /ui/reports/stock/moves?from=&to=&product=&reason=` (`report.view`): the stock movements
+/// of a range, newest first, cut to 1,000 lines (Story 5.31). Same range rules as the other
+/// reports.
+pub(crate) async fn stock_moves(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    Query(q): Query<MovesQuery>,
+) -> Response {
+    if let Err(denied) = gate(&auth, &headers).await {
+        return denied;
+    }
+    let reader = Arc::clone(auth.reader());
+    let (product, reason) = (filter(q.product), filter(q.reason));
+    let built = tokio::task::spawn_blocking(move || {
+        reader.stock_moves(&q.from, &q.to, product.as_deref(), reason.as_deref())
+    })
+    .await;
+    match built {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `GET /ui/reports/stock/waste?from=&to=` (`report.view`): waste by reason and by product, at
+/// cost (Story 5.31).
+pub(crate) async fn stock_waste(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    Query(q): Query<RangeQuery>,
+) -> Response {
+    if let Err(denied) = gate(&auth, &headers).await {
+        return denied;
+    }
+    let reader = Arc::clone(auth.reader());
+    match tokio::task::spawn_blocking(move || reader.waste_report(&q.from, &q.to)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `GET /ui/reports/stock/expiring` (`report.view`): the lots inside the expiry warning window
+/// and the expired lots not yet written off, as of now (Story 5.31).
+pub(crate) async fn stock_expiring(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(denied) = gate(&auth, &headers).await {
+        return denied;
+    }
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    match tokio::task::spawn_blocking(move || reader.expiry(now)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
         Ok(Err(e)) => fail(ui_error(e)),
         Err(_) => fail(internal()),
     }

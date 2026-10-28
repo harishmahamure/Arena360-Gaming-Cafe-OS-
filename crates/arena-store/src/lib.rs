@@ -33,6 +33,7 @@ mod sessions;
 mod shifts;
 mod staff;
 mod stock;
+mod stock_reports;
 mod wallet;
 mod zreport;
 
@@ -199,6 +200,7 @@ pub use stock::{
     open_hold_qty, open_hold_totals, release_hold, set_lot_remaining, set_low_stock_qty,
     update_stock,
 };
+pub use stock_reports::{StockLevelRow, StockMoveReportRow, StockMovesRows};
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
     insert_topup_order, insert_wallet, insert_wallet_txn, list_order_wallet_txns, list_wallet_txns,
@@ -1306,6 +1308,39 @@ impl Store {
                     Vec::new()
                 },
                 names: reports::staff_names(&s.conn)?,
+            })
+        })
+    }
+
+    /// Every tracked product with what is on hand (Story 5.31), in one read snapshot. An older
+    /// database without the tables reads as no stock.
+    pub fn stock_levels(&self) -> Result<Vec<StockLevelRow>, AppError> {
+        if !self.table_exists("products")? || !self.table_exists("stock")? {
+            return Ok(Vec::new());
+        }
+        self.read_consistent(|s| stock_reports::stock_levels(&s.conn))
+    }
+
+    /// The stock moves with `at` from `from_ms` to `to_ms` (UTC ms, inclusive), newest first, with
+    /// the staff names (Story 5.31). `product_id` and `reason` narrow them; `waste_only` keeps the
+    /// waste moves and expired write-offs.
+    pub fn stock_moves_rows(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+        product_id: Option<&str>,
+        reason: Option<&str>,
+        waste_only: bool,
+    ) -> Result<StockMovesRows, AppError> {
+        if !self.table_exists("stock_moves")? || !self.table_exists("staff")? {
+            return Ok(StockMovesRows::default());
+        }
+        self.read_consistent(|s| {
+            Ok(StockMovesRows {
+                moves: stock_reports::stock_moves_between(
+                    &s.conn, from_ms, to_ms, product_id, reason, waste_only,
+                )?,
+                staff: reports::staff_names(&s.conn)?,
             })
         })
     }

@@ -3235,6 +3235,19 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/reports/sessions", get(crate::ui_report::sessions))
         .route("/ui/reports/players", get(crate::ui_report::players))
         .route("/ui/reports/staff", get(crate::ui_report::staff))
+        .route("/ui/reports/stock", get(crate::ui_report::stock))
+        .route(
+            "/ui/reports/stock/moves",
+            get(crate::ui_report::stock_moves),
+        )
+        .route(
+            "/ui/reports/stock/waste",
+            get(crate::ui_report::stock_waste),
+        )
+        .route(
+            "/ui/reports/stock/expiring",
+            get(crate::ui_report::stock_expiring),
+        )
         .route("/ui/reports/shifts", get(crate::ui_report::shifts))
         .route("/ui/reports/shifts/{id}", get(crate::ui_report::shift))
         .route("/ui/reports/gst", get(crate::ui_report::gst))
@@ -6368,6 +6381,147 @@ pub(crate) mod tests {
             (status, reply["field"].as_str()),
             (StatusCode::UNPROCESSABLE_ENTITY, Some("from"))
         );
+    }
+
+    /// Story 5.31: the Stock reads need `report.view` and a valid range, value stock at cost,
+    /// list movements newest first with product and reason filters, and net waste by reason.
+    #[tokio::test]
+    async fn the_stock_reports_need_report_view_and_read_stock_movements_and_waste() {
+        let hub = hub().await;
+        let urls = [
+            "/ui/reports/stock",
+            "/ui/reports/stock/moves?from=2027-01-15&to=2027-01-15",
+            "/ui/reports/stock/waste?from=2027-01-15&to=2027-01-15",
+            "/ui/reports/stock/expiring",
+        ];
+        for url in urls {
+            let (status, _) = call(&hub, "GET", url, None, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        for url in urls {
+            let (status, reply) = call(&hub, "GET", url, Some(&counter), None).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+            assert_eq!(reply["code"], "PERMISSION_DENIED");
+        }
+
+        // Nothing stocked yet.
+        let (status, empty) = call(&hub, "GET", urls[0], Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(empty["items"].as_array().map(Vec::len), Some(0));
+        assert_eq!(empty["total_value_minor"], 0);
+        let (status, empty) = call(&hub, "GET", urls[2], Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(empty["by_reason"].as_array().map(Vec::len), Some(5));
+        let (status, empty) = call(&hub, "GET", urls[3], Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(empty["expired"].as_array().map(Vec::len), Some(0));
+
+        // A bad range is refused on the field, as on the other reports.
+        for kind in ["moves", "waste"] {
+            let (status, reply) = call(
+                &hub,
+                "GET",
+                &format!("/ui/reports/stock/{kind}?from=2027-01-16&to=2027-01-15"),
+                Some(&manager),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+            assert_eq!(reply["field"], "to");
+        }
+
+        // Two tracked products (20 Cola at 15; one Apple at 0 on hand) with a stock-in, a
+        // waste, an undone waste and an expired write-off, written with plain SQL.
+        let manager_id = hub.manager_id.clone();
+        let day = T0 + 4 * 3_600_000;
+        let seed = format!(
+            "INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
+                                   track_stock, image, kitchen, favourite, active, bundle, rev,
+                                   created_at, updated_at)
+             VALUES ('PA', 'Cola', 'Drinks', 50, 0, '', 1, '', 0, 0, 1, 0, 1, 0, 0),
+                    ('PB', 'Apple', 'Food', 30, 0, '', 1, '', 0, 0, 1, 0, 1, 0, 0);
+             INSERT INTO stock (product_id, qty, avg_cost_minor, rev, created_at, updated_at)
+             VALUES ('PA', 20, 15, 1, 0, 0);
+             INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
+                    before_avg_cost_minor, unit_cost_minor, supplier, lots_used, staff_id, at, rev,
+                    created_at, updated_at, waste_reason, value_minor)
+             VALUES ('M1', 'PA', 'stock_in', 25, 0, 0, 15, '', '[]', '{by}', {t1}, 1, 0, 0, NULL, 0),
+                    ('M2', 'PA', 'waste', -4, 25, 15, 15, '', '[]', '{by}', {t2}, 1, 0, 0, 'spoiled', 60),
+                    ('M3', 'PA', 'waste_reverted', 1, 21, 15, 15, '', '[]', '{by}', {t3}, 1, 0, 0, 'spoiled', 15),
+                    ('M4', 'PB', 'expired', -2, 2, 10, 10, '', '[]', '{by}', {t4}, 1, 0, 0, NULL, 20);",
+            by = manager_id,
+            t1 = day,
+            t2 = day + 1_000,
+            t3 = day + 2_000,
+            t4 = day + 3_000,
+        );
+        hub.writer
+            .submit(move |tx| {
+                tx.execute_batch(&seed)
+                    .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))
+            })
+            .await
+            .unwrap();
+
+        let (status, stock) = call(&hub, "GET", urls[0], Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{stock}");
+        let items = stock["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            (items[0]["name"].as_str(), items[0]["qty"].clone()),
+            (Some("Apple"), json!(0))
+        );
+        assert_eq!(items[1]["value_minor"], 300);
+        assert_eq!(stock["total_value_minor"], 300);
+
+        let (status, moves) = call(&hub, "GET", urls[1], Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{moves}");
+        let lines = moves["moves"].as_array().unwrap();
+        let ids: Vec<_> = lines.iter().filter_map(|m| m["move_id"].as_str()).collect();
+        assert_eq!(ids, ["M4", "M3", "M2", "M1"], "newest first");
+        assert_eq!(lines[3]["qty"], 25);
+        assert_eq!(lines[3]["value_minor"], 375, "a stock-in is worth its cost");
+        assert_eq!(lines[2]["value_minor"], -60);
+        assert_eq!(lines[3]["staff"], "Manager");
+        assert_eq!(moves["total"], 4);
+        assert_eq!(moves["truncated"], false);
+        let (status, only) = call(
+            &hub,
+            "GET",
+            &format!("{}&product=PB&reason=expired", urls[1]),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{only}");
+        assert_eq!(only["moves"].as_array().map(Vec::len), Some(1));
+        let (_, other_day) = call(
+            &hub,
+            "GET",
+            "/ui/reports/stock/moves?from=2027-01-16&to=2027-01-16",
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(other_day["moves"].as_array().map(Vec::len), Some(0));
+
+        let (status, waste) = call(&hub, "GET", urls[2], Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{waste}");
+        let reasons = waste["by_reason"].as_array().unwrap();
+        assert_eq!(
+            (reasons[0]["reason"].as_str(), reasons[0]["qty"].clone()),
+            (Some("spoiled"), json!(3)),
+            "the undone unit nets out"
+        );
+        assert_eq!(reasons[0]["value_minor"], 45);
+        assert_eq!(reasons[4]["reason"], "expired");
+        assert_eq!(reasons[4]["value_minor"], 20);
+        assert_eq!(waste["total_value_minor"], 65);
+        let products = waste["by_product"].as_array().unwrap();
+        assert_eq!(products[0]["product"], "Cola");
+        assert_eq!(products[1]["product"], "Apple");
     }
 
     /// Story 5.30: the Players and Staff reads need `report.view` and a valid range; Players also

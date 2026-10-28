@@ -1,5 +1,6 @@
 import type {
   DailySales,
+  ExpiryView,
   GstExported,
   GstMonth,
   PlayersReport,
@@ -8,6 +9,9 @@ import type {
   ShiftList,
   SnapshotLocale,
   StaffReport,
+  StockMoves,
+  StockReport,
+  WasteReport,
   ZReport,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
@@ -59,6 +63,12 @@ export const REPORTS: readonly ReportEntry[] = [
     href: "/reports/staff",
     title: "hub.reports.staff",
     note: "hub.reports.staff_note",
+  },
+  {
+    id: "stock",
+    href: "/reports/stock",
+    title: "hub.reports.stock",
+    note: "hub.reports.stock_note",
   },
   {
     id: "gst",
@@ -149,11 +159,21 @@ async function loadReport<T>(
   from: string,
   to: string,
   isReport: (body: unknown) => boolean,
+  extra: Record<string, string> = {},
+): Promise<ReportOutcome<T>> {
+  return loadReportAt<T>(kind, { from, to, ...extra }, isReport);
+}
+
+/** Reads `GET /ui/reports/{kind}` with `params` (a report with no range passes none). */
+async function loadReportAt<T>(
+  kind: string,
+  params: Record<string, string>,
+  isReport: (body: unknown) => boolean,
 ): Promise<ReportOutcome<T>> {
   const token = getToken();
   if (!token) return { kind: "signed_out" };
   try {
-    const query = new URLSearchParams({ from, to });
+    const query = new URLSearchParams(params);
     const url = `${REPORTS_URL}/${kind}?${query}`; // i18n-ignore
     const res = await fetch(url, {
       headers: authHeaders(token),
@@ -193,6 +213,35 @@ export const loadPlayersReport = (from: string, to: string) =>
 /** `GET /ui/reports/staff`. */
 export const loadStaffReport = (from: string, to: string) =>
   loadReport<StaffReport>("staff", from, to, (b) => hasList(b, "staff"));
+
+/** `GET /ui/reports/stock`: stock on hand per tracked product, valued at cost. */
+export const loadStockLevels = () =>
+  loadReportAt<StockReport>("stock", {}, (b) => hasList(b, "items"));
+
+/** `GET /ui/reports/stock/moves`: the movements of a range, optionally of one product and reason. */
+export const loadStockMoves = (from: string, to: string, product: string, reason: string) =>
+  loadReport<StockMoves>("stock/moves", from, to, (b) => hasList(b, "moves"), { product, reason }); // i18n-ignore
+
+/** `GET /ui/reports/stock/waste`: waste by reason and by product, at cost. */
+export const loadStockWaste = (from: string, to: string) =>
+  loadReport<WasteReport>("stock/waste", from, to, (b) => hasList(b, "by_reason")); // i18n-ignore
+
+/** `GET /ui/reports/stock/expiring`: lots inside the warning window and expired lots. */
+export const loadStockExpiring = () =>
+  loadReportAt<ExpiryView>("stock/expiring", {}, (b) => hasList(b, "expiring")); // i18n-ignore
+
+/** The stock move reasons, in the order the filter lists them. */
+export const MOVE_REASONS = [
+  "stock_in",
+  "stock_in_reverted",
+  "sale",
+  "sale_reverted",
+  "return",
+  "waste",
+  "waste_reverted",
+  "expired",
+  "count_adjust",
+] as const;
 
 export type ShiftReadOutcome<T> =
   | { kind: "ok"; view: T }

@@ -7745,6 +7745,74 @@ mod licence {
         );
     }
 
+    async fn notify(f: &Fixture, key: &str, value: &str) -> Result<Applied, AppError> {
+        let rev = match setting(&reopen(f), key)["rev"] {
+            RowValue::Integer(n) => n,
+            _ => unreachable!(),
+        };
+        let mut i = set(key, value, Some(rev));
+        i.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(i).await
+    }
+
+    /// Story 5.15: the four service messages are paid-tier; the receipt keys are open to all.
+    #[tokio::test]
+    async fn the_notification_keys_follow_the_effective_tier() {
+        let f = bootstrapped().await;
+        for k in arena_proto::NOTIFY_KEYS {
+            assert_eq!(text(&f, k).as_deref(), Some("false"), "{k}");
+            assert_eq!(
+                notify(&f, k, "true").await.unwrap_err().code,
+                ErrorCode::TierLocked,
+                "{k}"
+            );
+        }
+        notify(&f, "receipt.default", "none").await.unwrap();
+        notify(&f, "receipt.footer", "Thanks\nCome again")
+            .await
+            .unwrap();
+        notify(&f, "receipt.address", "1 High St\nPune")
+            .await
+            .unwrap();
+        notify(&f, "receipt.phone", "+91 98765 43210")
+            .await
+            .unwrap();
+        for (key, value) in [
+            ("receipt.footer", "a\nb\nc\nd"),
+            ("receipt.phone", "a\nb"),
+            ("receipt.default", "email"),
+        ] {
+            assert_eq!(
+                notify(&f, key, value).await.unwrap_err().code,
+                ErrorCode::ValidationFailed,
+                "{key}"
+            );
+        }
+        let basic = arena_proto::Entitlement {
+            standing: LicenceStanding::Verified,
+            tier: arena_proto::Tier::Basic,
+            flags: Vec::new(),
+            limits: arena_proto::Tier::Basic.defaults().limits,
+        };
+        send(&f, ActorKind::System, basic.apply_payload(false))
+            .await
+            .unwrap();
+        notify(&f, "notify.low_balance", "true").await.unwrap();
+        assert_eq!(text(&f, "notify.low_balance").as_deref(), Some("true"));
+        let lapsed = arena_proto::Entitlement::free(LicenceStanding::Expired);
+        send(&f, ActorKind::System, lapsed.apply_payload(false))
+            .await
+            .unwrap();
+        assert_eq!(
+            notify(&f, "notify.low_balance", "false")
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::TierLocked
+        );
+        assert_eq!(text(&f, "notify.low_balance").as_deref(), Some("true"));
+    }
+
     #[tokio::test]
     async fn a_downgrade_blocks_new_devices_and_ends_nothing_running() {
         let f = bootstrapped().await;

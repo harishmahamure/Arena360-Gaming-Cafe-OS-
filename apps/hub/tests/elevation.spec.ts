@@ -61,6 +61,10 @@ function newHub(): Hub {
   return {
     settings: new Map([
       ["receipt.footer", { value: "", rev: 1 }],
+      ["receipt.address", { value: "", rev: 1 }],
+      ["receipt.phone", { value: "", rev: 1 }],
+      ["receipt.default", { value: "print", rev: 1 }],
+      ["printer.paper_mm", { value: "80", rev: 1 }],
       ["branch.currency", { value: "INR", rev: 1 }],
       ["branch.symbol_position", { value: "before", rev: 1 }],
       ["branch.number_format", { value: "indian", rev: 1 }],

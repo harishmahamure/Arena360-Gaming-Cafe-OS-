@@ -17,3 +17,9 @@ pub fn limit(tx: &StoreTx<'_>, name: &str) -> Result<Option<i64>, AppError> {
 pub fn has_flag(tx: &StoreTx<'_>, name: &str) -> Result<bool, AppError> {
     Ok(find_setting(tx, KEY_LICENCE_FLAGS)?.is_some_and(|s| arena_proto::has_flag(&s.value, name)))
 }
+
+/// Whether the effective tier (`licence.tier`, absent until a licence is applied) is a paid one.
+pub fn is_paid(tx: &StoreTx<'_>) -> Result<bool, AppError> {
+    Ok(find_setting(tx, arena_proto::KEY_LICENCE_TIER)?
+        .is_some_and(|s| arena_proto::tier_is_paid(&s.value)))
+}

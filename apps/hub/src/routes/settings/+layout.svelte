@@ -11,6 +11,7 @@
   const SECTIONS: { href: string; label: MessageKey }[] = [
     { href: "/settings/branch", label: "hub.settings.nav.branch" },
     { href: "/settings/receipt", label: "hub.settings.nav.receipt" },
+    { href: "/settings/notifications", label: "hub.settings.nav.notifications" },
     { href: "/settings/screen-lock", label: "hub.settings.nav.screen_lock" },
     { href: "/settings/devices-display", label: "hub.settings.nav.devices_display" },
     { href: "/settings/devices", label: "hub.settings.nav.devices" },

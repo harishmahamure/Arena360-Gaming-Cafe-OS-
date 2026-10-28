@@ -26,6 +26,13 @@ use arena_proto::{
     KEY_LICENCE_FLAGS, KITCHEN_KOT_MODES,
 };
 use arena_proto::{
+    DEFAULT_NOTIFY, DEFAULT_RECEIPT_ADDRESS, DEFAULT_RECEIPT_DEFAULT, DEFAULT_RECEIPT_PHONE,
+    KEY_NOTIFY_CREDIT_REMINDER, KEY_NOTIFY_LOW_BALANCE, KEY_NOTIFY_SESSION_ENDING,
+    KEY_NOTIFY_WHATSAPP_RECEIPT, KEY_RECEIPT_ADDRESS, KEY_RECEIPT_DEFAULT, KEY_RECEIPT_FOOTER,
+    KEY_RECEIPT_PHONE, RECEIPT_ADDRESS_MAX_LINES, RECEIPT_DEFAULT_CHOICES,
+    RECEIPT_FOOTER_MAX_LINES, RECEIPT_PHONE_MAX_LINES, valid_receipt_lines,
+};
+use arena_proto::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
 };
@@ -84,7 +91,14 @@ pub fn bootstrap_locale_settings(b: &BranchBootstrap) -> [(&'static str, String)
 pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("idle_lock_minutes", "5"),
     ("hub.locale", "en-IN"),
-    ("receipt.footer", ""),
+    (KEY_RECEIPT_FOOTER, ""),
+    (KEY_RECEIPT_ADDRESS, DEFAULT_RECEIPT_ADDRESS),
+    (KEY_RECEIPT_PHONE, DEFAULT_RECEIPT_PHONE),
+    (KEY_RECEIPT_DEFAULT, DEFAULT_RECEIPT_DEFAULT),
+    (KEY_NOTIFY_WHATSAPP_RECEIPT, DEFAULT_NOTIFY),
+    (KEY_NOTIFY_CREDIT_REMINDER, DEFAULT_NOTIFY),
+    (KEY_NOTIFY_LOW_BALANCE, DEFAULT_NOTIFY),
+    (KEY_NOTIFY_SESSION_ENDING, DEFAULT_NOTIFY),
     (KEY_HUB_STOPPED_AT, ""),
     // Story 1.18: the kiosk process lists (JSON arrays of `{path_glob, signer?}`).
     (KEY_PROCESS_ALLOW, DEFAULT_PROCESS_ALLOW),
@@ -132,7 +146,14 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 20] = [
+pub const KEYED_FIELD_KEYS: [&str; 27] = [
+    KEY_RECEIPT_ADDRESS,
+    KEY_RECEIPT_PHONE,
+    KEY_RECEIPT_DEFAULT,
+    KEY_NOTIFY_WHATSAPP_RECEIPT,
+    KEY_NOTIFY_CREDIT_REMINDER,
+    KEY_NOTIFY_LOW_BALANCE,
+    KEY_NOTIFY_SESSION_ENDING,
     KEY_KITCHEN_KOT_MODE,
     KEY_KITCHEN_KOT_PRINTER,
     KEY_KITCHEN_KOT_PAPER_MM,
@@ -199,6 +220,10 @@ pub enum SettingRule {
     Tax,
     BranchCode,
     BranchName,
+    /// Up to `max_lines` receipt text lines (`arena_proto::valid_receipt_lines`).
+    ReceiptLines {
+        max_lines: usize,
+    },
 }
 
 /// The value rule for every known setting. A key not listed here is not a setting.
@@ -208,7 +233,32 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         SettingRule::Integer { min: 1, max: 30 },
     ),
     ("hub.locale", SettingRule::Locale),
-    ("receipt.footer", SettingRule::Text),
+    (
+        KEY_RECEIPT_FOOTER,
+        SettingRule::ReceiptLines {
+            max_lines: RECEIPT_FOOTER_MAX_LINES,
+        },
+    ),
+    (
+        KEY_RECEIPT_ADDRESS,
+        SettingRule::ReceiptLines {
+            max_lines: RECEIPT_ADDRESS_MAX_LINES,
+        },
+    ),
+    (
+        KEY_RECEIPT_PHONE,
+        SettingRule::ReceiptLines {
+            max_lines: RECEIPT_PHONE_MAX_LINES,
+        },
+    ),
+    (
+        KEY_RECEIPT_DEFAULT,
+        SettingRule::OneOf(RECEIPT_DEFAULT_CHOICES),
+    ),
+    (KEY_NOTIFY_WHATSAPP_RECEIPT, SettingRule::Bool),
+    (KEY_NOTIFY_CREDIT_REMINDER, SettingRule::Bool),
+    (KEY_NOTIFY_LOW_BALANCE, SettingRule::Bool),
+    (KEY_NOTIFY_SESSION_ENDING, SettingRule::Bool),
     (KEY_HUB_STOPPED_AT, SettingRule::Text),
     (KEY_CURRENCY, SettingRule::Currency),
     (
@@ -354,6 +404,7 @@ impl SettingRule {
             Self::PrinterStatus => arena_proto::PrinterStatus::parse(value).is_some(),
             Self::TestSession => arena_proto::TestSessionStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
+            Self::ReceiptLines { max_lines } => valid_receipt_lines(value, max_lines),
             Self::BranchCode => arena_proto::valid_branch_code(value),
             Self::BranchName => {
                 let n = value.chars().count();
@@ -628,6 +679,21 @@ mod tests {
         }
         for not_a_setting in ["display.hc.", "display.hc.D1", "display.hc.hubx"] {
             assert_eq!(setting_rule(not_a_setting), None, "{not_a_setting}");
+        }
+    }
+
+    #[test]
+    fn receipt_and_notification_rules() {
+        let rule = |k| setting_rule(k).unwrap();
+        assert!(rule("receipt.footer").accepts("Thanks\nCome again\nBye"));
+        assert!(!rule("receipt.footer").accepts("1\n2\n3\n4"));
+        assert!(!rule("receipt.phone").accepts("1\n2"));
+        assert!(rule("receipt.default").accepts("none"));
+        assert!(!rule("receipt.default").accepts("Print"));
+        for k in arena_proto::NOTIFY_KEYS {
+            assert!(rule(k).accepts("true") && !rule(k).accepts("on"), "{k}");
+            assert!(DEFAULT_SETTINGS.contains(&(k, "false")), "{k}");
+            assert!(KEYED_FIELD_KEYS.contains(&k), "{k}");
         }
     }
 

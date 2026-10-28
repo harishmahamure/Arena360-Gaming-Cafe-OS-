@@ -133,6 +133,20 @@ pub(super) fn tier(
     ))
 }
 
+/// The paid-tier gate (Story 5.15): a `New` intent in [`arena_proto::notify_gate`] is refused
+/// with `TIER_LOCKED` while the effective tier is Free. Values stay stored across a lapse.
+pub(super) fn paid_tier(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    if arena_proto::notify_gate(&intent.payload) != Some(TierGate::New)
+        || crate::entitlement::is_paid(tx)?
+    {
+        return Ok(());
+    }
+    Err(AppError::new(
+        ErrorCode::TierLocked,
+        "available on Basic and above",
+    ))
+}
+
 /// The permission step of an elevated intent. Only the Hub's ticket path sets `elevated_by`
 /// (every edge strips a client's), and this re-checks everything the ticket was issued on:
 ///

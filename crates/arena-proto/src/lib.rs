@@ -35,6 +35,7 @@ mod pos;
 mod pricing;
 mod printer;
 mod process;
+mod receipt;
 mod scope;
 mod session;
 mod setup_devices;
@@ -206,6 +207,14 @@ pub use process::{
     PATH_ELLIPSIS, PATH_TOKENS, ProcessBlockReason, ProcessList, ProcessMode, ProcessRule,
     SYSTEM_DIR_TOKEN, is_catch_all_glob, is_file_name_glob, is_full_path_glob,
     is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
+};
+pub use receipt::{
+    DEFAULT_NOTIFY, DEFAULT_RECEIPT_ADDRESS, DEFAULT_RECEIPT_DEFAULT, DEFAULT_RECEIPT_PHONE,
+    KEY_NOTIFY_CREDIT_REMINDER, KEY_NOTIFY_LOW_BALANCE, KEY_NOTIFY_SESSION_ENDING,
+    KEY_NOTIFY_WHATSAPP_RECEIPT, KEY_RECEIPT_ADDRESS, KEY_RECEIPT_DEFAULT, KEY_RECEIPT_FOOTER,
+    KEY_RECEIPT_PHONE, NOTIFY_KEYS, RECEIPT_ADDRESS_MAX_LINES, RECEIPT_DEFAULT_CHOICES,
+    RECEIPT_FOOTER_MAX_LINES, RECEIPT_LINE_MAX_CHARS, RECEIPT_PHONE_MAX_LINES, notify_gate,
+    tier_is_paid, valid_receipt_lines,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{

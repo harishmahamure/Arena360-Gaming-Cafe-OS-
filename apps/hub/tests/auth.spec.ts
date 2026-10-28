@@ -129,7 +129,13 @@ async function stubHub(page: Page): Promise<Hub> {
       }
       case "/ui/settings":
         if (!who(route)) return json(route, 401, AUTH_FAILED);
-        return json(route, 200, [{ key: "receipt.footer", ...hub.setting }]);
+        return json(route, 200, [
+          { key: "receipt.footer", ...hub.setting },
+          { key: "receipt.address", value: "", rev: 1 },
+          { key: "receipt.phone", value: "", rev: 1 },
+          { key: "receipt.default", value: "print", rev: 1 },
+          { key: "printer.paper_mm", value: "80", rev: 1 },
+        ]);
       case "/ui/intent": {
         hub.intents.push({
           authorization: req.headers()["authorization"] ?? null,
@@ -276,6 +282,7 @@ test("a Manager saves the setting", async ({ page }) => {
   await signIn(page, "manager", "dev-manager-pass");
   await expect(page).toHaveURL(/\/floor$/);
   await page.goto("/settings/receipt");
+  await page.getByLabel(en["hub.settings.receipt_footer"]).fill("Thanks");
   await page.getByRole("button", { name: en["hub.settings.save"] }).click();
   await expect(page.getByTestId("settings-status")).toContainText(en["hub.settings.saved"]);
 });
@@ -295,10 +302,7 @@ test("sign-out returns to sign-in, and a revoked session does too", async ({ pag
   await expect(page).toHaveURL(/\/floor$/);
   await page.goto("/settings/receipt");
   await expect(page.locator("main h1")).toHaveText(en["hub.nav.settings"]);
-  await expect(page.getByRole("button", { name: en["hub.settings.save"] })).not.toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
+  await page.getByLabel(en["hub.settings.receipt_footer"]).fill("Thanks");
   hub.sessions.clear();
   await page.getByRole("button", { name: en["hub.settings.save"] }).click();
   await expect(page).toHaveURL(/\/sign-in(\?|$)/);
@@ -364,10 +368,7 @@ test("a STALE save keeps the typed text and shows the Hub's value", async ({ pag
   await expect(page).toHaveURL(/\/floor$/);
   await page.goto("/settings/receipt");
   const field = page.getByLabel(en["hub.settings.receipt_footer"]);
-  await expect(page.getByRole("button", { name: en["hub.settings.save"] })).not.toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
+  await expect(field).toBeVisible();
   // Someone else saved meanwhile.
   hub.setting = { value: "from elsewhere", rev: 2 };
   hub.nextIntent = { status: 409, body: { code: "STALE", message: "stale", field: "base_rev" } };
@@ -391,8 +392,10 @@ test("two saves send base_rev from the reloaded settings", async ({ page }) => {
   const field = page.getByLabel(en["hub.settings.receipt_footer"]);
   const save = page.getByRole("button", { name: en["hub.settings.save"] });
   for (const text of ["first", "second"]) {
-    await expect(save).not.toHaveAttribute("aria-disabled", "true");
+    // Nothing to save until something changes.
+    await expect(save).toHaveAttribute("aria-disabled", "true");
     await field.fill(text);
+    await expect(save).not.toHaveAttribute("aria-disabled", "true");
     await save.click();
     await expect(page.getByTestId("settings-status")).toContainText(en["hub.settings.saved"]);
     await expect.poll(() => hub.setting.value).toBe(text);

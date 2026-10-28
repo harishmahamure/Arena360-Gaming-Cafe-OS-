@@ -363,6 +363,7 @@ pub(crate) fn run(
         return Ok(Outcome::Replayed(stored));
     }
     guards::tier(tx, intent, arena_proto::kitchen_gate)?;
+    guards::paid_tier(tx, intent)?;
     let target = load(tx, intent, now)?;
     guards::authorize(intent, &target)?;
     guards::base_rev(intent, &target)?;

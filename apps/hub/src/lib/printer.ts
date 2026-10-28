@@ -1,12 +1,14 @@
 import type {
   FoundPrinter,
   PrinterFindResult,
+  PrinterErrorKind,
   PrinterHealth,
   PrinterSelected,
   PrinterStatus,
   PrinterStatusReply,
   UiError,
 } from "@arena/ui/generated";
+import type { MessageKey } from "@arena/ui/messages";
 import { authHeaders, errorOf, getToken, noticeLocked, setToken } from "./auth";
 import { bridge } from "./service.svelte";
 
@@ -135,3 +137,14 @@ export function selectionOf(p: FoundPrinter): PrinterSelected {
 export function sameSelection(a: PrinterSelected | null, b: PrinterSelected | null): boolean {
   return !!a && !!b && a.kind === b.kind && a.id_or_addr === b.id_or_addr;
 }
+
+/** The message for each way a print can fail. */
+export const PRINTER_ERROR_MESSAGES: Record<PrinterErrorKind, MessageKey> = {
+  refused: "hub.settings.printer.error.refused",
+  timeout: "hub.settings.printer.error.timeout",
+  unreachable: "hub.settings.printer.error.unreachable",
+  spooler: "hub.settings.printer.error.spooler",
+  bluetooth: "hub.settings.printer.error.bluetooth",
+  bluetooth_permission: "hub.settings.printer.error.bluetooth_permission",
+  other: "hub.settings.printer.error.other",
+};

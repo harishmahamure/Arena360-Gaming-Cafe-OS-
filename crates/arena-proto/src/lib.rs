@@ -258,9 +258,11 @@ pub use setup_devices::{
 };
 pub use shift::{
     CASH_DEPOSIT, CASH_DRAWER_OPEN, CASH_EXPENSE, CASH_FLOAT_IN, CASH_REFUND, CASH_SALE,
-    CASH_SALE_REVERTED, CashDeposit, DEPOSIT_REFERENCE_MAX_CHARS, EXPENSE_NOTE_MAX_CHARS,
-    ExpenseCategory, ExpenseCreate, ExpensePaidFrom, MAX_CASH_MOVE_MINOR, MAX_FLOAT_MINOR,
-    ShiftOpen, ShiftState, SnapshotShift, receipt_photo_problem,
+    CASH_SALE_REVERTED, CashDeposit, CloseDeposit, DEFAULT_SHIFT_VARIANCE_THRESHOLD,
+    DEPOSIT_REFERENCE_MAX_CHARS, EXPENSE_NOTE_MAX_CHARS, ExpenseCategory, ExpenseCreate,
+    ExpensePaidFrom, KEY_SHIFT_VARIANCE_THRESHOLD, MAX_CASH_MOVE_MINOR, MAX_FLOAT_MINOR,
+    ShiftBreakdown, ShiftClose, ShiftCount, ShiftOpen, ShiftState, SnapshotShift,
+    VARIANCE_NOTE_MAX_CHARS, VarianceReason, receipt_photo_problem,
 };
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,

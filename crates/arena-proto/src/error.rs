@@ -161,6 +161,9 @@ pub enum ErrorCode {
     ShiftNotOpen,
     /// A deposit or drawer expense above the cash expected in the drawer (Story 5.25); the message never says how much.
     DrawerShort,
+    /// A shift close whose count differs from the expected cash by more than the branch threshold
+    /// without an approver and a reason (Story 5.26).
+    VarianceOverThreshold,
     /// A counter sale of a bundle with a component short of stock; the message names it.
     BundleShort,
 }
@@ -265,6 +268,7 @@ impl ErrorCode {
             Self::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
             Self::ShiftNotOpen => "SHIFT_NOT_OPEN",
             Self::DrawerShort => "DRAWER_SHORT",
+            Self::VarianceOverThreshold => "VARIANCE_OVER_THRESHOLD",
             Self::BundleShort => "BUNDLE_SHORT",
         }
     }
@@ -429,6 +433,7 @@ mod tests {
             (ErrorCode::ShiftAlreadyOpen, "SHIFT_ALREADY_OPEN"),
             (ErrorCode::ShiftNotOpen, "SHIFT_NOT_OPEN"),
             (ErrorCode::DrawerShort, "DRAWER_SHORT"),
+            (ErrorCode::VarianceOverThreshold, "VARIANCE_OVER_THRESHOLD"),
             (ErrorCode::BundleShort, "BUNDLE_SHORT"),
         ];
         for (code, text) in cases {

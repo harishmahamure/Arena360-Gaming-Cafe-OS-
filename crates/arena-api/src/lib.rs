@@ -18,6 +18,7 @@ mod ui_printer;
 mod ui_refund;
 #[cfg(test)]
 mod ui_setup_tests;
+mod ui_shift;
 
 pub use health::{
     DEFAULT_HEALTH_PORT, UI_ALLOWED_ORIGINS, bind_health, router, serve_health, serve_router,

@@ -514,3 +514,10 @@
 - The expense list, deposit slips and receipt photos are stored but have no viewer yet (Z-report, Story 5.28, and Reports, Story 5.27, will read them); the Shift screen shows only a confirmation.
 - Owner-paid expenses are recorded against the open shift for the audit trail but never move the drawer; they are not synced to a petty-cash ledger (Epic 14).
 - `expected_cash` ignores zero-amount `drawer_open` rows by construction; late kicks after close are still undecided (see Story 5.18 notes).
+
+## Story 5.26 (close a shift)
+
+- An Undo of a cash sale (or a refund) made after its shift has closed still writes its compensating `sale_reverted` row against the closed shift, so that shift's stored `expected_minor` no longer equals the sum of its `cash_events`; Z-report (Story 5.28) must read the stored figures and show late rows as corrections.
+- The elevation ticket for `shift.close` only checks that the approver holds `shift.close`; an approver without `shift.override_variance` is refused at apply time (`VARIANCE_OVER_THRESHOLD`) after the PIN was spent. Built-in Manager and Owner hold both.
+- The variance threshold is stored in minor units and defaults to `10000` whatever the branch currency's decimals; Settings → Shift edits it in the currency's own units.
+- Owner alert for an over-threshold close (`shift.closed` carrying variance, reason, staff and approver) is Epic 8; the shifts row already holds all four.

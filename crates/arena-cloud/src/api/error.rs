@@ -80,6 +80,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ShiftAlreadyOpen
         | ErrorCode::ShiftNotOpen
         | ErrorCode::DrawerShort
+        | ErrorCode::VarianceOverThreshold
         | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,

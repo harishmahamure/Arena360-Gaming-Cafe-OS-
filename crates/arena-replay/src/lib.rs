@@ -1438,6 +1438,18 @@ mod tests {
             );
             expense.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
             writer.submit_intent(expense).await.unwrap();
+            // Closing the shift updates its row with the count, and the deposit at close adds one.
+            let mut close = submit(
+                IntentPayload::ShiftClose(arena_proto::ShiftClose {
+                    counted_minor: 0,
+                    deposit: None,
+                    reason: Some(arena_proto::VarianceReason::CountingError),
+                    note: None,
+                }),
+                None,
+            );
+            close.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
+            writer.submit_intent(close).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

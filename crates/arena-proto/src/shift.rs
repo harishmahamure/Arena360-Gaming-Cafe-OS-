@@ -169,3 +169,97 @@ pub struct ShiftState {
     #[ts(type = "number")]
     pub carried_minor: i64,
 }
+
+/// `settings`: the largest difference between the counted and the expected cash that a shift
+/// closes on without a manager (minor units, Settings → Shift).
+pub const KEY_SHIFT_VARIANCE_THRESHOLD: &str = "shift.variance_threshold_minor";
+/// The default threshold: 100.00 in a two-decimal currency.
+pub const DEFAULT_SHIFT_VARIANCE_THRESHOLD: &str = "10000";
+/// The longest note an `other` variance reason takes, in characters.
+pub const VARIANCE_NOTE_MAX_CHARS: usize = 140;
+
+/// Why a shift closed over the threshold (the reasons the close dialog offers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum VarianceReason {
+    CountingError,
+    UnrecordedExpense,
+    ChangeFloatMismatch,
+    Other,
+}
+
+impl VarianceReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CountingError => "counting_error",
+            Self::UnrecordedExpense => "unrecorded_expense",
+            Self::ChangeFloatMismatch => "change_float_mismatch",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Cash moved to the safe at close, with the slip reference. Recorded after the count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CloseDeposit {
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    pub reference: String,
+}
+
+/// The payload of `shift.close` (permission `shift.close`). `counted_minor` is the cash staff
+/// counted; the Hub works out the expected cash and the signed variance itself. A variance over
+/// the branch threshold needs an approver holding `shift.override_variance` (the inline manager
+/// PIN) and a `reason`; `note` is required for `other`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ShiftClose {
+    #[ts(type = "number")]
+    pub counted_minor: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub deposit: Option<CloseDeposit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<VarianceReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+/// What made up the expected cash of a shift (signed by their effect on the drawer: sales add,
+/// refunds, deposits and drawer expenses subtract).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ShiftBreakdown {
+    #[ts(type = "number")]
+    pub float_minor: i64,
+    #[ts(type = "number")]
+    pub cash_sales_minor: i64,
+    #[ts(type = "number")]
+    pub cash_refunds_minor: i64,
+    #[ts(type = "number")]
+    pub deposits_minor: i64,
+    #[ts(type = "number")]
+    pub expenses_minor: i64,
+}
+
+/// The reveal after staff confirm a count (`GET /ui/shift/count?counted_minor=`): the expected
+/// cash is only ever returned for a stated count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ShiftCount {
+    #[ts(type = "number")]
+    pub counted_minor: i64,
+    #[ts(type = "number")]
+    pub expected_minor: i64,
+    /// Counted minus expected: positive is over, negative is short.
+    #[ts(type = "number")]
+    pub difference_minor: i64,
+    #[ts(type = "number")]
+    pub threshold_minor: i64,
+    pub over_threshold: bool,
+    pub breakdown: ShiftBreakdown,
+}

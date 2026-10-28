@@ -27,6 +27,7 @@ export type Permission =
   | "catalog.edit"
   | "shift.open"
   | "shift.close"
+  | "shift.override_variance"
   | "cash.manage"
   | "device.manage"
   | "device.remote"

@@ -89,4 +89,5 @@ export type ErrorCode =
   | "SHIFT_ALREADY_OPEN"
   | "SHIFT_NOT_OPEN"
   | "DRAWER_SHORT"
+  | "VARIANCE_OVER_THRESHOLD"
   | "BUNDLE_SHORT";

@@ -82,3 +82,48 @@ export const EXPENSE_CATEGORY_LABELS: Record<(typeof EXPENSE_CATEGORIES)[number]
   food_stock: "hub.shift.cash.category.food_stock",
   other: "hub.shift.cash.category.other",
 };
+
+/** The setting holding the largest difference a shift closes on without a manager (minor units). */
+export const KEY_VARIANCE_THRESHOLD = "shift.variance_threshold_minor";
+
+/**
+ * The notes a currency's drawer is counted in, largest first, in minor units. A currency with no
+ * set here is counted as a single total only.
+ */
+const DENOMINATIONS: Record<string, readonly number[]> = {
+  INR: [50_000, 20_000, 10_000, 5_000, 2_000, 1_000],
+};
+
+/** The note values of `currency` in minor units, or an empty list when it has no set. */
+export function denominationsFor(currency: string | undefined): readonly number[] {
+  return (currency && DENOMINATIONS[currency]) || [];
+}
+
+/** The reasons a count over the threshold can be closed with, in the order the dialog offers them. */
+export const VARIANCE_REASONS = [
+  "counting_error",
+  "unrecorded_expense",
+  "change_float_mismatch",
+  "other",
+] as const;
+
+/** The label of each variance reason. */
+export const VARIANCE_REASON_LABELS: Record<(typeof VARIANCE_REASONS)[number], MessageKey> = {
+  counting_error: "hub.shift.close.reason.counting_error",
+  unrecorded_expense: "hub.shift.close.reason.unrecorded_expense",
+  change_float_mismatch: "hub.shift.close.reason.change_float_mismatch",
+  other: "hub.shift.close.reason.other",
+};
+
+/** A count of notes typed into a denomination row: whole numbers only, empty is zero. */
+export function parseCount(text: string): number | null {
+  const v = text.trim();
+  if (v === "") return 0;
+  if (!/^\d{1,6}$/.test(v)) return null;
+  return Number(v);
+}
+
+/** Coins typed into the count: empty is zero, anything else is a float amount. */
+export function parseAmountOrZero(text: string, exponent: number): number | null {
+  return text.trim() === "" ? 0 : parseFloat(text, exponent);
+}

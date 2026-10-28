@@ -277,6 +277,10 @@ pub(super) fn mutate(
             Target::Shift(t) => super::shift::mutate_open(tx, intent, s, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::ShiftClose(c) => match target {
+            Target::Shift(t) => super::shift::mutate_close(tx, intent, c, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::CashDeposit(d) => match target {
             Target::Shift(t) => super::shift::mutate_deposit(tx, intent, d, t),
             _ => Err(mismatch()),

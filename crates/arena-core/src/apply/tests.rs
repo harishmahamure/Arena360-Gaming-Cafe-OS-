@@ -45,6 +45,7 @@ mod rules;
 mod session;
 mod session_expire;
 mod shift;
+mod shift_close;
 mod stock;
 mod test_session;
 mod transfer;

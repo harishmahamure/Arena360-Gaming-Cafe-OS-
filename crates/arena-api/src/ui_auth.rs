@@ -912,6 +912,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ShiftAlreadyOpen
         | ErrorCode::ShiftNotOpen
         | ErrorCode::DrawerShort
+        | ErrorCode::VarianceOverThreshold
         | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
@@ -3224,6 +3225,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/rules", get(rules))
         .route("/ui/coupons", get(crate::ui_coupons::list))
         .route("/ui/refund/invoice", get(crate::ui_refund::invoice))
+        .route("/ui/shift/count", get(crate::ui_shift::count))
         .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
         .route(
             "/ui/discount/preview",
@@ -6009,6 +6011,43 @@ pub(crate) mod tests {
         assert_eq!(view["expiring"], json!([]));
         assert_eq!(view["expired"], json!([]));
         assert_eq!(view["today"].as_str().map(str::len), Some(10));
+    }
+
+    /// Story 5.26: the expected cash is only ever revealed for a stated count.
+    #[tokio::test]
+    async fn the_shift_reveal_needs_a_count_and_a_signed_in_member() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/shift/count?counted_minor=0", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, _) = call(&hub, "GET", "/ui/shift/count", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "no count, no reveal");
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            "/ui/shift/count?counted_minor=-1",
+            Some(&counter),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "counted_minor");
+        let (status, reveal) = call(
+            &hub,
+            "GET",
+            "/ui/shift/count?counted_minor=2500",
+            Some(&counter),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reveal}");
+        // The fixture's shift opened with an empty drawer and took no cash.
+        assert_eq!(reveal["counted_minor"], 2500);
+        assert_eq!(reveal["expected_minor"], 0);
+        assert_eq!(reveal["difference_minor"], 2500);
+        assert_eq!(reveal["threshold_minor"], 10_000);
+        assert_eq!(reveal["over_threshold"], false);
+        assert_eq!(reveal["breakdown"]["float_minor"], 0);
     }
 
     #[tokio::test]

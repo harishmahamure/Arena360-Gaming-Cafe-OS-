@@ -368,6 +368,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Shift(t) => super::shift::validate_open(intent, s, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::ShiftClose(c) => match target {
+            Target::Shift(t) => super::shift::validate_close(intent, c, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::CashDeposit(d) => match target {
             Target::Shift(t) => super::shift::validate_deposit(intent, d, t),
             _ => Err(internal_target()),

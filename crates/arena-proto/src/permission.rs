@@ -57,6 +57,8 @@ pub enum Permission {
     ShiftOpen,
     #[serde(rename = "shift.close")]
     ShiftClose,
+    #[serde(rename = "shift.override_variance")]
+    ShiftOverrideVariance,
     #[serde(rename = "cash.manage")]
     CashManage,
     /// Register and configure devices.
@@ -88,7 +90,7 @@ pub enum Permission {
 
 impl Permission {
     /// Every catalogue permission, grouped by module.
-    pub const ALL: [Permission; 35] = [
+    pub const ALL: [Permission; 36] = [
         Self::PlayerManage,
         Self::PlayerView,
         Self::WalletTopup,
@@ -112,6 +114,7 @@ impl Permission {
         Self::CatalogEdit,
         Self::ShiftOpen,
         Self::ShiftClose,
+        Self::ShiftOverrideVariance,
         Self::CashManage,
         Self::DeviceManage,
         Self::DeviceRemote,
@@ -152,6 +155,7 @@ impl Permission {
             Self::CatalogEdit => "catalog.edit",
             Self::ShiftOpen => "shift.open",
             Self::ShiftClose => "shift.close",
+            Self::ShiftOverrideVariance => "shift.override_variance",
             Self::CashManage => "cash.manage",
             Self::DeviceManage => "device.manage",
             Self::DeviceRemote => "device.remote",
@@ -198,7 +202,9 @@ impl Permission {
             Self::KitchenUse => "kitchen",
             Self::StockIn | Self::StockAdjust | Self::StockOverride => "stock",
             Self::CatalogEdit => "catalog",
-            Self::ShiftOpen | Self::ShiftClose | Self::CashManage => "shift",
+            Self::ShiftOpen | Self::ShiftClose | Self::ShiftOverrideVariance | Self::CashManage => {
+                "shift"
+            }
             Self::DeviceManage | Self::DeviceRemote | Self::DevicePair | Self::DeviceScreen => {
                 "device"
             }

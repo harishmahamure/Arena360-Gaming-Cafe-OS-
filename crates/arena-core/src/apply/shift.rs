@@ -5,16 +5,19 @@
 //! refused `SHIFT_NOT_OPEN`; UPI, card, wallet and credit never need one.
 
 use arena_proto::{
-    AppError, CASH_DEPOSIT, CASH_EXPENSE, CASH_FLOAT_IN, CASH_SALE, CASH_SALE_REVERTED,
+    ActorKind, AppError, CASH_DEPOSIT, CASH_EXPENSE, CASH_FLOAT_IN, CASH_SALE, CASH_SALE_REVERTED,
     CashDeposit, DEPOSIT_REFERENCE_MAX_CHARS, EXPENSE_NOTE_MAX_CHARS, ErrorCode, ExpenseCreate,
     ExpensePaidFrom, Intent, MAX_CASH_MOVE_MINOR, MAX_FLOAT_MINOR, PaymentMethod, PaymentRow,
-    ShiftOpen, receipt_photo_problem,
+    Permission, ShiftClose, ShiftOpen, VARIANCE_NOTE_MAX_CHARS, VarianceReason,
+    receipt_photo_problem,
 };
 use arena_store::{
-    ChangeOp, NewCashEvent, NewCashMove, NewShift, RowKey, ShiftRow, StoreTx, expected_cash,
-    insert_cash_event, insert_cash_move, insert_shift, last_opening_float, open_sales_of_order,
-    open_shift,
+    ChangeOp, NewCashEvent, NewCashMove, NewShift, RowKey, ShiftClosing, ShiftRow, StoreTx,
+    close_shift, expected_cash, insert_cash_event, insert_cash_move, insert_shift,
+    last_opening_float, open_sales_of_order, open_shift, variance_threshold,
 };
+
+use crate::rbac;
 
 use super::mutate::Written;
 
@@ -25,9 +28,14 @@ pub(crate) struct ShiftTarget {
     carried_minor: i64,
     /// The cash the open shift's drawer should hold (never sent to a client).
     expected_minor: i64,
+    /// The branch's variance threshold (Story 5.26).
+    threshold_minor: i64,
+    /// Whether whoever approves the intent (the elevating member, else the actor) holds
+    /// `shift.override_variance`.
+    can_override: bool,
 }
 
-pub(super) fn load(tx: &StoreTx<'_>) -> Result<ShiftTarget, AppError> {
+pub(super) fn load(tx: &StoreTx<'_>, intent: &Intent) -> Result<ShiftTarget, AppError> {
     let open = open_shift(tx)?;
     let expected_minor = match &open {
         Some(s) => expected_cash(tx, &s.id)?,
@@ -38,7 +46,25 @@ pub(super) fn load(tx: &StoreTx<'_>) -> Result<ShiftTarget, AppError> {
         open,
         carried_minor: last_opening_float(tx)?,
         expected_minor,
+        threshold_minor: variance_threshold(tx)?,
+        can_override: can_override(tx, intent)?,
     })
+}
+
+/// Whether the approver of `intent` holds `shift.override_variance`: the owner, the elevating
+/// member, or else the acting member.
+fn can_override(tx: &StoreTx<'_>, intent: &Intent) -> Result<bool, AppError> {
+    if !matches!(intent.payload, arena_proto::IntentPayload::ShiftClose(_)) {
+        return Ok(false);
+    }
+    if intent.actor.kind == ActorKind::Owner {
+        return Ok(true);
+    }
+    let holder = intent
+        .elevated_by
+        .as_ref()
+        .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+    rbac::staff_allows(tx, holder, Permission::ShiftOverrideVariance)
 }
 
 pub(super) fn validate_open(
@@ -290,6 +316,154 @@ pub(super) fn validate_expense(
         drawer_has(t, e.amount_minor)?;
     }
     Ok(())
+}
+
+/// What a close works out from the count: the signed difference and, over the threshold, the
+/// approved reason.
+struct CloseCheck {
+    difference_minor: i64,
+    over: bool,
+    reason: Option<VarianceReason>,
+    note: Option<String>,
+}
+
+fn check_close(intent: &Intent, c: &ShiftClose, t: &ShiftTarget) -> Result<CloseCheck, AppError> {
+    if intent.base_rev.is_some() {
+        return Err(invalid("base_rev", "shift.close takes no base_rev"));
+    }
+    if !(0..=MAX_CASH_MOVE_MINOR).contains(&c.counted_minor) {
+        return Err(invalid("counted_minor", "enter the cash you counted"));
+    }
+    if t.open.is_none() {
+        return Err(AppError::with_field(
+            ErrorCode::ShiftNotOpen,
+            "shift",
+            "There is no shift to close.",
+        ));
+    }
+    if let Some(d) = &c.deposit {
+        if !(1..=MAX_CASH_MOVE_MINOR).contains(&d.amount_minor) || d.amount_minor > c.counted_minor
+        {
+            return Err(invalid(
+                "deposit",
+                "the deposit is more than the cash counted",
+            ));
+        }
+        if plain(&d.reference, DEPOSIT_REFERENCE_MAX_CHARS).is_none() {
+            return Err(invalid("reference", "enter the slip reference"));
+        }
+    }
+    let difference_minor = c.counted_minor - t.expected_minor;
+    let over = difference_minor.abs() > t.threshold_minor;
+    if !over {
+        return Ok(CloseCheck {
+            difference_minor,
+            over,
+            reason: None,
+            note: None,
+        });
+    }
+    if !t.can_override {
+        return Err(AppError::new(
+            ErrorCode::VarianceOverThreshold,
+            "The difference is over the limit. A manager must approve it.",
+        ));
+    }
+    let Some(reason) = c.reason else {
+        return Err(invalid("reason", "choose why the count is off"));
+    };
+    let note = if reason == VarianceReason::Other {
+        let note = c.note.as_deref().map(str::trim).unwrap_or_default();
+        if plain(note, VARIANCE_NOTE_MAX_CHARS).is_none() {
+            return Err(invalid("note", "say why the count is off"));
+        }
+        Some(note.to_owned())
+    } else {
+        None
+    };
+    Ok(CloseCheck {
+        difference_minor,
+        over,
+        reason: Some(reason),
+        note,
+    })
+}
+
+pub(super) fn validate_close(
+    intent: &Intent,
+    c: &ShiftClose,
+    t: &ShiftTarget,
+) -> Result<(), AppError> {
+    check_close(intent, c, t).map(|_| ())
+}
+
+/// Closes the shift: stores the count, the expected cash and the signed variance (with the
+/// reason and approver when it was over the threshold), writes the optional deposit after the
+/// count, and records what the next shift's float is prefilled with.
+pub(super) fn mutate_close(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    c: &ShiftClose,
+    t: &ShiftTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let shift = t
+        .open
+        .as_ref()
+        .ok_or_else(|| AppError::new(ErrorCode::ShiftNotOpen, "There is no shift to close."))?;
+    let check = check_close(intent, c, t)?;
+    let mut written = Vec::new();
+    let mut deposited = 0;
+    if let Some(d) = &c.deposit {
+        let id = ulid::Ulid::generate().to_string();
+        insert_cash_move(
+            tx,
+            &NewCashMove {
+                id: &id,
+                shift_id: &shift.id,
+                kind: CASH_DEPOSIT,
+                amount_minor: -d.amount_minor,
+                staff_id: &intent.actor.id,
+                reference: Some(d.reference.trim()),
+                category: None,
+                paid_from: None,
+                spent_minor: None,
+                note: None,
+                receipt_photo: None,
+            },
+        )?;
+        written.push(inserted(id));
+        deposited = d.amount_minor;
+    }
+    let approver = check.over.then(|| {
+        intent
+            .elevated_by
+            .as_ref()
+            .map_or(intent.actor.id.as_str(), |e| e.id.as_str())
+    });
+    close_shift(
+        tx,
+        &ShiftClosing {
+            shift_id: &shift.id,
+            closed_at: now_ms,
+            counted_minor: c.counted_minor,
+            expected_minor: t.expected_minor,
+            variance_minor: check.difference_minor,
+            variance_reason: check.reason.map(VarianceReason::as_str),
+            variance_note: check.note.as_deref(),
+            closed_by: &intent.actor.id,
+            approver_id: approver,
+            next_float_minor: c.counted_minor - deposited,
+        },
+    )?;
+    written.push(Written {
+        key: RowKey::Shifts {
+            id: shift.id.clone(),
+        },
+        op: ChangeOp::Update,
+        before: None,
+    });
+    Ok(written)
 }
 
 fn inserted(id: String) -> Written {

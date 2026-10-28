@@ -240,6 +240,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 58,
         sql: include_str!("../migrations/0058_cash_moves.sql"),
     },
+    Migration {
+        version: 59,
+        sql: include_str!("../migrations/0059_shift_close.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -831,6 +835,45 @@ mod tests {
             conn.execute_batch("UPDATE cash_events SET receipt_photo = 'x' WHERE id = 'E2'")
                 .is_err(),
             "the photo is part of the record"
+        );
+    }
+
+    /// Migration 59 gives `shifts` the close columns, keeps an open shift as it was and checks
+    /// the variance reason.
+    #[test]
+    fn the_shift_close_migration_adds_the_close_columns() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 59) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO shifts (id, staff_id, opened_at, float_minor, carried_minor, state, rev,
+                                 created_at, updated_at)
+             VALUES ('SH', 'S', 0, 500, 0, 'open', 0, 0, 0);",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATIONS[58].sql).unwrap();
+        let kept: (i64, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT float_minor, counted_minor, next_float_minor FROM shifts WHERE id = 'SH'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, (500, None, None), "an open shift has no count yet");
+        let close = |reason: &str| {
+            conn.execute_batch(&format!(
+                "UPDATE shifts SET state = 'closed', counted_minor = 400, expected_minor = 500,
+                                   variance_minor = -100, variance_reason = '{reason}'
+                 WHERE id = 'SH'"
+            ))
+        };
+        assert!(close("coffee").is_err(), "a known reason");
+        assert!(close("counting_error").is_ok());
+        assert!(
+            conn.execute_batch("UPDATE shifts SET counted_minor = -1 WHERE id = 'SH'")
+                .is_err(),
+            "a count is never negative"
         );
     }
 }

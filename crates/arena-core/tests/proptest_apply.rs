@@ -181,6 +181,13 @@ enum Op {
         amount: i64,
         reference_ok: bool,
     },
+    /// `shift.close` (Story 5.26) by the owner, counting `delta` away from the expected cash: it
+    /// applies exactly when a shift is open, the count is not negative and, over the threshold, a
+    /// reason is given; the closed shift then stores the expected cash and the signed variance.
+    ShiftClose {
+        delta: i64,
+        reason: bool,
+    },
     /// `stock.threshold` (valid or not) on the first tracked product: the open "Low stock" alert
     /// exists exactly when the quantity is at or under the new threshold.
     Threshold {
@@ -672,6 +679,11 @@ fn op() -> impl Strategy<Value = Op> {
                 amount,
                 reference_ok
             }),
+        1 => (
+            prop_oneof![5 => -20_000..=20_000i64, 1 => Just(-1_000_000i64)],
+            any::<bool>(),
+        )
+            .prop_map(|(delta, reason)| Op::ShiftClose { delta, reason }),
         2 => prop_oneof![
             1 => Just(None),
             5 => (0..=60i64).prop_map(Some),
@@ -2832,6 +2844,60 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         .map(|e| int(e, "amount_minor"))
                         .sum();
                     prop_assert_eq!(after, before - if draws { *amount } else { 0 });
+                    return assert_gap_free(hub);
+                }
+            } else {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::ShiftNotOpen));
+            }
+            prop_assert_eq!(hub.change_count(), changes_before);
+        }
+        Op::ShiftClose { delta, reason } => {
+            let shifts = hub.reader.rows(Table::Shifts).unwrap();
+            let open = shifts.iter().find(|s| text(s, "state") == "open");
+            let expected: Option<i64> = open.map(|s| {
+                hub.reader
+                    .rows(Table::CashEvents)
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e["shift_id"] == s["id"])
+                    .map(|e| int(e, "amount_minor"))
+                    .sum()
+            });
+            let counted = expected.unwrap_or(0) + delta;
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::ShiftClose(arena_proto::ShiftClose {
+                    counted_minor: counted,
+                    deposit: None,
+                    reason: reason.then_some(arena_proto::VarianceReason::CountingError),
+                    note: None,
+                }),
+                None,
+            ));
+            let over = delta.abs() > 10_000;
+            if counted < 0 {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("counted_minor")))
+                );
+            } else if let (Some(shift), Some(before)) = (open, expected) {
+                if over && !*reason {
+                    prop_assert_eq!(
+                        code(&out),
+                        Some((ErrorCode::ValidationFailed, Some("reason")))
+                    );
+                } else {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    let closed = hub
+                        .reader
+                        .rows(Table::Shifts)
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| s["id"] == shift["id"])
+                        .unwrap();
+                    prop_assert_eq!(text(&closed, "state"), "closed");
+                    prop_assert_eq!(int(&closed, "expected_minor"), before);
+                    prop_assert_eq!(int(&closed, "variance_minor"), *delta);
+                    prop_assert_eq!(int(&closed, "next_float_minor"), counted);
                     return assert_gap_free(hub);
                 }
             } else {

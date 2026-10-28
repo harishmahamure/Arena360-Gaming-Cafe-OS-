@@ -23,6 +23,7 @@
     { href: "/settings/printer", label: "hub.settings.nav.printer" },
     { href: "/settings/kitchen", label: "hub.settings.nav.kitchen" },
     { href: "/settings/inventory", label: "hub.settings.nav.inventory" },
+    { href: "/settings/shift", label: "hub.settings.nav.shift" },
     { href: "/settings/system", label: "hub.settings.nav.system" },
     { href: "/settings/setup", label: "hub.settings.nav.setup" },
   ];

@@ -170,9 +170,10 @@ pub use sessions::{
 };
 pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
 pub use shifts::{
-    NewCashEvent, NewCashMove, NewShift, OpenSale, ShiftRow, count_cash_events, expected_cash,
-    insert_cash_event, insert_cash_move, insert_shift, last_opening_float, open_sales_of_order,
-    open_shift, open_shift_id, shift_of_order_sale,
+    NewCashEvent, NewCashMove, NewShift, OpenSale, ShiftClosing, ShiftRow, close_shift,
+    count_cash_events, expected_cash, insert_cash_event, insert_cash_move, insert_shift,
+    last_opening_float, open_sales_of_order, open_shift, open_shift_id, shift_breakdown,
+    shift_count, shift_of_order_sale, variance_threshold,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,
@@ -1128,6 +1129,21 @@ impl Store {
 
     /// The branch's open shift and the float the next one would offer, with the number of cash
     /// events so far. An older database without the tables reads as no shift and a float of 0.
+    /// The reveal for a stated count against the open shift (Story 5.26), or `None` with no
+    /// shift open. The expected cash is never read without a count.
+    pub fn shift_count(
+        &self,
+        counted_minor: i64,
+    ) -> Result<Option<arena_proto::ShiftCount>, AppError> {
+        if !self.table_exists("shifts")? {
+            return Ok(None);
+        }
+        match open_shift_id(&self.conn)? {
+            Some(id) => Ok(Some(shifts::shift_count(&self.conn, &id, counted_minor)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn shift_state(&self) -> Result<arena_proto::ShiftState, AppError> {
         if !self.table_exists("shifts")? {
             return Ok(arena_proto::ShiftState {

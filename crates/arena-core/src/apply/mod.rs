@@ -339,8 +339,8 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }
         P::ControllerCheck(c) => Target::ControllerCheck(Box::new(controller_check::load(tx, c)?)),
-        P::ShiftOpen(_) | P::CashDeposit(_) | P::ExpenseCreate(_) => {
-            Target::Shift(Box::new(shift::load(tx)?))
+        P::ShiftOpen(_) | P::ShiftClose(_) | P::CashDeposit(_) | P::ExpenseCreate(_) => {
+            Target::Shift(Box::new(shift::load(tx, intent)?))
         }
         P::StockIn(_)
         | P::StockInReverted(_)

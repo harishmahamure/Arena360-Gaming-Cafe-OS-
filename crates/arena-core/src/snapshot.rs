@@ -952,6 +952,22 @@ impl SnapshotReader {
         })
     }
 
+    /// The reveal for a stated count against the open shift (Story 5.26): `SHIFT_NOT_OPEN` when no
+    /// shift is open.
+    pub fn shift_count(&self, counted_minor: i64) -> Result<arena_proto::ShiftCount, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.shift_count(counted_minor)?.ok_or_else(|| {
+            AppError::with_field(
+                ErrorCode::ShiftNotOpen,
+                "shift",
+                "There is no shift to close.",
+            )
+        })
+    }
+
     /// The invoice numbered `invoice_no` for the Refund screen: `INVOICE_NOT_FOUND` when no settled
     /// order carries that number.
     pub fn refund_invoice(&self, invoice_no: &str) -> Result<arena_proto::RefundInvoice, AppError> {

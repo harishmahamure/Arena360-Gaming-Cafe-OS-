@@ -94,6 +94,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::ShiftAlreadyOpen
         | ErrorCode::ShiftNotOpen
         | ErrorCode::DrawerShort
+        | ErrorCode::VarianceOverThreshold
         | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => true,

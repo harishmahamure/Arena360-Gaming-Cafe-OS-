@@ -3,13 +3,19 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { onDestroy, onMount, tick } from "svelte";
   import { invalidate } from "$app/navigation";
-  import { SESSION_DEPENDENCY, newIdempotencyKey, submitIntent } from "../../lib/auth";
+  import {
+    SESSION_DEPENDENCY,
+    hasPermission,
+    newIdempotencyKey,
+    submitIntent,
+  } from "../../lib/auth";
   import { branchLocale } from "../../lib/locale.svelte";
   import { floatText, parseFloat } from "../../lib/shift";
   import { shiftState } from "../../lib/shift.svelte";
   import { SNAPSHOT_DEPENDENCY } from "../../lib/snapshot";
   import { page } from "$app/state";
   import CashMovePanel from "../../lib/CashMovePanel.svelte";
+  import CloseShiftPanel from "../../lib/CloseShiftPanel.svelte";
   import { sessionStaff } from "../../lib/operating";
 
   // The running count of cash events follows the Hub; the drawer total is never shown.
@@ -26,6 +32,8 @@
   let refusal: string | null = $state(null);
   let busy = $state(false);
   let opened = $state(false);
+  let closing = $state(false);
+  let closed = $state(false);
   let root: HTMLElement | undefined = $state();
   let attempt: { key: string; float: number } | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -42,6 +50,7 @@
     error = null;
     refusal = null;
     opened = false;
+    closed = false;
     opening = true;
     await tick();
     root?.querySelector<HTMLInputElement>("input")?.select();
@@ -138,11 +147,29 @@
     {#if opened}
       <p class="type-hub-label" role="status" data-testid="shift-status">{t("hub.shift.opened")}</p>
     {/if}
-    <CashMovePanel
-      {staff}
-      ontimeout={() => void invalidate(SESSION_DEPENDENCY)}
-      ondone={() => void invalidate(SNAPSHOT_DEPENDENCY)}
-    />
+    {#if closing}
+      <CloseShiftPanel
+        {staff}
+        ontimeout={() => void invalidate(SESSION_DEPENDENCY)}
+        oncancel={() => (closing = false)}
+        ondone={() => {
+          closing = false;
+          closed = true;
+          void invalidate(SNAPSHOT_DEPENDENCY);
+        }}
+      />
+    {:else}
+      {#if hasPermission(staff, "shift.close")}
+        <div class="actions">
+          <Button label="hub.shift.close.start" onclick={() => (closing = true)} />
+        </div>
+      {/if}
+      <CashMovePanel
+        {staff}
+        ontimeout={() => void invalidate(SESSION_DEPENDENCY)}
+        ondone={() => void invalidate(SNAPSHOT_DEPENDENCY)}
+      />
+    {/if}
   {:else if opening}
     <form class="form" onsubmit={confirm} novalidate data-testid="shift-form">
       <TextField
@@ -168,6 +195,11 @@
       </div>
     </form>
   {:else}
+    {#if closed}
+      <p class="type-hub-label" role="status" data-testid="shift-closed">
+        {t("hub.shift.close.closed")}
+      </p>
+    {/if}
     <p class="type-hub-body" data-testid="shift-none">{t("hub.shift.none")}</p>
     <div class="actions">
       <Button label="hub.shift.open" onclick={() => void begin()} />

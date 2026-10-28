@@ -72,11 +72,13 @@ pub fn open_shift_id(conn: &Connection) -> Result<Option<String>, AppError> {
     .map_err(db_error)
 }
 
-/// The opening float of the latest shift (0 before the first one): what the next shift offers.
+/// The float the next shift offers (0 before the first shift): the latest shift's counted cash
+/// less its deposit at close once it is closed (Story 5.26), else its opening float.
 pub fn last_opening_float(conn: &Connection) -> Result<i64, AppError> {
     let found: Option<i64> = conn
         .query_row(
-            "SELECT float_minor FROM shifts ORDER BY opened_at DESC, id DESC LIMIT 1",
+            "SELECT COALESCE(next_float_minor, float_minor) FROM shifts
+             ORDER BY opened_at DESC, id DESC LIMIT 1",
             [],
             |r| r.get(0),
         )
@@ -203,6 +205,114 @@ pub fn insert_cash_move(conn: &Connection, e: &NewCashMove<'_>) -> Result<(), Ap
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// What closes a shift (Story 5.26).
+pub struct ShiftClosing<'a> {
+    pub shift_id: &'a str,
+    pub closed_at: i64,
+    pub counted_minor: i64,
+    pub expected_minor: i64,
+    pub variance_minor: i64,
+    pub variance_reason: Option<&'a str>,
+    pub variance_note: Option<&'a str>,
+    pub closed_by: &'a str,
+    pub approver_id: Option<&'a str>,
+    pub next_float_minor: i64,
+}
+
+/// Closes the open shift with its count; the caller stamps the row.
+pub fn close_shift(conn: &Connection, c: &ShiftClosing<'_>) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE shifts SET state = 'closed', closed_at = ?2, counted_minor = ?3,
+                    expected_minor = ?4, variance_minor = ?5, variance_reason = ?6,
+                    variance_note = ?7, closed_by = ?8, approver_id = ?9, next_float_minor = ?10
+             WHERE id = ?1 AND state = 'open'",
+            params![
+                c.shift_id,
+                c.closed_at,
+                c.counted_minor,
+                c.expected_minor,
+                c.variance_minor,
+                c.variance_reason,
+                c.variance_note,
+                c.closed_by,
+                c.approver_id,
+                c.next_float_minor
+            ],
+        )
+        .map_err(db_error)?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            arena_proto::ErrorCode::ShiftNotOpen,
+            "There is no shift to close.",
+        ))
+    }
+}
+
+/// What made up the expected cash of a shift, by kind (signed by the drawer effect). A reversed
+/// sale nets out because its compensating row counts with the sales.
+pub fn shift_breakdown(
+    conn: &Connection,
+    shift_id: &str,
+) -> Result<arena_proto::ShiftBreakdown, AppError> {
+    let sum = |kinds: &[&str]| -> Result<i64, AppError> {
+        let marks = kinds.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM cash_events
+             WHERE shift_id = ? AND kind IN ({marks})"
+        );
+        let mut values: Vec<&dyn rusqlite::ToSql> = vec![&shift_id];
+        values.extend(kinds.iter().map(|k| k as &dyn rusqlite::ToSql));
+        conn.query_row(&sql, values.as_slice(), |r| r.get(0))
+            .map_err(db_error)
+    };
+    Ok(arena_proto::ShiftBreakdown {
+        float_minor: sum(&[arena_proto::CASH_FLOAT_IN])?,
+        cash_sales_minor: sum(&[arena_proto::CASH_SALE, arena_proto::CASH_SALE_REVERTED])?,
+        cash_refunds_minor: sum(&[arena_proto::CASH_REFUND])?,
+        deposits_minor: sum(&[arena_proto::CASH_DEPOSIT])?,
+        expenses_minor: sum(&[arena_proto::CASH_EXPENSE])?,
+    })
+}
+
+/// The branch's variance threshold in minor units (Settings → Shift); the default when the
+/// setting is missing or unreadable.
+pub fn variance_threshold(conn: &Connection) -> Result<i64, AppError> {
+    let default = || {
+        arena_proto::DEFAULT_SHIFT_VARIANCE_THRESHOLD
+            .parse::<i64>()
+            .unwrap_or(10_000)
+    };
+    Ok(
+        crate::find_setting(conn, arena_proto::KEY_SHIFT_VARIANCE_THRESHOLD)?
+            .and_then(|s| s.value.trim().parse::<i64>().ok())
+            .filter(|v| *v >= 0)
+            .unwrap_or_else(default),
+    )
+}
+
+/// The reveal for a stated count: the expected cash, the signed difference and whether it is over
+/// the threshold. Only ever built from a count, so the expected cash is never read out alone.
+pub fn shift_count(
+    conn: &Connection,
+    shift_id: &str,
+    counted_minor: i64,
+) -> Result<arena_proto::ShiftCount, AppError> {
+    let expected_minor = expected_cash(conn, shift_id)?;
+    let threshold_minor = variance_threshold(conn)?;
+    let difference_minor = counted_minor - expected_minor;
+    Ok(arena_proto::ShiftCount {
+        counted_minor,
+        expected_minor,
+        difference_minor,
+        threshold_minor,
+        over_threshold: difference_minor.abs() > threshold_minor,
+        breakdown: shift_breakdown(conn, shift_id)?,
+    })
 }
 
 /// The cash a shift's drawer should hold: float plus cash sales, less cash refunds, deposits

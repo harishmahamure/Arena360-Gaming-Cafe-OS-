@@ -164,6 +164,9 @@ pub enum IntentKind {
     #[serde(rename = "shift.open")]
     ShiftOpen,
     /// Cash taken from the drawer to the safe, with a slip reference (Story 5.25).
+    /// Closes the shift with a blind count and a signed variance (Story 5.26).
+    #[serde(rename = "shift.close")]
+    ShiftClose,
     #[serde(rename = "cash.deposit")]
     CashDeposit,
     /// An expense paid from the drawer or by the owner (Story 5.25).
@@ -288,7 +291,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 93] = [
+    pub const ALL: [IntentKind; 94] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -338,6 +341,7 @@ impl IntentKind {
         Self::StockExpiryCheck,
         Self::StockThreshold,
         Self::ShiftOpen,
+        Self::ShiftClose,
         Self::CashDeposit,
         Self::ExpenseCreate,
         Self::DeviceMaintenance,
@@ -436,6 +440,7 @@ impl IntentKind {
             Self::StockExpiryCheck => "stock.expiry_check",
             Self::StockThreshold => "stock.threshold",
             Self::ShiftOpen => "shift.open",
+            Self::ShiftClose => "shift.close",
             Self::CashDeposit => "cash.deposit",
             Self::ExpenseCreate => "expense.create",
             Self::DeviceMaintenance => "device.maintenance",
@@ -536,6 +541,7 @@ impl IntentKind {
             | Self::StockExpiryCheck
             | Self::StockThreshold => IntentCategory::Catalog,
             Self::ShiftOpen
+            | Self::ShiftClose
             | Self::CashDeposit
             | Self::ExpenseCreate
             | Self::PosSale
@@ -638,6 +644,7 @@ impl IntentKind {
             | Self::CouponUpsert
             | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
             Self::ShiftOpen => Requirement::Perm(Permission::ShiftOpen),
+            Self::ShiftClose => Requirement::Perm(Permission::ShiftClose),
             Self::CashDeposit | Self::ExpenseCreate => Requirement::Perm(Permission::CashManage),
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
             Self::StockWaste | Self::StockWasteReverted | Self::StockWriteOff => {
@@ -760,6 +767,7 @@ impl IntentKind {
             | Self::StockExpiryCheck
             | Self::StockThreshold
             | Self::ShiftOpen
+            | Self::ShiftClose
             | Self::CashDeposit
             | Self::ExpenseCreate => None,
             Self::DeviceMaintenance
@@ -1323,6 +1331,8 @@ pub enum IntentPayload {
     StockThreshold(crate::StockThreshold),
     #[serde(rename = "shift.open")]
     ShiftOpen(crate::ShiftOpen),
+    #[serde(rename = "shift.close")]
+    ShiftClose(crate::ShiftClose),
     #[serde(rename = "cash.deposit")]
     CashDeposit(crate::CashDeposit),
     #[serde(rename = "expense.create")]
@@ -1465,6 +1475,7 @@ impl IntentPayload {
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
             Self::StockThreshold(_) => IntentKind::StockThreshold,
             Self::ShiftOpen(_) => IntentKind::ShiftOpen,
+            Self::ShiftClose(_) => IntentKind::ShiftClose,
             Self::CashDeposit(_) => IntentKind::CashDeposit,
             Self::ExpenseCreate(_) => IntentKind::ExpenseCreate,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
@@ -1590,7 +1601,7 @@ mod tests {
         Permission::DiscountManual,
         Permission::KitchenUse,
         Permission::StockOverride,
-        Permission::ShiftClose,
+        Permission::ShiftOverrideVariance,
         Permission::DevicePair,
         Permission::BackupExport,
         Permission::OpsPromote,
@@ -1752,6 +1763,7 @@ mod tests {
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
                 | "coupon.upsert" | "stock.threshold" => Requirement::Perm(Permission::CatalogEdit),
                 "shift.open" => Requirement::Perm(Permission::ShiftOpen),
+                "shift.close" => Requirement::Perm(Permission::ShiftClose),
                 "cash.deposit" | "expense.create" => Requirement::Perm(Permission::CashManage),
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
                 "stock.waste" | "stock.waste.reverted" | "stock.write_off" => {

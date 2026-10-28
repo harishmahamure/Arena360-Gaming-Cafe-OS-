@@ -76,6 +76,7 @@ import type { SessionSettleReverted } from "./SessionSettleReverted";
 import type { SessionStart } from "./SessionStart";
 import type { SessionTransfer } from "./SessionTransfer";
 import type { SettingsSet } from "./SettingsSet";
+import type { ShiftClose } from "./ShiftClose";
 import type { ShiftOpen } from "./ShiftOpen";
 import type { StaffDeactivate } from "./StaffDeactivate";
 import type { StaffSetCredentials } from "./StaffSetCredentials";
@@ -144,6 +145,7 @@ export type IntentPayload =
   | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
   | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "shift.open" } & ShiftOpen)
+  | ({ kind: "shift.close" } & ShiftClose)
   | ({ kind: "cash.deposit" } & CashDeposit)
   | ({ kind: "expense.create" } & ExpenseCreate)
   | ({ kind: "device.maintenance" } & DeviceMaintenance)

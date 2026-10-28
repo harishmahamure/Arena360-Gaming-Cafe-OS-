@@ -108,6 +108,7 @@ impl Entitlement {
         LicenceApply {
             standing: self.standing,
             clock_wrong,
+            tier: self.tier,
             flags: self.flags.join(","),
             device_cap: self.limits.devices,
             user_cap: self.limits.users,
@@ -120,6 +121,8 @@ impl Entitlement {
 pub struct LicenceApply {
     pub standing: LicenceStanding,
     pub clock_wrong: bool,
+    /// The effective tier (Free whenever the licence is not trusted or has ended).
+    pub tier: Tier,
     pub flags: String,
     pub device_cap: u32,
     pub user_cap: u32,
@@ -131,7 +134,7 @@ impl LicenceApply {
             && (self.flags.is_empty() || self.flags.split(',').all(flag_name))
     }
 
-    pub fn rows(&self) -> [(&'static str, String); 5] {
+    pub fn rows(&self) -> [(&'static str, String); 6] {
         [
             (crate::KEY_LICENCE_FLAGS, self.flags.clone()),
             (crate::KEY_DEVICE_CAP, self.device_cap.to_string()),
@@ -141,6 +144,7 @@ impl LicenceApply {
                 crate::KEY_LICENCE_CLOCK,
                 if self.clock_wrong { "wrong" } else { "ok" }.to_owned(),
             ),
+            (crate::KEY_LICENCE_TIER, self.tier.as_str().to_owned()),
         ]
     }
 }
@@ -229,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn the_apply_payload_round_trips_the_five_setting_rows() {
+    fn the_apply_payload_round_trips_the_six_setting_rows() {
         let e = eval(Some(&token(Tier::Basic, "T", "B")), T0 * 1000);
         let p = e.apply_payload(true);
         assert!(p.flags_valid());
@@ -237,6 +241,7 @@ mod tests {
         assert_eq!(rows[1], (crate::KEY_DEVICE_CAP, "60".to_owned()));
         assert_eq!(rows[3].1, "verified");
         assert_eq!(rows[4].1, "wrong");
+        assert_eq!(rows[5], (crate::KEY_LICENCE_TIER, "basic".to_owned()));
         let bad = LicenceApply {
             flags: "Kitchen".into(),
             ..p
@@ -313,6 +318,7 @@ mod tests {
         let p = |flags: &str| LicenceApply {
             standing: LicenceStanding::Verified,
             clock_wrong: false,
+            tier: Tier::Free,
             flags: flags.into(),
             device_cap: 1,
             user_cap: 1,

@@ -31,8 +31,8 @@ import org.json.JSONObject
  * through the `ArenaAds` JavaScript interface, and only when the ads gate is on (Android, Free).
  * Until the page calls [init] nothing here touches the SDK, so a paid Hub never makes an ad request.
  *
- * The surface is `init`, `bannerPlace`, `bannerHide`, `bannerDestroy`, `interstitialPreload` and
- * `interstitialShow` (the page's `ads.ts` names them `banner.place` and so on). Events go back as
+ * The surface is `init`, `bannerPlace`, `bannerHide`, `bannerDestroy`, `interstitialPreload`,
+ * `interstitialShow` and `stop` (the page's `ads.ts` names them `banner.place` and so on). Events go back as
  * `arena:ad` window events. The SDK is started on a background thread; `loadAd` and `show` are
  * the SDK's own main-thread calls (it does its network and disk work on its own threads), and in
  * a debug build StrictMode logs any network or disk access on the main thread that starts in here.
@@ -252,6 +252,21 @@ class ArenaAds(private val activity: Activity, private val webView: WebView) {
             emit(AdEvents.FAILED, AdEvents.INTERSTITIAL)
         }
       ad.show(activity)
+    }
+  }
+
+  /**
+   * The ads gate turned off (the branch is paid): the banner is destroyed, a preloaded or loading
+   * interstitial is discarded (a load still in flight is dropped when it answers) and the SDK is
+   * asked for nothing more. Calling [init] again, when the gate turns on, starts it all anew.
+   */
+  @JavascriptInterface
+  fun stop() {
+    activity.runOnUiThread {
+      bannerDestroy()
+      interstitialGeneration++
+      interstitial = null
+      loadingInterstitial = false
     }
   }
 

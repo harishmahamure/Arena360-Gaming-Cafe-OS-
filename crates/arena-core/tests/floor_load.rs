@@ -128,6 +128,7 @@ async fn floor_at(path: std::path::PathBuf, dir: Option<tempfile::TempDir>) -> F
         .apply_licence(arena_proto::LicenceApply {
             standing: arena_proto::LicenceStanding::Verified,
             clock_wrong: false,
+            tier: arena_proto::Tier::Free,
             flags: String::new(),
             device_cap: 100,
             user_cap: 10,

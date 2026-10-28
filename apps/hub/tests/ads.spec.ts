@@ -83,6 +83,7 @@ async function open(
       bannerDestroy: () => calls.push("bannerDestroy"),
       interstitialPreload: () => calls.push("interstitialPreload"),
       interstitialShow: () => calls.push("interstitialShow"),
+      stop: () => calls.push("stop"),
     };
   }, debug);
   await page.route(`${HUB}/**`, async (route) => {
@@ -173,6 +174,7 @@ test.describe("the gate", () => {
       bannerDestroy: () => void log.push("destroy"),
       interstitialPreload: () => void log.push("preload"),
       interstitialShow: () => void log.push("show"),
+      stop: () => void log.push("stop"),
     };
     const ads = new AdsClient({
       android,
@@ -201,6 +203,7 @@ test.describe("the gate", () => {
       'place {"x":0,"y":800,"width":412,"height":50}',
       "preload",
       "destroy",
+      "stop",
       'init {"rating":"PG","personalised":false}',
     ]);
   });
@@ -297,7 +300,7 @@ test.describe("android", () => {
     entitlement(hub, "basic");
     await expect
       .poll(() => lifecycle(page))
-      .toEqual(['init {"rating":"PG","personalised":false}', "bannerDestroy"]);
+      .toEqual(['init {"rating":"PG","personalised":false}', "bannerDestroy", "stop"]);
     await expect(page.getByTestId("ad-banner")).toHaveCount(0);
     entitlement(hub, "free");
     await expect
@@ -305,9 +308,25 @@ test.describe("android", () => {
       .toEqual([
         'init {"rating":"PG","personalised":false}',
         "bannerDestroy",
+        "stop",
         'init {"rating":"PG","personalised":false}',
       ]);
     await expect(page.getByTestId("ad-banner")).toBeVisible();
+  });
+
+  test("the gate turning off leaves focus where it was and removes the slot", async ({ page }) => {
+    const hub = await open(page, "free");
+    await expect(page.getByTestId("ad-banner")).toBeVisible();
+    const main = page.locator("main").first();
+    await page.locator("header button").first().focus();
+    const before = await page.evaluate(() => document.activeElement?.outerHTML ?? "");
+    expect(before).toContain("<button");
+    expect(before.length).toBeLessThan(400);
+    entitlement(hub, "basic");
+    await expect(page.getByTestId("ad-banner")).toHaveCount(0);
+    expect(await page.evaluate(() => document.activeElement?.outerHTML ?? "")).toBe(before);
+    expect(await page.evaluate(() => document.documentElement.dataset.ads)).toBeUndefined();
+    await expect(main).toBeVisible();
   });
 
   test("the stream event alone stops ads, with the snapshot still saying Free", async ({

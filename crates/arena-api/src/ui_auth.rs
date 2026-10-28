@@ -3252,6 +3252,7 @@ pub(crate) mod tests {
                 IntentPayload::LicenceApply(arena_proto::LicenceApply {
                     standing: arena_proto::LicenceStanding::Verified,
                     clock_wrong: false,
+                    tier: arena_proto::Tier::Free,
                     flags: String::new(),
                     device_cap: 20,
                     user_cap: 10,

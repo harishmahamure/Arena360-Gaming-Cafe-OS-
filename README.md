@@ -1913,6 +1913,22 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   the answer says where to resume. `ControlDb::ad_fill` sums requests and impressions per day and slot
   over all branches (no tenant or branch in the rows) so fill rate (impressions ÷ requests) is
   computable for NFR27; the Grafana export is deferred with Story 2.3's exporter.
+- **Upgrade and lapse (Story 4.15).** No new gate: the gate of Story 4.10 follows the Hub's effective
+  tier, which the heartbeat task evaluates (`settle`) from the cached licence against trusted time
+  right after each answer (and each failed beat, and at start). A comp or paid licence in the
+  answer therefore turns ads off within that heartbeat; a lapse turns them on once the cloud signs
+  Free, or once the cached licence passes its `exp` on trusted time (cloud time plus monotonic
+  elapsed, so moving the wall clock forward changes nothing while a cloud time is held). A tampered,
+  foreign or unreadable licence is Free with standing `unverified`. The Hub starts with an unknown
+  tier (`null`, gate off) until the cached licence has been evaluated, so a paid Android Hub that
+  restarts with the WAN down shows no ad at any point; the tier recorded at pairing is not used.
+  With the gate off `ads.ts` calls the plugin's `bannerDestroy` and `stop` (Kotlin `stop`: the
+  banner is destroyed, a preloaded or loading interstitial is dropped, a late load is ignored), the
+  banner slot leaves the layout (`data-ads` removed, focus untouched) and `InterstitialPolicy` forgets
+  any ad it had loaded; the next `init` starts it afresh. **Audit:** `licence.apply` also writes
+  the setting `licence.tier`; it changes only when the effective tier does, so each gate change is
+  one change record (actor `system`/`hub-licence`, its `at`, the new tier in the row and the old
+  tier in the previous row image the audit viewer shows). The first licence of a Hub inserts it.
 - **Free café end to end (Story 4.8).** `crates/arena-hub/tests/free_android_golive.rs` (feature
   `dev-fixtures`) starts a real cloud and the real `arena-hub` binary with `--platform android`,
   with a kiosk speaking the LAN protocol, and walks sign-up → Free (no comp entitlement) → a

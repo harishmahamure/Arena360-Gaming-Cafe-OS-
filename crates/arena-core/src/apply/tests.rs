@@ -7427,6 +7427,7 @@ mod licence {
         LicenceApply {
             standing: LicenceStanding::Verified,
             clock_wrong: false,
+            tier: arena_proto::Tier::Free,
             flags: flags.into(),
             device_cap: devices,
             user_cap: 10,
@@ -7488,12 +7489,13 @@ mod licence {
     }
 
     #[tokio::test]
-    async fn the_system_writes_the_five_licence_rows_as_change_rows() {
+    async fn the_system_writes_the_six_licence_rows_as_change_rows() {
         let f = bootstrapped().await;
         let applied = send(&f, ActorKind::System, body("kitchen,tunnel", 60))
             .await
             .unwrap();
-        assert_eq!(applied.changes.len(), 5);
+        assert_eq!(applied.changes.len(), 6);
+        assert_eq!(text(&f, "licence.tier").as_deref(), Some("free"));
         assert_eq!(text(&f, "licence.flags").as_deref(), Some("kitchen,tunnel"));
         assert_eq!(text(&f, "licence.device_cap").as_deref(), Some("60"));
         assert_eq!(text(&f, "licence.user_cap").as_deref(), Some("10"));
@@ -7503,6 +7505,58 @@ mod licence {
             .await
             .unwrap();
         assert_eq!(again.changes.len(), 2);
+    }
+
+    /// Story 4.15: a gate change is one system change record of `licence.tier`, with the time and
+    /// the previous row image (the audit viewer shows old and new from the two images).
+    #[tokio::test]
+    async fn a_tier_change_is_one_system_change_row_and_a_repeat_writes_nothing() {
+        let f = bootstrapped().await;
+        let at = |tier| LicenceApply {
+            tier,
+            ..body("kitchen", 60)
+        };
+        send(&f, ActorKind::System, at(arena_proto::Tier::Free))
+            .await
+            .unwrap();
+        let upgraded = send(&f, ActorKind::System, at(arena_proto::Tier::Basic))
+            .await
+            .unwrap();
+        assert_eq!(upgraded.changes.len(), 1);
+        assert_eq!(text(&f, "licence.tier").as_deref(), Some("basic"));
+        assert!(
+            f.writer
+                .apply_licence(at(arena_proto::Tier::Basic))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let lapsed = f
+            .writer
+            .apply_licence(at(arena_proto::Tier::Free))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lapsed.changes.len(), 1);
+        let rows: Vec<_> = reopen(&f)
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.row_id.ends_with("/licence.tier"))
+            .collect();
+        let ops: Vec<_> = rows
+            .iter()
+            .map(|c| (c.intent_kind.as_str(), c.actor_kind.as_str(), c.op))
+            .collect();
+        assert_eq!(
+            ops,
+            vec![
+                ("licence.apply", "system", arena_store::ChangeOp::Insert),
+                ("licence.apply", "system", arena_store::ChangeOp::Update),
+                ("licence.apply", "system", arena_store::ChangeOp::Update),
+            ]
+        );
+        assert!(rows.iter().all(|c| c.at > 0));
     }
 
     #[tokio::test]
@@ -7572,7 +7626,7 @@ mod licence {
     async fn the_writer_applies_only_what_changed() {
         let f = bootstrapped().await;
         let first = f.writer.apply_licence(body("kitchen", 60)).await.unwrap();
-        assert_eq!(first.unwrap().changes.len(), 5);
+        assert_eq!(first.unwrap().changes.len(), 6);
         assert!(
             f.writer
                 .apply_licence(body("kitchen", 60))

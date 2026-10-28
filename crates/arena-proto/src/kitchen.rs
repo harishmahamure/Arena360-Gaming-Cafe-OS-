@@ -5,6 +5,8 @@ pub const KEY_DEVICE_CAP: &str = "licence.device_cap";
 pub const KEY_USER_CAP: &str = "licence.user_cap";
 pub const KEY_LICENCE_STATUS: &str = "licence.status";
 pub const KEY_LICENCE_CLOCK: &str = "licence.clock";
+/// The effective tier the Hub runs under (Story 4.15): its change record is the audit row of a gate change.
+pub const KEY_LICENCE_TIER: &str = "licence.tier";
 pub const KEY_KITCHEN_KOT_MODE: &str = "kitchen.kot_mode";
 pub const KEY_KITCHEN_KOT_PRINTER: &str = "kitchen.kot_printer";
 pub const KEY_KITCHEN_KOT_PAPER_MM: &str = "kitchen.kot_paper_mm";

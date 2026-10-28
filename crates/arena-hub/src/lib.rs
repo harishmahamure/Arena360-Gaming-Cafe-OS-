@@ -285,7 +285,10 @@ async fn run(
     let mut initial = HubStatus::opened(schema_version, instance_id.clone());
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
-    initial.tier = identity.map(|i| i.tier);
+    // The effective tier is unknown until the heartbeat task has evaluated the cached licence
+    // against trusted time (Story 4.15): the tier recorded at pairing is not it. A paid Android
+    // Hub that restarts with the WAN down must not report Free (and show ads) in between.
+    initial.tier = None;
     initial.platform = cfg.platform;
     if cfg.platform == arena_proto::HubPlatform::Android {
         // Read the addresses before the first snapshot, so the header does not flash

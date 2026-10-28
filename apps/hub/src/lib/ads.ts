@@ -54,6 +54,8 @@ export type AdsBridge = {
   bannerDestroy(): void;
   interstitialPreload(): void;
   interstitialShow(): void;
+  /** Gate off (Story 4.15): destroys the banner and drops any preloaded interstitial. */
+  stop?(): void;
 };
 
 /** Ads run only on Android and only when the Hub's effective tier is Free. */
@@ -112,8 +114,8 @@ export class AdsClient {
 
   /**
    * Re-evaluates the gate for the Hub's effective tier. Turning it on starts the plugin once
-   * (off the main thread, on the Kotlin side); turning it off removes any banner and stops
-   * listening, and the next `true` starts it again. Returns whether ads are on.
+   * (off the main thread, on the Kotlin side); turning it off removes any banner, drops a preloaded
+   * interstitial and stops listening, and the next `true` starts it again. Returns whether ads are on.
    */
   evaluate(tier: Tier | null | undefined): boolean {
     const bridge = adsEnabled(this.#env.android, tier) ? this.#env.bridge() : undefined;
@@ -166,6 +168,7 @@ export class AdsClient {
   #stopAds() {
     try {
       this.#bridge?.bannerDestroy();
+      this.#bridge?.stop?.();
     } catch {
       // The plugin is gone with the page; nothing to clean up.
     }

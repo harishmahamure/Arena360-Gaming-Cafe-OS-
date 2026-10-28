@@ -79,6 +79,8 @@ export class InterstitialPolicy {
   lock(open: readonly string[]) {
     this.#locked = true;
     this.#excluded = open.length > 0;
+    // A gate that turned off dropped the plugin's preloaded ad: forget it was loaded.
+    if (!this.#ads.state.enabled) this.#loaded = false;
     if (this.#ads.state.enabled && !this.#excluded && this.#spaced()) {
       this.#ads.interstitial.preload();
     }
@@ -94,6 +96,7 @@ export class InterstitialPolicy {
     const wasLocked = this.#locked;
     this.#locked = false;
     this.#excluded = false;
+    if (!this.#ads.state.enabled) this.#loaded = false;
     if (!wasLocked || excluded || !this.#loaded || !this.#ads.state.enabled || !this.#spaced()) {
       return false;
     }

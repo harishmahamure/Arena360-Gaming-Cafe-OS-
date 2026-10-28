@@ -747,8 +747,9 @@ mod tests {
         );
         assert_eq!(setting(&f.path, "licence.clock").as_deref(), Some("ok"));
         let rows = audit_kinds(&f.path);
-        assert_eq!(rows.len(), 5, "{rows:?}");
+        assert_eq!(rows.len(), 6, "{rows:?}");
         assert!(rows.contains(&"B/licence.status".to_owned()));
+        assert_eq!(setting(&f.path, "licence.tier").as_deref(), Some("basic"));
         f.task.beat().await;
         assert_eq!(audit_kinds(&f.path), rows);
         assert_eq!(f.status.borrow().licence, Some(LicenceStanding::Verified));
@@ -863,6 +864,76 @@ mod tests {
             setting(&f.path, "licence.status").as_deref(),
             Some("expired")
         );
+    }
+
+    fn tier_rows(path: &std::path::Path) -> Vec<(String, String, i64)> {
+        Store::open(path, T0)
+            .unwrap()
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.row_id == "B/licence.tier")
+            .map(|c| (c.intent_kind, c.actor_kind, c.at))
+            .collect()
+    }
+
+    /// Story 4.15: a comp grant turns the gate off within the heartbeat that carries it; the
+    /// licence passing its end on trusted time (WAN down, wall clock moved forward) turns it on.
+    /// Each change is one system audit row; nothing else writes one.
+    #[tokio::test]
+    async fn an_upgrade_and_an_expiry_each_move_the_tier_and_write_one_system_audit_row() {
+        let port = serve(
+            vec![answer(true, Tier::Free), answer(true, Tier::Basic)],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Free));
+        assert_eq!(tier_rows(&f.path).len(), 1);
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Basic));
+        assert_eq!(setting(&f.path, "licence.tier").as_deref(), Some("basic"));
+        assert_eq!(tier_rows(&f.path).len(), 2);
+        // Settling again changes nothing and writes nothing.
+        f.wall.set(T0 + 30 * 86_400_000);
+        f.task.settle().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Basic));
+        assert_eq!(tier_rows(&f.path).len(), 2);
+        f.wall.set(T0);
+        // The WAN is down: trusted time (held cloud time plus elapsed) passes the licence's end.
+        let past = T0 + 8 * 86_400_000;
+        f.status.send_modify(|s| {
+            s.cloud_time = Some(CloudTime {
+                cloud_ms: past,
+                at: Instant::now(),
+            })
+        });
+        f.task.settle().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Free));
+        assert_eq!(setting(&f.path, "licence.tier").as_deref(), Some("free"));
+        let rows = tier_rows(&f.path);
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows.iter()
+                .all(|(kind, actor, at)| kind == "licence.apply" && actor == "system" && *at > 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tampered_licence_is_free_and_ads_are_on_for_it() {
+        let tampered = answer(true, Tier::Basic).1.replacen("eyJ", "xyz", 1);
+        let port = serve(vec![answer(true, Tier::Basic), (200, tampered)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Basic));
+        f.task.beat().await;
+        let s = f.status.borrow().clone();
+        assert_eq!(
+            (s.tier, s.licence),
+            (Some(Tier::Free), Some(LicenceStanding::Unverified))
+        );
+        assert_eq!(setting(&f.path, "licence.tier").as_deref(), Some("free"));
     }
 
     #[tokio::test]

@@ -1,19 +1,33 @@
 import type {
   DailySales,
+  GstExported,
+  GstMonth,
   SessionsReport,
+  SettingEntry,
   ShiftList,
   SnapshotLocale,
   ZReport,
 } from "@arena/ui/generated";
+import type { MessageKey } from "@arena/ui/messages";
 import { authHeaders, getToken, newIdempotencyKey, setToken, submitIntent } from "./auth";
+import { KEY_TAX, parseTax } from "./tax";
 
 export const REPORTS_URL = "http://127.0.0.1:7409/ui/reports";
 
 /** The most business days one report covers (the Hub refuses more). */
 export const MAX_DAYS = 90;
 
+/** One report on the list; `gstOnly` ones are offered only in a GST-registered branch. */
+export type ReportEntry = {
+  id: string;
+  href: string;
+  title: MessageKey;
+  note: MessageKey;
+  gstOnly?: boolean;
+};
+
 /** The reports on the list, in order. Later report stories add their entries here. */
-export const REPORTS = [
+export const REPORTS: readonly ReportEntry[] = [
   {
     id: "daily-sales",
     href: "/reports/daily-sales",
@@ -32,7 +46,21 @@ export const REPORTS = [
     title: "hub.reports.shifts",
     note: "hub.reports.shifts_note",
   },
-] as const;
+  {
+    id: "gst",
+    href: "/reports/gst",
+    title: "hub.reports.gst",
+    note: "hub.reports.gst_note",
+    gstOnly: true,
+  },
+];
+
+/** Whether the branch settings describe a GST-registered Indian branch (the GST return applies). */
+export function isGstBranch(settings: readonly SettingEntry[]): boolean {
+  const row = settings.find((s) => s.key === KEY_TAX);
+  const tax = row ? parseTax(row.value) : null;
+  return !!tax && tax.country === "IN" && tax.gst;
+}
 
 export type ReportOutcome<T> =
   | { kind: "ok"; view: T }
@@ -200,4 +228,87 @@ export async function reprintZReport(shiftId: string): Promise<ReprintZOutcome> 
   if (outcome.kind === "applied") return "queued";
   if (outcome.kind === "signed_out") return "signed_out";
   return outcome.kind === "error" ? "refused" : "unreachable";
+}
+
+/** The month (`YYYY-MM`) of the business day at `nowMs` in the branch. */
+export const businessMonthNow = (locale: SnapshotLocale, nowMs: number) =>
+  businessDayNow(locale, nowMs).slice(0, 7);
+
+export type GstOutcome<T> =
+  | { kind: "ok"; view: T }
+  | { kind: "invalid"; field: string; reason: string }
+  | { kind: "denied" }
+  | { kind: "signed_out" }
+  | { kind: "unreachable" };
+
+/** Reads a GST answer: the view on 200, the refused field on 422. */
+async function gstCall<T>(
+  url: string,
+  init: RequestInit,
+  isView: (body: unknown) => boolean,
+): Promise<GstOutcome<T>> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  try {
+    const res = await fetch(url, {
+      ...init,
+      headers: { ...authHeaders(token), ...init.headers },
+      signal: AbortSignal.timeout(30_000),
+      cache: "no-store",
+    });
+    if (res.status === 401) {
+      setToken(null);
+      return { kind: "signed_out" };
+    }
+    if (res.status === 403) return { kind: "denied" };
+    const body: unknown = await res.json().catch(() => null);
+    if (res.status === 422 && typeof body === "object" && body !== null) {
+      const e = body as { field?: unknown; message?: unknown };
+      return {
+        kind: "invalid",
+        field: typeof e.field === "string" ? e.field : "",
+        reason: typeof e.message === "string" ? e.message : "",
+      };
+    }
+    return res.ok && isView(body) ? { kind: "ok", view: body as T } : { kind: "unreachable" };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+const isGstMonth = (b: unknown) => hasList(b, "sections");
+
+/** `GET /ui/reports/gst?month=YYYY-MM`: the month's totals per GSTR-1 section. */
+export const loadGstMonth = (month: string) =>
+  gstCall<GstMonth>(`${REPORTS_URL}/gst?${new URLSearchParams({ month })}`, {}, isGstMonth); // i18n-ignore
+
+/**
+ * `POST /ui/reports/gst/export`: the Hub writes the month's ZIP of CSVs into `folder` (a path on
+ * the Hub's own disk or a USB drive) and answers what it wrote. No network call is made.
+ */
+export const exportGst = (month: string, folder: string) =>
+  gstCall<GstExported>(
+    `${REPORTS_URL}/gst/export`, // i18n-ignore
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ month, folder }),
+    },
+    (b) => typeof b === "object" && b !== null && typeof (b as GstExported).path === "string",
+  );
+
+/** The message for a refused export folder (`reason` is the Hub's code). */
+export function folderProblem(reason: string): MessageKey {
+  switch (reason) {
+    case "not_found":
+      return "hub.settings.system.invalid.not_found";
+    case "not_dir":
+      return "hub.settings.system.invalid.not_dir";
+    case "not_writable":
+      return "hub.settings.system.invalid.not_writable";
+    case "unsupported":
+      return "hub.gst.unsupported";
+    default:
+      return "hub.gst.folder_required";
+  }
 }

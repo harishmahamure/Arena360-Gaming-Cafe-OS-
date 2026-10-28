@@ -16,6 +16,7 @@ mod credit;
 mod dedupe;
 mod devices;
 mod group_bills;
+mod gst;
 mod identity;
 mod invoices;
 mod migrations;
@@ -99,6 +100,7 @@ pub use group_bills::{
     list_ended_group_segments, list_ended_group_sessions, list_group_sessions, set_group_payer,
     set_group_state, set_order_group, set_order_payer, set_session_group,
 };
+pub use gst::{GstCreditRow, GstInvoiceRow, GstLineRow, GstRows, load_gst_rows};
 pub use identity::{
     CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
     find_trusted_clock, insert_hub_identity, replace_hub_identity, store_licence,
@@ -1246,6 +1248,15 @@ impl Store {
             };
             Ok(Some(load_z_report_rows(&s.conn, shift, closed_at)?))
         })
+    }
+
+    /// The rows the GSTR-1 export of the business days `from` to `to` is built from (Story 5.29),
+    /// in one read snapshot. An older database without the tables reads as an empty month.
+    pub fn gst_rows(&self, from: &str, to: &str) -> Result<GstRows, AppError> {
+        if !self.table_exists("orders")? || !self.table_exists("refunds")? {
+            return Ok(GstRows::default());
+        }
+        self.read_consistent(|s| load_gst_rows(&s.conn, from, to))
     }
 
     /// The branch's open shift and the float the next one would offer, with the number of cash

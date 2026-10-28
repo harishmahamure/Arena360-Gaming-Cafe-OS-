@@ -28,6 +28,7 @@ mod discount;
 mod extend;
 mod force_end;
 mod group_bill;
+mod gst;
 mod invoice;
 mod order_line;
 mod order_place;

@@ -1,6 +1,13 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { DailySales, SessionsReport, ShiftList, ZReport } from "@arena/ui/generated";
+import type {
+  DailySales,
+  GstExported,
+  GstMonth,
+  SessionsReport,
+  ShiftList,
+  ZReport,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { addDays, businessDayNow, daySpan, durationText, bpText } from "../src/lib/reports";
 import { CORS, HUB, device, json as ok, snapshot } from "./floor-fixture";
@@ -166,10 +173,74 @@ const SHIFTS: ShiftList = {
   ],
 };
 
-type Hub = { asked: string[]; sent: unknown[]; shiftStatus: number };
+const GST_TAX = JSON.stringify({
+  country: "IN",
+  gst: true,
+  gstin: "29ABCDE1234F1Z5",
+  inclusive: true,
+  product_bp: 500,
+  play_bp: 1800,
+  sac: "9996",
+  label: "GST",
+  rate_bp: 0,
+});
+const SIMPLE_TAX = JSON.stringify({
+  country: "IN",
+  gst: false,
+  gstin: "",
+  inclusive: true,
+  product_bp: 500,
+  play_bp: 1800,
+  sac: "",
+  label: "Tax",
+  rate_bp: 0,
+});
 
-async function open(page: Page, permissions: string[], path = "/reports"): Promise<Hub> {
-  const hub: Hub = { asked: [], sent: [], shiftStatus: 200 };
+const section = (
+  key: string,
+  documents: number,
+  taxable: number,
+  c: number,
+  s: number,
+  i: number,
+) => ({
+  key,
+  documents,
+  taxable_minor: taxable,
+  central_minor: c,
+  state_minor: s,
+  integrated_minor: i,
+});
+
+const GST_MONTH: GstMonth = {
+  month: "2026-10",
+  sections: [
+    section("b2b", 2, 30_000, 1_000, 1_000, 500),
+    section("b2cs", 3, 100_000, 4_000, 4_000, 0),
+    section("cdnr", 1, 10_000, 500, 500, 0),
+    section("hsn", 6, 120_000, 4_500, 4_500, 500),
+  ],
+  invoices: 5,
+  credit_notes: 1,
+  untaxed: 1,
+  unnumbered: 2,
+  empty: false,
+};
+
+type Hub = {
+  asked: string[];
+  sent: unknown[];
+  shiftStatus: number;
+  exported: unknown[];
+};
+
+async function open(
+  page: Page,
+  permissions: string[],
+  path = "/reports",
+  tax: string = GST_TAX,
+): Promise<Hub> {
+  const hub: Hub = { asked: [], sent: [], shiftStatus: 200, exported: [] };
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "tok"));
   await page.route(`${HUB}/**`, async (route: Route) => {
     const req = route.request();
@@ -194,6 +265,61 @@ async function open(page: Page, permissions: string[], path = "/reports"): Promi
           headers: CORS,
           body: `retry: 300\n\n`,
         });
+      case "/ui/settings":
+        return ok(route, [
+          { key: "branch.tax", value: tax, rev: 1 },
+          { key: "system.backup_dir", value: "/mnt/usb", rev: 1 },
+        ]);
+      case "/ui/reports/gst": {
+        const month = url.searchParams.get("month") ?? "";
+        hub.asked.push(`gst ${month}`);
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+          return route.fulfill({
+            status: 422,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ code: "VALIDATION_FAILED", message: "m", field: "month" }),
+          });
+        }
+        const none = month === "2026-11";
+        return ok(
+          route,
+          none
+            ? {
+                ...GST_MONTH,
+                month,
+                empty: true,
+                invoices: 0,
+                credit_notes: 0,
+                untaxed: 0,
+                unnumbered: 0,
+              }
+            : { ...GST_MONTH, month },
+        );
+      }
+      case "/ui/reports/gst/export": {
+        const body = route.request().postDataJSON() as { month: string; folder: string };
+        hub.exported.push(body);
+        if (body.folder === "/bad") {
+          return route.fulfill({
+            status: 422,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({
+              code: "VALIDATION_FAILED",
+              message: "not_writable",
+              field: "folder",
+            }),
+          });
+        }
+        const done: GstExported = {
+          file_name: `GSTR1_DEV01_${body.month}.zip`,
+          path: `${body.folder}/GSTR1_DEV01_${body.month}.zip`,
+          bytes: 2048,
+          month: { ...GST_MONTH, month: body.month },
+        };
+        return ok(route, done);
+      }
       case "/ui/reports/shifts":
         hub.asked.push("shifts");
         return ok(route, SHIFTS);
@@ -447,4 +573,79 @@ test("the Shifts screens have no accessibility violations", async ({ page }) => 
   await expect(page.getByTestId("z-sales-total")).toBeVisible();
   const z = await new AxeBuilder({ page }).analyze();
   expect(z.violations).toEqual([]);
+});
+
+// ---- Story 5.29: the GST return ----
+
+test("a GST branch lists the GST return and its month shows every section", async ({ page }) => {
+  const hub = await open(page, ["report.view"]);
+  await expect(page.getByTestId("report-link-gst")).toContainText(en["hub.reports.gst"]);
+  await page.getByTestId("report-link-gst").click();
+  await expect(page.getByTestId("gst-screen")).toBeVisible();
+  await expect(page.getByTestId("gst-month")).toHaveValue(/^\d{4}-\d{2}$/);
+  await expect(page.getByTestId("gst-counts")).toHaveText("5 invoices · 1 credit notes");
+  await expect(page.getByTestId("gst-section-b2b")).toContainText("₹300.00");
+  await expect(page.getByTestId("gst-section-b2b")).toContainText("₹5.00");
+  await expect(page.getByTestId("gst-section-b2cs")).toContainText("₹1,000.00");
+  await expect(page.getByTestId("gst-section-cdnr")).toContainText("₹100.00");
+  await expect(page.getByTestId("gst-section-hsn")).toContainText("₹1,200.00");
+  await expect(page.getByTestId("gst-untaxed")).toContainText("1 invoices");
+  await expect(page.getByTestId("gst-unnumbered")).toContainText("2 sales");
+  expect(hub.asked.at(-1)).toMatch(/^gst \d{4}-\d{2}$/);
+});
+
+test("a simple-tax branch does not list the GST return", async ({ page }) => {
+  await open(page, ["report.view"], "/reports", SIMPLE_TAX);
+  await expect(page.getByTestId("report-link-shifts")).toBeVisible();
+  await expect(page.getByTestId("report-link-gst")).toHaveCount(0);
+  await page.goto("/reports/gst");
+  await expect(page.getByTestId("gst-not-gst")).toHaveText(en["hub.gst.not_gst"]);
+});
+
+test("picking a month asks for it, and an empty month says so", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/gst");
+  await expect(page.getByTestId("gst-counts")).toBeVisible();
+  await page.getByTestId("gst-month").fill("2026-11");
+  await page.getByRole("button", { name: en["hub.gst.show"] }).click();
+  await expect(page.getByTestId("gst-empty")).toHaveText("No invoices in 2026-11.");
+  expect(hub.asked.at(-1)).toBe("gst 2026-11");
+});
+
+test("Export writes the month into the folder and says where", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/gst");
+  // The backup folder is offered as the first guess.
+  await expect(page.getByTestId("gst-folder")).toHaveValue("/mnt/usb");
+  await page.getByTestId("gst-month").fill("2026-10");
+  await page.getByTestId("gst-folder").fill("/media/usb");
+  await page.getByRole("button", { name: en["hub.gst.export"] }).click();
+  await expect(page.getByTestId("gst-saved")).toHaveText(
+    "Saved /media/usb/GSTR1_DEV01_2026-10.zip.",
+  );
+  expect(hub.exported).toEqual([{ month: "2026-10", folder: "/media/usb" }]);
+});
+
+test("a folder the Hub refuses is explained and nothing is saved", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/gst");
+  await page.getByTestId("gst-folder").fill("/bad");
+  await page.getByRole("button", { name: en["hub.gst.export"] }).click();
+  await expect(page.getByTestId("gst-folder-error")).toContainText(
+    en["hub.settings.system.invalid.not_writable"],
+  );
+  await expect(page.getByTestId("gst-saved")).toHaveCount(0);
+  await page.getByTestId("gst-folder").fill("");
+  await page.getByRole("button", { name: en["hub.gst.export"] }).click();
+  await expect(page.getByTestId("gst-folder-error")).toContainText(en["hub.gst.folder_required"]);
+});
+
+test("without report.view the GST screen says so and asks for nothing", async ({ page }) => {
+  const hub = await open(page, ["pos.sell"], "/reports/gst");
+  await expect(page.getByTestId("reports-denied")).toHaveText(en["hub.reports.no_access"]);
+  expect(hub.asked).toEqual([]);
+});
+
+test("the GST screen has no accessibility violations", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/gst");
+  await expect(page.getByTestId("gst-section-hsn")).toBeVisible();
+  const gst = await new AxeBuilder({ page }).analyze();
+  expect(gst.violations).toEqual([]);
 });

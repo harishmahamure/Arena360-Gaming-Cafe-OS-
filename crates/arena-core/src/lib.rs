@@ -10,6 +10,7 @@ mod clock;
 mod commands;
 pub mod devices;
 pub mod entitlement;
+pub mod gst;
 pub mod invoice;
 pub mod locale;
 pub mod pairing;

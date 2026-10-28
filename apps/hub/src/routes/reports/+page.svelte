@@ -1,11 +1,21 @@
 <script lang="ts">
   import { t } from "@arena/ui";
+  import { onMount } from "svelte";
   import { page } from "$app/state";
-  import { hasPermission } from "../../lib/auth";
+  import { hasPermission, loadSettings } from "../../lib/auth";
   import { sessionStaff } from "../../lib/operating";
-  import { REPORTS } from "../../lib/reports";
+  import { REPORTS, isGstBranch } from "../../lib/reports";
 
   const allowed = $derived(hasPermission(sessionStaff(page.data), "report.view"));
+
+  // The GST return is offered only once the branch settings say it is GST-registered.
+  let gst = $state(false);
+  const shown = $derived(REPORTS.filter((r) => !r.gstOnly || gst));
+
+  onMount(async () => {
+    const outcome = await loadSettings();
+    gst = outcome.kind === "ok" && isGstBranch(outcome.settings);
+  });
 </script>
 
 <svelte:head>
@@ -17,7 +27,7 @@
 
   {#if allowed}
     <ul class="list" aria-label={t("hub.reports.list")}>
-      {#each REPORTS as report (report.id)}
+      {#each shown as report (report.id)}
         <li>
           <a class="ui-interactive entry" href={report.href} data-testid="report-link-{report.id}">
             <span class="type-hub-body title">{t(report.title)}</span>

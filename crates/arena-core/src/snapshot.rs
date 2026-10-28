@@ -1026,6 +1026,53 @@ impl SnapshotReader {
         Ok(arena_proto::ShiftList { shifts })
     }
 
+    /// A month of the GST return (Story 5.29), built from the stored invoices and credit notes.
+    /// `VALIDATION_FAILED` on a bad month (`month`) or in a branch that is not GST registered
+    /// (`tax`). Never writes.
+    pub fn gst_month(&self, month: &str) -> Result<arena_proto::GstMonth, AppError> {
+        Ok(self.gst_return(month)?.1.month)
+    }
+
+    /// The export of a month (Story 5.29): the file name, the ZIP and the month's totals.
+    pub fn gst_export(
+        &self,
+        month: &str,
+    ) -> Result<(String, Vec<u8>, arena_proto::GstMonth), AppError> {
+        let (code, built) = self.gst_return(month)?;
+        Ok((
+            arena_proto::gst_file_name(&code, month),
+            built.csv.to_zip(),
+            built.month,
+        ))
+    }
+
+    fn gst_return(&self, month: &str) -> Result<(String, crate::gst::GstReturn), AppError> {
+        let (from, to) = crate::gst::month_range(month)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let tax = store
+            .settings()?
+            .into_iter()
+            .find(|s| s.key == arena_proto::KEY_TAX)
+            .and_then(|s| arena_proto::TaxSettings::parse(&s.value))
+            .filter(crate::gst::gst_applies)
+            .ok_or_else(|| {
+                AppError::with_field(
+                    ErrorCode::ValidationFailed,
+                    "tax",
+                    "The GST return applies to a GST-registered branch.",
+                )
+            })?;
+        let code = store
+            .branch_summary()?
+            .map(|b| b.branch_code)
+            .unwrap_or_default();
+        let rows = store.gst_rows(&from, &to)?;
+        Ok((code, crate::gst::build(&rows, &tax, month)))
+    }
+
     /// The ESC/POS bytes of a closed shift's Z-report at the saved paper width, marked "Reprint"
     /// when `reprint` is set; `None` when there is no such shift or it is still open.
     pub fn z_report_bytes(

@@ -3235,6 +3235,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/reports/sessions", get(crate::ui_report::sessions))
         .route("/ui/reports/shifts", get(crate::ui_report::shifts))
         .route("/ui/reports/shifts/{id}", get(crate::ui_report::shift))
+        .route("/ui/reports/gst", get(crate::ui_report::gst))
+        .route("/ui/reports/gst/export", post(crate::ui_report::gst_export))
         .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
         .route(
             "/ui/discount/preview",
@@ -6057,6 +6059,145 @@ pub(crate) mod tests {
         assert_eq!(reveal["threshold_minor"], 10_000);
         assert_eq!(reveal["over_threshold"], false);
         assert_eq!(reveal["breakdown"]["float_minor"], 0);
+    }
+
+    /// Story 5.29: the GST reads need `report.view` and a GST branch; the export writes one ZIP
+    /// into a writable folder and refuses a folder it cannot use.
+    #[tokio::test]
+    async fn the_gst_return_needs_report_view_a_gst_branch_and_a_writable_folder() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/reports/gst?month=2026-10", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_string_lossy().into_owned();
+        let body = |month: &str, folder: &str| json!({ "month": month, "folder": folder });
+
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            "/ui/reports/gst?month=2026-10",
+            Some(&counter),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/reports/gst/export",
+            Some(&counter),
+            Some(body("2026-10", &folder)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+
+        // The test branch is simple-tax: there is no GST return.
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            "/ui/reports/gst?month=2026-10",
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(
+            (reply["code"].as_str(), reply["field"].as_str()),
+            (Some("VALIDATION_FAILED"), Some("tax"))
+        );
+
+        let gst = r#"{"country":"IN","gst":true,"gstin":"29ABCDE1234F1Z5","inclusive":true,"product_bp":500,"play_bp":1800,"sac":"","label":"Tax","rate_bp":0}"#;
+        hub.writer
+            .submit(move |tx| {
+                tx.execute(
+                    "UPDATE settings SET value = ?1 WHERE key = 'branch.tax'",
+                    [gst],
+                )
+                .map(|_| ())
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))
+            })
+            .await
+            .unwrap();
+
+        let (status, month) = call(
+            &hub,
+            "GET",
+            "/ui/reports/gst?month=2026-10",
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{month}");
+        assert_eq!(
+            (month["month"].as_str(), month["empty"].as_bool()),
+            (Some("2026-10"), Some(true))
+        );
+        assert_eq!(month["sections"].as_array().map(Vec::len), Some(4));
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            "/ui/reports/gst?month=2026-13",
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "month");
+
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/reports/gst/export",
+            Some(&manager),
+            Some(body("2026-10", &folder)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        let name = done["file_name"].as_str().unwrap();
+        assert!(
+            name.starts_with("GSTR1_") && name.ends_with("_2026-10.zip"),
+            "{name}"
+        );
+        let written = std::fs::read(dir.path().join(name)).unwrap();
+        assert!(written.starts_with(b"PK\x03\x04"));
+        assert_eq!(done["bytes"], written.len());
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(leftovers.len(), 1, "no temporary file is left behind");
+
+        // A folder that cannot be used is refused with its reason; nothing else is written.
+        let file = dir.path().join(name).to_string_lossy().into_owned();
+        for (bad, reason) in [
+            ("relative/dir", "not_found"),
+            ("/no/such/folder/here", "not_found"),
+            (file.as_str(), "not_dir"),
+            ("content://tree/primary%3AReports", "unsupported"),
+        ] {
+            let (status, reply) = call(
+                &hub,
+                "POST",
+                "/ui/reports/gst/export",
+                Some(&manager),
+                Some(body("2026-10", bad)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}: {reply}");
+            assert_eq!(
+                (reply["field"].as_str(), reply["message"].as_str()),
+                (Some("folder"), Some(reason)),
+                "{bad}"
+            );
+        }
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/reports/gst/export",
+            Some(&manager),
+            Some(json!({ "month": "2026-10" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
     }
 
     /// Story 5.28: the Shifts reads need `report.view`; an unknown shift is `NOT_FOUND`, an open

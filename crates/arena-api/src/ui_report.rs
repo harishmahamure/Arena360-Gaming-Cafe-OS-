@@ -2,7 +2,8 @@
 //! `GET /ui/reports/sessions?from=&to=` (`report.view`), over inclusive business days
 //! (`YYYY-MM-DD`, at most 90 days). They only read, off the writer's thread, so a long range
 //! never holds up `apply()`. Story 5.28 adds `GET /ui/reports/shifts` and
-//! `GET /ui/reports/shifts/{id}` (the Z-report of a closed shift).
+//! `GET /ui/reports/shifts/{id}` (the Z-report of a closed shift). Story 5.29 adds
+//! `GET /ui/reports/gst` and `POST /ui/reports/gst/export` (the GSTR-1 ZIP, written to a folder).
 
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
-use crate::ui_auth::{UiAuth, auth_failed, bearer, fail, internal, ui_error};
+use crate::ui_auth::{UiAuth, auth_failed, bad_frame, bearer, fail, internal, ui_error};
 
 #[derive(Deserialize)]
 pub(crate) struct RangeQuery {
@@ -126,6 +127,89 @@ pub(crate) async fn shift(
     let now = auth.clock().now_ms();
     match tokio::task::spawn_blocking(move || reader.z_report(&id, now)).await {
         Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MonthQuery {
+    month: String,
+}
+
+/// `GET /ui/reports/gst?month=YYYY-MM` (`report.view`): a month of the GST return as the screen
+/// shows it (Story 5.29). `VALIDATION_FAILED` on a bad month, or `tax` in a branch that is not
+/// GST registered.
+pub(crate) async fn gst(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    Query(q): Query<MonthQuery>,
+) -> Response {
+    if let Err(denied) = gate(&auth, &headers).await {
+        return denied;
+    }
+    let reader = Arc::clone(auth.reader());
+    match tokio::task::spawn_blocking(move || reader.gst_month(&q.month)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+const EXPORT_SHAPE: &str = "the body must be {\"month\": \"YYYY-MM\", \"folder\": string}";
+
+/// Writes `bytes` as `folder/file_name` through a temporary name, so a reader never sees half a
+/// file. `folder` must be an absolute path of a writable directory; an Android tree URI is not
+/// one (`VALIDATION_FAILED` on `folder`).
+fn write_export(
+    folder: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<std::path::PathBuf, AppError> {
+    let bad = |reason: &str| AppError::with_field(ErrorCode::ValidationFailed, "folder", reason);
+    let dir = std::path::Path::new(folder);
+    if arena_proto::is_backup_tree_uri(folder) {
+        return Err(bad("unsupported"));
+    }
+    arena_core::setup::probe_backup_dir(dir).map_err(|p| bad(p.as_str()))?;
+    let target = dir.join(file_name);
+    let part = dir.join(format!(".{file_name}.part"));
+    let written = std::fs::write(&part, bytes).and_then(|()| std::fs::rename(&part, &target));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&part);
+        return Err(bad("not_writable"));
+    }
+    Ok(target)
+}
+
+/// `POST /ui/reports/gst/export {month, folder}` (`report.view`): writes the month's ZIP of CSVs
+/// to `folder` and answers what was written (Story 5.29). Reads the database and writes one file;
+/// it makes no network call.
+pub(crate) async fn gst_export(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Ok(req) = serde_json::from_slice::<arena_proto::GstExportRequest>(&body) else {
+        return fail(bad_frame(EXPORT_SHAPE));
+    };
+    if let Err(denied) = gate(&auth, &headers).await {
+        return denied;
+    }
+    let reader = Arc::clone(auth.reader());
+    let job = tokio::task::spawn_blocking(move || {
+        let (file_name, zip, month) = reader.gst_export(&req.month)?;
+        let path = write_export(&req.folder, &file_name, &zip)?;
+        Ok::<_, AppError>(arena_proto::GstExported {
+            file_name,
+            path: path.to_string_lossy().into_owned(),
+            bytes: i64::try_from(zip.len()).unwrap_or(i64::MAX),
+            month,
+        })
+    })
+    .await;
+    match job {
+        Ok(Ok(done)) => Json(done).into_response(),
         Ok(Err(e)) => fail(ui_error(e)),
         Err(_) => fail(internal()),
     }

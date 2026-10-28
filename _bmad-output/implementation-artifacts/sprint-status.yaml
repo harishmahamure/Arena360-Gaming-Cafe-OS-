@@ -155,7 +155,7 @@ development_status:
   5-28-z-report-at-shift-close: done
   5-29-gstr-1-export: done
   5-30-players-and-staff-reports: done
-  5-31-stock-reports-with-waste-by-reason: review
+  5-31-stock-reports-with-waste-by-reason: done
   5-32-export-every-hub-report-to-csv-and-pdf: backlog
   5-33-csv-import-with-dry-run-starting-with-products: backlog
   5-34-import-players-and-plans-by-csv: backlog

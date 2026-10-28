@@ -2,7 +2,7 @@
 title: 'Story 5.31: Stock reports with waste by reason'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: 'c56679d'
 followup_review_recommended: false
@@ -81,6 +81,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review (unattended): folds, loaders and endpoints checked against the stock waste, undo and expiry writers (apply/stock.rs); no blocking findings. fmt, clippy, cargo tests, pnpm checks and Hub svelte-check green.
 
 ## Design Notes
 

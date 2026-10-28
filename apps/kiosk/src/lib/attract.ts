@@ -30,7 +30,7 @@ export function mediaAt(media: readonly AttractMedia[], index: number): AttractM
 
 /** Whether the screen offers the login panel: the PC is ready, with a rate to show. */
 export const canLogIn = (view: AttractView | null): boolean =>
-  view !== null && view.state === "ready";
+  view !== null && view.state === "ready" && view.rate_minor != null;
 
 /** "₹120.00 an hour" in the branch locale, or `null` when the PC shows no rate. */
 export function rateText(view: AttractView | null): string | null {

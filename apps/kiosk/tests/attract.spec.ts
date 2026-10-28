@@ -387,9 +387,11 @@ test.describe("the curated media", () => {
   });
 
   test("a new item list restarts at the first item", async ({ page }) => {
+    await page.clock.install();
     await open(page, { view: view({ media: items }), logo: null });
-    await expect(stillSrc(page)).toHaveAttribute("src", `/media/${items[0].cover}`);
-    await emit(page, { view: view({ media: [items[1]] }), logo: null });
+    await page.clock.runFor(60_000);
+    await expect(stillSrc(page)).toHaveAttribute("src", `/media/${items[2].cover}`);
+    await emit(page, { view: view({ media: [items[1], items[2], items[0]] }), logo: null });
     await expect(stillSrc(page)).toHaveAttribute("src", `/media/${items[1].cover}`);
   });
 });

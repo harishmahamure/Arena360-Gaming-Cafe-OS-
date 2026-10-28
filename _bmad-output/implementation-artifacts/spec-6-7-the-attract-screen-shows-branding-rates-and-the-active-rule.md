@@ -2,7 +2,7 @@
 title: 'Story 6.7: The attract screen shows branding, rates and the active rule, with no ads'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '35ada76f63e387d172cd5b3bc50053d1c2f9b809'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -11,7 +11,11 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-6-context.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-6-6-game-media-on-the-kiosk-falls-back-from-video-to-cover-to-so.md'
 warnings: ['oversized']
-deferred: []
+deferred:
+  - 'A cached attract view keeps its rule chip and discounted rate after rule.until while the Hub is unreachable (no client-side expiry).'
+  - 'A shell that outlives a service restart keeps a logo cleared while it was disconnected (the service sends nothing on connect when it has no logo).'
+  - 'No registry test drives tick_attract with a real MediaCache; SVG safety is substring-based (image-set() not covered), CSS-only references are neutralised by rendering through <img>.'
+  - 'cfg(unix) service integration tests (runtime.rs) remain unexecuted on the Windows host.'
 ---
 
 <intent-contract>
@@ -91,6 +95,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-29, four reviewers). Fixed: a full app queue no longer marks an attract line as told (`send_attract`, unit-tested); `canLogIn` requires a rate; a new media list restarts the cycle (test strengthened); `isAttractView` validates locale and rule shapes; the Hub logo picker ignores a superseded pick. Deferred items are listed in the frontmatter.
 
 ## Design Notes
 

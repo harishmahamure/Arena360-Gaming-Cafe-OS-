@@ -297,6 +297,28 @@ export type AttractShown = { view: AttractView | null; logo: string | null };
 
 const ATTRACT_STATES = ["ready", "ask_counter"];
 
+const isLocale = (v: unknown): boolean => {
+  if (typeof v !== "object" || v === null) return false;
+  const l = v as Record<string, unknown>;
+  return (
+    typeof l.currency === "string" &&
+    typeof l.exponent === "number" &&
+    typeof l.symbol === "string" &&
+    typeof l.tz === "string"
+  );
+};
+
+const isRule = (v: unknown): boolean => {
+  if (typeof v !== "object" || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return (
+    typeof r.name === "string" &&
+    typeof r.adjust_kind === "string" &&
+    typeof r.adjust_value === "number" &&
+    (r.until == null || typeof r.until === "number")
+  );
+};
+
 const isAttractView = (v: unknown): v is AttractView => {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;
@@ -304,8 +326,9 @@ const isAttractView = (v: unknown): v is AttractView => {
     typeof o.branch_name === "string" &&
     typeof o.state === "string" &&
     ATTRACT_STATES.includes(o.state) &&
-    typeof o.locale === "object" &&
-    o.locale !== null &&
+    isLocale(o.locale) &&
+    (o.rate_minor == null || typeof o.rate_minor === "number") &&
+    (o.rule == null || isRule(o.rule)) &&
     Array.isArray(o.media) &&
     o.media.every(
       (m) =>

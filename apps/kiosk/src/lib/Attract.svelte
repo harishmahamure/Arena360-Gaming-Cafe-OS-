@@ -36,6 +36,13 @@
   );
   const showLogo = $derived(logo !== null && logo !== brokenLogo);
 
+  // A different list of videos starts again from its first item.
+  const mediaKey = $derived(view?.media.map((m) => m.video).join(",") ?? "");
+  $effect(() => {
+    void mediaKey;
+    index = 0;
+  });
+
   // Each video plays for ATTRACT_VIDEO_MS, then the next; a single item keeps playing.
   $effect(() => {
     void index;

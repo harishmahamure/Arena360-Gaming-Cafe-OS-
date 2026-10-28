@@ -143,9 +143,7 @@ pub(crate) async fn run<S: IpcServer>(
                         }
                         // The cached screen first: the app paints it with no network wait.
                         told = crate::attract::Shown::default();
-                        if let Some(msg) = attract_message(&attract.borrow_and_update(), &mut told) {
-                            let _ = out.try_send(msg);
-                        }
+                        send_attract(&out, &attract.borrow_and_update(), &mut told);
                         let _ = out.try_send(IpcMsg::HubStatus { state: *hub_state.borrow_and_update() });
                         let _ = out.try_send(IpcMsg::Theme { hc: *theme.borrow_and_update() });
                         let last = ctx.app_state.lock().unwrap_or_else(|p| p.into_inner()).clone();
@@ -238,10 +236,8 @@ pub(crate) async fn run<S: IpcServer>(
             }
             changed = attract.changed() => {
                 if changed.is_err() { break; }
-                if let Some(c) = &current
-                    && let Some(msg) = attract_message(&attract.borrow_and_update(), &mut told)
-                {
-                    let _ = c.out.try_send(msg);
+                if let Some(c) = &current {
+                    send_attract(&c.out, &attract.borrow_and_update(), &mut told);
                 }
             }
             changed = exits.changed() => {
@@ -298,6 +294,21 @@ fn attract_message(
     let logo = (shown.logo != told.logo).then(|| shown.logo.clone().unwrap_or_default());
     *told = shown.clone();
     (view.is_some() || logo.is_some()).then_some(IpcMsg::Attract { view, logo })
+}
+
+/// Sends what differs from `told` to the app; `told` moves forward only when the line was
+/// queued, so a full queue leaves the change to go out with the next update.
+fn send_attract(
+    out: &mpsc::Sender<IpcMsg>,
+    shown: &crate::attract::Shown,
+    told: &mut crate::attract::Shown,
+) {
+    let before = told.clone();
+    if let Some(msg) = attract_message(shown, told)
+        && out.try_send(msg).is_err()
+    {
+        *told = before;
+    }
 }
 
 fn screen_message(s: crate::pc::Screen) -> IpcMsg {
@@ -644,6 +655,33 @@ mod tests {
             attract_message(&shown, &mut fresh),
             Some(IpcMsg::Attract {
                 view: Some(Box::new(view(9_600))),
+                logo: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_leaves_the_change_to_go_out_later() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.try_send(IpcMsg::Ping { n: 0 }).unwrap();
+        let shown = Shown {
+            view: Some(view(12_000)),
+            logo: None,
+        };
+        let mut told = Shown::default();
+        send_attract(&tx, &shown, &mut told);
+        assert_eq!(
+            told,
+            Shown::default(),
+            "a dropped line is not counted as told"
+        );
+        assert_eq!(rx.recv().await, Some(IpcMsg::Ping { n: 0 }));
+        send_attract(&tx, &shown, &mut told);
+        assert_eq!(told, shown);
+        assert_eq!(
+            rx.recv().await,
+            Some(IpcMsg::Attract {
+                view: Some(Box::new(view(12_000))),
                 logo: None,
             })
         );

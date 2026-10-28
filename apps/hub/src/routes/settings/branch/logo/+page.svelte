@@ -53,13 +53,18 @@
     }
   }
 
+  /** Counts the picks, so a slow resize cannot overwrite a later choice. */
+  let picks = 0;
+
   async function choose(e: Event) {
     const file = (e.currentTarget as HTMLInputElement).files?.[0];
     status = null;
     error = null;
     if (!file) return;
+    const mine = ++picks;
     const outcome = await prepareLogo(file);
     if (input) input.value = "";
+    if (mine !== picks) return; // a later pick supersedes this one
     if (outcome.kind === "ok") {
       draft = outcome.uri;
       return;

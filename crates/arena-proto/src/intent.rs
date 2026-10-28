@@ -243,6 +243,13 @@ pub enum IntentKind {
     /// "Printer offline" alert is raised.
     #[serde(rename = "receipt.print_failed")]
     ReceiptPrintFailed,
+    /// The print task sent the drawer pulse queued by a cash settle (system only; Story 5.18).
+    #[serde(rename = "drawer.kicked")]
+    DrawerKicked,
+    /// The printer did not take the drawer pulse (system only). The sale stays settled and a
+    /// "Printer offline" alert is raised.
+    #[serde(rename = "drawer.kick_failed")]
+    DrawerKickFailed,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
     /// Opens an alert on a device or the branch (system only; any feature supplies the kind). One
@@ -266,7 +273,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 86] = [
+    pub const ALL: [IntentKind; 88] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -348,6 +355,8 @@ impl IntentKind {
         Self::ReceiptReprint,
         Self::ReceiptPrinted,
         Self::ReceiptPrintFailed,
+        Self::DrawerKicked,
+        Self::DrawerKickFailed,
         Self::AlertRaise,
         Self::AlertAck,
         Self::ControllerCheck,
@@ -438,6 +447,8 @@ impl IntentKind {
             Self::ReceiptReprint => "receipt.reprint",
             Self::ReceiptPrinted => "receipt.printed",
             Self::ReceiptPrintFailed => "receipt.print_failed",
+            Self::DrawerKicked => "drawer.kicked",
+            Self::DrawerKickFailed => "drawer.kick_failed",
             Self::SessionAssignPlayer => "session.assign_player",
             Self::AlertRaise => "alert.raise",
             Self::AlertAck => "alert.ack",
@@ -508,6 +519,8 @@ impl IntentKind {
             | Self::ReceiptReprint
             | Self::ReceiptPrinted
             | Self::ReceiptPrintFailed
+            | Self::DrawerKicked
+            | Self::DrawerKickFailed
             | Self::OrderLineCancel => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
@@ -573,6 +586,8 @@ impl IntentKind {
             | Self::InvoiceIssue
             | Self::ReceiptPrinted
             | Self::ReceiptPrintFailed
+            | Self::DrawerKicked
+            | Self::DrawerKickFailed
             | Self::SessionRateFlip => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert | Self::StaffDeactivate => {
                 Requirement::Perm(Permission::UserManage)
@@ -740,6 +755,8 @@ impl IntentKind {
             | Self::ReceiptReprint
             | Self::ReceiptPrinted
             | Self::ReceiptPrintFailed
+            | Self::DrawerKicked
+            | Self::DrawerKickFailed
             | Self::SessionRateFlip
             | Self::AlertRaise
             | Self::AlertAck
@@ -1318,6 +1335,10 @@ pub enum IntentPayload {
     ReceiptPrinted(crate::ReceiptPrinted),
     #[serde(rename = "receipt.print_failed")]
     ReceiptPrintFailed(crate::ReceiptPrintFailed),
+    #[serde(rename = "drawer.kicked")]
+    DrawerKicked(crate::DrawerKicked),
+    #[serde(rename = "drawer.kick_failed")]
+    DrawerKickFailed(crate::DrawerKickFailed),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
     #[serde(rename = "alert.raise")]
@@ -1415,6 +1436,8 @@ impl IntentPayload {
             Self::ReceiptReprint(_) => IntentKind::ReceiptReprint,
             Self::ReceiptPrinted(_) => IntentKind::ReceiptPrinted,
             Self::ReceiptPrintFailed(_) => IntentKind::ReceiptPrintFailed,
+            Self::DrawerKicked(_) => IntentKind::DrawerKicked,
+            Self::DrawerKickFailed(_) => IntentKind::DrawerKickFailed,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
             Self::AlertRaise(_) => IntentKind::AlertRaise,
             Self::AlertAck(_) => IntentKind::AlertAck,
@@ -1639,6 +1662,8 @@ mod tests {
                 | "invoice.issue"
                 | "receipt.printed"
                 | "receipt.print_failed"
+                | "drawer.kicked"
+                | "drawer.kick_failed"
                 | "stock.expiry_check" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)

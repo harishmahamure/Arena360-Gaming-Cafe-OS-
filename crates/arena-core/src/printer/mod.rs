@@ -12,7 +12,7 @@ use arena_proto::{
     parse_bluetooth_address, parse_printer_addr,
 };
 
-pub use escpos::{pc437_text, ruler, test_page, test_page_date};
+pub use escpos::{drawer_kick, pc437_text, ruler, test_page, test_page_date};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

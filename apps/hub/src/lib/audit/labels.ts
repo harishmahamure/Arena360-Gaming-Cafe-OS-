@@ -65,6 +65,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "receipt.reprint": "hub.audit.intent.receipt.reprint",
   "receipt.printed": "hub.audit.intent.receipt.printed",
   "receipt.print_failed": "hub.audit.intent.receipt.print_failed",
+  "drawer.kicked": "hub.audit.intent.drawer.kicked",
+  "drawer.kick_failed": "hub.audit.intent.drawer.kick_failed",
   "session.transfer": "hub.audit.intent.session.transfer",
   "session.group": "hub.audit.intent.session.group",
   "group.payer": "hub.audit.intent.group.payer",

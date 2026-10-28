@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::db_error;
 
 pub const KIND_PRINT: &str = "print";
+pub const KIND_DRAWER: &str = "drawer";
 pub const STATE_QUEUED: &str = "queued";
 pub const STATE_DONE: &str = "done";
 pub const STATE_FAILED: &str = "failed";

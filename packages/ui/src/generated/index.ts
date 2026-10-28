@@ -95,6 +95,8 @@ export type { DeviceTestSessionStart } from "./DeviceTestSessionStart";
 export type { DeviceVersionReported } from "./DeviceVersionReported";
 export type { DiscoveredHub } from "./DiscoveredHub";
 export type { DiscoveryFound } from "./DiscoveryFound";
+export type { DrawerKickFailed } from "./DrawerKickFailed";
+export type { DrawerKicked } from "./DrawerKicked";
 export type { EffectKind } from "./EffectKind";
 export type { EffectRecordedEvent } from "./EffectRecordedEvent";
 export type { ElevateDrop } from "./ElevateDrop";

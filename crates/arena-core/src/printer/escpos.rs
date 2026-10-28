@@ -9,6 +9,12 @@ const LF: u8 = 0x0A;
 const RULER_DIGITS: &str = "1234567890";
 const TEST_OK: &str = "Printer test OK";
 
+/// The drawer pulse: ESC p, pin 0, 25 ms on, 250 ms off (the RJ11 drawer port of a receipt
+/// printer). The drawer opens on the pulse and nothing prints.
+pub fn drawer_kick() -> Vec<u8> {
+    vec![ESC, b'p', 0, 25, 250]
+}
+
 pub fn pc437_text(text: &str) -> Vec<u8> {
     text.chars()
         .map(|c| {
@@ -61,6 +67,11 @@ pub fn test_page(branch_name: &str, date: &str, paper: PaperWidth) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_drawer_pulse_is_esc_p_on_pin_0() {
+        assert_eq!(drawer_kick(), b"\x1bp\x00\x19\xfa");
+    }
 
     const GOLDEN_80: &[u8] = b"\x1b@\x1bt\x00\x1bM\x00\x1ba\x01\x1d!\x11Dev Branch\n\x1d!\x00\
 5 Oct 2026\nPrinter test OK\n\x1ba\x00\

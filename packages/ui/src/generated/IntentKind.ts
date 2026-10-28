@@ -84,6 +84,8 @@ export type IntentKind =
   | "receipt.reprint"
   | "receipt.printed"
   | "receipt.print_failed"
+  | "drawer.kicked"
+  | "drawer.kick_failed"
   | "session.assign_player"
   | "alert.raise"
   | "alert.ack"

@@ -11,6 +11,8 @@ pub const KEY_RECEIPT_ADDRESS: &str = "receipt.address";
 pub const KEY_RECEIPT_PHONE: &str = "receipt.phone";
 /// What the settle bar preselects: `print` (when a printer is available) or `none`.
 pub const KEY_RECEIPT_DEFAULT: &str = "receipt.default";
+/// Whether a settle with a cash row kicks the drawer attached to the receipt printer.
+pub const KEY_RECEIPT_DRAWER: &str = "receipt.drawer";
 pub const KEY_NOTIFY_WHATSAPP_RECEIPT: &str = "notify.whatsapp_receipt";
 pub const KEY_NOTIFY_CREDIT_REMINDER: &str = "notify.credit_reminder";
 pub const KEY_NOTIFY_LOW_BALANCE: &str = "notify.low_balance";
@@ -20,6 +22,8 @@ pub const RECEIPT_DEFAULT_CHOICES: &[&str] = &["print", "none"];
 pub const DEFAULT_RECEIPT_ADDRESS: &str = "";
 pub const DEFAULT_RECEIPT_PHONE: &str = "";
 pub const DEFAULT_RECEIPT_DEFAULT: &str = "print";
+/// No drawer is assumed: the branch turns the kick on once one is cabled to the printer.
+pub const DEFAULT_RECEIPT_DRAWER: &str = "false";
 /// A service message is off until the branch turns it on.
 pub const DEFAULT_NOTIFY: &str = "false";
 
@@ -92,6 +96,24 @@ pub struct ReceiptPrinted {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct ReceiptPrintFailed {
+    pub outbox_id: String,
+    pub error_kind: PrinterErrorKind,
+    pub error: String,
+}
+
+/// The payload of `drawer.kicked` (system): the print task sent the drawer pulse. A `drawer_open`
+/// cash event is written against the shift beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct DrawerKicked {
+    pub outbox_id: String,
+}
+
+/// The payload of `drawer.kick_failed` (system): the printer did not take the pulse. The sale
+/// stays settled and a "Printer offline" alert is raised.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct DrawerKickFailed {
     pub outbox_id: String,
     pub error_kind: PrinterErrorKind,
     pub error: String,

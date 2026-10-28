@@ -221,6 +221,9 @@ enum Op {
         /// The receipt choice is Print: the sale is numbered in its own transaction, queues one
         /// print and can never be undone.
         print: bool,
+        /// `receipt.drawer` is on for this sale: a cash sale queues one drawer kick and can never
+        /// be undone. The setting goes back off straight after.
+        drawer: bool,
     },
     /// Products placed on a running session's bill (stock may refuse), then maybe the
     /// placement's Undo (late or in time).
@@ -536,8 +539,8 @@ fn op() -> impl Strategy<Value = Op> {
                 late
             }
         ),
-        3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3), prop::bool::weighted(0.4)).prop_map(
-            |(pick, qty, second, undo, late, print)| Op::PosSale { pick, qty, second, undo, late, print }
+        3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3), prop::bool::weighted(0.4), prop::bool::weighted(0.25)).prop_map(
+            |(pick, qty, second, undo, late, print, drawer)| Op::PosSale { pick, qty, second, undo, late, print, drawer }
         ),
         3 => (0..3u8, any::<u8>(), 1..=6u8, any::<bool>(), prop::bool::weighted(0.3)).prop_map(
             |(slot, pick, qty, undo, late)| Op::OrderPlace { slot, pick, qty, undo, late }
@@ -774,6 +777,24 @@ impl Hub {
             RowValue::Integer(n) => n,
             ref other => panic!("rev is {other:?}"),
         })
+    }
+}
+
+/// Turns `receipt.drawer` on or off (the `PosSale` op wraps one sale in it).
+fn set_drawer(hub: &mut Hub, on: bool) {
+    let rev = hub
+        .reader
+        .rows(Table::Settings)
+        .unwrap()
+        .iter()
+        .find(|s| text(s, "key") == arena_proto::KEY_RECEIPT_DRAWER)
+        .map(|s| int(s, "rev"));
+    if let Some(rev) = rev {
+        let value = if on { "true" } else { "false" };
+        let _ = hub.submit_new(hub.intent(
+            set_payload(arena_proto::KEY_RECEIPT_DRAWER, value),
+            Some(rev),
+        ));
     }
 }
 
@@ -1611,6 +1632,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             undo,
             late,
             print,
+            drawer,
         } => {
             let products: Vec<_> = hub
                 .reader
@@ -1655,6 +1677,9 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 return Ok(());
             };
             let stock_before = stock_image(hub);
+            if *drawer {
+                set_drawer(hub, true);
+            }
             let before = hub.change_count();
             let out = hub.submit_new(
                 hub.intent(
@@ -1683,6 +1708,9 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     None,
                 ),
             );
+            if *drawer {
+                set_drawer(hub, false);
+            }
             if let Err(e) = &out {
                 // A refusal (short stock, a bundle part switched off, no shift) writes nothing.
                 prop_assert!(
@@ -1696,8 +1724,10 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     "{:?}",
                     out
                 );
-                prop_assert_eq!(hub.change_count(), before);
                 prop_assert_eq!(stock_image(hub), stock_before);
+                if !*drawer {
+                    prop_assert_eq!(hub.change_count(), before);
+                }
                 return Ok(());
             }
             let order = hub
@@ -1707,6 +1737,18 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .into_iter()
                 .rfind(|o| text(o, "kind") == "pos_sale")
                 .unwrap();
+            let kicked = hub
+                .reader
+                .queued_drawers(10_000)
+                .unwrap()
+                .iter()
+                .filter(|r| r.ref_id == text(&order, "id"))
+                .count();
+            prop_assert_eq!(
+                kicked,
+                usize::from(*drawer && bill.total_minor > 0),
+                "a cash sale with the drawer on queues exactly one kick"
+            );
             prop_assert_eq!(text(&order, "status"), "settled");
             prop_assert_eq!(int(&order, "total_minor"), bill.total_minor);
             prop_assert_eq!(int(&order, "tax_minor"), bill.tax_minor);
@@ -1715,7 +1757,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 *print && bill.total_minor > 0,
                 "only a printed sale is numbered at settle"
             );
-            if *undo && *print {
+            if *undo && (*print || (*drawer && bill.total_minor > 0)) {
                 let after_forward = hub.change_count();
                 let out = hub.submit_new(hub.intent(
                     IntentPayload::PosSaleReverted(arena_proto::PosSaleReverted {
@@ -4129,6 +4171,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_holds_hold(&hub)?;
                 assert_invoices_hold(&hub)?;
                 assert_prints_hold(&hub)?;
+                assert_drawers_hold(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })
@@ -4147,6 +4190,25 @@ fn assert_prints_hold(hub: &Hub) -> Result<(), TestCaseError> {
         if int(order, "total_minor") > 0 {
             prop_assert!(matches!(order["invoice_no"], RowValue::Text(_)));
         }
+    }
+    Ok(())
+}
+
+/// The drawer invariants: a queued kick names a settled order that took cash against a shift, and
+/// that order's Undo is closed by the recorded effect.
+fn assert_drawers_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let orders = hub.reader.rows(Table::Orders).unwrap();
+    let events = hub.reader.rows(Table::CashEvents).unwrap();
+    for row in hub.reader.queued_drawers(10_000).unwrap() {
+        let order = orders.iter().find(|o| text(o, "id") == row.ref_id);
+        prop_assert!(order.is_some(), "a queued kick names a missing order");
+        prop_assert_eq!(text(order.unwrap(), "status"), "settled");
+        prop_assert!(
+            events
+                .iter()
+                .any(|e| text(e, "order_id") == row.ref_id && text(e, "kind") == "sale"),
+            "a queued kick names an order that took no cash"
+        );
     }
     Ok(())
 }

@@ -25,6 +25,7 @@
     KEY_ADDRESS,
     KEY_BRANCH_NAME,
     KEY_DEFAULT,
+    KEY_DRAWER,
     KEY_FOOTER,
     KEY_PHONE,
     LINE_MAX_CHARS,
@@ -39,7 +40,9 @@
   /** The keys this page edits, in save order. */
   const EDITED = [KEY_FOOTER, KEY_ADDRESS, KEY_PHONE, KEY_DEFAULT, KEY_PRINTER_PAPER_MM];
   /** Every key the page reads: the edited ones are required, the rest only enrich it. */
-  const READ = [...EDITED, KEY_PRINTER_SELECTED, KEY_BRANCH_NAME, KEY_TAX];
+  const READ = [...EDITED, KEY_DRAWER, KEY_PRINTER_SELECTED, KEY_BRANCH_NAME, KEY_TAX];
+  /** Saved with the edited keys, but a Hub without the row still opens the page. */
+  const SAVED = [...EDITED, KEY_DRAWER];
   const PAPER_LABELS: Record<(typeof PAPER_WIDTHS)[number], MessageKey> = {
     "58": "hub.settings.printer.paper_58",
     "80": "hub.settings.printer.paper_80",
@@ -59,6 +62,7 @@
   let phone = $state("");
   let choice = $state("print");
   let paper = $state("80");
+  let drawer = $state(false);
   /** The outcome of the last action, shown next to the controls. */
   let status: { tone: "ok" | "refusal"; text: string } | null = $state(null);
   /** After a STALE save: the value now on the Hub (the typed text is kept). */
@@ -72,8 +76,9 @@
     [KEY_PHONE]: phone,
     [KEY_DEFAULT]: choice,
     [KEY_PRINTER_PAPER_MM]: paper,
+    [KEY_DRAWER]: drawer ? "true" : "false",
   });
-  const changes = $derived(EDITED.filter((k) => rows[k] && form[k] !== rows[k].value));
+  const changes = $derived(SAVED.filter((k) => rows[k] && form[k] !== rows[k].value));
   const tooLong = (text: string) => text.split("\n").some((l) => l.length > LINE_MAX_CHARS);
   /** The first problem with a text block, as the message to show under it. */
   const problem = (text: string, max: number): string | null =>
@@ -126,6 +131,7 @@
         phone = next[KEY_PHONE].value;
         choice = next[KEY_DEFAULT].value;
         paper = next[KEY_PRINTER_PAPER_MM].value;
+        drawer = next[KEY_DRAWER]?.value === "true";
       }
       return true;
     } finally {
@@ -360,6 +366,22 @@
           {/each}
         </div>
       </fieldset>
+
+      <div class="group" data-testid="receipt-drawer">
+        <label class="option type-hub-body">
+          <input
+            type="checkbox"
+            name="receipt-drawer"
+            bind:checked={drawer}
+            disabled={saving || rows[KEY_DRAWER] === undefined}
+            aria-describedby="receipt-drawer-note"
+          />
+          <span>{t("hub.settings.receipt.drawer")}</span>
+        </label>
+        <p class="note type-hub-label" id="receipt-drawer-note">
+          {t("hub.settings.receipt.drawer_hint")}
+        </p>
+      </div>
 
       <div class="group" data-testid="receipt-preview-box">
         <p class="type-hub-label label">

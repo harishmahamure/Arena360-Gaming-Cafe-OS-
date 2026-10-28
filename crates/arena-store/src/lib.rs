@@ -99,9 +99,9 @@ pub use invoices::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use outbox::{
-    KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow, ReceiptSource,
-    STATE_DONE, STATE_FAILED, STATE_QUEUED, find_outbox, finish_outbox, insert_outbox,
-    latest_print_state, list_queued_outbox, load_receipt_source,
+    KIND_DRAWER, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
+    ReceiptSource, STATE_DONE, STATE_FAILED, STATE_QUEUED, find_outbox, finish_outbox,
+    insert_outbox, latest_print_state, list_queued_outbox, load_receipt_source,
 };
 pub use plans::{
     PlanRow, find_plan, insert_plan, insert_plan_group, list_plan_groups, list_plans, update_plan,
@@ -151,7 +151,7 @@ pub use sessions::{
 pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
 pub use shifts::{
     NewCashEvent, NewShift, OpenSale, ShiftRow, count_cash_events, insert_cash_event, insert_shift,
-    last_opening_float, open_sales_of_order, open_shift, open_shift_id,
+    last_opening_float, open_sales_of_order, open_shift, open_shift_id, shift_of_order_sale,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,
@@ -1039,6 +1039,14 @@ impl Store {
             return Ok(Vec::new());
         }
         list_queued_outbox(&self.conn, KIND_PRINT, limit)
+    }
+
+    /// Drawer kicks waiting on the side-effect outbox, oldest first (Story 5.18).
+    pub fn queued_drawers(&self, limit: i64) -> Result<Vec<OutboxRow>, AppError> {
+        if !self.table_exists("side_effect_outbox")? {
+            return Ok(Vec::new());
+        }
+        list_queued_outbox(&self.conn, KIND_DRAWER, limit)
     }
 
     /// The committed rows a receipt is built from; `None` when there is no such order.

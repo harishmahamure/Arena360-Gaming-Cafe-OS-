@@ -313,7 +313,11 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
         P::SessionRateFlip(f) => Target::SessionRateFlip(Box::new(rate_flip::load(tx, f, now)?)),
         P::InvoiceIssue(p) => Target::InvoiceIssue(Box::new(invoice_issue::load(tx, p, now)?)),
-        P::ReceiptReprint(_) | P::ReceiptPrinted(_) | P::ReceiptPrintFailed(_) => {
+        P::ReceiptReprint(_)
+        | P::ReceiptPrinted(_)
+        | P::ReceiptPrintFailed(_)
+        | P::DrawerKicked(_)
+        | P::DrawerKickFailed(_) => {
             Target::Receipt(Box::new(receipt_print::load(tx, &intent.payload)?))
         }
         P::AlertRaise(_) | P::AlertAck(_) => {

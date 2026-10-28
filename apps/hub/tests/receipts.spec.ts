@@ -40,6 +40,7 @@ function rows(tier: string, extra: Record<string, string> = {}) {
     "receipt.address": "",
     "receipt.phone": "",
     "receipt.default": "print",
+    "receipt.drawer": "false",
     "printer.selected": PRINTER,
     "printer.paper_mm": "80",
     "notify.whatsapp_receipt": "false",
@@ -195,6 +196,18 @@ test("Save sends one settings.set per changed key with base_rev", async ({ page 
     { key: "printer.paper_mm", value: "58", base_rev: 1 },
   ]);
   await expect(save(page)).toHaveAttribute("aria-disabled", "true");
+});
+
+test("the cash drawer switch is off by default and saves with base_rev", async ({ page }) => {
+  const hub = await open(page, "/settings/receipt", "free");
+  const drawer = page.getByLabel(en["hub.settings.receipt.drawer"]);
+  await expect(drawer).not.toBeChecked();
+  await expect(page.getByText(en["hub.settings.receipt.drawer_hint"])).toBeVisible();
+  await drawer.check();
+  await save(page).click();
+  await expect(page.getByTestId("settings-status")).toHaveText(en["hub.settings.saved"]);
+  expect(hub.intents).toEqual([{ key: "receipt.drawer", value: "true", base_rev: 1 }]);
+  await expect(drawer).toBeChecked();
 });
 
 test("Test print runs on the saved paper width only", async ({ page }) => {

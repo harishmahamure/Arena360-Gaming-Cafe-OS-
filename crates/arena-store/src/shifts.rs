@@ -131,6 +131,18 @@ pub fn count_cash_events(conn: &Connection, shift_id: &str) -> Result<i64, AppEr
     .map_err(db_error)
 }
 
+/// The shift the order's cash was taken against (its first `sale` event), if it took any.
+pub fn shift_of_order_sale(conn: &Connection, order_id: &str) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT shift_id FROM cash_events WHERE order_id = ?1 AND kind = ?2
+         ORDER BY created_at, id LIMIT 1",
+        params![order_id, arena_proto::CASH_SALE],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 /// The order's `sale` cash events that no `sale_reverted` row has cancelled.
 pub fn open_sales_of_order(conn: &Connection, order_id: &str) -> Result<Vec<OpenSale>, AppError> {
     let mut stmt = conn

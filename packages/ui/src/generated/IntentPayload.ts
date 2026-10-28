@@ -25,6 +25,8 @@ import type { DeviceScreen } from "./DeviceScreen";
 import type { DeviceTestSessionCompleted } from "./DeviceTestSessionCompleted";
 import type { DeviceTestSessionStart } from "./DeviceTestSessionStart";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
+import type { DrawerKickFailed } from "./DrawerKickFailed";
+import type { DrawerKicked } from "./DrawerKicked";
 import type { GroupDelete } from "./GroupDelete";
 import type { GroupPayer } from "./GroupPayer";
 import type { GroupUpsert } from "./GroupUpsert";
@@ -168,6 +170,8 @@ export type IntentPayload =
   | ({ kind: "receipt.reprint" } & ReceiptReprint)
   | ({ kind: "receipt.printed" } & ReceiptPrinted)
   | ({ kind: "receipt.print_failed" } & ReceiptPrintFailed)
+  | ({ kind: "drawer.kicked" } & DrawerKicked)
+  | ({ kind: "drawer.kick_failed" } & DrawerKickFailed)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer)
   | ({ kind: "alert.raise" } & AlertRaise)
   | ({ kind: "alert.ack" } & AlertAck)

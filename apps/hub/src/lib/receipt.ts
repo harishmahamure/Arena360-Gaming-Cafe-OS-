@@ -5,9 +5,11 @@ export const KEY_FOOTER = "receipt.footer";
 export const KEY_ADDRESS = "receipt.address";
 export const KEY_PHONE = "receipt.phone";
 export const KEY_DEFAULT = "receipt.default";
+/** Whether a cash settle kicks the drawer cabled to the receipt printer (Story 5.18). */
+export const KEY_DRAWER = "receipt.drawer";
 export const KEY_BRANCH_NAME = "branch.name";
 export const KEY_TIER = "licence.tier";
-export const RECEIPT_KEYS = [KEY_FOOTER, KEY_ADDRESS, KEY_PHONE, KEY_DEFAULT];
+export const RECEIPT_KEYS = [KEY_FOOTER, KEY_ADDRESS, KEY_PHONE, KEY_DEFAULT, KEY_DRAWER];
 export const RECEIPT_CHOICES = ["print", "none"] as const;
 export const FOOTER_MAX_LINES = 3;
 export const ADDRESS_MAX_LINES = 3;

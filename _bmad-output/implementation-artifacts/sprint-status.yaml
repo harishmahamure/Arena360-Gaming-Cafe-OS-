@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-28-2026 00:00
+last_updated: 10-28-2026 13:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -142,7 +142,7 @@ development_status:
   5-15-receipt-and-notification-settings: done
   5-16-receipt-tax-invoice-and-payment-receipt-layouts-for-58-and-8: done
   5-17-choose-print-or-none-at-settle-and-print-through-the-side-ef: done
-  5-18-cash-drawer-kicks-on-cash-sales: backlog
+  5-18-cash-drawer-kicks-on-cash-sales: review
   5-19-whatsapp-receipt-queued-to-the-outbox: backlog
   5-20-b2b-invoice-with-the-customer-s-gstin: backlog
   5-21-coupons-applied-at-settle: backlog

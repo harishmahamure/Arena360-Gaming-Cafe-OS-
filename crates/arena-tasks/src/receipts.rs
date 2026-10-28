@@ -7,19 +7,23 @@
 //! printer adapter (USB, LAN 9100 or Bluetooth, all behind the same interface) and applies the
 //! result intent: `receipt.printed`, or `receipt.print_failed` with the error. A failure never
 //! touches the sale; it raises the "Printer offline" alert and the order shows Reprint.
+//!
+//! The cash drawer kick (Story 5.18) is the same kind of job: a cash settle queues a `drawer` row,
+//! the task sends the pulse through the same printer and applies `drawer.kicked` or
+//! `drawer.kick_failed`. Kicks go first: the cash is already in the customer's hand.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arena_core::printer::{Printer, PrinterJobs, PrinterTarget};
+use arena_core::printer::{Printer, PrinterJobs, PrinterTarget, drawer_kick};
 use arena_core::{Clock, SnapshotReader, WriterHandle};
 use arena_proto::{
-    Actor, ActorKind, ErrorCode, Intent, IntentKind, IntentPayload, KEY_PRINTER_SELECTED,
-    PrinterErrorKind, PrinterJobFailure, PrinterSelected, ReceiptPrintFailed, ReceiptPrinted,
-    printer_error_text,
+    Actor, ActorKind, DrawerKickFailed, DrawerKicked, ErrorCode, Intent, IntentKind, IntentPayload,
+    KEY_PRINTER_SELECTED, PrinterErrorKind, PrinterJobFailure, PrinterSelected, ReceiptPrintFailed,
+    ReceiptPrinted, printer_error_text,
 };
-use arena_store::OutboxRow;
+use arena_store::{KIND_DRAWER, OutboxRow};
 use tokio::sync::broadcast::error::RecvError;
 
 pub const PRINT_TICK: Duration = Duration::from_millis(500);
@@ -44,22 +48,37 @@ pub struct ReceiptPrintTask {
 }
 
 fn result_intent(row: &OutboxRow, outcome: &Outcome, now: i64) -> Intent {
-    let payload = match outcome {
-        Outcome::Printed => IntentPayload::ReceiptPrinted(ReceiptPrinted {
-            outbox_id: row.id.clone(),
-        }),
-        Outcome::Failed(kind, error) => IntentPayload::ReceiptPrintFailed(ReceiptPrintFailed {
-            outbox_id: row.id.clone(),
-            error_kind: *kind,
-            error: error.clone(),
-        }),
+    let drawer = row.kind == KIND_DRAWER;
+    let outbox_id = row.id.clone();
+    let (kind, payload) = match (outcome, drawer) {
+        (Outcome::Printed, false) => (
+            IntentKind::ReceiptPrinted,
+            IntentPayload::ReceiptPrinted(ReceiptPrinted { outbox_id }),
+        ),
+        (Outcome::Failed(error_kind, error), false) => (
+            IntentKind::ReceiptPrintFailed,
+            IntentPayload::ReceiptPrintFailed(ReceiptPrintFailed {
+                outbox_id,
+                error_kind: *error_kind,
+                error: error.clone(),
+            }),
+        ),
+        (Outcome::Printed, true) => (
+            IntentKind::DrawerKicked,
+            IntentPayload::DrawerKicked(DrawerKicked { outbox_id }),
+        ),
+        (Outcome::Failed(error_kind, error), true) => (
+            IntentKind::DrawerKickFailed,
+            IntentPayload::DrawerKickFailed(DrawerKickFailed {
+                outbox_id,
+                error_kind: *error_kind,
+                error: error.clone(),
+            }),
+        ),
     };
     Intent {
         intent_id: ulid::Ulid::generate().to_string(),
-        kind: match outcome {
-            Outcome::Printed => IntentKind::ReceiptPrinted,
-            Outcome::Failed(..) => IntentKind::ReceiptPrintFailed,
-        },
+        kind,
         // The row id (a ULID) makes a retried result the same intent.
         idempotency_key: row.id.clone(),
         issued_at: now,
@@ -125,6 +144,7 @@ impl ReceiptPrintTask {
     /// Builds the receipt and sends it; the outcome is what the result intent records.
     async fn send(&self, row: &OutboxRow) -> Outcome {
         let reprint = reprint(row);
+        let drawer = row.kind == KIND_DRAWER;
         let order_id = row.ref_id.clone();
         let now = self.clock.now_ms();
         let read = self
@@ -135,7 +155,12 @@ impl ReceiptPrintTask {
                     .find(|s| s.key == KEY_PRINTER_SELECTED)
                     .map(|s| s.value)
                     .unwrap_or_default();
-                Ok((selected, r.receipt_bytes(&order_id, reprint, now)?))
+                let bytes = if drawer {
+                    Some(drawer_kick())
+                } else {
+                    r.receipt_bytes(&order_id, reprint, now)?
+                };
+                Ok((selected, bytes))
             })
             .await;
         let Some((selected, bytes)) = read else {
@@ -192,7 +217,11 @@ impl ReceiptPrintTask {
     /// Prints every queued receipt, oldest first. Returns whether any row is still waiting.
     pub async fn drain(&self) -> bool {
         let Some(rows) = self
-            .blocking("queue", |r| r.queued_prints(PRINT_BATCH))
+            .blocking("queue", |r| {
+                let mut rows = r.queued_drawers(PRINT_BATCH)?;
+                rows.extend(r.queued_prints(PRINT_BATCH)?);
+                Ok(rows)
+            })
             .await
         else {
             return true;
@@ -507,5 +536,86 @@ mod tests {
         t.drain().await;
         t.drain().await;
         assert_eq!(f.fake.sent().len(), 1);
+    }
+
+    /// A cash sale of `O1` against an open shift and a queued `drawer` row for it.
+    async fn queued_drawer(f: &Fixture, row: &str) {
+        queued(
+            f,
+            "01J000000000000000000000R0",
+            "O1",
+            r#"{"reprint":false,"by":"s"}"#,
+        )
+        .await;
+        let sql = format!(
+            "INSERT INTO shifts (id, staff_id, opened_at, float_minor, carried_minor, state, rev,
+                 created_at, updated_at)
+             VALUES ('SH1', 's', 0, 0, 0, 'open', 0, 0, 0);
+             INSERT INTO cash_events (id, shift_id, kind, amount_minor, staff_id, order_id, rev,
+                 created_at, updated_at)
+             VALUES ('CE1', 'SH1', 'sale', 4000, 's', 'O1', 0, 0, 0);
+             INSERT INTO side_effect_outbox (id, kind, ref_id, payload, state, at)
+             VALUES ('{row}', 'drawer', 'O1', '{{\"reprint\":false,\"by\":\"s\"}}', 'queued', {T0});
+             UPDATE side_effect_outbox SET state = 'done' WHERE id = '01J000000000000000000000R0';"
+        );
+        f.writer
+            .submit(move |tx| {
+                tx.execute_batch(&sql).unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    fn drawer_events(f: &Fixture) -> usize {
+        use arena_store::{RowValue, Table};
+        Store::open(&f.path, T0)
+            .unwrap()
+            .rows(Table::CashEvents)
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(&e["kind"], RowValue::Text(k) if k == "drawer_open"))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_queued_drawer_kick_sends_the_pulse_and_writes_a_drawer_open_cash_event() {
+        let f = fixture(Some(LAN)).await;
+        queued_drawer(&f, "01J000000000000000000000D1").await;
+        task(&f).drain().await;
+
+        let sent = f.fake.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].bytes, b"\x1bp\x00\x19\xfa");
+        assert_eq!(
+            state(&f, "01J000000000000000000000D1"),
+            ("done".to_owned(), None)
+        );
+        assert_eq!(drawer_events(&f), 1);
+        assert!(alert_kinds(&f).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_kick_is_recorded_with_the_alert_and_no_cash_event() {
+        let f = fixture(Some(LAN)).await;
+        let addr = "192.168.1.50:9100".parse().unwrap();
+        f.fake.fail_with(Some(PrinterError::Refused(addr)));
+        queued_drawer(&f, "01J000000000000000000000D1").await;
+        task(&f).drain().await;
+
+        let (s, error) = state(&f, "01J000000000000000000000D1");
+        assert_eq!(s, "failed");
+        assert!(error.unwrap().contains("refused the connection"));
+        assert_eq!(alert_kinds(&f), ["printer_offline"]);
+        assert_eq!(drawer_events(&f), 0);
+    }
+
+    #[tokio::test]
+    async fn a_kick_with_no_printer_set_up_fails_the_row_and_sends_nothing() {
+        let f = fixture(None).await;
+        queued_drawer(&f, "01J000000000000000000000D1").await;
+        task(&f).drain().await;
+        assert_eq!(state(&f, "01J000000000000000000000D1").0, "failed");
+        assert!(f.fake.sent().is_empty());
     }
 }

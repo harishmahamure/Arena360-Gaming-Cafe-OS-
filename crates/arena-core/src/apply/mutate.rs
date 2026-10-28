@@ -451,7 +451,9 @@ pub(super) fn mutate(
         },
         IntentPayload::ReceiptReprint(_)
         | IntentPayload::ReceiptPrinted(_)
-        | IntentPayload::ReceiptPrintFailed(_) => match target {
+        | IntentPayload::ReceiptPrintFailed(_)
+        | IntentPayload::DrawerKicked(_)
+        | IntentPayload::DrawerKickFailed(_) => match target {
             Target::Receipt(t) => super::receipt_print::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },

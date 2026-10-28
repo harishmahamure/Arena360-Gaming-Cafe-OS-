@@ -687,6 +687,15 @@ impl SnapshotReader {
         store.queued_prints(limit)
     }
 
+    /// Drawer kicks waiting on the side-effect outbox, oldest first (Story 5.18).
+    pub fn queued_drawers(&self, limit: i64) -> Result<Vec<arena_store::OutboxRow>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.queued_drawers(limit)
+    }
+
     /// The ESC/POS bytes of an order's receipt at the saved paper width, marked "Reprint" when
     /// `reprint` is set; `None` when there is no such order.
     pub fn receipt_bytes(

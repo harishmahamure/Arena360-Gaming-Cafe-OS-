@@ -8,6 +8,8 @@ pub const MAX_FLOAT_MINOR: i64 = 100_000_000;
 pub const CASH_FLOAT_IN: &str = "float_in";
 /// `cash_events.kind`: cash kept from a payment (cash tendered minus change).
 pub const CASH_SALE: &str = "sale";
+/// `cash_events.kind`: the drawer was kicked open for a sale (amount 0; `order_id` names it).
+pub const CASH_DRAWER_OPEN: &str = "drawer_open";
 /// `cash_events.kind`: the compensating row an Undo writes for a `sale`.
 pub const CASH_SALE_REVERTED: &str = "sale_reverted";
 

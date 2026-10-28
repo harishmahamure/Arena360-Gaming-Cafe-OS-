@@ -392,3 +392,225 @@ async fn a_failed_print_keeps_the_sale_raises_one_offline_alert_and_records_the_
         (ErrorCode::ValidationFailed, Some("error".into()))
     );
 }
+
+// ---- Story 5.18: the cash drawer kick ----
+
+async fn drawer_setting(f: &Fixture, value: &str) {
+    let row = reopen(f)
+        .rows(Table::Settings)
+        .unwrap()
+        .into_iter()
+        .find(|r| r["key"] == RowValue::Text(arena_proto::KEY_RECEIPT_DRAWER.into()))
+        .expect("the setting is seeded");
+    let mut i = intent(
+        owner(),
+        IntentPayload::SettingsSet(arena_proto::SettingsSet {
+            key: arena_proto::KEY_RECEIPT_DRAWER.into(),
+            value: value.into(),
+        }),
+    );
+    i.base_rev = Some(match row["rev"] {
+        RowValue::Integer(n) => n,
+        ref other => panic!("{other:?}"),
+    });
+    i.issued_at = f.clock.now_ms();
+    f.writer.submit_intent(i).await.unwrap();
+}
+
+/// The outbox rows of one kind as `(id, ref_id, state)`.
+fn outbox_of(f: &Fixture, kind: &str) -> Vec<(String, String, String)> {
+    let kind = kind.to_owned();
+    let mut rows = Vec::new();
+    reopen(f)
+        .write_tx(|tx| {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, ref_id, state FROM side_effect_outbox WHERE kind = ?1
+                     ORDER BY at, id",
+                )
+                .unwrap();
+            rows = stmt
+                .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            Ok(())
+        })
+        .unwrap();
+    rows
+}
+
+fn cash_kinds(f: &Fixture, order_id: &str) -> Vec<String> {
+    table(f, Table::CashEvents)
+        .iter()
+        .filter(|e| text(e, "order_id") == order_id)
+        .map(|e| text(e, "kind"))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_cash_settle_with_the_drawer_on_queues_one_kick_and_closes_undo() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    drawer_setting(&f, "true").await;
+    let (o, _) = sale_with(&f, &by, &id, None).await;
+
+    assert_eq!(effect_kinds(&f, &o), ["drawer_kicked"]);
+    let rows = outbox_of(&f, "drawer");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].1.as_str(), rows[0].2.as_str()),
+        (o.as_str(), "queued")
+    );
+    assert!(
+        outbox_of(&f, "print").is_empty(),
+        "no receipt was asked for"
+    );
+    assert_eq!(number_of(&f, &o), None, "a kick does not number the sale");
+
+    let refused = f.writer.submit_intent(revert_intent(&f, &by, &o)).await;
+    assert_eq!(refusal(refused).0, ErrorCode::UndoNotAllowed);
+}
+
+#[tokio::test]
+async fn print_and_the_drawer_queue_side_by_side() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    drawer_setting(&f, "true").await;
+    let (o, _) = sale_with(&f, &by, &id, Some(ReceiptChoice::Print)).await;
+    assert_eq!(
+        effect_kinds(&f, &o),
+        [
+            "drawer_kicked",
+            "invoice_number_assigned",
+            "receipt_printed"
+        ]
+    );
+    assert_eq!(outbox_of(&f, "drawer").len(), 1);
+    assert_eq!(outbox_of(&f, "print").len(), 1);
+}
+
+#[tokio::test]
+async fn the_drawer_off_or_no_cash_row_sends_no_kick() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+
+    let (off, _) = sale_with(&f, &by, &id, None).await;
+    assert!(outbox_of(&f, "drawer").is_empty());
+    assert!(!effect_recorded(&f, &off));
+
+    drawer_setting(&f, "true").await;
+    let applied = submit(
+        &f,
+        by.clone(),
+        IntentPayload::PosSale(PosSale {
+            lines: vec![PosSaleLine {
+                product_id: id.clone(),
+                qty: 1,
+            }],
+            payments: vec![pay(arena_proto::PaymentMethod::Upi, 4_000, Some("1234"))],
+            player_id: None,
+            credit_override: None,
+            stock_override: None,
+            receipt: None,
+        }),
+    )
+    .await
+    .unwrap();
+    let upi = applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders" && c.op == ChangeOp::Insert)
+        .unwrap()
+        .row_id
+        .clone();
+    assert!(
+        outbox_of(&f, "drawer").is_empty(),
+        "UPI never opens the drawer"
+    );
+    assert!(!effect_recorded(&f, &upi), "and its Undo stays open");
+}
+
+#[tokio::test]
+async fn drawer_kicked_records_a_drawer_open_event_once_and_only_the_hub_can_report_it() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    drawer_setting(&f, "true").await;
+    let (o, _) = sale_with(&f, &by, &id, None).await;
+    let row = outbox_of(&f, "drawer").remove(0).0;
+    let kicked = || {
+        IntentPayload::DrawerKicked(arena_proto::DrawerKicked {
+            outbox_id: row.clone(),
+        })
+    };
+
+    let denied = f.writer.submit_intent(intent(owner(), kicked())).await;
+    assert_eq!(refusal(denied).0, ErrorCode::PermissionDenied);
+    // A print result cannot close a drawer row, nor the other way round.
+    let wrong = result(
+        &f,
+        IntentPayload::ReceiptPrinted(ReceiptPrinted {
+            outbox_id: row.clone(),
+        }),
+    )
+    .await;
+    assert_eq!(refusal(wrong).0, ErrorCode::ValidationFailed);
+
+    let applied = result(&f, kicked()).await.unwrap();
+    let tables: Vec<_> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+    assert_eq!(tables, ["orders", "cash_events"]);
+    assert_eq!(outbox_of(&f, "drawer")[0].2, "done");
+    assert_eq!(cash_kinds(&f, &o), ["sale", "drawer_open"]);
+    let open = table(&f, Table::CashEvents)
+        .into_iter()
+        .find(|e| text(e, "kind") == "drawer_open")
+        .unwrap();
+    assert_eq!(open["amount_minor"], RowValue::Integer(0));
+    assert_eq!(text(&open, "staff_id"), by.id);
+    assert_eq!(
+        text(&open, "shift_id"),
+        text(
+            &table(&f, Table::CashEvents)
+                .into_iter()
+                .find(|e| text(e, "kind") == "sale")
+                .unwrap(),
+            "shift_id"
+        )
+    );
+    assert_eq!(refusal(result(&f, kicked()).await).0, ErrorCode::Stale);
+}
+
+#[tokio::test]
+async fn a_failed_kick_keeps_the_sale_raises_the_offline_alert_and_writes_no_cash_event() {
+    let f = bootstrapped().await;
+    let id = cola(&f).await;
+    let by = counter(&f).await;
+    drawer_setting(&f, "true").await;
+    let (o, _) = sale_with(&f, &by, &id, None).await;
+    let row = outbox_of(&f, "drawer").remove(0).0;
+    let failed = |error: &str| {
+        IntentPayload::DrawerKickFailed(arena_proto::DrawerKickFailed {
+            outbox_id: row.clone(),
+            error_kind: PrinterErrorKind::Refused,
+            error: error.into(),
+        })
+    };
+    assert_eq!(
+        refusal(result(&f, failed("  ")).await),
+        (ErrorCode::ValidationFailed, Some("error".into()))
+    );
+    let applied = result(&f, failed("The printer refused")).await.unwrap();
+    let tables: Vec<_> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+    assert_eq!(tables, ["orders", "alerts"]);
+    assert_eq!(alerts(&f), ["printer_offline"]);
+    assert_eq!(outbox_of(&f, "drawer")[0].2, "failed");
+    assert_eq!(cash_kinds(&f, &o), ["sale"]);
+    assert_eq!(
+        refusal(result(&f, failed("again")).await).0,
+        ErrorCode::Stale
+    );
+}

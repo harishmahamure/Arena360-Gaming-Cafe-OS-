@@ -8,17 +8,24 @@
 //! * `receipt.printed` and `receipt.print_failed` (system) close the row; a failure also raises
 //!   the "Printer offline" alert. The sale stays settled either way.
 //!
+//! Cash drawer kicks (Story 5.18) ride the same outbox. A settle with a cash row, while
+//! `receipt.drawer` is on, records the irreversible effect "drawer kicked" and queues a `drawer`
+//! row in its own transaction; the print task sends the pulse after commit and `drawer.kicked`
+//! (which writes a `drawer_open` cash event) or `drawer.kick_failed` closes the row.
+//!
 //! A result or a reprint touches the order row so the change log, and so the audit, names who and
 //! what. The order is already irreversible by then, so the revision bump costs nothing.
 
 use arena_proto::{
-    AlertKind, AppError, EffectKind, ErrorCode, Intent, IntentPayload, RECEIPT_ERROR_MAX_CHARS,
-    ReceiptChoice, UNDO_WINDOW_MS,
+    AlertKind, AppError, CASH_DRAWER_OPEN, EffectKind, ErrorCode, Intent, IntentPayload,
+    KEY_RECEIPT_DRAWER, RECEIPT_ERROR_MAX_CHARS, ReceiptChoice, UNDO_WINDOW_MS,
 };
 use arena_store::{
-    ChangeOp, INVOICED_KINDS, InvoiceOrder, KIND_PRINT, NewAlert, OutboxRow, RowKey, STATE_DONE,
-    STATE_FAILED, STATE_QUEUED, StoreTx, find_branch_summary, find_invoice_order, find_open_alert,
-    find_outbox, finish_outbox, insert_alert, insert_effect, insert_outbox, list_unnumbered,
+    ChangeOp, INVOICED_KINDS, InvoiceOrder, KIND_DRAWER, KIND_PRINT, NewAlert, NewCashEvent,
+    OutboxRow, RowKey, STATE_DONE, STATE_FAILED, STATE_QUEUED, StoreTx, find_branch_summary,
+    find_invoice_order, find_open_alert, find_outbox, find_setting, finish_outbox, insert_alert,
+    insert_cash_event, insert_effect, insert_outbox, list_unnumbered, open_shift_id,
+    shift_of_order_sale,
 };
 
 use super::invoice_issue::issue_number;
@@ -34,6 +41,8 @@ pub(crate) struct ReceiptTarget {
     order: Option<InvoiceOrder>,
     row: Option<OutboxRow>,
     printer_alert_open: bool,
+    /// The shift a drawer kick's cash event is written against.
+    shift_id: Option<String>,
 }
 
 pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<ReceiptTarget, AppError> {
@@ -52,6 +61,27 @@ pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<ReceiptT
                 .is_some(),
             ..ReceiptTarget::default()
         },
+        IntentPayload::DrawerKicked(p) => {
+            let row = find_outbox(tx, &p.outbox_id)?;
+            let shift_id = match &row {
+                Some(r) => match shift_of_order_sale(tx, &r.ref_id)? {
+                    Some(id) => Some(id),
+                    None => open_shift_id(tx)?,
+                },
+                None => None,
+            };
+            ReceiptTarget {
+                row,
+                shift_id,
+                ..ReceiptTarget::default()
+            }
+        }
+        IntentPayload::DrawerKickFailed(p) => ReceiptTarget {
+            row: find_outbox(tx, &p.outbox_id)?,
+            printer_alert_open: find_open_alert(tx, AlertKind::PrinterOffline.as_str(), None)?
+                .is_some(),
+            ..ReceiptTarget::default()
+        },
         _ => ReceiptTarget::default(),
     })
 }
@@ -64,17 +94,35 @@ fn not_found(field: &str, message: &str) -> AppError {
     AppError::with_field(ErrorCode::NotFound, field, message)
 }
 
-fn queued_row<'a>(t: &'a ReceiptTarget, field: &str) -> Result<&'a OutboxRow, AppError> {
+fn queued_row<'a>(
+    t: &'a ReceiptTarget,
+    field: &str,
+    kind: &str,
+) -> Result<&'a OutboxRow, AppError> {
     let Some(row) = &t.row else {
         return Err(not_found(field, "no such outbox row"));
     };
-    if row.kind != KIND_PRINT {
-        return Err(invalid(field, "this outbox row is not a print"));
+    if row.kind != kind {
+        return Err(invalid(
+            field,
+            "this outbox row is not of the kind this result names",
+        ));
     }
     if row.state != STATE_QUEUED {
         return Err(stale(field, "this print has already been recorded"));
     }
     Ok(row)
+}
+
+fn valid_error(error: &str) -> Result<(), AppError> {
+    let error = error.trim();
+    if error.is_empty() || error.chars().count() > RECEIPT_ERROR_MAX_CHARS {
+        return Err(invalid(
+            "error",
+            "a print error is 1 to 200 characters long",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn validate(intent: &Intent, t: &ReceiptTarget) -> Result<(), AppError> {
@@ -97,17 +145,24 @@ pub(super) fn validate(intent: &Intent, t: &ReceiptTarget) -> Result<(), AppErro
             }
             Ok(())
         }
-        IntentPayload::ReceiptPrinted(_) => queued_row(t, "outbox_id").map(|_| ()),
+        IntentPayload::ReceiptPrinted(_) => queued_row(t, "outbox_id", KIND_PRINT).map(|_| ()),
         IntentPayload::ReceiptPrintFailed(p) => {
-            queued_row(t, "outbox_id")?;
-            let error = p.error.trim();
-            if error.is_empty() || error.chars().count() > RECEIPT_ERROR_MAX_CHARS {
-                return Err(invalid(
-                    "error",
-                    "a print error is 1 to 200 characters long",
+            queued_row(t, "outbox_id", KIND_PRINT)?;
+            valid_error(&p.error)
+        }
+        IntentPayload::DrawerKicked(_) => {
+            queued_row(t, "outbox_id", KIND_DRAWER)?;
+            if t.shift_id.is_none() {
+                return Err(stale(
+                    "outbox_id",
+                    "no shift holds the cash of this drawer kick",
                 ));
             }
             Ok(())
+        }
+        IntentPayload::DrawerKickFailed(p) => {
+            queued_row(t, "outbox_id", KIND_DRAWER)?;
+            valid_error(&p.error)
         }
         _ => Err(AppError::new(
             ErrorCode::Internal,
@@ -124,6 +179,48 @@ fn touch_order(order_id: &str) -> Written {
         op: ChangeOp::Update,
         before: None,
     }
+}
+
+/// The staff who took the cash of a drawer row (its payload's `by`).
+fn kicked_by(row: &OutboxRow) -> String {
+    serde_json::from_str::<serde_json::Value>(&row.payload)
+        .ok()
+        .and_then(|v| v.get("by").and_then(|b| b.as_str().map(str::to_owned)))
+        .unwrap_or_default()
+}
+
+/// Closes a queued row as failed and raises the one "Printer offline" alert while none is open.
+/// The sale stays settled.
+fn fail_row(
+    tx: &StoreTx<'_>,
+    t: &ReceiptTarget,
+    row: &OutboxRow,
+    error: &str,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    finish_outbox(tx, &row.id, STATE_FAILED, now_ms, Some(error.trim()))?;
+    let mut written = vec![touch_order(&row.ref_id)];
+    if !t.printer_alert_open {
+        let id = ulid::Ulid::generate().to_string();
+        insert_alert(
+            tx,
+            &NewAlert {
+                id: &id,
+                kind: AlertKind::PrinterOffline.as_str(),
+                device_id: None,
+                raised_at: now_ms,
+                product_id: None,
+                qty: None,
+                threshold: None,
+            },
+        )?;
+        written.push(Written {
+            key: RowKey::Alerts { id },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+    }
+    Ok(written)
 }
 
 /// The JSON a `print` row carries: whether it is a reprint and who asked.
@@ -150,35 +247,46 @@ pub(super) fn mutate(
             Ok(vec![touch_order(&r.order_id)])
         }
         IntentPayload::ReceiptPrinted(p) => {
-            let row = queued_row(t, "outbox_id")?;
+            let row = queued_row(t, "outbox_id", KIND_PRINT)?;
             finish_outbox(tx, &p.outbox_id, STATE_DONE, now_ms, None)?;
             Ok(vec![touch_order(&row.ref_id)])
         }
         IntentPayload::ReceiptPrintFailed(p) => {
-            let row = queued_row(t, "outbox_id")?;
-            finish_outbox(tx, &p.outbox_id, STATE_FAILED, now_ms, Some(p.error.trim()))?;
-            let mut written = vec![touch_order(&row.ref_id)];
-            if !t.printer_alert_open {
-                let id = ulid::Ulid::generate().to_string();
-                insert_alert(
-                    tx,
-                    &NewAlert {
-                        id: &id,
-                        kind: AlertKind::PrinterOffline.as_str(),
-                        device_id: None,
-                        raised_at: now_ms,
-                        product_id: None,
-                        qty: None,
-                        threshold: None,
-                    },
-                )?;
-                written.push(Written {
-                    key: RowKey::Alerts { id },
+            let row = queued_row(t, "outbox_id", KIND_PRINT)?;
+            fail_row(tx, t, row, &p.error, now_ms)
+        }
+        IntentPayload::DrawerKicked(p) => {
+            let row = queued_row(t, "outbox_id", KIND_DRAWER)?;
+            let shift_id = t
+                .shift_id
+                .as_deref()
+                .ok_or_else(|| stale("outbox_id", "no shift holds this drawer kick"))?;
+            finish_outbox(tx, &p.outbox_id, STATE_DONE, now_ms, None)?;
+            let event_id = ulid::Ulid::generate().to_string();
+            insert_cash_event(
+                tx,
+                &NewCashEvent {
+                    id: &event_id,
+                    shift_id,
+                    kind: CASH_DRAWER_OPEN,
+                    amount_minor: 0,
+                    staff_id: &kicked_by(row),
+                    order_id: Some(&row.ref_id),
+                    reverses: None,
+                },
+            )?;
+            Ok(vec![
+                touch_order(&row.ref_id),
+                Written {
+                    key: RowKey::CashEvents { id: event_id },
                     op: ChangeOp::Insert,
                     before: None,
-                });
-            }
-            Ok(written)
+                },
+            ])
+        }
+        IntentPayload::DrawerKickFailed(p) => {
+            let row = queued_row(t, "outbox_id", KIND_DRAWER)?;
+            fail_row(tx, t, row, &p.error, now_ms)
         }
         _ => Err(AppError::new(
             ErrorCode::Internal,
@@ -236,12 +344,71 @@ pub(super) fn queue_on_settle(
     now_ms: i64,
     written: &mut Vec<Written>,
 ) -> Result<(), AppError> {
-    if choice(intent) != Some(ReceiptChoice::Print) {
+    if !is_settle(intent) {
         return Ok(());
     }
     let internal = |m: &str| AppError::new(ErrorCode::Internal, m.to_owned());
-    let order_id = settled_order_id(intent, written)
-        .ok_or_else(|| internal("a print settle wrote no order"))?;
+    let order_id =
+        settled_order_id(intent, written).ok_or_else(|| internal("a settle wrote no order"))?;
+    queue_drawer(tx, intent, &order_id, now_ms)?;
+    if choice(intent) == Some(ReceiptChoice::Print) {
+        queue_print(tx, intent, epoch, &order_id, now_ms, written)?;
+    }
+    Ok(())
+}
+
+/// Whether the intent settles a sale (a session bill, a counter sale or a plan sale).
+fn is_settle(intent: &Intent) -> bool {
+    matches!(
+        &intent.payload,
+        IntentPayload::SessionSettle(_) | IntentPayload::PosSale(_) | IntentPayload::PlanSell(_)
+    )
+}
+
+/// The drawer step of a settle: with `receipt.drawer` on and a cash row among the payments, the
+/// kick is registered as an irreversible effect (so Undo is refused and a correction is a
+/// Refund) and queued on the outbox. Nothing here touches the printer.
+fn queue_drawer(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    order_id: &str,
+    now_ms: i64,
+) -> Result<(), AppError> {
+    let on = find_setting(tx, KEY_RECEIPT_DRAWER)?.is_some_and(|s| s.value == "true");
+    if !on {
+        return Ok(());
+    }
+    if shift_of_order_sale(tx, order_id)?.is_none() {
+        return Ok(());
+    }
+    insert_effect(
+        tx,
+        &ulid::Ulid::generate().to_string(),
+        EffectKind::DrawerKicked,
+        Some(&intent.intent_id),
+        Some(order_id),
+        now_ms,
+    )?;
+    insert_outbox(
+        tx,
+        &ulid::Ulid::generate().to_string(),
+        KIND_DRAWER,
+        order_id,
+        &payload(false, &intent.actor.id),
+        now_ms,
+    )
+}
+
+fn queue_print(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    epoch: &Epoch,
+    order_id: &str,
+    now_ms: i64,
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    let internal = |m: &str| AppError::new(ErrorCode::Internal, m.to_owned());
+    let order_id = order_id.to_owned();
     let order = find_invoice_order(tx, &order_id)?
         .ok_or_else(|| internal("a print settle lost its order"))?;
     let branch =

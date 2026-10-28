@@ -168,7 +168,7 @@ development_status:
 
   epic-6: in-progress
   6-1-the-control-plane-publishes-the-global-game-catalogue-to-hub: done
-  6-2-the-hub-caches-the-catalogue-and-media-and-serves-them-on-th: review
+  6-2-the-hub-caches-the-catalogue-and-media-and-serves-them-on-th: done
   6-3-the-branch-game-and-app-library-at-the-hub-applied-to-every: backlog
   6-4-kiosks-scan-for-installed-games-and-launchers-and-report-the: backlog
   6-5-the-hub-matches-scanned-games-to-the-catalogue-and-the-manag: backlog

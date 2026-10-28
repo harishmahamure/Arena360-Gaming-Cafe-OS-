@@ -333,6 +333,9 @@ impl CloudClient {
         file.flush()
             .await
             .map_err(|e| MediaFailure::Unreachable(format!("cannot write the file: {e}")))?;
+        file.sync_all()
+            .await
+            .map_err(|e| MediaFailure::Unreachable(format!("cannot write the file: {e}")))?;
         drop(file);
         if total != bytes {
             return Err(MediaFailure::Mismatch("shorter than the manifest says"));

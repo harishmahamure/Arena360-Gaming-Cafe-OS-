@@ -2,7 +2,7 @@
 title: 'Story 6.2: The Hub caches the catalogue and media and serves them on the LAN'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 baseline_commit: 'cb2be672febe6d44c1c06189348872be24fe39bc'
@@ -88,6 +88,10 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Patched: lowering the cap now evicts least-recently-served videos at the next pull (`note_cap` -> `enforce_cap`); a failed file delete on eviction no longer marks the row evicted (error, row stays stored); downloads are `fsync`ed before the rename.
+- Deferred (not blocking): never-served videos sort first for eviction so one pull that overflows the cap can churn (matches the spec LRU rule); no per-file failure quarantine; no HEAD support; no reference.db auto-recovery; cap closure falls back to the 10 GiB default on a settings read error.
+- Known unrelated: `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::a_printer_that_stops_reading_times_out` fail in arena-tasks on this machine with or without this story.
 
 ## Verification
 

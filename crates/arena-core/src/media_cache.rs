@@ -185,7 +185,37 @@ impl MediaCache {
                 );
             }
         }
-        db.set_cap_seen(now)
+        db.set_cap_seen(now)?;
+        drop(db);
+        self.enforce_cap()
+    }
+
+    /// Drops the least recently served videos while the stored ones exceed what the cap leaves
+    /// after the covers (a lowered cap takes effect at the next pull).
+    fn enforce_cap(&self) -> Result<(), AppError> {
+        let db = self.db()?;
+        loop {
+            let (covers, videos) = db.stored_bytes()?;
+            if videos <= self.cap_bytes().saturating_sub(covers) {
+                return Ok(());
+            }
+            let Some(victim) = db.stored_videos_lru()?.into_iter().next() else {
+                return Ok(());
+            };
+            self.evict(&db, &victim.sha256)?;
+        }
+    }
+
+    /// Deletes a stored video from the disk and flags it `evicted`. A file that cannot be removed
+    /// stays stored, so the table never disagrees with the disk.
+    fn evict(&self, db: &ReferenceDb, sha256: &str) -> Result<(), AppError> {
+        let path = self.file_path(sha256);
+        if let Err(e) = std::fs::remove_file(&path)
+            && path.exists()
+        {
+            return Err(internal(format!("cannot evict a media file: {e}")));
+        }
+        db.mark_unstored(sha256, FileState::Evicted)
     }
 
     pub fn catalog_version(&self) -> Result<u64, AppError> {
@@ -253,8 +283,7 @@ impl MediaCache {
                     db.mark_unstored(&file.sha256, FileState::Evicted)?;
                     return Ok(Committed::NoRoom);
                 };
-                let _ = std::fs::remove_file(self.file_path(&victim.sha256));
-                db.mark_unstored(&victim.sha256, FileState::Evicted)?;
+                self.evict(&db, &victim.sha256)?;
                 evicted += 1;
             }
         }
@@ -566,6 +595,37 @@ mod tests {
         assert_eq!((status.cover_bytes, status.video_bytes), (300, 600));
         // An evicted video is not pending again.
         assert!(f.cache.pending().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_lowered_cap_drops_the_stalest_videos_at_the_next_pull() {
+        let f = fx(1000);
+        f.cache
+            .apply_manifest(&manifest(
+                1,
+                vec![game(
+                    "A",
+                    vec![
+                        media("cover", 'a', 100, "png"),
+                        media("video", 'b', 300, "mp4"),
+                        media("video", 'c', 300, "mp4"),
+                    ],
+                )],
+            ))
+            .unwrap();
+        f.cache.note_cap().unwrap();
+        store(&f.cache, 'a', 1);
+        store(&f.cache, 'b', 10);
+        store(&f.cache, 'c', 20);
+        f.cache.serve_lookup(&sha('b'), 500).unwrap();
+        // Cap 450 leaves 350 for videos: only the most recently served one stays.
+        f.cap.store(450, Ordering::SeqCst);
+        f.cache.note_cap().unwrap();
+        assert_eq!(state(&f.cache, 'c'), FileState::Evicted);
+        assert_eq!(state(&f.cache, 'b'), FileState::Stored);
+        assert_eq!(state(&f.cache, 'a'), FileState::Stored);
+        assert!(!f.cache.file_path(&sha('c')).exists());
+        assert_eq!(f.cache.status().unwrap().used_bytes, 400);
     }
 
     #[test]

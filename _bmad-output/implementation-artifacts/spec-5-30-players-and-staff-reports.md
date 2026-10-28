@@ -2,7 +2,7 @@
 title: 'Story 5.30: Players and staff reports'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: 'a65cc98'
 followup_review_recommended: false
@@ -93,3 +93,7 @@ A "visit" is a business day with at least one settled sale, so a player who buys
 ## Auto Run Result
 
 Status: in-review. Implemented and verified (fmt, clippy, cargo tests for proto/store/core/api, pnpm checks, Hub svelte-check, Playwright `reports.spec.ts`). Note: without `report.view` the screens show the existing "no access" note like the other reports, rather than opening `inline-pin`.
+
+## Review Result
+
+Code review (2026-10-28): no blocking findings. fmt, clippy, cargo tests (proto/store/core/api), pnpm checks and Hub svelte-check all green. Accepted: without `report.view` the screens show the "no access" note, as the other reports do, rather than `inline-pin`.

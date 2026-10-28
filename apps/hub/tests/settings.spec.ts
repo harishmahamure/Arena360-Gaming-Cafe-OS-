@@ -264,6 +264,8 @@ test("Settings opens on Branch, first in its sections, with the current values",
     en["hub.settings.nav.printer"],
     en["hub.settings.nav.kitchen"],
     en["hub.settings.nav.inventory"],
+    en["hub.settings.nav.import"],
+    en["hub.settings.nav.shift"],
     en["hub.settings.nav.system"],
     en["hub.settings.nav.setup"],
   ]);

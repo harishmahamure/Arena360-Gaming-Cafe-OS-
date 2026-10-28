@@ -23,6 +23,7 @@ mod entitlement;
 mod error;
 mod frame;
 mod gst;
+mod import;
 mod intent;
 mod kiosk;
 mod kiosk_pairing;
@@ -136,6 +137,12 @@ pub use frame::{
 pub use gst::{
     GST_B2B, GST_B2CS, GST_CDNR, GST_HSN, GstExportRequest, GstExported, GstMonth, GstSection,
     gst_file_name,
+};
+pub use import::{
+    IMPORT_CHUNK_ROWS, IMPORT_MAX_BYTES, IMPORT_MAX_FAILURES, IMPORT_MAX_ROWS,
+    IMPORT_PRODUCT_COLUMNS, ImportFailure, ImportProductRow, ImportProducts, ImportTemplateRequest,
+    ImportTemplateSaved, ProductImportCommitRequest, ProductImportPreview,
+    ProductImportPreviewRequest, ProductImportResult,
 };
 pub use intent::{
     AuditReadGranted, BootstrapOnboarding, BranchBootstrap, BranchSeedDefaults, DeviceAssign,

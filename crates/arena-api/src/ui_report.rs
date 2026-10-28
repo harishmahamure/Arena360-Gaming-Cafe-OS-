@@ -205,7 +205,7 @@ const EXPORT_SHAPE: &str = "the body must be {\"month\": \"YYYY-MM\", \"folder\"
 /// Writes `bytes` as `folder/file_name` through a temporary name, so a reader never sees half a
 /// file. `folder` must be an absolute path of a writable directory; an Android tree URI is not
 /// one (`VALIDATION_FAILED` on `folder`).
-fn write_export(
+pub(crate) fn write_export(
     folder: &str,
     file_name: &str,
     bytes: &[u8],

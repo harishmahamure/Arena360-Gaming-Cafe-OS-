@@ -42,6 +42,7 @@ mod frame;
 mod group_bill;
 mod groups;
 mod guards;
+mod import;
 mod invoice_issue;
 mod kiosk_log;
 mod licence;
@@ -57,7 +58,7 @@ mod players;
 mod pos_sale;
 mod prepaid;
 mod printer_status;
-mod products;
+pub(crate) mod products;
 pub(crate) mod rate_flip;
 mod rates;
 mod read_grants;
@@ -176,6 +177,8 @@ pub(crate) enum Target {
     Group(Box<groups::GroupTarget>),
     Zone(Box<zones::ZoneTarget>),
     Product(Box<products::ProductTarget>),
+    /// `import.products`: the products and stock the chunk is checked against.
+    Import(Box<import::ImportTarget>),
     Credentials(Option<arena_store::StaffRow>),
     Stock(Box<stock::StockTarget>),
     Maintenance(Box<maintenance::MaintenanceTarget>),
@@ -270,6 +273,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::ProductUpsert(_) | P::ProductDelete(_) => {
             Target::Product(Box::new(products::load(tx, &intent.payload)?))
         }
+        P::ImportProducts(_) => Target::Import(Box::new(import::load(tx)?)),
         P::PlayerCreate(_) | P::PlayerUpdate(_) | P::PlayerPasswordReset(_) => {
             Target::Player(Box::new(players::load(tx, &intent.payload)?))
         }

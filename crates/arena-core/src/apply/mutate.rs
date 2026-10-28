@@ -237,6 +237,10 @@ pub(super) fn mutate(
             Target::Product(t) => products::mutate_upsert(tx, intent, u, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::ImportProducts(p) => match target {
+            Target::Import(t) => super::import::mutate(tx, intent, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::PlanUpsert(u) => match target {
             Target::Plan(t) => plans::mutate(tx, u, t),
             _ => Err(mismatch()),

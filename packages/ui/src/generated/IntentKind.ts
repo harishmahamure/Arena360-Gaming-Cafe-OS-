@@ -52,6 +52,7 @@ export type IntentKind =
   | "stock.write_off"
   | "stock.expiry_check"
   | "stock.threshold"
+  | "import.products"
   | "shift.open"
   | "shift.close"
   | "shift.reprint_z"

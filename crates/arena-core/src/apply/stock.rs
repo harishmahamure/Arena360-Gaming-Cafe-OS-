@@ -686,6 +686,34 @@ pub(crate) fn ack_low_for(
     }
 }
 
+/// The supplier an imported opening quantity is booked under.
+pub(super) const SUPPLIER_IMPORT: &str = "CSV import";
+
+/// Opening stock for a product an import wrote (Story 5.33): a stock-in lot with no expiry, as
+/// `stock.in` would write it. The product is already validated as tracked.
+pub(super) fn opening_stock(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    product_id: &str,
+    qty: i64,
+    unit_cost_minor: i64,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let t = StockTarget {
+        stock: find_stock(tx, product_id)?,
+        now,
+        ..StockTarget::default()
+    };
+    let u = StockIn {
+        product_id: product_id.to_owned(),
+        qty,
+        unit_cost_minor,
+        supplier: SUPPLIER_IMPORT.to_owned(),
+        expiry: None,
+    };
+    mutate_in(tx, intent, &u, &t, now)
+}
+
 /// Whether a stock-in with this expiry lands inside the warning window of an alert-less branch.
 pub(super) fn stock_in_alerts(u: &StockIn, t: &StockTarget) -> bool {
     t.open_alert.is_none()

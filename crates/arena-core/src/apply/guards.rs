@@ -47,7 +47,28 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
     creating_player(tx, intent)?;
     overriding_credit(tx, intent)?;
     manual_discount(tx, intent)?;
-    overriding_stock(tx, intent)
+    overriding_stock(tx, intent)?;
+    importing_stock(tx, intent)
+}
+
+/// A product import that books opening stock needs `stock.in` on top of `catalog.edit`: the
+/// actor's own, or the elevating manager's.
+fn importing_stock(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    let IntentPayload::ImportProducts(i) = &intent.payload else {
+        return Ok(());
+    };
+    if !i.rows.iter().any(|r| r.opening_qty > 0) || intent.actor.kind == ActorKind::Owner {
+        return Ok(());
+    }
+    let holder = intent
+        .elevated_by
+        .as_ref()
+        .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+    if rbac::staff_allows(tx, holder, arena_proto::Permission::StockIn)? {
+        Ok(())
+    } else {
+        Err(rbac::denied())
+    }
 }
 
 /// A stock override at the counter needs `stock.override` on top of the sale: the actor's own,
@@ -231,6 +252,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::Group(_)
             | Target::Zone(_)
             | Target::Product(_)
+            | Target::Import(_)
             | Target::Credentials(_)
             | Target::Stock(_)
             | Target::Maintenance(_)
@@ -374,6 +396,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::Group(t) => groups::base_rev(intent, t),
         Target::Zone(t) => zones::base_rev(intent, t),
         Target::Product(t) => products::base_rev(intent, t),
+        Target::Import(_) => Ok(()),
         Target::Plan(t) => plans::base_rev(intent, t),
         Target::Rule(t) => rules::base_rev(intent, t),
         Target::Coupon(t) => coupon::base_rev(intent, t),

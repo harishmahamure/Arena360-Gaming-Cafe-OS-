@@ -157,7 +157,7 @@ development_status:
   5-30-players-and-staff-reports: done
   5-31-stock-reports-with-waste-by-reason: done
   5-32-export-every-hub-report-to-csv-and-pdf: done
-  5-33-csv-import-with-dry-run-starting-with-products: backlog
+  5-33-csv-import-with-dry-run-starting-with-products: review
   5-34-import-players-and-plans-by-csv: backlog
   5-35-seed-plans-and-products-from-a-starter-template: backlog
   5-36-export-and-import-a-branch-setup-file: backlog

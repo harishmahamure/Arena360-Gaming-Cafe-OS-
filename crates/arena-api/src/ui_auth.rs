@@ -3188,6 +3188,10 @@ async fn settings(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
     }
 }
 
+/// A CSV file may be 1.5 MB, which JSON escaping can double.
+const IMPORT_BODY_LIMIT: axum::extract::DefaultBodyLimit =
+    axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024);
+
 /// The auth routes, behind the same loopback origin guard as `/ui/snapshot`.
 pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
     if let Some(pairing) = &auth.pairing {
@@ -3227,6 +3231,18 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/rules", get(rules))
         .route("/ui/coupons", get(crate::ui_coupons::list))
         .route("/ui/refund/invoice", get(crate::ui_refund::invoice))
+        .route(
+            "/ui/import/products/preview",
+            post(crate::ui_import::preview).layer(IMPORT_BODY_LIMIT),
+        )
+        .route(
+            "/ui/import/products/commit",
+            post(crate::ui_import::commit).layer(IMPORT_BODY_LIMIT),
+        )
+        .route(
+            "/ui/import/products/template",
+            post(crate::ui_import::template),
+        )
         .route("/ui/shift/count", get(crate::ui_shift::count))
         .route(
             "/ui/reports/daily-sales",
@@ -6786,6 +6802,222 @@ pub(crate) mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".part"))
             .count();
         assert_eq!(parts, 0, "no temporary file is left behind");
+    }
+
+    #[tokio::test]
+    async fn a_product_csv_is_previewed_then_committed_in_chunks_with_a_safe_retry() {
+        let hub = hub().await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let dry = |csv: &str| json!({ "csv": csv });
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/preview",
+            None,
+            Some(dry("name,price\nTea,10\n")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/preview",
+            Some(&counter),
+            Some(dry("name,price\nTea,10\n")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+
+        // A dry-run counts and writes nothing.
+        let mut csv = String::from(
+            "name,category,price,tax_rate,hsn,barcode,track_stock,kitchen,opening_qty,unit_cost\r\n",
+        );
+        for i in 0..1001 {
+            csv.push_str(&format!(
+                "Item {i},Cat,{}.50,5,220210,B{i:05},true,false,3,2.25\r\n",
+                10 + i % 90
+            ));
+        }
+        csv.push_str("Broken,Cat,abc,5,220210,,true,false,0,0\r\n");
+        csv.push_str("Item 5,Cat,1,5,220210,B00005,true,false,0,0\r\n");
+        let (status, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/preview",
+            Some(&manager),
+            Some(dry(&csv)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(
+            (
+                &preview["rows"],
+                &preview["new"],
+                &preview["updated"],
+                &preview["failed"]
+            ),
+            (&json!(1003), &json!(1001), &json!(0), &json!(2)),
+            "{preview}"
+        );
+        let failures = preview["failures"].as_array().unwrap();
+        assert_eq!(
+            (
+                failures[0]["row"].as_i64(),
+                failures[0]["field"].as_str(),
+                failures[0]["reason"].as_str()
+            ),
+            (Some(1003), Some("price"), Some("bad_number"))
+        );
+        assert_eq!(failures[1]["reason"], "duplicate_barcode");
+        assert_eq!(
+            (&preview["can_commit"], &preview["can_commit_valid"]),
+            (&json!(false), &json!(true))
+        );
+        let products = |hub: &Hub| hub.auth.reader().products(T0).unwrap();
+        assert_eq!(products(&hub).len(), 0, "a dry-run writes nothing");
+
+        // Commit is refused while the file has problems, unless the valid rows are chosen.
+        let import_id = ulid::Ulid::generate().to_string();
+        let commit = |valid_only: bool| json!({ "csv": csv, "import_id": import_id, "valid_only": valid_only });
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/commit",
+            Some(&manager),
+            Some(commit(false)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "csv");
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/commit",
+            Some(&counter),
+            Some(commit(true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/commit",
+            Some(&manager),
+            Some(json!({ "csv": csv, "import_id": "nope", "valid_only": true })),
+        )
+        .await;
+        assert_eq!(
+            (status, &reply["field"]),
+            (StatusCode::UNPROCESSABLE_ENTITY, &json!("import_id"))
+        );
+
+        let started = std::time::Instant::now();
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/commit",
+            Some(&manager),
+            Some(commit(true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!(
+            (
+                &done["created"],
+                &done["updated"],
+                &done["skipped"],
+                &done["chunks"]
+            ),
+            (&json!(1001), &json!(0), &json!(2), &json!(3)),
+            "{done}"
+        );
+        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+        let all = products(&hub);
+        assert_eq!(all.len(), 1001);
+        let item = all.iter().find(|p| p.name == "Item 7").unwrap();
+        assert_eq!(
+            (item.price_minor, item.quantity, item.tax_rate_bp),
+            (1750, 3, 500)
+        );
+
+        // The same attempt again changes nothing (each chunk's key is derived from import_id).
+        let (status, again) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/commit",
+            Some(&manager),
+            Some(commit(true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(again["chunks"], 3);
+        let item = products(&hub)
+            .into_iter()
+            .find(|p| p.name == "Item 7")
+            .unwrap();
+        assert_eq!(
+            item.quantity, 3,
+            "the retry never books the opening stock twice"
+        );
+
+        // A new attempt of the same file matches by barcode: all updates, and stock is added.
+        let (_, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/preview",
+            Some(&manager),
+            Some(dry(&csv)),
+        )
+        .await;
+        assert_eq!(
+            (&preview["new"], &preview["updated"]),
+            (&json!(0), &json!(1001))
+        );
+
+        // The template is saved, and passes its own dry-run.
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_string_lossy().into_owned();
+        let (status, saved) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/template",
+            Some(&manager),
+            Some(json!({ "folder": folder })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let text =
+            std::fs::read_to_string(dir.path().join(saved["file_name"].as_str().unwrap())).unwrap();
+        assert!(text.starts_with(
+            "name,category,price,tax_rate,hsn,barcode,track_stock,kitchen,opening_qty,unit_cost\r\n"
+        ));
+        assert_eq!(text.lines().count(), 3);
+        let (_, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/preview",
+            Some(&manager),
+            Some(dry(&text)),
+        )
+        .await;
+        assert_eq!(
+            (&preview["rows"], &preview["failed"]),
+            (&json!(2), &json!(0)),
+            "{preview}"
+        );
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/products/template",
+            Some(&manager),
+            Some(json!({ "folder": "/no/such/folder" })),
+        )
+        .await;
+        assert_eq!(
+            (status, &reply["field"]),
+            (StatusCode::UNPROCESSABLE_ENTITY, &json!("folder"))
+        );
     }
 
     /// Story 5.30: the Players and Staff reads need `report.view` and a valid range; Players also

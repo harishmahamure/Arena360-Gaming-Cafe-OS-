@@ -160,6 +160,10 @@ pub enum IntentKind {
     StockExpiryCheck,
     #[serde(rename = "stock.threshold")]
     StockThreshold,
+    /// A chunk of a product CSV import: creates or updates products and records opening stock
+    /// (Story 5.33).
+    #[serde(rename = "import.products")]
+    ImportProducts,
     /// Opens the branch's shift with a confirmed cash float.
     #[serde(rename = "shift.open")]
     ShiftOpen,
@@ -294,7 +298,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 95] = [
+    pub const ALL: [IntentKind; 96] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -343,6 +347,7 @@ impl IntentKind {
         Self::StockWriteOff,
         Self::StockExpiryCheck,
         Self::StockThreshold,
+        Self::ImportProducts,
         Self::ShiftOpen,
         Self::ShiftClose,
         Self::ShiftReprintZ,
@@ -443,6 +448,7 @@ impl IntentKind {
             Self::StockWriteOff => "stock.write_off",
             Self::StockExpiryCheck => "stock.expiry_check",
             Self::StockThreshold => "stock.threshold",
+            Self::ImportProducts => "import.products",
             Self::ShiftOpen => "shift.open",
             Self::ShiftClose => "shift.close",
             Self::ShiftReprintZ => "shift.reprint_z",
@@ -544,7 +550,8 @@ impl IntentKind {
             | Self::StockWasteReverted
             | Self::StockWriteOff
             | Self::StockExpiryCheck
-            | Self::StockThreshold => IntentCategory::Catalog,
+            | Self::StockThreshold
+            | Self::ImportProducts => IntentCategory::Catalog,
             Self::ShiftOpen
             | Self::ShiftClose
             | Self::ShiftReprintZ
@@ -648,6 +655,7 @@ impl IntentKind {
             | Self::PlanUpsert
             | Self::RuleUpsert
             | Self::CouponUpsert
+            | Self::ImportProducts
             | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
             Self::ShiftOpen => Requirement::Perm(Permission::ShiftOpen),
             Self::ShiftClose => Requirement::Perm(Permission::ShiftClose),
@@ -773,6 +781,7 @@ impl IntentKind {
             | Self::StockWriteOff
             | Self::StockExpiryCheck
             | Self::StockThreshold
+            | Self::ImportProducts
             | Self::ShiftOpen
             | Self::ShiftClose
             | Self::ShiftReprintZ
@@ -1337,6 +1346,8 @@ pub enum IntentPayload {
     StockExpiryCheck(crate::StockExpiryCheck),
     #[serde(rename = "stock.threshold")]
     StockThreshold(crate::StockThreshold),
+    #[serde(rename = "import.products")]
+    ImportProducts(crate::ImportProducts),
     #[serde(rename = "shift.open")]
     ShiftOpen(crate::ShiftOpen),
     #[serde(rename = "shift.close")]
@@ -1484,6 +1495,7 @@ impl IntentPayload {
             Self::StockWriteOff(_) => IntentKind::StockWriteOff,
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
             Self::StockThreshold(_) => IntentKind::StockThreshold,
+            Self::ImportProducts(_) => IntentKind::ImportProducts,
             Self::ShiftOpen(_) => IntentKind::ShiftOpen,
             Self::ShiftClose(_) => IntentKind::ShiftClose,
             Self::ShiftReprintZ(_) => IntentKind::ShiftReprintZ,
@@ -1771,7 +1783,9 @@ mod tests {
                 }
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
-                | "coupon.upsert" | "stock.threshold" => Requirement::Perm(Permission::CatalogEdit),
+                | "coupon.upsert" | "stock.threshold" | "import.products" => {
+                    Requirement::Perm(Permission::CatalogEdit)
+                }
                 "shift.open" => Requirement::Perm(Permission::ShiftOpen),
                 "shift.close" => Requirement::Perm(Permission::ShiftClose),
                 "shift.reprint_z" => Requirement::Perm(Permission::ReportView),

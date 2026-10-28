@@ -1,7 +1,8 @@
 use arena_proto::{
-    ActorKind, AppError, ErrorCode, GST_MAX_BP, Intent, IntentPayload, KEY_TAX, MAX_BARCODE_CHARS,
-    MAX_BUNDLE_COMPONENTS, MAX_CATEGORY_CHARS, MAX_COMPONENT_QTY, MAX_PRICE_MINOR, ProductDelete,
-    ProductUpsert, SIMPLE_MAX_BP, TaxMode, TaxSettings, hsn_valid, image_problem,
+    ActorKind, AppError, ErrorCode, GST_MAX_BP, ImportProductRow, Intent, IntentPayload, KEY_TAX,
+    MAX_BARCODE_CHARS, MAX_BUNDLE_COMPONENTS, MAX_CATEGORY_CHARS, MAX_COMPONENT_QTY,
+    MAX_PRICE_MINOR, ProductDelete, ProductUpsert, SIMPLE_MAX_BP, TaxMode, TaxSettings, hsn_valid,
+    image_problem,
 };
 use arena_store::{
     ChangeOp, ProductRow, RowKey, StoreTx, Table, barcode_holder, delete_row, find_product,
@@ -313,4 +314,54 @@ pub(super) fn mutate_delete(
     )?);
     drop_components(tx, &d.id, &t.old_components, &mut out)?;
     Ok(out)
+}
+
+/// The product an import row writes: a new active product, or the matched one with only the
+/// columns of the file changed (its image, favourite flag and active flag stay).
+pub(crate) fn upsert_from_import(
+    row: &ImportProductRow,
+    old: Option<&ProductRow>,
+) -> ProductUpsert {
+    ProductUpsert {
+        id: old.map(|o| o.product_id.clone()),
+        name: row.name.trim().to_owned(),
+        category: row.category.trim().to_owned(),
+        price_minor: row.price_minor,
+        tax_rate_bp: row.tax_rate_bp,
+        hsn: row.hsn.trim().to_owned(),
+        track_stock: row.track_stock,
+        image: old.map(|o| o.image.clone()).unwrap_or_default(),
+        barcode: row.barcode.trim().to_owned(),
+        kitchen: row.kitchen,
+        favourite: old.is_some_and(|o| o.favourite),
+        active: old.is_none_or(|o| o.active),
+        bundle: false,
+        components: Vec::new(),
+    }
+}
+
+/// The Story 5.3 rules for one import row: the same checks a `product.upsert` of it would
+/// meet. `old` is the product the row updates, `holder` the active product that holds the row's
+/// barcode now, `tax` the branch's tax settings.
+pub(crate) fn check_import_row(
+    row: &ImportProductRow,
+    old: Option<&ProductRow>,
+    holder: Option<&str>,
+    tax: Option<&TaxSettings>,
+) -> Result<(), AppError> {
+    let t = import_target(old, holder, tax);
+    validate_upsert(&upsert_from_import(row, old), &t)
+}
+
+pub(crate) fn import_target(
+    old: Option<&ProductRow>,
+    holder: Option<&str>,
+    tax: Option<&TaxSettings>,
+) -> ProductTarget {
+    ProductTarget {
+        product: old.cloned(),
+        holder: holder.map(str::to_owned),
+        tax: tax.cloned(),
+        ..ProductTarget::default()
+    }
 }

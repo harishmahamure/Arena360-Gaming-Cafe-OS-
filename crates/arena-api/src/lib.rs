@@ -10,6 +10,7 @@ pub mod ui_audit;
 pub mod ui_auth;
 mod ui_coupons;
 pub mod ui_events;
+mod ui_import;
 pub mod ui_pair;
 mod ui_pairing;
 #[cfg(test)]

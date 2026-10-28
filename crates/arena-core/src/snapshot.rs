@@ -1383,6 +1383,32 @@ impl SnapshotReader {
         store.read_consistent(|s| crate::catalog::products(s, now_ms))
     }
 
+    /// A dry-run of a product CSV (Story 5.33): the counts and problems, and the rows that could
+    /// be imported, read against the products the Hub holds now. Writes nothing. Blocking
+    /// (SQLite).
+    pub fn product_import(
+        &self,
+        csv: &str,
+        now_ms: i64,
+    ) -> Result<
+        (
+            arena_proto::ProductImportPreview,
+            Vec<arena_proto::ImportProductRow>,
+        ),
+        AppError,
+    > {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let exponent = read_locale(s, now_ms)?.map_or(2, |l| l.exponent);
+            let ctx = crate::import_products::context(s)?;
+            let analysis = crate::import_products::analyse(csv, &ctx, exponent)?;
+            Ok((analysis.preview, analysis.rows))
+        })
+    }
+
     /// The Inventory → Expiring and Expired lists as of `now_ms`. Blocking (SQLite).
     pub fn expiry(&self, now_ms: i64) -> Result<arena_proto::ExpiryView, AppError> {
         let store = self

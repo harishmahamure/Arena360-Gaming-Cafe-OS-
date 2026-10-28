@@ -194,6 +194,12 @@ enum Op {
     ZReprint {
         pick: u8,
     },
+    /// `import.products` (Story 5.33): rows of random names, barcodes, prices and opening
+    /// quantities. A chunk applies whole or not at all, and the stock on hand grows by exactly the
+    /// opening quantities it booked.
+    Import {
+        rows: Vec<(String, String, i64, i64, bool)>,
+    },
     /// `stock.threshold` (valid or not) on the first tracked product: the open "Low stock" alert
     /// exists exactly when the quantity is at or under the new threshold.
     Threshold {
@@ -698,6 +704,17 @@ fn op() -> impl Strategy<Value = Op> {
             1 => Just(Some(arena_proto::MAX_STOCK_QTY + 1)),
         ]
         .prop_map(|value| Op::Threshold { value }),
+        2 => prop::collection::vec(
+            (
+                "[A-Za-z]{1,4}",
+                "[0-2]{0,2}",
+                prop_oneof![5 => 0..=100_000i64, 1 => Just(-1i64)],
+                prop_oneof![3 => 0..=50i64, 1 => Just(-1i64)],
+                any::<bool>(),
+            ),
+            0..5,
+        )
+        .prop_map(|rows| Op::Import { rows }),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
         3 => (any::<u8>(), prop::bool::weighted(0.8)).prop_map(|(pick, window_closed)| Op::InvoiceIssue {
@@ -2957,6 +2974,82 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
             }
             prop_assert_eq!(hub.change_count(), changes_before);
+        }
+        Op::Import { rows } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let on_hand = |hub: &Hub| -> i64 {
+                hub.reader
+                    .products()
+                    .unwrap()
+                    .iter()
+                    .map(|p| {
+                        hub.reader
+                            .stock(&p.product_id)
+                            .unwrap()
+                            .map_or(0, |s| s.qty)
+                    })
+                    .sum()
+            };
+            let (products_before, stock_before) =
+                (hub.reader.products().unwrap().len(), on_hand(hub));
+            let intent = hub.intent(
+                IntentPayload::ImportProducts(arena_proto::ImportProducts {
+                    rows: rows
+                        .iter()
+                        .map(
+                            |(name, barcode, price, qty, track)| arena_proto::ImportProductRow {
+                                name: name.clone(),
+                                category: String::new(),
+                                price_minor: *price,
+                                tax_rate_bp: None,
+                                hsn: String::new(),
+                                barcode: barcode.clone(),
+                                track_stock: *track,
+                                kitchen: false,
+                                opening_qty: *qty,
+                                unit_cost_minor: 100,
+                            },
+                        )
+                        .collect(),
+                }),
+                None,
+            );
+            let out = hub.submit_new(intent);
+            match out {
+                Err(e) => {
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::ValidationFailed
+                                | ErrorCode::BarcodeTaken
+                                | ErrorCode::HsnRequired
+                        ),
+                        "{e:?}"
+                    );
+                    prop_assert_eq!(hub.change_count(), changes_before);
+                    prop_assert_eq!(hub.reader.products().unwrap().len(), products_before);
+                    prop_assert_eq!(on_hand(hub), stock_before);
+                    return assert_gap_free(hub);
+                }
+                Ok(_) => {
+                    prop_assert!(!rows.is_empty());
+                    let booked: i64 = rows.iter().map(|r| r.3).sum();
+                    prop_assert_eq!(on_hand(hub), stock_before + booked);
+                    let products = hub.reader.products().unwrap();
+                    prop_assert!(products.len() >= products_before);
+                    for (name, barcode, price, _, _) in rows {
+                        prop_assert!(
+                            products.iter().any(|p| p.name == *name
+                                && p.price_minor == *price
+                                && p.barcode.as_deref()
+                                    == (!barcode.is_empty()).then_some(barcode.as_str())),
+                            "{name} not found"
+                        );
+                    }
+                }
+            }
         }
         Op::Threshold { value } => {
             let Some(row) = hub.reader.tracked_thresholds().unwrap().into_iter().next() else {

@@ -3,7 +3,7 @@
 //! * A settle whose receipt choice is `whatsapp` ([`queue_on_settle`]) checks, inside its own
 //!   transaction, that the branch is on a paid tier with the message switched on and that the sale
 //!   is for a profiled player whose latest transactional consent is granted. It then writes the
-//!   `notify.requested` row of purpose `transactional`, kind `receipt`, on `notify_outbox`, with
+//!   `notify_outbox` row of purpose `transactional`, kind `receipt`, with
 //!   `not_before` at the end of the Undo window. The row names the player, never the phone number.
 //!   Nothing here sends a message and no invoice number is issued: the Undo-window task numbers the
 //!   sale and the Epic 8 drain sends once the number exists.

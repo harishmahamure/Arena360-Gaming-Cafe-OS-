@@ -143,7 +143,7 @@ development_status:
   5-16-receipt-tax-invoice-and-payment-receipt-layouts-for-58-and-8: done
   5-17-choose-print-or-none-at-settle-and-print-through-the-side-ef: done
   5-18-cash-drawer-kicks-on-cash-sales: done
-  5-19-whatsapp-receipt-queued-to-the-outbox: review
+  5-19-whatsapp-receipt-queued-to-the-outbox: done
   5-20-b2b-invoice-with-the-customer-s-gstin: backlog
   5-21-coupons-applied-at-settle: backlog
   5-22-manual-discount-with-manager-pin-and-reason: backlog

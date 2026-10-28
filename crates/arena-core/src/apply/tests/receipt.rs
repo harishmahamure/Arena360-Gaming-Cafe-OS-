@@ -888,3 +888,29 @@ async fn a_withdrawn_consent_closes_whatsapp_for_the_next_settle() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::ConsentRequired);
 }
+
+#[tokio::test]
+async fn a_plan_sale_settles_to_whatsapp_and_its_undo_skips_the_row() {
+    let f = bootstrapped().await;
+    whatsapp_branch(&f).await;
+    let player = profiled(&f, "asha", true).await;
+    let plan = super::session::plan_of(&f, "pack", 30_000, true).await;
+    let mut i = super::session::sell_intent(&player, &plan, vec![pay(Cash, 30_000, None)]);
+    if let IntentPayload::PlanSell(s) = &mut i.payload {
+        s.receipt = Some(ReceiptChoice::Whatsapp);
+    }
+    super::session::end(&f, i).await.unwrap();
+    let order = text(&super::session::sale_order(&f), "id");
+    let rows = notifies(&f);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].0.as_str(), rows[0].1.as_str(), rows[0].6.as_str()),
+        (order.as_str(), player.as_str(), "queued")
+    );
+
+    let rev = rev_of(&f, Table::Orders, &order);
+    super::session::end(&f, super::session::sell_revert_intent(&order, Some(rev)))
+        .await
+        .unwrap();
+    assert_eq!(notifies(&f)[0].6, "skipped");
+}

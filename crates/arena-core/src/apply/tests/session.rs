@@ -433,6 +433,7 @@ async fn ending_a_session_writes_an_open_order_one_line_and_frees_the_device() {
     let live = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
     assert_eq!(live.bills.len(), 1);
     let (b, l) = (&live.bills[0], &live.bills[0].lines[0]);
+    assert_eq!(b.player_id.as_deref(), Some(player.as_str()));
     assert_eq!(
         (b.session_id.as_str(), b.order_id.as_deref()),
         (text(&s, "id").as_str(), None)
@@ -447,6 +448,7 @@ async fn ending_a_session_writes_an_open_order_one_line_and_frees_the_device() {
     let after = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
     assert_eq!(after.bills.len(), 1);
     assert!(after.bills[0].order_id.is_some());
+    assert_eq!(after.bills[0].player_id, b.player_id);
     assert_eq!(after.bills[0].lines, b.lines);
     assert_eq!(
         a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),

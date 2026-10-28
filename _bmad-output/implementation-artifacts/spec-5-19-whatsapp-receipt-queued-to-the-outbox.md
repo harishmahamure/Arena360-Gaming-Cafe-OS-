@@ -2,7 +2,7 @@
 title: 'Story 5.19: WhatsApp receipt queued to the outbox'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '496ab38'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'

@@ -15,4 +15,6 @@ export type ReasonCode =
   | "spoiled"
   | "broken"
   | "free"
-  | "cancelled_order";
+  | "cancelled_order"
+  | "changed_mind"
+  | "mistake";

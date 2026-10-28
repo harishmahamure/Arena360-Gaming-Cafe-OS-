@@ -11,15 +11,16 @@
 use std::collections::BTreeMap;
 
 use arena_proto::{
-    AppError, ErrorCode, Intent, MOVE_SALE, MOVE_SALE_REVERTED, OrderPlace, OrderPlaceReverted,
-    SessionMode,
+    AppError, ErrorCode, Intent, KEY_INVENTORY_TAKE_STOCK_AT, MOVE_RETURN, MOVE_SALE,
+    MOVE_SALE_REVERTED, OrderPlace, OrderPlaceReverted, SessionMode, TAKE_STOCK_AT_ORDER,
 };
 use arena_store::{
-    ChangeOp, LiveSession, LotRow, MoveRow, NewOrder, NewProductLine, OrderRow, PRODUCT_LINE_BASE,
-    PlacedLine, RowKey, StockRow, StoreTx, Table, add_order_amount, delete_row, effect_recorded,
-    find_order, find_order_for_session, find_session, find_stock, insert_order,
-    insert_product_line, list_lots, list_order_line_ids, list_placement_lines,
-    list_placement_moves, next_product_position, read_row,
+    ChangeOp, HoldRow, LiveSession, LotRow, MoveRow, NewHold, NewOrder, NewProductLine, OrderRow,
+    PRODUCT_LINE_BASE, PlacedLine, RowKey, StockRow, StoreTx, Table, add_order_amount, delete_row,
+    effect_recorded, find_order, find_order_for_session, find_session, find_setting, find_stock,
+    insert_hold, insert_order, insert_product_line, list_lots, list_order_line_ids,
+    list_placement_holds, list_placement_lines, list_placement_moves, next_product_position,
+    read_row,
 };
 
 use super::mutate::Written;
@@ -34,6 +35,24 @@ pub(crate) struct PlaceTarget {
     basket: Basket,
     /// Where the order's next product line goes.
     next_position: i64,
+    /// Whether the branch takes stock when a line is served (`inventory.take_stock_at`).
+    at_served: bool,
+}
+
+/// Whether the branch takes stock at "served" (the default) rather than at placement.
+pub(super) fn take_at_served(tx: &StoreTx<'_>) -> Result<bool, AppError> {
+    Ok(find_setting(tx, KEY_INVENTORY_TAKE_STOCK_AT)?
+        .is_none_or(|s| s.value != TAKE_STOCK_AT_ORDER))
+}
+
+/// Per line: its stock is held until served (a kitchen line while the branch takes stock at
+/// served).
+fn deferred(t: &PlaceTarget) -> Vec<bool> {
+    t.basket
+        .items
+        .iter()
+        .map(|i| t.at_served && i.product.as_ref().is_some_and(|p| p.kitchen))
+        .collect()
 }
 
 pub(super) fn load_place(
@@ -55,6 +74,7 @@ pub(super) fn load_place(
         order,
         basket: load_basket(tx, &p.lines, now_ms)?,
         next_position,
+        at_served: take_at_served(tx)?,
     })
 }
 
@@ -98,7 +118,12 @@ pub(super) fn validate_place(
     }
     check_lines(&p.lines, &t.basket)?;
     price(&p.lines, &t.basket)?;
-    plan_stock(&p.lines, &t.basket, p.stock_override == Some(true))?;
+    plan_stock(
+        &p.lines,
+        &t.basket,
+        p.stock_override == Some(true),
+        &deferred(t),
+    )?;
     Ok(())
 }
 
@@ -115,7 +140,12 @@ pub(super) fn mutate_place(
     let (business_day, _) = crate::locale::stamp(tx, now_ms)?
         .ok_or_else(|| internal("the branch has not been bootstrapped"))?;
     let priced = price(&p.lines, &t.basket)?;
-    let plan = plan_stock(&p.lines, &t.basket, p.stock_override == Some(true))?;
+    let plan = plan_stock(
+        &p.lines,
+        &t.basket,
+        p.stock_override == Some(true),
+        &deferred(t),
+    )?;
     let amount: i64 = priced.lines.iter().map(|(_, a)| a).sum();
     let mut written = Vec::new();
     let order_id = match &t.order {
@@ -178,13 +208,32 @@ pub(super) fn mutate_place(
                 position: t.next_position + i as i64,
                 at: now_ms,
                 placement: Some((placement_id, &intent.actor.id)),
+                served: !product.kitchen,
             },
         )?;
         written.push(Written {
-            key: RowKey::OrderLines { id },
+            key: RowKey::OrderLines { id: id.clone() },
             op: ChangeOp::Insert,
             before: None,
         });
+        for h in plan.holds.iter().filter(|h| h.line == i) {
+            let hold_id = ulid::Ulid::generate().to_string();
+            insert_hold(
+                tx,
+                &NewHold {
+                    id: &hold_id,
+                    order_line_id: &id,
+                    item_id: &h.product_id,
+                    qty: h.qty,
+                },
+            )?;
+            written.push(Written {
+                key: RowKey::StockHolds { id: hold_id },
+                op: ChangeOp::Insert,
+                before: None,
+            });
+            written.extend(super::stock::touch(tx, &h.product_id)?);
+        }
     }
     move_stock(
         tx,
@@ -212,6 +261,10 @@ pub(crate) struct RevertTarget {
     moves: Vec<MoveRow>,
     /// Whether the placement's stock was already given back.
     given_back: bool,
+    /// Whether a cancelled line of the placement returned its stock (order mode).
+    returned: bool,
+    /// The placement's open stock holds.
+    holds: Vec<HoldRow>,
     stocks: BTreeMap<String, StockRow>,
     lots: BTreeMap<String, Vec<LotRow>>,
     effect: bool,
@@ -244,6 +297,8 @@ pub(super) fn load_place_reverted(
         all_lines: list_order_line_ids(tx, &order.id)?.len(),
         moves,
         given_back,
+        returned: !list_placement_moves(tx, &r.placement_id, MOVE_RETURN)?.is_empty(),
+        holds: list_placement_holds(tx, &order.id, &r.placement_id)?,
         stocks,
         lots,
         effect: effect_recorded(tx, Some(&r.placement_id), &order.id)?,
@@ -285,6 +340,9 @@ pub(super) fn validate_place_reverted(intent: &Intent, t: &RevertTarget) -> Resu
     if !in_window(t.now, first.placed_at) {
         return Err(undo_denied("the undo window has closed"));
     }
+    if t.returned {
+        return Err(undo_denied("an item of this order was cancelled"));
+    }
     if t.effect {
         return Err(undo_denied("a receipt, drawer or invoice already happened"));
     }
@@ -323,6 +381,17 @@ pub(super) fn mutate_place_reverted(
             &intent.actor.id,
             now_ms,
         )?);
+    }
+    for h in &t.holds {
+        let key = RowKey::StockHolds { id: h.id.clone() };
+        let before = read_row(tx, &key)?;
+        delete_row(tx, Table::StockHolds, &before)?;
+        written.push(Written {
+            key,
+            op: ChangeOp::Delete,
+            before: Some(before),
+        });
+        written.extend(super::stock::touch(tx, &h.item_id)?);
     }
     let mut amount = 0;
     for line in &t.placed {

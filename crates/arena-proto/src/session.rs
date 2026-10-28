@@ -610,11 +610,21 @@ pub struct BillLine {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct BillItem {
+    /// The order line (for Mark served and Cancel).
+    #[serde(default)]
+    pub line_id: String,
     pub label: String,
     #[ts(type = "number")]
     pub qty: i64,
     #[ts(type = "number")]
     pub amount_minor: i64,
+    /// Whether the line was served; a placed kitchen line is not until staff mark it.
+    #[serde(default = "served_by_default")]
+    pub served: bool,
+}
+
+fn served_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

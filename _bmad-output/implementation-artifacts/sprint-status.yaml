@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-28-2026 23:00
+last_updated: 10-29-2026 00:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -137,7 +137,7 @@ development_status:
   5-10-open-a-shift-with-a-confirmed-float-and-cash-needs-an-open-s: done
   5-11-sell-at-the-counter-a-walk-up-sale-settles-and-takes-stock: done
   5-12-attach-an-order-to-a-running-session-so-it-settles-with-the: done
-  5-13-take-stock-at-served-mark-items-served-and-cancel-unserved-l: backlog
+  5-13-take-stock-at-served-mark-items-served-and-cancel-unserved-l: review
   5-14-invoice-numbers-in-an-epoch-segmented-series-that-never-repe: backlog
   5-15-receipt-and-notification-settings: backlog
   5-16-receipt-tax-invoice-and-payment-receipt-layouts-for-58-and-8: backlog

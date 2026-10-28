@@ -120,17 +120,17 @@ pub use sessions::{
     NewPosOrder, NewProductLine, NewSession, OpenOrder, OrderLineRow, OrderRow, SegmentRow,
     Settlement, close_segments, device_has_live_session, effect_recorded, end_session,
     expire_session, extend_session, find_ending, find_order, find_order_for_session, find_session,
-    find_settlement, forced_pack_minutes, forward_intent_id, grace_session, hold_session_expired,
-    insert_effect, insert_extension_order, insert_order, insert_order_line, insert_payment,
-    insert_pos_order, insert_product_line, insert_segment, insert_session, list_live_sessions,
-    list_open_order_lines, list_open_orders, list_order_line_ids, list_payment_ids, list_pos_sales,
-    list_segments, mark_forced, next_guest_no, reopen_order, reopen_segments, reopen_session,
-    settle_order, sum_reserved_minor,
+    find_settlement, forced_pack_minutes, forward_intent_id, forward_kind, grace_session,
+    hold_session_expired, insert_effect, insert_extension_order, insert_order, insert_order_line,
+    insert_payment, insert_pos_order, insert_product_line, insert_segment, insert_session,
+    list_live_sessions, list_open_order_lines, list_open_orders, list_order_line_ids,
+    list_payment_ids, list_pos_sales, list_segments, mark_forced, next_guest_no, reopen_order,
+    reopen_segments, reopen_session, settle_order, sum_reserved_minor,
 };
 pub use sessions::{
-    PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines, find_placed_order,
-    list_ordered_counts, list_placement_lines, list_segment_line_ids, next_product_position,
-    sum_segment_amounts,
+    LineRow, PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines,
+    count_unserved_lines, find_line, find_placed_order, list_ordered_counts, list_placement_lines,
+    list_segment_line_ids, mark_line_served, next_product_position, sum_segment_amounts,
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
@@ -150,10 +150,12 @@ pub use staff::{
     set_staff_credentials, set_staff_setup_code, update_role_name, update_staff,
 };
 pub use stock::{
-    LotRow, MoveRow, StockRow, ThresholdRow, expired_qty, find_lot, find_move, find_stock,
-    insert_lot, insert_move, insert_stock, latest_move_id, list_expiring_lots, list_lots,
-    list_low_stock, list_moves, list_order_moves, list_placement_moves, list_tracked_thresholds,
-    low_stock_qty, set_lot_remaining, set_low_stock_qty, update_stock,
+    HoldRow, LotRow, MoveRow, NewHold, StockRow, ThresholdRow, expired_qty, find_lot, find_move,
+    find_stock, insert_hold, insert_lot, insert_move, insert_stock, latest_move_id,
+    list_expiring_lots, list_line_holds, list_lots, list_low_stock, list_moves, list_order_moves,
+    list_placement_holds, list_placement_moves, list_tracked_thresholds, low_stock_qty,
+    open_hold_qty, open_hold_totals, release_hold, set_lot_remaining, set_low_stock_qty,
+    update_stock,
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
@@ -924,6 +926,22 @@ impl Store {
         Ok(find_order(&self.conn, order_id)?.and_then(|o| o.session_id))
     }
 
+    /// The session a line sits on (`None` when the line or its order is gone).
+    pub fn line_session(&self, line_id: &str) -> Result<Option<String>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        Ok(find_line(&self.conn, line_id)?
+            .and_then(|l| find_order(&self.conn, &l.order_id).transpose())
+            .transpose()?
+            .and_then(|o| o.session_id))
+    }
+
+    /// The kind of the intent that wrote `intent_id`'s changes.
+    pub fn intent_kind(&self, intent_id: &str) -> Result<Option<String>, AppError> {
+        forward_kind(&self.conn, intent_id)
+    }
+
     /// The session and order a placement put products on (`None` when it left no lines).
     pub fn placed_order(&self, placement_id: &str) -> Result<Option<(String, String)>, AppError> {
         if !self.table_exists("orders")? {
@@ -994,6 +1012,14 @@ impl Store {
             return Ok(0);
         }
         expired_qty(&self.conn, product_id, today)
+    }
+
+    /// How many units of a product open holds claim (kitchen lines not yet served).
+    pub fn held_qty(&self, product_id: &str) -> Result<i64, AppError> {
+        if !self.table_exists("stock_holds")? {
+            return Ok(0);
+        }
+        open_hold_qty(&self.conn, product_id)
     }
 
     pub fn moves(&self, product_id: &str) -> Result<Vec<MoveRow>, AppError> {

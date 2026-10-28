@@ -77,6 +77,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "printer.status": "hub.audit.intent.printer.status",
   "order.place": "hub.audit.intent.order.place",
   "order.place.reverted": "hub.audit.intent.order.place.reverted",
+  "order.line_served": "hub.audit.intent.order.line_served",
+  "order.line_cancel": "hub.audit.intent.order.line_cancel",
 };
 
 /** An intent kind's label. */

@@ -1,11 +1,11 @@
 use arena_proto::{
     AlertKind, AppError, DEFAULT_STOCK_EXPIRY_WARN_DAYS, ErrorCode, Intent, IntentPayload,
     KEY_STOCK_EXPIRY_WARN_DAYS, MAX_PRICE_MINOR, MAX_STOCK_IN_QTY, MAX_STOCK_QTY,
-    MAX_SUPPLIER_CHARS, MOVE_COUNT_ADJUST, MOVE_EXPIRED, MOVE_SALE, MOVE_SALE_REVERTED,
-    MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED, NOTE_SALE_OVERRIDE,
-    STOCK_EXPIRY_WARN_RANGE, STOCK_UNDO_MS, StockIn, StockInReverted, StockThreshold, StockWaste,
-    StockWasteReverted, StockWriteOff, add_days, consume_plan, lot_expired, lot_in_window,
-    valid_date, weighted_avg_cost,
+    MAX_SUPPLIER_CHARS, MOVE_COUNT_ADJUST, MOVE_EXPIRED, MOVE_RETURN, MOVE_SALE,
+    MOVE_SALE_REVERTED, MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED,
+    NOTE_SALE_OVERRIDE, STOCK_EXPIRY_WARN_RANGE, STOCK_UNDO_MS, StockIn, StockInReverted,
+    StockThreshold, StockWaste, StockWasteReverted, StockWriteOff, add_days, consume_plan,
+    lot_expired, lot_in_window, valid_date, weighted_avg_cost,
 };
 use arena_store::{
     AlertRow, ChangeOp, LotRow, MoveRow, NewAlert, ProductRow, RowKey, StockRow, StoreTx, Table,
@@ -513,6 +513,30 @@ fn consume(
     staff_id: &str,
     now: i64,
 ) -> Result<Vec<Written>, AppError> {
+    consume_for(
+        tx,
+        product_id,
+        qty,
+        reason,
+        waste_reason,
+        None,
+        staff_id,
+        now,
+    )
+}
+
+/// [`consume`] for a move that belongs to an order (the waste of a cancelled line).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn consume_for(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    qty: i64,
+    reason: &str,
+    waste_reason: Option<&str>,
+    order_id: Option<&str>,
+    staff_id: &str,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
     let short = || AppError::with_field(ErrorCode::OutOfStock, "qty", "not enough stock on hand");
     if qty <= 0 {
         return Err(invalid("qty", "quantity must be at least 1"));
@@ -566,7 +590,7 @@ fn consume(
             at: now,
             waste_reason: waste_reason.map(str::to_owned),
             value_minor: qty.saturating_mul(stock.avg_cost_minor),
-            order_id: None,
+            order_id: order_id.map(str::to_owned),
             note: None,
             elevated_by: None,
             placement_id: None,
@@ -1231,4 +1255,111 @@ pub(super) fn restore_sale_moves(
         changed.push((m.product_id.clone(), stock.qty, stock.qty + give));
     }
     Ok((out, changed))
+}
+
+/// What a cancelled line gives back to the shelf in `order` mode, where the line took its stock
+/// at placement: `qty` units in a new lot (no expiry) at the average cost, and a `return` move
+/// tagged with the order and the placement. The line's share of the placement's lot draw is not
+/// recorded per line, so the units go into a fresh lot, as a sale override does.
+pub(super) fn return_to_stock(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    qty: i64,
+    sale: &StockFor<'_>,
+    staff_id: &str,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let stock = find_stock(tx, product_id)?;
+    let (before, avg) = stock.as_ref().map_or((0, 0), |s| (s.qty, s.avg_cost_minor));
+    let stock_op = if stock.is_some() {
+        update_stock(tx, product_id, before + qty, avg)?;
+        ChangeOp::Update
+    } else {
+        insert_stock(tx, product_id, before + qty, avg)?;
+        ChangeOp::Insert
+    };
+    let lot_id = ulid::Ulid::generate().to_string();
+    insert_lot(
+        tx,
+        &LotRow {
+            lot_id: lot_id.clone(),
+            product_id: product_id.to_owned(),
+            qty_in: qty,
+            qty_remaining: qty,
+            unit_cost_minor: avg,
+            expiry: None,
+            received_at: now,
+        },
+    )?;
+    let move_id = ulid::Ulid::generate().to_string();
+    insert_move(
+        tx,
+        &MoveRow {
+            move_id: move_id.clone(),
+            product_id: product_id.to_owned(),
+            reason: MOVE_RETURN.to_owned(),
+            delta: qty,
+            before_qty: before,
+            before_avg_cost_minor: avg,
+            unit_cost_minor: avg,
+            supplier: String::new(),
+            lot_id: Some(lot_id.clone()),
+            lots_used: "[]".to_owned(),
+            staff_id: staff_id.to_owned(),
+            at: now,
+            waste_reason: None,
+            value_minor: qty.saturating_mul(avg),
+            order_id: Some(sale.order_id.to_owned()),
+            note: None,
+            elevated_by: None,
+            placement_id: sale.placement_id.map(str::to_owned),
+        },
+    )?;
+    let mut out = vec![
+        write(
+            RowKey::Stock {
+                product_id: product_id.to_owned(),
+            },
+            stock_op,
+            None,
+        ),
+        write(RowKey::StockLots { lot_id }, ChangeOp::Insert, None),
+        write(RowKey::StockMoves { move_id }, ChangeOp::Insert, None),
+    ];
+    out.extend(low_after_change(
+        tx,
+        product_id,
+        before,
+        before + qty,
+        staff_id,
+        now,
+    )?);
+    Ok(out)
+}
+
+/// The units of a product that may be taken right now: on hand less lots past their expiry date on
+/// `today` (open holds are not subtracted: serving a held line takes its own hold).
+pub(super) fn takeable(tx: &StoreTx<'_>, product_id: &str, today: &str) -> Result<i64, AppError> {
+    let held = find_stock(tx, product_id)?.map_or(0, |s| s.qty);
+    let expired: i64 = list_lots(tx, product_id)?
+        .iter()
+        .filter(|l| l.expiry.as_deref().is_some_and(|e| lot_expired(e, today)))
+        .map(|l| l.qty_remaining)
+        .sum();
+    Ok((held - expired).max(0))
+}
+
+/// A write that touches a product's stock row without changing it, so a hold opened or closed on
+/// the product goes out on `catalog.changed` (availability follows the holds). `None` when the
+/// product has no stock row (nothing sells from it anyway).
+pub(super) fn touch(tx: &StoreTx<'_>, product_id: &str) -> Result<Option<Written>, AppError> {
+    Ok(find_stock(tx, product_id)?.map(|_| {
+        write(
+            RowKey::Stock {
+                product_id: product_id.to_owned(),
+            },
+            ChangeOp::Update,
+            None,
+        )
+    }))
 }

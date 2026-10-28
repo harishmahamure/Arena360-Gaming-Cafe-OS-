@@ -34,6 +34,7 @@ type Sent = {
   payload: Record<string, unknown> & { kind: string };
   key: string;
   base_rev?: number;
+  reason?: string;
   ticket?: string;
 };
 type Hub = {
@@ -155,13 +156,19 @@ async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise
       }
       case "/ui/intent": {
         const body = req.postDataJSON() as {
-          intent: { payload: Sent["payload"]; idempotency_key: string; base_rev?: number };
+          intent: {
+            payload: Sent["payload"];
+            idempotency_key: string;
+            base_rev?: number;
+            reason?: string;
+          };
           elevation_ticket?: string;
         };
         const sent: Sent = {
           payload: body.intent.payload,
           key: body.intent.idempotency_key,
           base_rev: body.intent.base_rev,
+          reason: body.intent.reason,
           ticket: body.elevation_ticket,
         };
         hub.sent.push(sent);
@@ -635,8 +642,8 @@ test("the running bill lists the products placed on it after the session lines",
       },
     ],
     items: [
-      { label: "Cola", qty: 2, amount_minor: 8000 },
-      { label: "Chips", qty: 1, amount_minor: 1000 },
+      { line_id: "L-cola", served: true, label: "Cola", qty: 2, amount_minor: 8000 },
+      { line_id: "L-chips", served: true, label: "Chips", qty: 1, amount_minor: 1000 },
     ],
     subtotal_minor: 19333,
     paid_minor: 0,
@@ -654,4 +661,100 @@ test("the running bill lists the products placed on it after the session lines",
   await expect(breakdown.getByTestId("bill-subtotal")).toContainText("193.33");
   // The order is part of the running session's bill: there is no settle bar yet.
   await expect(page.getByTestId("settle-bar")).toHaveCount(0);
+});
+
+/** A running bill with a served Cola and an unserved Burger placed on it. */
+const orderedBill = (): SnapshotBill => ({
+  session_id: "S2",
+  device_id: device(2, {}).device_id,
+  session_rev: 1,
+  lines: [],
+  items: [
+    { line_id: "L-cola", served: true, label: "Cola", qty: 1, amount_minor: 4000 },
+    { line_id: "L-burger", served: false, label: "Burger", qty: 2, amount_minor: 18000 },
+  ],
+  subtotal_minor: 22000,
+  paid_minor: 0,
+  remaining_minor: 22000,
+});
+
+test("the order section marks a held line served and offers nothing on a served line", async ({
+  page,
+}) => {
+  const hub = await open(page, "seller-token", { bills: [orderedBill()] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const lines = page.getByTestId("order-section").getByTestId("order-line");
+  await expect(lines).toHaveCount(2);
+  const [cola, burger] = [lines.nth(0), lines.nth(1)];
+  await expect(cola).toHaveAttribute("data-served", "true");
+  await expect(cola.getByTestId("order-line-state")).toContainText(en["hub.order.served"]);
+  await expect(cola.getByRole("button")).toHaveCount(0);
+  await expect(burger).toHaveAttribute("data-served", "false");
+  await expect(burger.getByTestId("order-line-state")).toContainText(en["hub.order.unserved"]);
+  await expect(page.getByTestId("order-pending")).toContainText(en["hub.order.unserved_note"]);
+
+  await burger.getByRole("button", { name: en["hub.order.mark_served"] }).click();
+  await expect
+    .poll(() => hub.sent.map((s) => s.payload))
+    .toContainEqual({
+      kind: "order.line_served",
+      line_id: "L-burger",
+    });
+});
+
+test("cancelling an unserved line asks why, then whether it was already made", async ({ page }) => {
+  const hub = await open(page, "seller-token", { bills: [orderedBill()] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const burger = page.getByTestId("order-line").nth(1);
+  await burger.getByRole("button", { name: en["hub.order.cancel"] }).click();
+  // Nothing is sent until both questions are answered.
+  await page.getByRole("radio", { name: en["reason.changed_mind"] }).check();
+  await page.getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await expect(page.getByText(en["hub.order.made_legend"])).toBeVisible();
+  expect(hub.sent).toHaveLength(0);
+  await page.getByRole("button", { name: en["hub.order.made_yes"] }).click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload).toEqual({
+    kind: "order.line_cancel",
+    line_id: "L-burger",
+    made: true,
+  });
+  expect(hub.sent[0].reason).toBe("changed_mind");
+});
+
+test("cancelling can be backed out, and the reasons are the three on offer", async ({ page }) => {
+  const hub = await open(page, "seller-token", { bills: [orderedBill()] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const burger = page.getByTestId("order-line").nth(1);
+  await burger.getByRole("button", { name: en["hub.order.cancel"] }).click();
+  const options = page.getByTestId("order-cancel-reason").getByRole("radio");
+  await expect(options).toHaveCount(3);
+  await expect(page.getByRole("radio", { name: en["reason.mistake"] })).toBeVisible();
+  await expect(page.getByRole("radio", { name: en["reason.other"] })).toBeVisible();
+  await page.getByRole("radio", { name: en["reason.mistake"] }).check();
+  await page.getByRole("button", { name: en["ui.reason.confirm"] }).click();
+  await page.getByRole("button", { name: en["hub.order.cancel_back"] }).click();
+  await expect(page.getByText(en["hub.order.made_legend"])).toHaveCount(0);
+  await expect(burger.getByRole("button", { name: en["hub.order.mark_served"] })).toBeVisible();
+  expect(hub.sent).toHaveLength(0);
+});
+
+test("an ended session's bill cannot settle while a line is unserved", async ({ page }) => {
+  const bill: SnapshotBill = {
+    ...orderedBill(),
+    order_id: "O1",
+    order_rev: 4,
+  };
+  await open(page, "seller-token", { bills: [bill], sessions: [] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("order-section")).toBeVisible();
+  const submit = page.getByTestId("settle-region").getByRole("button", {
+    name: en["hub.settle.submit"],
+  });
+  await expect(submit).toBeDisabled();
+  await expect(page.getByTestId("settle-region")).toContainText(en["hub.order.unserved_note"]);
 });

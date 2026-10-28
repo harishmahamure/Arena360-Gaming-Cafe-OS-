@@ -1098,6 +1098,82 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            // A kitchen product holds its stock when placed: one line is served (its hold taken
+            // and closed), one is cancelled (its hold released, the line and a waste move).
+            let burger = writer
+                .submit_intent(submit(
+                    IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                        id: None,
+                        name: "Burger".into(),
+                        category: String::new(),
+                        price_minor: 9_000,
+                        tax_rate_bp: None,
+                        hsn: String::new(),
+                        track_stock: true,
+                        image: String::new(),
+                        barcode: String::new(),
+                        kitchen: true,
+                        favourite: false,
+                        active: true,
+                        bundle: false,
+                        components: Vec::new(),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::StockIn(arena_proto::StockIn {
+                        product_id: burger.clone(),
+                        qty: 10,
+                        unit_cost_minor: 2_000,
+                        supplier: String::new(),
+                        expiry: None,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            for qty in [1, 2] {
+                let placed = writer
+                    .submit_intent(submit(
+                        IntentPayload::OrderPlace(arena_proto::OrderPlace {
+                            session_id: third.clone(),
+                            lines: vec![arena_proto::PosSaleLine {
+                                product_id: burger.clone(),
+                                qty,
+                            }],
+                            stock_override: None,
+                        }),
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+                let line = placed
+                    .changes
+                    .iter()
+                    .find(|c| c.tbl == "order_lines")
+                    .unwrap()
+                    .row_id
+                    .clone();
+                let step = if qty == 1 {
+                    IntentPayload::OrderLineServed(arena_proto::OrderLineServed { line_id: line })
+                } else {
+                    IntentPayload::OrderLineCancel(arena_proto::OrderLineCancel {
+                        line_id: line,
+                        made: true,
+                    })
+                };
+                let mut intent = submit(step, None);
+                if qty == 2 {
+                    intent.reason = Some(arena_proto::ReasonCode::ChangedMind);
+                }
+                writer.submit_intent(intent).await.unwrap();
+            }
             writer.submit_intent(end_of(&third, 1)).await.unwrap();
             let raise = |kind: arena_proto::AlertKind| {
                 let mut intent = submit(

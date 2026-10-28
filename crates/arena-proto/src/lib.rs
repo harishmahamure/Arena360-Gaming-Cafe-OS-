@@ -180,9 +180,10 @@ pub use players::{
     valid_policy_version, valid_tags, valid_username,
 };
 pub use pos::{
-    MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST, MOVE_SALE, MOVE_SALE_REVERTED,
-    NOTE_SALE_OVERRIDE, OrderPlace, OrderPlaceReverted, OrderPlacedEvent, PlaceOutcome, PosSale,
-    PosSaleLine, PosSaleLineView, PosSalePaymentView, PosSaleReverted, PosSaleView, PosSalesView,
+    MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST, MOVE_RETURN, MOVE_SALE, MOVE_SALE_REVERTED,
+    NOTE_SALE_OVERRIDE, OrderLineCancel, OrderLineEvent, OrderLineServed, OrderPlace,
+    OrderPlaceReverted, OrderPlacedEvent, PlaceOutcome, PosSale, PosSaleLine, PosSaleLineView,
+    PosSalePaymentView, PosSaleReverted, PosSaleView, PosSalesView,
 };
 pub use pricing::{
     RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,
@@ -251,12 +252,14 @@ pub use staff_invite::{
 };
 pub use staff_list::{StaffList, StaffStatus, StaffView, UiStaffDeactivateRequest};
 pub use stock::{
-    DEFAULT_STOCK_EXPIRY_WARN_DAYS, ExpiringLot, ExpiryView, KEY_STOCK_EXPIRY_WARN_DAYS, LotView,
-    LowStockItem, LowStockView, MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_EXPIRED,
-    MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED,
-    STOCK_EXPIRY_WARN_RANGE, STOCK_UNDO_MS, StockExpiryCheck, StockIn, StockInReverted,
-    StockThreshold, StockWaste, StockWasteReverted, StockWriteOff, add_days, consume_plan,
-    lot_expired, lot_in_window, valid_date, weighted_avg_cost,
+    DEFAULT_INVENTORY_TAKE_STOCK_AT, DEFAULT_STOCK_EXPIRY_WARN_DAYS, ExpiringLot, ExpiryView,
+    KEY_INVENTORY_TAKE_STOCK_AT, KEY_STOCK_EXPIRY_WARN_DAYS, LotView, LowStockItem, LowStockView,
+    MAX_STOCK_IN_QTY, MAX_STOCK_QTY, MAX_SUPPLIER_CHARS, MOVE_EXPIRED, MOVE_STOCK_IN,
+    MOVE_STOCK_IN_REVERTED, MOVE_WASTE, MOVE_WASTE_REVERTED, STOCK_EXPIRY_WARN_RANGE,
+    STOCK_UNDO_MS, StockExpiryCheck, StockIn, StockInReverted, StockThreshold, StockWaste,
+    StockWasteReverted, StockWriteOff, TAKE_STOCK_AT_MODES, TAKE_STOCK_AT_ORDER,
+    TAKE_STOCK_AT_SERVED, add_days, consume_plan, lot_expired, lot_in_window, valid_date,
+    weighted_avg_cost,
 };
 pub use tax::{
     DEFAULT_TAX, GST_MAX_BP, GSTIN_INVALID, KEY_TAX, RATE_RANGE, SIMPLE_MAX_BP, TaxMode,

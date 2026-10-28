@@ -17,6 +17,14 @@ pub const KEY_STOCK_EXPIRY_WARN_DAYS: &str = "stock.expiry_warn_days";
 pub const DEFAULT_STOCK_EXPIRY_WARN_DAYS: &str = "3";
 pub const STOCK_EXPIRY_WARN_RANGE: (i64, i64) = (0, 30);
 
+/// When stock leaves the shelf for an order placed on a session bill: `served` (default; kitchen
+/// lines hold their stock until marked served) or `order` (at placement, as before).
+pub const KEY_INVENTORY_TAKE_STOCK_AT: &str = "inventory.take_stock_at";
+pub const TAKE_STOCK_AT_SERVED: &str = "served";
+pub const TAKE_STOCK_AT_ORDER: &str = "order";
+pub const DEFAULT_INVENTORY_TAKE_STOCK_AT: &str = TAKE_STOCK_AT_SERVED;
+pub const TAKE_STOCK_AT_MODES: &[&str] = &[TAKE_STOCK_AT_SERVED, TAKE_STOCK_AT_ORDER];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct StockIn {

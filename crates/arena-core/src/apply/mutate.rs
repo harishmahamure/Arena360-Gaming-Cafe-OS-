@@ -393,6 +393,16 @@ pub(super) fn mutate(
             }
             _ => Err(mismatch()),
         },
+        IntentPayload::OrderLineServed(_) => match target {
+            Target::OrderLineServed(t) => super::order_line::mutate_served(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::OrderLineCancel(c) => match target {
+            Target::OrderLineCancel(t) => {
+                super::order_line::mutate_cancel(tx, intent, c, t, now_ms)
+            }
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditSetLimit(c) => match target {
             Target::CreditSetLimit(t) => super::credit::mutate_set_limit(tx, c, t),
             _ => Err(mismatch()),

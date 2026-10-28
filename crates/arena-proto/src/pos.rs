@@ -16,6 +16,8 @@ pub const MOVE_SALE_REVERTED: &str = "sale_reverted";
 pub const MOVE_COUNT_ADJUST: &str = "count_adjust";
 /// The note a `count_adjust` written by a sale override carries.
 pub const NOTE_SALE_OVERRIDE: &str = "Override at sale";
+/// `stock_moves.reason`: stock a cancelled, not-yet-served line gives back (order mode).
+pub const MOVE_RETURN: &str = "return";
 
 /// One line of a counter sale: `qty` of a product.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -155,4 +157,32 @@ pub struct PlaceOutcome {
 pub struct OrderPlacedEvent {
     pub session_id: String,
     pub order_id: String,
+}
+
+/// The payload of `order.line_served` (Story 5.13): a placed kitchen line is marked served. Its
+/// open stock holds are taken (a `sale` move per held item) and closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderLineServed {
+    pub line_id: String,
+}
+
+/// The payload of `order.line_cancel`: an unserved placed line is cancelled. `made` answers "Was
+/// it already made?": `false` releases the hold (or returns the stock), `true` records waste
+/// `cancelled_order` at cost. The intent's `reason` (`changed_mind`, `mistake`, `other`) is
+/// required.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderLineCancel {
+    pub line_id: String,
+    pub made: bool,
+}
+
+/// A line was served or cancelled on a session bill (the `order.line_changed` UI event).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderLineEvent {
+    pub line_id: String,
+    /// `true` when the line was cancelled (and left the bill), `false` when it was served.
+    pub cancelled: bool,
 }

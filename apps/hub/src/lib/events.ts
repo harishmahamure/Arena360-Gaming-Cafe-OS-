@@ -37,6 +37,8 @@ export type EventHandlers = {
   onSessionStarted?: () => void;
   /** `order.placed`: products went on a running session's bill; reload the snapshot. */
   onOrderPlaced?: () => void;
+  /** `order.line_changed`: a placed line was served or cancelled; reload the snapshot. */
+  onOrderLineChanged?: () => void;
   /** `bill.settled`: a bill was settled; reload the snapshot so its UNPAID line clears. */
   onBillSettled?: () => void;
   /** `wallet.changed`: a wallet balance moved; open profiles and bills reload. */
@@ -113,6 +115,7 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
     es.addEventListener("devices.changed", () => handlers.onDevicesChanged?.());
     es.addEventListener("session.started", () => handlers.onSessionStarted?.());
     es.addEventListener("order.placed", () => handlers.onOrderPlaced?.());
+    es.addEventListener("order.line_changed", () => handlers.onOrderLineChanged?.());
     es.addEventListener("bill.settled", () => handlers.onBillSettled?.());
     es.addEventListener("bill.reverted", () => handlers.onBillReverted?.());
     es.addEventListener("wallet.changed", (ev) => {

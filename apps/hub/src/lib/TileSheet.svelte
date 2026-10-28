@@ -36,6 +36,7 @@
     newIdempotencyKey,
   } from "./auth";
   import GroupPanel, { type Payer } from "./GroupPanel.svelte";
+  import OrderSection from "./OrderSection.svelte";
   import ConvertGuest from "./players/ConvertGuest.svelte";
   import ExtendOptions from "./players/ExtendOptions.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
@@ -52,6 +53,7 @@
     PAUSE_LABELS,
     adminUnlockJob,
     assignJob,
+    cancelLineJob,
     cmds,
     endJob,
     extendJob,
@@ -66,6 +68,7 @@
     resumeJob,
     screenJob,
     send,
+    servedJob,
     settleJob,
     startJob,
     transferJob,
@@ -375,6 +378,18 @@
     approving = job;
   }
 
+  /** Marks a placed line served: its held stock is taken. */
+  function serveLine(lineId: string) {
+    if (!busy) void go(servedJob(lineId));
+  }
+
+  function cancelLine(lineId: string, made: boolean, reason: ReasonCode) {
+    if (!busy) void go(cancelLineJob(lineId, made, reason));
+  }
+
+  // A session bill settles once every placed line is served or cancelled.
+  const unserved = $derived((unpaid?.items ?? []).some((i) => !i.served));
+
   function settle(payments: PaymentRow[]) {
     if (unpaid?.order_id && unpaid.order_rev != null) {
       void go(settleJob(unpaid.order_id, payments, unpaid.order_rev));
@@ -559,10 +574,24 @@
         {tz}
         {names}
       />
+      <OrderSection
+        items={unpaid.items}
+        {locale}
+        {busy}
+        onserve={serveLine}
+        oncancel={cancelLine}
+      />
     {/if}
     <!-- On a phone this region stays pinned to the bottom of the sheet while the rest scrolls. -->
     <div class="settle-region" data-testid="settle-region" bind:clientHeight={settleHeight}>
-      <SettleBar bind:this={settleBar} bill={unpaid} {locale} {busy} onsettle={settle}>
+      <SettleBar
+        bind:this={settleBar}
+        bill={unpaid}
+        {locale}
+        {busy}
+        blockedReason={unserved ? "hub.order.unserved_note" : undefined}
+        onsettle={settle}
+      >
         {#snippet extra()}
           {#if unpaid.guest && unpaid.session_rev != null && !unpaid.group_bill_id}
             <ConvertGuest
@@ -721,6 +750,15 @@
             {tz}
             {names}
           />
+          {#if bill.items?.length}
+            <OrderSection
+              items={bill.items}
+              {locale}
+              {busy}
+              onserve={serveLine}
+              oncancel={cancelLine}
+            />
+          {/if}
         {/if}
         {#if canGroup}
           {#if grouping}

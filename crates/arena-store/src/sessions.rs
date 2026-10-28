@@ -94,6 +94,7 @@ pub struct NewOrderLine<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderLineRow {
+    pub id: String,
     pub order_id: String,
     pub device_id: String,
     pub from_at: i64,
@@ -105,6 +106,8 @@ pub struct OrderLineRow {
     /// The product's name when this is a placed product line (`None` for a session line).
     pub label: Option<String>,
     pub qty: Option<i64>,
+    /// Whether the line was served (a time line always is).
+    pub served: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,7 +564,8 @@ pub fn list_open_order_lines(conn: &Connection) -> Result<Vec<OrderLineRow>, App
         .prepare(
             "SELECT l.order_id, COALESCE(l.device_id, ''), l.from_at, l.to_at, l.minutes,
                     l.rate_minor_per_hour, l.amount_minor, g.rule_id,
-                    CASE WHEN l.product_id IS NULL THEN NULL ELSE COALESCE(l.label, '') END, l.qty
+                    CASE WHEN l.product_id IS NULL THEN NULL ELSE COALESCE(l.label, '') END, l.qty,
+                    l.id, l.served
              FROM order_lines l JOIN orders o ON o.id = l.order_id
                   LEFT JOIN session_segments g ON g.id = l.session_segment_id
              WHERE o.status = 'open' ORDER BY l.order_id, l.position",
@@ -579,6 +583,8 @@ pub fn list_open_order_lines(conn: &Connection) -> Result<Vec<OrderLineRow>, App
             rule_id: r.get(7)?,
             label: r.get(8)?,
             qty: r.get(9)?,
+            id: r.get(10)?,
+            served: r.get::<_, i64>(11)? != 0,
         })
     })
     .map_err(db_error)?
@@ -786,6 +792,67 @@ pub fn add_order_amount(
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// A product line as serve and cancel need it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineRow {
+    pub id: String,
+    pub order_id: String,
+    pub product_id: Option<String>,
+    pub label: String,
+    pub qty: i64,
+    pub amount_minor: i64,
+    pub served: bool,
+    pub placement_id: Option<String>,
+}
+
+pub fn find_line(conn: &Connection, line_id: &str) -> Result<Option<LineRow>, AppError> {
+    conn.query_row(
+        "SELECT id, order_id, product_id, COALESCE(label, ''), COALESCE(qty, 1), amount_minor,
+                served, placement_id
+         FROM order_lines WHERE id = ?1",
+        [line_id],
+        |r| {
+            Ok(LineRow {
+                id: r.get(0)?,
+                order_id: r.get(1)?,
+                product_id: r.get(2)?,
+                label: r.get(3)?,
+                qty: r.get(4)?,
+                amount_minor: r.get(5)?,
+                served: r.get::<_, i64>(6)? != 0,
+                placement_id: r.get(7)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Marks a line served by `by` at `at`.
+pub fn mark_line_served(
+    conn: &Connection,
+    line_id: &str,
+    at: i64,
+    by: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE order_lines SET served = 1, served_at = ?2, served_by = ?3 WHERE id = ?1",
+        params![line_id, at, by],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// How many lines of an order are still to be served.
+pub fn count_unserved_lines(conn: &Connection, order_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM order_lines WHERE order_id = ?1 AND served = 0",
+        [order_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
 }
 
 /// The items placed on each session's bill order (the sum of its product line quantities), for
@@ -1323,6 +1390,9 @@ pub struct NewProductLine<'a> {
     /// The placement (`order.place` intent id) and the staff member that added the line; `None`
     /// for a counter sale's line.
     pub placement: Option<(&'a str, &'a str)>,
+    /// Whether the line is served when written: a counter sale's always is, a placed kitchen line
+    /// is not until staff mark it.
+    pub served: bool,
 }
 
 /// Where the first product line of a session bill sits: after every session (time) line.
@@ -1334,9 +1404,9 @@ pub fn insert_product_line(conn: &Connection, l: &NewProductLine<'_>) -> Result<
                                   minutes, rate_minor_per_hour, amount_minor, position, rev,
                                   created_at, updated_at, label, product_id, qty,
                                   unit_price_minor, tax_rate_bp, placement_id, placed_by,
-                                  placed_at)
+                                  placed_at, served, served_at, served_by)
          VALUES (?1, ?2, NULL, NULL, ?3, ?3, 0, 0, ?4, ?5, 0, 0, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                 ?13)",
+                 ?13, ?14, ?15, ?16)",
         params![
             l.id,
             l.order_id,
@@ -1350,7 +1420,10 @@ pub fn insert_product_line(conn: &Connection, l: &NewProductLine<'_>) -> Result<
             l.tax_rate_bp,
             l.placement.map(|p| p.0),
             l.placement.map(|p| p.1),
-            l.placement.map(|_| l.at)
+            l.placement.map(|_| l.at),
+            i64::from(l.served),
+            l.placement.filter(|_| l.served).map(|_| l.at),
+            l.placement.filter(|_| l.served).map(|p| p.1)
         ],
     )
     .map_err(db_error)?;
@@ -1434,4 +1507,15 @@ pub fn list_pos_sales(
             Ok(sale)
         })
         .collect()
+}
+
+/// The kind of the intent that wrote changes under `intent_id`.
+pub fn forward_kind(conn: &Connection, intent_id: &str) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT intent_kind FROM changes WHERE intent_id = ?1 LIMIT 1",
+        [intent_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
 }

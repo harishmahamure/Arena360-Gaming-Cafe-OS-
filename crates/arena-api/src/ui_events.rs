@@ -13,6 +13,9 @@
 //!   the view reloads the snapshot, which no longer lists the bill.
 //! - `event: order.placed`, data [`OrderPlacedEvent`](arena_proto::OrderPlacedEvent): an `order.place`
 //!   committed; open bills and the floor reload.
+//! - `event: order.line_changed`, data [`OrderLineEvent`](arena_proto::OrderLineEvent): an
+//!   `order.line_served` or `order.line_cancel` committed (`cancelled` tells which); open bills and the
+//!   floor reload. A cancel sends no `bill.reverted`.
 //! - `event: wallet.changed`, data [`WalletChangedEvent`]: a wallet balance moved (a top-up, a credit spend, a
 //!   wallet payment or an undo of either); open profiles and bills reload.
 //! - `event: bill.reverted`, data [`BillRevertedEvent`]: a `session.end.reverted` or
@@ -54,8 +57,8 @@ use std::time::Duration;
 
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
 use arena_proto::{
-    AppliedEvent, BillRevertedEvent, BillSettledEvent, OrderPlacedEvent, SessionStartedEvent,
-    SettingsChangedEvent, SnapshotLocale, SnapshotUi, WalletChangedEvent,
+    AppliedEvent, BillRevertedEvent, BillSettledEvent, OrderLineEvent, OrderPlacedEvent,
+    SessionStartedEvent, SettingsChangedEvent, SnapshotLocale, SnapshotUi, WalletChangedEvent,
 };
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -266,6 +269,19 @@ fn placed_candidate(applied: &Applied) -> bool {
     has("order_lines") && !has("payments")
 }
 
+/// Whether a commit updated or deleted order lines (a candidate serve or cancel; the caller looks
+/// the intent kind up).
+fn line_candidate(applied: &Applied) -> Option<(String, bool)> {
+    let line = applied.changes.iter().find(|c| {
+        c.tbl == "order_lines"
+            && matches!(
+                c.op,
+                arena_core::ChangeOp::Update | arena_core::ChangeOp::Delete
+            )
+    })?;
+    Some((line.row_id.clone(), line.op == arena_core::ChangeOp::Delete))
+}
+
 fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
     applied
         .changes
@@ -423,7 +439,24 @@ impl HubTask {
                                 self.send("order.placed", data, false);
                             }
                         }
-                        if let Some(reverted) = bill_reverted(&applied) {
+                        // Serving or cancelling a line changes the bill's lines but is no Undo.
+                        let line_event = match line_candidate(&applied) {
+                            Some((line_id, deleted)) => {
+                                let (reader, id) = (Arc::clone(&self.reader), applied.intent_id.clone());
+                                let kind = tokio::task::spawn_blocking(move || reader.intent_kind(&id))
+                                    .await
+                                    .ok()
+                                    .and_then(Result::ok)
+                                    .flatten();
+                                matches!(kind.as_deref(), Some("order.line_served" | "order.line_cancel"))
+                                    .then_some(OrderLineEvent { line_id, cancelled: deleted })
+                            }
+                            None => None,
+                        };
+                        if let Some(event) = &line_event {
+                            let data = serde_json::to_string(event).unwrap_or_default();
+                            self.send("order.line_changed", data, false);
+                        } else if let Some(reverted) = bill_reverted(&applied) {
                             let data = serde_json::to_string(&reverted).unwrap_or_default();
                             self.send("bill.reverted", data, false);
                         }
@@ -806,6 +839,30 @@ mod tests {
         assert_eq!(bill_reverted(&unend).unwrap().order_id, "O");
         let end = applied(&[("sessions", "S", Update), ("orders", "O", Insert)]);
         assert!(bill_reverted(&end).is_none());
+    }
+
+    #[test]
+    fn a_served_or_cancelled_line_is_a_line_candidate_and_a_placement_is_not() {
+        use arena_core::ChangeOp::{Delete, Insert, Update};
+        let served = applied(&[
+            ("stock", "P", Update),
+            ("stock_moves", "M", Insert),
+            ("stock_holds", "H", Update),
+            ("order_lines", "L", Update),
+        ]);
+        assert_eq!(line_candidate(&served), Some(("L".into(), false)));
+        let cancelled = applied(&[
+            ("stock_holds", "H", Update),
+            ("order_lines", "L", Delete),
+            ("orders", "O", Update),
+        ]);
+        assert_eq!(line_candidate(&cancelled), Some(("L".into(), true)));
+        let place = applied(&[
+            ("orders", "O", Insert),
+            ("order_lines", "L", Insert),
+            ("stock_holds", "H", Insert),
+        ]);
+        assert!(line_candidate(&place).is_none());
     }
 
     #[test]

@@ -38,6 +38,8 @@ export type IntentKind =
   | "pos.sale.reverted"
   | "order.place"
   | "order.place.reverted"
+  | "order.line_served"
+  | "order.line_cancel"
   | "staff.set_credentials"
   | "staff.deactivate"
   | "stock.in"

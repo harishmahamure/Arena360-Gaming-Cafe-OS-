@@ -274,6 +274,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::OrderPlaceReverted(t) => super::order_place::validate_place_reverted(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::OrderLineServed(s) => match target {
+            Target::OrderLineServed(t) => super::order_line::validate_served(intent, s, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::OrderLineCancel(c) => match target {
+            Target::OrderLineCancel(t) => super::order_line::validate_cancel(intent, c, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::PlanSellReverted(_) => match target {
             Target::PlanSellReverted(t) => super::plan_sales::validate_sell_reverted(intent, t),
             _ => Err(internal_target()),

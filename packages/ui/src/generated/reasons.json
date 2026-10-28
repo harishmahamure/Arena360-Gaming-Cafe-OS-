@@ -1,5 +1,6 @@
 {
   "device.revoke": ["lost", "stolen", "replaced", "other"],
+  "order.line_cancel": ["changed_mind", "mistake", "other"],
   "session.force_end": ["rule_violation", "hardware_issue", "closing", "other"],
   "stock.waste": ["spoiled", "broken", "free", "cancelled_order"]
 }

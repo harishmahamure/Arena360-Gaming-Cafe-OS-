@@ -32,6 +32,7 @@
     bill,
     locale,
     busy,
+    blockedReason,
     onsettle,
     title = "hub.settle.title",
     extra,
@@ -41,6 +42,8 @@
     bill: SnapshotBill;
     locale: SnapshotLocale;
     busy: boolean;
+    /** Why the bill cannot settle yet (placed items still to serve), shown on the button. */
+    blockedReason?: MessageKey;
     onsettle: (payments: PaymentRow[]) => void;
     title?: MessageKey;
     extra?: Snippet;
@@ -145,7 +148,7 @@
   }
 
   export async function submit() {
-    if (busy || !closed) return;
+    if (busy || !closed || blockedReason) return;
     attempted = true;
     if (!rowsValid(rows, exponent, wallet)) {
       await tick();
@@ -264,12 +267,14 @@
 
   <Button
     label="hub.settle.submit"
-    disabled={busy || !closed}
+    disabled={busy || !closed || !!blockedReason}
     disabledReason={busy
       ? "hub.sheet.waiting"
-      : sums.overpaid
-        ? "hub.settle.over"
-        : "hub.settle.remaining"}
+      : blockedReason
+        ? blockedReason
+        : sums.overpaid
+          ? "hub.settle.over"
+          : "hub.settle.remaining"}
     reasonParams={{ amount: money(sums.remaining) }}
     onclick={() => void submit()}
   />

@@ -107,6 +107,11 @@ const REFUSALS: Record<string, MessageKey> = {
   "STALE:group.payer": "hub.group.stale",
   "VALIDATION_FAILED:group.payer": "hub.group.payer_refused",
   "NOT_FOUND:group.payer": "hub.group.payer_refused",
+  "VALIDATION_FAILED:order.line_served": "hub.order.line_refused",
+  "NOT_FOUND:order.line_served": "hub.order.line_refused",
+  "OUT_OF_STOCK:order.line_served": "hub.order.serve_short",
+  "VALIDATION_FAILED:order.line_cancel": "hub.order.line_refused",
+  "NOT_FOUND:order.line_cancel": "hub.order.line_refused",
 };
 
 const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Job => ({
@@ -225,6 +230,26 @@ export const settleJob = (order_id: string, payments: PaymentRow[], rev: number)
     { track: "none", rev, done: "hub.sheet.done.settled" },
   );
 
+/** Marks a placed kitchen line served: its held stock is taken. */
+export const servedJob = (line_id: string) =>
+  job({ kind: "order.line_served", line_id }, { track: "none", done: "hub.sheet.done.served" });
+
+/** The reasons a placed line is cancelled for, in the order the sheet offers them. */
+export const CANCEL_REASONS: ReasonCode[] = ["changed_mind", "mistake", "other"];
+
+export const CANCEL_LABELS: Record<string, MessageKey> = {
+  changed_mind: "reason.changed_mind",
+  mistake: "reason.mistake",
+  other: "reason.other",
+};
+
+/** Cancels an unserved line; `made` answers "Was it already made?". */
+export const cancelLineJob = (line_id: string, made: boolean, reason: ReasonCode) =>
+  job(
+    { kind: "order.line_cancel", line_id, made },
+    { track: "none", reason, done: "hub.sheet.done.line_cancelled" },
+  );
+
 export const adminUnlockJob = (device_id: string) =>
   job(
     { kind: "device.admin_unlock", device_id },
@@ -278,7 +303,9 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
                     : kind === "session.settle" ||
                         kind === "session.settle.reverted" ||
                         kind === "order.place" ||
-                        kind === "order.place.reverted"
+                        kind === "order.place.reverted" ||
+                        kind === "order.line_served" ||
+                        kind === "order.line_cancel"
                       ? "pos.sell"
                       : kind === "credit.collect" || kind === "credit.collect.reverted"
                         ? "credit.collect"

@@ -15,7 +15,7 @@ use arena_store::{
     StockRow, StoreTx, effect_recorded, find_credit, find_order, find_player, find_product,
     find_setting, find_stock, forward_intent_id, insert_pos_order, insert_product_line,
     list_components, list_lots, list_order_line_ids, list_order_moves, list_order_wallet_txns,
-    list_payment_ids,
+    list_payment_ids, open_hold_qty,
 };
 
 use super::mutate::Written;
@@ -41,7 +41,8 @@ pub(super) struct Item {
 /// The stock of a tracked product at the moment of the sale.
 pub(super) struct Held {
     pub(super) qty: i64,
-    /// What may be sold: the quantity less lots past their expiry date.
+    /// What may be sold: the quantity less lots past their expiry date and less the units open
+    /// holds claim.
     pub(super) usable: i64,
 }
 
@@ -77,9 +78,10 @@ pub(super) fn load_held(
         })
         .map(|l| l.qty_remaining)
         .sum();
+    let held = open_hold_qty(tx, product_id)?;
     Ok(Held {
         qty,
-        usable: (qty - expired).max(0),
+        usable: (qty - expired - held).max(0),
     })
 }
 
@@ -208,42 +210,77 @@ pub(super) fn price(sale: &[PosSaleLine], t: &Basket) -> Result<Priced, AppError
     Ok(Priced { bill, lines })
 }
 
-/// What the sale does to stock: units taken per product, and the units an override raises first.
+/// What the sale does to stock: units taken per product, the units an override raises first and the
+/// units held for lines that are not served yet.
 pub(super) struct StockPlan {
     pub(super) takes: Vec<(String, i64)>,
     pub(super) raises: BTreeMap<String, i64>,
+    pub(super) holds: Vec<PlannedHold>,
 }
 
+/// One tracked item of a deferred line whose stock is held instead of taken.
+pub(super) struct PlannedHold {
+    /// The index of the line in the order's lines.
+    pub(super) line: usize,
+    pub(super) product_id: String,
+    pub(super) qty: i64,
+}
+
+/// Plans a sale's stock. `defer[i]` is true for a line whose stock is held until it is served;
+/// an empty slice defers nothing. Every line is checked against what is available (on hand less
+/// expired lots less open holds), deferred or not.
 pub(super) fn plan_stock(
     sale: &[PosSaleLine],
     t: &Basket,
     over: bool,
+    defer: &[bool],
 ) -> Result<StockPlan, AppError> {
     let tracked = |p: &ProductRow| !p.bundle && p.track_stock;
     let mut need: BTreeMap<&str, i64> = BTreeMap::new();
+    let mut takes_need: BTreeMap<&str, i64> = BTreeMap::new();
     let mut order: Vec<&str> = Vec::new();
     let mut in_bundle: BTreeSet<&str> = BTreeSet::new();
+    let mut holds = Vec::new();
     // What the plain lines alone ask of a product: a bundle's part may be raised by an
     // override, a plain line never.
     let mut plain: BTreeMap<&str, i64> = BTreeMap::new();
-    for (line, item) in sale.iter().zip(&t.items) {
+    for (i, (line, item)) in sale.iter().zip(&t.items).enumerate() {
         let Some(p) = &item.product else { continue };
-        if p.bundle {
-            for part in &item.parts {
-                if let Some(c) = part.product.as_ref().filter(|c| tracked(c)) {
-                    if !need.contains_key(c.product_id.as_str()) {
-                        order.push(c.product_id.as_str());
-                    }
-                    *need.entry(c.product_id.as_str()).or_default() += part.qty * line.qty;
-                    in_bundle.insert(c.product_id.as_str());
-                }
-            }
+        let deferred = defer.get(i).copied().unwrap_or(false);
+        let demand: Vec<(&ProductRow, i64)> = if p.bundle {
+            item.parts
+                .iter()
+                .filter_map(|part| {
+                    part.product
+                        .as_ref()
+                        .filter(|c| tracked(c))
+                        .map(|c| (c, part.qty * line.qty))
+                })
+                .collect()
         } else if tracked(p) {
-            if !need.contains_key(p.product_id.as_str()) {
-                order.push(p.product_id.as_str());
+            vec![(p, line.qty)]
+        } else {
+            Vec::new()
+        };
+        for (c, qty) in demand {
+            *need.entry(c.product_id.as_str()).or_default() += qty;
+            if p.bundle {
+                in_bundle.insert(c.product_id.as_str());
+            } else {
+                *plain.entry(c.product_id.as_str()).or_default() += qty;
             }
-            *need.entry(p.product_id.as_str()).or_default() += line.qty;
-            *plain.entry(p.product_id.as_str()).or_default() += line.qty;
+            if deferred {
+                holds.push(PlannedHold {
+                    line: i,
+                    product_id: c.product_id.clone(),
+                    qty,
+                });
+            } else {
+                if !takes_need.contains_key(c.product_id.as_str()) {
+                    order.push(c.product_id.as_str());
+                }
+                *takes_need.entry(c.product_id.as_str()).or_default() += qty;
+            }
         }
     }
     let mut raises = BTreeMap::new();
@@ -287,9 +324,13 @@ pub(super) fn plan_stock(
     }
     let takes = order
         .into_iter()
-        .map(|id| (id.to_owned(), need[id]))
+        .map(|id| (id.to_owned(), takes_need[id]))
         .collect();
-    Ok(StockPlan { takes, raises })
+    Ok(StockPlan {
+        takes,
+        raises,
+        holds,
+    })
 }
 
 pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Result<(), AppError> {
@@ -312,7 +353,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
         s.player_id.is_some(),
         priced.bill.total_minor,
     )?;
-    plan_stock(&s.lines, &t.basket, s.stock_override == Some(true))?;
+    plan_stock(&s.lines, &t.basket, s.stock_override == Some(true), &[])?;
     Ok(())
 }
 
@@ -326,7 +367,7 @@ pub(super) fn mutate_sale(
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?
         .ok_or_else(|| internal("the branch has not been bootstrapped"))?;
     let priced = price(&s.lines, &t.basket)?;
-    let plan = plan_stock(&s.lines, &t.basket, s.stock_override == Some(true))?;
+    let plan = plan_stock(&s.lines, &t.basket, s.stock_override == Some(true), &[])?;
     let breakup = serde_json::to_string(&priced.bill.breakup)
         .map_err(|_| internal("the tax breakup cannot be written"))?;
     let order_id = ulid::Ulid::generate().to_string();
@@ -378,6 +419,7 @@ pub(super) fn mutate_sale(
                 position: i as i64,
                 at: now_ms,
                 placement: None,
+                served: true,
             },
         )?;
         written.push(Written {

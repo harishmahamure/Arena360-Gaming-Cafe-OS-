@@ -419,6 +419,7 @@
         onDevicesChanged: () => void refresh(),
         onSessionStarted: () => void refresh(),
         onOrderPlaced: () => void refresh(),
+        onOrderLineChanged: () => void refresh(),
         onBillSettled: () => void refresh(),
         onBillReverted: () => {
           applyBillReverted();

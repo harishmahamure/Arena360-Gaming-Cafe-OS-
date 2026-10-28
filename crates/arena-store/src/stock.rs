@@ -402,3 +402,115 @@ pub fn list_low_stock(conn: &Connection) -> Result<Vec<ThresholdRow>, AppError> 
 pub fn list_tracked_thresholds(conn: &Connection) -> Result<Vec<ThresholdRow>, AppError> {
     threshold_rows(conn, false)
 }
+
+/// One tracked item of an unserved line whose stock is held, not yet taken (Story 5.13). Open
+/// while `released_at` is `None`; a served line closes it (the stock is taken) and a cancelled
+/// line releases it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldRow {
+    pub id: String,
+    pub order_line_id: String,
+    pub item_id: String,
+    pub qty: i64,
+    pub released_at: Option<i64>,
+}
+
+/// A hold to insert (`rev` and the timestamps are set by the stamp step).
+pub struct NewHold<'a> {
+    pub id: &'a str,
+    pub order_line_id: &'a str,
+    pub item_id: &'a str,
+    pub qty: i64,
+}
+
+const HOLD_COLUMNS: &str = "id, order_line_id, item_id, qty, released_at";
+
+fn hold(r: &rusqlite::Row<'_>) -> rusqlite::Result<HoldRow> {
+    Ok(HoldRow {
+        id: r.get(0)?,
+        order_line_id: r.get(1)?,
+        item_id: r.get(2)?,
+        qty: r.get(3)?,
+        released_at: r.get(4)?,
+    })
+}
+
+pub fn insert_hold(conn: &Connection, h: &NewHold<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO stock_holds (id, order_line_id, item_id, qty, released_at, rev, created_at,
+                                  updated_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, 0, 0, 0)",
+        params![h.id, h.order_line_id, h.item_id, h.qty],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The open holds of one line, in the order they were made.
+pub fn list_line_holds(conn: &Connection, line_id: &str) -> Result<Vec<HoldRow>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {HOLD_COLUMNS} FROM stock_holds
+             WHERE order_line_id = ?1 AND released_at IS NULL ORDER BY rowid"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt.query_map([line_id], hold).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// The open holds of the lines one placement added to an order.
+pub fn list_placement_holds(
+    conn: &Connection,
+    order_id: &str,
+    placement_id: &str,
+) -> Result<Vec<HoldRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT h.id, h.order_line_id, h.item_id, h.qty, h.released_at
+             FROM stock_holds h JOIN order_lines l ON l.id = h.order_line_id
+             WHERE l.order_id = ?1 AND l.placement_id = ?2 AND h.released_at IS NULL
+             ORDER BY h.rowid",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![order_id, placement_id], hold)
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// Closes a hold at `at` (it is no longer counted against the stock).
+pub fn release_hold(conn: &Connection, hold_id: &str, at: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE stock_holds SET released_at = ?2 WHERE id = ?1 AND released_at IS NULL",
+        params![hold_id, at],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// How many units of a product open holds claim.
+pub fn open_hold_qty(conn: &Connection, product_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(qty), 0) FROM stock_holds
+         WHERE item_id = ?1 AND released_at IS NULL",
+        [product_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// The units open holds claim, per product (products without a hold are absent).
+pub fn open_hold_totals(
+    conn: &Connection,
+) -> Result<std::collections::BTreeMap<String, i64>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT item_id, SUM(qty) FROM stock_holds WHERE released_at IS NULL
+             GROUP BY item_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?;
+    rows.collect::<Result<_, _>>().map_err(db_error)
+}

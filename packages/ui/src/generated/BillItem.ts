@@ -3,4 +3,16 @@
 /**
  * A product line on a session bill: what was placed, how many, and what it cost.
  */
-export type BillItem = { label: string; qty: number; amount_minor: number };
+export type BillItem = {
+  /**
+   * The order line (for Mark served and Cancel).
+   */
+  line_id: string;
+  label: string;
+  qty: number;
+  amount_minor: number;
+  /**
+   * Whether the line was served; a placed kitchen line is not until staff mark it.
+   */
+  served: boolean;
+};

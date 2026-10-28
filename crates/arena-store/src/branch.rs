@@ -44,6 +44,7 @@ pub enum Table {
     Stock,
     StockLots,
     StockMoves,
+    StockHolds,
     Rates,
     Players,
     Consents,
@@ -67,7 +68,7 @@ pub enum Table {
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 36] = [
+    pub const ALL: [Table; 37] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -85,6 +86,7 @@ impl Table {
         Table::Stock,
         Table::StockLots,
         Table::StockMoves,
+        Table::StockHolds,
         Table::Rates,
         Table::Players,
         Table::Consents,
@@ -126,6 +128,7 @@ impl Table {
             Self::Stock => "stock",
             Self::StockLots => "stock_lots",
             Self::StockMoves => "stock_moves",
+            Self::StockHolds => "stock_holds",
             Self::Rates => "rates",
             Self::Players => "players",
             Self::Consents => "consents",
@@ -175,7 +178,8 @@ impl Table {
             | Self::Alerts
             | Self::GroupBills
             | Self::Shifts
-            | Self::CashEvents => &["id"],
+            | Self::CashEvents
+            | Self::StockHolds => &["id"],
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
             Self::PlanGroups => &["plan_id", "group_id"],
@@ -206,6 +210,7 @@ impl Table {
             | Self::Stock
             | Self::StockLots
             | Self::StockMoves
+            | Self::StockHolds
             | Self::Rates
             | Self::Players
             | Self::Consents
@@ -355,6 +360,9 @@ pub enum RowKey {
     Shifts {
         id: String,
     },
+    StockHolds {
+        id: String,
+    },
     CashEvents {
         id: String,
     },
@@ -380,6 +388,7 @@ impl RowKey {
             Self::Stock { .. } => Table::Stock,
             Self::StockLots { .. } => Table::StockLots,
             Self::StockMoves { .. } => Table::StockMoves,
+            Self::StockHolds { .. } => Table::StockHolds,
             Self::Rates { .. } => Table::Rates,
             Self::Plans { .. } => Table::Plans,
             Self::PlanGroups { .. } => Table::PlanGroups,
@@ -444,6 +453,7 @@ impl RowKey {
             | Self::GroupBills { id }
             | Self::Shifts { id }
             | Self::CashEvents { id }
+            | Self::StockHolds { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => id.clone(),
         }
@@ -535,6 +545,7 @@ impl RowKey {
             Table::GroupBills => Self::GroupBills { id: text("id")? },
             Table::Shifts => Self::Shifts { id: text("id")? },
             Table::CashEvents => Self::CashEvents { id: text("id")? },
+            Table::StockHolds => Self::StockHolds { id: text("id")? },
             Table::Sessions => Self::Sessions { id: text("id")? },
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
             Table::Orders => Self::Orders { id: text("id")? },
@@ -591,6 +602,7 @@ impl RowKey {
             | Self::GroupBills { id }
             | Self::Shifts { id }
             | Self::CashEvents { id }
+            | Self::StockHolds { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => vec![id],
         }

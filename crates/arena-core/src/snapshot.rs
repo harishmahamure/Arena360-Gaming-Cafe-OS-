@@ -180,6 +180,8 @@ fn bills(
             .filter(|l| l.order_id == order_id)
             .filter_map(|l| {
                 Some(arena_proto::BillItem {
+                    line_id: l.id.clone(),
+                    served: l.served,
                     label: l.label.clone()?,
                     qty: l.qty.unwrap_or(1),
                     amount_minor: l.amount_minor,
@@ -695,6 +697,24 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.order_session(order_id)
+    }
+
+    /// The session a line sits on (`None` when the line or its order is gone).
+    pub fn line_session(&self, line_id: &str) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.line_session(line_id)
+    }
+
+    /// The kind of the intent `intent_id` (`None` when it wrote nothing).
+    pub fn intent_kind(&self, intent_id: &str) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.intent_kind(intent_id)
     }
 
     /// The session and order a placement put products on.

@@ -31,6 +31,8 @@ import type { GroupUpsert } from "./GroupUpsert";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { LicenceApply } from "./LicenceApply";
+import type { OrderLineCancel } from "./OrderLineCancel";
+import type { OrderLineServed } from "./OrderLineServed";
 import type { OrderPlace } from "./OrderPlace";
 import type { OrderPlaceReverted } from "./OrderPlaceReverted";
 import type { PlanSell } from "./PlanSell";
@@ -116,6 +118,8 @@ export type IntentPayload =
   | ({ kind: "pos.sale.reverted" } & PosSaleReverted)
   | ({ kind: "order.place" } & OrderPlace)
   | ({ kind: "order.place.reverted" } & OrderPlaceReverted)
+  | ({ kind: "order.line_served" } & OrderLineServed)
+  | ({ kind: "order.line_cancel" } & OrderLineCancel)
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
   | ({ kind: "staff.deactivate" } & StaffDeactivate)
   | ({ kind: "stock.in" } & StockIn)

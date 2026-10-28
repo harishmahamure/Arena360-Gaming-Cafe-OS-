@@ -14,7 +14,8 @@ struct Status {
 }
 
 /// The units of a tracked product that may be sold: its stock less what sits in lots past their
-/// expiry date on `today`. Also answers whether any of the missing units are expired.
+/// expiry date on `today` and less the units open holds claim (kitchen lines not yet served).
+/// Also answers whether any of the missing units are expired.
 fn sellable(
     store: &Store,
     product_id: &str,
@@ -25,7 +26,8 @@ fn sellable(
         Some(day) => store.expired_qty(product_id, day)?,
         None => 0,
     };
-    Ok(((qty - expired).max(0), expired > 0))
+    let held = store.held_qty(product_id)?;
+    Ok(((qty - expired - held).max(0), expired > 0))
 }
 
 fn status(store: &Store, p: &ProductRow, today: Option<&str>) -> Result<Status, AppError> {

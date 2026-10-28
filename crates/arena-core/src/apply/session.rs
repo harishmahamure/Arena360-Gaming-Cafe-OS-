@@ -7,7 +7,7 @@ use arena_store::{
     ChangeOp, CreditRow, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment,
     NewSession, NewWalletTxn, OrderRow, OrderTxn, RateRow, RowKey, SegmentRow, StoreTx, Table,
     add_order_amount, adjust_outstanding, adjust_wallet, assign_order_player,
-    assign_session_player, close_segments, count_product_lines, delete_row,
+    assign_session_player, close_segments, count_product_lines, count_unserved_lines, delete_row,
     device_has_live_session, effect_recorded, end_session, find_active_rate, find_credit,
     find_device_meta, find_order, find_order_for_session, find_player, find_session, find_wallet,
     fold_pause, forward_intent_id, insert_order, insert_order_line, insert_payment, insert_segment,
@@ -550,6 +550,8 @@ pub(crate) struct SettleTarget {
     pub(super) shift_open: bool,
     /// The bill is a postpaid session's that is still running: it settles once the session ends.
     running: bool,
+    /// The bill still has lines that are not served (Story 5.13).
+    unserved: bool,
 }
 
 pub(super) fn load_settle(
@@ -568,6 +570,10 @@ pub(super) fn load_settle(
         Some(id) => find_session(tx, id)?.is_some_and(|s| {
             super::group_bill::is_running(&s) && s.mode != SessionMode::Block.as_str()
         }),
+        None => false,
+    };
+    target.unserved = match &order {
+        Some(o) => count_unserved_lines(tx, &o.id)? > 0,
         None => false,
     };
     target.order = order;
@@ -612,6 +618,7 @@ pub(super) fn load_payer(
         business_day,
         shift_open: arena_store::open_shift_id(tx)?.is_some(),
         running: false,
+        unserved: false,
     })
 }
 
@@ -692,6 +699,12 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
         return Err(invalid(
             "order_id",
             "this session is still running; end it to settle the bill",
+        ));
+    }
+    if t.unserved {
+        return Err(invalid(
+            "order_id",
+            "Mark served or cancel unserved items first",
         ));
     }
     validate_payments(

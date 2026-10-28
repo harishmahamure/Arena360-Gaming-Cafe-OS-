@@ -2139,9 +2139,34 @@ async fn run_intent(
         arena_proto::IntentPayload::OrderPlaceReverted(r) => Some(r.order_id.clone()),
         _ => None,
     };
+    // A cancelled line may take its order with it: read its session first, so the kiosk's
+    // "Ordered: n items" can follow.
+    let cancelling = match &intent.payload {
+        arena_proto::IntentPayload::OrderLineCancel(c) => {
+            let (reader, id) = (Arc::clone(&auth.reader), c.line_id.clone());
+            tokio::task::spawn_blocking(move || reader.line_session(&id))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        }
+        _ => None,
+    };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
+            if let Some(session_id) = cancelling {
+                let reader = Arc::clone(&auth.reader);
+                let id = session_id.clone();
+                let paused = tokio::task::spawn_blocking(move || reader.session_paused(&id))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or(true);
+                if !paused {
+                    push_pause_state(auth, &session_id, false, &cmd_id).await;
+                }
+            }
             if let Some(order_id) = unplacing {
                 let reader = Arc::clone(&auth.reader);
                 let session = tokio::task::spawn_blocking(move || reader.order_session(&order_id))
@@ -4078,6 +4103,175 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::OK, "{reply}");
         let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
         assert_eq!(listed[0]["quantity"], 5);
+    }
+
+    /// The first product line on the session's live bill.
+    fn first_item(hub: &Hub, session_id: &str) -> arena_proto::BillItem {
+        let snapshot =
+            arena_core::read_snapshot(&Store::open_reader(&hub.path).unwrap(), hub.clock.now_ms())
+                .unwrap();
+        snapshot
+            .bills
+            .into_iter()
+            .find(|b| b.session_id == session_id)
+            .unwrap()
+            .items
+            .remove(0)
+    }
+
+    #[tokio::test]
+    async fn a_kitchen_line_is_held_then_served_or_cancelled_over_the_ui_intent_route() {
+        use arena_proto::{
+            OrderLineCancel, OrderLineServed, OrderPlace, PosSaleLine, ProductUpsert, ReasonCode,
+            StockIn,
+        };
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (_, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        let session_id = reply["applied"]["changes"][0]["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        rx.recv().await.unwrap();
+        let who = || Actor {
+            kind: ActorKind::Staff,
+            id: "x".into(),
+        };
+        let post = |token: String, payload: IntentPayload, reason: Option<ReasonCode>| {
+            let hub = &hub;
+            async move {
+                let mut i = intent_as(who(), payload, None);
+                i.reason = reason;
+                call(
+                    hub,
+                    "POST",
+                    "/ui/intent",
+                    Some(&token),
+                    Some(json!({ "intent": i })),
+                )
+                .await
+            }
+        };
+        let (status, _) = post(
+            manager.clone(),
+            IntentPayload::ProductUpsert(ProductUpsert {
+                id: None,
+                name: "Burger".into(),
+                category: String::new(),
+                price_minor: 9_000,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: true,
+                favourite: false,
+                active: true,
+                bundle: false,
+                components: Vec::new(),
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        let burger = listed[0]["id"].as_str().unwrap().to_owned();
+        let (status, _) = post(
+            manager,
+            IntentPayload::StockIn(StockIn {
+                product_id: burger.clone(),
+                qty: 5,
+                unit_cost_minor: 2_000,
+                supplier: String::new(),
+                expiry: None,
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let place = |qty: i64| {
+            IntentPayload::OrderPlace(OrderPlace {
+                session_id: session_id.clone(),
+                lines: vec![PosSaleLine {
+                    product_id: burger.clone(),
+                    qty,
+                }],
+                stock_override: None,
+            })
+        };
+        let (status, reply) = post(token.clone(), place(2), None).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        rx.recv().await.unwrap();
+        // The stock is held, not taken: on hand stays 5 and the open bill lists an unserved line.
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        assert_eq!(listed[0]["quantity"], 5);
+        let item = first_item(&hub, &session_id);
+        assert!(!item.served);
+        let line_id = item.line_id;
+
+        // Cancelling needs a reason and a `made` answer, and tells the kiosk the new count.
+        let cancel = IntentPayload::OrderLineCancel(OrderLineCancel {
+            line_id: line_id.clone(),
+            made: false,
+        });
+        let (status, reply) = post(token.clone(), cancel.clone(), None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["code"], "REASON_REQUIRED");
+        let (status, reply) = post(token.clone(), cancel, Some(ReasonCode::ChangedMind)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the screen pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::SessionStarted { session, .. },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a session.started event")
+        };
+        assert_eq!(session.ordered_items, 0);
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        assert_eq!(listed[0]["quantity"], 5);
+
+        // A new placement is served by its line id, which takes the stock.
+        let (status, _) = post(token.clone(), place(2), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let line_id = first_item(&hub, &session_id).line_id;
+        let (status, reply) = post(
+            token.clone(),
+            IntentPayload::OrderLineServed(OrderLineServed {
+                line_id: line_id.clone(),
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        assert_eq!(listed[0]["quantity"], 3);
+        // A served line cannot be cancelled.
+        let (status, reply) = post(
+            token.clone(),
+            IntentPayload::OrderLineCancel(OrderLineCancel {
+                line_id,
+                made: true,
+            }),
+            Some(ReasonCode::Mistake),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["code"], "VALIDATION_FAILED");
     }
 
     #[tokio::test]

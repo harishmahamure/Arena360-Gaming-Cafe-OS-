@@ -228,6 +228,12 @@ enum Op {
         undo: bool,
         late: bool,
     },
+    /// An unserved placed line is marked served or cancelled (made or not), when one exists.
+    OrderLine {
+        pick: u8,
+        cancel: bool,
+        made: bool,
+    },
     /// A cash top-up for a player, then maybe its Undo (late or in time).
     WalletTopup {
         player: u8,
@@ -526,6 +532,9 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         3 => (0..3u8, any::<u8>(), 1..=6u8, any::<bool>(), prop::bool::weighted(0.3)).prop_map(
             |(slot, pick, qty, undo, late)| Op::OrderPlace { slot, pick, qty, undo, late }
+        ),
+        2 => (any::<u8>(), any::<bool>(), any::<bool>()).prop_map(
+            |(pick, cancel, made)| Op::OrderLine { pick, cancel, made }
         ),
         2 => (any::<u8>(), 0..3000u16).prop_map(|(player, limit)| Op::CreditSet { player, limit }),
         2 => (
@@ -1074,7 +1083,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     track_stock: true,
                     image: String::new(),
                     barcode: barcode.clone(),
-                    kitchen: false,
+                    kitchen: name.len() % 2 == 0,
                     favourite: false,
                     active: true,
                     bundle: *bundle,
@@ -1795,6 +1804,67 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(hub.change_count(), after_forward);
                 } else {
                     prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert_eq!(stock_image(hub), stock_before);
+                }
+            }
+        }
+        Op::OrderLine { pick, cancel, made } => {
+            let lines: Vec<_> = hub
+                .reader
+                .rows(Table::OrderLines)
+                .unwrap()
+                .into_iter()
+                .filter(|l| int(l, "served") == 0)
+                .collect();
+            let Some(l) = lines.get(usize::from(*pick) % lines.len().max(1)) else {
+                return Ok(());
+            };
+            let stock_before = stock_image(hub);
+            let open_before = open_hold_qty(hub);
+            let (payload, reason) = if *cancel {
+                (
+                    IntentPayload::OrderLineCancel(arena_proto::OrderLineCancel {
+                        line_id: text(l, "id"),
+                        made: *made,
+                    }),
+                    Some(arena_proto::ReasonCode::Mistake),
+                )
+            } else {
+                (
+                    IntentPayload::OrderLineServed(arena_proto::OrderLineServed {
+                        line_id: text(l, "id"),
+                    }),
+                    None,
+                )
+            };
+            let mut intent = hub.intent(payload, None);
+            intent.reason = reason;
+            let out = hub.submit_new(intent);
+            match out {
+                Ok(_) if *cancel => {
+                    prop_assert!(
+                        hub.reader
+                            .rows(Table::OrderLines)
+                            .unwrap()
+                            .iter()
+                            .all(|x| x["id"] != l["id"])
+                    );
+                    prop_assert!(open_hold_qty(hub) <= open_before);
+                }
+                Ok(_) => {
+                    let now = hub
+                        .reader
+                        .rows(Table::OrderLines)
+                        .unwrap()
+                        .into_iter()
+                        .find(|x| x["id"] == l["id"])
+                        .unwrap();
+                    prop_assert_eq!(int(&now, "served"), 1);
+                }
+                Err(e) => {
+                    // Only short stock refuses a serve; nothing is written.
+                    prop_assert_eq!(e.code, ErrorCode::OutOfStock, "{:?}", e);
+                    prop_assert!(!*cancel);
                     prop_assert_eq!(stock_image(hub), stock_before);
                 }
             }
@@ -3920,6 +3990,36 @@ fn assert_stock_holds(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// The units open stock holds claim, over every product.
+fn open_hold_qty(hub: &Hub) -> i64 {
+    hub.reader
+        .rows(Table::StockHolds)
+        .unwrap()
+        .iter()
+        .filter(|h| h["released_at"] == RowValue::Null)
+        .map(|h| int(h, "qty"))
+        .sum()
+}
+
+/// A hold is open only for a line that exists and is not served; a served line holds nothing.
+fn assert_holds_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let lines = hub.reader.rows(Table::OrderLines).unwrap();
+    for h in hub.reader.rows(Table::StockHolds).unwrap() {
+        prop_assert!(int(&h, "qty") > 0);
+        if h["released_at"] != RowValue::Null {
+            continue;
+        }
+        let line = lines.iter().find(|l| l["id"] == h["order_line_id"]);
+        prop_assert!(line.is_some(), "an open hold of a missing line");
+        prop_assert_eq!(
+            int(line.unwrap(), "served"),
+            0,
+            "an open hold of a served line"
+        );
+    }
+    Ok(())
+}
+
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
         .ok()
@@ -3945,6 +4045,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_orders_hold(&hub)?;
                 assert_cash_holds(&hub)?;
                 assert_stock_holds(&hub)?;
+                assert_holds_hold(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })

@@ -127,6 +127,12 @@ pub enum IntentKind {
     OrderPlace,
     #[serde(rename = "order.place.reverted")]
     OrderPlaceReverted,
+    /// A placed kitchen line marked served: its held stock is taken.
+    #[serde(rename = "order.line_served")]
+    OrderLineServed,
+    /// An unserved placed line cancelled, with a reason.
+    #[serde(rename = "order.line_cancel")]
+    OrderLineCancel,
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials,
     #[serde(rename = "staff.deactivate")]
@@ -243,7 +249,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 80] = [
+    pub const ALL: [IntentKind; 82] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -278,6 +284,8 @@ impl IntentKind {
         Self::PosSaleReverted,
         Self::OrderPlace,
         Self::OrderPlaceReverted,
+        Self::OrderLineServed,
+        Self::OrderLineCancel,
         Self::StaffSetCredentials,
         Self::StaffDeactivate,
         Self::StockIn,
@@ -363,6 +371,8 @@ impl IntentKind {
             Self::PosSaleReverted => "pos.sale.reverted",
             Self::OrderPlace => "order.place",
             Self::OrderPlaceReverted => "order.place.reverted",
+            Self::OrderLineServed => "order.line_served",
+            Self::OrderLineCancel => "order.line_cancel",
             Self::StaffSetCredentials => "staff.set_credentials",
             Self::StaffDeactivate => "staff.deactivate",
             Self::StockIn => "stock.in",
@@ -467,7 +477,9 @@ impl IntentKind {
             | Self::PosSale
             | Self::PosSaleReverted
             | Self::OrderPlace
-            | Self::OrderPlaceReverted => IntentCategory::Money,
+            | Self::OrderPlaceReverted
+            | Self::OrderLineServed
+            | Self::OrderLineCancel => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -572,7 +584,9 @@ impl IntentKind {
             | Self::PosSale
             | Self::PosSaleReverted
             | Self::OrderPlace
-            | Self::OrderPlaceReverted => Requirement::Perm(Permission::PosSell),
+            | Self::OrderPlaceReverted
+            | Self::OrderLineServed
+            | Self::OrderLineCancel => Requirement::Perm(Permission::PosSell),
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
             Self::SessionExtend => Requirement::Perm(Permission::SessionExtend),
             Self::SessionTransfer => Requirement::Perm(Permission::SessionTransfer),
@@ -609,6 +623,7 @@ impl IntentKind {
                 ReasonCode::Other,
             ]),
             Self::StockWaste => Some(&ReasonCode::WASTE),
+            Self::OrderLineCancel => Some(&ReasonCode::CANCEL),
             Self::SessionForceEnd => Some(&[
                 ReasonCode::RuleViolation,
                 ReasonCode::HardwareIssue,
@@ -650,6 +665,7 @@ impl IntentKind {
             | Self::PosSaleReverted
             | Self::OrderPlace
             | Self::OrderPlaceReverted
+            | Self::OrderLineServed
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
@@ -718,6 +734,8 @@ pub enum ReasonCode {
     Broken,
     Free,
     CancelledOrder,
+    ChangedMind,
+    Mistake,
 }
 
 impl ReasonCode {
@@ -729,8 +747,11 @@ impl ReasonCode {
         Self::CancelledOrder,
     ];
 
+    /// The reasons `order.line_cancel` takes, in the order the Hub offers them.
+    pub const CANCEL: [ReasonCode; 3] = [Self::ChangedMind, Self::Mistake, Self::Other];
+
     /// Every code.
-    pub const ALL: [ReasonCode; 11] = [
+    pub const ALL: [ReasonCode; 13] = [
         Self::Lost,
         Self::Stolen,
         Self::Replaced,
@@ -742,6 +763,8 @@ impl ReasonCode {
         Self::Broken,
         Self::Free,
         Self::CancelledOrder,
+        Self::ChangedMind,
+        Self::Mistake,
     ];
 
     /// The stored and wire form, e.g. `stolen`.
@@ -758,6 +781,8 @@ impl ReasonCode {
             Self::Broken => "broken",
             Self::Free => "free",
             Self::CancelledOrder => "cancelled_order",
+            Self::ChangedMind => "changed_mind",
+            Self::Mistake => "mistake",
         }
     }
 }
@@ -1164,6 +1189,10 @@ pub enum IntentPayload {
     OrderPlace(crate::OrderPlace),
     #[serde(rename = "order.place.reverted")]
     OrderPlaceReverted(crate::OrderPlaceReverted),
+    #[serde(rename = "order.line_served")]
+    OrderLineServed(crate::OrderLineServed),
+    #[serde(rename = "order.line_cancel")]
+    OrderLineCancel(crate::OrderLineCancel),
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials(StaffSetCredentials),
     #[serde(rename = "staff.deactivate")]
@@ -1295,6 +1324,8 @@ impl IntentPayload {
             Self::PosSaleReverted(_) => IntentKind::PosSaleReverted,
             Self::OrderPlace(_) => IntentKind::OrderPlace,
             Self::OrderPlaceReverted(_) => IntentKind::OrderPlaceReverted,
+            Self::OrderLineServed(_) => IntentKind::OrderLineServed,
+            Self::OrderLineCancel(_) => IntentKind::OrderLineCancel,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
             Self::StaffDeactivate(_) => IntentKind::StaffDeactivate,
             Self::StockIn(_) => IntentKind::StockIn,
@@ -1604,7 +1635,9 @@ mod tests {
                 | "pos.sale"
                 | "pos.sale.reverted"
                 | "order.place"
-                | "order.place.reverted" => Requirement::Perm(Permission::PosSell),
+                | "order.place.reverted"
+                | "order.line_served"
+                | "order.line_cancel" => Requirement::Perm(Permission::PosSell),
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "session.extend" => Requirement::Perm(Permission::SessionExtend),
                 "session.transfer" => Requirement::Perm(Permission::SessionTransfer),
@@ -1691,11 +1724,12 @@ mod tests {
     }
 
     #[test]
-    fn only_device_revoke_force_end_and_waste_require_a_reason() {
+    fn only_device_revoke_force_end_waste_and_cancel_require_a_reason() {
         for kind in IntentKind::ALL {
             let want: Option<&[ReasonCode]> = match kind {
                 IntentKind::DeviceRevoke => Some(&ReasonCode::ALL[..4]),
                 IntentKind::StockWaste => Some(&ReasonCode::WASTE),
+                IntentKind::OrderLineCancel => Some(&ReasonCode::CANCEL),
                 IntentKind::SessionForceEnd => Some(&[
                     ReasonCode::RuleViolation,
                     ReasonCode::HardwareIssue,
@@ -1726,6 +1760,7 @@ mod tests {
             v,
             serde_json::json!({
                 "device.revoke": ["lost", "stolen", "replaced", "other"],
+                "order.line_cancel": ["changed_mind", "mistake", "other"],
                 "session.force_end": ["rule_violation", "hardware_issue", "closing", "other"],
                 "stock.waste": ["spoiled", "broken", "free", "cancelled_order"],
             })

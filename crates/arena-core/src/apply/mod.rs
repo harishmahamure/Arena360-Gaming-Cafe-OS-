@@ -43,6 +43,7 @@ mod kiosk_log;
 mod licence;
 mod maintenance;
 mod mutate;
+mod order_line;
 mod order_place;
 mod pc_command;
 mod plan_sales;
@@ -195,6 +196,8 @@ pub(crate) enum Target {
     PosSaleReverted(Box<pos_sale::RevertTarget>),
     OrderPlace(Box<order_place::PlaceTarget>),
     OrderPlaceReverted(Box<order_place::RevertTarget>),
+    OrderLineServed(Box<order_line::LineTarget>),
+    OrderLineCancel(Box<order_line::LineTarget>),
     CreditSetLimit(Box<credit::LimitTarget>),
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
@@ -288,6 +291,12 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::OrderPlace(p) => Target::OrderPlace(Box::new(order_place::load_place(tx, p, now)?)),
         P::OrderPlaceReverted(r) => {
             Target::OrderPlaceReverted(Box::new(order_place::load_place_reverted(tx, r, now)?))
+        }
+        P::OrderLineServed(s) => {
+            Target::OrderLineServed(Box::new(order_line::load_line(tx, &s.line_id, now)?))
+        }
+        P::OrderLineCancel(c) => {
+            Target::OrderLineCancel(Box::new(order_line::load_line(tx, &c.line_id, now)?))
         }
         P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),
         P::CreditCollect(c) => {

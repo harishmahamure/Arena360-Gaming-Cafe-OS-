@@ -2,7 +2,7 @@
 title: "Story 5.38: A second branch starts from the tenant's existing setup"
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '6e90bb4'
 followup_review_recommended: false
@@ -95,3 +95,5 @@ The link is a signed path rather than an R2 presigned URL so it works with the i
 ## Review Triage Log
 
 Unattended build; see the commit message for the verification run.
+
+Review (2026-10-28): no blocking findings. fmt, clippy -D warnings, cloud setup_start, tasks template_apply tests, check:generated, check:strings and onboarding svelte-check green. Noted, not blocking: a retry link won by a heartbeat that never reaches the Hub leaves status `pending` until the owner changes the choice.

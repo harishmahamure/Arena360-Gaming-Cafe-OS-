@@ -1463,6 +1463,49 @@ impl SnapshotReader {
         })
     }
 
+    /// The starter templates (Story 5.35), priced in the branch currency. Blocking (SQLite).
+    pub fn starter_templates(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<arena_proto::StarterTemplateInfo>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let exponent = read_locale(s, now_ms)?.map_or(2, |l| l.exponent);
+            Ok(crate::import_starter::templates(exponent))
+        })
+    }
+
+    /// A dry-run of a starter template (Story 5.35): what it would add and what is skipped, and
+    /// the plan and product rows to commit, read against the Hub now. Writes nothing. Blocking
+    /// (SQLite).
+    pub fn starter_import(
+        &self,
+        template_id: &str,
+        now_ms: i64,
+    ) -> Result<
+        (
+            arena_proto::StarterPreview,
+            Vec<arena_proto::ImportPlanRow>,
+            Vec<arena_proto::ImportProductRow>,
+        ),
+        AppError,
+    > {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let exponent = read_locale(s, now_ms)?.map_or(2, |l| l.exponent);
+            let products = crate::import_products::context(s)?;
+            let plans = crate::import_plans::context(s)?;
+            let a = crate::import_starter::analyse(template_id, &products, &plans, exponent)?;
+            Ok((a.preview, a.plan_rows, a.product_rows))
+        })
+    }
+
     /// The Inventory → Expiring and Expired lists as of `now_ms`. Blocking (SQLite).
     pub fn expiry(&self, now_ms: i64) -> Result<arena_proto::ExpiryView, AppError> {
         let store = self

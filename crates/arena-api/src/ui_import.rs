@@ -2,8 +2,9 @@
 //! preview` reads a file against what the Hub holds and writes nothing; `.../commit` applies the
 //! rows that passed as `import.*` intents of 500 rows, each with its own idempotency key derived
 //! from the client's `import_id`, so a retry never duplicates; `.../template` saves the template.
-//! Products and plans need `catalog.edit` (opening stock also needs `stock.in`, which `apply()`
-//! checks); players need `player.manage` (balances also `wallet.topup`, limits `credit.manage`).
+//! Starter templates (Story 5.35) go through the same product and plan intents. Products, plans and
+//! templates need `catalog.edit` (opening stock also needs `stock.in`, which `apply()` checks);
+//! players need `player.manage` (balances also `wallet.topup`, limits `credit.manage`).
 
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -15,6 +16,7 @@ use arena_proto::{
     ImportPlayers, ImportPreviewRequest, ImportProducts, ImportTemplateRequest,
     ImportTemplateSaved, Intent, IntentPayload, Permission, PlanImportResult, PlayerImportResult,
     ProductImportCommitRequest, ProductImportPreviewRequest, ProductImportResult, SessionStaff,
+    StarterCommitRequest, StarterPreviewRequest, StarterResult,
 };
 use axum::Json;
 use axum::extract::State;
@@ -222,14 +224,14 @@ pub(crate) async fn template(
 // Players and plans (Story 5.34)
 // ----------------------------------------------------------------------------------------------
 
-/// Sends each payload as the next chunk of the import, with keys derived from `import_id`, and
+/// Sends each payload as chunk `n` of the import, with keys derived from `import_id`, and
 /// answers what each applied. Stops at the first chunk the Hub refuses.
 async fn submit_chunks(
     auth: &UiAuth,
     me: &SessionStaff,
     import_id: &str,
     now: i64,
-    payloads: Vec<IntentPayload>,
+    payloads: Vec<(usize, IntentPayload)>,
 ) -> Result<Vec<arena_core::Applied>, Response> {
     let Some(writer) = auth.writer() else {
         return Err(fail(ui_error(AppError::new(
@@ -238,7 +240,7 @@ async fn submit_chunks(
         ))));
     };
     let mut applied = Vec::new();
-    for (n, payload) in payloads.into_iter().enumerate() {
+    for (n, payload) in payloads {
         let (Some(key), Some(id)) = (
             chunk_ulid(import_id, n, 0),
             chunk_ulid(import_id, n, 0x8000),
@@ -430,6 +432,7 @@ pub(crate) async fn players_commit(
     let payloads = chunks
         .into_iter()
         .map(IntentPayload::ImportPlayers)
+        .enumerate()
         .collect();
     let applied = match submit_chunks(&auth, &me, &req.import_id, now, payloads).await {
         Ok(a) => a,
@@ -522,6 +525,7 @@ pub(crate) async fn plans_commit(
     let payloads = rows
         .chunks(IMPORT_CHUNK_ROWS)
         .map(|c| IntentPayload::ImportPlans(ImportPlans { rows: c.to_vec() }))
+        .enumerate()
         .collect();
     let applied = match submit_chunks(&auth, &me, &req.import_id, now, payloads).await {
         Ok(a) => a,
@@ -572,4 +576,111 @@ async fn save_template(body: &[u8], file_name: &'static str, text: String) -> Re
         Ok(Err(e)) => fail(ui_error(e)),
         Err(_) => fail(internal()),
     }
+}
+
+// ----------------------------------------------------------------------------------------------
+// Starter templates (Story 5.35)
+// ----------------------------------------------------------------------------------------------
+
+const STARTER_PREVIEW_SHAPE: &str = "the body must be {\"template_id\": string}";
+const STARTER_COMMIT_SHAPE: &str =
+    "the body must be {\"template_id\": string, \"import_id\": ULID}";
+
+/// `GET /ui/import/templates`: the starter templates and what each adds.
+pub(crate) async fn starter_list(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(denied) = gate_for(&auth, &headers, Permission::CatalogEdit, "templates").await {
+        return denied;
+    }
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    match tokio::task::spawn_blocking(move || reader.starter_templates(now)).await {
+        Ok(Ok(list)) => Json(list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `POST /ui/import/templates/preview {template_id}`: the dry-run.
+pub(crate) async fn starter_preview(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(denied) = gate_for(&auth, &headers, Permission::CatalogEdit, "templates").await {
+        return denied;
+    }
+    let Ok(req) = serde_json::from_slice::<StarterPreviewRequest>(&body) else {
+        return fail(bad_frame(STARTER_PREVIEW_SHAPE));
+    };
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    let read = tokio::task::spawn_blocking(move || reader.starter_import(&req.template_id, now));
+    match read.await {
+        Ok(Ok((preview, _, _))) => Json(preview).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `POST /ui/import/templates/commit {template_id, import_id}`: adds what the dry-run lists as
+/// one `import.products` (chunk 0) and one `import.plans` (chunk 1) intent. The template is read
+/// again against the Hub now, so applying it twice adds nothing; a retry after a half-finished
+/// attempt sends each part under the same key as before.
+pub(crate) async fn starter_commit(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let me = match gate_for(&auth, &headers, Permission::CatalogEdit, "templates").await {
+        Ok(me) => me,
+        Err(denied) => return denied,
+    };
+    let Ok(req) = serde_json::from_slice::<StarterCommitRequest>(&body) else {
+        return fail(bad_frame(STARTER_COMMIT_SHAPE));
+    };
+    if !is_ulid(&req.import_id) {
+        return fail(ui_error(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "import_id",
+            "import_id must be a ULID",
+        )));
+    }
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    let id = req.template_id.clone();
+    let read = tokio::task::spawn_blocking(move || reader.starter_import(&id, now)).await;
+    let (preview, plans, products) = match read {
+        Ok(Ok(found)) => found,
+        Ok(Err(e)) => return fail(ui_error(e)),
+        Err(_) => return fail(internal()),
+    };
+    if !preview.can_commit {
+        return fail(ui_error(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "template_id",
+            "everything in this template is already set up, or has no device group to go with",
+        )));
+    }
+    let mut payloads = Vec::new();
+    if !products.is_empty() {
+        payloads.push((
+            0,
+            IntentPayload::ImportProducts(ImportProducts { rows: products }),
+        ));
+    }
+    if !plans.is_empty() {
+        payloads.push((1, IntentPayload::ImportPlans(ImportPlans { rows: plans })));
+    }
+    let applied = match submit_chunks(&auth, &me, &req.import_id, now, payloads).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    Json(StarterResult {
+        plans_created: counted(&applied, "plans").0,
+        products_created: counted(&applied, "products").0,
+        skipped_plans: preview.skipped_plans,
+        skipped_products: preview.skipped_products,
+        chunks: i64::try_from(applied.len()).unwrap_or(i64::MAX),
+    })
+    .into_response()
 }

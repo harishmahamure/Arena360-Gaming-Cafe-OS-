@@ -353,3 +353,107 @@ pub struct PlanImportResult {
     #[ts(type = "number")]
     pub chunks: i64,
 }
+
+// ----------------------------------------------------------------------------------------------
+// Starter templates (Story 5.35)
+// ----------------------------------------------------------------------------------------------
+
+/// A plan a starter template adds, as the Templates tab lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterPlanInfo {
+    pub name: String,
+    /// `pack`, `block` or `pass`.
+    pub plan_kind: String,
+    /// The kind of device group it is offered on: `pc`, `console` or `vr`.
+    pub group_kind: String,
+    /// The price in the branch currency's minor units.
+    #[ts(type = "number")]
+    pub price_minor: i64,
+}
+
+/// A product a starter template adds, as the Templates tab lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterProductInfo {
+    pub name: String,
+    pub category: String,
+    #[ts(type = "number")]
+    pub price_minor: i64,
+}
+
+/// One starter template (`GET /ui/import/templates`): what choosing it will add.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterTemplateInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub plans: Vec<StarterPlanInfo>,
+    pub products: Vec<StarterProductInfo>,
+}
+
+/// The body of `POST /ui/import/templates/preview` (a dry-run, which writes nothing).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterPreviewRequest {
+    pub template_id: String,
+}
+
+/// The body of `POST /ui/import/templates/commit`; `import_id` works as in
+/// [`ProductImportCommitRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterCommitRequest {
+    pub template_id: String,
+    pub import_id: String,
+}
+
+/// What the dry-run decided for one plan or product of the template.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterItem {
+    pub name: String,
+    /// Whether commit adds it.
+    pub add: bool,
+    /// Why it is skipped: `exists` (a plan with the name, a product with the name or barcode),
+    /// `no_group` (a plan with no device group of its kind) or `invalid`. Absent when added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+}
+
+/// What a starter-template dry-run found. Nothing was written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterPreview {
+    pub template_id: String,
+    pub plans: Vec<StarterItem>,
+    pub products: Vec<StarterItem>,
+    #[ts(type = "number")]
+    pub new_plans: i64,
+    #[ts(type = "number")]
+    pub new_products: i64,
+    #[ts(type = "number")]
+    pub skipped_plans: i64,
+    #[ts(type = "number")]
+    pub skipped_products: i64,
+    /// Whether commit has anything to add.
+    pub can_commit: bool,
+}
+
+/// What a starter-template commit did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StarterResult {
+    #[ts(type = "number")]
+    pub plans_created: i64,
+    #[ts(type = "number")]
+    pub products_created: i64,
+    #[ts(type = "number")]
+    pub skipped_plans: i64,
+    #[ts(type = "number")]
+    pub skipped_products: i64,
+    #[ts(type = "number")]
+    pub chunks: i64,
+}

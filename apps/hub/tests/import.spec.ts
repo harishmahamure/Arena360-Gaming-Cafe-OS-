@@ -9,6 +9,9 @@ import type {
   ProductImportPreview,
   ProductImportResult,
   SessionStaff,
+  StarterPreview,
+  StarterResult,
+  StarterTemplateInfo,
 } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
@@ -115,6 +118,46 @@ const PLANS: PlanImportPreview = {
 };
 const PLANS_DONE: PlanImportResult = { created: 2, updated: 1, skipped: 0, chunks: 1 };
 
+const STARTERS: StarterTemplateInfo[] = [
+  {
+    id: "indian-cafe",
+    name: "Indian café",
+    description: "PC gaming hours and a chai-and-snacks menu.",
+    plans: [
+      { name: "PC 1 hour pack", plan_kind: "pack", group_kind: "pc", price_minor: 6000 },
+      { name: "PC night pass", plan_kind: "pass", group_kind: "pc", price_minor: 50000 },
+    ],
+    products: [{ name: "Masala chai", category: "Drinks", price_minor: 2000 }],
+  },
+  {
+    id: "vr-arcade",
+    name: "VR arcade",
+    description: "VR sessions.",
+    plans: [{ name: "VR 1 hour pack", plan_kind: "pack", group_kind: "vr", price_minor: 35000 }],
+    products: [],
+  },
+];
+const STARTER_PREVIEW: StarterPreview = {
+  template_id: "indian-cafe",
+  plans: [
+    { name: "PC 1 hour pack", add: true },
+    { name: "PC night pass", add: false, reason: "no_group" },
+  ],
+  products: [{ name: "Masala chai", add: false, reason: "exists" }],
+  new_plans: 1,
+  new_products: 0,
+  skipped_plans: 1,
+  skipped_products: 1,
+  can_commit: true,
+};
+const STARTER_DONE: StarterResult = {
+  plans_created: 1,
+  products_created: 0,
+  skipped_plans: 1,
+  skipped_products: 1,
+  chunks: 1,
+};
+
 type Posted = { path: string; body: Record<string, unknown> };
 
 async function open(
@@ -123,6 +166,7 @@ async function open(
 ) {
   const posts: Posted[] = [];
   let refuseFolder = opts.folderRefused ?? false;
+  let starterApplied = false;
   await page.addInitScript(
     (t) => sessionStorage.setItem("arena.hub.token", t),
     opts.token ?? "manager-token",
@@ -170,6 +214,19 @@ async function open(
       case "/ui/import/plans/commit":
         posts.push({ path: "plans/commit", body: req.postDataJSON() });
         return json(route, 200, PLANS_DONE);
+      case "/ui/import/templates":
+        return json(route, 200, STARTERS);
+      case "/ui/import/templates/preview":
+        posts.push({ path: "templates/preview", body: req.postDataJSON() });
+        return json(
+          route,
+          200,
+          starterApplied ? { ...STARTER_PREVIEW, can_commit: false } : STARTER_PREVIEW,
+        );
+      case "/ui/import/templates/commit":
+        posts.push({ path: "templates/commit", body: req.postDataJSON() });
+        starterApplied = true;
+        return json(route, 200, STARTER_DONE);
       case "/ui/import/products/template":
         posts.push({ path: "template", body: req.postDataJSON() });
         if (refuseFolder) {
@@ -341,4 +398,48 @@ test("the Plans tab previews and commits a plan file whole", async ({ page }) =>
   await expect(page.getByTestId("import-done")).toContainText("Imported: 2 new, 1 updated.");
   expect(posts.map((p) => p.path)).toEqual(["plans/preview", "plans/commit"]);
   expect(posts[1].body.valid_only).toBe(false);
+});
+
+test("the Templates tab lists each template, shows a dry-run and adds it once", async ({
+  page,
+}) => {
+  const posts = await open(page);
+  await page.getByRole("tab", { name: en["hub.import.tab_templates"] }).click();
+  await expect(page.getByTestId("starter-indian-cafe")).toContainText("Indian café");
+  await expect(page.getByTestId("starter-vr-arcade")).toBeVisible();
+  await page.getByTestId("starter-indian-cafe").getByRole("radio").check();
+  await expect(page.getByTestId("starter-plans").locator("li")).toHaveCount(2);
+  await expect(page.getByTestId("starter-plans")).toContainText("PC 1 hour pack · Time pack");
+  await expect(page.getByTestId("starter-products")).toContainText("Masala chai · Drinks");
+  await expect(page.getByTestId("import-summary")).toContainText(
+    "1 plans and 0 products will be added; 1 plans and 1 products are skipped.",
+  );
+  const items = page.getByTestId("starter-item");
+  await expect(items).toHaveCount(3);
+  await expect(items.nth(1)).toContainText(en["hub.import.starter_skip_no_group"]);
+  await expect(items.nth(2)).toContainText(en["hub.import.starter_skip_exists"]);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
+  ).toEqual([]);
+  await page.getByRole("button", { name: en["hub.import.starter_add"] }).click();
+  await expect(page.getByTestId("import-done")).toContainText("Added 1 plans and 0 products.");
+  await expect(page.getByTestId("starter-nothing")).toBeVisible();
+  await expect(page.getByRole("button", { name: en["hub.import.starter_add"] })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(posts.map((p) => p.path)).toEqual([
+    "templates/preview",
+    "templates/commit",
+    "templates/preview",
+  ]);
+  expect(posts[1].body.template_id).toBe("indian-cafe");
+  expect(String(posts[1].body.import_id)).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+});
+
+test("the Templates tab needs permission to edit the catalogue", async ({ page }) => {
+  await open(page, { token: "counter-token" });
+  await page.getByRole("tab", { name: en["hub.import.tab_templates"] }).click();
+  await expect(page.getByTestId("import-no-access")).toHaveText(en["hub.import.starter_no_access"]);
 });

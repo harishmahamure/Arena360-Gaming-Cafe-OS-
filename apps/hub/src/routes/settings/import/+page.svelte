@@ -4,6 +4,7 @@
   import { page } from "$app/state";
   import { hasPermission } from "../../../lib/auth";
   import ImportPanel from "../../../lib/ImportPanel.svelte";
+  import StarterPanel from "../../../lib/StarterPanel.svelte";
   import {
     commitPlans,
     commitPlayers,
@@ -26,6 +27,7 @@
     { id: "products", label: "hub.import.tab_products" },
     { id: "players", label: "hub.import.tab_players" },
     { id: "plans", label: "hub.import.tab_plans" },
+    { id: "templates", label: "hub.import.tab_templates" },
   ];
   let kind: ImportKind = $state("products");
 </script>
@@ -87,6 +89,8 @@
             done={(r) => t("hub.import.players_done", { created: r.created, matched: r.matched })}
             skipped={(r) => r.skipped}
           />
+        {:else if current === "templates"}
+          <StarterPanel allowed={canCatalog} />
         {:else}
           <ImportPanel
             allowed={canCatalog}

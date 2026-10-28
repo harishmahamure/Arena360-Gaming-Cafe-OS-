@@ -16,6 +16,7 @@ mod import_file;
 pub mod import_plans;
 pub mod import_players;
 pub mod import_products;
+pub mod import_starter;
 pub mod invoice;
 pub mod locale;
 pub mod pairing;

@@ -3268,6 +3268,15 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
             "/ui/import/plans/template",
             post(crate::ui_import::plans_template),
         )
+        .route("/ui/import/templates", get(crate::ui_import::starter_list))
+        .route(
+            "/ui/import/templates/preview",
+            post(crate::ui_import::starter_preview),
+        )
+        .route(
+            "/ui/import/templates/commit",
+            post(crate::ui_import::starter_commit),
+        )
         .route("/ui/shift/count", get(crate::ui_shift::count))
         .route(
             "/ui/reports/daily-sales",
@@ -7438,6 +7447,211 @@ pub(crate) mod tests {
             )
         );
         assert_eq!(text.lines().count(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_starter_template_is_previewed_then_added_once() {
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "o".into(),
+        };
+        let add_group = |name: &'static str, kind: &'static str| {
+            let hub = &hub;
+            async move {
+                hub.writer
+                    .submit_intent(intent_as(
+                        owner(),
+                        IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                            id: None,
+                            name: name.into(),
+                            group_kind: kind.into(),
+                            colour: "teal".into(),
+                            sort_order: 1,
+                        }),
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+            }
+        };
+        for (method, uri) in [
+            ("GET", "/ui/import/templates"),
+            ("POST", "/ui/import/templates/preview"),
+            ("POST", "/ui/import/templates/commit"),
+        ] {
+            let (status, _) = call(&hub, method, uri, None, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
+            let (status, reply) = call(
+                &hub,
+                method,
+                uri,
+                Some(&counter),
+                (method == "POST").then(|| json!({ "template_id": "indian-cafe" })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{uri} {reply}");
+        }
+
+        let (status, list) = call(&hub, "GET", "/ui/import/templates", Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        let ids: Vec<&str> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["indian-cafe", "console-lounge", "vr-arcade"]);
+        assert!(!list[0]["plans"].as_array().unwrap().is_empty());
+        assert!(!list[0]["products"].as_array().unwrap().is_empty());
+
+        let ask = |id: &str| json!({ "template_id": id });
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/templates/preview",
+            Some(&manager),
+            Some(ask("nope")),
+        )
+        .await;
+        assert_eq!(
+            (status, &reply["field"]),
+            (StatusCode::UNPROCESSABLE_ENTITY, &json!("template_id"))
+        );
+
+        // Only a console group: the PC plans have nowhere to go, the products still add.
+        add_group("PS5", "console").await;
+        let (status, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/templates/preview",
+            Some(&manager),
+            Some(ask("indian-cafe")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(
+            (
+                &preview["new_plans"],
+                &preview["skipped_plans"],
+                &preview["new_products"]
+            ),
+            (&json!(0), &json!(5), &json!(9)),
+            "{preview}"
+        );
+        assert_eq!(preview["plans"][0]["reason"], "no_group");
+        let plans = |hub: &Hub| hub.auth.reader().plans().unwrap();
+        let products = |hub: &Hub| hub.auth.reader().products(T0).unwrap();
+        assert_eq!(
+            (plans(&hub).len(), products(&hub).len()),
+            (0, 0),
+            "a dry-run writes nothing"
+        );
+
+        add_group("PC", "pc").await;
+        let import_id = ulid::Ulid::generate().to_string();
+        let commit = json!({ "template_id": "indian-cafe", "import_id": import_id });
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/templates/commit",
+            Some(&manager),
+            Some(json!({ "template_id": "indian-cafe", "import_id": "nope" })),
+        )
+        .await;
+        assert_eq!(
+            (status, &reply["field"]),
+            (StatusCode::UNPROCESSABLE_ENTITY, &json!("import_id"))
+        );
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/import/templates/commit",
+            Some(&manager),
+            Some(commit.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!(
+            (
+                &done["plans_created"],
+                &done["products_created"],
+                &done["skipped_plans"],
+                &done["chunks"]
+            ),
+            (&json!(5), &json!(9), &json!(0), &json!(2)),
+            "{done}"
+        );
+        let stored = plans(&hub);
+        assert_eq!(stored.len(), 5);
+        assert!(stored.iter().all(|p| p.active && p.group_ids.len() == 1));
+        let pack = stored.iter().find(|p| p.name == "PC 1 hour pack").unwrap();
+        let listed = &list[0]["plans"][0];
+        assert_eq!(listed["name"], "PC 1 hour pack");
+        assert_eq!(listed["price_minor"], pack.price_minor);
+        let all = products(&hub);
+        assert_eq!(all.len(), 9);
+        let chai = all.iter().find(|p| p.name == "Masala chai").unwrap();
+        assert_eq!(chai.price_minor, list[0]["products"][0]["price_minor"]);
+
+        // Applying it again (even the same attempt) adds nothing.
+        for body in [
+            commit,
+            json!({ "template_id": "indian-cafe", "import_id": ulid::Ulid::generate().to_string() }),
+        ] {
+            let (status, reply) = call(
+                &hub,
+                "POST",
+                "/ui/import/templates/commit",
+                Some(&manager),
+                Some(body),
+            )
+            .await;
+            assert_eq!(
+                (status, &reply["field"]),
+                (StatusCode::UNPROCESSABLE_ENTITY, &json!("template_id")),
+                "{reply}"
+            );
+        }
+        let (_, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/templates/preview",
+            Some(&manager),
+            Some(ask("indian-cafe")),
+        )
+        .await;
+        assert_eq!(
+            (
+                &preview["new_plans"],
+                &preview["new_products"],
+                &preview["can_commit"]
+            ),
+            (&json!(0), &json!(0), &json!(false)),
+            "{preview}"
+        );
+        assert_eq!((plans(&hub).len(), products(&hub).len()), (5, 9));
+
+        // A second template adds its own plans and only the products not on the menu yet.
+        let (_, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/templates/preview",
+            Some(&manager),
+            Some(ask("console-lounge")),
+        )
+        .await;
+        assert_eq!(
+            (
+                &preview["new_plans"],
+                &preview["new_products"],
+                &preview["skipped_products"]
+            ),
+            (&json!(5), &json!(2), &json!(5)),
+            "{preview}"
+        );
     }
 
     /// Story 5.30: the Players and Staff reads need `report.view` and a valid range; Players also

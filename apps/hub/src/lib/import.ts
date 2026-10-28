@@ -6,6 +6,9 @@ import type {
   PlayerImportResult,
   ProductImportPreview,
   ProductImportResult,
+  StarterPreview,
+  StarterResult,
+  StarterTemplateInfo,
 } from "@arena/ui/generated";
 import { authHeaders, getToken, setToken } from "./auth";
 
@@ -62,7 +65,7 @@ async function post<T>(
 const hasNumber = (b: unknown, key: string) =>
   typeof b === "object" && b !== null && typeof (b as Record<string, unknown>)[key] === "number";
 
-export type ImportKind = "products" | "players" | "plans";
+export type ImportKind = "products" | "players" | "plans" | "templates";
 
 /** `POST /ui/import/<kind>/preview`: a dry-run of `csv`. Nothing is written. */
 const preview =
@@ -103,3 +106,49 @@ export const savePlayerTemplate = template("players");
 export const previewPlans = preview<PlanImportPreview>("plans");
 export const commitPlans = commit<PlanImportResult>("plans");
 export const savePlanTemplate = template("plans");
+
+/** `GET /ui/import/templates`: the starter templates and what each adds. */
+export async function loadStarterTemplates(): Promise<ImportOutcome<StarterTemplateInfo[]>> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  try {
+    const url = `${IMPORT_URL}/templates`; // i18n-ignore (a URL)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (res.status === 401) {
+      setToken(null);
+      return { kind: "signed_out" };
+    }
+    if (res.status === 403) return { kind: "denied" };
+    const answer: unknown = await res.json().catch(() => null);
+    return res.ok && Array.isArray(answer)
+      ? { kind: "ok", view: answer as StarterTemplateInfo[] }
+      : { kind: "unreachable" };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/** `POST /ui/import/templates/preview`: a dry-run of one template. Nothing is written. */
+export const previewStarter = (templateId: string) =>
+  post<StarterPreview>(
+    "templates/preview", // i18n-ignore (a URL)
+    { template_id: templateId },
+    (b) => hasNumber(b, "new_plans"),
+    30_000,
+  );
+
+/**
+ * `POST /ui/import/templates/commit`: adds the template's plans and products. `importId` names
+ * this attempt; asking again with the same id never adds anything twice.
+ */
+export const commitStarter = (templateId: string, importId: string) =>
+  post<StarterResult>(
+    "templates/commit", // i18n-ignore (a URL)
+    { template_id: templateId, import_id: importId },
+    (b) => hasNumber(b, "chunks"),
+    120_000,
+  );

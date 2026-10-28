@@ -144,7 +144,7 @@ development_status:
   5-17-choose-print-or-none-at-settle-and-print-through-the-side-ef: done
   5-18-cash-drawer-kicks-on-cash-sales: done
   5-19-whatsapp-receipt-queued-to-the-outbox: done
-  5-20-b2b-invoice-with-the-customer-s-gstin: review
+  5-20-b2b-invoice-with-the-customer-s-gstin: done
   5-21-coupons-applied-at-settle: backlog
   5-22-manual-discount-with-manager-pin-and-reason: backlog
   5-23-void-an-unsettled-order-with-manager-pin: backlog

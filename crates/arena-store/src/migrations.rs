@@ -244,6 +244,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 59,
         sql: include_str!("../migrations/0059_shift_close.sql"),
     },
+    Migration {
+        version: 60,
+        sql: include_str!("../migrations/0060_z_report.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -875,5 +879,29 @@ mod tests {
                 .is_err(),
             "a count is never negative"
         );
+    }
+
+    /// Migration 60 gives `shifts` a Z-report column that is empty for every earlier shift.
+    #[test]
+    fn the_z_report_migration_adds_an_empty_column() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 60) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO shifts (id, staff_id, opened_at, float_minor, carried_minor, state, rev,
+                                 created_at, updated_at)
+             VALUES ('SH', 'S', 0, 500, 0, 'open', 0, 0, 0);",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATIONS[59].sql).unwrap();
+        let kept: Option<String> = conn
+            .query_row("SELECT z_report FROM shifts WHERE id = 'SH'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(kept, None, "an earlier shift has no stored Z-report");
+        conn.execute_batch("UPDATE shifts SET z_report = '{}' WHERE id = 'SH'")
+            .unwrap();
     }
 }

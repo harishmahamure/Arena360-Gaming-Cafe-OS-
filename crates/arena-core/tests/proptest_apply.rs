@@ -188,6 +188,12 @@ enum Op {
         delta: i64,
         reason: bool,
     },
+    /// `shift.reprint_z` (Story 5.28) for one of the shifts or an unknown id: an unknown shift is
+    /// `NOT_FOUND`, an open one `STALE`, a closed one applies, touches only its own row and leaves
+    /// the stored Z-report as it was.
+    ZReprint {
+        pick: u8,
+    },
     /// `stock.threshold` (valid or not) on the first tracked product: the open "Low stock" alert
     /// exists exactly when the quantity is at or under the new threshold.
     Threshold {
@@ -684,6 +690,7 @@ fn op() -> impl Strategy<Value = Op> {
             any::<bool>(),
         )
             .prop_map(|(delta, reason)| Op::ShiftClose { delta, reason }),
+        1 => (0..4u8).prop_map(|pick| Op::ZReprint { pick }),
         2 => prop_oneof![
             1 => Just(None),
             5 => (0..=60i64).prop_map(Some),
@@ -2898,10 +2905,56 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(int(&closed, "expected_minor"), before);
                     prop_assert_eq!(int(&closed, "variance_minor"), *delta);
                     prop_assert_eq!(int(&closed, "next_float_minor"), counted);
+                    // The Z-report stored with the close carries the same count facts.
+                    let stored = match &closed["z_report"] {
+                        RowValue::Text(t) => t.clone(),
+                        other => panic!("z_report: {other:?}"),
+                    };
+                    let z: arena_proto::ZReport = serde_json::from_str(&stored).unwrap();
+                    prop_assert_eq!(z.expected_minor, before);
+                    prop_assert_eq!(z.counted_minor, counted);
+                    prop_assert_eq!(z.variance_minor, *delta);
+                    prop_assert!(!z.rebuilt);
+                    prop_assert_eq!(
+                        z.by_type.iter().map(|t| t.amount_minor).sum::<i64>(),
+                        z.sales_minor
+                    );
                     return assert_gap_free(hub);
                 }
             } else {
                 prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::ShiftNotOpen));
+            }
+            prop_assert_eq!(hub.change_count(), changes_before);
+        }
+        Op::ZReprint { pick } => {
+            let shifts = hub.reader.rows(Table::Shifts).unwrap();
+            let target = shifts.get(usize::from(*pick));
+            let shift_id = target.map_or_else(|| "NO-SUCH-SHIFT".to_owned(), |s| text(s, "id"));
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::ShiftReprintZ(arena_proto::ZReportReprint {
+                    shift_id: shift_id.clone(),
+                }),
+                None,
+            ));
+            match target {
+                None => prop_assert_eq!(code(&out), Some((ErrorCode::NotFound, Some("shift_id")))),
+                Some(s) if text(s, "state") == "open" => {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::Stale, Some("shift_id"))))
+                }
+                Some(before) => {
+                    let applied = out.as_ref().expect("a closed shift can be reprinted");
+                    let tables: Vec<_> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+                    prop_assert_eq!(tables, vec!["shifts"]);
+                    let after = hub
+                        .reader
+                        .rows(Table::Shifts)
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| s["id"] == before["id"])
+                        .unwrap();
+                    prop_assert_eq!(&after["z_report"], &before["z_report"]);
+                    return assert_gap_free(hub);
+                }
             }
             prop_assert_eq!(hub.change_count(), changes_before);
         }

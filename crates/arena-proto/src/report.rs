@@ -143,3 +143,174 @@ pub struct SessionsReport {
     pub by_group: Vec<GroupSessions>,
     pub by_device: Vec<DeviceSessions>,
 }
+
+/// How many shifts the Shifts report lists, newest first.
+pub const SHIFT_LIST_LIMIT: i64 = 100;
+
+/// A payment line of the Z-report that carries a reference (UPI and card), with when and for which
+/// invoice it was taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZReference {
+    /// When the bill settled (UTC ms).
+    #[ts(type = "number")]
+    pub at: i64,
+    /// The invoice number; empty while the bill has none (a top-up, or a sale not yet numbered).
+    pub invoice_no: String,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    /// The UPI or card reference; empty when none was typed.
+    pub reference: String,
+}
+
+/// The UPI or card payment rows of a shift, in settle order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZReferenceGroup {
+    /// `upi` or `card`.
+    pub method: String,
+    pub rows: Vec<ZReference>,
+}
+
+/// A refund made during the shift: a negative line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZRefund {
+    pub credit_note_no: String,
+    /// How the money went back (`cash`, `upi`, `card`, `wallet`); empty when it only cut credit.
+    pub method: String,
+    /// Negative: what the refund paid back.
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+}
+
+/// Stock written off during the shift for one waste reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZWaste {
+    pub reason: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    /// The stock's value at the average cost.
+    #[ts(type = "number")]
+    pub value_minor: i64,
+}
+
+/// An expense or a deposit recorded against the shift. `amount_minor` is positive: what the
+/// expense cost, or what went to the safe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZCashLine {
+    /// The expense category; empty for a deposit.
+    pub category: String,
+    /// The deposit's slip reference; empty for an expense.
+    pub reference: String,
+    pub note: String,
+    /// `drawer` or `owner` for an expense; empty for a deposit.
+    pub paid_from: String,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+}
+
+/// Orders voided during the shift for one reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZVoid {
+    pub reason: String,
+    #[ts(type = "number")]
+    pub count: i64,
+    /// What the voided orders' lines came to.
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+}
+
+/// The end-of-shift report (Story 5.28). It is built from the shift's stored rows inside the close
+/// transaction and kept on the `shifts` row, so the screen and the print show the same figures; a
+/// shift closed before the report existed gets one built on read (`rebuilt`).
+///
+/// Sales follow Story 5.27: `by_type` adds up to `sales_minor` (play time + products + plans +
+/// discounts + tax added). `payments` are the positive payment rows of the shift's settled bills,
+/// top-ups and credit collections (payments, not sales); refunds are separate negative lines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZReport {
+    pub shift_id: String,
+    #[ts(type = "number")]
+    pub opened_at: i64,
+    #[ts(type = "number")]
+    pub closed_at: i64,
+    pub opened_by: String,
+    pub closed_by: String,
+    /// True when this report was built from the rows at the moment it was read, because the shift
+    /// closed before Z-reports were stored.
+    #[serde(default)]
+    pub rebuilt: bool,
+    #[ts(type = "number")]
+    pub orders: i64,
+    #[ts(type = "number")]
+    pub sales_minor: i64,
+    /// The tax inside `sales_minor`.
+    #[ts(type = "number")]
+    pub tax_minor: i64,
+    pub by_type: Vec<ReportAmount>,
+    /// By method (`key`): amount and number of payment rows.
+    pub payments: Vec<ReportAmount>,
+    /// The UPI and card rows behind `payments`, grouped by method.
+    pub references: Vec<ZReferenceGroup>,
+    /// Top-ups and credit collections, as in Daily sales.
+    pub received: Vec<ReportAmount>,
+    pub refunds: Vec<ZRefund>,
+    /// The sum of `refunds` (negative).
+    #[ts(type = "number")]
+    pub refunds_minor: i64,
+    pub waste: Vec<ZWaste>,
+    pub expenses: Vec<ZCashLine>,
+    pub deposits: Vec<ZCashLine>,
+    pub voids: Vec<ZVoid>,
+    /// How many times the drawer was kicked open.
+    #[ts(type = "number")]
+    pub drawer_opens: i64,
+    #[ts(type = "number")]
+    pub float_minor: i64,
+    #[ts(type = "number")]
+    pub expected_minor: i64,
+    #[ts(type = "number")]
+    pub counted_minor: i64,
+    /// Counted minus expected: negative is short.
+    #[ts(type = "number")]
+    pub variance_minor: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub variance_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub variance_note: Option<String>,
+    /// Who approved a variance over the threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approver: Option<String>,
+}
+
+/// One closed shift in the Shifts report (`GET /ui/reports/shifts`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ShiftListRow {
+    pub shift_id: String,
+    #[ts(type = "number")]
+    pub opened_at: i64,
+    #[ts(type = "number")]
+    pub closed_at: i64,
+    pub opened_by: String,
+    pub closed_by: String,
+    #[ts(type = "number")]
+    pub counted_minor: i64,
+    #[ts(type = "number")]
+    pub variance_minor: i64,
+}
+
+/// The Shifts report: closed shifts, newest first (at most [`SHIFT_LIST_LIMIT`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ShiftList {
+    pub shifts: Vec<ShiftListRow>,
+}

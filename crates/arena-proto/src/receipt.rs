@@ -130,6 +130,15 @@ pub struct ReceiptReprint {
     pub order_id: String,
 }
 
+/// The payload of `shift.reprint_z` (permission `report.view`): print the Z-report of a closed
+/// shift again, marked "Reprint". It queues a `print` outbox row whose `ref_id` is the shift id.
+/// An unknown shift is `NOT_FOUND`; a shift that is still open is `STALE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ZReportReprint {
+    pub shift_id: String,
+}
+
 /// The payload of `receipt.printed` (system): the print task sent the outbox row to the printer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]

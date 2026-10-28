@@ -54,6 +54,7 @@ export type IntentKind =
   | "stock.threshold"
   | "shift.open"
   | "shift.close"
+  | "shift.reprint_z"
   | "cash.deposit"
   | "expense.create"
   | "device.maintenance"

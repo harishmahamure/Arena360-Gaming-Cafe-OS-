@@ -474,6 +474,7 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::ReceiptReprint(_)
+        | IntentPayload::ShiftReprintZ(_)
         | IntentPayload::ReceiptPrinted(_)
         | IntentPayload::ReceiptPrintFailed(_)
         | IntentPayload::DrawerKicked(_)

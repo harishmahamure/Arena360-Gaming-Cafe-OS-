@@ -8,7 +8,7 @@
 //! ASCII form).
 
 use arena_proto::currency::currency;
-use arena_proto::{NumberFormat, PaymentMethod, PaymentRow, SymbolPosition};
+use arena_proto::{NumberFormat, PaymentMethod, PaymentRow, SymbolPosition, ZReport};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 
@@ -700,6 +700,222 @@ pub fn render_sale_copy(settings: &ReceiptSettings, sale: &SaleReceipt, reprint:
     encode(&sale_rows_for(settings, sale, reprint))
 }
 
+/// `Cash`, `UPI`, ...: how a payment method reads on the Z-report.
+fn method_title(method: &str) -> String {
+    match method {
+        "cash" => "Cash".to_owned(),
+        "upi" => "UPI".to_owned(),
+        "card" => "Card".to_owned(),
+        "wallet" => "Wallet".to_owned(),
+        "credit" => "On credit".to_owned(),
+        other => sentence(other),
+    }
+}
+
+/// `food_stock` as `Food stock`.
+fn sentence(key: &str) -> String {
+    let text = key.replace('_', " ");
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// The branch-local time of day as printed: `14:05`.
+fn receipt_clock(at_ms: i64, tz: &str) -> String {
+    let utc = DateTime::<Utc>::from_timestamp_millis(at_ms).unwrap_or_default();
+    match tz.parse::<Tz>() {
+        Ok(zone) => utc.with_timezone(&zone).format("%H:%M").to_string(),
+        Err(_) => utc.format("%H:%M").to_string(),
+    }
+}
+
+/// The Z-report (Story 5.28) in the Story 5.16 style: the same header, rules, pairs and footer,
+/// under the title "Z-Report". Every figure is the stored one, so the print and the Hub screen
+/// agree.
+fn z_report_rows(s: &ReceiptSettings, r: &ZReport, reprint: bool) -> Vec<Row> {
+    let mut l = Layout::new(s.paper);
+    let m = &s.money;
+    l.header(s, None);
+    l.centred(Style::Bold, "Z-Report");
+    if reprint {
+        l.centred(Style::Bold, "Reprint");
+    }
+    l.pair(Style::Plain, "Opened", &receipt_time(r.opened_at, &s.tz));
+    l.pair(Style::Plain, "Closed", &receipt_time(r.closed_at, &s.tz));
+    if !r.opened_by.trim().is_empty() {
+        l.pair(Style::Plain, "Opened by", r.opened_by.trim());
+    }
+    if !r.closed_by.trim().is_empty() {
+        l.pair(Style::Plain, "Closed by", r.closed_by.trim());
+    }
+    l.rule();
+
+    l.lines(Style::Bold, "Sales");
+    for t in &r.by_type {
+        let title = match t.key.as_str() {
+            "play_time" => "Play time".to_owned(),
+            "tax_added" => "Tax added".to_owned(),
+            other => sentence(other),
+        };
+        l.pair(Style::Plain, &title, &m.number(t.amount_minor));
+    }
+    l.pair(Style::Bold, "Total sales", &m.with_symbol(r.sales_minor));
+    l.pair(Style::Plain, "Bills", &r.orders.to_string());
+    l.pair(Style::Plain, "Tax included", &m.number(r.tax_minor));
+    l.rule();
+
+    l.lines(Style::Bold, "Payments");
+    if r.payments.is_empty() {
+        l.lines(Style::Plain, "None");
+    }
+    for p in &r.payments {
+        l.pair(
+            Style::Plain,
+            &format!("{} x{}", method_title(&p.key), p.count),
+            &m.number(p.amount_minor),
+        );
+    }
+    let received: Vec<_> = r.received.iter().filter(|x| x.count > 0).collect();
+    if !received.is_empty() {
+        l.lines(Style::Plain, "Received, not sales");
+        for x in received {
+            let title = if x.key == "topup" {
+                "Wallet top-ups"
+            } else {
+                "Credit collected"
+            };
+            l.pair(
+                Style::Plain,
+                &format!("{title} x{}", x.count),
+                &m.number(x.amount_minor),
+            );
+        }
+    }
+
+    if !r.references.is_empty() {
+        l.rule();
+        l.lines(Style::Bold, "UPI and card references");
+        for g in &r.references {
+            l.lines(Style::Plain, &method_title(&g.method));
+            for row in &g.rows {
+                let at = receipt_clock(row.at, &s.tz);
+                let left = if row.invoice_no.is_empty() {
+                    at
+                } else {
+                    format!("{at} {}", row.invoice_no)
+                };
+                l.pair(Style::Plain, &left, &m.number(row.amount_minor));
+                if !row.reference.is_empty() {
+                    l.lines(Style::Plain, &format!("Ref {}", row.reference));
+                }
+            }
+        }
+    }
+
+    if !r.refunds.is_empty() {
+        l.rule();
+        l.lines(Style::Bold, "Refunds");
+        for x in &r.refunds {
+            let left = if x.method.is_empty() {
+                x.credit_note_no.clone()
+            } else {
+                format!("{} {}", x.credit_note_no, method_title(&x.method))
+            };
+            l.pair(Style::Plain, &left, &m.number(x.amount_minor));
+        }
+        l.pair(Style::Bold, "Total refunds", &m.number(r.refunds_minor));
+    }
+
+    if !r.waste.is_empty() {
+        l.rule();
+        l.lines(Style::Bold, "Waste");
+        for w in &r.waste {
+            l.pair(
+                Style::Plain,
+                &format!("{} x{}", sentence(&w.reason), w.qty),
+                &m.number(w.value_minor),
+            );
+        }
+    }
+
+    if !r.expenses.is_empty() {
+        l.rule();
+        l.lines(Style::Bold, "Expenses");
+        for e in &r.expenses {
+            let paid = if e.paid_from.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", e.paid_from)
+            };
+            l.pair(
+                Style::Plain,
+                &format!("{}{paid}", sentence(&e.category)),
+                &m.number(e.amount_minor),
+            );
+            if !e.note.is_empty() {
+                l.lines(Style::Plain, &e.note);
+            }
+        }
+    }
+
+    if !r.deposits.is_empty() {
+        l.rule();
+        l.lines(Style::Bold, "Deposits");
+        for d in &r.deposits {
+            l.pair(
+                Style::Plain,
+                &format!("Slip {}", d.reference),
+                &m.number(d.amount_minor),
+            );
+        }
+    }
+
+    if !r.voids.is_empty() {
+        l.rule();
+        l.lines(Style::Bold, "Voids");
+        for v in &r.voids {
+            l.pair(
+                Style::Plain,
+                &format!("{} x{}", sentence(&v.reason), v.count),
+                &m.number(v.amount_minor),
+            );
+        }
+    }
+    l.rule();
+    l.pair(Style::Plain, "Drawer opens", &r.drawer_opens.to_string());
+    l.rule();
+
+    l.lines(Style::Bold, "Cash count");
+    l.pair(Style::Plain, "Float", &m.number(r.float_minor));
+    l.pair(Style::Plain, "Expected", &m.number(r.expected_minor));
+    l.pair(Style::Plain, "Counted", &m.number(r.counted_minor));
+    let variance = if r.variance_minor > 0 {
+        format!("+{}", m.number(r.variance_minor))
+    } else {
+        m.number(r.variance_minor)
+    };
+    l.pair(Style::Total, "VARIANCE", &variance);
+    if let Some(reason) = r.variance_reason.as_deref() {
+        l.pair(Style::Plain, "Reason", &sentence(reason));
+    }
+    if let Some(note) = r.variance_note.as_deref().filter(|n| !n.trim().is_empty()) {
+        l.lines(Style::Plain, note);
+    }
+    if let Some(who) = r.approver.as_deref().filter(|a| !a.trim().is_empty()) {
+        l.pair(Style::Plain, "Approved by", who);
+    }
+    l.footer(s);
+    l.rows
+}
+
+/// The Z-report of a closed shift as ESC/POS bytes, with a centred "Reprint" line under the title
+/// when `reprint` is set.
+pub fn render_z_report(settings: &ReceiptSettings, report: &ZReport, reprint: bool) -> Vec<u8> {
+    encode(&z_report_rows(settings, report, reprint))
+}
+
 /// A wallet top-up or credit collection as ESC/POS bytes. It never carries an invoice number.
 pub fn render_payment(settings: &ReceiptSettings, payment: &PaymentReceipt) -> Vec<u8> {
     encode(&payment_rows(settings, payment))
@@ -1020,6 +1236,220 @@ mod tests {
                 check_golden(&format!("{name}_{tag}"), &render_payment(&inr, &payment));
             }
         }
+    }
+
+    fn z_report() -> ZReport {
+        use arena_proto::{
+            ReportAmount, ZCashLine, ZReference, ZReferenceGroup, ZRefund, ZVoid, ZWaste,
+        };
+        let amount = |key: &str, amount_minor: i64, count: i64| ReportAmount {
+            key: key.into(),
+            amount_minor,
+            count,
+        };
+        ZReport {
+            shift_id: "01JSHIFT".into(),
+            opened_at: MS_2026_10_28_0835_UTC - 8 * 3_600_000,
+            closed_at: MS_2026_10_28_0835_UTC,
+            opened_by: "Meera".into(),
+            closed_by: "Asha".into(),
+            rebuilt: false,
+            orders: 14,
+            sales_minor: 1_250_000,
+            tax_minor: 190_678,
+            by_type: vec![
+                amount("play_time", 700_000, 9),
+                amount("products", 480_000, 22),
+                amount("plans", 100_000, 2),
+                amount("discounts", -50_000, 3),
+                amount("tax_added", 20_000, 1),
+            ],
+            payments: vec![
+                amount("cash", 600_000, 8),
+                amount("upi", 450_000, 4),
+                amount("card", 150_000, 1),
+                amount("wallet", 50_000, 2),
+            ],
+            references: vec![
+                ZReferenceGroup {
+                    method: "upi".into(),
+                    rows: vec![
+                        ZReference {
+                            at: MS_2026_10_28_0835_UTC - 3 * 3_600_000,
+                            invoice_no: "KOR/26-27/E1k/000141".into(),
+                            amount_minor: 200_000,
+                            reference: "UTR4455781234".into(),
+                        },
+                        ZReference {
+                            at: MS_2026_10_28_0835_UTC - 3_600_000,
+                            invoice_no: String::new(),
+                            amount_minor: 250_000,
+                            reference: "1234".into(),
+                        },
+                    ],
+                },
+                ZReferenceGroup {
+                    method: "card".into(),
+                    rows: vec![ZReference {
+                        at: MS_2026_10_28_0835_UTC - 1_800_000,
+                        invoice_no: "KOR/26-27/E1k/000142".into(),
+                        amount_minor: 150_000,
+                        reference: "T-9".into(),
+                    }],
+                },
+            ],
+            received: vec![amount("topup", 50_000, 2), amount("credit_collect", 0, 0)],
+            refunds: vec![ZRefund {
+                credit_note_no: "KOR/26-27/E1k/000143".into(),
+                method: "cash".into(),
+                amount_minor: -40_000,
+            }],
+            refunds_minor: -40_000,
+            waste: vec![ZWaste {
+                reason: "spoiled".into(),
+                qty: 2,
+                value_minor: 4_000,
+            }],
+            expenses: vec![ZCashLine {
+                category: "food_stock".into(),
+                reference: String::new(),
+                note: "Milk and ice for the shake counter".into(),
+                paid_from: "drawer".into(),
+                amount_minor: 35_000,
+            }],
+            deposits: vec![ZCashLine {
+                category: String::new(),
+                reference: "SLIP-17".into(),
+                note: String::new(),
+                paid_from: String::new(),
+                amount_minor: 300_000,
+            }],
+            voids: vec![ZVoid {
+                reason: "mistake".into(),
+                count: 1,
+                amount_minor: 9_000,
+            }],
+            drawer_opens: 8,
+            float_minor: 100_000,
+            expected_minor: 325_000,
+            counted_minor: 320_050,
+            variance_minor: -4_950,
+            variance_reason: Some("counting_error".into()),
+            variance_note: None,
+            approver: Some("Rohan".into()),
+        }
+    }
+
+    #[test]
+    fn the_z_report_matches_its_golden_files_and_fits_the_paper() {
+        for (paper, tag) in [(PaperWidth::Mm80, "80"), (PaperWidth::Mm58, "58")] {
+            let s = settings(paper, "INR");
+            assert_fits(&z_report_rows(&s, &z_report(), false), paper);
+            check_golden(
+                &format!("z_report_{tag}"),
+                &render_z_report(&s, &z_report(), false),
+            );
+            assert_fits(&z_report_rows(&s, &z_report(), true), paper);
+        }
+    }
+
+    #[test]
+    fn the_z_report_reads_in_the_receipt_style_with_every_section() {
+        let s = settings(PaperWidth::Mm80, "INR");
+        let rows = text(z_report_rows(&s, &z_report(), false));
+        let has = |p: &str| rows.iter().any(|r| r.starts_with(p));
+        assert!(rows.iter().any(|r| r.trim() == "Z-Report"));
+        assert!(rows.iter().all(|r| !r.contains("Reprint")));
+        for section in [
+            "Sales",
+            "Payments",
+            "UPI and card references",
+            "Refunds",
+            "Waste",
+            "Expenses",
+            "Deposits",
+            "Voids",
+            "Cash count",
+        ] {
+            assert!(has(section), "{section}: {rows:?}");
+        }
+        // Each reference sits under its method with time, invoice, amount and reference.
+        let upi = rows.iter().position(|r| r == "UPI").unwrap();
+        assert!(
+            rows[upi + 1].starts_with("11:05 KOR/26-27/E1k/000141")
+                && rows[upi + 1].ends_with("2,000.00")
+        );
+        assert_eq!(rows[upi + 2].trim(), "Ref UTR4455781234");
+        assert!(rows[upi + 3].starts_with("13:05") && rows[upi + 3].ends_with("2,500.00"));
+        let card = rows.iter().position(|r| r == "Card").unwrap();
+        assert!(card > upi);
+        assert!(rows.iter().any(|r| r.trim() == "Ref T-9"));
+        // Refunds print negative, variance signed with the reason and approver.
+        assert!(
+            rows.iter()
+                .any(|r| r.starts_with("KOR/26-27/E1k/000143 Cash") && r.ends_with("-400.00"))
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.starts_with("VARIANCE") && r.ends_with("-49.50"))
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.starts_with("Reason") && r.ends_with("Counting error"))
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.starts_with("Approved by") && r.ends_with("Rohan"))
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.starts_with("Drawer opens") && r.ends_with('8'))
+        );
+        let reprint = text(z_report_rows(&s, &z_report(), true));
+        assert!(reprint.iter().any(|r| r.trim() == "Reprint"));
+    }
+
+    #[test]
+    fn a_quiet_shift_prints_only_the_sections_it_has() {
+        use arena_proto::ReportAmount;
+        let s = settings(PaperWidth::Mm58, "INR");
+        let quiet = ZReport {
+            payments: vec![],
+            references: vec![],
+            received: vec![ReportAmount {
+                key: "topup".into(),
+                amount_minor: 0,
+                count: 0,
+            }],
+            refunds: vec![],
+            refunds_minor: 0,
+            waste: vec![],
+            expenses: vec![],
+            deposits: vec![],
+            voids: vec![],
+            variance_reason: None,
+            approver: None,
+            drawer_opens: 0,
+            ..z_report()
+        };
+        let rows = text(z_report_rows(&s, &quiet, false));
+        for gone in [
+            "UPI and card references",
+            "Refunds",
+            "Waste",
+            "Expenses",
+            "Deposits",
+            "Voids",
+            "Reason",
+            "Approved by",
+        ] {
+            assert!(
+                rows.iter().all(|r| !r.starts_with(gone)),
+                "{gone}: {rows:?}"
+            );
+        }
+        assert!(rows.iter().any(|r| r.trim() == "None"));
+        assert_fits(&z_report_rows(&s, &quiet, false), PaperWidth::Mm58);
     }
 
     fn text(rows: Vec<Row>) -> Vec<String> {

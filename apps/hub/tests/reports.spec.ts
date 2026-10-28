@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { DailySales, SessionsReport } from "@arena/ui/generated";
+import type { DailySales, SessionsReport, ShiftList, ZReport } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { addDays, businessDayNow, daySpan, durationText, bpText } from "../src/lib/reports";
 import { CORS, HUB, device, json as ok, snapshot } from "./floor-fixture";
@@ -84,10 +84,92 @@ const SESSIONS: SessionsReport = {
   ],
 };
 
-type Hub = { asked: string[] };
+const Z: ZReport = {
+  shift_id: "SH1",
+  opened_at: Date.UTC(2026, 9, 28, 3, 30),
+  closed_at: Date.UTC(2026, 9, 28, 11, 30),
+  opened_by: "Meera",
+  closed_by: "Asha",
+  rebuilt: false,
+  orders: 6,
+  sales_minor: 240_000,
+  tax_minor: 36_000,
+  by_type: [
+    { key: "play_time", amount_minor: 150_000, count: 3 },
+    { key: "products", amount_minor: 100_000, count: 8 },
+    { key: "plans", amount_minor: 0, count: 0 },
+    { key: "discounts", amount_minor: -10_000, count: 1 },
+    { key: "tax_added", amount_minor: 0, count: 0 },
+  ],
+  payments: [
+    { key: "cash", amount_minor: 120_000, count: 3 },
+    { key: "upi", amount_minor: 80_000, count: 2 },
+    { key: "card", amount_minor: 40_000, count: 1 },
+  ],
+  references: [
+    {
+      method: "upi",
+      rows: [
+        {
+          at: Date.UTC(2026, 9, 28, 5, 0),
+          invoice_no: "DEV01/26-27/E1k/000007",
+          amount_minor: 80_000,
+          reference: "1234",
+        },
+      ],
+    },
+    {
+      method: "card",
+      rows: [
+        { at: Date.UTC(2026, 9, 28, 6, 0), invoice_no: "", amount_minor: 40_000, reference: "T-9" },
+      ],
+    },
+  ],
+  received: [
+    { key: "topup", amount_minor: 50_000, count: 2 },
+    { key: "credit_collect", amount_minor: 0, count: 0 },
+  ],
+  refunds: [{ credit_note_no: "DEV01/26-27/E1k/000008", method: "cash", amount_minor: -4_000 }],
+  refunds_minor: -4_000,
+  waste: [{ reason: "spoiled", qty: 2, value_minor: 4_000 }],
+  expenses: [
+    {
+      category: "supplies",
+      reference: "",
+      note: "Tissue",
+      paid_from: "drawer",
+      amount_minor: 5_000,
+    },
+  ],
+  deposits: [{ category: "", reference: "SLIP-1", note: "", paid_from: "", amount_minor: 20_000 }],
+  voids: [{ reason: "mistake", count: 1, amount_minor: 9_000 }],
+  drawer_opens: 4,
+  float_minor: 100_000,
+  expected_minor: 191_000,
+  counted_minor: 190_500,
+  variance_minor: -500,
+  variance_reason: "counting_error",
+  approver: "Rohan",
+};
+
+const SHIFTS: ShiftList = {
+  shifts: [
+    {
+      shift_id: "SH1",
+      opened_at: Z.opened_at,
+      closed_at: Z.closed_at,
+      opened_by: "Meera",
+      closed_by: "Asha",
+      counted_minor: 190_500,
+      variance_minor: -500,
+    },
+  ],
+};
+
+type Hub = { asked: string[]; sent: unknown[]; shiftStatus: number };
 
 async function open(page: Page, permissions: string[], path = "/reports"): Promise<Hub> {
-  const hub: Hub = { asked: [] };
+  const hub: Hub = { asked: [], sent: [], shiftStatus: 200 };
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "tok"));
   await page.route(`${HUB}/**`, async (route: Route) => {
     const req = route.request();
@@ -112,6 +194,41 @@ async function open(page: Page, permissions: string[], path = "/reports"): Promi
           headers: CORS,
           body: `retry: 300\n\n`,
         });
+      case "/ui/reports/shifts":
+        hub.asked.push("shifts");
+        return ok(route, SHIFTS);
+      case "/ui/reports/shifts/SH1":
+      case "/ui/reports/shifts/OPEN":
+      case "/ui/reports/shifts/GONE":
+        hub.asked.push(url.pathname.split("/").pop() ?? "");
+        if (url.pathname.endsWith("OPEN")) {
+          return route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ code: "STALE", message: "open" }),
+          });
+        }
+        if (url.pathname.endsWith("GONE")) {
+          return route.fulfill({
+            status: 404,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ code: "NOT_FOUND", message: "gone" }),
+          });
+        }
+        return ok(route, Z);
+      case "/ui/intent":
+        hub.sent.push(route.request().postDataJSON().intent.payload);
+        if (hub.shiftStatus !== 200) {
+          return route.fulfill({
+            status: hub.shiftStatus,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({ code: "STALE", message: "x" }),
+          });
+        }
+        return ok(route, { applied: { intent_id: "I", changes: [] } });
       case "/ui/reports/daily-sales":
       case "/ui/reports/sessions": {
         const from = url.searchParams.get("from") ?? "";
@@ -237,4 +354,97 @@ test("the report screens have no accessibility violations", async ({ page }) => 
   await expect(page.getByTestId("sessions-count")).toBeVisible();
   const sessions = await new AxeBuilder({ page }).analyze();
   expect(sessions.violations).toEqual([]);
+});
+
+// ---- Story 5.28: Shifts and the Z-report ----
+
+test("the list offers Shifts and the Shifts list opens a closed shift's Z-report", async ({
+  page,
+}) => {
+  const hub = await open(page, ["report.view"]);
+  await expect(page.getByTestId("report-link-shifts")).toContainText(en["hub.reports.shifts"]);
+  await page.getByTestId("report-link-shifts").click();
+  await expect(page.getByTestId("shifts-report-screen")).toBeVisible();
+  const row = page.getByTestId("shift-row");
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("Meera");
+  await expect(row).toContainText("Asha");
+  await expect(row).toContainText("₹1,905.00");
+  await expect(row).toContainText("−₹5.00");
+  await page.getByTestId("shift-open-SH1").click();
+  await expect(page.getByTestId("z-report-screen")).toBeVisible();
+  expect(hub.asked).toEqual(["shifts", "SH1"]);
+});
+
+test("the Z-report shows every section with the stored figures", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/shifts/SH1");
+  await expect(page.getByTestId("z-sales-total")).toContainText("₹2,400.00");
+  await expect(page.getByTestId("z-type-play_time")).toContainText("₹1,500.00");
+  await expect(page.getByTestId("z-type-discounts")).toContainText("−₹100.00");
+  await expect(page.getByTestId("z-payment-cash")).toContainText("₹1,200.00");
+  await expect(page.getByTestId("z-payment-cash")).toContainText("3");
+  await expect(page.getByTestId("z-payment-upi")).toContainText("₹800.00");
+  await expect(page.getByTestId("z-received")).toContainText("₹500.00");
+  // UPI and card references, each under its method.
+  const upi = page.getByTestId("z-references-upi").getByTestId("z-reference-row");
+  await expect(upi).toContainText("DEV01/26-27/E1k/000007");
+  await expect(upi).toContainText("₹800.00");
+  await expect(upi).toContainText("1234");
+  const card = page.getByTestId("z-references-card").getByTestId("z-reference-row");
+  await expect(card).toContainText("T-9");
+  // Refunds are negative lines.
+  await expect(page.getByTestId("z-refund-row")).toContainText("DEV01/26-27/E1k/000008");
+  await expect(page.getByTestId("z-refund-row")).toContainText("−₹40.00");
+  await expect(page.getByTestId("z-refunds-total")).toContainText("−₹40.00");
+  await expect(page.getByTestId("z-waste-row")).toContainText(en["reason.spoiled"]);
+  await expect(page.getByTestId("z-expense-row")).toContainText(
+    en["hub.shift.cash.category.supplies"],
+  );
+  await expect(page.getByTestId("z-expense-row")).toContainText("₹50.00");
+  await expect(page.getByTestId("z-deposit-row")).toContainText("SLIP-1");
+  await expect(page.getByTestId("z-void-row")).toContainText(en["reason.mistake"]);
+  await expect(page.getByTestId("z-drawer-opens")).toContainText("4");
+  // Expected, counted and the signed variance with its reason and approver.
+  await expect(page.getByTestId("z-expected")).toHaveText("₹1,910.00");
+  await expect(page.getByTestId("z-counted")).toHaveText("₹1,905.00");
+  await expect(page.getByTestId("z-variance")).toHaveText("−₹5.00");
+  await expect(page.getByTestId("z-reason")).toContainText(
+    en["hub.shift.close.reason.counting_error"],
+  );
+  await expect(page.getByTestId("z-approver")).toHaveText("Rohan");
+  await expect(page.getByTestId("z-rebuilt")).toHaveCount(0);
+});
+
+test("Reprint sends shift.reprint_z for the shift and says it is queued", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/shifts/SH1");
+  await page.getByRole("button", { name: en["hub.zreport.reprint"] }).click();
+  await expect(page.getByTestId("z-reprint-status")).toHaveText(en["hub.zreport.reprint_queued"]);
+  expect(hub.sent).toEqual([{ kind: "shift.reprint_z", shift_id: "SH1" }]);
+});
+
+test("an open or unknown shift is explained and offers no Reprint", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/shifts/OPEN");
+  await expect(page.getByTestId("report-problem")).toContainText(en["hub.zreport.still_open"]);
+  await expect(page.getByRole("button", { name: en["hub.zreport.reprint"] })).toHaveCount(0);
+  await page.goto("/reports/shifts/GONE");
+  await expect(page.getByTestId("report-problem")).toContainText(en["hub.zreport.not_found"]);
+});
+
+test("without report.view the Shifts screens say so and ask for nothing", async ({ page }) => {
+  const hub = await open(page, ["pos.sell"], "/reports/shifts");
+  await expect(page.getByTestId("reports-denied")).toHaveText(en["hub.reports.no_access"]);
+  await page.goto("/reports/shifts/SH1");
+  await expect(page.getByTestId("reports-denied")).toBeVisible();
+  expect(hub.asked).toEqual([]);
+});
+
+test("the Shifts screens have no accessibility violations", async ({ page }) => {
+  await open(page, ["report.view"], "/reports/shifts");
+  await expect(page.getByTestId("shift-row")).toBeVisible();
+  const list = await new AxeBuilder({ page }).analyze();
+  expect(list.violations).toEqual([]);
+  await page.goto("/reports/shifts/SH1");
+  await expect(page.getByTestId("z-sales-total")).toBeVisible();
+  const z = await new AxeBuilder({ page }).analyze();
+  expect(z.violations).toEqual([]);
 });

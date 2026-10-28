@@ -327,6 +327,7 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             _ => Err(internal_target()),
         },
         IntentPayload::ReceiptReprint(_)
+        | IntentPayload::ShiftReprintZ(_)
         | IntentPayload::ReceiptPrinted(_)
         | IntentPayload::ReceiptPrintFailed(_)
         | IntentPayload::DrawerKicked(_)

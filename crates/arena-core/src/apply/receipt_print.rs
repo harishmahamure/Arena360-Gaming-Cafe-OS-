@@ -16,6 +16,10 @@
 //! row in its own transaction; the print task sends the pulse after commit and `drawer.kicked`
 //! (which writes a `drawer_open` cash event) or `drawer.kick_failed` closes the row.
 //!
+//! The Z-report of a closed shift (Story 5.28) rides the same outbox: `shift.close` queues a `print`
+//! row whose `ref_id` is the shift id and whose payload carries `"z_report": true` when a printer is
+//! chosen, and `shift.reprint_z` queues another. Their results touch the `shifts` row, not an order.
+//!
 //! A result or a reprint touches the order row so the change log, and so the audit, names who and
 //! what. The order is already irreversible by then, so the revision bump costs nothing.
 
@@ -25,9 +29,10 @@ use arena_proto::{
 };
 use arena_store::{
     ChangeOp, INVOICED_KINDS, InvoiceOrder, KIND_DRAWER, KIND_PRINT, NewAlert, NewCashEvent,
-    OutboxRow, RowKey, STATE_DONE, STATE_FAILED, STATE_QUEUED, StoreTx, find_branch_summary,
-    find_invoice_order, find_open_alert, find_outbox, find_setting, finish_outbox, insert_alert,
-    insert_cash_event, insert_effect, insert_outbox, list_unnumbered, shift_of_order_sale,
+    OutboxRow, RowKey, STATE_DONE, STATE_FAILED, STATE_QUEUED, ShiftDetail, StoreTx,
+    find_branch_summary, find_invoice_order, find_open_alert, find_outbox, find_setting,
+    find_shift, finish_outbox, insert_alert, insert_cash_event, insert_effect, insert_outbox,
+    list_unnumbered, shift_of_order_sale,
 };
 
 use super::invoice_issue::issue_number;
@@ -45,12 +50,18 @@ pub(crate) struct ReceiptTarget {
     printer_alert_open: bool,
     /// The shift a drawer kick's cash event is written against.
     shift_id: Option<String>,
+    /// The shift a Z-report reprint names (Story 5.28).
+    z_shift: Option<ShiftDetail>,
 }
 
 pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<ReceiptTarget, AppError> {
     Ok(match payload {
         IntentPayload::ReceiptReprint(r) => ReceiptTarget {
             order: find_invoice_order(tx, &r.order_id)?,
+            ..ReceiptTarget::default()
+        },
+        IntentPayload::ShiftReprintZ(z) => ReceiptTarget {
+            z_shift: find_shift(tx, &z.shift_id)?,
             ..ReceiptTarget::default()
         },
         IntentPayload::ReceiptPrinted(p) => ReceiptTarget {
@@ -151,6 +162,15 @@ pub(super) fn validate(intent: &Intent, t: &ReceiptTarget) -> Result<(), AppErro
             }
             Ok(())
         }
+        IntentPayload::ShiftReprintZ(_) => {
+            let Some(shift) = &t.z_shift else {
+                return Err(not_found("shift_id", "no such shift"));
+            };
+            if shift.open {
+                return Err(stale("shift_id", "this shift is still open"));
+            }
+            Ok(())
+        }
         IntentPayload::ReceiptPrinted(_) => queued_row(t, "outbox_id", KIND_PRINT).map(|_| ()),
         IntentPayload::ReceiptPrintFailed(p) => {
             queued_row(t, "outbox_id", KIND_PRINT)?;
@@ -187,6 +207,29 @@ fn touch_order(order_id: &str) -> Written {
     }
 }
 
+/// Whether a `print` row carries a Z-report (its `ref_id` is a shift id, Story 5.28).
+pub(crate) fn is_z_row(row: &OutboxRow) -> bool {
+    serde_json::from_str::<serde_json::Value>(&row.payload)
+        .ok()
+        .and_then(|v| v.get("z_report").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
+/// Touches the row a result or reprint is about: the order of a receipt, the shift of a Z-report.
+fn touch_ref(row: &OutboxRow) -> Written {
+    if is_z_row(row) {
+        Written {
+            key: RowKey::Shifts {
+                id: row.ref_id.clone(),
+            },
+            op: ChangeOp::Update,
+            before: None,
+        }
+    } else {
+        touch_order(&row.ref_id)
+    }
+}
+
 /// The staff who took the cash of a drawer row (its payload's `by`).
 fn kicked_by(row: &OutboxRow) -> String {
     serde_json::from_str::<serde_json::Value>(&row.payload)
@@ -205,7 +248,7 @@ fn fail_row(
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     finish_outbox(tx, &row.id, STATE_FAILED, now_ms, Some(error.trim()))?;
-    let mut written = vec![touch_order(&row.ref_id)];
+    let mut written = vec![touch_ref(row)];
     if !t.printer_alert_open {
         let id = ulid::Ulid::generate().to_string();
         insert_alert(
@@ -227,6 +270,11 @@ fn fail_row(
         });
     }
     Ok(written)
+}
+
+/// The JSON a Z-report `print` row carries (Story 5.28): marked `z_report`, its `ref_id` is the shift.
+pub(super) fn z_payload(reprint: bool, by: &str) -> String {
+    serde_json::json!({ "z_report": true, "reprint": reprint, "by": by }).to_string()
 }
 
 /// The JSON a `print` row carries: whether it is a reprint and who asked.
@@ -252,10 +300,27 @@ pub(super) fn mutate(
             )?;
             Ok(vec![touch_order(&r.order_id)])
         }
+        IntentPayload::ShiftReprintZ(z) => {
+            insert_outbox(
+                tx,
+                &ulid::Ulid::generate().to_string(),
+                KIND_PRINT,
+                &z.shift_id,
+                &z_payload(true, &intent.actor.id),
+                now_ms,
+            )?;
+            Ok(vec![Written {
+                key: RowKey::Shifts {
+                    id: z.shift_id.clone(),
+                },
+                op: ChangeOp::Update,
+                before: None,
+            }])
+        }
         IntentPayload::ReceiptPrinted(p) => {
             let row = queued_row(t, "outbox_id", KIND_PRINT)?;
             finish_outbox(tx, &p.outbox_id, STATE_DONE, now_ms, None)?;
-            Ok(vec![touch_order(&row.ref_id)])
+            Ok(vec![touch_ref(row)])
         }
         IntentPayload::ReceiptPrintFailed(p) => {
             let row = queued_row(t, "outbox_id", KIND_PRINT)?;

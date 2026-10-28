@@ -103,6 +103,14 @@ fn credit_note(row: &OutboxRow) -> Option<String> {
         })
 }
 
+/// Whether a `print` row carries a shift's Z-report (Story 5.28): its `ref_id` is the shift id.
+fn z_report(row: &OutboxRow) -> bool {
+    serde_json::from_str::<serde_json::Value>(&row.payload)
+        .ok()
+        .and_then(|v| v.get("z_report").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
 fn reprint(row: &OutboxRow) -> bool {
     serde_json::from_str::<serde_json::Value>(&row.payload)
         .ok()
@@ -155,6 +163,7 @@ impl ReceiptPrintTask {
     async fn send(&self, row: &OutboxRow) -> Outcome {
         let reprint = reprint(row);
         let credit_note = credit_note(row);
+        let z = z_report(row);
         let drawer = row.kind == KIND_DRAWER;
         let order_id = row.ref_id.clone();
         let now = self.clock.now_ms();
@@ -168,6 +177,8 @@ impl ReceiptPrintTask {
                     .unwrap_or_default();
                 let bytes = if let Some(refund_id) = &credit_note {
                     r.credit_note_bytes(refund_id, now)?
+                } else if z {
+                    r.z_report_bytes(&order_id, reprint, now)?
                 } else if drawer {
                     Some(drawer_kick())
                 } else {
@@ -180,7 +191,10 @@ impl ReceiptPrintTask {
             return Self::fail(PrinterErrorKind::Other, "the receipt could not be built");
         };
         let Some(bytes) = bytes else {
-            return Self::fail(PrinterErrorKind::Other, "the order of this receipt is gone");
+            return Self::fail(
+                PrinterErrorKind::Other,
+                "the order or shift of this receipt is gone",
+            );
         };
         let selected = match PrinterSelected::parse(&selected) {
             Ok(Some(s)) => s,
@@ -283,7 +297,11 @@ impl ReceiptPrintTask {
                 }
                 ev = applied.recv() => match ev {
                     Ok(a) => {
-                        if a.changes.iter().any(|c| c.tbl == "orders") {
+                        if a
+                            .changes
+                            .iter()
+                            .any(|c| c.tbl == "orders" || c.tbl == "shifts")
+                        {
                             due = true;
                         }
                     }
@@ -549,6 +567,98 @@ mod tests {
         t.drain().await;
         t.drain().await;
         assert_eq!(f.fake.sent().len(), 1);
+    }
+
+    /// A closed shift `SH1` with a settled cash sale in its window and a queued Z-report row.
+    async fn queued_z(f: &Fixture, row: &str, payload: &str) {
+        queued(
+            f,
+            "01J000000000000000000000R0",
+            "O1",
+            r#"{"reprint":false,"by":"s"}"#,
+        )
+        .await;
+        let sql = format!(
+            "INSERT INTO shifts (id, staff_id, opened_at, float_minor, carried_minor, state,
+                 closed_at, counted_minor, expected_minor, variance_minor, closed_by, rev,
+                 created_at, updated_at)
+             VALUES ('SH1', 's', {open}, 1000, 0, 'closed', {close}, 5000, 5000, 0, 's', 1, 0, 0);
+             INSERT INTO payments (id, order_id, method, amount_minor, reference, staff_id,
+                 position, business_day, fy, rev, created_at, updated_at)
+             VALUES ('P1', 'O1', 'cash', 4000, NULL, 's', 0, 'd', 'FY2026-27', 1, 0, 0);
+             INSERT INTO side_effect_outbox (id, kind, ref_id, payload, state, at)
+             VALUES ('{row}', 'print', 'SH1', '{payload}', 'queued', {T0});
+             UPDATE side_effect_outbox SET state = 'done' WHERE id = '01J000000000000000000000R0';",
+            open = T0 - 1000,
+            close = T0 + 1000,
+        );
+        f.writer
+            .submit(move |tx| {
+                tx.execute_batch(&sql).unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_queued_z_report_prints_the_shift_report_and_is_recorded_on_the_shift() {
+        let f = fixture(Some(LAN)).await;
+        queued_z(
+            &f,
+            "01J000000000000000000000Z1",
+            r#"{"z_report":true,"reprint":false,"by":"s"}"#,
+        )
+        .await;
+        assert!(!task(&f).drain().await);
+
+        let sent = f.fake.sent();
+        assert_eq!(sent.len(), 1);
+        let text = String::from_utf8_lossy(&sent[0].bytes).to_string();
+        assert!(
+            text.contains("Z-Report") && !text.contains("Reprint"),
+            "{text}"
+        );
+        assert!(
+            text.contains("40.00"),
+            "the shift's cash sale is on it: {text}"
+        );
+        assert_eq!(
+            state(&f, "01J000000000000000000000Z1"),
+            ("done".to_owned(), None)
+        );
+        assert!(alert_kinds(&f).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_reprinted_z_report_is_marked_and_a_failed_one_alerts_without_touching_the_shift() {
+        let f = fixture(Some(LAN)).await;
+        queued_z(
+            &f,
+            "01J000000000000000000000Z1",
+            r#"{"z_report":true,"reprint":true,"by":"s"}"#,
+        )
+        .await;
+        task(&f).drain().await;
+        assert!(String::from_utf8_lossy(&f.fake.sent()[0].bytes).contains("Reprint"));
+
+        let addr = "192.168.1.50:9100".parse().unwrap();
+        f.fake.fail_with(Some(PrinterError::Refused(addr)));
+        f.writer
+            .submit(|tx| {
+                tx.execute_batch(
+                    "INSERT INTO side_effect_outbox (id, kind, ref_id, payload, state, at)
+                     VALUES ('01J000000000000000000000Z2', 'print', 'SH1',
+                             '{\"z_report\":true,\"reprint\":false}', 'queued', 1800000000000)",
+                )
+                .unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+        task(&f).drain().await;
+        assert_eq!(state(&f, "01J000000000000000000000Z2").0, "failed");
+        assert_eq!(alert_kinds(&f), ["printer_offline"]);
     }
 
     /// A cash sale of `O1` against an open shift and a queued `drawer` row for it.

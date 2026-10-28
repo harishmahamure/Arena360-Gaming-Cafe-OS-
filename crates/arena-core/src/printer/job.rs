@@ -5,14 +5,14 @@
 use arena_proto::{
     KEY_PRINTER_PAPER_MM, KEY_RECEIPT_ADDRESS, KEY_RECEIPT_FOOTER, KEY_RECEIPT_PHONE, KEY_TAX,
     NumberFormat, PaymentMethod, PaymentRow, SettingEntry, SnapshotLocale, SymbolPosition,
-    TaxSettings,
+    TaxSettings, ZReport,
 };
 use arena_store::{CreditNoteSource, ReceiptLineRow, ReceiptSource};
 
 use super::PaperWidth;
 use super::receipt::{
     Buyer, Coupon, CreditHead, ItemLine, ReceiptMoney, ReceiptSettings, SaleReceipt, SessionLine,
-    render_credit_note, render_sale_copy,
+    render_credit_note, render_sale_copy, render_z_report,
 };
 use crate::apply::CreditNoteLine;
 use crate::invoice::tax::RateTax;
@@ -271,6 +271,21 @@ pub fn render_credit_note_order(
         &receipt_settings(settings, branch_name, locale),
         &sale,
         &head,
+    )
+}
+
+/// The ESC/POS bytes of a shift's Z-report (Story 5.28), marked "Reprint" when `reprint` is set.
+pub fn z_report_bytes(
+    settings: &[SettingEntry],
+    branch_name: &str,
+    locale: Option<&SnapshotLocale>,
+    report: &ZReport,
+    reprint: bool,
+) -> Vec<u8> {
+    render_z_report(
+        &receipt_settings(settings, branch_name, locale),
+        report,
+        reprint,
     )
 }
 

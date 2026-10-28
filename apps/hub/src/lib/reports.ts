@@ -1,5 +1,11 @@
-import type { DailySales, SessionsReport, SnapshotLocale } from "@arena/ui/generated";
-import { authHeaders, getToken, setToken } from "./auth";
+import type {
+  DailySales,
+  SessionsReport,
+  ShiftList,
+  SnapshotLocale,
+  ZReport,
+} from "@arena/ui/generated";
+import { authHeaders, getToken, newIdempotencyKey, setToken, submitIntent } from "./auth";
 
 export const REPORTS_URL = "http://127.0.0.1:7409/ui/reports";
 
@@ -19,6 +25,12 @@ export const REPORTS = [
     href: "/reports/sessions",
     title: "hub.reports.sessions",
     note: "hub.reports.sessions_note",
+  },
+  {
+    id: "shifts",
+    href: "/reports/shifts",
+    title: "hub.reports.shifts",
+    note: "hub.reports.shifts_note",
   },
 ] as const;
 
@@ -131,3 +143,61 @@ export const loadDailySales = (from: string, to: string) =>
 /** `GET /ui/reports/sessions`. */
 export const loadSessionsReport = (from: string, to: string) =>
   loadReport<SessionsReport>("sessions", from, to, (b) => hasList(b, "by_device"));
+
+export type ShiftReadOutcome<T> =
+  | { kind: "ok"; view: T }
+  | { kind: "not_found" }
+  | { kind: "open" }
+  | { kind: "denied" }
+  | { kind: "signed_out" }
+  | { kind: "unreachable" };
+
+async function loadShiftRead<T>(
+  path: string,
+  isView: (body: unknown) => boolean,
+): Promise<ShiftReadOutcome<T>> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  try {
+    const url = `${REPORTS_URL}/${path}`; // i18n-ignore
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (res.status === 401) {
+      setToken(null);
+      return { kind: "signed_out" };
+    }
+    if (res.status === 403) return { kind: "denied" };
+    if (res.status === 404) return { kind: "not_found" };
+    if (res.status === 409) return { kind: "open" };
+    const body: unknown = res.ok ? await res.json() : null;
+    return isView(body) ? { kind: "ok", view: body as T } : { kind: "unreachable" };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/** `GET /ui/reports/shifts`: the closed shifts, newest first. */
+export const loadShiftList = () => loadShiftRead<ShiftList>("shifts", (b) => hasList(b, "shifts"));
+
+/** `GET /ui/reports/shifts/{id}`: the Z-report of a closed shift, as stored at close. */
+export const loadZReport = (shiftId: string) =>
+  loadShiftRead<ZReport>(`shifts/${encodeURIComponent(shiftId)}`, (b) => hasList(b, "by_type")); // i18n-ignore
+
+export type ReprintZOutcome = "queued" | "refused" | "signed_out" | "unreachable";
+
+/**
+ * Prints the Z-report of a closed shift again (`shift.reprint_z`, Story 5.28). The Hub queues it
+ * on the print outbox, marked "Reprint"; the answer only says it is queued.
+ */
+export async function reprintZReport(shiftId: string): Promise<ReprintZOutcome> {
+  const outcome = await submitIntent(
+    { kind: "shift.reprint_z", shift_id: shiftId },
+    newIdempotencyKey(),
+  );
+  if (outcome.kind === "applied") return "queued";
+  if (outcome.kind === "signed_out") return "signed_out";
+  return outcome.kind === "error" ? "refused" : "unreachable";
+}

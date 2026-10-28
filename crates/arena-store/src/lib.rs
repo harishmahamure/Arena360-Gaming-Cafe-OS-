@@ -33,6 +33,7 @@ mod shifts;
 mod staff;
 mod stock;
 mod wallet;
+mod zreport;
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -174,10 +175,11 @@ pub use sessions::{
 };
 pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
 pub use shifts::{
-    NewCashEvent, NewCashMove, NewShift, OpenSale, ShiftClosing, ShiftRow, close_shift,
-    count_cash_events, expected_cash, insert_cash_event, insert_cash_move, insert_shift,
-    last_opening_float, open_sales_of_order, open_shift, open_shift_id, shift_breakdown,
-    shift_count, shift_of_order_sale, variance_threshold,
+    NewCashEvent, NewCashMove, NewShift, OpenSale, ShiftClosing, ShiftDetail, ShiftRow,
+    close_shift, count_cash_events, expected_cash, find_shift, insert_cash_event, insert_cash_move,
+    insert_shift, last_opening_float, list_closed_shifts, open_sales_of_order, open_shift,
+    open_shift_id, shift_breakdown, shift_count, shift_of_order_sale, staff_display_name,
+    variance_threshold,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,
@@ -198,6 +200,9 @@ pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
     insert_topup_order, insert_wallet, insert_wallet_txn, list_order_wallet_txns, list_wallet_txns,
     order_player_and_kind, wallet_balance,
+};
+pub use zreport::{
+    ZCashEventRow, ZPaymentRow, ZRefundRow, ZReportRows, ZVoidRow, ZWasteRow, load_z_report_rows,
 };
 
 /// The transaction `apply()` and the replayer run in.
@@ -1207,6 +1212,39 @@ impl Store {
                 devices: reports::report_devices(&s.conn)?,
                 groups: reports::group_names(&s.conn)?,
             })
+        })
+    }
+
+    /// The shift `id` (open or closed) with its Z-report, if one was stored (Story 5.28).
+    pub fn shift_detail(&self, id: &str) -> Result<Option<ShiftDetail>, AppError> {
+        if !self.table_exists("shifts")? {
+            return Ok(None);
+        }
+        find_shift(&self.conn, id)
+    }
+
+    /// Closed shifts, newest first, for the Shifts report (Story 5.28).
+    pub fn closed_shifts(&self, limit: i64) -> Result<Vec<ShiftDetail>, AppError> {
+        if !self.table_exists("shifts")? {
+            return Ok(Vec::new());
+        }
+        list_closed_shifts(&self.conn, limit)
+    }
+
+    /// The rows the Z-report of the shift `id` is built from; the window runs from its opening to
+    /// its `closed_at`. `None` when there is no such shift or it is still open.
+    pub fn z_report_rows(&self, id: &str) -> Result<Option<ZReportRows>, AppError> {
+        if !self.table_exists("shifts")? || !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        self.read_consistent(|s| {
+            let Some(shift) = find_shift(&s.conn, id)? else {
+                return Ok(None);
+            };
+            let Some(closed_at) = shift.closed_at.filter(|_| !shift.open) else {
+                return Ok(None);
+            };
+            Ok(Some(load_z_report_rows(&s.conn, shift, closed_at)?))
         })
     }
 

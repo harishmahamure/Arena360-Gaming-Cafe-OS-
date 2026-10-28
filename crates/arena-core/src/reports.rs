@@ -6,11 +6,12 @@
 use std::collections::BTreeMap;
 
 use arena_proto::{
-    AppError, DailySales, DeviceSessions, ErrorCode, GroupSessions, HourSales, NamedSales,
-    RECEIVED_CREDIT_COLLECT, RECEIVED_TOPUP, REPORT_MAX_DAYS, ReportAmount, SALES_DISCOUNTS,
-    SALES_PLANS, SALES_PLAY_TIME, SALES_PRODUCTS, SALES_TAX_ADDED, SessionsReport,
+    AppError, CASH_DEPOSIT, CASH_DRAWER_OPEN, CASH_EXPENSE, DailySales, DeviceSessions, ErrorCode,
+    GroupSessions, HourSales, NamedSales, RECEIVED_CREDIT_COLLECT, RECEIVED_TOPUP, REPORT_MAX_DAYS,
+    ReportAmount, SALES_DISCOUNTS, SALES_PLANS, SALES_PLAY_TIME, SALES_PRODUCTS, SALES_TAX_ADDED,
+    SessionsReport, ZCashLine, ZReference, ZReferenceGroup, ZRefund, ZReport, ZVoid, ZWaste,
 };
-use arena_store::{SalesReportRows, SessionsReportRows};
+use arena_store::{SalesReportRows, SessionsReportRows, ZCashEventRow, ZReportRows};
 use chrono::{NaiveDate, TimeZone, Timelike};
 use chrono_tz::Tz;
 
@@ -334,6 +335,165 @@ pub fn sessions_report(
     }
 }
 
+/// The payment methods in the order a Z-report lists them; any other method follows, by name.
+const Z_METHODS: [&str; 5] = ["cash", "upi", "card", "wallet", "credit"];
+
+/// The Z-report of a shift (Story 5.28), folded from the rows of its window. Sales by type reuse
+/// the Story 5.27 fold, so they add up to the stored totals; payments are the positive payment
+/// rows (top-ups and credit collections are payments, not sales); refunds are negative lines. The
+/// close facts (counted, expected, variance, reason, approver) come from `rows.shift`.
+pub fn z_report(rows: &ZReportRows, tz: Tz) -> ZReport {
+    let s = &rows.shift;
+    let sales = daily_sales(&rows.sales, "", "", tz);
+
+    let mut methods = BTreeMap::<&str, (i64, i64)>::new();
+    for p in &rows.payments {
+        let m = methods.entry(p.method.as_str()).or_default();
+        m.0 += p.amount_minor;
+        m.1 += 1;
+    }
+    let mut ordered: Vec<&str> = Z_METHODS
+        .into_iter()
+        .filter(|m| methods.contains_key(m))
+        .collect();
+    ordered.extend(methods.keys().filter(|m| !Z_METHODS.contains(m)));
+    let payments = ordered
+        .into_iter()
+        .map(|m| ReportAmount {
+            key: m.to_owned(),
+            amount_minor: methods[m].0,
+            count: methods[m].1,
+        })
+        .collect();
+
+    let references = ["upi", "card"]
+        .into_iter()
+        .filter_map(|method| {
+            let list: Vec<ZReference> = rows
+                .payments
+                .iter()
+                .filter(|p| p.method == method)
+                .map(|p| ZReference {
+                    at: p.at,
+                    invoice_no: p.invoice_no.clone().unwrap_or_default(),
+                    amount_minor: p.amount_minor,
+                    reference: p.reference.clone().unwrap_or_default(),
+                })
+                .collect();
+            (!list.is_empty()).then(|| ZReferenceGroup {
+                method: method.to_owned(),
+                rows: list,
+            })
+        })
+        .collect();
+
+    let received = [RECEIVED_TOPUP, RECEIVED_CREDIT_COLLECT]
+        .into_iter()
+        .map(|kind| {
+            let (amount_minor, count) = rows
+                .received
+                .iter()
+                .filter(|r| r.kind == kind)
+                .fold((0, 0), |(a, c), r| (a + r.amount_minor, c + r.count));
+            ReportAmount {
+                key: kind.to_owned(),
+                amount_minor,
+                count,
+            }
+        })
+        .collect();
+
+    let refunds: Vec<ZRefund> = rows
+        .refunds
+        .iter()
+        .map(|r| ZRefund {
+            credit_note_no: r.credit_note_no.clone(),
+            method: r.method.clone().unwrap_or_default(),
+            amount_minor: -r.amount_minor,
+        })
+        .collect();
+
+    let mut waste = BTreeMap::<&str, (i64, i64)>::new();
+    for w in &rows.waste {
+        let e = waste.entry(w.reason.as_str()).or_default();
+        e.0 += w.qty;
+        e.1 += w.value_minor;
+    }
+    let mut voids = BTreeMap::<&str, (i64, i64)>::new();
+    for v in &rows.voids {
+        let e = voids.entry(v.reason.as_str()).or_default();
+        e.0 += 1;
+        e.1 += v.amount_minor;
+    }
+
+    let line = |e: &ZCashEventRow, expense: bool| ZCashLine {
+        category: e.category.clone().filter(|_| expense).unwrap_or_default(),
+        reference: e.reference.clone().filter(|_| !expense).unwrap_or_default(),
+        note: e.note.clone().unwrap_or_default(),
+        paid_from: e.paid_from.clone().filter(|_| expense).unwrap_or_default(),
+        amount_minor: e
+            .spent_minor
+            .filter(|_| expense)
+            .unwrap_or_else(|| e.amount_minor.abs()),
+    };
+    let of_kind = |kind: &str, expense: bool| -> Vec<ZCashLine> {
+        rows.cash_events
+            .iter()
+            .filter(|e| e.kind == kind)
+            .map(|e| line(e, expense))
+            .collect()
+    };
+    let drawer_opens = rows
+        .cash_events
+        .iter()
+        .filter(|e| e.kind == CASH_DRAWER_OPEN)
+        .count();
+
+    ZReport {
+        shift_id: s.id.clone(),
+        opened_at: s.opened_at,
+        closed_at: s.closed_at.unwrap_or(s.opened_at),
+        opened_by: s.opened_by.clone(),
+        closed_by: s.closed_by.clone(),
+        rebuilt: false,
+        orders: sales.orders,
+        sales_minor: sales.sales_minor,
+        tax_minor: sales.tax_minor,
+        by_type: sales.by_type,
+        payments,
+        references,
+        received,
+        refunds_minor: refunds.iter().map(|r| r.amount_minor).sum(),
+        refunds,
+        waste: waste
+            .into_iter()
+            .map(|(reason, (qty, value_minor))| ZWaste {
+                reason: reason.to_owned(),
+                qty,
+                value_minor,
+            })
+            .collect(),
+        expenses: of_kind(CASH_EXPENSE, true),
+        deposits: of_kind(CASH_DEPOSIT, false),
+        voids: voids
+            .into_iter()
+            .map(|(reason, (count, amount_minor))| ZVoid {
+                reason: reason.to_owned(),
+                count,
+                amount_minor,
+            })
+            .collect(),
+        drawer_opens: i64::try_from(drawer_opens).unwrap_or(i64::MAX),
+        float_minor: s.float_minor,
+        expected_minor: s.expected_minor.unwrap_or(0),
+        counted_minor: s.counted_minor.unwrap_or(0),
+        variance_minor: s.variance_minor.unwrap_or(0),
+        variance_reason: s.variance_reason.clone(),
+        variance_note: s.variance_note.clone(),
+        approver: s.approver.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arena_store::SessionReportRow;
@@ -363,6 +523,195 @@ mod tests {
             is_plan: plan,
             category: cat.into(),
         }
+    }
+
+    fn shift_detail() -> arena_store::ShiftDetail {
+        arena_store::ShiftDetail {
+            id: "SH".into(),
+            open: false,
+            opened_at: 1_000,
+            closed_at: Some(9_000),
+            opened_by: "Meera".into(),
+            closed_by: "Asha".into(),
+            float_minor: 500,
+            counted_minor: Some(1_400),
+            expected_minor: Some(1_500),
+            variance_minor: Some(-100),
+            variance_reason: None,
+            variance_note: None,
+            approver: None,
+            z_report: None,
+        }
+    }
+
+    fn payment(method: &str, amount: i64, reference: Option<&str>) -> arena_store::ZPaymentRow {
+        arena_store::ZPaymentRow {
+            method: method.into(),
+            amount_minor: amount,
+            reference: reference.map(Into::into),
+            at: 2_000,
+            invoice_no: None,
+        }
+    }
+
+    #[test]
+    fn a_z_report_folds_the_shift_rows_and_adds_up_to_the_stored_totals() {
+        let rows = ZReportRows {
+            shift: shift_detail(),
+            sales: SalesReportRows {
+                orders: vec![order("a", "pos_sale", 700, "", 2_000)],
+                lines: vec![line("a", 700, true, false, "Drinks")],
+                ..SalesReportRows::default()
+            },
+            received: vec![ReceivedRow {
+                kind: "credit_collect".into(),
+                amount_minor: 300,
+                count: 1,
+            }],
+            payments: vec![
+                payment("upi", 400, Some("R1")),
+                payment("cash", 300, None),
+                payment("gift", 5, None),
+                payment("card", 300, Some("T-9")),
+                payment("cash", 300, None),
+            ],
+            refunds: vec![arena_store::ZRefundRow {
+                credit_note_no: "CN/1".into(),
+                method: None,
+                amount_minor: 50,
+            }],
+            waste: vec![
+                arena_store::ZWasteRow {
+                    reason: "spoiled".into(),
+                    qty: 1,
+                    value_minor: 20,
+                },
+                arena_store::ZWasteRow {
+                    reason: "spoiled".into(),
+                    qty: 2,
+                    value_minor: 40,
+                },
+            ],
+            voids: vec![
+                arena_store::ZVoidRow {
+                    reason: "mistake".into(),
+                    amount_minor: 90,
+                },
+                arena_store::ZVoidRow {
+                    reason: "mistake".into(),
+                    amount_minor: 10,
+                },
+            ],
+            cash_events: vec![
+                ZCashEventRow {
+                    kind: "expense".into(),
+                    amount_minor: 0,
+                    reference: None,
+                    category: Some("repairs".into()),
+                    paid_from: Some("owner".into()),
+                    spent_minor: Some(250),
+                    note: None,
+                },
+                ZCashEventRow {
+                    kind: "deposit".into(),
+                    amount_minor: -800,
+                    reference: Some("S-1".into()),
+                    category: None,
+                    paid_from: None,
+                    spent_minor: None,
+                    note: None,
+                },
+                ZCashEventRow {
+                    kind: "drawer_open".into(),
+                    amount_minor: 0,
+                    reference: None,
+                    category: None,
+                    paid_from: None,
+                    spent_minor: None,
+                    note: None,
+                },
+            ],
+        };
+        let z = z_report(&rows, Tz::UTC);
+        assert_eq!((z.orders, z.sales_minor), (1, 700));
+        assert_eq!(z.by_type.iter().map(|t| t.amount_minor).sum::<i64>(), 700);
+        // Cash, UPI and card in that order, other methods after; counts per row.
+        assert_eq!(
+            z.payments
+                .iter()
+                .map(|p| (p.key.as_str(), p.amount_minor, p.count))
+                .collect::<Vec<_>>(),
+            [
+                ("cash", 600, 2),
+                ("upi", 400, 1),
+                ("card", 300, 1),
+                ("gift", 5, 1)
+            ]
+        );
+        assert_eq!(
+            z.references
+                .iter()
+                .map(|g| g.method.as_str())
+                .collect::<Vec<_>>(),
+            ["upi", "card"]
+        );
+        assert_eq!(z.references[0].rows[0].reference, "R1");
+        assert_eq!(
+            z.received
+                .iter()
+                .map(|r| (r.key.as_str(), r.amount_minor))
+                .collect::<Vec<_>>(),
+            [("topup", 0), ("credit_collect", 300)]
+        );
+        assert_eq!(
+            (
+                z.refunds[0].amount_minor,
+                z.refunds[0].method.as_str(),
+                z.refunds_minor
+            ),
+            (-50, "", -50)
+        );
+        assert_eq!(
+            (z.waste.len(), z.waste[0].qty, z.waste[0].value_minor),
+            (1, 3, 60)
+        );
+        assert_eq!((z.voids[0].count, z.voids[0].amount_minor), (2, 100));
+        assert_eq!(
+            (z.expenses[0].amount_minor, z.expenses[0].paid_from.as_str()),
+            (250, "owner")
+        );
+        assert_eq!(
+            (z.deposits[0].amount_minor, z.deposits[0].reference.as_str()),
+            (800, "S-1")
+        );
+        assert_eq!(z.drawer_opens, 1);
+        assert_eq!(
+            (z.expected_minor, z.counted_minor, z.variance_minor),
+            (1_500, 1_400, -100)
+        );
+        assert_eq!((z.opened_at, z.closed_at), (1_000, 9_000));
+    }
+
+    #[test]
+    fn an_empty_shift_has_empty_sections_and_zero_totals() {
+        let rows = ZReportRows {
+            shift: shift_detail(),
+            sales: SalesReportRows::default(),
+            received: vec![],
+            payments: vec![],
+            refunds: vec![],
+            waste: vec![],
+            voids: vec![],
+            cash_events: vec![],
+        };
+        let z = z_report(&rows, Tz::UTC);
+        assert_eq!(
+            (z.orders, z.sales_minor, z.refunds_minor, z.drawer_opens),
+            (0, 0, 0, 0)
+        );
+        assert!(z.payments.is_empty() && z.references.is_empty() && z.waste.is_empty());
+        assert_eq!(z.by_type.len(), 5);
+        assert_eq!(z.received.len(), 2);
     }
 
     #[test]

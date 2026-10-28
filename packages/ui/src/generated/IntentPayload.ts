@@ -90,6 +90,7 @@ import type { StockWasteReverted } from "./StockWasteReverted";
 import type { StockWriteOff } from "./StockWriteOff";
 import type { WalletTopup } from "./WalletTopup";
 import type { WalletTopupReverted } from "./WalletTopupReverted";
+import type { ZReportReprint } from "./ZReportReprint";
 import type { ZoneDelete } from "./ZoneDelete";
 import type { ZoneUpsert } from "./ZoneUpsert";
 
@@ -146,6 +147,7 @@ export type IntentPayload =
   | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "shift.open" } & ShiftOpen)
   | ({ kind: "shift.close" } & ShiftClose)
+  | ({ kind: "shift.reprint_z" } & ZReportReprint)
   | ({ kind: "cash.deposit" } & CashDeposit)
   | ({ kind: "expense.create" } & ExpenseCreate)
   | ({ kind: "device.maintenance" } & DeviceMaintenance)

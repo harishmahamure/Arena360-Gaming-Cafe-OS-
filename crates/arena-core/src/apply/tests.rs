@@ -49,6 +49,7 @@ mod shift_close;
 mod stock;
 mod test_session;
 mod transfer;
+mod z_report;
 
 const T0: i64 = 1_800_000_000_000;
 const HUB: &str = "01JHUBAAAAAAAAAAAAAAAAAAAA";

@@ -7,14 +7,15 @@
 use arena_proto::{
     ActorKind, AppError, CASH_DEPOSIT, CASH_EXPENSE, CASH_FLOAT_IN, CASH_SALE, CASH_SALE_REVERTED,
     CashDeposit, DEPOSIT_REFERENCE_MAX_CHARS, EXPENSE_NOTE_MAX_CHARS, ErrorCode, ExpenseCreate,
-    ExpensePaidFrom, Intent, MAX_CASH_MOVE_MINOR, MAX_FLOAT_MINOR, PaymentMethod, PaymentRow,
-    Permission, ShiftClose, ShiftOpen, VARIANCE_NOTE_MAX_CHARS, VarianceReason,
-    receipt_photo_problem,
+    ExpensePaidFrom, Intent, KEY_PRINTER_SELECTED, MAX_CASH_MOVE_MINOR, MAX_FLOAT_MINOR,
+    PaymentMethod, PaymentRow, Permission, PrinterSelected, ShiftClose, ShiftOpen,
+    VARIANCE_NOTE_MAX_CHARS, VarianceReason, receipt_photo_problem,
 };
 use arena_store::{
-    ChangeOp, NewCashEvent, NewCashMove, NewShift, RowKey, ShiftClosing, ShiftRow, StoreTx,
-    close_shift, expected_cash, insert_cash_event, insert_cash_move, insert_shift,
-    last_opening_float, open_sales_of_order, open_shift, variance_threshold,
+    ChangeOp, KIND_PRINT, NewCashEvent, NewCashMove, NewShift, RowKey, ShiftClosing, ShiftRow,
+    StoreTx, close_shift, expected_cash, find_setting, find_shift, insert_cash_event,
+    insert_cash_move, insert_outbox, insert_shift, last_opening_float, load_z_report_rows,
+    open_sales_of_order, open_shift, staff_display_name, variance_threshold,
 };
 
 use crate::rbac;
@@ -441,6 +442,8 @@ pub(super) fn mutate_close(
             .as_ref()
             .map_or(intent.actor.id.as_str(), |e| e.id.as_str())
     });
+    let next_float_minor = c.counted_minor - deposited;
+    let report = z_report_json(tx, intent, shift, c, t, &check, approver, now_ms)?;
     close_shift(
         tx,
         &ShiftClosing {
@@ -453,9 +456,11 @@ pub(super) fn mutate_close(
             variance_note: check.note.as_deref(),
             closed_by: &intent.actor.id,
             approver_id: approver,
-            next_float_minor: c.counted_minor - deposited,
+            next_float_minor,
+            z_report: Some(&report),
         },
     )?;
+    queue_z_print(tx, intent, &shift.id, now_ms)?;
     written.push(Written {
         key: RowKey::Shifts {
             id: shift.id.clone(),
@@ -464,6 +469,63 @@ pub(super) fn mutate_close(
         before: None,
     });
     Ok(written)
+}
+
+/// Builds the Z-report of the shift being closed from its stored rows and returns it as JSON
+/// (Story 5.28). The window runs from the shift's opening to this close; the count facts are the
+/// ones this close is about to store. Called after the deposit at close was written, so the
+/// deposit is in the report.
+#[allow(clippy::too_many_arguments)]
+fn z_report_json(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    shift: &ShiftRow,
+    c: &ShiftClose,
+    t: &ShiftTarget,
+    check: &CloseCheck,
+    approver: Option<&str>,
+    now_ms: i64,
+) -> Result<String, AppError> {
+    let internal = |m: &str| AppError::new(ErrorCode::Internal, m.to_owned());
+    let mut detail =
+        find_shift(tx, &shift.id)?.ok_or_else(|| internal("the open shift is gone"))?;
+    detail.open = false;
+    detail.closed_at = Some(now_ms);
+    detail.closed_by = staff_display_name(tx, &intent.actor.id)?;
+    detail.counted_minor = Some(c.counted_minor);
+    detail.expected_minor = Some(t.expected_minor);
+    detail.variance_minor = Some(check.difference_minor);
+    detail.variance_reason = check.reason.map(|r| r.as_str().to_owned());
+    detail.variance_note = check.note.clone();
+    detail.approver = approver.map(|a| staff_display_name(tx, a)).transpose()?;
+    let rows = load_z_report_rows(tx, detail, now_ms)?;
+    let tz = crate::locale::tz_at(tx, now_ms)?.unwrap_or(chrono_tz::Tz::UTC);
+    serde_json::to_string(&crate::reports::z_report(&rows, tz))
+        .map_err(|e| internal(&format!("the Z-report did not serialise: {e}")))
+}
+
+/// Queues the Z-report on the print outbox when a printer is chosen (`printer.selected` parses to
+/// a printer). With none chosen nothing is queued and the close completes; a printer that is down
+/// is the print task's business, never the close's.
+fn queue_z_print(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    shift_id: &str,
+    now_ms: i64,
+) -> Result<(), AppError> {
+    let chosen = find_setting(tx, KEY_PRINTER_SELECTED)?
+        .is_some_and(|s| matches!(PrinterSelected::parse(&s.value), Ok(Some(_))));
+    if !chosen {
+        return Ok(());
+    }
+    insert_outbox(
+        tx,
+        &ulid::Ulid::generate().to_string(),
+        KIND_PRINT,
+        shift_id,
+        &super::receipt_print::z_payload(false, &intent.actor.id),
+        now_ms,
+    )
 }
 
 fn inserted(id: String) -> Written {

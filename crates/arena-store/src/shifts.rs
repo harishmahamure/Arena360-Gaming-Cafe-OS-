@@ -219,6 +219,9 @@ pub struct ShiftClosing<'a> {
     pub closed_by: &'a str,
     pub approver_id: Option<&'a str>,
     pub next_float_minor: i64,
+    /// The Z-report as JSON (Story 5.28), stored with the close so every later view shows what
+    /// was printed.
+    pub z_report: Option<&'a str>,
 }
 
 /// Closes the open shift with its count; the caller stamps the row.
@@ -227,7 +230,8 @@ pub fn close_shift(conn: &Connection, c: &ShiftClosing<'_>) -> Result<(), AppErr
         .execute(
             "UPDATE shifts SET state = 'closed', closed_at = ?2, counted_minor = ?3,
                     expected_minor = ?4, variance_minor = ?5, variance_reason = ?6,
-                    variance_note = ?7, closed_by = ?8, approver_id = ?9, next_float_minor = ?10
+                    variance_note = ?7, closed_by = ?8, approver_id = ?9, next_float_minor = ?10,
+                    z_report = ?11
              WHERE id = ?1 AND state = 'open'",
             params![
                 c.shift_id,
@@ -239,7 +243,8 @@ pub fn close_shift(conn: &Connection, c: &ShiftClosing<'_>) -> Result<(), AppErr
                 c.variance_note,
                 c.closed_by,
                 c.approver_id,
-                c.next_float_minor
+                c.next_float_minor,
+                c.z_report
             ],
         )
         .map_err(db_error)?;
@@ -325,4 +330,92 @@ pub fn expected_cash(conn: &Connection, shift_id: &str) -> Result<i64, AppError>
         |r| r.get(0),
     )
     .map_err(db_error)
+}
+
+/// A shift as the Shifts report and the Z-report read it: who opened and closed it, what was
+/// counted, and the stored Z-report when the close wrote one. Staff are shown by display name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShiftDetail {
+    pub id: String,
+    pub open: bool,
+    pub opened_at: i64,
+    pub closed_at: Option<i64>,
+    pub opened_by: String,
+    pub closed_by: String,
+    pub float_minor: i64,
+    pub counted_minor: Option<i64>,
+    pub expected_minor: Option<i64>,
+    pub variance_minor: Option<i64>,
+    pub variance_reason: Option<String>,
+    pub variance_note: Option<String>,
+    pub approver: Option<String>,
+    /// The Z-report JSON stored at close; `None` for an open shift and one closed before Story 5.28.
+    pub z_report: Option<String>,
+}
+
+const DETAIL_COLUMNS: &str = "s.id, s.state = 'open', s.opened_at, s.closed_at,
+        COALESCE(o.display_name, s.staff_id), COALESCE(c.display_name, s.closed_by, ''),
+        s.float_minor, s.counted_minor, s.expected_minor, s.variance_minor, s.variance_reason,
+        s.variance_note, a.display_name, s.z_report";
+
+const DETAIL_JOINS: &str = "FROM shifts s
+        LEFT JOIN staff o ON o.staff_id = s.staff_id
+        LEFT JOIN staff c ON c.staff_id = s.closed_by
+        LEFT JOIN staff a ON a.staff_id = s.approver_id";
+
+fn detail(r: &rusqlite::Row<'_>) -> rusqlite::Result<ShiftDetail> {
+    Ok(ShiftDetail {
+        id: r.get(0)?,
+        open: r.get(1)?,
+        opened_at: r.get(2)?,
+        closed_at: r.get(3)?,
+        opened_by: r.get(4)?,
+        closed_by: r.get(5)?,
+        float_minor: r.get(6)?,
+        counted_minor: r.get(7)?,
+        expected_minor: r.get(8)?,
+        variance_minor: r.get(9)?,
+        variance_reason: r.get(10)?,
+        variance_note: r.get(11)?,
+        approver: r.get(12)?,
+        z_report: r.get(13)?,
+    })
+}
+
+/// The shift `id`, open or closed.
+pub fn find_shift(conn: &Connection, id: &str) -> Result<Option<ShiftDetail>, AppError> {
+    conn.query_row(
+        &format!("SELECT {DETAIL_COLUMNS} {DETAIL_JOINS} WHERE s.id = ?1"),
+        [id],
+        detail,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Closed shifts, newest first.
+pub fn list_closed_shifts(conn: &Connection, limit: i64) -> Result<Vec<ShiftDetail>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {DETAIL_COLUMNS} {DETAIL_JOINS} WHERE s.state = 'closed'
+             ORDER BY s.opened_at DESC, s.id DESC LIMIT ?1"
+        ))
+        .map_err(db_error)?;
+    stmt.query_map([limit], detail)
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)
+}
+
+/// The display name of a staff member, or the id when there is none.
+pub fn staff_display_name(conn: &Connection, staff_id: &str) -> Result<String, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT display_name FROM staff WHERE staff_id = ?1",
+            [staff_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(db_error)?
+        .unwrap_or_else(|| staff_id.to_owned()))
 }

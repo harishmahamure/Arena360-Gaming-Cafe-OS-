@@ -91,6 +91,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "cash.deposit": "hub.audit.intent.cash.deposit",
   "expense.create": "hub.audit.intent.expense.create",
   "shift.close": "hub.audit.intent.shift.close",
+  "shift.reprint_z": "hub.audit.intent.shift.reprint_z",
 };
 
 /** An intent kind's label. */

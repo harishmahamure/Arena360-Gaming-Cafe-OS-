@@ -1,0 +1,69 @@
+{ESC}@{ESC}t{00}{ESC}M{00}{ESC}E{01}{GS}!{11} Arena 360 Koramangala
+{ESC}E{00}{GS}!{00}      12, 5th Cross, Koramangala 4th Block
+                Bengaluru 560034
+                +91 98450 12345
+------------------------------------------------
+{ESC}E{01}{GS}!{00}                    Z-Report
+{ESC}E{00}{GS}!{00}Opened                         28 Oct 2026 06:05
+Closed                         28 Oct 2026 14:05
+Opened by                                  Meera
+Closed by                                   Asha
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Sales
+{ESC}E{00}{GS}!{00}Play time                               7,000.00
+Products                                4,800.00
+Plans                                   1,000.00
+Discounts                                -500.00
+Tax added                                 200.00
+{ESC}E{01}{GS}!{00}Total sales                          Rs12,500.00
+{ESC}E{00}{GS}!{00}Bills                                         14
+Tax included                            1,906.78
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Payments
+{ESC}E{00}{GS}!{00}Cash x8                                 6,000.00
+UPI x4                                  4,500.00
+Card x1                                 1,500.00
+Wallet x2                                 500.00
+Received, not sales
+Wallet top-ups x2                         500.00
+------------------------------------------------
+{ESC}E{01}{GS}!{00}UPI and card references
+{ESC}E{00}{GS}!{00}UPI
+11:05 KOR/26-27/E1k/000141              2,000.00
+Ref UTR4455781234
+13:05                                   2,500.00
+Ref 1234
+Card
+13:35 KOR/26-27/E1k/000142              1,500.00
+Ref T-9
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Refunds
+{ESC}E{00}{GS}!{00}KOR/26-27/E1k/000143 Cash                -400.00
+{ESC}E{01}{GS}!{00}Total refunds                            -400.00
+{ESC}E{00}{GS}!{00}------------------------------------------------
+{ESC}E{01}{GS}!{00}Waste
+{ESC}E{00}{GS}!{00}Spoiled x2                                 40.00
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Expenses
+{ESC}E{00}{GS}!{00}Food stock (drawer)                       350.00
+Milk and ice for the shake counter
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Deposits
+{ESC}E{00}{GS}!{00}Slip SLIP-17                            3,000.00
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Voids
+{ESC}E{00}{GS}!{00}Mistake x1                                 90.00
+------------------------------------------------
+Drawer opens                                   8
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Cash count
+{ESC}E{00}{GS}!{00}Float                                   1,000.00
+Expected                                3,250.00
+Counted                                 3,200.50
+{ESC}E{01}{GS}!{01}VARIANCE                                  -49.50
+{ESC}E{00}{GS}!{00}Reason                            Counting error
+Approved by                                Rohan
+------------------------------------------------
+             Thank you for playing!
+      Goods once sold are not returnable.
+{ESC}d{04}{GS}VB{00}

@@ -302,3 +302,13 @@ test("a member without shift.close sees no Close shift button", async ({ page })
   await open(page, []);
   await expect(page.getByRole("button", { name: en["hub.shift.close.start"] })).toHaveCount(0);
 });
+
+test("the close action also says it prints the Z-report", async ({ page }) => {
+  await open(page, ["shift.close"]);
+  await startClose(page);
+  await singleTotal(page, "4950");
+  expect(en["hub.shift.close.submit"]).toBe("Close shift · print Z-report");
+  await expect(
+    page.getByRole("button", { name: "Close shift · print Z-report", exact: true }),
+  ).toBeVisible();
+});

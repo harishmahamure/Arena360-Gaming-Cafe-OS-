@@ -232,7 +232,8 @@ pub use receipt::{
     NOTIFY_STATE_QUEUED, NOTIFY_STATE_SKIPPED, RECEIPT_ADDRESS_MAX_LINES, RECEIPT_DEFAULT_CHOICES,
     RECEIPT_ERROR_MAX_CHARS, RECEIPT_FOOTER_MAX_LINES, RECEIPT_LINE_MAX_CHARS,
     RECEIPT_PHONE_MAX_LINES, ReceiptChoice, ReceiptPrintFailed, ReceiptPrinted, ReceiptReprint,
-    WhatsappRefusal, notify_gate, tier_is_paid, valid_receipt_lines, whatsapp_refusal,
+    WhatsappRefusal, ZReportReprint, notify_gate, tier_is_paid, valid_receipt_lines,
+    whatsapp_refusal,
 };
 pub use refund::{
     MAX_REFUND_LINES, REFUND_NOTE_MAX_CHARS, RefundCreate, RefundInvoice, RefundLineReq,
@@ -241,7 +242,8 @@ pub use refund::{
 pub use report::{
     DailySales, DeviceSessions, GroupSessions, HourSales, NamedSales, RECEIVED_CREDIT_COLLECT,
     RECEIVED_TOPUP, REPORT_MAX_DAYS, ReportAmount, SALES_DISCOUNTS, SALES_PLANS, SALES_PLAY_TIME,
-    SALES_PRODUCTS, SALES_TAX_ADDED, SessionsReport,
+    SALES_PRODUCTS, SALES_TAX_ADDED, SHIFT_LIST_LIMIT, SessionsReport, ShiftList, ShiftListRow,
+    ZCashLine, ZReference, ZReferenceGroup, ZRefund, ZReport, ZVoid, ZWaste,
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{

@@ -968,6 +968,91 @@ impl SnapshotReader {
         })
     }
 
+    /// The Z-report of a closed shift (Story 5.28): the one stored at close, or for a shift closed
+    /// before that, one built from its rows now (`rebuilt`). `NOT_FOUND` for an unknown shift,
+    /// `STALE` while it is still open. Never writes.
+    pub fn z_report(&self, shift_id: &str, now_ms: i64) -> Result<arena_proto::ZReport, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let detail = store.shift_detail(shift_id)?.ok_or_else(|| {
+            AppError::with_field(ErrorCode::NotFound, "shift_id", "There is no such shift.")
+        })?;
+        if detail.open {
+            return Err(AppError::with_field(
+                ErrorCode::Stale,
+                "shift_id",
+                "This shift is still open.",
+            ));
+        }
+        if let Some(stored) = detail
+            .z_report
+            .as_deref()
+            .and_then(|j| serde_json::from_str::<arena_proto::ZReport>(j).ok())
+        {
+            return Ok(stored);
+        }
+        let rows = store.z_report_rows(shift_id)?.ok_or_else(|| {
+            AppError::with_field(ErrorCode::NotFound, "shift_id", "There is no such shift.")
+        })?;
+        let tz = crate::locale::current_tz(&store, now_ms)?;
+        let mut report = crate::reports::z_report(&rows, tz);
+        report.rebuilt = true;
+        Ok(report)
+    }
+
+    /// The closed shifts, newest first (the Shifts report, Story 5.28).
+    pub fn shift_list(&self) -> Result<arena_proto::ShiftList, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let shifts = store
+            .closed_shifts(arena_proto::SHIFT_LIST_LIMIT)?
+            .into_iter()
+            .filter_map(|s| {
+                Some(arena_proto::ShiftListRow {
+                    opened_at: s.opened_at,
+                    closed_at: s.closed_at?,
+                    opened_by: s.opened_by,
+                    closed_by: s.closed_by,
+                    counted_minor: s.counted_minor.unwrap_or(0),
+                    variance_minor: s.variance_minor.unwrap_or(0),
+                    shift_id: s.id,
+                })
+            })
+            .collect();
+        Ok(arena_proto::ShiftList { shifts })
+    }
+
+    /// The ESC/POS bytes of a closed shift's Z-report at the saved paper width, marked "Reprint"
+    /// when `reprint` is set; `None` when there is no such shift or it is still open.
+    pub fn z_report_bytes(
+        &self,
+        shift_id: &str,
+        reprint: bool,
+        now_ms: i64,
+    ) -> Result<Option<Vec<u8>>, AppError> {
+        let report = match self.z_report(shift_id, now_ms) {
+            Ok(r) => r,
+            Err(e) if matches!(e.code, ErrorCode::NotFound | ErrorCode::Stale) => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+        let settings = self.settings()?;
+        let snapshot = self.snapshot(now_ms)?;
+        let name = snapshot.branch.as_ref().map_or("", |b| b.name.as_str());
+        Ok(Some(crate::printer::job::z_report_bytes(
+            &settings,
+            name,
+            snapshot.locale.as_ref(),
+            &report,
+            reprint,
+        )))
+    }
+
     /// Daily sales for the business days `from` to `to` (Story 5.27), `VALIDATION_FAILED` on a
     /// bad range.
     pub fn daily_sales(

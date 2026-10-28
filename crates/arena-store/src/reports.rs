@@ -79,8 +79,27 @@ pub fn sales_orders(
     from: &str,
     to: &str,
 ) -> Result<Vec<SalesOrderRow>, AppError> {
+    sales_orders_where(conn, "o.business_day BETWEEN ?1 AND ?2", &from, &to)
+}
+
+/// The sales settled from `from_ms` to `to_ms` inclusive (UTC ms), by settle time: the bills of one
+/// shift (Story 5.28).
+pub fn sales_orders_between(
+    conn: &Connection,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<SalesOrderRow>, AppError> {
+    sales_orders_where(conn, "o.settled_at BETWEEN ?1 AND ?2", &from_ms, &to_ms)
+}
+
+fn sales_orders_where(
+    conn: &Connection,
+    cond: &str,
+    a: &dyn rusqlite::ToSql,
+    b: &dyn rusqlite::ToSql,
+) -> Result<Vec<SalesOrderRow>, AppError> {
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT o.id, o.kind, o.total_minor, o.tax_minor, COALESCE(o.coupon_minor, 0),
                     COALESCE(o.discount_minor, 0), COALESCE(o.settled_at, o.created_at),
                     COALESCE(s.group_id, es.group_id, dm.group_id, '')
@@ -89,10 +108,10 @@ pub fn sales_orders(
              LEFT JOIN sessions es ON es.id = o.extends_session_id
              LEFT JOIN devices_meta dm ON dm.device_id = o.device_id
              WHERE o.status = 'settled' AND o.kind IN ('session', 'plan_sale', 'pos_sale')
-               AND o.business_day BETWEEN ?1 AND ?2",
-        )
+               AND {cond}",
+        ))
         .map_err(db_error)?;
-    stmt.query_map(params![from, to], |r| {
+    stmt.query_map(params![a, b], |r| {
         Ok(SalesOrderRow {
             id: r.get(0)?,
             kind: r.get(1)?,
@@ -110,18 +129,36 @@ pub fn sales_orders(
 }
 
 pub fn sales_lines(conn: &Connection, from: &str, to: &str) -> Result<Vec<SalesLineRow>, AppError> {
+    sales_lines_where(conn, "o.business_day BETWEEN ?1 AND ?2", &from, &to)
+}
+
+/// The lines of the sales settled from `from_ms` to `to_ms` inclusive (Story 5.28).
+pub fn sales_lines_between(
+    conn: &Connection,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<SalesLineRow>, AppError> {
+    sales_lines_where(conn, "o.settled_at BETWEEN ?1 AND ?2", &from_ms, &to_ms)
+}
+
+fn sales_lines_where(
+    conn: &Connection,
+    cond: &str,
+    a: &dyn rusqlite::ToSql,
+    b: &dyn rusqlite::ToSql,
+) -> Result<Vec<SalesLineRow>, AppError> {
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT l.order_id, l.amount_minor, COALESCE(l.qty, 1), l.product_id IS NOT NULL,
                     l.plan_id IS NOT NULL, COALESCE(p.category, '')
              FROM order_lines l
              JOIN orders o ON o.id = l.order_id
              LEFT JOIN products p ON p.product_id = l.product_id
              WHERE o.status = 'settled' AND o.kind IN ('session', 'plan_sale', 'pos_sale')
-               AND o.business_day BETWEEN ?1 AND ?2",
-        )
+               AND {cond}",
+        ))
         .map_err(db_error)?;
-    stmt.query_map(params![from, to], |r| {
+    stmt.query_map(params![a, b], |r| {
         Ok(SalesLineRow {
             order_id: r.get(0)?,
             amount_minor: r.get(1)?,

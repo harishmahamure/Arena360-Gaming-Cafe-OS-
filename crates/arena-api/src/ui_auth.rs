@@ -3233,6 +3233,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
             get(crate::ui_report::daily_sales),
         )
         .route("/ui/reports/sessions", get(crate::ui_report::sessions))
+        .route("/ui/reports/shifts", get(crate::ui_report::shifts))
+        .route("/ui/reports/shifts/{id}", get(crate::ui_report::shift))
         .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
         .route(
             "/ui/discount/preview",
@@ -6055,6 +6057,82 @@ pub(crate) mod tests {
         assert_eq!(reveal["threshold_minor"], 10_000);
         assert_eq!(reveal["over_threshold"], false);
         assert_eq!(reveal["breakdown"]["float_minor"], 0);
+    }
+
+    /// Story 5.28: the Shifts reads need `report.view`; an unknown shift is `NOT_FOUND`, an open
+    /// one `STALE`, and a closed one returns the Z-report stored at close.
+    #[tokio::test]
+    async fn the_shift_reads_need_report_view_and_serve_the_stored_z_report() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/reports/shifts", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        for uri in ["/ui/reports/shifts", "/ui/reports/shifts/anything"] {
+            let (status, reply) = call(&hub, "GET", uri, Some(&counter), None).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {reply}");
+            assert_eq!(reply["code"], "PERMISSION_DENIED");
+        }
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let (status, list) = call(&hub, "GET", "/ui/reports/shifts", Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list["shifts"], json!([]), "the open shift is not listed");
+
+        let (status, reply) =
+            call(&hub, "GET", "/ui/reports/shifts/NOPE", Some(&manager), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{reply}");
+        assert_eq!(reply["code"], "NOT_FOUND");
+
+        let shift_id = hub
+            .writer
+            .submit(|tx| arena_store::open_shift_id(tx))
+            .await
+            .unwrap()
+            .expect("the fixture opened a shift");
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            &format!("/ui/reports/shifts/{shift_id}"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{reply}");
+        assert_eq!(reply["code"], "STALE");
+
+        hub.writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "owner".into(),
+                },
+                IntentPayload::ShiftClose(arena_proto::ShiftClose {
+                    counted_minor: 0,
+                    deposit: None,
+                    reason: None,
+                    note: None,
+                }),
+                None,
+            ))
+            .await
+            .unwrap();
+        let (status, list) = call(&hub, "GET", "/ui/reports/shifts", Some(&manager), None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list["shifts"].as_array().map(Vec::len), Some(1));
+        assert_eq!(list["shifts"][0]["shift_id"], shift_id);
+        assert_eq!(list["shifts"][0]["variance_minor"], 0);
+        let (status, z) = call(
+            &hub,
+            "GET",
+            &format!("/ui/reports/shifts/{shift_id}"),
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{z}");
+        assert_eq!(z["shift_id"], shift_id);
+        assert_eq!(z["rebuilt"], false, "the stored report is served");
+        assert_eq!(z["counted_minor"], 0);
+        assert_eq!(z["by_type"].as_array().map(Vec::len), Some(5));
     }
 
     /// Story 5.27: the Reports reads need `report.view` (the counter lacks it) and a valid range.

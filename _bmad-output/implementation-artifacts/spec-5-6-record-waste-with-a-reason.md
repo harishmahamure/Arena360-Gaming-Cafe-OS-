@@ -2,7 +2,7 @@
 title: 'Story 5.6: Record waste with a reason'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '97c62d2'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -82,3 +82,5 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review pass: lot-order consume, undo guards (waste move, same staff, 8 s, latest move, lot room), migration trigger and audit all match the spec; verify gate green. No findings.

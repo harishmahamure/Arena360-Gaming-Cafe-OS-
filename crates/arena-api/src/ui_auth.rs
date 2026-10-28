@@ -1990,6 +1990,7 @@ async fn intent(
     if matches!(
         intent.payload,
         arena_proto::IntentPayload::PlayerCreate(_)
+            | arena_proto::IntentPayload::ImportPlayers(_)
             | arena_proto::IntentPayload::PlayerUpdate(_)
             | arena_proto::IntentPayload::PlayerPasswordReset(_)
     ) {
@@ -3242,6 +3243,30 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route(
             "/ui/import/products/template",
             post(crate::ui_import::template),
+        )
+        .route(
+            "/ui/import/players/preview",
+            post(crate::ui_import::players_preview).layer(IMPORT_BODY_LIMIT),
+        )
+        .route(
+            "/ui/import/players/commit",
+            post(crate::ui_import::players_commit).layer(IMPORT_BODY_LIMIT),
+        )
+        .route(
+            "/ui/import/players/template",
+            post(crate::ui_import::players_template),
+        )
+        .route(
+            "/ui/import/plans/preview",
+            post(crate::ui_import::plans_preview).layer(IMPORT_BODY_LIMIT),
+        )
+        .route(
+            "/ui/import/plans/commit",
+            post(crate::ui_import::plans_commit).layer(IMPORT_BODY_LIMIT),
+        )
+        .route(
+            "/ui/import/plans/template",
+            post(crate::ui_import::plans_template),
         )
         .route("/ui/shift/count", get(crate::ui_shift::count))
         .route(
@@ -7018,6 +7043,401 @@ pub(crate) mod tests {
             (status, &reply["field"]),
             (StatusCode::UNPROCESSABLE_ENTITY, &json!("folder"))
         );
+    }
+
+    /// Story 5.34: a player CSV is previewed without writing, then committed in chunks of 500
+    /// with sealed profiles, balances as `import` ledger rows and credit limits; the same
+    /// attempt again changes nothing and a second file naming the same phones adds nobody.
+    #[tokio::test]
+    async fn a_player_csv_is_previewed_then_committed_in_chunks_with_a_safe_retry() {
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let dry = |csv: &str| json!({ "csv": csv });
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/preview",
+            None,
+            Some(dry("phone,name\n+919800000001,A\n")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let mut csv = String::from("phone,name,balance,credit_limit\r\n");
+        for i in 0..1001 {
+            csv.push_str(&format!(
+                "+9198{i:08},Player {i},{}.50,{}\r\n",
+                i % 50,
+                if i % 10 == 0 { 500 } else { 0 }
+            ));
+        }
+        csv.push_str("12345,Short,0,0\r\n");
+        csv.push_str("+919800000005,Again,0,0\r\n");
+        let (status, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/preview",
+            Some(&counter),
+            Some(dry(&csv)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(
+            (
+                &preview["rows"],
+                &preview["new"],
+                &preview["matched"],
+                &preview["failed"],
+                &preview["with_credit"]
+            ),
+            (
+                &json!(1003),
+                &json!(1001),
+                &json!(0),
+                &json!(2),
+                &json!(101)
+            ),
+            "{preview}"
+        );
+        let failures = preview["failures"].as_array().unwrap();
+        assert_eq!(
+            (failures[0]["row"].as_i64(), failures[0]["reason"].as_str()),
+            (Some(1003), Some("bad_phone"))
+        );
+        assert_eq!(failures[1]["reason"], "duplicate_phone");
+        assert_eq!(
+            (&preview["can_commit"], &preview["can_commit_valid"]),
+            (&json!(false), &json!(true))
+        );
+        let players = |hub: &Hub| {
+            Store::open_reader(&hub.path)
+                .unwrap()
+                .rows(Table::Players)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(players(&hub), 0, "a dry-run writes nothing");
+
+        let import_id = ulid::Ulid::generate().to_string();
+        let commit = |valid_only: bool| json!({ "csv": csv, "import_id": import_id, "valid_only": valid_only });
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/commit",
+            Some(&manager),
+            Some(commit(false)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "csv");
+        assert_eq!(players(&hub), 0);
+
+        let started = std::time::Instant::now();
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/commit",
+            Some(&manager),
+            Some(commit(true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!(
+            (
+                &done["created"],
+                &done["matched"],
+                &done["skipped"],
+                &done["chunks"]
+            ),
+            (&json!(1001), &json!(0), &json!(2), &json!(3)),
+            "{done}"
+        );
+        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+        assert_eq!(players(&hub), 1001);
+        let reader = Store::open_reader(&hub.path).unwrap();
+        let txns = reader.rows(Table::WalletTxns).unwrap();
+        assert!(
+            txns.iter()
+                .all(|t| t["reason"] == RowValue::Text("import".into())
+                    && t["order_id"] == RowValue::Null),
+            "balances are ledger rows of reason import"
+        );
+        assert!(
+            reader
+                .rows(Table::Consents)
+                .unwrap()
+                .iter()
+                .all(|c| c["granted"] == RowValue::Integer(0))
+        );
+        assert_eq!(reader.rows(Table::CreditBalances).unwrap().len(), 101);
+        let (status, hits) = call(
+            &hub,
+            "GET",
+            "/ui/players?q=%2B919800000007",
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{hits}");
+        assert_eq!(hits.as_array().unwrap().len(), 1, "{hits}");
+        assert_eq!(hits[0]["name"], "Player 7");
+        assert!(
+            hits[0]["username"]
+                .as_str()
+                .unwrap()
+                .starts_with("player.7"),
+            "{hits}"
+        );
+
+        // The same attempt again changes nothing (each chunk is the stored one, with its key).
+        let (status, again) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/commit",
+            Some(&manager),
+            Some(commit(true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(
+            (&again["created"], &again["chunks"]),
+            (&json!(1001), &json!(3))
+        );
+        assert_eq!(players(&hub), 1001, "the retry never adds anybody twice");
+
+        // A new attempt of the same file finds every phone already there.
+        let (_, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/preview",
+            Some(&manager),
+            Some(dry(&csv)),
+        )
+        .await;
+        assert_eq!(
+            (&preview["new"], &preview["matched"]),
+            (&json!(0), &json!(1001)),
+            "{preview}"
+        );
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/commit",
+            Some(&manager),
+            Some(json!({ "csv": csv, "import_id": ulid::Ulid::generate().to_string(), "valid_only": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+
+        // The template is saved, and passes its own dry-run.
+        let dir = tempfile::tempdir().unwrap();
+        let (status, saved) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/template",
+            Some(&manager),
+            Some(json!({ "folder": dir.path().to_string_lossy() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let text =
+            std::fs::read_to_string(dir.path().join(saved["file_name"].as_str().unwrap())).unwrap();
+        assert!(text.starts_with("phone,name,balance,credit_limit\r\n"));
+        assert_eq!(text.lines().count(), 3);
+        let (_, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/preview",
+            Some(&manager),
+            Some(dry(&text)),
+        )
+        .await;
+        assert_eq!(
+            (&preview["rows"], &preview["failed"]),
+            (&json!(2), &json!(0)),
+            "{preview}"
+        );
+    }
+
+    /// Story 5.34: personal data needs the branch key, so a Hub without one cannot import players.
+    #[tokio::test]
+    async fn a_player_import_is_unsupported_without_a_key_store() {
+        let hub = hub_without_kek().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/players/preview",
+            Some(&manager),
+            Some(json!({ "csv": "phone,name\n+919800000001,A\n" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
+        assert_eq!(reply["code"], "UNSUPPORTED");
+    }
+
+    /// Story 5.34: a plan CSV is checked against the plans and groups the Hub holds, then
+    /// committed in chunks; a plan with the same name is updated and a retry changes nothing.
+    #[tokio::test]
+    async fn a_plan_csv_is_previewed_then_committed_in_chunks_with_a_safe_retry() {
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let dry = |csv: &str| json!({ "csv": csv });
+        for (name, kind) in [("PC", "pc"), ("PS5", "console")] {
+            hub.writer
+                .submit_intent(intent_as(
+                    Actor {
+                        kind: ActorKind::Owner,
+                        id: "o".into(),
+                    },
+                    IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                        id: None,
+                        name: name.into(),
+                        group_kind: kind.into(),
+                        colour: "teal".into(),
+                        sort_order: 1,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+        }
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/plans/preview",
+            Some(&counter),
+            Some(dry("name,type,price\nA,pack,1\n")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+
+        let mut csv =
+            String::from("name,type,hours,price,validity_days,window_start,window_end,groups\r\n");
+        for i in 0..1001 {
+            csv.push_str(&format!(
+                "Pack {i},pack,{}.5,{}.00,30,,,PC\r\n",
+                1 + i % 9,
+                50 + i
+            ));
+        }
+        csv.push_str("Mixed,pack,1,10,30,,,PC;PS5\r\n");
+        csv.push_str("Ghost,pass,,10,7,22:00,06:00,Nowhere\r\n");
+        let (status, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/plans/preview",
+            Some(&manager),
+            Some(dry(&csv)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(
+            (
+                &preview["rows"],
+                &preview["new"],
+                &preview["updated"],
+                &preview["failed"]
+            ),
+            (&json!(1003), &json!(1001), &json!(0), &json!(2)),
+            "{preview}"
+        );
+        let failures = preview["failures"].as_array().unwrap();
+        assert_eq!(
+            (failures[0]["row"].as_i64(), failures[0]["reason"].as_str()),
+            (Some(1003), Some("group_kind"))
+        );
+        assert_eq!(failures[1]["reason"], "unknown_group");
+        let plans = |hub: &Hub| hub.auth.reader().plans().unwrap();
+        assert_eq!(plans(&hub).len(), 0, "a dry-run writes nothing");
+
+        let import_id = ulid::Ulid::generate().to_string();
+        let commit = |valid_only: bool| json!({ "csv": csv, "import_id": import_id, "valid_only": valid_only });
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/import/plans/commit",
+            Some(&manager),
+            Some(commit(false)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["field"], "csv");
+        let started = std::time::Instant::now();
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/import/plans/commit",
+            Some(&manager),
+            Some(commit(true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!(
+            (
+                &done["created"],
+                &done["updated"],
+                &done["skipped"],
+                &done["chunks"]
+            ),
+            (&json!(1001), &json!(0), &json!(2), &json!(3)),
+            "{done}"
+        );
+        assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+        let all = plans(&hub);
+        assert_eq!(all.len(), 1001);
+        let p = all.iter().find(|p| p.name == "Pack 7").unwrap();
+        assert_eq!(
+            (p.price_minor, p.minutes, p.validity_days, p.group_ids.len()),
+            (5700, Some(8 * 60 + 30), Some(30), 1)
+        );
+
+        let (status, again) = call(
+            &hub,
+            "POST",
+            "/ui/import/plans/commit",
+            Some(&manager),
+            Some(commit(true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(plans(&hub).len(), 1001, "the retry never adds a plan twice");
+
+        // A new attempt of the same file updates every plan by its name.
+        let (_, preview) = call(
+            &hub,
+            "POST",
+            "/ui/import/plans/preview",
+            Some(&manager),
+            Some(dry(&csv)),
+        )
+        .await;
+        assert_eq!(
+            (&preview["new"], &preview["updated"]),
+            (&json!(0), &json!(1001)),
+            "{preview}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (status, saved) = call(
+            &hub,
+            "POST",
+            "/ui/import/plans/template",
+            Some(&manager),
+            Some(json!({ "folder": dir.path().to_string_lossy() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let text =
+            std::fs::read_to_string(dir.path().join(saved["file_name"].as_str().unwrap())).unwrap();
+        assert!(
+            text.starts_with(
+                "name,type,hours,price,validity_days,window_start,window_end,groups\r\n"
+            )
+        );
+        assert_eq!(text.lines().count(), 3);
     }
 
     /// Story 5.30: the Players and Staff reads need `report.view` and a valid range; Players also

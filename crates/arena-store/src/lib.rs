@@ -37,6 +37,7 @@ mod stock_reports;
 mod wallet;
 mod zreport;
 
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -131,8 +132,8 @@ pub use player_packs::{
 };
 pub use players::{
     PlayerRow, find_player, find_player_key, insert_consent, insert_player, insert_player_key,
-    latest_consent, list_player_revs, phone_holder, set_player_password, update_player,
-    username_taken,
+    latest_consent, list_player_revs, phone_holder, player_import_keys, set_player_password,
+    update_player, username_taken,
 };
 pub use pricing_rules::{
     PricingRuleRow, find_pricing_rule, insert_pricing_rule, list_pricing_rules, update_pricing_rule,
@@ -203,8 +204,8 @@ pub use stock::{
 pub use stock_reports::{StockLevelRow, StockMoveReportRow, StockMovesRows};
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
-    insert_topup_order, insert_wallet, insert_wallet_txn, list_order_wallet_txns, list_wallet_txns,
-    order_player_and_kind, wallet_balance,
+    insert_import_wallet_txn, insert_topup_order, insert_wallet, insert_wallet_txn,
+    list_order_wallet_txns, list_wallet_txns, order_player_and_kind, wallet_balance,
 };
 pub use zreport::{
     ZCashEventRow, ZPaymentRow, ZRefundRow, ZReportRows, ZVoidRow, ZWasteRow, load_z_report_rows,
@@ -744,6 +745,14 @@ impl Store {
 
     pub fn devices_meta(&self) -> Result<Vec<DeviceMetaRow>, AppError> {
         list_device_meta(&self.conn)
+    }
+
+    /// The phone lookups and usernames of the live players, for a CSV import dry-run.
+    pub fn player_import_keys(&self) -> Result<(HashSet<String>, HashSet<String>), AppError> {
+        if !self.table_exists("players")? {
+            return Ok((HashSet::new(), HashSet::new()));
+        }
+        player_import_keys(&self.conn)
     }
 
     pub fn groups(&self) -> Result<Vec<GroupRow>, AppError> {

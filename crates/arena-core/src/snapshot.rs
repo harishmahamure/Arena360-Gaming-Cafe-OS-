@@ -1409,6 +1409,60 @@ impl SnapshotReader {
         })
     }
 
+    /// A dry-run of a player CSV (Story 5.34): the counts and problems, the rows that would
+    /// create a player and the usernames already in use, read against the profiles the Hub holds
+    /// now. Writes nothing. Blocking (SQLite).
+    pub fn player_import(
+        &self,
+        csv: &str,
+        now_ms: i64,
+        kek: &[u8; crate::players::KEK_LEN],
+    ) -> Result<
+        (
+            arena_proto::PlayerImportPreview,
+            Vec<crate::import_players::PlayerLine>,
+            std::collections::HashSet<String>,
+        ),
+        AppError,
+    > {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let exponent = read_locale(s, now_ms)?.map_or(2, |l| l.exponent);
+            let ctx = crate::import_players::context(s)?;
+            let analysis = crate::import_players::analyse(csv, &ctx, exponent, kek)?;
+            Ok((analysis.preview, analysis.rows, ctx.usernames))
+        })
+    }
+
+    /// A dry-run of a plan CSV (Story 5.34): the counts and problems and the rows that could be
+    /// imported, read against the plans and groups the Hub holds now. Writes nothing. Blocking
+    /// (SQLite).
+    pub fn plan_import(
+        &self,
+        csv: &str,
+        now_ms: i64,
+    ) -> Result<
+        (
+            arena_proto::PlanImportPreview,
+            Vec<arena_proto::ImportPlanRow>,
+        ),
+        AppError,
+    > {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let exponent = read_locale(s, now_ms)?.map_or(2, |l| l.exponent);
+            let ctx = crate::import_plans::context(s)?;
+            let analysis = crate::import_plans::analyse(csv, &ctx, exponent)?;
+            Ok((analysis.preview, analysis.rows))
+        })
+    }
+
     /// The Inventory → Expiring and Expired lists as of `now_ms`. Blocking (SQLite).
     pub fn expiry(&self, now_ms: i64) -> Result<arena_proto::ExpiryView, AppError> {
         let store = self

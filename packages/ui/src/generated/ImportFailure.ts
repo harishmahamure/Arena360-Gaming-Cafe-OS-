@@ -10,7 +10,9 @@ export type ImportFailure = {
   /**
    * A stable code: `required`, `bad_number`, `bad_flag`, `out_of_range`, `too_long`,
    * `bad_value`, `unknown_column`, `missing_column`, `duplicate_barcode`, `duplicate_product`,
-   * `barcode_taken`, `bundle`, `needs_hsn`, `needs_tracking`, `bad_file`.
+   * `barcode_taken`, `bundle`, `needs_hsn`, `needs_tracking`, `bad_file`; players add `bad_phone`
+   * and `duplicate_phone`; plans add `bad_time`, `unknown_group`, `bad_groups`, `group_kind`,
+   * `kind_change` and `duplicate_plan`.
    */
   reason: string;
   message: string;

@@ -2,6 +2,10 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type {
   HubSnapshot,
+  PlanImportPreview,
+  PlanImportResult,
+  PlayerImportPreview,
+  PlayerImportResult,
   ProductImportPreview,
   ProductImportResult,
   SessionStaff,
@@ -20,7 +24,7 @@ const STAFF: Record<string, SessionStaff> = {
     staff_id: "01JMANAGER0000000000000000",
     display_name: "Manager",
     role_name: "Manager",
-    permissions: ["catalog.edit", "settings.edit"],
+    permissions: ["catalog.edit", "settings.edit", "player.manage"],
   },
   "counter-token": {
     staff_id: "01JCOUNTER0000000000000000",
@@ -84,6 +88,33 @@ const BROKEN: ProductImportPreview = {
 };
 const DONE: ProductImportResult = { created: 2, updated: 1, skipped: 0, chunks: 1 };
 
+const PLAYERS: PlayerImportPreview = {
+  rows: 4,
+  new: 2,
+  matched: 1,
+  failed: 1,
+  with_balance: 1,
+  with_credit: 1,
+  failures: [{ row: 4, field: "phone", reason: "bad_phone", message: "phone must start with +" }],
+  truncated: false,
+  unusable: false,
+  can_commit: false,
+  can_commit_valid: true,
+};
+const PLAYERS_DONE: PlayerImportResult = { created: 2, matched: 1, skipped: 1, chunks: 1 };
+const PLANS: PlanImportPreview = {
+  rows: 3,
+  new: 2,
+  updated: 1,
+  failed: 0,
+  failures: [],
+  truncated: false,
+  unusable: false,
+  can_commit: true,
+  can_commit_valid: true,
+};
+const PLANS_DONE: PlanImportResult = { created: 2, updated: 1, skipped: 0, chunks: 1 };
+
 type Posted = { path: string; body: Record<string, unknown> };
 
 async function open(
@@ -121,6 +152,24 @@ async function open(
       case "/ui/import/products/commit":
         posts.push({ path: "commit", body: req.postDataJSON() });
         return json(route, 200, DONE);
+      case "/ui/import/players/preview":
+        posts.push({ path: "players/preview", body: req.postDataJSON() });
+        return json(route, 200, PLAYERS);
+      case "/ui/import/players/commit":
+        posts.push({ path: "players/commit", body: req.postDataJSON() });
+        return json(route, 200, PLAYERS_DONE);
+      case "/ui/import/players/template":
+        posts.push({ path: "players/template", body: req.postDataJSON() });
+        return json(route, 200, {
+          file_name: "players-template.csv",
+          path: "/usb/players-template.csv",
+        });
+      case "/ui/import/plans/preview":
+        posts.push({ path: "plans/preview", body: req.postDataJSON() });
+        return json(route, 200, PLANS);
+      case "/ui/import/plans/commit":
+        posts.push({ path: "plans/commit", body: req.postDataJSON() });
+        return json(route, 200, PLANS_DONE);
       case "/ui/import/products/template":
         posts.push({ path: "template", body: req.postDataJSON() });
         if (refuseFolder) {
@@ -228,4 +277,68 @@ test("Download template names a bad folder inline and then saves", async ({ page
     "/usb/products-template.csv",
   );
   expect(posts.map((p) => p.body.folder)).toEqual(["/nope", "/usb"]);
+});
+
+test("the Players tab checks phones, shows matched rows and imports the valid ones", async ({
+  page,
+}) => {
+  const posts = await open(page);
+  await page.getByRole("tab", { name: en["hub.import.tab_players"] }).click();
+  await expect(page.getByRole("tab", { name: en["hub.import.tab_players"] })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByTestId("import-file").setInputFiles({
+    name: "players.csv",
+    mimeType: "text/csv",
+    buffer: Buf.from("phone,name,balance,credit_limit\n+919800000001,A,10,0\n"),
+  });
+  await expect(page.getByTestId("import-summary")).toContainText(
+    "4 rows: 2 new, 1 already have a profile, 1 with problems",
+  );
+  await expect(page.getByTestId("import-note")).toContainText(
+    "1 start with a balance and 1 get a credit limit",
+  );
+  await expect(page.getByTestId("import-failure")).toContainText("phone must start with +");
+  await expect(
+    page.getByRole("button", { name: en["hub.import.commit"], exact: true }),
+  ).toHaveAttribute("aria-disabled", "true");
+  await page.getByRole("button", { name: en["hub.import.commit_valid"] }).click();
+  await expect(page.getByTestId("import-done")).toContainText(
+    "Imported: 2 new players, 1 already had a profile.",
+  );
+  const commit = posts.find((p) => p.path === "players/commit")!;
+  expect(commit.body.valid_only).toBe(true);
+  expect(String(commit.body.import_id)).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  await page.getByTestId("template-folder").fill("/usb");
+  await page.getByRole("button", { name: en["hub.import.template_button"] }).click();
+  await expect(page.getByTestId("template-status-text")).toContainText("/usb/players-template.csv");
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
+  ).toEqual([]);
+});
+
+test("the Players tab needs permission to manage players", async ({ page }) => {
+  await open(page, { token: "counter-token" });
+  await page.getByRole("tab", { name: en["hub.import.tab_players"] }).click();
+  await expect(page.getByTestId("import-no-access")).toHaveText(en["hub.import.players_no_access"]);
+  await expect(page.getByTestId("import-file")).toHaveCount(0);
+});
+
+test("the Plans tab previews and commits a plan file whole", async ({ page }) => {
+  const posts = await open(page);
+  await page.getByRole("tab", { name: en["hub.import.tab_plans"] }).click();
+  await page.getByTestId("import-file").setInputFiles({
+    name: "plans.csv",
+    mimeType: "text/csv",
+    buffer: Buf.from("name,type,price,groups\n2 h,pack,100,PC\n"),
+  });
+  await expect(page.getByTestId("import-summary")).toContainText(
+    "3 rows: 2 new, 1 updated, 0 with problems",
+  );
+  await page.getByRole("button", { name: en["hub.import.commit"], exact: true }).click();
+  await expect(page.getByTestId("import-done")).toContainText("Imported: 2 new, 1 updated.");
+  expect(posts.map((p) => p.path)).toEqual(["plans/preview", "plans/commit"]);
+  expect(posts[1].body.valid_only).toBe(false);
 });

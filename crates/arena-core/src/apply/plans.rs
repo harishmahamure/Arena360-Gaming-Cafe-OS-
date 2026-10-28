@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use arena_proto::{
-    ActorKind, AppError, ErrorCode, Intent, IntentPayload, MAX_PRICE_MINOR, MINUTES_PER_DAY,
-    PLAN_MAX_GROUPS, PLAN_MAX_MINUTES, PLAN_MAX_VALIDITY_DAYS, PlanUpsert,
+    ActorKind, AppError, ErrorCode, ImportPlanRow, Intent, IntentPayload, MAX_PRICE_MINOR,
+    MINUTES_PER_DAY, PLAN_MAX_GROUPS, PLAN_MAX_MINUTES, PLAN_MAX_VALIDITY_DAYS, PlanUpsert,
 };
 use arena_store::{
     ChangeOp, GroupRow, PlanRow, RowKey, StoreTx, Table, delete_row, find_group, find_plan,
@@ -225,4 +225,44 @@ pub(super) fn mutate(
         out.push(group_write(&id, group_id, ChangeOp::Insert, None));
     }
     Ok(out)
+}
+
+/// A plan-import row as the `plan.upsert` it stands for (Story 5.34): an edit of `old` when the
+/// name matched a plan (keeping whether it is on sale), else a new active plan.
+pub(crate) fn upsert_from_import(row: &ImportPlanRow, old: Option<&PlanRow>) -> PlanUpsert {
+    PlanUpsert {
+        id: old.map(|o| o.plan_id.clone()),
+        plan_kind: row.plan_kind.clone(),
+        name: row.name.clone(),
+        price_minor: row.price_minor,
+        minutes: row.minutes,
+        validity_days: row.validity_days,
+        window_start_min: row.window_start_min,
+        window_end_min: row.window_end_min,
+        group_ids: row.group_ids.clone(),
+        active: old.is_none_or(|o| o.active),
+    }
+}
+
+/// What a plan import row is checked against: the plan it updates, that plan's groups and the
+/// live groups of the row (`None` for an id that is not one).
+pub(crate) fn import_target(
+    old: Option<(&PlanRow, &[String])>,
+    groups: Vec<Option<GroupRow>>,
+) -> PlanTarget {
+    PlanTarget {
+        plan: old.map(|(p, _)| p.clone()),
+        old_groups: old.map(|(_, g)| g.to_vec()).unwrap_or_default(),
+        groups,
+    }
+}
+
+/// The `plan.upsert` rules for one plan-import row (what both the dry-run and the intent run).
+pub(crate) fn check_import_row(
+    row: &ImportPlanRow,
+    old: Option<&PlanRow>,
+    groups: Vec<Option<GroupRow>>,
+) -> Result<(), AppError> {
+    let target = import_target(old.map(|o| (o, &[][..])), groups);
+    validate(&upsert_from_import(row, old), &target)
 }

@@ -33,6 +33,8 @@ import type { ExpenseCreate } from "./ExpenseCreate";
 import type { GroupDelete } from "./GroupDelete";
 import type { GroupPayer } from "./GroupPayer";
 import type { GroupUpsert } from "./GroupUpsert";
+import type { ImportPlans } from "./ImportPlans";
+import type { ImportPlayers } from "./ImportPlayers";
 import type { ImportProducts } from "./ImportProducts";
 import type { InvoiceIssue } from "./InvoiceIssue";
 import type { KioskLog } from "./KioskLog";
@@ -147,6 +149,8 @@ export type IntentPayload =
   | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
   | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "import.products" } & ImportProducts)
+  | ({ kind: "import.players" } & ImportPlayers)
+  | ({ kind: "import.plans" } & ImportPlans)
   | ({ kind: "shift.open" } & ShiftOpen)
   | ({ kind: "shift.close" } & ShiftClose)
   | ({ kind: "shift.reprint_z" } & ZReportReprint)

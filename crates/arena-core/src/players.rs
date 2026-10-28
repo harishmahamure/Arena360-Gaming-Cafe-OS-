@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use arena_proto::{
-    AppError, CONSENT_TRANSACTIONAL, ErrorCode, PlayerConsent, PlayerCreate, PlayerEditForm,
-    PlayerForm, PlayerHit, PlayerProfile, PlayerUpdate, normalize_phone, normalize_username,
+    AppError, CONSENT_TRANSACTIONAL, ErrorCode, ImportPlayerRow, PlayerConsent, PlayerCreate,
+    PlayerEditForm, PlayerForm, PlayerHit, PlayerProfile, PlayerUpdate, normalize_phone,
+    normalize_username,
 };
 use arena_store::PlayerRow;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
@@ -15,6 +16,8 @@ use crate::staff::base64url;
 
 pub const KEK_LEN: usize = 32;
 const LOOKUP_LABEL: &[u8] = b"arena.phone-lookup.v1";
+/// The policy version recorded for imported players, whose consent is not granted.
+pub const IMPORT_POLICY_VERSION: &str = "import";
 
 pub trait Kek: Send + Sync {
     fn kek(&self) -> Result<[u8; KEK_LEN], AppError>;
@@ -163,6 +166,36 @@ pub fn seal(
         wrapped_key: encrypt(kek, &dek_aad(player_id), &dek)?,
         consent: u.consent,
         policy_version: u.policy_version,
+    })
+}
+
+/// Seals one imported player (Story 5.34): name and phone as ciphertext under a fresh key
+/// wrapped by `kek`, exactly as [`seal`] does for a profile made at the counter, but with no
+/// password to hash and no optional fields.
+pub fn seal_import(
+    kek: &[u8; KEK_LEN],
+    player_id: &str,
+    username: &str,
+    phone: &str,
+    name: &str,
+    balance_minor: i64,
+    credit_limit_minor: i64,
+) -> Result<ImportPlayerRow, AppError> {
+    let mut dek = [0u8; KEK_LEN];
+    SystemRandom::new()
+        .fill(&mut dek)
+        .map_err(|_| internal("the system random source failed"))?;
+    let phone = normalize_phone(phone);
+    Ok(ImportPlayerRow {
+        player_id: player_id.to_owned(),
+        username: username.to_owned(),
+        phone_lookup: phone_lookup(kek, &phone),
+        name_enc: encrypt(&dek, &field_aad(player_id, "name"), name.trim().as_bytes())?,
+        phone_enc: encrypt(&dek, &field_aad(player_id, "phone"), phone.as_bytes())?,
+        wrapped_key: encrypt(kek, &dek_aad(player_id), &dek)?,
+        policy_version: IMPORT_POLICY_VERSION.to_owned(),
+        balance_minor,
+        credit_limit_minor,
     })
 }
 

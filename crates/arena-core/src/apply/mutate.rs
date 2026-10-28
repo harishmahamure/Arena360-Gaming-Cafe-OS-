@@ -241,6 +241,14 @@ pub(super) fn mutate(
             Target::Import(t) => super::import::mutate(tx, intent, p, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::ImportPlayers(p) => match target {
+            Target::ImportPlayers(_) => super::import_players::mutate(tx, intent, p, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::ImportPlans(p) => match target {
+            Target::ImportPlans(t) => super::import_plans::mutate(tx, p, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::PlanUpsert(u) => match target {
             Target::Plan(t) => plans::mutate(tx, u, t),
             _ => Err(mismatch()),

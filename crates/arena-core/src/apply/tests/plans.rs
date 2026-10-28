@@ -3,7 +3,7 @@ use super::*;
 use crate::rbac::{ROLE_COUNTER, ROLE_MANAGER};
 use arena_proto::{GroupUpsert, PlanUpsert};
 
-async fn group(f: &Fixture, name: &str, kind: &str) -> String {
+pub(super) async fn group(f: &Fixture, name: &str, kind: &str) -> String {
     f.writer
         .submit_intent(intent(
             owner(),

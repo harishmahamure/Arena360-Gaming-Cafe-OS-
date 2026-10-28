@@ -29,6 +29,8 @@ mod extend;
 mod force_end;
 mod group_bill;
 mod gst;
+mod import_plans;
+mod import_players;
 mod import_products;
 mod invoice;
 mod order_line;

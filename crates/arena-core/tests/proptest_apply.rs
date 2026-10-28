@@ -200,6 +200,18 @@ enum Op {
     Import {
         rows: Vec<(String, String, i64, i64, bool)>,
     },
+    /// `import.players` (Story 5.34): sealed rows with phones that may already be taken, balances
+    /// and credit limits that may be negative. A chunk applies whole or not at all, and the
+    /// wallets grow by exactly the balances it brought.
+    ImportPlayers {
+        rows: Vec<(u8, i64, i64)>,
+    },
+    /// `import.plans` (Story 5.34): rows of a few names (so some repeat and some match plans the
+    /// run already made), prices that may be 0 and minutes that may be 0. A chunk applies whole
+    /// or not at all.
+    ImportPlans {
+        rows: Vec<(u8, i64, i64)>,
+    },
     /// `stock.threshold` (valid or not) on the first tracked product: the open "Low stock" alert
     /// exists exactly when the quantity is at or under the new threshold.
     Threshold {
@@ -715,6 +727,24 @@ fn op() -> impl Strategy<Value = Op> {
             0..5,
         )
         .prop_map(|rows| Op::Import { rows }),
+        2 => prop::collection::vec(
+            (
+                0..6u8,
+                prop_oneof![5 => 0..=50_000i64, 1 => Just(-1i64)],
+                prop_oneof![5 => 0..=90_000i64, 1 => Just(-1i64)],
+            ),
+            0..4,
+        )
+        .prop_map(|rows| Op::ImportPlayers { rows }),
+        2 => prop::collection::vec(
+            (
+                0..3u8,
+                prop_oneof![5 => 1..=90_000i64, 1 => Just(0i64)],
+                prop_oneof![5 => 1..=600i64, 1 => Just(0i64)],
+            ),
+            0..4,
+        )
+        .prop_map(|rows| Op::ImportPlans { rows }),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
         3 => (any::<u8>(), prop::bool::weighted(0.8)).prop_map(|(pick, window_closed)| Op::InvoiceIssue {
@@ -1563,6 +1593,15 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .map_or((0, 0), |s| (s.qty, s.avg_cost_minor))
             };
             let (old_qty, old_avg) = held(hub);
+            let open_alerts = |hub: &Hub| {
+                hub.reader
+                    .rows(Table::Alerts)
+                    .unwrap()
+                    .iter()
+                    .filter(|a| a["acked_at"] == RowValue::Null)
+                    .count()
+            };
+            let alerts_before = open_alerts(hub);
             let intent = hub.intent(
                 IntentPayload::StockIn(arena_proto::StockIn {
                     product_id: id.clone(),
@@ -1601,7 +1640,10 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 (old_avg.min(*cost), old_avg.max(*cost))
             };
             prop_assert!((lo..=hi).contains(&new_avg));
-            prop_assert_eq!(hub.change_count(), changes_before + 3);
+            // The lot, the move and the stock row, and one more for each "Low stock" alert the
+            // arrival closed.
+            let closed = alerts_before.saturating_sub(open_alerts(hub));
+            prop_assert_eq!(hub.change_count(), changes_before + 3 + closed);
             if *undo {
                 let move_id = out
                     .unwrap()
@@ -1611,6 +1653,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .unwrap()
                     .row_id
                     .clone();
+                let alerts_in = open_alerts(hub);
                 let revert = hub.intent(
                     IntentPayload::StockInReverted(arena_proto::StockInReverted { move_id }),
                     None,
@@ -1618,7 +1661,9 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 let out = hub.submit_new(revert);
                 prop_assert!(out.is_ok(), "{:?}", out);
                 prop_assert_eq!(held(hub), (old_qty, old_avg));
-                prop_assert_eq!(hub.change_count(), changes_before + 6);
+                // Taking the arrival back can raise the alert it had closed.
+                let raised = open_alerts(hub).saturating_sub(alerts_in);
+                prop_assert_eq!(hub.change_count(), changes_before + 6 + closed + raised);
             }
             let lots: i64 = hub
                 .reader
@@ -2779,12 +2824,24 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             }
         }
         Op::ShiftOpen { float } => {
+            // A shift an earlier `shift.close` ended leaves the drawer free to open again.
+            let drawer_free = hub.bootstrapped
+                && !hub
+                    .reader
+                    .rows(Table::Shifts)
+                    .unwrap()
+                    .iter()
+                    .any(|s| text(s, "state") == "open");
             let out = hub.submit_new(hub.intent(
                 IntentPayload::ShiftOpen(arena_proto::ShiftOpen {
                     float_minor: *float,
                 }),
                 None,
             ));
+            if drawer_free && (0..=arena_proto::MAX_FLOAT_MINOR).contains(float) {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                return assert_gap_free(hub);
+            }
             let (kind, field) = code(&out).unzip();
             prop_assert!(out.is_err(), "{:?}", out);
             if !(0..=arena_proto::MAX_FLOAT_MINOR).contains(float) {
@@ -2798,7 +2855,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             }
             prop_assert_eq!(hub.change_count(), changes_before);
             let shifts = hub.reader.rows(Table::Shifts).unwrap();
-            prop_assert_eq!(shifts.len(), usize::from(hub.bootstrapped));
+            prop_assert!(shifts.len() >= usize::from(hub.bootstrapped));
             // A cash event never falls outside a shift, and the float is the first of them.
             let events = hub.reader.rows(Table::CashEvents).unwrap();
             let inside = events
@@ -2936,6 +2993,15 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         z.by_type.iter().map(|t| t.amount_minor).sum::<i64>(),
                         z.sales_minor
                     );
+                    // The café goes on trading: the next shift opens with the float the count
+                    // left in the drawer, so every cash flow that follows still has a shift.
+                    let reopened = hub.submit_new(hub.intent(
+                        IntentPayload::ShiftOpen(arena_proto::ShiftOpen {
+                            float_minor: counted.min(arena_proto::MAX_FLOAT_MINOR),
+                        }),
+                        None,
+                    ));
+                    prop_assert!(reopened.is_ok(), "{:?}", reopened);
                     return assert_gap_free(hub);
                 }
             } else {
@@ -3046,6 +3112,120 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                                 && p.barcode.as_deref()
                                     == (!barcode.is_empty()).then_some(barcode.as_str())),
                             "{name} not found"
+                        );
+                    }
+                }
+            }
+        }
+        Op::ImportPlayers { rows } => {
+            const KEK: [u8; 32] = [3; 32];
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let wallets = |hub: &Hub| -> i64 {
+                hub.reader
+                    .rows(Table::Wallets)
+                    .unwrap()
+                    .iter()
+                    .map(|w| match w["balance_minor"] {
+                        RowValue::Integer(v) => v,
+                        _ => 0,
+                    })
+                    .sum()
+            };
+            let players_before = hub.reader.rows(Table::Players).unwrap().len();
+            let wallets_before = wallets(hub);
+            let lines: Vec<arena_core::import_players::PlayerLine> = rows
+                .iter()
+                .map(
+                    |(phone, balance, limit)| arena_core::import_players::PlayerLine {
+                        phone: format!("+9190000000{phone}"),
+                        name: "Imported".into(),
+                        balance_minor: *balance,
+                        credit_limit_minor: *limit,
+                    },
+                )
+                .collect();
+            let mut taken = std::collections::HashSet::new();
+            let sealed = arena_core::import_players::seal_rows(&KEK, &lines, &mut taken).unwrap();
+            let intent = hub.intent(
+                IntentPayload::ImportPlayers(arena_proto::ImportPlayers { rows: sealed }),
+                None,
+            );
+            match hub.submit_new(intent) {
+                Err(e) => {
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::ValidationFailed
+                                | ErrorCode::PhoneTaken
+                                | ErrorCode::UsernameTaken
+                        ),
+                        "{e:?}"
+                    );
+                    prop_assert_eq!(hub.change_count(), changes_before);
+                    prop_assert_eq!(
+                        hub.reader.rows(Table::Players).unwrap().len(),
+                        players_before
+                    );
+                    prop_assert_eq!(wallets(hub), wallets_before);
+                    return assert_gap_free(hub);
+                }
+                Ok(_) => {
+                    prop_assert!(!rows.is_empty());
+                    prop_assert_eq!(
+                        hub.reader.rows(Table::Players).unwrap().len(),
+                        players_before + rows.len()
+                    );
+                    let brought: i64 = rows.iter().map(|r| r.1).sum();
+                    prop_assert_eq!(wallets(hub), wallets_before + brought);
+                }
+            }
+        }
+        Op::ImportPlans { rows } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let pc = group_of(hub, "pc")?;
+            let changes_before = hub.change_count();
+            let plans_before = hub.reader.plans().unwrap().len();
+            let intent = hub.intent(
+                IntentPayload::ImportPlans(arena_proto::ImportPlans {
+                    rows: rows
+                        .iter()
+                        .map(|(name, price, minutes)| arena_proto::ImportPlanRow {
+                            name: format!("Imp {name}"),
+                            plan_kind: "pack".into(),
+                            price_minor: *price,
+                            minutes: Some(*minutes),
+                            validity_days: Some(30),
+                            window_start_min: None,
+                            window_end_min: None,
+                            group_ids: vec![pc.clone()],
+                        })
+                        .collect(),
+                }),
+                None,
+            );
+            match hub.submit_new(intent) {
+                Err(e) => {
+                    prop_assert_eq!(e.code, ErrorCode::ValidationFailed, "{:?}", e);
+                    prop_assert_eq!(hub.change_count(), changes_before);
+                    prop_assert_eq!(hub.reader.plans().unwrap().len(), plans_before);
+                    return assert_gap_free(hub);
+                }
+                Ok(_) => {
+                    prop_assert!(!rows.is_empty());
+                    let plans = hub.reader.plans().unwrap();
+                    for (name, price, minutes) in rows {
+                        prop_assert!(
+                            plans
+                                .iter()
+                                .any(|(p, groups)| p.name == format!("Imp {name}")
+                                    && p.price_minor == *price
+                                    && p.minutes == Some(*minutes)
+                                    && groups == &vec![pc.clone()]),
+                            "Imp {name} not found"
                         );
                     }
                 }
@@ -4642,6 +4822,12 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), before);
                 return Ok(());
             }
+            // An open bill can belong to a session that is still running, or hold unserved
+            // items: the Hub refuses to settle it before it looks at the payments.
+            if code(&out) == Some((ErrorCode::ValidationFailed, Some("order_id"))) {
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
             match credit {
                 None => {
                     prop_assert_eq!(
@@ -5298,7 +5484,17 @@ fn apply_invariants_hold_over_random_intent_sequences() {
 /// that queued a print has its number.
 fn assert_prints_hold(hub: &Hub) -> Result<(), TestCaseError> {
     let orders = hub.reader.rows(Table::Orders).unwrap();
+    let shifts = hub.reader.rows(Table::Shifts).unwrap();
     for row in hub.reader.queued_prints(10_000).unwrap() {
+        // A Z-report print names its closed shift, not an order.
+        if shifts.iter().any(|s| text(s, "id") == row.ref_id) {
+            prop_assert!(
+                shifts
+                    .iter()
+                    .any(|s| text(s, "id") == row.ref_id && text(s, "state") == "closed")
+            );
+            continue;
+        }
         let order = orders.iter().find(|o| text(o, "id") == row.ref_id);
         prop_assert!(order.is_some(), "a queued print names a missing order");
         let order = order.unwrap();

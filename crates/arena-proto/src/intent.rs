@@ -164,6 +164,13 @@ pub enum IntentKind {
     /// (Story 5.33).
     #[serde(rename = "import.products")]
     ImportProducts,
+    /// A chunk of a player CSV import: creates profiles with their opening balance and credit
+    /// limit (Story 5.34).
+    #[serde(rename = "import.players")]
+    ImportPlayers,
+    /// A chunk of a plan CSV import: creates or updates plans and their groups (Story 5.34).
+    #[serde(rename = "import.plans")]
+    ImportPlans,
     /// Opens the branch's shift with a confirmed cash float.
     #[serde(rename = "shift.open")]
     ShiftOpen,
@@ -298,7 +305,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 96] = [
+    pub const ALL: [IntentKind; 98] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -348,6 +355,8 @@ impl IntentKind {
         Self::StockExpiryCheck,
         Self::StockThreshold,
         Self::ImportProducts,
+        Self::ImportPlayers,
+        Self::ImportPlans,
         Self::ShiftOpen,
         Self::ShiftClose,
         Self::ShiftReprintZ,
@@ -449,6 +458,8 @@ impl IntentKind {
             Self::StockExpiryCheck => "stock.expiry_check",
             Self::StockThreshold => "stock.threshold",
             Self::ImportProducts => "import.products",
+            Self::ImportPlayers => "import.players",
+            Self::ImportPlans => "import.plans",
             Self::ShiftOpen => "shift.open",
             Self::ShiftClose => "shift.close",
             Self::ShiftReprintZ => "shift.reprint_z",
@@ -551,7 +562,8 @@ impl IntentKind {
             | Self::StockWriteOff
             | Self::StockExpiryCheck
             | Self::StockThreshold
-            | Self::ImportProducts => IntentCategory::Catalog,
+            | Self::ImportProducts
+            | Self::ImportPlans => IntentCategory::Catalog,
             Self::ShiftOpen
             | Self::ShiftClose
             | Self::ShiftReprintZ
@@ -571,9 +583,10 @@ impl IntentKind {
             | Self::OrderLineCancel
             | Self::OrderVoid
             | Self::RefundCreate => IntentCategory::Money,
-            Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
-                IntentCategory::Player
-            }
+            Self::PlayerCreate
+            | Self::ImportPlayers
+            | Self::PlayerUpdate
+            | Self::PlayerPasswordReset => IntentCategory::Player,
             Self::SessionStart
             | Self::SessionEnd
             | Self::SessionSettle
@@ -656,6 +669,7 @@ impl IntentKind {
             | Self::RuleUpsert
             | Self::CouponUpsert
             | Self::ImportProducts
+            | Self::ImportPlans
             | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
             Self::ShiftOpen => Requirement::Perm(Permission::ShiftOpen),
             Self::ShiftClose => Requirement::Perm(Permission::ShiftClose),
@@ -666,9 +680,10 @@ impl IntentKind {
                 Requirement::Perm(Permission::StockAdjust)
             }
             Self::StockExpiryCheck => Requirement::System,
-            Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
-                Requirement::Perm(Permission::PlayerManage)
-            }
+            Self::PlayerCreate
+            | Self::ImportPlayers
+            | Self::PlayerUpdate
+            | Self::PlayerPasswordReset => Requirement::Perm(Permission::PlayerManage),
             Self::SessionStart
             | Self::SessionAssignPlayer
             | Self::SessionGroup
@@ -794,6 +809,8 @@ impl IntentKind {
             | Self::DeviceScreen
             | Self::DevicePower
             | Self::PlayerCreate
+            | Self::ImportPlayers
+            | Self::ImportPlans
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
             | Self::SessionStart
@@ -1348,6 +1365,10 @@ pub enum IntentPayload {
     StockThreshold(crate::StockThreshold),
     #[serde(rename = "import.products")]
     ImportProducts(crate::ImportProducts),
+    #[serde(rename = "import.players")]
+    ImportPlayers(crate::ImportPlayers),
+    #[serde(rename = "import.plans")]
+    ImportPlans(crate::ImportPlans),
     #[serde(rename = "shift.open")]
     ShiftOpen(crate::ShiftOpen),
     #[serde(rename = "shift.close")]
@@ -1496,6 +1517,8 @@ impl IntentPayload {
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
             Self::StockThreshold(_) => IntentKind::StockThreshold,
             Self::ImportProducts(_) => IntentKind::ImportProducts,
+            Self::ImportPlayers(_) => IntentKind::ImportPlayers,
+            Self::ImportPlans(_) => IntentKind::ImportPlans,
             Self::ShiftOpen(_) => IntentKind::ShiftOpen,
             Self::ShiftClose(_) => IntentKind::ShiftClose,
             Self::ShiftReprintZ(_) => IntentKind::ShiftReprintZ,
@@ -1783,7 +1806,7 @@ mod tests {
                 }
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
-                | "coupon.upsert" | "stock.threshold" | "import.products" => {
+                | "coupon.upsert" | "stock.threshold" | "import.products" | "import.plans" => {
                     Requirement::Perm(Permission::CatalogEdit)
                 }
                 "shift.open" => Requirement::Perm(Permission::ShiftOpen),
@@ -1794,7 +1817,7 @@ mod tests {
                 "stock.waste" | "stock.waste.reverted" | "stock.write_off" => {
                     Requirement::Perm(Permission::StockAdjust)
                 }
-                "player.create" | "player.update" | "player.password_reset" => {
+                "player.create" | "import.players" | "player.update" | "player.password_reset" => {
                     Requirement::Perm(Permission::PlayerManage)
                 }
                 "session.start" | "session.assign_player" | "session.group" | "alert.ack" => {

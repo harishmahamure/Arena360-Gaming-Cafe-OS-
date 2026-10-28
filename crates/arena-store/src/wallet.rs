@@ -195,3 +195,24 @@ pub fn list_wallet_txns(conn: &Connection, player_id: &str) -> Result<Vec<Wallet
 pub fn wallet_balance(conn: &Connection, player_id: &str) -> Result<i64, AppError> {
     Ok(find_wallet(conn, player_id)?.map_or(0, |w| w.balance_minor))
 }
+
+/// An imported opening balance (Story 5.34): a ledger row of reason `import` that belongs to no
+/// order, so there is no cash event and no invoice behind it.
+pub fn insert_import_wallet_txn(
+    conn: &Connection,
+    id: &str,
+    player_id: &str,
+    delta_minor: i64,
+    staff_id: &str,
+    business_day: &str,
+    fy: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO wallet_txns (id, player_id, delta_minor, reason, method, staff_id, order_id,
+                                  business_day, fy, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'import', NULL, ?4, NULL, ?5, ?6, 0, 0, 0)",
+        params![id, player_id, delta_minor, staff_id, business_day, fy],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}

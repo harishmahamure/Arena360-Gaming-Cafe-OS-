@@ -182,6 +182,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Import(t) => super::import::validate(p, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::ImportPlayers(p) => match target {
+            Target::ImportPlayers(t) => super::import_players::validate(p, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::ImportPlans(p) => match target {
+            Target::ImportPlans(t) => super::import_plans::validate(p, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::ProductDelete(_) => match target {
             Target::Product(t) => products::validate_delete(t),
             _ => Err(internal_target()),

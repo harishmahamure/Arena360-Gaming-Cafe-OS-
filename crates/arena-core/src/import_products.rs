@@ -37,7 +37,7 @@ pub(crate) struct Problem {
     pub message: String,
 }
 
-fn problem(field: &str, reason: &'static str, message: impl Into<String>) -> Problem {
+pub(crate) fn problem(field: &str, reason: &'static str, message: impl Into<String>) -> Problem {
     Problem {
         field: field.to_owned(),
         reason,
@@ -261,7 +261,7 @@ impl Columns {
     }
 }
 
-fn number(field: &str, text: &str, places: u32, what: &str) -> Result<i64, Problem> {
+pub(crate) fn number(field: &str, text: &str, places: u32, what: &str) -> Result<i64, Problem> {
     parse_decimal(text, places).map_err(|e| match e {
         DecimalError::Syntax => problem(field, "bad_number", format!("{what} must be a number")),
         DecimalError::Places => problem(
@@ -284,7 +284,7 @@ fn flag(field: &str, text: &str) -> Result<bool, Problem> {
     }
 }
 
-fn take<T>(problems: &mut Vec<Problem>, r: Result<T, Problem>, default: T) -> T {
+pub(crate) fn take<T>(problems: &mut Vec<Problem>, r: Result<T, Problem>, default: T) -> T {
     r.unwrap_or_else(|p| {
         problems.push(p);
         default

@@ -187,3 +187,30 @@ pub fn latest_consent(
     .optional()
     .map_err(db_error)
 }
+
+/// Every live player's phone lookup and every username in use, for checking a CSV import (Story
+/// 5.34) without a query per row.
+pub fn player_import_keys(
+    conn: &Connection,
+) -> Result<
+    (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ),
+    AppError,
+> {
+    let mut lookups = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+    let mut stmt = conn
+        .prepare("SELECT phone_lookup, username FROM players WHERE deleted_at IS NULL")
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(db_error)?;
+    for row in rows {
+        let (lookup, name) = row.map_err(db_error)?;
+        lookups.insert(lookup);
+        names.insert(name);
+    }
+    Ok((lookups, names))
+}

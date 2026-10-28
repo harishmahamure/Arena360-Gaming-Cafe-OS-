@@ -53,6 +53,8 @@ export type IntentKind =
   | "stock.expiry_check"
   | "stock.threshold"
   | "shift.open"
+  | "cash.deposit"
+  | "expense.create"
   | "device.maintenance"
   | "rate.upsert"
   | "device.test_session.start"

@@ -8,6 +8,9 @@
   import { floatText, parseFloat } from "../../lib/shift";
   import { shiftState } from "../../lib/shift.svelte";
   import { SNAPSHOT_DEPENDENCY } from "../../lib/snapshot";
+  import { page } from "$app/state";
+  import CashMovePanel from "../../lib/CashMovePanel.svelte";
+  import { sessionStaff } from "../../lib/operating";
 
   // The running count of cash events follows the Hub; the drawer total is never shown.
   const REFRESH_MS = 5000;
@@ -15,6 +18,7 @@
   const locale = $derived(branchLocale.current);
   const shift = $derived(shiftState.current);
   const open = $derived(shift?.open ?? null);
+  const staff = $derived(sessionStaff(page.data));
 
   let opening = $state(false);
   let text = $state("");
@@ -134,6 +138,11 @@
     {#if opened}
       <p class="type-hub-label" role="status" data-testid="shift-status">{t("hub.shift.opened")}</p>
     {/if}
+    <CashMovePanel
+      {staff}
+      ontimeout={() => void invalidate(SESSION_DEPENDENCY)}
+      ondone={() => void invalidate(SNAPSHOT_DEPENDENCY)}
+    />
   {:else if opening}
     <form class="form" onsubmit={confirm} novalidate data-testid="shift-form">
       <TextField

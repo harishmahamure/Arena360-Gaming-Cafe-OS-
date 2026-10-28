@@ -171,6 +171,16 @@ enum Op {
     ShiftOpen {
         float: i64,
     },
+    /// `cash.deposit` or `expense.create` (Story 5.25) with an amount in or out of range and, for
+    /// a deposit, a slip reference that may be blank: it applies exactly when the fields are
+    /// valid, a shift is open and the drawer holds the amount (an expense the owner paid needs
+    /// no cash), and it then moves the expected cash by its drawer effect.
+    CashMove {
+        deposit: bool,
+        owner_paid: bool,
+        amount: i64,
+        reference_ok: bool,
+    },
     /// `stock.threshold` (valid or not) on the first tracked product: the open "Low stock" alert
     /// exists exactly when the quantity is at or under the new threshold.
     Threshold {
@@ -650,6 +660,18 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..6u8).prop_map(|pick| Op::WriteOff { pick }),
         1 => prop_oneof![4 => 0..=50_000i64, 1 => -2..=-1i64, 1 => Just(arena_proto::MAX_FLOAT_MINOR + 1)]
             .prop_map(|float| Op::ShiftOpen { float }),
+        2 => (
+            any::<bool>(),
+            any::<bool>(),
+            prop_oneof![5 => 1..=20_000i64, 1 => -1..=0i64, 1 => Just(arena_proto::MAX_CASH_MOVE_MINOR + 1)],
+            any::<bool>(),
+        )
+            .prop_map(|(deposit, owner_paid, amount, reference_ok)| Op::CashMove {
+                deposit,
+                owner_paid,
+                amount,
+                reference_ok
+            }),
         2 => prop_oneof![
             1 => Just(None),
             5 => (0..=60i64).prop_map(Some),
@@ -2747,6 +2769,75 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .iter()
                 .all(|e| shifts.iter().any(|s| s["id"] == e["shift_id"]));
             prop_assert!(inside);
+        }
+        Op::CashMove {
+            deposit,
+            owner_paid,
+            amount,
+            reference_ok,
+        } => {
+            let shifts = hub.reader.rows(Table::Shifts).unwrap();
+            let open = shifts.iter().find(|s| text(s, "state") == "open");
+            let expected: Option<i64> = open.map(|s| {
+                hub.reader
+                    .rows(Table::CashEvents)
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e["shift_id"] == s["id"])
+                    .map(|e| int(e, "amount_minor"))
+                    .sum()
+            });
+            let payload = if *deposit {
+                IntentPayload::CashDeposit(arena_proto::CashDeposit {
+                    amount_minor: *amount,
+                    reference: if *reference_ok { "SLIP-1" } else { "  " }.into(),
+                })
+            } else {
+                IntentPayload::ExpenseCreate(arena_proto::ExpenseCreate {
+                    category: arena_proto::ExpenseCategory::Supplies,
+                    amount_minor: *amount,
+                    paid_from: if *owner_paid {
+                        arena_proto::ExpensePaidFrom::Owner
+                    } else {
+                        arena_proto::ExpensePaidFrom::Drawer
+                    },
+                    receipt_photo: None,
+                    note: None,
+                })
+            };
+            let out = hub.submit_new(hub.intent(payload, None));
+            let in_range = (1..=arena_proto::MAX_CASH_MOVE_MINOR).contains(amount);
+            let draws = *deposit || !*owner_paid;
+            if *deposit && !*reference_ok {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("reference")))
+                );
+            } else if !in_range {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("amount_minor")))
+                );
+            } else if let (Some(shift), Some(before)) = (open, expected) {
+                if draws && *amount > before {
+                    prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::DrawerShort));
+                } else {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    let after: i64 = hub
+                        .reader
+                        .rows(Table::CashEvents)
+                        .unwrap()
+                        .iter()
+                        .filter(|e| e["shift_id"] == shift["id"])
+                        .map(|e| int(e, "amount_minor"))
+                        .sum();
+                    prop_assert_eq!(after, before - if draws { *amount } else { 0 });
+                    return assert_gap_free(hub);
+                }
+            } else {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::ShiftNotOpen));
+            }
+            prop_assert_eq!(hub.change_count(), changes_before);
         }
         Op::Threshold { value } => {
             let Some(row) = hub.reader.tracked_thresholds().unwrap().into_iter().next() else {

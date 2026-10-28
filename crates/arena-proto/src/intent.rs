@@ -163,6 +163,12 @@ pub enum IntentKind {
     /// Opens the branch's shift with a confirmed cash float.
     #[serde(rename = "shift.open")]
     ShiftOpen,
+    /// Cash taken from the drawer to the safe, with a slip reference (Story 5.25).
+    #[serde(rename = "cash.deposit")]
+    CashDeposit,
+    /// An expense paid from the drawer or by the owner (Story 5.25).
+    #[serde(rename = "expense.create")]
+    ExpenseCreate,
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance,
     #[serde(rename = "rate.upsert")]
@@ -282,7 +288,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 91] = [
+    pub const ALL: [IntentKind; 93] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -332,6 +338,8 @@ impl IntentKind {
         Self::StockExpiryCheck,
         Self::StockThreshold,
         Self::ShiftOpen,
+        Self::CashDeposit,
+        Self::ExpenseCreate,
         Self::DeviceMaintenance,
         Self::RateUpsert,
         Self::DeviceTestSessionStart,
@@ -428,6 +436,8 @@ impl IntentKind {
             Self::StockExpiryCheck => "stock.expiry_check",
             Self::StockThreshold => "stock.threshold",
             Self::ShiftOpen => "shift.open",
+            Self::CashDeposit => "cash.deposit",
+            Self::ExpenseCreate => "expense.create",
             Self::DeviceMaintenance => "device.maintenance",
             Self::RateUpsert => "rate.upsert",
             Self::DeviceTestSessionStart => "device.test_session.start",
@@ -526,6 +536,8 @@ impl IntentKind {
             | Self::StockExpiryCheck
             | Self::StockThreshold => IntentCategory::Catalog,
             Self::ShiftOpen
+            | Self::CashDeposit
+            | Self::ExpenseCreate
             | Self::PosSale
             | Self::PosSaleReverted
             | Self::OrderPlace
@@ -626,6 +638,7 @@ impl IntentKind {
             | Self::CouponUpsert
             | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
             Self::ShiftOpen => Requirement::Perm(Permission::ShiftOpen),
+            Self::CashDeposit | Self::ExpenseCreate => Requirement::Perm(Permission::CashManage),
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
             Self::StockWaste | Self::StockWasteReverted | Self::StockWriteOff => {
                 Requirement::Perm(Permission::StockAdjust)
@@ -746,7 +759,9 @@ impl IntentKind {
             | Self::StockWriteOff
             | Self::StockExpiryCheck
             | Self::StockThreshold
-            | Self::ShiftOpen => None,
+            | Self::ShiftOpen
+            | Self::CashDeposit
+            | Self::ExpenseCreate => None,
             Self::DeviceMaintenance
             | Self::RateUpsert
             | Self::DeviceTestSessionStart
@@ -1308,6 +1323,10 @@ pub enum IntentPayload {
     StockThreshold(crate::StockThreshold),
     #[serde(rename = "shift.open")]
     ShiftOpen(crate::ShiftOpen),
+    #[serde(rename = "cash.deposit")]
+    CashDeposit(crate::CashDeposit),
+    #[serde(rename = "expense.create")]
+    ExpenseCreate(crate::ExpenseCreate),
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance(DeviceMaintenance),
     #[serde(rename = "rate.upsert")]
@@ -1446,6 +1465,8 @@ impl IntentPayload {
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
             Self::StockThreshold(_) => IntentKind::StockThreshold,
             Self::ShiftOpen(_) => IntentKind::ShiftOpen,
+            Self::CashDeposit(_) => IntentKind::CashDeposit,
+            Self::ExpenseCreate(_) => IntentKind::ExpenseCreate,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
             Self::RateUpsert(_) => IntentKind::RateUpsert,
             Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
@@ -1570,7 +1591,6 @@ mod tests {
         Permission::KitchenUse,
         Permission::StockOverride,
         Permission::ShiftClose,
-        Permission::CashManage,
         Permission::DevicePair,
         Permission::BackupExport,
         Permission::OpsPromote,
@@ -1732,6 +1752,7 @@ mod tests {
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
                 | "coupon.upsert" | "stock.threshold" => Requirement::Perm(Permission::CatalogEdit),
                 "shift.open" => Requirement::Perm(Permission::ShiftOpen),
+                "cash.deposit" | "expense.create" => Requirement::Perm(Permission::CashManage),
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
                 "stock.waste" | "stock.waste.reverted" | "stock.write_off" => {
                     Requirement::Perm(Permission::StockAdjust)

@@ -277,6 +277,14 @@ pub(super) fn mutate(
             Target::Shift(t) => super::shift::mutate_open(tx, intent, s, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::CashDeposit(d) => match target {
+            Target::Shift(t) => super::shift::mutate_deposit(tx, intent, d, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::ExpenseCreate(e) => match target {
+            Target::Shift(t) => super::shift::mutate_expense(tx, intent, e, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::StockThreshold(w) => match target {
             Target::Stock(t) => stock::mutate_threshold(tx, intent, w, t, now_ms),
             _ => Err(mismatch()),

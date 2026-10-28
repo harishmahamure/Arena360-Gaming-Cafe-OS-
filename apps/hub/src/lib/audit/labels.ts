@@ -88,6 +88,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "order.line_cancel": "hub.audit.intent.order.line_cancel",
   "order.void": "hub.audit.intent.order.void",
   "refund.create": "hub.audit.intent.refund.create",
+  "cash.deposit": "hub.audit.intent.cash.deposit",
+  "expense.create": "hub.audit.intent.expense.create",
 };
 
 /** An intent kind's label. */

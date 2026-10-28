@@ -368,6 +368,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Shift(t) => super::shift::validate_open(intent, s, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::CashDeposit(d) => match target {
+            Target::Shift(t) => super::shift::validate_deposit(intent, d, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::ExpenseCreate(e) => match target {
+            Target::Shift(t) => super::shift::validate_expense(intent, e, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::StockThreshold(w) => match target {
             Target::Stock(t) => stock::validate_threshold(w, t),
             _ => Err(internal_target()),

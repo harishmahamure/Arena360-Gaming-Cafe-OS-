@@ -236,6 +236,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 57,
         sql: include_str!("../migrations/0057_refunds.sql"),
     },
+    Migration {
+        version: 58,
+        sql: include_str!("../migrations/0058_cash_moves.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -768,6 +772,65 @@ mod tests {
         assert!(
             again("R4", "CN/3", "mistake", 0).is_err(),
             "a refund pays back something"
+        );
+    }
+
+    /// Migration 58 gives `cash_events` the detail columns of a deposit and an expense, keeps
+    /// existing rows, checks the category and the payer, and keeps the table append-only.
+    #[test]
+    fn the_cash_move_migration_adds_detail_columns_and_stays_append_only() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 58) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO shifts (id, staff_id, opened_at, float_minor, carried_minor, state, rev,
+                                 created_at, updated_at)
+             VALUES ('SH', 'S', 0, 0, 0, 'open', 0, 0, 0);
+             INSERT INTO cash_events (id, shift_id, kind, amount_minor, staff_id, rev, created_at,
+                                      updated_at)
+             VALUES ('E1', 'SH', 'float_in', 5, 'S', 0, 0, 0);",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATIONS[57].sql).unwrap();
+        let kept: (i64, Option<String>) = conn
+            .query_row(
+                "SELECT amount_minor, reference FROM cash_events WHERE id = 'E1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, (5, None), "an existing event is kept as it was");
+        let insert = |id: &str, category: &str, paid_from: &str, spent: i64| {
+            conn.execute_batch(&format!(
+                "INSERT INTO cash_events (id, shift_id, kind, amount_minor, staff_id, category,
+                                          paid_from, spent_minor, rev, created_at, updated_at)
+                 VALUES ('{id}', 'SH', 'expense', 0, 'S', '{category}', '{paid_from}', {spent},
+                         0, 0, 0)"
+            ))
+        };
+        assert!(insert("E2", "food_stock", "owner", 10).is_ok());
+        assert!(
+            insert("E3", "gifts", "owner", 10).is_err(),
+            "a known category"
+        );
+        assert!(
+            insert("E4", "other", "bank", 10).is_err(),
+            "the drawer or the owner"
+        );
+        assert!(
+            insert("E5", "other", "drawer", 0).is_err(),
+            "an expense costs something"
+        );
+        assert!(
+            conn.execute_batch("UPDATE cash_events SET note = 'x' WHERE id = 'E2'")
+                .is_err(),
+            "the note is part of the record"
+        );
+        assert!(
+            conn.execute_batch("UPDATE cash_events SET receipt_photo = 'x' WHERE id = 'E2'")
+                .is_err(),
+            "the photo is part of the record"
         );
     }
 }

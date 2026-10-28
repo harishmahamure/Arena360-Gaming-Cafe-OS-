@@ -911,6 +911,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::OutOfStock
         | ErrorCode::ShiftAlreadyOpen
         | ErrorCode::ShiftNotOpen
+        | ErrorCode::DrawerShort
         | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,

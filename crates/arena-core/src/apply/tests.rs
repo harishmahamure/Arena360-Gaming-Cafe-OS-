@@ -20,6 +20,7 @@ use crate::writer::{Writer, WriterHandle};
 
 mod ad_metrics;
 mod alert;
+mod cash_moves;
 mod commands;
 mod console;
 mod coupon;

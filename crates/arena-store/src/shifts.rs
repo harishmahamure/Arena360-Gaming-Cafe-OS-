@@ -164,3 +164,55 @@ pub fn open_sales_of_order(conn: &Connection, order_id: &str) -> Result<Vec<Open
     .collect::<Result<_, _>>()
     .map_err(db_error)
 }
+
+/// A deposit or an expense (Story 5.25): a cash event with its detail columns.
+pub struct NewCashMove<'a> {
+    pub id: &'a str,
+    pub shift_id: &'a str,
+    pub kind: &'a str,
+    /// The drawer's effect: negative for a deposit or a drawer expense, 0 for an owner expense.
+    pub amount_minor: i64,
+    pub staff_id: &'a str,
+    pub reference: Option<&'a str>,
+    pub category: Option<&'a str>,
+    pub paid_from: Option<&'a str>,
+    pub spent_minor: Option<i64>,
+    pub note: Option<&'a str>,
+    pub receipt_photo: Option<&'a str>,
+}
+
+pub fn insert_cash_move(conn: &Connection, e: &NewCashMove<'_>) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO cash_events (id, shift_id, kind, amount_minor, staff_id, reference,
+                                  category, paid_from, spent_minor, note, receipt_photo,
+                                  rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, 0)",
+        params![
+            e.id,
+            e.shift_id,
+            e.kind,
+            e.amount_minor,
+            e.staff_id,
+            e.reference,
+            e.category,
+            e.paid_from,
+            e.spent_minor,
+            e.note,
+            e.receipt_photo
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The cash a shift's drawer should hold: float plus cash sales, less cash refunds, deposits
+/// and drawer expenses. It is the sum of the shift's `cash_events`, so an Undo's compensating
+/// row nets the sale it cancels. Never shown to staff before the blind count.
+pub fn expected_cash(conn: &Connection, shift_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(amount_minor), 0) FROM cash_events WHERE shift_id = ?1",
+        [shift_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}

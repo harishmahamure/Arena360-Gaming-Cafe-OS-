@@ -507,3 +507,10 @@
 - `drawer.kicked` is not queued for a cash refund; the drawer opens only for sales.
 - The Sessions screen has no Refund entry; a refund starts from POS.
 - Credit not yet collected is cut using the player's current outstanding; a refund of a sale whose credit was partly collected through other orders cuts only what is still owed.
+
+## Deferred from: Story 5.25
+
+- An Undo of a cash sale after a deposit or drawer expense can take the shift's expected cash below zero (the compensating `sale_reverted` row is not checked against the drawer); Story 5.26 must read a negative expectation as is.
+- The expense list, deposit slips and receipt photos are stored but have no viewer yet (Z-report, Story 5.28, and Reports, Story 5.27, will read them); the Shift screen shows only a confirmation.
+- Owner-paid expenses are recorded against the open shift for the audit trail but never move the drawer; they are not synced to a petty-cash ledger (Epic 14).
+- `expected_cash` ignores zero-amount `drawer_open` rows by construction; late kicks after close are still undecided (see Story 5.18 notes).

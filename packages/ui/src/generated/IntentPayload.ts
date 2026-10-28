@@ -7,6 +7,7 @@ import type { AlertRaise } from "./AlertRaise";
 import type { AuditReadGranted } from "./AuditReadGranted";
 import type { BranchBootstrap } from "./BranchBootstrap";
 import type { BranchSeedDefaults } from "./BranchSeedDefaults";
+import type { CashDeposit } from "./CashDeposit";
 import type { ControllerCheck } from "./ControllerCheck";
 import type { CouponUpsert } from "./CouponUpsert";
 import type { CreditAutoPause } from "./CreditAutoPause";
@@ -28,6 +29,7 @@ import type { DeviceTestSessionStart } from "./DeviceTestSessionStart";
 import type { DeviceVersionReported } from "./DeviceVersionReported";
 import type { DrawerKickFailed } from "./DrawerKickFailed";
 import type { DrawerKicked } from "./DrawerKicked";
+import type { ExpenseCreate } from "./ExpenseCreate";
 import type { GroupDelete } from "./GroupDelete";
 import type { GroupPayer } from "./GroupPayer";
 import type { GroupUpsert } from "./GroupUpsert";
@@ -142,6 +144,8 @@ export type IntentPayload =
   | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
   | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "shift.open" } & ShiftOpen)
+  | ({ kind: "cash.deposit" } & CashDeposit)
+  | ({ kind: "expense.create" } & ExpenseCreate)
   | ({ kind: "device.maintenance" } & DeviceMaintenance)
   | ({ kind: "rate.upsert" } & RateUpsert)
   | ({ kind: "device.test_session.start" } & DeviceTestSessionStart)

@@ -170,8 +170,9 @@ pub use sessions::{
 };
 pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
 pub use shifts::{
-    NewCashEvent, NewShift, OpenSale, ShiftRow, count_cash_events, insert_cash_event, insert_shift,
-    last_opening_float, open_sales_of_order, open_shift, open_shift_id, shift_of_order_sale,
+    NewCashEvent, NewCashMove, NewShift, OpenSale, ShiftRow, count_cash_events, expected_cash,
+    insert_cash_event, insert_cash_move, insert_shift, last_opening_float, open_sales_of_order,
+    open_shift, open_shift_id, shift_of_order_sale,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,

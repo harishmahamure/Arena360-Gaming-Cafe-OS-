@@ -88,4 +88,5 @@ export type ErrorCode =
   | "OUT_OF_STOCK"
   | "SHIFT_ALREADY_OPEN"
   | "SHIFT_NOT_OPEN"
+  | "DRAWER_SHORT"
   | "BUNDLE_SHORT";

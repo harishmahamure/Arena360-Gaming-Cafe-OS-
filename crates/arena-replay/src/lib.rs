@@ -1416,6 +1416,28 @@ mod tests {
             refund.reason = Some(arena_proto::ReasonCode::Mistake);
             refund.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
             writer.submit_intent(refund).await.unwrap();
+            // A deposit and an expense carry their detail columns through the replay as well.
+            let mut deposit = submit(
+                IntentPayload::CashDeposit(arena_proto::CashDeposit {
+                    amount_minor: 100,
+                    reference: "SLIP-1".into(),
+                }),
+                None,
+            );
+            deposit.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
+            writer.submit_intent(deposit).await.unwrap();
+            let mut expense = submit(
+                IntentPayload::ExpenseCreate(arena_proto::ExpenseCreate {
+                    category: arena_proto::ExpenseCategory::Repairs,
+                    amount_minor: 50,
+                    paid_from: arena_proto::ExpensePaidFrom::Drawer,
+                    receipt_photo: Some("data:image/jpeg;base64,/9j/AA==".into()),
+                    note: Some("tape".into()),
+                }),
+                None,
+            );
+            expense.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
+            writer.submit_intent(expense).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

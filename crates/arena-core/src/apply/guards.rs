@@ -74,6 +74,7 @@ fn overriding_stock(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
 fn overriding_credit(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     let credit_override = match &intent.payload {
         IntentPayload::SessionSettle(s) => s.credit_override,
+        IntentPayload::PosSale(s) => s.credit_override,
         IntentPayload::SessionExtend(e) if e.source == arena_proto::ExtendSource::Credit => {
             e.credit_override
         }

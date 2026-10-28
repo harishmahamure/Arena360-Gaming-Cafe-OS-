@@ -201,6 +201,9 @@ fn plan_stock(s: &PosSale, t: &SaleTarget, over: bool) -> Result<StockPlan, AppE
     let mut need: BTreeMap<&str, i64> = BTreeMap::new();
     let mut order: Vec<&str> = Vec::new();
     let mut in_bundle: BTreeSet<&str> = BTreeSet::new();
+    // What the plain lines alone ask of a product: a bundle's part may be raised by an
+    // override, a plain line never.
+    let mut plain: BTreeMap<&str, i64> = BTreeMap::new();
     for (line, item) in s.lines.iter().zip(&t.items) {
         let Some(p) = &item.product else { continue };
         if p.bundle {
@@ -218,6 +221,7 @@ fn plan_stock(s: &PosSale, t: &SaleTarget, over: bool) -> Result<StockPlan, AppE
                 order.push(p.product_id.as_str());
             }
             *need.entry(p.product_id.as_str()).or_default() += line.qty;
+            *plain.entry(p.product_id.as_str()).or_default() += line.qty;
         }
     }
     let mut raises = BTreeMap::new();
@@ -241,7 +245,8 @@ fn plan_stock(s: &PosSale, t: &SaleTarget, over: bool) -> Result<StockPlan, AppE
                 continue;
             }
             let field = format!("lines[{i}]");
-            if !in_bundle.contains(c.product_id.as_str()) {
+            let plain_wanted = plain.get(c.product_id.as_str()).copied().unwrap_or(0);
+            if !in_bundle.contains(c.product_id.as_str()) || plain_wanted > usable {
                 return Err(AppError::with_field(
                     ErrorCode::OutOfStock,
                     field,

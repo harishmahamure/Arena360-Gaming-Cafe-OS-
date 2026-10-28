@@ -643,6 +643,14 @@ impl SnapshotReader {
         store.settlement(order_id)
     }
 
+    pub fn is_pos_sale(&self, order_id: &str) -> Result<bool, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.is_pos_sale(order_id)
+    }
+
     pub fn wallet(
         &self,
         player_id: &str,

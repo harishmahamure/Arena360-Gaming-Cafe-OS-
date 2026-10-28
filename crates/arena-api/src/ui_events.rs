@@ -233,6 +233,25 @@ fn collected_order(applied: &Applied) -> Option<String> {
         .map(|c| c.row_id.clone())
 }
 
+/// The order a commit inserted together with its lines and payments: a candidate walk-up sale
+/// (the caller checks the order kind).
+fn sold_order(applied: &Applied) -> Option<String> {
+    let has = |tbl: &str| {
+        applied
+            .changes
+            .iter()
+            .any(|c| c.tbl == tbl && c.op == arena_core::ChangeOp::Insert)
+    };
+    if !has("payments") || !has("order_lines") {
+        return None;
+    }
+    applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders" && c.op == arena_core::ChangeOp::Insert)
+        .map(|c| c.row_id.clone())
+}
+
 fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
     applied
         .changes
@@ -362,6 +381,18 @@ impl HubTask {
                             let settled = BillSettledEvent { order_id, collection };
                             let data = serde_json::to_string(&settled).unwrap_or_default();
                             self.send("bill.settled", data, false);
+                        } else if let Some(order_id) = sold_order(&applied) {
+                            let (reader, id) = (Arc::clone(&self.reader), order_id.clone());
+                            let walk_up = tokio::task::spawn_blocking(move || reader.is_pos_sale(&id))
+                                .await
+                                .ok()
+                                .and_then(Result::ok)
+                                .unwrap_or(false);
+                            if walk_up {
+                                let settled = BillSettledEvent { order_id, collection: None };
+                                let data = serde_json::to_string(&settled).unwrap_or_default();
+                                self.send("bill.settled", data, false);
+                            }
                         }
                         if let Some(reverted) = bill_reverted(&applied) {
                             let data = serde_json::to_string(&reverted).unwrap_or_default();

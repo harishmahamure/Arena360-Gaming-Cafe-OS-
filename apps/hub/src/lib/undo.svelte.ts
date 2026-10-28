@@ -188,7 +188,11 @@ export async function runUndo(staff: SessionStaff | null, ticket?: string): Prom
       refused: false,
     };
     closeSoon();
-    if (u.restore) posRestore.current = u.restore;
+    // Only a screen that is showing the counter takes the cart back: a later visit must not
+    // find a stale one.
+    if (u.restore && globalThis.location?.pathname.startsWith("/pos")) {
+      posRestore.current = u.restore;
+    }
     await invalidate(SNAPSHOT_DEPENDENCY);
     return "done";
   }

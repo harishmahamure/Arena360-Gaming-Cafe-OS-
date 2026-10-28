@@ -220,8 +220,11 @@
     if (!restored) return;
     untrack(() => {
       posRestore.current = null;
-      cart = restored.cart;
-      attached = restored.player;
+      // A cart already started for the next customer is never overwritten.
+      if (cart.length === 0) {
+        cart = restored.cart;
+        attached = restored.player;
+      }
       refusals = {};
       notice = null;
       void load();
@@ -621,6 +624,11 @@
                 >{sale.player ?? t("hub.pos.cart.walkup")} · {t("hub.pos.recent.by", {
                   name: sale.staff,
                 })}</span
+              >
+              <span class="type-hub-label" data-testid="recent-methods"
+                >{[
+                  ...new Set(sale.payments.map((p) => t(METHOD_NAME[p.method as PaymentMethod]))),
+                ].join(", ")}</span
               >
               <span class="type-hub-numeric tabular-nums" data-testid="recent-total"
                 >{money(sale.total_minor)}</span

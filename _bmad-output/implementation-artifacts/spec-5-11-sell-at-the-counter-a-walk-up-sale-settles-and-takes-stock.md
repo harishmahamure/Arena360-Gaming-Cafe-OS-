@@ -2,7 +2,7 @@
 title: 'Story 5.11: Sell at the counter — a walk-up sale settles and takes stock'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '4e9fc3542278edbadbc5d16579abdcd6248fa89b'
 baseline_revision: '4e9fc3542278edbadbc5d16579abdcd6248fa89b'
 route: 'dispatch'
@@ -101,3 +101,7 @@ Status: review
 - **Verification (all pass):** `cargo fmt --check`; `cargo clippy -D warnings` on proto, store, core, api, replay; `cargo test` on proto (176), store (55), core (752 lib plus integration and proptest), api (242), replay; `pnpm --filter hub check` (0 errors); `check:strings`, `check:layers`, `check:protocol`, `check:hex`; Playwright `pos`, `settle`, `shift` specs (129 passed), full suite 1400 passed by the implementation run. Every I/O matrix row has a passing test.
 - **Pre-existing failures on this Windows host** (unrelated): `arena-e2e` is unix-only, `arena-kiosk-svc` discovery/pipe tests, `arena-cloud` backup hung-run test.
 - **Residual risks:** a plain product short of stock is refused `OUT_OF_STOCK` even with an override (the spec allows the override for bundles only); every per-line validation error uses the field `lines[i]`; the `orders` rebuild in 0047 is covered by a migration test but has not run against a production database; the code review pass (step 4) is still to run.
+
+## Code Review (2026-10-28)
+
+Fixed in review: `credit.manage` now guards `credit_override` on `pos.sale`; a plain line that shares a product with a bundle is refused `OUT_OF_STOCK` and never raised by an override; `bill.settled` is emitted for a walk-up sale (reader `is_pos_sale`); an Undo restores the cart only when the POS screen is showing and the cart is empty; Recent sales rows list their payment methods. Tests added for the first two. Deferred (not blocking): nested bundles, tax-settings load failure UX, unbounded `GET /ui/pos/sales`.

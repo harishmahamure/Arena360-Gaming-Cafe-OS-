@@ -890,6 +890,22 @@ impl Store {
         find_settlement(&self.conn, order_id)
     }
 
+    /// Whether the order is a walk-up product sale (`pos_sale`).
+    pub fn is_pos_sale(&self, order_id: &str) -> Result<bool, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(false);
+        }
+        self.conn
+            .query_row(
+                "SELECT 1 FROM orders WHERE id = ?1 AND kind = 'pos_sale'",
+                [order_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|r| r.is_some())
+            .map_err(|e| AppError::new(ErrorCode::Internal, format!("db error: {e}")))
+    }
+
     pub fn ending(&self, session_id: &str) -> Result<Option<Ending>, AppError> {
         if !self.table_exists("irreversible_effects")? {
             return Ok(None);

@@ -1097,3 +1097,36 @@ async fn recent_sales_list_the_business_days_counter_sales_newest_first() {
     revert(&f, owner(), &second).await.unwrap();
     assert_eq!(reader.pos_sales(f.clock.now_ms()).unwrap().sales.len(), 1);
 }
+
+#[tokio::test]
+async fn a_plain_line_sharing_a_product_with_a_bundle_is_never_raised_by_an_override() {
+    let f = bootstrapped().await;
+    let chips = make(&f, priced("Chips", 1_000, true)).await;
+    stock_in(&f, &chips, 1, 500).await;
+    let bundle = combo(&f, &chips, 1).await;
+    // The plain line alone asks for 2 chips of 1: out of stock, whatever the order of lines.
+    let mut s = sale_of(&[(&chips, 2), (&bundle, 1)], vec![pay(Cash, 7_000, None)]);
+    s.stock_override = Some(true);
+    let before = changes(&f);
+    assert_eq!(refusal(sell(&f, owner(), s).await).0, ErrorCode::OutOfStock);
+    assert_eq!(changes(&f), before);
+    assert_eq!(held(&f, &chips).0, 1);
+}
+
+#[tokio::test]
+async fn a_credit_override_at_the_counter_needs_credit_manage() {
+    let f = bootstrapped().await;
+    let id = cola(&f, 4_000, 10).await;
+    let p = credit_player(&f, "asha", "+919876543210", 5_000).await;
+    let counter = staff(&f, "asha2", ROLE_COUNTER).await;
+    let mut s = sale_of(&[(&id, 3)], vec![pay(Credit, 12_000, None)]);
+    s.player_id = Some(p);
+    s.credit_override = Some(true);
+    let before = changes(&f);
+    assert_eq!(
+        refusal(sell(&f, counter, s.clone()).await).0,
+        ErrorCode::PermissionDenied
+    );
+    assert_eq!(changes(&f), before);
+    sell(&f, owner(), s).await.unwrap();
+}

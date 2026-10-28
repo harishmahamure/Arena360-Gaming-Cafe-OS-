@@ -2,7 +2,7 @@
 title: 'Story 5.33: CSV import with dry-run, starting with products'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '8312a1c'
 followup_review_recommended: false
@@ -102,4 +102,10 @@ The preview and the intent cannot disagree because they share `check_row` and `d
 
 ## Auto Run Result
 
-Status: review. Implemented and verified.
+Status: done. Implemented, reviewed and verified.
+
+## Code Review (2026-10-28)
+
+Reviewed the implementation commit against the intent contract: preview/commit/template endpoints, shared `check_row`/`duplicates`, the `import.products` intent (permission, validate, all-or-none mutate), chunk idempotency keys, CSV reader. No blocking findings. Gate re-run green: fmt, clippy -D warnings, cargo tests (proto, core, api), pnpm format/strings/protocol/layers/hex/generated checks, Hub svelte-check.
+
+Non-blocking notes: a barcode-less row and a later barcode-carrying row sharing a name in different chunks resolve against the products earlier chunks created, so the later row may update instead of create (preview counts it as new); a mid-import failure retried with the same `import_id` re-reads the Hub, so rows are matched as updates. Both are consistent with the "opening stock is additive" design note.

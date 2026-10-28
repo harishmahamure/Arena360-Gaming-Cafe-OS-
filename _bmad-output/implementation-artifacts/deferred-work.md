@@ -529,3 +529,10 @@
 - Daily sales by hour, group and category use the bill's total (by hour, group) and the line amounts before coupon and discount (by category and by type); a coupon or manual discount is shown as its own row in by-type but is not spread over categories.
 - A refund is shown as one negative total dated by the credit note's business day; it is not split by type, hour or group. Story 5.28 (Shifts) and 5.32 (CSV/PDF export) read the same row types.
 - The range picker uses the browser's date input; the "Today" preset is computed from the device clock and the snapshot's tz and day start.
+
+## Deferred from: code review of spec-6-3-the-branch-game-and-app-library-at-the-hub-applied-to-every-kiosk (2026-10-29)
+
+- An operator allow rule identical to a library-derived rule is removed when the last entry needing it goes away (diff-merge has no rule ownership).
+- Linked entries: `kiosk.library` keeps stored catalogue name/launcher/age rating while the Hub list shows current catalogue values; refresh on catalogue change.
+- `MAX_LIBRARY_VALUE_CHARS` (900k chars) vs `MAX_FRAME_BYTES` (1 MiB bytes): multibyte/escaped content could exceed a frame near the cap.
+- No tests for the cap refusals or catalogue-missing paths; "library is full/too large" errors use field `name`, which the Hub shows as a name-length message.

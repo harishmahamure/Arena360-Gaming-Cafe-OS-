@@ -376,7 +376,8 @@ pub(super) fn validate_upsert(u: &LibraryUpsert, t: &LibraryTarget) -> Result<()
     let own = serde_json::to_string(&library_rules(&n.executable_path, &n.launcher))
         .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
     parse_process_rules(ProcessList::Allow, &own).map_err(refused_rules)?;
-    let after = after_upsert(t, &n, "00000000000000000000000000");
+    // An edit replaces the entry's current row; a new entry has no row to replace.
+    let after = after_upsert(t, &n, own_id.unwrap_or("00000000000000000000000000"));
     let plan = plan(t, &after)?;
     if let Some(allow) = &plan.allow {
         parse_process_rules(ProcessList::Allow, allow).map_err(refused_rules)?;

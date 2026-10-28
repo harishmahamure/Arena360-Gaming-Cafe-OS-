@@ -2,7 +2,7 @@
 title: 'Story 6.3: The branch game and app library at the Hub, applied to every kiosk'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: 'ed8c63e2ae1b457a0c007ef08ccd7ee8f50d79b1'
 followup_review_recommended: false
@@ -108,3 +108,15 @@ The library reaches kiosks as the derived setting `kiosk.library` rather than a 
 - `library.delete` requires `base_rev` from non-owners, as `zone.delete`.
 - A linked entry that stays linked to the same catalogue id keeps its stored name, launcher and age rating on edit; `GET /ui/library` shows the catalogue's current values.
 - Not run here: `crates/arena-kiosk-svc/tests/runtime.rs` (unix-only) new test; 14 pre-existing `arena-kiosk-svc` Windows unit failures (SYSTEM/Administrators ownership) are unrelated.
+
+### Review Findings
+
+Code review 2026-10-29 (blind-hunter, edge-case-hunter, verification-gap, acceptance-auditor). 0 decision-needed, 1 patch (applied), 4 defer, rest rejected.
+
+- [x] [Review][Patch] `validate_upsert` planned an edit against a placeholder id, so the old row stayed in the "after" list and the allow-list and `kiosk.library` size checks ran on a state that never exists [crates/arena-core/src/apply/library.rs] — fixed: the entry's real id is used on edits.
+- [x] [Review][Defer] An operator allow rule identical to a library-derived rule (same glob, no signer) is removed when the last entry needing it is disabled or deleted — deferred: inherent to the spec's diff-merge design (no ownership marker on rules).
+- [x] [Review][Defer] Linked entries keep the stored catalogue name/launcher/age rating in `kiosk.library` while `GET /ui/library` shows the cache's current values — deferred: documented in Implementation Notes; needs a refresh on catalogue change.
+- [x] [Review][Defer] `kiosk.library` cap is in chars (900k) while the frame limit is 1 MiB of bytes; multibyte or escaped content near the cap could exceed a frame — deferred: needs ~300 maximal entries, not reachable in normal use.
+- [x] [Review][Defer] Cap-refusal tests (300 entries, allow-list and library size limits), catalogue-missing paths in `ui_library`, and the "library is full/too large" errors landing on field `name` (misleading Hub message) — deferred: low impact.
+
+Rejected: `ui_library_tests.rs` missing (false — excluded from the review diff only); `games.manage` can edit the allow-list (by design in the spec); catalogue pre-check before permission check (catalogue is non-sensitive staff data, low); missing `process_allow` row (seeded default, low); empty tag dedupe quirk, client/server length counting, delete confirmation, free-text catalogue id, stale open form, kiosk second settings round-trip, `library::load` without caller (Story 6.23), other UI polish (cosmetic or out of story scope).

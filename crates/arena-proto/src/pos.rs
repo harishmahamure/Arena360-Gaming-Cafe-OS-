@@ -159,6 +159,14 @@ pub struct OrderPlacedEvent {
     pub order_id: String,
 }
 
+/// The payload of `invoice.issue` (Story 5.14): number a settled sale. The system intent the Hub
+/// applies once the Undo window of a settled order has closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct InvoiceIssue {
+    pub order_id: String,
+}
+
 /// The payload of `order.line_served` (Story 5.13): a placed kitchen line is marked served. Its
 /// open stock holds are taken (a `sale` move per held item) and closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

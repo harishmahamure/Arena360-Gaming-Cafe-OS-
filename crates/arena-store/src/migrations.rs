@@ -204,6 +204,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 49,
         sql: include_str!("../migrations/0049_stock_holds.sql"),
     },
+    Migration {
+        version: 50,
+        sql: include_str!("../migrations/0050_invoices.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -218,6 +222,53 @@ mod tests {
         for (i, m) in MIGRATIONS.iter().enumerate() {
             assert_eq!(m.version as usize, i + 1);
         }
+    }
+
+    /// Migration 50 adds `orders.invoice_no` (unique once set) and the `invoice_sequences` table.
+    #[test]
+    fn the_invoices_migration_adds_a_unique_number_and_the_sequence_table() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 50) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        let order = |id: &str| {
+            format!(
+                "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                     created_at, updated_at, kind)
+                 VALUES ('{id}', 'settled', 5, 5, 'd', 'f', 0, 0, 0, 'pos_sale');"
+            )
+        };
+        conn.execute_batch(&order("O1")).unwrap();
+        conn.execute_batch(&order("O2")).unwrap();
+        conn.execute_batch(MIGRATIONS[49].sql).unwrap();
+
+        let number: Option<String> = conn
+            .query_row("SELECT invoice_no FROM orders WHERE id = 'O1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(number, None, "an existing order has no number");
+        conn.execute_batch("UPDATE orders SET invoice_no = 'X/1' WHERE id = 'O1'")
+            .unwrap();
+        assert!(
+            conn.execute_batch("UPDATE orders SET invoice_no = 'X/1' WHERE id = 'O2'")
+                .is_err(),
+            "a number is never repeated"
+        );
+        conn.execute_batch(
+            "INSERT INTO invoice_sequences (fy, segment, next, rev, created_at, updated_at)
+             VALUES ('FY2026-27', 'E1a', 2, 0, 0, 0);",
+        )
+        .unwrap();
+        assert!(
+            conn.execute_batch(
+                "INSERT INTO invoice_sequences (fy, segment, next, rev, created_at, updated_at)
+                 VALUES ('FY2026-27', 'E1a', 3, 0, 0, 0);",
+            )
+            .is_err(),
+            "a segment is one row"
+        );
     }
 
     /// Migration 49 adds the served flag in place (existing lines read as served) and the

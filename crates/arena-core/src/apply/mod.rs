@@ -39,6 +39,7 @@ mod frame;
 mod group_bill;
 mod groups;
 mod guards;
+mod invoice_issue;
 mod kiosk_log;
 mod licence;
 mod maintenance;
@@ -204,6 +205,7 @@ pub(crate) enum Target {
     CreditAutoPause(Box<credit_pause::PauseTarget>),
     SessionExpire(Box<session_expire::ExpireTarget>),
     SessionRateFlip(Box<rate_flip::FlipTarget>),
+    InvoiceIssue(Box<invoice_issue::IssueTarget>),
     Alert(Box<alert::AlertTarget>),
     ControllerCheck(Box<controller_check::CheckTarget>),
     Shift(Box<shift::ShiftTarget>),
@@ -308,6 +310,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::CreditAutoPause(p) => Target::CreditAutoPause(Box::new(credit_pause::load(tx, p, now)?)),
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
         P::SessionRateFlip(f) => Target::SessionRateFlip(Box::new(rate_flip::load(tx, f, now)?)),
+        P::InvoiceIssue(p) => Target::InvoiceIssue(Box::new(invoice_issue::load(tx, p, now)?)),
         P::AlertRaise(_) | P::AlertAck(_) => {
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))
         }

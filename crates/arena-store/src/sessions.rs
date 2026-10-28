@@ -1438,7 +1438,7 @@ pub fn list_pos_sales(
     let mut stmt = conn
         .prepare(
             "SELECT o.id, o.settled_at, COALESCE(st.display_name, o.settled_by), p.username,
-                    o.subtotal_minor, o.tax_minor, o.total_minor
+                    o.subtotal_minor, o.tax_minor, o.total_minor, o.invoice_no
              FROM orders o
              LEFT JOIN staff st ON st.staff_id = o.settled_by
              LEFT JOIN players p ON p.player_id = o.player_id
@@ -1458,7 +1458,7 @@ pub fn list_pos_sales(
                 subtotal_minor: r.get(4)?,
                 tax_minor: r.get(5)?,
                 total_minor: r.get(6)?,
-                invoice_no: None,
+                invoice_no: r.get(7)?,
             })
         })
         .map_err(db_error)?

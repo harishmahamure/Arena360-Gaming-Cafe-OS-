@@ -16,6 +16,7 @@ mod dedupe;
 mod devices;
 mod group_bills;
 mod identity;
+mod invoices;
 mod migrations;
 mod plans;
 mod player_packs;
@@ -90,6 +91,10 @@ pub use identity::{
     CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
     find_trusted_clock, insert_hub_identity, replace_hub_identity, store_licence,
     store_trusted_clock,
+};
+pub use invoices::{
+    INVOICED_KINDS, InvoiceOrder, find_invoice_order, find_sequence, list_unnumbered,
+    set_invoice_no, take_sequence,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use plans::{
@@ -1012,6 +1017,14 @@ impl Store {
             return Ok(0);
         }
         expired_qty(&self.conn, product_id, today)
+    }
+
+    /// Settled sales without an invoice number, oldest settle first (see `list_unnumbered`).
+    pub fn unnumbered_orders(&self, limit: i64) -> Result<Vec<(String, i64)>, AppError> {
+        if !self.table_exists("invoice_sequences")? {
+            return Ok(Vec::new());
+        }
+        list_unnumbered(&self.conn, limit)
     }
 
     /// How many units of a product open holds claim (kitchen lines not yet served).

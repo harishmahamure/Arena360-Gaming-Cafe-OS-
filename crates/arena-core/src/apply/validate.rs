@@ -314,6 +314,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::SessionRateFlip(t) => super::rate_flip::validate(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::InvoiceIssue(_) => match target {
+            Target::InvoiceIssue(t) => super::invoice_issue::validate(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::CreditCollectReverted(_) => match target {
             Target::CreditCollectReverted(t) => {
                 super::credit_collect::validate_collect_reverted(intent, t)

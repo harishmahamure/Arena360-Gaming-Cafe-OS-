@@ -143,6 +143,7 @@ export type { IntentResult } from "./IntentResult";
 export type { IntentSubmit } from "./IntentSubmit";
 export type { InviteRole } from "./InviteRole";
 export type { InviteStatus } from "./InviteStatus";
+export type { InvoiceIssue } from "./InvoiceIssue";
 export type { IssuePairingCode } from "./IssuePairingCode";
 export type { KioskHubState } from "./KioskHubState";
 export type { KioskHubStatus } from "./KioskHubStatus";

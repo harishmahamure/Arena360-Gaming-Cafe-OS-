@@ -80,6 +80,7 @@ export type IntentKind =
   | "credit.auto_pause"
   | "session.expire"
   | "session.rate_flip"
+  | "invoice.issue"
   | "session.assign_player"
   | "alert.raise"
   | "alert.ack"

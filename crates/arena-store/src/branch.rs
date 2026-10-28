@@ -64,11 +64,12 @@ pub enum Table {
     GroupBills,
     Shifts,
     CashEvents,
+    InvoiceSequences,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 37] = [
+    pub const ALL: [Table; 38] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -106,6 +107,7 @@ impl Table {
         Table::GroupBills,
         Table::Shifts,
         Table::CashEvents,
+        Table::InvoiceSequences,
     ];
 
     /// The SQL table name.
@@ -148,6 +150,7 @@ impl Table {
             Self::GroupBills => "group_bills",
             Self::Shifts => "shifts",
             Self::CashEvents => "cash_events",
+            Self::InvoiceSequences => "invoice_sequences",
         }
     }
 
@@ -183,6 +186,7 @@ impl Table {
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
             Self::PlanGroups => &["plan_id", "group_id"],
+            Self::InvoiceSequences => &["fy", "segment"],
             Self::Consents => &["consent_id"],
             Self::Sessions
             | Self::SessionSegments
@@ -228,6 +232,7 @@ impl Table {
             | Self::GroupBills
             | Self::Shifts
             | Self::CashEvents
+            | Self::InvoiceSequences
             | Self::Plans => true,
             Self::Settings | Self::RolePerms | Self::BundleComponents | Self::PlanGroups => false,
         }
@@ -366,6 +371,10 @@ pub enum RowKey {
     CashEvents {
         id: String,
     },
+    InvoiceSequences {
+        fy: String,
+        segment: String,
+    },
 }
 
 impl RowKey {
@@ -398,6 +407,7 @@ impl RowKey {
             Self::GroupBills { .. } => Table::GroupBills,
             Self::Shifts { .. } => Table::Shifts,
             Self::CashEvents { .. } => Table::CashEvents,
+            Self::InvoiceSequences { .. } => Table::InvoiceSequences,
             Self::Players { .. } => Table::Players,
             Self::Consents { .. } => Table::Consents,
             Self::Sessions { .. } => Table::Sessions,
@@ -440,6 +450,7 @@ impl RowKey {
             Self::Rates { rate_id } => rate_id.clone(),
             Self::Plans { plan_id } => plan_id.clone(),
             Self::PlanGroups { plan_id, group_id } => format!("{plan_id}/{group_id}"),
+            Self::InvoiceSequences { fy, segment } => format!("{fy}/{segment}"),
             Self::PricingRules { rule_id } => rule_id.clone(),
             Self::Players { player_id } => player_id.clone(),
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => player_id.clone(),
@@ -545,6 +556,10 @@ impl RowKey {
             Table::GroupBills => Self::GroupBills { id: text("id")? },
             Table::Shifts => Self::Shifts { id: text("id")? },
             Table::CashEvents => Self::CashEvents { id: text("id")? },
+            Table::InvoiceSequences => Self::InvoiceSequences {
+                fy: text("fy")?,
+                segment: text("segment")?,
+            },
             Table::StockHolds => Self::StockHolds { id: text("id")? },
             Table::Sessions => Self::Sessions { id: text("id")? },
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
@@ -589,6 +604,7 @@ impl RowKey {
             Self::Rates { rate_id } => vec![rate_id],
             Self::Plans { plan_id } => vec![plan_id],
             Self::PlanGroups { plan_id, group_id } => vec![plan_id, group_id],
+            Self::InvoiceSequences { fy, segment } => vec![fy, segment],
             Self::PricingRules { rule_id } => vec![rule_id],
             Self::Players { player_id } => vec![player_id],
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => vec![player_id],

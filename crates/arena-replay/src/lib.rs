@@ -931,7 +931,9 @@ mod tests {
                     None,
                 )
             };
-            writer.submit_intent(pos()).await.unwrap();
+            let kept_sale = writer.submit_intent(pos()).await.unwrap().changes[0]
+                .row_id
+                .clone();
             let undone = writer.submit_intent(pos()).await.unwrap();
             writer
                 .submit_intent(submit(
@@ -1249,6 +1251,19 @@ mod tests {
                 })
                 .await
                 .unwrap();
+            // The counter sale kept above is long past its Undo window: the system numbers it.
+            let mut number = submit(
+                IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
+                    order_id: kept_sale,
+                }),
+                None,
+            );
+            number.actor = Actor {
+                kind: ActorKind::System,
+                id: "hub".into(),
+            };
+            number.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
+            writer.submit_intent(number).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();

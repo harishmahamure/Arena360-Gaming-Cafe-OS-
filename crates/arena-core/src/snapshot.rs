@@ -669,6 +669,15 @@ impl SnapshotReader {
         rate_flips_in(&store, now_ms)
     }
 
+    /// Settled sales still without an invoice number, oldest settle first: `(order id, settled_at)`.
+    pub fn unnumbered_orders(&self, limit: i64) -> Result<Vec<(String, i64)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.unnumbered_orders(limit)
+    }
+
     pub fn settlement(&self, order_id: &str) -> Result<Option<arena_store::Settlement>, AppError> {
         let store = self
             .reader

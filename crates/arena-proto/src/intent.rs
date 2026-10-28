@@ -226,6 +226,12 @@ pub enum IntentKind {
     /// begins, ends or is edited). Nothing due is `STALE`.
     #[serde(rename = "session.rate_flip")]
     SessionRateFlip,
+    /// Issues the next invoice number of the branch's series to a settled sale once its Undo
+    /// window has closed (system only; the Hub's invoice task submits it in `settled_at` order).
+    /// An order that has a number, has no sale to number or is still inside its window is
+    /// `STALE`.
+    #[serde(rename = "invoice.issue")]
+    InvoiceIssue,
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer,
     /// Opens an alert on a device or the branch (system only; any feature supplies the kind). One
@@ -249,7 +255,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 82] = [
+    pub const ALL: [IntentKind; 83] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -327,6 +333,7 @@ impl IntentKind {
         Self::CreditAutoPause,
         Self::SessionExpire,
         Self::SessionRateFlip,
+        Self::InvoiceIssue,
         Self::AlertRaise,
         Self::AlertAck,
         Self::ControllerCheck,
@@ -413,6 +420,7 @@ impl IntentKind {
             Self::CreditAutoPause => "credit.auto_pause",
             Self::SessionExpire => "session.expire",
             Self::SessionRateFlip => "session.rate_flip",
+            Self::InvoiceIssue => "invoice.issue",
             Self::SessionAssignPlayer => "session.assign_player",
             Self::AlertRaise => "alert.raise",
             Self::AlertAck => "alert.ack",
@@ -479,6 +487,7 @@ impl IntentKind {
             | Self::OrderPlace
             | Self::OrderPlaceReverted
             | Self::OrderLineServed
+            | Self::InvoiceIssue
             | Self::OrderLineCancel => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
@@ -541,6 +550,7 @@ impl IntentKind {
             | Self::CreditAutoPause
             | Self::AlertRaise
             | Self::SessionExpire
+            | Self::InvoiceIssue
             | Self::SessionRateFlip => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert | Self::StaffDeactivate => {
                 Requirement::Perm(Permission::UserManage)
@@ -703,6 +713,7 @@ impl IntentKind {
             | Self::CreditCollectReverted
             | Self::CreditAutoPause
             | Self::SessionExpire
+            | Self::InvoiceIssue
             | Self::SessionRateFlip
             | Self::AlertRaise
             | Self::AlertAck
@@ -1273,6 +1284,8 @@ pub enum IntentPayload {
     SessionExpire(crate::SessionExpire),
     #[serde(rename = "session.rate_flip")]
     SessionRateFlip(crate::SessionRateFlip),
+    #[serde(rename = "invoice.issue")]
+    InvoiceIssue(crate::InvoiceIssue),
     #[serde(rename = "session.assign_player")]
     SessionAssignPlayer(crate::SessionAssignPlayer),
     #[serde(rename = "alert.raise")]
@@ -1366,6 +1379,7 @@ impl IntentPayload {
             Self::CreditAutoPause(_) => IntentKind::CreditAutoPause,
             Self::SessionExpire(_) => IntentKind::SessionExpire,
             Self::SessionRateFlip(_) => IntentKind::SessionRateFlip,
+            Self::InvoiceIssue(_) => IntentKind::InvoiceIssue,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
             Self::AlertRaise(_) => IntentKind::AlertRaise,
             Self::AlertAck(_) => IntentKind::AlertAck,
@@ -1587,6 +1601,7 @@ mod tests {
                 | "alert.raise"
                 | "session.expire"
                 | "session.rate_flip"
+                | "invoice.issue"
                 | "stock.expiry_check" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)

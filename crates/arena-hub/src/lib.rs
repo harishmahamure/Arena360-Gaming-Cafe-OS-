@@ -499,6 +499,11 @@ async fn run(
             relay,
         )
     });
+    let invoice_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::InvoiceTask::new(w, Arc::clone(&snapshots), Arc::clone(&clock)).run(),
+        )
+    });
     let mut cloud_pairer = CloudPairer::new(
         cloud,
         writer.clone(),
@@ -647,6 +652,10 @@ async fn run(
         let _ = job.await;
     }
     if let Some(job) = test_session_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = invoice_job {
         job.abort();
         let _ = job.await;
     }

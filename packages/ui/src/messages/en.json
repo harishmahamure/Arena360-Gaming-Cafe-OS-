@@ -1764,6 +1764,7 @@
   "hub.audit.intent.session.resume": "Session resumed",
   "hub.audit.intent.session.expire": "Session time ran out",
   "hub.audit.intent.session.rate_flip": "Rate changed mid-session",
+  "hub.audit.intent.invoice.issue": "Invoice number issued",
   "hub.audit.intent.wallet.topup": "Wallet top-up",
   "hub.audit.intent.wallet.topup.reverted": "Wallet top-up undone",
   "hub.settle.method.wallet": "Wallet",

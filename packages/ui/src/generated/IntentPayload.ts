@@ -28,6 +28,7 @@ import type { DeviceVersionReported } from "./DeviceVersionReported";
 import type { GroupDelete } from "./GroupDelete";
 import type { GroupPayer } from "./GroupPayer";
 import type { GroupUpsert } from "./GroupUpsert";
+import type { InvoiceIssue } from "./InvoiceIssue";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { LicenceApply } from "./LicenceApply";
@@ -160,6 +161,7 @@ export type IntentPayload =
   | ({ kind: "credit.auto_pause" } & CreditAutoPause)
   | ({ kind: "session.expire" } & SessionExpire)
   | ({ kind: "session.rate_flip" } & SessionRateFlip)
+  | ({ kind: "invoice.issue" } & InvoiceIssue)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer)
   | ({ kind: "alert.raise" } & AlertRaise)
   | ({ kind: "alert.ack" } & AlertAck)

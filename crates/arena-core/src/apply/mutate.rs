@@ -433,6 +433,10 @@ pub(super) fn mutate(
             Target::SessionRateFlip(t) => super::rate_flip::mutate(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::InvoiceIssue(_) => match target {
+            Target::InvoiceIssue(t) => super::invoice_issue::mutate(tx, intent, t, epoch, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditCollectReverted(_) => match target {
             Target::CreditCollectReverted(t) => {
                 super::credit_collect::mutate_collect_reverted(tx, t)

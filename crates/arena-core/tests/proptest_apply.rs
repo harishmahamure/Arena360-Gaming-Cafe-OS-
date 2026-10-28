@@ -269,6 +269,12 @@ enum Op {
     RateFlip {
         slot: u8,
     },
+    /// The system numbers a settled order (maybe after the Undo window closed): it either issues
+    /// the next number of the series or writes nothing.
+    InvoiceIssue {
+        pick: u8,
+        window_closed: bool,
+    },
     /// A staff transfer of a running or paused session to an existing device: it either moves
     /// the session, closing its segment and opening one on the target, or writes nothing.
     Transfer {
@@ -566,6 +572,10 @@ fn op() -> impl Strategy<Value = Op> {
         .prop_map(|value| Op::Threshold { value }),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
+        3 => (any::<u8>(), prop::bool::weighted(0.8)).prop_map(|(pick, window_closed)| Op::InvoiceIssue {
+            pick,
+            window_closed
+        }),
         2 => (0..3u8, 0..4u8).prop_map(|(slot, target)| Op::Transfer { slot, target }),
         2 => (0..3u8, 0..3u8, 0..4u8).prop_map(|(slot, other, guest)| Op::Group { slot, other, guest }),
         2 => (0..3u8, prop::bool::ANY).prop_map(|(slot, undo)| Op::ForceEnd { slot, undo }),
@@ -3068,6 +3078,52 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             }
             prop_assert_eq!(hub.change_count(), before);
         }
+        Op::InvoiceIssue {
+            pick,
+            window_closed,
+        } => {
+            let orders: Vec<_> = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .filter(|o| text(o, "status") == "settled")
+                .collect();
+            if orders.is_empty() {
+                return Ok(());
+            }
+            let order = &orders[usize::from(*pick) % orders.len()];
+            if *window_closed {
+                hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
+            }
+            let id = text(order, "id");
+            let before = hub.change_count();
+            let mut intent = hub.intent(
+                IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
+                    order_id: id.clone(),
+                }),
+                None,
+            );
+            intent.actor.kind = ActorKind::System;
+            let out = hub.submit_new(intent);
+            match code(&out) {
+                Some((ErrorCode::Stale | ErrorCode::ValidationFailed, _)) => {
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+                Some(other) => prop_assert!(false, "unexpected refusal {other:?}"),
+                None => {
+                    let after = hub
+                        .reader
+                        .rows(Table::Orders)
+                        .unwrap()
+                        .into_iter()
+                        .find(|o| text(o, "id") == id)
+                        .unwrap();
+                    prop_assert!(matches!(after["invoice_no"], RowValue::Text(_)));
+                    prop_assert!(int(&after, "total_minor") > 0);
+                }
+            }
+        }
         Op::RateFlip { slot } => {
             let Some(session) = hub
                 .reader
@@ -4046,8 +4102,44 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_cash_holds(&hub)?;
                 assert_stock_holds(&hub)?;
                 assert_holds_hold(&hub)?;
+                assert_invoices_hold(&hub)?;
             }
             assert_replay_reproduces(&hub)
         })
         .unwrap();
+}
+
+/// The invoice invariants: a number is unique, only a settled sale has one, and every
+/// `(fy, segment)` holds the sequence 1..next-1 with no gap and no repeat.
+fn assert_invoices_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let orders = hub.reader.rows(Table::Orders).unwrap();
+    let mut numbers = std::collections::BTreeSet::new();
+    let mut per_segment = std::collections::BTreeMap::<String, Vec<i64>>::new();
+    for o in &orders {
+        let RowValue::Text(no) = &o["invoice_no"] else {
+            continue;
+        };
+        prop_assert!(numbers.insert(no.clone()), "{no} issued twice");
+        prop_assert_eq!(text(o, "status"), "settled");
+        prop_assert!(int(o, "total_minor") > 0);
+        let (prefix, seq) = no.rsplit_once('/').unwrap();
+        per_segment
+            .entry(prefix.to_owned())
+            .or_default()
+            .push(seq.parse().unwrap());
+    }
+    for seqs in per_segment.values_mut() {
+        seqs.sort_unstable();
+        let want: Vec<i64> = (1..=seqs.len() as i64).collect();
+        prop_assert_eq!(&*seqs, &want, "a segment has a gap or a repeat");
+    }
+    let sequences: i64 = hub
+        .reader
+        .rows(Table::InvoiceSequences)
+        .unwrap()
+        .iter()
+        .map(|s| int(s, "next") - 1)
+        .sum();
+    prop_assert_eq!(sequences, numbers.len() as i64);
+    Ok(())
 }

@@ -138,7 +138,7 @@ development_status:
   5-11-sell-at-the-counter-a-walk-up-sale-settles-and-takes-stock: done
   5-12-attach-an-order-to-a-running-session-so-it-settles-with-the: done
   5-13-take-stock-at-served-mark-items-served-and-cancel-unserved-l: done
-  5-14-invoice-numbers-in-an-epoch-segmented-series-that-never-repe: backlog
+  5-14-invoice-numbers-in-an-epoch-segmented-series-that-never-repe: review
   5-15-receipt-and-notification-settings: backlog
   5-16-receipt-tax-invoice-and-payment-receipt-layouts-for-58-and-8: backlog
   5-17-choose-print-or-none-at-settle-and-print-through-the-side-ef: backlog

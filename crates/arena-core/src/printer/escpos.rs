@@ -9,8 +9,9 @@ const LF: u8 = 0x0A;
 const RULER_DIGITS: &str = "1234567890";
 const TEST_OK: &str = "Printer test OK";
 
-/// The drawer pulse: ESC p, pin 0, 25 ms on, 250 ms off (the RJ11 drawer port of a receipt
-/// printer). The drawer opens on the pulse and nothing prints.
+/// The drawer pulse: ESC p, pin 0, t1 = 25, t2 = 250. The operands are in units of 2 ms, so 50 ms
+/// on and 500 ms off (the RJ11 drawer port of a receipt printer). The drawer opens on the pulse and
+/// nothing prints.
 pub fn drawer_kick() -> Vec<u8> {
     vec![ESC, b'p', 0, 25, 250]
 }

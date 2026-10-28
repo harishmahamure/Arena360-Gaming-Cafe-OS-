@@ -596,6 +596,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_drain_sends_the_kick_before_a_waiting_receipt() {
+        let f = fixture(Some(LAN)).await;
+        queued_drawer(&f, "01J000000000000000000000D1").await;
+        queued(
+            &f,
+            "01J000000000000000000000P2",
+            "O1",
+            r#"{"reprint":false,"by":"s"}"#,
+        )
+        .await;
+        task(&f).drain().await;
+
+        let sent = f.fake.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].bytes, b"\x1bp\x00\x19\xfa", "the pulse goes first");
+        assert_ne!(sent[1].bytes, sent[0].bytes);
+        assert_eq!(
+            state(&f, "01J000000000000000000000P2"),
+            ("done".to_owned(), None)
+        );
+        assert_eq!(drawer_events(&f), 1);
+    }
+
+    #[tokio::test]
     async fn a_failed_kick_is_recorded_with_the_alert_and_no_cash_event() {
         let f = fixture(Some(LAN)).await;
         let addr = "192.168.1.50:9100".parse().unwrap();

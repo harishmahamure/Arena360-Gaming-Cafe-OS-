@@ -24,8 +24,7 @@ use arena_store::{
     ChangeOp, INVOICED_KINDS, InvoiceOrder, KIND_DRAWER, KIND_PRINT, NewAlert, NewCashEvent,
     OutboxRow, RowKey, STATE_DONE, STATE_FAILED, STATE_QUEUED, StoreTx, find_branch_summary,
     find_invoice_order, find_open_alert, find_outbox, find_setting, finish_outbox, insert_alert,
-    insert_cash_event, insert_effect, insert_outbox, list_unnumbered, open_shift_id,
-    shift_of_order_sale,
+    insert_cash_event, insert_effect, insert_outbox, list_unnumbered, shift_of_order_sale,
 };
 
 use super::invoice_issue::issue_number;
@@ -64,10 +63,7 @@ pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<ReceiptT
         IntentPayload::DrawerKicked(p) => {
             let row = find_outbox(tx, &p.outbox_id)?;
             let shift_id = match &row {
-                Some(r) => match shift_of_order_sale(tx, &r.ref_id)? {
-                    Some(id) => Some(id),
-                    None => open_shift_id(tx)?,
-                },
+                Some(r) => shift_of_order_sale(tx, &r.ref_id)?,
                 None => None,
             };
             ReceiptTarget {
@@ -109,17 +105,24 @@ fn queued_row<'a>(
         ));
     }
     if row.state != STATE_QUEUED {
-        return Err(stale(field, "this print has already been recorded"));
+        return Err(stale(
+            field,
+            if kind == KIND_DRAWER {
+                "this drawer kick has already been recorded"
+            } else {
+                "this print has already been recorded"
+            },
+        ));
     }
     Ok(row)
 }
 
-fn valid_error(error: &str) -> Result<(), AppError> {
+fn valid_error(error: &str, what: &str) -> Result<(), AppError> {
     let error = error.trim();
     if error.is_empty() || error.chars().count() > RECEIPT_ERROR_MAX_CHARS {
         return Err(invalid(
             "error",
-            "a print error is 1 to 200 characters long",
+            &format!("a {what} error is 1 to 200 characters long"),
         ));
     }
     Ok(())
@@ -148,7 +151,7 @@ pub(super) fn validate(intent: &Intent, t: &ReceiptTarget) -> Result<(), AppErro
         IntentPayload::ReceiptPrinted(_) => queued_row(t, "outbox_id", KIND_PRINT).map(|_| ()),
         IntentPayload::ReceiptPrintFailed(p) => {
             queued_row(t, "outbox_id", KIND_PRINT)?;
-            valid_error(&p.error)
+            valid_error(&p.error, "print")
         }
         IntentPayload::DrawerKicked(_) => {
             queued_row(t, "outbox_id", KIND_DRAWER)?;
@@ -162,7 +165,7 @@ pub(super) fn validate(intent: &Intent, t: &ReceiptTarget) -> Result<(), AppErro
         }
         IntentPayload::DrawerKickFailed(p) => {
             queued_row(t, "outbox_id", KIND_DRAWER)?;
-            valid_error(&p.error)
+            valid_error(&p.error, "drawer kick")
         }
         _ => Err(AppError::new(
             ErrorCode::Internal,

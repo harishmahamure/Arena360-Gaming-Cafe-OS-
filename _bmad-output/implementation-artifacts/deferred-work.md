@@ -492,3 +492,9 @@
 - "Clears" is an acknowledgement by the actor of the stock-in or revert, so the record cannot tell "restocked" from "dismissed by staff"; Epic 8's owner alert reads the alert row's `product_id`, `qty`, `threshold` and `raised_at`.
 - A system `alert.raise` with kind `stock_low` is not refused and would create a product-less alert.
 - Story 5.11 (sale) must call `decrement()` for the alert to fire on sales; today only waste, write-off and stock-in revert reach it in production.
+
+## Deferred from: code review of story-5-18 (2026-10-28)
+
+- Drawer kick has apply-level tests through `pos.sale` only; `session.settle` and `plan.sell` share `queue_on_settle` but lack a drawer test.
+- `drawer.kicked` applied after the sale's shift is closed appends a `drawer_open` event to that closed shift; Story 5.26 must ignore zero-amount `drawer_open` rows in variance and decide whether late kicks are allowed.
+- A failed kick leaves the sale non-undoable and there is no retry or manual "open drawer" action.

@@ -2,7 +2,7 @@
 title: 'Story 5.18: Cash drawer kicks on cash sales'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'ce6751d'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
@@ -80,3 +80,23 @@ context:
 
 - The drawer is for sales only; 5.24 refunds that pay cash back and 5.25 cash expenses may want a kick of their own (a new outbox payload, same `drawer` kind and results).
 - `drawer_open` cash events carry amount 0, so the 5.26 variance maths must ignore them (they are a log, not money).
+
+### Review Findings
+
+- [x] [Review][Patch] `drawer.kicked` fell back to the open shift when the sale's cash shift was not found, contradicting "STALE when no shift holds the sale's cash" [crates/arena-core/src/apply/receipt_print.rs:load] — fixed: no fallback
+- [x] [Review][Patch] Proptest "a refused sale writes nothing" was skipped when the drawer was on [crates/arena-core/tests/proptest_apply.rs] — fixed: change count taken right after the sale, before the setting is reset
+- [x] [Review][Patch] No test pinned "drawer kicks go before waiting receipts" [crates/arena-tasks/src/receipts.rs] — fixed: `a_drain_sends_the_kick_before_a_waiting_receipt`
+- [x] [Review][Patch] Drawer rows reused print wording in STALE / VALIDATION_FAILED messages [crates/arena-core/src/apply/receipt_print.rs] — fixed: kind-aware messages
+- [x] [Review][Patch] `drawer_kick()` doc said 25 ms / 250 ms; ESC p operands are 2 ms units (50 ms / 500 ms) [crates/arena-core/src/printer/escpos.rs] — fixed (comment only)
+- [x] [Review][Defer] Drawer kick is tested through `pos.sale` only; `session.settle` and `plan.sell` share `queue_on_settle` but have no drawer test — deferred: same code path, add with the next receipt story
+- [x] [Review][Defer] `drawer.kicked` after the sale's shift has closed still appends a `drawer_open` event to that shift — deferred: spec says "against the shift the sale was taken on"; 5.26 shift close should ignore zero-amount `drawer_open` rows
+- [x] [Review][Defer] A failed kick leaves the sale non-undoable (effect is recorded at settle, before the pulse) and there is no retry / "open drawer" action — deferred: per spec ("the sale stays settled"; manual open is out of scope)
+
+#### Rejected
+
+- Upgraded Hubs cannot enable the switch (no back-fill) — false: `seed_defaults::missing` back-fills every `DEFAULT_SETTINGS` key.
+- "A settle wrote no order" now aborts every settle — false: `pos.sale`, `plan.sell` insert an order row and `session.settle` names it.
+- Empty `staff_id` from `kicked_by` — low: the payload is always built with `by` by `queue_drawer`.
+- Zero-kept cash row queues no kick — by design: a kick needs a cash `sale` event.
+- Task re-sends the pulse on a STALE no-shift result — unreachable now that a queued kick implies a sale event with a shift.
+- No printer selected when enabling the switch / pin selection / Playwright toast coverage / `drawer_open` consumers — low or out of scope (5.26 note already records the variance maths).

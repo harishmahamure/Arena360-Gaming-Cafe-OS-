@@ -1708,6 +1708,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     None,
                 ),
             );
+            let after = hub.change_count();
             if *drawer {
                 set_drawer(hub, false);
             }
@@ -1725,9 +1726,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     out
                 );
                 prop_assert_eq!(stock_image(hub), stock_before);
-                if !*drawer {
-                    prop_assert_eq!(hub.change_count(), before);
-                }
+                prop_assert_eq!(after, before);
                 return Ok(());
             }
             let order = hub

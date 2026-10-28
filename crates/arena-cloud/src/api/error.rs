@@ -96,6 +96,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::SERVICE_UNAVAILABLE
         }
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
+        ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -171,6 +172,11 @@ impl ApiError {
             error: AppError::new(ErrorCode::BadRequest, "The request body is too large."),
             retry_after_s: None,
         }
+    }
+
+    /// `PAYLOAD_TOO_LARGE`, 413: the body is over this route's own limit.
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        AppError::new(ErrorCode::PayloadTooLarge, message).into()
     }
 
     /// `VALIDATION_FAILED`, 422, naming `field`.
@@ -317,6 +323,7 @@ mod tests {
             (ErrorCode::PairCodeInvalid, 401),
             (ErrorCode::PairCodeExpired, 401),
             (ErrorCode::FeatureNotEntitled, 403),
+            (ErrorCode::PayloadTooLarge, 413),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

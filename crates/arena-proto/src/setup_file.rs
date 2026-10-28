@@ -295,3 +295,23 @@ pub struct SetupFileResult {
     #[ts(type = "number")]
     pub skipped: i64,
 }
+
+/// The path (under `/v1`) a paid Hub keeps its setup template at (Story 5.37); `{id}` is the
+/// branch id.
+pub const SETUP_TEMPLATE_PATH: &str = "/branches/{id}/setup-template";
+
+/// What the cloud kept of an uploaded setup template. The same four members are stored beside
+/// the file, so Story 5.38 can offer a branch without reading its file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SetupTemplateStored {
+    /// The setup file's format version.
+    pub version: u32,
+    /// SHA-256 of the stored file, lowercase hex.
+    pub sha256: String,
+    #[ts(type = "number")]
+    pub bytes: u64,
+    /// Unix ms of the upload.
+    #[ts(type = "number")]
+    pub uploaded_at: i64,
+}

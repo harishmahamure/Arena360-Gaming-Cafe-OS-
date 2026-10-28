@@ -919,6 +919,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
         }
+        ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,

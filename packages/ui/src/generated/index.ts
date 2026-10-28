@@ -358,6 +358,7 @@ export type { SetupPreviewRequest } from "./SetupPreviewRequest";
 export type { SetupProduct } from "./SetupProduct";
 export type { SetupRule } from "./SetupRule";
 export type { SetupStatus } from "./SetupStatus";
+export type { SetupTemplateStored } from "./SetupTemplateStored";
 export type { ShiftBreakdown } from "./ShiftBreakdown";
 export type { ShiftClose } from "./ShiftClose";
 export type { ShiftCount } from "./ShiftCount";

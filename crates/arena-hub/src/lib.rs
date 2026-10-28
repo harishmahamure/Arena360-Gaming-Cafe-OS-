@@ -467,6 +467,18 @@ async fn run(
         })
         .run(),
     );
+    let template_job = tokio::spawn(
+        arena_tasks::SetupTemplateTask::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            writer.clone(),
+            Arc::clone(&snapshots),
+            pair_gate.clone(),
+            status_tx.clone(),
+            Arc::clone(&clock),
+        )
+        .run(),
+    );
     let test_session_job = writer.clone().map(|w| {
         tokio::spawn(
             arena_tasks::TestSessionTask::new(w, Arc::clone(&snapshots), Arc::clone(&clock)).run(),
@@ -660,6 +672,8 @@ async fn run(
     let _ = heartbeat_job.await;
     command_job.abort();
     let _ = command_job.await;
+    template_job.abort();
+    let _ = template_job.await;
     setup_job.abort();
     let _ = setup_job.await;
     if let Some(job) = backup_job {

@@ -29,6 +29,7 @@ pub mod ops;
 pub mod pairing_code;
 pub mod passwords;
 pub mod store;
+pub mod templates;
 pub mod totp;
 pub mod useragent;
 
@@ -253,6 +254,20 @@ pub async fn serve(
         ),
         None => None,
     };
+    if let Some(st) = &auth {
+        let store = if dev {
+            Some(templates::TemplateStore::memory())
+        } else {
+            templates::TemplateStore::from_env(&|k| std::env::var_os(k))
+                .map_err(|e| std::io::Error::other(format!("setup template store: {e}")))?
+        };
+        match store {
+            Some(store) => {
+                let _ = st.templates.set(store);
+            }
+            None => tracing::warn!("no object store configured: setup templates are not kept"),
+        }
+    }
     let check_db = Arc::clone(&db);
     let check = tokio::spawn(health::reachability_loop(
         tx,

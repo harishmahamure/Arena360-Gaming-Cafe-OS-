@@ -4,7 +4,7 @@ use std::time::Duration;
 use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
     AppError, CommandResult, CommandResultAck, CommandsPage, ErrorCode, HeartbeatRequest,
-    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, UiError,
+    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, SetupTemplateStored, UiError,
     normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
@@ -154,6 +154,26 @@ impl CloudClient {
     ) -> Result<CommandResultAck, CloudFailure> {
         self.post(&format!("/v1/commands/{id}/result"), Some(token), req)
             .await
+    }
+
+    /// Keeps `file` (the text of the branch's setup file) as the branch's cloud template
+    /// (Story 5.37).
+    pub async fn put_setup_template(
+        &self,
+        token: &str,
+        branch_id: &str,
+        file: String,
+    ) -> Result<SetupTemplateStored, CloudFailure> {
+        let call = self
+            .http
+            .put(format!(
+                "{}/v1/branches/{branch_id}/setup-template",
+                self.base
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .bearer_auth(token)
+            .body(file);
+        self.send(call).await
     }
 
     async fn post<Q: serde::Serialize, R: serde::de::DeserializeOwned>(

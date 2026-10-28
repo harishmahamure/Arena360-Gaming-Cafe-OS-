@@ -90,4 +90,5 @@ export type ErrorCode =
   | "SHIFT_NOT_OPEN"
   | "DRAWER_SHORT"
   | "VARIANCE_OVER_THRESHOLD"
-  | "BUNDLE_SHORT";
+  | "BUNDLE_SHORT"
+  | "PAYLOAD_TOO_LARGE";

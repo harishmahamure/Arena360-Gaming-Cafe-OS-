@@ -28,6 +28,7 @@ mod pair;
 mod panic;
 pub mod security;
 pub mod session;
+mod setup_template;
 pub mod signin;
 pub mod signup;
 pub mod wizard;
@@ -75,6 +76,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(branches::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
+            .merge(setup_template::router(Arc::clone(st)))
             .merge(commands::router(Arc::clone(st)))
             .merge(wizard_events::router(Arc::clone(st)))
             .merge(meta::router());

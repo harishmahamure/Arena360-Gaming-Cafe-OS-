@@ -166,6 +166,8 @@ pub enum ErrorCode {
     VarianceOverThreshold,
     /// A counter sale of a bundle with a component short of stock; the message names it.
     BundleShort,
+    /// A request body over the limit of its route, such as a setup template over 1 MB (Story 5.37).
+    PayloadTooLarge,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -270,6 +272,7 @@ impl ErrorCode {
             Self::DrawerShort => "DRAWER_SHORT",
             Self::VarianceOverThreshold => "VARIANCE_OVER_THRESHOLD",
             Self::BundleShort => "BUNDLE_SHORT",
+            Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
         }
     }
 }
@@ -435,6 +438,7 @@ mod tests {
             (ErrorCode::DrawerShort, "DRAWER_SHORT"),
             (ErrorCode::VarianceOverThreshold, "VARIANCE_OVER_THRESHOLD"),
             (ErrorCode::BundleShort, "BUNDLE_SHORT"),
+            (ErrorCode::PayloadTooLarge, "PAYLOAD_TOO_LARGE"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

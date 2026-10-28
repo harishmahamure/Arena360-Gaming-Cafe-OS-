@@ -39,6 +39,8 @@ pub struct AuthState {
     pub billing_enabled: bool,
     pub hub_tokens: std::sync::Mutex<std::collections::HashMap<[u8; 32], i64>>,
     pub wizard_tx: tokio::sync::broadcast::Sender<String>,
+    /// Where setup templates are kept (Story 5.37); set once by `serve`.
+    pub templates: std::sync::OnceLock<crate::templates::TemplateStore>,
 }
 
 impl AuthState {
@@ -56,6 +58,7 @@ impl AuthState {
             billing_enabled: cfg.billing_enabled,
             hub_tokens: std::sync::Mutex::default(),
             wizard_tx: tokio::sync::broadcast::channel(64).0,
+            templates: std::sync::OnceLock::new(),
         }
     }
 

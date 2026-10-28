@@ -29,8 +29,11 @@ const KEY = "hub.stopped_at";
 type Access = { notifications: boolean; battery_exempt: boolean; asked: boolean };
 type Calls = { intents: { value: string; ticket?: string }[]; elevations: unknown[] };
 
+let sessions: { id: string; state: string }[] = [];
+
 function snapshot(paired: boolean): HubSnapshot {
   return {
+    sessions: sessions as unknown as HubSnapshot["sessions"],
     branch: paired ? { name: "Dev Branch", branch_code: "DEV01" } : null,
     groups: [],
     zones: [],
@@ -106,22 +109,32 @@ async function stub(page: Page, token: string | null, paired = true): Promise<Ca
   return calls;
 }
 
-async function bridge(page: Page, access: Access) {
-  await page.addInitScript((a: Access) => {
-    const w = window as unknown as { __bridge: string[]; __access: Access; ArenaHub: unknown };
-    w.__bridge = [];
-    w.__access = a;
-    const note = (name: string) => () => void w.__bridge.push(name);
-    w.ArenaHub = {
-      state: () => JSON.stringify(w.__access),
-      startHub: note("startHub"),
-      stopHub: note("stopHub"),
-      requestAccess: note("requestAccess"),
-      skipAccess: note("skipAccess"),
-      openBatterySettings: note("openBatterySettings"),
-      openNotificationSettings: note("openNotificationSettings"),
-    };
-  }, access);
+async function bridge(page: Page, access: Access, update?: string) {
+  await page.addInitScript(
+    ([a, u]: [Access, string | undefined]) => {
+      const w = window as unknown as { __bridge: string[]; __access: Access; ArenaHub: unknown };
+      w.__bridge = [];
+      w.__access = a;
+      const note = (name: string) => () => void w.__bridge.push(name);
+      w.ArenaHub = {
+        state: () => JSON.stringify(w.__access),
+        startHub: note("startHub"),
+        stopHub: note("stopHub"),
+        requestAccess: note("requestAccess"),
+        skipAccess: note("skipAccess"),
+        openBatterySettings: note("openBatterySettings"),
+        openNotificationSettings: note("openNotificationSettings"),
+        ...(u === undefined
+          ? {}
+          : {
+              updateState: () => u,
+              checkUpdate: note("checkUpdate"),
+              installUpdate: note("installUpdate"),
+            }),
+      };
+    },
+    [access, update] as [Access, string | undefined],
+  );
 }
 
 const bridgeCalls = (page: Page) =>
@@ -244,5 +257,52 @@ test.describe("Stop Hub", () => {
     await page.getByRole("button", { name: en["hub.service.cancel"] }).click();
     expect(await bridgeCalls(page)).not.toContain("stopHub");
     expect(calls.intents).toHaveLength(0);
+  });
+});
+
+test.describe("Play update (Story 4.16)", () => {
+  test.afterEach(() => {
+    sessions = [];
+  });
+
+  test("Update ready installs only when no session is active, paused or in grace", async ({
+    page,
+  }) => {
+    sessions = [{ id: "S1", state: "paused" }];
+    await bridge(page, GOOD, "ready");
+    await stub(page, "counter-token");
+    await page.goto("/system/service");
+    const panel = page.getByTestId("service-update");
+    await expect(panel).toContainText(en["hub.update.ready"]);
+    expect(await bridgeCalls(page)).toContain("checkUpdate");
+    const install = page.getByRole("button", { name: en["hub.update.install"] });
+    await expect(install).toBeDisabled();
+    await expect(panel).toContainText(en["hub.update.install_waiting"]);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+    sessions = [{ id: "S1", state: "ended" }];
+    await page.reload();
+    await expect(install).toBeEnabled();
+    await install.click();
+    expect(await bridgeCalls(page)).toContain("installUpdate");
+  });
+
+  test("a download in progress and an arena:update event are shown", async ({ page }) => {
+    await bridge(page, GOOD, "downloading");
+    await stub(page, "counter-token");
+    await page.goto("/system/service");
+    const panel = page.getByTestId("service-update");
+    await expect(panel).toContainText(en["hub.update.downloading"]);
+    await page.evaluate(() =>
+      window.dispatchEvent(new CustomEvent("arena:update", { detail: { status: "ready" } })),
+    );
+    await expect(panel).toContainText(en["hub.update.ready"]);
+  });
+
+  test("with nothing to install the panel says the Hub is up to date", async ({ page }) => {
+    await bridge(page, GOOD, "none");
+    await stub(page, "counter-token");
+    await page.goto("/system/service");
+    await expect(page.getByTestId("service-update")).toContainText(en["hub.update.none"]);
   });
 });

@@ -1,0 +1,153 @@
+name: Release Android Hub
+
+# Story 4.16: a release tag builds the signed AAB and uploads it to the Play internal testing
+# track, only after the cloud release for the same tag is live (cloud first, AD-8).
+#
+#   deploy-cloud succeeded for tag v* -> this workflow (workflow_run) -> build -> upload
+#
+# Promotion to production is never automatic: the release manager runs
+# `node scripts/play-release.mjs promote` by hand once the pre-launch report is clean, and
+# follows docs/runbooks/android-play-rollout.md (1% -> 10% -> 50% -> 100% over a week).
+# Credentials are SOPS-managed (deploy/secrets/android-upload.enc.yaml, play-publisher.enc.yaml).
+
+on:
+  workflow_run:
+    workflows: [deploy-cloud]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose cloud release is already live (v1.2.3)"
+        required: true
+
+concurrency:
+  group: release-android-${{ github.event.workflow_run.head_branch || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_NDK_VERSION: 28.2.13676358
+  SOPS_URL: https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+  # Operator step (deploy/README.md, "Pin the tool checksums"): replace PIN-ME with the sha256.
+  SOPS_SHA256: PIN-ME
+  CLOUD_URL: https://api.arena360.cloud
+
+jobs:
+  gate:
+    name: cloud release is live
+    runs-on: ubuntu-latest
+    # A tag's deploy-cloud run that succeeded, or a manual run by the release manager.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      ref: ${{ steps.tag.outputs.ref }}
+    steps:
+      - id: tag
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch || inputs.tag }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$TAG is not a release tag (vX.Y.Z)"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ref=${SHA:-refs/tags/$TAG}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: The cloud answers
+        run: node scripts/play-release.mjs cloud-live "$CLOUD_URL"
+      - name: Listing declarations match the build
+        run: node scripts/play-release.mjs check
+
+  upload:
+    name: signed AAB to Play internal testing
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: play-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-release
+      - name: Install the pinned NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "ndk;${ANDROID_NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-android.mjs manifest
+      - run: node scripts/check-ads.mjs source
+      - name: Install sops (pinned URL + sha256)
+        run: |
+          if [[ ! "$SOPS_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::SOPS_SHA256 is not a sha256. Pin it in release-android.yml (deploy/README.md, \"Pin the tool checksums\")."
+            exit 1
+          fi
+          curl -fsSL -o "$RUNNER_TEMP/sops" "$SOPS_URL"
+          echo "${SOPS_SHA256}  $RUNNER_TEMP/sops" | sha256sum -c -
+          install -m 0755 "$RUNNER_TEMP/sops" "$RUNNER_TEMP/sops-bin"
+      - name: Upload key from SOPS (a release is always signed)
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          f=deploy/secrets/android-upload.enc.yaml
+          [[ -f "$f" ]] || { echo "::error::$f is missing: a Play release is never built unsigned"; exit 1; }
+          get() {
+            local v
+            v=$("$RUNNER_TEMP/sops-bin" --decrypt --extract "[\"$1\"]" "$f")
+            [[ -n "$v" ]] || { echo "::error::$1 is empty in $f"; exit 1; }
+            printf '%s' "$v"
+          }
+          printf '%s' "$(get keystore_b64)" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$RUNNER_TEMP/upload.jks" "$(get store_password)" "$(get key_alias)" "$(get key_password)" > apps/hub/src-tauri/gen/android/keystore.properties
+      - name: Release AAB
+        env:
+          ARENA_ADMOB_APP_ID: ${{ secrets.ARENA_ADMOB_APP_ID }}
+        run: pnpm --filter @arena/hub exec tauri android build --aab --target aarch64 --target x86_64 -- --locked
+      - name: Check the ad ids and inspect the signed AAB
+        run: |
+          node scripts/check-ads.mjs ids --require-production
+          aab=$(find apps/hub/src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -n 1)
+          test -n "$aab"
+          mkdir "$RUNNER_TEMP/aab"
+          unzip -q "$aab" -d "$RUNNER_TEMP/aab"
+          node scripts/check-android.mjs aab "$RUNNER_TEMP/aab"
+          jarsigner -verify "$aab"
+          echo "AAB=$aab" >> "$GITHUB_ENV"
+      - name: Upload to the internal testing track (Play App Signing)
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+          TAG: ${{ needs.gate.outputs.tag }}
+        run: |
+          PLAY_SERVICE_ACCOUNT_JSON=$("$RUNNER_TEMP/sops-bin" --decrypt --extract '["service_account_json"]' deploy/secrets/play-publisher.enc.yaml)
+          export PLAY_SERVICE_ACCOUNT_JSON
+          node scripts/play-release.mjs upload "$AAB" --notes "Arena 360 Hub $TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hub-android-release
+          path: apps/hub/src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
+          retention-days: 30

@@ -8,9 +8,13 @@ import android.view.WindowManager
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.android.play.core.appupdate.AppUpdateInfo
+import com.google.android.play.core.appupdate.AppUpdateManager
+import com.google.android.play.core.appupdate.AppUpdateOptions
 import `in`.arena360.ads.ArenaAds
 import kotlin.math.roundToInt
 import org.json.JSONObject
@@ -31,6 +35,10 @@ class MainActivity : TauriActivity() {
       "window.dispatchEvent(new CustomEvent('arena:backup-folder', { detail: { uri: " +
         (if (uri == null) "null" else JSONObject.quote(uri)) + " } }))"
 
+    /** Tells Settings → System the Play update state changed (`none`, `downloading`, `ready`). */
+    private fun updateScript(status: String) =
+      "window.dispatchEvent(new CustomEvent('arena:update', { detail: { status: " + JSONObject.quote(status) + " } }))"
+
     /** The text zoom (percent) for a system font scale: it follows the scale, capped at 130%. */
     fun textZoomFor(fontScale: Float): Int = (fontScale * 100).roundToInt().coerceAtMost(MAX_TEXT_ZOOM)
   }
@@ -41,6 +49,8 @@ class MainActivity : TauriActivity() {
 
   private var webView: WebView? = null
   private var ads: ArenaAds? = null
+  var updates: UpdateBridge? = null
+    private set
 
   // Back goes to the Hub UI, which closes the topmost sheet (or does nothing): it never leaves the
   // app and never walks the WebView history.
@@ -78,6 +88,16 @@ class MainActivity : TauriActivity() {
 
   fun pickBackupFolder() = backupFolder.launch(null)
 
+  // Play's own prompt for a flexible update; a refusal or failure is asked again at the next check.
+  private val updateFlow =
+    registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+      if (result.resultCode != RESULT_OK) updates?.failed()
+    }
+
+  fun startUpdateFlow(manager: AppUpdateManager, info: AppUpdateInfo, options: AppUpdateOptions) {
+    manager.startUpdateFlowForResult(info, updateFlow, options)
+  }
+
   fun askNotifications(done: () -> Unit) {
     afterNotifications = done
     notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -97,6 +117,7 @@ class MainActivity : TauriActivity() {
     // The last callback added is asked first: take the top again if a plugin added its own.
     claimBack()
     ads?.resume()
+    updates?.check()
   }
 
   override fun onPause() {
@@ -108,6 +129,8 @@ class MainActivity : TauriActivity() {
   override fun onDestroy() {
     ads?.release()
     ads = null
+    updates?.release()
+    updates = null
     super.onDestroy()
   }
 
@@ -121,6 +144,9 @@ class MainActivity : TauriActivity() {
     runOnUiThread {
       this.webView = webView
       applyTextZoom(webView)
+      updates?.release()
+      updates = UpdateBridge(this) { status -> runOnUiThread { webView.evaluateJavascript(updateScript(status), null) } }
+      updates?.check()
       webView.addJavascriptInterface(HubBridge(this), "ArenaHub")
       // Inert until the page's ads gate (Android and Free) calls `init`.
       ads?.release()

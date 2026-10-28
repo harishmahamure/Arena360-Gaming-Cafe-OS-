@@ -74,6 +74,18 @@ class HubBridge(private val activity: MainActivity) {
   @JavascriptInterface
   fun keepBackupFolder(tree: String) = BackupFolderBridge.keepOnly(activity, Uri.parse(tree))
 
+  /** The Play update state: `none`, `downloading` or `ready` (Story 4.16). */
+  @JavascriptInterface
+  fun updateState(): String = activity.updates?.status ?: "none"
+
+  /** Asks Play now (the page does this when System opens); `arena:update` follows on a change. */
+  @JavascriptInterface
+  fun checkUpdate() = activity.runOnUiThread { activity.updates?.check(force = true) }
+
+  /** Installs a downloaded update. The page calls this only when no session is open. */
+  @JavascriptInterface
+  fun installUpdate() = activity.runOnUiThread { activity.updates?.install() }
+
   @JavascriptInterface
   fun openAppSettings() {
     activity.runOnUiThread {

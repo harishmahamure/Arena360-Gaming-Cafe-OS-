@@ -14,6 +14,12 @@
     submitIntent,
   } from "../../../lib/auth";
   import { bridge, refreshAccess, service } from "../../../lib/service.svelte";
+  import {
+    canInstall,
+    openSessions,
+    parseUpdateStatus,
+    type UpdateStatus,
+  } from "../../../lib/update";
 
   const KEY = "hub.stopped_at";
 
@@ -23,6 +29,15 @@
   });
   const canStop = $derived(hasPermission(staff, "settings.edit"));
 
+  const open = $derived(
+    openSessions(
+      (page.data as { hub?: { ok: boolean; snapshot?: { sessions?: { state: string }[] } } }).hub
+        ?.snapshot?.sessions,
+    ),
+  );
+  let update: UpdateStatus = $state("none");
+  const installable = $derived(canInstall(update, open));
+
   let confirming = $state(false);
   let approving = $state(false);
   let busy = $state(false);
@@ -31,9 +46,21 @@
 
   onMount(() => {
     refreshAccess();
-    const onFocus = () => refreshAccess();
+    const readUpdate = () => (update = parseUpdateStatus(bridge()?.updateState?.()));
+    const onUpdate = (e: Event) =>
+      (update = parseUpdateStatus((e as CustomEvent<{ status?: string }>).detail?.status));
+    readUpdate();
+    bridge()?.checkUpdate?.();
+    const onFocus = () => {
+      refreshAccess();
+      readUpdate();
+    };
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    window.addEventListener("arena:update", onUpdate);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("arena:update", onUpdate);
+    };
   });
 
   async function stop(ticket?: string) {
@@ -122,6 +149,26 @@
           variant="secondary"
           onclick={() => bridge()?.openNotificationSettings()}
         />
+      </div>
+    {/if}
+
+    {#if bridge()?.updateState}
+      <div class="row" data-testid="service-update">
+        <h3 class="type-hub-label">{t("hub.update.title")}</h3>
+        {#if update === "ready"}
+          <StatusBadge state="warning" label="hub.update.ready" />
+          <p class="type-hub-body">{t("hub.update.ready_help")}</p>
+          <Button
+            label="hub.update.install"
+            disabled={!installable}
+            disabledReason="hub.update.install_waiting"
+            onclick={() => bridge()?.installUpdate?.()}
+          />
+        {:else if update === "downloading"}
+          <p class="type-hub-body">{t("hub.update.downloading")}</p>
+        {:else}
+          <p class="type-hub-body">{t("hub.update.none")}</p>
+        {/if}
       </div>
     {/if}
 

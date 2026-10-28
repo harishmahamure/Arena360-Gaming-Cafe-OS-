@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 02:00
+last_updated: 10-29-2026 03:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -120,7 +120,7 @@ development_status:
   4-13-a-standard-interstitial-only-when-staff-come-back-from-the-i: done
   4-14-ad-requests-and-impressions-are-recorded-without-ids-and-sen: done
   4-15-upgrading-removes-ads-within-one-heartbeat-and-a-lapse-bring: done
-  4-16-the-android-hub-ships-through-google-play-with-a-staged-roll: backlog
+  4-16-the-android-hub-ships-through-google-play-with-a-staged-roll: review
   4-17-android-hub-proven-on-a-3-gb-device-with-20-kiosks-doze-and: backlog
   epic-4-retrospective: optional
 

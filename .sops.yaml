@@ -11,3 +11,7 @@ creation_rules:
   - path_regex: ^deploy/secrets/production\.enc\.yaml$
     encrypted_regex: ^(data|stringData)$
     age: age1productionrecipientreplacemewiththeoutputofagekeygen000000000000000
+  # Not a Kubernetes Secret: a flat file whose one key, `service_account_json`, is the Play
+  # Developer API service account (Story 4.16). Every value is encrypted.
+  - path_regex: ^deploy/secrets/play-publisher\.enc\.yaml$
+    age: age1productionrecipientreplacemewiththeoutputofagekeygen000000000000000

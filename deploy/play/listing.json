@@ -1,0 +1,58 @@
+{
+  "package_name": "in.arena360.hub",
+  "contains_ads": true,
+  "ad_sdk": {
+    "artifact": "com.google.android.gms:play-services-ads",
+    "version": "25.5.0"
+  },
+  "data_safety": {
+    "note": "Matches the data the Google Mobile Ads SDK collects (Google's AdMob disclosure guide). The Hub itself sends no personal data off the device on Free; the cafe's data stays on the Hub. Re-check this block whenever ad_sdk.version changes.",
+    "collected": [
+      {
+        "type": "device_or_other_ids",
+        "shared": true,
+        "purposes": [
+          "advertising_or_marketing",
+          "analytics",
+          "fraud_prevention_security_and_compliance"
+        ],
+        "optional": false
+      },
+      {
+        "type": "approximate_location",
+        "shared": true,
+        "purposes": ["advertising_or_marketing"],
+        "optional": false
+      },
+      {
+        "type": "app_interactions",
+        "shared": true,
+        "purposes": ["advertising_or_marketing", "analytics"],
+        "optional": false
+      },
+      {
+        "type": "crash_logs",
+        "shared": true,
+        "purposes": ["analytics"],
+        "optional": false
+      },
+      {
+        "type": "diagnostics",
+        "shared": true,
+        "purposes": ["analytics", "fraud_prevention_security_and_compliance"],
+        "optional": false
+      }
+    ],
+    "encrypted_in_transit": true,
+    "deletion_request": false
+  },
+  "foreground_service": {
+    "types": ["connectedDevice"],
+    "declaration": "The Hub serves the cafe's kiosk PCs over the local network and keeps session timers running while the screen is off. It runs from the moment the owner pairs the Hub until they stop it in System."
+  },
+  "device_catalogue": {
+    "min_ram_mb": 3072,
+    "min_sdk": 28,
+    "note": "minSdk 28 excludes Android 8.1 (API 27) and earlier."
+  }
+}

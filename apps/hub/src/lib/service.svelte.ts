@@ -17,6 +17,12 @@ export type Bridge = {
   pickBackupFolder?(): void;
   /** After the Hub accepted the folder as the backup location, drops the grants for other folders. */
   keepBackupFolder?(tree: string): void;
+  /** The Play update state: "none", "downloading" or "ready" (Story 4.16). */
+  updateState?(): string;
+  /** Asks Play for an update now; the page gets `arena:update` when the state changes. */
+  checkUpdate?(): void;
+  /** Installs a downloaded update and restarts the Hub. Only called with no open session. */
+  installUpdate?(): void;
 };
 
 export const service: { access: Access | null } = $state({ access: null });

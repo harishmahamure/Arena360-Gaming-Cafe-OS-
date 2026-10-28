@@ -1817,6 +1817,24 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   (SOPS, keys `keystore_b64`, `store_password`, `key_alias`, `key_password`) into
   `gen/android/keystore.properties` (ignored). Without that file the AAB is built unsigned and the
   job says so.
+- **Google Play (Story 4.16):** the Android Hub ships only through Play. A `vX.Y.Z` tag whose
+  `deploy-cloud` run succeeded starts `.github/workflows/release-android.yml`: it checks the
+  cloud answers (cloud first), runs `pnpm run check:play`, builds the signed AAB (SOPS upload
+  key; never unsigned) and uploads it to the Play internal testing track through the Play
+  Developer API (`scripts/play-release.mjs upload`, service account in
+  `deploy/secrets/play-publisher.enc.yaml`, key `service_account_json`). `deploy/play/listing.json`
+  holds "Contains ads", the data safety form for the pinned ad SDK, the `connectedDevice`
+  foreground-service declaration and the device catalogue (3 GB RAM, minSdk 28); `check:play`
+  fails when they drift from the Gradle files, the manifest or `device_spec.rs`.
+  `deploy/play/rollout.json` records the 1% → 10% → 50% → 100% stages over a week and the halt
+  thresholds (crash rate, ANR rate, fleet heartbeat-gap); `promote` refuses a stage out of
+  order, too early or without a clean pre-launch report. Runbook:
+  `docs/runbooks/android-play-rollout.md`. **In the Hub:** `UpdateBridge.kt` (Play in-app
+  updates, flexible) downloads in the background; System → Hub service shows **Update ready**
+  and enables **Install and restart** only while no session is active, paused or in grace
+  (`apps/hub/src/lib/update.ts`); an update Play installs by itself restarts the service through
+  `BootReceiver` (`MY_PACKAGE_REPLACED`). Not runnable locally: the Gradle/Kotlin build, the
+  Play API calls against a real account, the pre-launch report and a real in-app update.
 - **Checks:** `node scripts/check-android.mjs manifest` checks the backup rules, the cleartext
   policy, duplicate manifest entries and that `KeystoreBridge.kt` uses `AndroidKeyStore` with
   AES-GCM and never reads the key out; `node scripts/check-android.mjs aab <dir>` checks an extracted AAB for 16 KB ELF

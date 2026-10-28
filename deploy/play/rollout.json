@@ -1,0 +1,17 @@
+{
+  "track_internal": "internal",
+  "track_production": "production",
+  "stages": [
+    { "percent": 1, "min_hours": 24 },
+    { "percent": 10, "min_hours": 48 },
+    { "percent": 50, "min_hours": 72 },
+    { "percent": 100, "min_hours": 0 }
+  ],
+  "total_days": 7,
+  "halt_when": {
+    "user_perceived_crash_rate_pct": 1.0,
+    "anr_rate_pct": 0.47,
+    "heartbeat_gap_hubs_pct": 2.0
+  },
+  "notes": "Crash and ANR rates are Play Console's user-perceived rates for the version. heartbeat_gap_hubs_pct is the share of Free Hubs on that version whose last cloud heartbeat is more than 3 intervals old (the fleet heartbeat-gap metric). The thresholds are the recorded ones: change them here, in a reviewed commit, never at the moment of a rollout."
+}

@@ -18,6 +18,7 @@ pub mod api;
 pub mod auth;
 pub mod backup;
 pub mod branch_code;
+pub mod catalog;
 pub mod client_ip;
 pub mod config;
 pub mod crypto;
@@ -266,6 +267,15 @@ pub async fn serve(
                 let _ = st.templates.set(store);
             }
             None => tracing::warn!("no object store configured: setup templates are not kept"),
+        }
+        match config::catalog_cdn_from_env(dev, &|k| std::env::var_os(k)) {
+            Some(base) => {
+                let _ = st.catalog_cdn.set(base);
+            }
+            None => tracing::warn!(
+                "{} is not set: the catalogue manifest answers 503",
+                config::CATALOG_CDN_ENV
+            ),
         }
     }
     let check_db = Arc::clone(&db);

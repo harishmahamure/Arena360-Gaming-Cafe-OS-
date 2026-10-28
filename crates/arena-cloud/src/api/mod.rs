@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod branches;
+mod catalog;
 pub mod commands;
 mod cors;
 mod dev;
@@ -75,6 +76,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(wizard_devices::router(Arc::clone(st)))
             .merge(wizard_golive::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
+            .merge(catalog::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
             .merge(setup_template::router(Arc::clone(st)))

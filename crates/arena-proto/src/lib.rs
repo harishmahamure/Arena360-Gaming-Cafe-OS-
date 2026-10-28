@@ -22,6 +22,7 @@ mod display;
 mod entitlement;
 mod error;
 mod frame;
+mod game_catalog;
 mod gst;
 mod import;
 mod intent;
@@ -134,6 +135,10 @@ pub use frame::{
     Frame, FrameBody, FrameError, Hello, HelloOk, HubEvent, IntentResult, IntentSubmit,
     MAX_RID_LEN, MAX_SETTINGS_GET_KEYS, PROTOCOL_VERSION, SettingsGet, SettingsValues, Versions,
     check_envelope, parse_frame, parse_frame_value, parse_json,
+};
+pub use game_catalog::{
+    CATALOG_MANIFEST_PATH, CATALOG_MANIFEST_PER_MIN, CatalogGame, CatalogManifest, CatalogMedia,
+    CatalogSignature,
 };
 pub use gst::{
     GST_B2B, GST_B2CS, GST_CDNR, GST_HSN, GstExportRequest, GstExported, GstMonth, GstSection,

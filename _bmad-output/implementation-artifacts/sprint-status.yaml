@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-28-2026 23:59
+last_updated: 10-29-2026 00:30
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -166,8 +166,8 @@ development_status:
   5-39-pos-and-money-proven-under-load-offline-and-on-real-hardware: done
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-the-control-plane-publishes-the-global-game-catalogue-to-hub: backlog
+  epic-6: in-progress
+  6-1-the-control-plane-publishes-the-global-game-catalogue-to-hub: review
   6-2-the-hub-caches-the-catalogue-and-media-and-serves-them-on-th: backlog
   6-3-the-branch-game-and-app-library-at-the-hub-applied-to-every: backlog
   6-4-kiosks-scan-for-installed-games-and-launchers-and-report-the: backlog

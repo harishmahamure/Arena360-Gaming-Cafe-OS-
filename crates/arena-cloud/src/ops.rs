@@ -3,7 +3,9 @@ use std::ffi::OsString;
 use arena_proto::{Tier, TierLimits};
 use arena_store::control::{CompGrant, ControlDb, GrantOutcome};
 
-use crate::config::{Database, GrantCompConfig};
+use crate::catalog::{self, ImportError, ImportSummary};
+use crate::config::{CatalogImportConfig, Database, GrantCompConfig};
+use crate::templates::TemplateStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantSummary {
@@ -65,6 +67,46 @@ pub async fn open_migrated(database: &Database, now_ms: i64) -> Result<ControlDb
         .await
         .map_err(|e| OpsError::Db(e.to_string()))?;
     Ok(db)
+}
+
+/// `catalog import` (Story 6.1): reads the list and its media, uploads what changed once by
+/// hash and writes the games, the version and one `admin_audit` row in one transaction.
+pub async fn catalog_import(
+    cfg: &CatalogImportConfig,
+    env: impl Fn(&str) -> Option<OsString>,
+    now_ms: i64,
+) -> Result<ImportSummary, OpsError> {
+    let database = match &cfg.dev_data_dir {
+        Some(dir) => Database::Local {
+            data_dir: dir.clone(),
+        },
+        None => crate::config::remote_database(&env).map_err(OpsError::Config)?,
+    };
+    let file_name = cfg
+        .file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| OpsError::Config("the import file name is not text".to_owned()))?
+        .to_owned();
+    let text = std::fs::read_to_string(&cfg.file)
+        .map_err(|e| OpsError::Config(format!("{}: {e}", cfg.file.display())))?;
+    let games = catalog::parse_import(&file_name, &text).map_err(OpsError::Config)?;
+    let games = catalog::resolve(games, &cfg.media_dir).map_err(OpsError::Config)?;
+    let store = TemplateStore::from_env(&env).map_err(OpsError::Config)?;
+    let db = open_migrated(&database, now_ms).await?;
+    catalog::import(
+        &db,
+        store.as_ref(),
+        &file_name,
+        &games,
+        &cfg.operator,
+        now_ms,
+    )
+    .await
+    .map_err(|e| match e {
+        ImportError::File(m) => OpsError::Config(m),
+        ImportError::Backend(m) => OpsError::Db(m),
+    })
 }
 
 pub async fn grant_comp(

@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const USAGE: &str =
@@ -14,6 +14,8 @@ pub const USAGE: &str =
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
                                   --operator <name> --reason <text> [--dev [--data-dir <dir>]]
        arena-cloud ops licence-keygen [--kid <kid>]
+       arena-cloud catalog import <file.json|file.csv> --operator <name> [--media-dir <dir>]
+                                  [--dev [--data-dir <dir>]]
 
   --role all   every serving role this build has (control, command)
   --role jobs  run one --task and exit (0 on success, 1 on failure)
@@ -31,6 +33,10 @@ pub const USAGE: &str =
                exit 1 for an unknown branch, a past date or a database failure
   ops licence-keygen  print a new Ed25519 PKCS#8 private key PEM on stdout (for SOPS) and, on
                stderr, its kid and the VerifyKey line for arena_proto::licence::LICENCE_VERIFY_KEYS
+  catalog import  upsert the game catalogue from a JSON or CSV list by name + launcher, upload
+               its media (relative to --media-dir, default the file's folder) once by hash,
+               move the catalogue version and write one admin_audit row; needs the object store
+               (ARENA_BACKUP_S3_*) only when a changed game has media
 
 environment (not with --dev):
   ARENA_CONTROL_DB_URL    gz_control URL (libsql:// or https://)
@@ -46,6 +52,8 @@ environment (not with --dev):
   ARENA_LICENCE_SIGNING_KEY  the Ed25519 PKCS#8 PEM that signs branch licences (from
                           ops licence-keygen; --dev: the committed dev key)
   ARENA_LICENCE_KID       the kid of that key, as listed in LICENCE_VERIFY_KEYS
+  ARENA_CATALOG_CDN_URL   the CDN base URL game media are served from, `<base>/catalog/<sha256>.<ext>`
+                          (--dev default: http://127.0.0.1:9000); unset: the manifest answers 503
   ARENA_BILLING_ENABLED   unset or false: billing is not available in this build (true exits 64)
   ARENA_GUPSHUP_ENDPOINT, ARENA_GUPSHUP_USERID, ARENA_GUPSHUP_PASSWORD, ARENA_GUPSHUP_SENDER,
   ARENA_GUPSHUP_DLT_TEMPLATE_ID  the Gupshup Enterprise SMS account (gupshup only)
@@ -55,6 +63,17 @@ environment (--task control-backup, ops restore-control --from-key):
   ARENA_BACKUP_AGE_RECIPIENTS        comma-separated age X25519 public keys (control-backup)
   ARENA_ALERT_WEBHOOK_URL            optional: Slack-compatible webhook POSTed on failure
   ARENA_ENV                          optional: environment name in the alert";
+
+/// The CDN base URL catalogue media are served from (Story 6.1).
+pub const CATALOG_CDN_ENV: &str = "ARENA_CATALOG_CDN_URL";
+
+/// The CDN base from the environment (`--dev`: a local default), without a trailing slash.
+pub fn catalog_cdn_from_env(dev: bool, env: &impl Fn(&str) -> Option<OsString>) -> Option<String> {
+    get_env(env, CATALOG_CDN_ENV)
+        .filter(|v| !v.is_empty())
+        .or_else(|| dev.then(|| "http://127.0.0.1:9000".to_owned()))
+        .map(|v| v.trim_end_matches('/').to_owned())
+}
 
 /// The `gz_control` URL.
 pub const DB_URL_ENV: &str = "ARENA_CONTROL_DB_URL";
@@ -208,6 +227,16 @@ pub struct GrantCompConfig {
     pub dev_data_dir: Option<PathBuf>,
 }
 
+/// `catalog import` (Story 6.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogImportConfig {
+    pub file: PathBuf,
+    /// Media paths in the file are relative to this folder.
+    pub media_dir: PathBuf,
+    pub operator: String,
+    pub dev_data_dir: Option<PathBuf>,
+}
+
 /// What the command line asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -215,6 +244,7 @@ pub enum Command {
     Job(JobConfig),
     RestoreControl(RestoreConfig),
     GrantComp(GrantCompConfig),
+    CatalogImport(CatalogImportConfig),
     LicenceKeygen { kid: Option<String> },
     Help,
     Version,
@@ -300,6 +330,56 @@ fn parse_grant_comp(args: impl Iterator<Item = OsString>) -> Result<Command, Str
         until_ms,
         operator,
         reason,
+        dev_data_dir: dev.then(|| data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))),
+    }))
+}
+
+fn parse_catalog(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    match args.next().and_then(|a| a.into_string().ok()).as_deref() {
+        Some("import") => {}
+        Some("--help" | "-h") => return Ok(Command::Help),
+        Some(other) => return Err(format!("unknown catalog command {other}")),
+        None => return Err("catalog needs a command (import)".to_owned()),
+    }
+    let mut file: Option<String> = None;
+    let mut media_dir: Option<PathBuf> = None;
+    let mut operator: Option<String> = None;
+    let mut dev = false;
+    let mut data_dir: Option<PathBuf> = None;
+    let early = walk_flags(args, |flag, inline, value| {
+        match flag {
+            "--help" | "-h" => return Ok(Some(Command::Help)),
+            "--media-dir" => media_dir = Some(PathBuf::from(value()?)),
+            "--operator" => operator = Some(value()?),
+            "--dev" if !inline => dev = true,
+            "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
+            other if !other.starts_with('-') && file.is_none() => file = Some(other.to_owned()),
+            other => return Err(format!("unknown argument {other}")),
+        }
+        Ok(None)
+    })?;
+    if let Some(cmd) = early {
+        return Ok(cmd);
+    }
+    let file = PathBuf::from(file.ok_or("catalog import needs a file (.json or .csv)")?);
+    let operator = operator
+        .map(|v| v.trim().to_owned())
+        .filter(|v| {
+            !v.is_empty() && v.chars().count() <= OPS_TEXT_MAX && !v.chars().any(char::is_control)
+        })
+        .ok_or("catalog import needs --operator")?;
+    if data_dir.is_some() && !dev {
+        return Err("--data-dir needs --dev".to_owned());
+    }
+    let media_dir = media_dir.unwrap_or_else(|| {
+        file.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+    });
+    Ok(Command::CatalogImport(CatalogImportConfig {
+        file,
+        media_dir,
+        operator,
         dev_data_dir: dev.then(|| data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))),
     }))
 }
@@ -412,6 +492,10 @@ pub fn parse(
     if args.peek().is_some_and(|a| a == "ops") {
         args.next();
         return parse_ops(args);
+    }
+    if args.peek().is_some_and(|a| a == "catalog") {
+        args.next();
+        return parse_catalog(args);
     }
     let mut role: Option<String> = None;
     let mut task: Option<String> = None;
@@ -1201,6 +1285,61 @@ mod ops_tests {
         let mut dir = GOOD.to_vec();
         dir.extend(["--data-dir", "/tmp/x"]);
         assert!(ops(&dir).unwrap_err().contains("--data-dir needs --dev"));
+    }
+
+    #[test]
+    fn catalog_import_parses_a_file_an_operator_and_a_media_folder() {
+        let cat = |args: &[&str]| {
+            parse(
+                std::iter::once("catalog")
+                    .chain(args.iter().copied())
+                    .map(OsString::from),
+                |_| None,
+            )
+        };
+        let Command::CatalogImport(c) =
+            cat(&["import", "lists/games.csv", "--operator", "harish"]).unwrap()
+        else {
+            panic!("not catalog import")
+        };
+        assert_eq!(c.file, PathBuf::from("lists/games.csv"));
+        assert_eq!(c.media_dir, PathBuf::from("lists"));
+        assert_eq!(
+            (c.operator.as_str(), c.dev_data_dir.clone()),
+            ("harish", None)
+        );
+        let Command::CatalogImport(c) = cat(&[
+            "import",
+            "games.json",
+            "--operator",
+            "h",
+            "--media-dir",
+            "art",
+            "--dev",
+        ])
+        .unwrap() else {
+            panic!("not catalog import")
+        };
+        assert_eq!(c.media_dir, PathBuf::from("art"));
+        assert_eq!(c.dev_data_dir, Some(PathBuf::from(DEFAULT_DATA_DIR)));
+        assert_eq!(c.file, PathBuf::from("games.json"));
+        assert!(
+            cat(&["import", "--operator", "h"])
+                .unwrap_err()
+                .contains("needs a file")
+        );
+        assert!(
+            cat(&["import", "g.json"])
+                .unwrap_err()
+                .contains("--operator")
+        );
+        assert!(cat(&["import", "a.json", "b.json", "--operator", "h"]).is_err());
+        assert!(
+            cat(&["export"])
+                .unwrap_err()
+                .contains("unknown catalog command")
+        );
+        assert!(cat(&["import", "g.json", "--operator", "h", "--data-dir", "x"]).is_err());
     }
 
     #[test]

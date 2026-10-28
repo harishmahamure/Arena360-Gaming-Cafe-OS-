@@ -42,6 +42,8 @@ pub struct AuthState {
     pub wizard_tx: tokio::sync::broadcast::Sender<String>,
     /// Where setup templates are kept (Story 5.37); set once by `serve`.
     pub templates: std::sync::OnceLock<crate::templates::TemplateStore>,
+    /// The CDN base URL catalogue media are served from (Story 6.1); set once by `serve`.
+    pub catalog_cdn: std::sync::OnceLock<String>,
 }
 
 impl AuthState {
@@ -60,6 +62,7 @@ impl AuthState {
             hub_tokens: std::sync::Mutex::default(),
             wizard_tx: tokio::sync::broadcast::channel(64).0,
             templates: std::sync::OnceLock::new(),
+            catalog_cdn: std::sync::OnceLock::new(),
         }
     }
 

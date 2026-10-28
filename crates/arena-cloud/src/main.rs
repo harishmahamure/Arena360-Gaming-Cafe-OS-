@@ -83,6 +83,30 @@ async fn main() -> ExitCode {
                 }
             };
         }
+        Ok(Command::CatalogImport(import)) => {
+            return match arena_cloud::ops::catalog_import(
+                &import,
+                |k| std::env::var_os(k),
+                arena_cloud::now_ms(),
+            )
+            .await
+            {
+                Ok(summary) => {
+                    for line in summary.lines() {
+                        println!("{line}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e @ arena_cloud::ops::OpsError::Config(_)) => {
+                    eprintln!("arena-cloud: catalog import: {e}");
+                    ExitCode::from(EXIT_USAGE)
+                }
+                Err(e) => {
+                    eprintln!("arena-cloud: catalog import failed: {e}");
+                    ExitCode::from(EXIT_FAILURE)
+                }
+            };
+        }
         Ok(Command::LicenceKeygen { kid }) => {
             return match arena_cloud::licence::generate(kid.as_deref()) {
                 Ok(key) => {

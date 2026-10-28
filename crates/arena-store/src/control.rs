@@ -16,7 +16,9 @@
 //! and the owner's password, TOTP and backup codes (Story 2.5) in `control/mfa.rs`; every SQL
 //! statement `arena-cloud` runs lives here.
 
+mod admin_audit;
 mod ads;
+mod catalog;
 mod commands;
 mod dump;
 mod entitlement;
@@ -34,7 +36,12 @@ mod staff_invites;
 mod template_choice;
 mod tenant;
 
+pub use admin_audit::{AdminAuditRow, NewAdminAudit};
 pub use ads::{AdFillRow, AdMetric};
+pub use catalog::{
+    CatalogImport, CatalogImportOutcome, CatalogMediaRow, CatalogRow, CatalogSignatureRow,
+    GameWrite,
+};
 pub use commands::{CommandRow, NewCommand};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
@@ -143,6 +150,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 16,
         sql: include_str!("../control-migrations/0016_branch_template_choice.sql"),
+    },
+    ControlMigration {
+        version: 17,
+        sql: include_str!("../control-migrations/0017_catalog.sql"),
     },
 ];
 
@@ -1072,12 +1083,16 @@ mod tests {
                 .map(|l| l.split("--").next().unwrap_or(""))
                 .collect::<Vec<_>>()
                 .join("\n");
+            let mut in_trigger = false;
             for stmt in code.split(';') {
-                let first = stmt
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_uppercase();
+                let mut words = stmt.split_whitespace().map(str::to_ascii_uppercase);
+                let first = words.next().unwrap_or_default();
+                // A trigger body is `BEGIN … END` and its `;`s are not statement ends here.
+                if in_trigger {
+                    in_trigger = first != "END";
+                    continue;
+                }
+                in_trigger = first == "CREATE" && words.next().as_deref() == Some("TRIGGER");
                 assert!(
                     !["BEGIN", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE"]
                         .contains(&first.as_str()),

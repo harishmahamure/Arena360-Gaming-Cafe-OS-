@@ -2,7 +2,7 @@
 title: 'Story 5.16: Receipt, tax invoice and payment receipt layouts for 58 and 80 mm'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '0fe1b46'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
@@ -41,4 +41,5 @@ context:
 
 ## Review Triage Log
 
-- Not yet reviewed.
+- Patched: the CGST/SGST half-rate label was wrong for an odd basis-point rate (121 bp printed 0.65%); now exact via `half_percent`, with a test.
+- Reviewed, no change: ASCII-only text so PC437 safe; widths hold at 32/48; wrapping matches the 5.15 preview.

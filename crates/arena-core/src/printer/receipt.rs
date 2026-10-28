@@ -447,7 +447,7 @@ impl Layout {
             }
             match (t.cgst_minor, t.sgst_minor) {
                 (Some(cgst), Some(sgst)) => {
-                    let half = percent(t.rate_bp / 2) + if t.rate_bp % 2 == 1 { "5" } else { "" };
+                    let half = half_percent(t.rate_bp);
                     self.pair(Style::Plain, &format!("CGST {half}%"), &m.number(cgst));
                     self.pair(Style::Plain, &format!("SGST {half}%"), &m.number(sgst));
                 }
@@ -479,6 +479,18 @@ fn percent(bp: u16) -> String {
         (_, 0) => format!("{whole}.{}", frac / 10),
         _ => format!("{whole}.{frac:02}"),
     }
+}
+
+/// Half of `bp` as a percent, exact for an odd rate: `1800` as `9`, `25` as `0.125`.
+fn half_percent(bp: u16) -> String {
+    let milli = u32::from(bp) * 5;
+    let (whole, frac) = (milli / 1000, milli % 1000);
+    if frac == 0 {
+        return whole.to_string();
+    }
+    format!("{whole}.{frac:03}")
+        .trim_end_matches('0')
+        .to_owned()
 }
 
 fn payment_label(p: &PaymentRow) -> String {
@@ -1022,6 +1034,15 @@ mod tests {
         assert_eq!(percent(250), "2.5");
         assert_eq!(percent(25), "0.25");
         assert_eq!(percent(0), "0");
+    }
+
+    #[test]
+    fn half_rates_are_exact_for_odd_basis_points() {
+        assert_eq!(half_percent(1800), "9");
+        assert_eq!(half_percent(500), "2.5");
+        assert_eq!(half_percent(25), "0.125");
+        assert_eq!(half_percent(121), "0.605");
+        assert_eq!(half_percent(0), "0");
     }
 
     #[test]

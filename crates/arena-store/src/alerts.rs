@@ -12,6 +12,12 @@ pub struct AlertRow {
     pub acked_at: Option<i64>,
     pub acked_by: Option<String>,
     pub rev: i64,
+    /// The product a low-stock alert is about.
+    pub product_id: Option<String>,
+    /// The quantity on hand a low-stock alert last saw.
+    pub qty: Option<i64>,
+    /// The threshold a low-stock alert crossed.
+    pub threshold: Option<i64>,
 }
 
 pub struct NewAlert<'a> {
@@ -19,9 +25,13 @@ pub struct NewAlert<'a> {
     pub kind: &'a str,
     pub device_id: Option<&'a str>,
     pub raised_at: i64,
+    pub product_id: Option<&'a str>,
+    pub qty: Option<i64>,
+    pub threshold: Option<i64>,
 }
 
-const COLUMNS: &str = "id, kind, device_id, raised_at, acked_at, acked_by, rev";
+const COLUMNS: &str =
+    "id, kind, device_id, raised_at, acked_at, acked_by, rev, product_id, qty, threshold";
 
 fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRow> {
     Ok(AlertRow {
@@ -32,14 +42,26 @@ fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRow> {
         acked_at: r.get(4)?,
         acked_by: r.get(5)?,
         rev: r.get(6)?,
+        product_id: r.get(7)?,
+        qty: r.get(8)?,
+        threshold: r.get(9)?,
     })
 }
 
 pub fn insert_alert(conn: &Connection, a: &NewAlert<'_>) -> Result<(), AppError> {
     conn.execute(
-        "INSERT INTO alerts (id, kind, device_id, raised_at, rev, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, 0, 0, 0)",
-        params![a.id, a.kind, a.device_id, a.raised_at],
+        "INSERT INTO alerts (id, kind, device_id, raised_at, product_id, qty, threshold, rev,
+                             created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, 0)",
+        params![
+            a.id,
+            a.kind,
+            a.device_id,
+            a.raised_at,
+            a.product_id,
+            a.qty,
+            a.threshold
+        ],
     )
     .map_err(db_error)?;
     Ok(())
@@ -71,6 +93,44 @@ pub fn find_open_alert(
     )
     .optional()
     .map_err(db_error)
+}
+
+/// The open alert of `kind` about `product_id`, if any.
+pub fn find_open_alert_for_product(
+    conn: &Connection,
+    kind: &str,
+    product_id: &str,
+) -> Result<Option<AlertRow>, AppError> {
+    conn.query_row(
+        &format!(
+            "SELECT {COLUMNS} FROM alerts
+             WHERE kind = ?1 AND product_id = ?2 AND acked_at IS NULL"
+        ),
+        params![kind, product_id],
+        from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Rewrites the quantity an open low-stock alert shows.
+pub fn set_alert_qty(conn: &Connection, id: &str, qty: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE alerts SET qty = ?2 WHERE id = ?1 AND acked_at IS NULL",
+        params![id, qty],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Rewrites the threshold an open low-stock alert shows.
+pub fn set_alert_threshold(conn: &Connection, id: &str, threshold: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE alerts SET threshold = ?2 WHERE id = ?1 AND acked_at IS NULL",
+        params![id, threshold],
+    )
+    .map_err(db_error)?;
+    Ok(())
 }
 
 /// Every open alert, oldest first.

@@ -99,6 +99,9 @@ pub(super) fn mutate(
                 kind: AlertKind::ControllerMissing.as_str(),
                 device_id: Some(&s.device_id),
                 raised_at: now_ms,
+                product_id: None,
+                qty: None,
+                threshold: None,
             },
         )?;
         written.push(Written {

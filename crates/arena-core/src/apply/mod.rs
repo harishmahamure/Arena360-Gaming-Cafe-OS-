@@ -292,7 +292,8 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         | P::StockWaste(_)
         | P::StockWasteReverted(_)
         | P::StockWriteOff(_)
-        | P::StockExpiryCheck(_) => Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?)),
+        | P::StockExpiryCheck(_)
+        | P::StockThreshold(_) => Target::Stock(Box::new(stock::load(tx, &intent.payload, now)?)),
     })
 }
 

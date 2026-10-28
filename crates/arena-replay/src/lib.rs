@@ -528,6 +528,18 @@ mod tests {
                 })
                 .await
                 .unwrap();
+            // 37 left; a threshold of 38 raises "Low stock", the stock-in below lifts it and the
+            // write-off crosses it again.
+            writer
+                .submit_intent(submit(
+                    IntentPayload::StockThreshold(arena_proto::StockThreshold {
+                        product_id: cola.clone(),
+                        low_stock_qty: Some(38),
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
             let player_id = ulid::Ulid::generate().to_string();
             let player = arena_core::players::seal(
                 &[5; 32],

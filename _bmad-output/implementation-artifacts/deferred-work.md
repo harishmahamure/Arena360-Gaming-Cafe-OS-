@@ -485,3 +485,10 @@
 - Expiry state is branch-wide: one alert for all lots, no per-lot alert rows, no undo of a write-off, and the Counter-with-PIN path for `stock.write_off` is covered by a mocked Playwright run only.
 - The price of expired stock sitting in waste/stock reports (Story 5.31) will need `stock_moves.reason = 'expired'` grouped with waste.
 - (Review 5.7) If a `stock.in` raises today's alert after the business day turns but before the first sweep, `raised_today` makes the check a no-op, so newly expired products miss that day's `catalog.changed` touch (availability itself is still right at read time). `stock.waste` / `stock.in.reverted` also leave a stale alert until the next hourly check, and changing the warn days does not re-evaluate the alert until then.
+
+## Deferred from: Story 5.8
+
+- The low-stock check compares the quantity on hand (`stock.qty`), which still counts expired lots that Story 5.7 holds from sale. A product whose remaining stock is all expired does not alert until the expired lot is written off (that decrement crosses the threshold); a lot passing its date writes nothing, so it neither raises nor clears the alert. Comparing against sellable quantity would need the daily expiry check to re-evaluate thresholds.
+- "Clears" is an acknowledgement by the actor of the stock-in or revert, so the record cannot tell "restocked" from "dismissed by staff"; Epic 8's owner alert reads the alert row's `product_id`, `qty`, `threshold` and `raised_at`.
+- A system `alert.raise` with kind `stock_low` is not refused and would create a product-less alert.
+- Story 5.11 (sale) must call `decrement()` for the alert to fire on sales; today only waste, write-off and stock-in revert reach it in production.

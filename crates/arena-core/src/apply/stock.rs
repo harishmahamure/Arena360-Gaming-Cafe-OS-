@@ -3,14 +3,15 @@ use arena_proto::{
     KEY_STOCK_EXPIRY_WARN_DAYS, MAX_PRICE_MINOR, MAX_STOCK_IN_QTY, MAX_STOCK_QTY,
     MAX_SUPPLIER_CHARS, MOVE_EXPIRED, MOVE_STOCK_IN, MOVE_STOCK_IN_REVERTED, MOVE_WASTE,
     MOVE_WASTE_REVERTED, STOCK_EXPIRY_WARN_RANGE, STOCK_UNDO_MS, StockIn, StockInReverted,
-    StockWaste, StockWasteReverted, StockWriteOff, add_days, consume_plan, lot_expired,
-    lot_in_window, valid_date, weighted_avg_cost,
+    StockThreshold, StockWaste, StockWasteReverted, StockWriteOff, add_days, consume_plan,
+    lot_expired, lot_in_window, valid_date, weighted_avg_cost,
 };
 use arena_store::{
     AlertRow, ChangeOp, LotRow, MoveRow, NewAlert, ProductRow, RowKey, StockRow, StoreTx, Table,
-    ack_alert, delete_row, find_lot, find_move, find_open_alert, find_product, find_setting,
-    find_stock, insert_alert, insert_lot, insert_move, insert_stock, latest_branch_alert_at,
-    latest_move_id, list_expiring_lots, list_lots, read_row, set_lot_remaining, update_stock,
+    ack_alert, delete_row, find_lot, find_move, find_open_alert, find_open_alert_for_product,
+    find_product, find_setting, find_stock, insert_alert, insert_lot, insert_move, insert_stock,
+    latest_branch_alert_at, latest_move_id, list_expiring_lots, list_lots, low_stock_qty, read_row,
+    set_alert_qty, set_alert_threshold, set_lot_remaining, set_low_stock_qty, update_stock,
 };
 
 use super::mutate::Written;
@@ -33,6 +34,10 @@ pub(crate) struct StockTarget {
     open_alert: Option<AlertRow>,
     /// Whether an "Expiring soon" alert was already raised in today's business day.
     raised_today: bool,
+    /// The product's low-stock threshold now (`stock.threshold`).
+    threshold: Option<i64>,
+    /// The open "Low stock" alert of the product (`stock.threshold`).
+    low_alert: Option<AlertRow>,
 }
 
 fn invalid(field: &str, message: &str) -> AppError {
@@ -77,6 +82,12 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload, now: i64) -> Result<Stoc
             None
         }
         IntentPayload::StockWaste(w) => Some(w.product_id.clone()),
+        IntentPayload::StockThreshold(w) => {
+            t.threshold = low_stock_qty(tx, &w.product_id)?;
+            t.low_alert =
+                find_open_alert_for_product(tx, AlertKind::StockLow.as_str(), &w.product_id)?;
+            Some(w.product_id.clone())
+        }
         IntentPayload::StockWasteReverted(r) => {
             t.mv = find_move(tx, &r.move_id)?;
             if let Some(m) = &t.mv {
@@ -222,6 +233,14 @@ pub(super) fn mutate_in(
     if stock_in_alerts(u, t) {
         out.push(raise_expiring(tx, now)?);
     }
+    out.extend(low_after_change(
+        tx,
+        &u.product_id,
+        qty,
+        qty + u.qty,
+        &intent.actor.id,
+        now,
+    )?);
     Ok(out)
 }
 
@@ -262,7 +281,7 @@ pub(super) fn mutate_revert(
             value_minor: 0,
         },
     )?;
-    Ok(vec![
+    let mut out = vec![
         write(
             RowKey::Stock {
                 product_id: m.product_id.clone(),
@@ -272,7 +291,16 @@ pub(super) fn mutate_revert(
         ),
         write(key, ChangeOp::Delete, Some(before)),
         write(RowKey::StockMoves { move_id }, ChangeOp::Insert, None),
-    ])
+    ];
+    out.extend(low_after_change(
+        tx,
+        &m.product_id,
+        stock.qty,
+        m.before_qty,
+        &intent.actor.id,
+        now,
+    )?);
+    Ok(out)
 }
 
 fn used_json(used: &[(String, i64)]) -> String {
@@ -438,6 +466,14 @@ pub(super) fn mutate_waste_revert(
         ChangeOp::Insert,
         None,
     ));
+    out.extend(low_after_change(
+        tx,
+        &m.product_id,
+        stock.qty,
+        m.before_qty,
+        &intent.actor.id,
+        now,
+    )?);
     Ok(out)
 }
 
@@ -524,6 +560,14 @@ fn consume(
         ChangeOp::Insert,
         None,
     ));
+    out.extend(low_after_change(
+        tx,
+        product_id,
+        stock.qty,
+        stock.qty - qty,
+        staff_id,
+        now,
+    )?);
     Ok(out)
 }
 
@@ -568,17 +612,15 @@ fn raise_expiring(tx: &StoreTx<'_>, now: i64) -> Result<Written, AppError> {
             kind: AlertKind::StockExpiring.as_str(),
             device_id: None,
             raised_at: now,
+            product_id: None,
+            qty: None,
+            threshold: None,
         },
     )?;
     Ok(write(RowKey::Alerts { id }, ChangeOp::Insert, None))
 }
 
-fn clear_expiring(
-    tx: &StoreTx<'_>,
-    alert: &AlertRow,
-    by: &str,
-    now: i64,
-) -> Result<Written, AppError> {
+fn ack_row(tx: &StoreTx<'_>, alert: &AlertRow, by: &str, now: i64) -> Result<Written, AppError> {
     ack_alert(tx, &alert.id, now, by)?;
     Ok(write(
         RowKey::Alerts {
@@ -587,6 +629,20 @@ fn clear_expiring(
         ChangeOp::Update,
         None,
     ))
+}
+
+/// Acknowledges the open "Low stock" alert of a product that is deleted, untracked or made a
+/// bundle (it no longer shows in Low stock, so its alert must not linger and sound).
+pub(crate) fn ack_low_for(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    by: &str,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    match find_open_alert_for_product(tx, AlertKind::StockLow.as_str(), product_id)? {
+        Some(alert) => Ok(vec![ack_row(tx, &alert, by, now)?]),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// Whether a stock-in with this expiry lands inside the warning window of an alert-less branch.
@@ -686,8 +742,16 @@ pub(super) fn mutate_write_off(
     if let Some(alert) = &t.open_alert
         && t.window.iter().all(|(l, _)| l.lot_id == lot.lot_id)
     {
-        out.push(clear_expiring(tx, alert, &intent.actor.id, now)?);
+        out.push(ack_row(tx, alert, &intent.actor.id, now)?);
     }
+    out.extend(low_after_change(
+        tx,
+        &lot.product_id,
+        stock.qty,
+        stock.qty - qty,
+        &intent.actor.id,
+        now,
+    )?);
     Ok(out)
 }
 
@@ -740,7 +804,7 @@ pub(super) fn mutate_check(
         (Some(Check::Raise), open) => {
             let mut out = Vec::new();
             if let Some(alert) = open {
-                out.push(clear_expiring(tx, alert, &intent.actor.id, now)?);
+                out.push(ack_row(tx, alert, &intent.actor.id, now)?);
             }
             out.push(raise_expiring(tx, now)?);
             // Touch the stock of every product with an expired lot so its availability
@@ -765,12 +829,137 @@ pub(super) fn mutate_check(
             }
             Ok(out)
         }
-        (Some(Check::Clear), Some(alert)) => {
-            Ok(vec![clear_expiring(tx, alert, &intent.actor.id, now)?])
-        }
+        (Some(Check::Clear), Some(alert)) => Ok(vec![ack_row(tx, alert, &intent.actor.id, now)?]),
         _ => Err(AppError::new(
             ErrorCode::Internal,
             "the expiry check reached mutate with nothing to do",
         )),
+    }
+}
+
+/// `stock.threshold` validation: a live tracked non-bundle product, a value in range, and a
+/// value the product does not already have.
+pub(super) fn validate_threshold(w: &StockThreshold, t: &StockTarget) -> Result<(), AppError> {
+    match &t.product {
+        Some(p) if !p.bundle && p.track_stock => {}
+        _ => {
+            return Err(invalid(
+                "product_id",
+                "a threshold is set for tracked products that are not bundles",
+            ));
+        }
+    }
+    if let Some(v) = w.low_stock_qty
+        && !(0..=MAX_STOCK_QTY).contains(&v)
+    {
+        return Err(invalid("low_stock_qty", "threshold is out of range"));
+    }
+    if t.threshold == w.low_stock_qty {
+        return Err(AppError::with_field(
+            ErrorCode::Stale,
+            "low_stock_qty",
+            "the product already has this threshold",
+        ));
+    }
+    Ok(())
+}
+
+/// Stores the threshold, then raises the alert (quantity at or under it, none open), refreshes
+/// the open one (still at or under it) or acknowledges it (above it, or cleared).
+pub(super) fn mutate_threshold(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    w: &StockThreshold,
+    t: &StockTarget,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    set_low_stock_qty(tx, &w.product_id, w.low_stock_qty)?;
+    let mut out = vec![write(
+        RowKey::Products {
+            product_id: w.product_id.clone(),
+        },
+        ChangeOp::Update,
+        None,
+    )];
+    let qty = t.stock.as_ref().map_or(0, |s| s.qty);
+    match (w.low_stock_qty, &t.low_alert) {
+        (Some(th), Some(alert)) if qty <= th => {
+            set_alert_qty(tx, &alert.id, qty)?;
+            set_alert_threshold(tx, &alert.id, th)?;
+            out.push(alert_update(&alert.id));
+        }
+        (Some(th), None) if qty <= th => {
+            out.push(raise_low(tx, &w.product_id, qty, th, now)?);
+        }
+        (_, Some(alert)) => out.push(ack_row(tx, alert, &intent.actor.id, now)?),
+        _ => {}
+    }
+    Ok(out)
+}
+
+fn alert_update(id: &str) -> Written {
+    write(RowKey::Alerts { id: id.to_owned() }, ChangeOp::Update, None)
+}
+
+fn raise_low(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    qty: i64,
+    threshold: i64,
+    now: i64,
+) -> Result<Written, AppError> {
+    let id = ulid::Ulid::generate().to_string();
+    insert_alert(
+        tx,
+        &NewAlert {
+            id: &id,
+            kind: AlertKind::StockLow.as_str(),
+            device_id: None,
+            raised_at: now,
+            product_id: Some(product_id),
+            qty: Some(qty),
+            threshold: Some(threshold),
+        },
+    )?;
+    Ok(write(RowKey::Alerts { id }, ChangeOp::Insert, None))
+}
+
+/// The low-stock hook every stock change runs after it moved the quantity of `product_id` from
+/// `old_qty` to `new_qty`. A tracked non-bundle product with a threshold raises "Low stock" when
+/// the quantity crosses from above the threshold to at or under it; while the alert is open and
+/// the product still low, its quantity follows the stock; once the quantity is back above the
+/// threshold the alert is acknowledged by `by`.
+pub(crate) fn low_after_change(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    old_qty: i64,
+    new_qty: i64,
+    by: &str,
+    now: i64,
+) -> Result<Vec<Written>, AppError> {
+    let Some(threshold) = low_stock_qty(tx, product_id)? else {
+        return Ok(Vec::new());
+    };
+    match find_product(tx, product_id)? {
+        Some(p) if p.deleted_at.is_none() && p.track_stock && !p.bundle => {}
+        _ => return Ok(Vec::new()),
+    }
+    let open = find_open_alert_for_product(tx, AlertKind::StockLow.as_str(), product_id)?;
+    if new_qty > threshold {
+        return match open {
+            Some(alert) => Ok(vec![ack_row(tx, &alert, by, now)?]),
+            None => Ok(Vec::new()),
+        };
+    }
+    match open {
+        Some(alert) if alert.qty != Some(new_qty) => {
+            set_alert_qty(tx, &alert.id, new_qty)?;
+            Ok(vec![alert_update(&alert.id)])
+        }
+        Some(_) => Ok(Vec::new()),
+        None if old_qty > threshold => {
+            Ok(vec![raise_low(tx, product_id, new_qty, threshold, now)?])
+        }
+        None => Ok(Vec::new()),
     }
 }

@@ -65,6 +65,7 @@ import type { StaffUpsert } from "./StaffUpsert";
 import type { StockExpiryCheck } from "./StockExpiryCheck";
 import type { StockIn } from "./StockIn";
 import type { StockInReverted } from "./StockInReverted";
+import type { StockThreshold } from "./StockThreshold";
 import type { StockWaste } from "./StockWaste";
 import type { StockWasteReverted } from "./StockWasteReverted";
 import type { StockWriteOff } from "./StockWriteOff";
@@ -114,6 +115,7 @@ export type IntentPayload =
   | ({ kind: "stock.waste.reverted" } & StockWasteReverted)
   | ({ kind: "stock.write_off" } & StockWriteOff)
   | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
+  | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "device.maintenance" } & DeviceMaintenance)
   | ({ kind: "rate.upsert" } & RateUpsert)
   | ({ kind: "device.test_session.start" } & DeviceTestSessionStart)

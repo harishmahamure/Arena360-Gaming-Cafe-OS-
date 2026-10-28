@@ -307,7 +307,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.live_sessions()?,
             s.live_segments()?,
             s.open_orders()?,
-            s.alerts()?,
+            s.alerts_with_products()?,
             s.pricing_rules()?,
             s.group_bills()?,
             s.ended_group_sessions()?,
@@ -329,12 +329,16 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
     snapshot.group_bills = group_bills(group_rows, &sessions, ended_group, &rules, now_ms);
     snapshot.alerts = alerts
         .into_iter()
-        .filter_map(|a| {
+        .filter_map(|(a, product)| {
             Some(arena_proto::SnapshotAlert {
                 kind: arena_proto::AlertKind::parse(&a.kind)?,
                 id: a.id,
                 device_id: a.device_id,
                 raised_at: a.raised_at,
+                product_id: a.product_id,
+                product,
+                qty: a.qty,
+                threshold: a.threshold,
             })
         })
         .collect();
@@ -906,6 +910,15 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.read_consistent(|s| crate::catalog::expiry_view(s, now_ms))
+    }
+
+    /// The Inventory → Low stock page. Blocking (SQLite).
+    pub fn low_stock(&self) -> Result<arena_proto::LowStockView, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(crate::catalog::low_stock_view)
     }
 
     pub fn rules(&self) -> Result<Vec<arena_proto::RuleView>, AppError> {

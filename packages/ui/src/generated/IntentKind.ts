@@ -42,6 +42,7 @@ export type IntentKind =
   | "stock.waste.reverted"
   | "stock.write_off"
   | "stock.expiry_check"
+  | "stock.threshold"
   | "device.maintenance"
   | "rate.upsert"
   | "device.test_session.start"

@@ -97,6 +97,9 @@ pub(super) fn mutate(
                     kind: &r.alert_kind,
                     device_id: r.device_id.as_deref(),
                     raised_at: now_ms,
+                    product_id: None,
+                    qty: None,
+                    threshold: None,
                 },
             )?;
             Ok(vec![Written {

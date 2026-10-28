@@ -316,6 +316,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Stock(t) => stock::validate_write_off(w, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::StockThreshold(w) => match target {
+            Target::Stock(t) => stock::validate_threshold(w, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::StockExpiryCheck(_) => match target {
             Target::Stock(t) => stock::validate_check(t),
             _ => Err(internal_target()),

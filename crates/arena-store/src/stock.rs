@@ -270,3 +270,82 @@ pub fn expired_qty(conn: &Connection, product_id: &str, today: &str) -> Result<i
     )
     .map_err(db_error)
 }
+
+/// A tracked, non-bundle product with what is on hand and its low-stock threshold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThresholdRow {
+    pub product_id: String,
+    pub name: String,
+    pub qty: i64,
+    pub low_stock_qty: Option<i64>,
+}
+
+/// The low-stock threshold of a product (`None` when it has none or does not exist).
+pub fn low_stock_qty(conn: &Connection, product_id: &str) -> Result<Option<i64>, AppError> {
+    conn.query_row(
+        "SELECT low_stock_qty FROM products WHERE product_id = ?1",
+        [product_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(db_error)
+}
+
+/// Sets (`Some`) or clears (`None`) a product's low-stock threshold.
+pub fn set_low_stock_qty(
+    conn: &Connection,
+    product_id: &str,
+    low_stock_qty: Option<i64>,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE products SET low_stock_qty = ?2 WHERE product_id = ?1",
+            params![product_id, low_stock_qty],
+        )
+        .map_err(db_error)?;
+    (n == 1).then_some(()).ok_or_else(|| {
+        AppError::new(
+            arena_proto::ErrorCode::Internal,
+            format!("no products row {product_id}"),
+        )
+    })
+}
+
+fn threshold_rows(conn: &Connection, only_low: bool) -> Result<Vec<ThresholdRow>, AppError> {
+    let filter = if only_low {
+        "AND p.low_stock_qty IS NOT NULL AND COALESCE(s.qty, 0) <= p.low_stock_qty"
+    } else {
+        ""
+    };
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT p.product_id, p.name, COALESCE(s.qty, 0), p.low_stock_qty
+             FROM products p LEFT JOIN stock s ON s.product_id = p.product_id
+             WHERE p.deleted_at IS NULL AND p.track_stock = 1 AND p.bundle = 0 {filter}
+             ORDER BY p.name COLLATE NOCASE, p.product_id"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ThresholdRow {
+                product_id: r.get(0)?,
+                name: r.get(1)?,
+                qty: r.get(2)?,
+                low_stock_qty: r.get(3)?,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// Live tracked non-bundle products with a threshold whose quantity on hand is at or under it,
+/// by name.
+pub fn list_low_stock(conn: &Connection) -> Result<Vec<ThresholdRow>, AppError> {
+    threshold_rows(conn, true)
+}
+
+/// Every live tracked non-bundle product with its quantity and threshold, by name.
+pub fn list_tracked_thresholds(conn: &Connection) -> Result<Vec<ThresholdRow>, AppError> {
+    threshold_rows(conn, false)
+}

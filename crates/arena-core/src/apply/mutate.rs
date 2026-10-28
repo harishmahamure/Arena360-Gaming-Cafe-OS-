@@ -234,7 +234,7 @@ pub(super) fn mutate(
         IntentPayload::StaffSetCredentials(c) => super::staff_credentials::mutate(tx, c),
         IntentPayload::StaffDeactivate(d) => super::staff_deactivate::mutate(tx, d),
         IntentPayload::ProductUpsert(u) => match target {
-            Target::Product(t) => products::mutate_upsert(tx, u, t),
+            Target::Product(t) => products::mutate_upsert(tx, intent, u, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::PlanUpsert(u) => match target {
@@ -246,7 +246,7 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::ProductDelete(p) => match target {
-            Target::Product(t) => products::mutate_delete(tx, p, t, now_ms),
+            Target::Product(t) => products::mutate_delete(tx, intent, p, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::StockIn(u) => match target {
@@ -267,6 +267,10 @@ pub(super) fn mutate(
         },
         IntentPayload::StockWriteOff(_) => match target {
             Target::Stock(t) => stock::mutate_write_off(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::StockThreshold(w) => match target {
+            Target::Stock(t) => stock::mutate_threshold(tx, intent, w, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::StockExpiryCheck(_) => match target {

@@ -2851,6 +2851,18 @@ async fn stock_expiry(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Re
     }
 }
 
+async fn stock_low(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(&auth.reader);
+    match tokio::task::spawn_blocking(move || reader.low_stock()).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 async fn plans(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
     if let Err(e) = auth.session(&headers).await {
         return fail(e);
@@ -3040,6 +3052,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))
         .route("/ui/stock/expiry", get(stock_expiry))
+        .route("/ui/stock/low", get(stock_low))
         .route("/ui/plans", get(plans))
         .route("/ui/rules", get(rules))
         .route("/ui/printer/find", post(crate::ui_printer::find))
@@ -5148,6 +5161,18 @@ pub(crate) mod tests {
         assert_eq!(view["expiring"], json!([]));
         assert_eq!(view["expired"], json!([]));
         assert_eq!(view["today"].as_str().map(str::len), Some(10));
+    }
+
+    #[tokio::test]
+    async fn the_low_stock_page_needs_a_session_and_starts_empty() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/stock/low", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, view) = call(&hub, "GET", "/ui/stock/low", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["low"], json!([]));
+        assert_eq!(view["tracked"], json!([]));
     }
 
     #[tokio::test]

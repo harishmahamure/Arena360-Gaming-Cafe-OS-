@@ -9,4 +9,20 @@ export type SnapshotAlert = {
   kind: AlertKind;
   device_id?: string | null;
   raised_at: number;
+  /**
+   * The product a low-stock alert is about.
+   */
+  product_id?: string;
+  /**
+   * That product's name now.
+   */
+  product?: string;
+  /**
+   * The quantity on hand a low-stock alert last saw.
+   */
+  qty?: number;
+  /**
+   * The threshold a low-stock alert crossed.
+   */
+  threshold?: number;
 };

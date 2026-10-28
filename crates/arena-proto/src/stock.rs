@@ -69,6 +69,39 @@ pub struct StockWriteOff {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct StockExpiryCheck {}
 
+/// The payload of `stock.threshold`: set a tracked product's low-stock threshold (whole units,
+/// `0..=MAX_STOCK_QTY`), or clear it with `null`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StockThreshold {
+    pub product_id: String,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub low_stock_qty: Option<i64>,
+}
+
+/// One tracked product on the Inventory → Low stock page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct LowStockItem {
+    pub product_id: String,
+    pub product: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    /// The product's threshold, if it has one.
+    #[ts(type = "number | null")]
+    pub low_stock_qty: Option<i64>,
+}
+
+/// The Inventory → Low stock page: the products at or under their threshold, and every tracked
+/// product (with its threshold, to edit), by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct LowStockView {
+    pub low: Vec<LowStockItem>,
+    pub tracked: Vec<LowStockItem>,
+}
+
 /// One lot on the Inventory → Expiring and Expired lists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]

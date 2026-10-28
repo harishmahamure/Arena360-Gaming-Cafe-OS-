@@ -55,7 +55,7 @@
         {#if acts(row)}
           <button type="button" class="row ui-interactive" onclick={() => onpick(row)}>
             <span class="type-hub-title">{where(row)}</span>
-            <span class="type-hub-body">{t(row.label)}</span>
+            <span class="type-hub-body">{t(row.label, row.params)}</span>
             {#if row.since !== null}
               <span class="type-hub-label muted">{ageOf(row.since, now)}</span>
             {/if}
@@ -64,7 +64,7 @@
           <p class="row">
             <span class="glyph" aria-hidden="true">⚠</span>
             <span class="type-hub-title">{where(row)}</span>
-            <span class="type-hub-body">{t(row.label)}</span>
+            <span class="type-hub-body">{t(row.label, row.params)}</span>
           </p>
         {/if}
       </li>

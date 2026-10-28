@@ -145,6 +145,11 @@ enum Op {
     WriteOff {
         pick: u8,
     },
+    /// `stock.threshold` (valid or not) on the first tracked product: the open "Low stock" alert
+    /// exists exactly when the quantity is at or under the new threshold.
+    Threshold {
+        value: Option<i64>,
+    },
     Player {
         user: u8,
         phone: u8,
@@ -512,6 +517,13 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..8i64, 1..=20i64).prop_map(|(days, qty)| Op::ExpiringStock { days, qty }),
         1 => Just(Op::ExpiryCheck),
         2 => (0..6u8).prop_map(|pick| Op::WriteOff { pick }),
+        2 => prop_oneof![
+            1 => Just(None),
+            5 => (0..=60i64).prop_map(Some),
+            1 => Just(Some(-1)),
+            1 => Just(Some(arena_proto::MAX_STOCK_QTY + 1)),
+        ]
+        .prop_map(|value| Op::Threshold { value }),
         2 => (0..3u8).prop_map(|slot| Op::SessionExpire { slot }),
         2 => (0..3u8).prop_map(|slot| Op::RateFlip { slot }),
         2 => (0..3u8, 0..4u8).prop_map(|(slot, target)| Op::Transfer { slot, target }),
@@ -739,6 +751,15 @@ fn open_expiring_alerts(hub: &Hub) -> usize {
         .iter()
         .filter(|a| a.kind == "stock_expiring")
         .count()
+}
+
+fn open_low_alerts(hub: &Hub, product_id: &str) -> Vec<arena_store::AlertRow> {
+    hub.reader
+        .alerts()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == "stock_low" && a.product_id.as_deref() == Some(product_id))
+        .collect()
 }
 
 fn code(r: &Result<Applied, AppError>) -> Option<(ErrorCode, Option<&str>)> {
@@ -1346,6 +1367,13 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .sum()
             };
             let (old_qty, old_avg) = held(hub);
+            let threshold = hub
+                .reader
+                .tracked_thresholds()
+                .unwrap()
+                .into_iter()
+                .find(|r| r.product_id == id)
+                .and_then(|r| r.low_stock_qty);
             let mut intent = hub.intent(
                 IntentPayload::StockWaste(arena_proto::StockWaste {
                     product_id: id.clone(),
@@ -1374,6 +1402,13 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert_eq!(held(hub), (old_qty - qty, old_avg));
             prop_assert_eq!(lot_sum(hub), old_qty - qty);
             prop_assert!(hub.change_count() >= changes_before + 3);
+            let low = open_low_alerts(hub, &id);
+            prop_assert!(low.len() <= 1);
+            if threshold.is_some_and(|th| old_qty > th && old_qty - qty <= th) {
+                prop_assert_eq!(low.len(), 1);
+                prop_assert_eq!(low[0].qty, Some(old_qty - qty));
+                prop_assert_eq!(low[0].threshold, threshold);
+            }
             if *undo {
                 let after_waste = hub.change_count();
                 let move_id = out
@@ -1503,6 +1538,49 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let emptied = after.iter().find(|l| l.lot_id == lot.lot_id).unwrap();
             prop_assert_eq!(emptied.qty_remaining, 0);
             prop_assert_eq!(after.iter().map(|l| l.qty_remaining).sum::<i64>(), left);
+        }
+        Op::Threshold { value } => {
+            let Some(row) = hub.reader.tracked_thresholds().unwrap().into_iter().next() else {
+                return Ok(());
+            };
+            let id = row.product_id.clone();
+            let intent = hub.intent(
+                IntentPayload::StockThreshold(arena_proto::StockThreshold {
+                    product_id: id.clone(),
+                    low_stock_qty: *value,
+                }),
+                None,
+            );
+            let out = hub.submit_new(intent);
+            if value.is_some_and(|v| !(0..=arena_proto::MAX_STOCK_QTY).contains(&v)) {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("low_stock_qty")))
+                );
+                prop_assert_eq!(hub.change_count(), changes_before);
+                return assert_gap_free(hub);
+            }
+            if *value == row.low_stock_qty {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale));
+                prop_assert_eq!(hub.change_count(), changes_before);
+                return assert_gap_free(hub);
+            }
+            prop_assert!(out.is_ok(), "{:?}", out);
+            let stored = hub
+                .reader
+                .tracked_thresholds()
+                .unwrap()
+                .into_iter()
+                .find(|r| r.product_id == id)
+                .unwrap();
+            prop_assert_eq!(stored.low_stock_qty, *value);
+            let low = open_low_alerts(hub, &id);
+            let want = usize::from(value.is_some_and(|v| row.qty <= v));
+            prop_assert_eq!(low.len(), want);
+            if let (Some(alert), Some(v)) = (low.first(), value) {
+                prop_assert_eq!(alert.qty, Some(row.qty));
+                prop_assert_eq!(alert.threshold, Some(*v));
+            }
         }
         Op::Player {
             user,

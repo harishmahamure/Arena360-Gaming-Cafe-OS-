@@ -284,6 +284,7 @@
   <a class="link type-hub-label" href="/inventory/waste">{t("hub.products.waste_link")}</a>
   <a class="link type-hub-label" href="/inventory/expiring">{t("hub.products.expiring_link")}</a>
   <a class="link type-hub-label" href="/inventory/expired">{t("hub.products.expired_link")}</a>
+  <a class="link type-hub-label" href="/inventory/low-stock">{t("hub.products.low_stock_link")}</a>
 
   <form class="form" bind:this={formEl} onsubmit={save} data-testid="product-form">
     <TextField label="hub.products.name" bind:value={form.name} error={errors.name} required />

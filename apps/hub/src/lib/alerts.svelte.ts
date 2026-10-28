@@ -1,6 +1,6 @@
 // Hub alerts: the open alerts the snapshot carries, the header list's rows, the acknowledge job
-// and the sound loop. The sound repeats every 30 s while any open device alert (or an expiring-
-// stock alert) exists; the branch-level conditions (licence unverified, PC clock wrong) are rows
+// and the sound loop. The sound repeats every 30 s while any open device alert (or an expiring- or
+// low-stock alert) exists; the branch-level conditions (licence unverified, PC clock wrong) are rows
 // with no sound.
 
 import { t } from "@arena/ui";
@@ -19,6 +19,7 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   controller_missing: "hub.alerts.kind.controller_missing",
   printer_offline: "hub.alerts.kind.printer_offline",
   stock_expiring: "hub.alerts.kind.stock_expiring",
+  stock_low: "hub.alerts.kind.stock_low",
 };
 
 // A branch-level alert (no device) has no tile tag.
@@ -28,11 +29,19 @@ export const KIND_TAGS: Record<AlertKind, "new" | "time-up" | "controllers" | nu
   controller_missing: "controllers",
   printer_offline: null,
   stock_expiring: null,
+  stock_low: null,
 };
 
 /** Branch-level kinds that also sound, and the screen a pick on them opens. */
-const BRANCH_SOUNDS = new Set<AlertKind>(["stock_expiring"]);
-const KIND_HREFS: Partial<Record<AlertKind, string>> = { stock_expiring: "/inventory/expiring" };
+const BRANCH_SOUNDS = new Set<AlertKind>(["stock_expiring", "stock_low"]);
+const KIND_HREFS: Partial<Record<AlertKind, string>> = {
+  stock_expiring: "/inventory/expiring",
+  stock_low: "/inventory/low-stock",
+};
+
+/** The values a kind's label shows (the low-stock text names the product and what is left). */
+const labelParams = (a: SnapshotAlert): Record<string, string | number> | undefined =>
+  a.kind === "stock_low" ? { product: a.product ?? "", qty: a.qty ?? 0 } : undefined;
 
 const CONDITIONS = {
   licence: "hub.licence.unverified",
@@ -51,6 +60,8 @@ export type AlertRow = {
   /** The screen the row opens when it is not about a device. */
   href: string | null;
   label: MessageKey;
+  /** The values `label` shows, if it takes any. */
+  params?: Record<string, string | number>;
   /** When the alert was raised (UTC ms; `null` for a condition). */
   since: number | null;
 };
@@ -88,6 +99,7 @@ export function listRows(): AlertRow[] {
       deviceId: a.device_id ?? null,
       href: KIND_HREFS[a.kind] ?? null,
       label: KIND_LABELS[a.kind],
+      params: labelParams(a),
       since: a.raised_at,
     })),
     ...alerts.conditions.map((c) => ({
@@ -167,7 +179,7 @@ function announce(snapshot: HubSnapshot) {
     say(
       a.id,
       a.device_id ? (names.get(a.device_id) ?? "") : t("hub.alerts.branch"),
-      t(KIND_LABELS[a.kind]),
+      t(KIND_LABELS[a.kind], labelParams(a)),
     );
   }
   for (const c of alerts.conditions) {

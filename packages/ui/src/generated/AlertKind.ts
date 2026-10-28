@@ -5,4 +5,4 @@
  * ([`AlertKind::tag`]).
  */
 export type AlertKind =
-  "fixture" | "time_up" | "controller_missing" | "printer_offline" | "stock_expiring";
+  "fixture" | "time_up" | "controller_missing" | "printer_offline" | "stock_expiring" | "stock_low";

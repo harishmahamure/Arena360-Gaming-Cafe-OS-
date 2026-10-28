@@ -193,8 +193,10 @@ fn written(id: String, op: ChangeOp) -> Vec<Written> {
 
 pub(super) fn mutate_upsert(
     tx: &StoreTx<'_>,
+    intent: &Intent,
     u: &ProductUpsert,
     t: &ProductTarget,
+    now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     let (id, op) = match &t.product {
         Some(old) => (old.product_id.clone(), ChangeOp::Update),
@@ -223,6 +225,14 @@ pub(super) fn mutate_upsert(
         _ => insert_product(tx, &row)?,
     }
     let mut out = written(id.clone(), op);
+    if !row.track_stock || row.bundle {
+        out.extend(super::stock::ack_low_for(
+            tx,
+            &id,
+            &intent.actor.id,
+            now_ms,
+        )?);
+    }
     let kept = |id: &str, qty: i64| {
         u.components
             .iter()
@@ -287,12 +297,19 @@ fn drop_components(
 
 pub(super) fn mutate_delete(
     tx: &StoreTx<'_>,
+    intent: &Intent,
     d: &ProductDelete,
     t: &ProductTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     set_product_deleted(tx, &d.id, now_ms)?;
     let mut out = written(d.id.clone(), ChangeOp::Update);
+    out.extend(super::stock::ack_low_for(
+        tx,
+        &d.id,
+        &intent.actor.id,
+        now_ms,
+    )?);
     drop_components(tx, &d.id, &t.old_components, &mut out)?;
     Ok(out)
 }

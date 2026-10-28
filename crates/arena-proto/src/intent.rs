@@ -133,6 +133,8 @@ pub enum IntentKind {
     StockWriteOff,
     #[serde(rename = "stock.expiry_check")]
     StockExpiryCheck,
+    #[serde(rename = "stock.threshold")]
+    StockThreshold,
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance,
     #[serde(rename = "rate.upsert")]
@@ -228,7 +230,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 74] = [
+    pub const ALL: [IntentKind; 75] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -267,6 +269,7 @@ impl IntentKind {
         Self::StockWasteReverted,
         Self::StockWriteOff,
         Self::StockExpiryCheck,
+        Self::StockThreshold,
         Self::DeviceMaintenance,
         Self::RateUpsert,
         Self::DeviceTestSessionStart,
@@ -346,6 +349,7 @@ impl IntentKind {
             Self::StockWasteReverted => "stock.waste.reverted",
             Self::StockWriteOff => "stock.write_off",
             Self::StockExpiryCheck => "stock.expiry_check",
+            Self::StockThreshold => "stock.threshold",
             Self::DeviceMaintenance => "device.maintenance",
             Self::RateUpsert => "rate.upsert",
             Self::DeviceTestSessionStart => "device.test_session.start",
@@ -434,7 +438,8 @@ impl IntentKind {
             | Self::StockWaste
             | Self::StockWasteReverted
             | Self::StockWriteOff
-            | Self::StockExpiryCheck => IntentCategory::Catalog,
+            | Self::StockExpiryCheck
+            | Self::StockThreshold => IntentCategory::Catalog,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -509,9 +514,11 @@ impl IntentKind {
             // ([`elevator_permission`](Self::elevator_permission)).
             Self::DeviceAdminExit | Self::DeviceAdminRelock => Requirement::Device,
             Self::DeviceAdminUnlock => Requirement::Perm(Permission::DeviceRemote),
-            Self::ProductUpsert | Self::ProductDelete | Self::PlanUpsert | Self::RuleUpsert => {
-                Requirement::Perm(Permission::CatalogEdit)
-            }
+            Self::ProductUpsert
+            | Self::ProductDelete
+            | Self::PlanUpsert
+            | Self::RuleUpsert
+            | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
             Self::StockWaste | Self::StockWasteReverted | Self::StockWriteOff => {
                 Requirement::Perm(Permission::StockAdjust)
@@ -612,7 +619,8 @@ impl IntentKind {
             | Self::StockInReverted
             | Self::StockWasteReverted
             | Self::StockWriteOff
-            | Self::StockExpiryCheck => None,
+            | Self::StockExpiryCheck
+            | Self::StockThreshold => None,
             Self::DeviceMaintenance
             | Self::RateUpsert
             | Self::DeviceTestSessionStart
@@ -1126,6 +1134,8 @@ pub enum IntentPayload {
     StockWriteOff(crate::StockWriteOff),
     #[serde(rename = "stock.expiry_check")]
     StockExpiryCheck(crate::StockExpiryCheck),
+    #[serde(rename = "stock.threshold")]
+    StockThreshold(crate::StockThreshold),
     #[serde(rename = "device.maintenance")]
     DeviceMaintenance(DeviceMaintenance),
     #[serde(rename = "rate.upsert")]
@@ -1241,6 +1251,7 @@ impl IntentPayload {
             Self::StockWasteReverted(_) => IntentKind::StockWasteReverted,
             Self::StockWriteOff(_) => IntentKind::StockWriteOff,
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
+            Self::StockThreshold(_) => IntentKind::StockThreshold,
             Self::DeviceMaintenance(_) => IntentKind::DeviceMaintenance,
             Self::RateUpsert(_) => IntentKind::RateUpsert,
             Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
@@ -1516,9 +1527,8 @@ mod tests {
                     Requirement::Perm(Permission::UserManage)
                 }
                 "staff.set_credentials" => Requirement::System,
-                "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert" => {
-                    Requirement::Perm(Permission::CatalogEdit)
-                }
+                "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
+                | "stock.threshold" => Requirement::Perm(Permission::CatalogEdit),
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
                 "stock.waste" | "stock.waste.reverted" | "stock.write_off" => {
                     Requirement::Perm(Permission::StockAdjust)

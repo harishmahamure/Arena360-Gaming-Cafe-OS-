@@ -41,8 +41,8 @@ pub use admin::{
     verifier_staff, verifier_version_at,
 };
 pub use alerts::{
-    AlertRow, NewAlert, ack_alert, find_alert, find_open_alert, insert_alert,
-    latest_branch_alert_at, list_open_alerts,
+    AlertRow, NewAlert, ack_alert, find_alert, find_open_alert, find_open_alert_for_product,
+    insert_alert, latest_branch_alert_at, list_open_alerts, set_alert_qty, set_alert_threshold,
 };
 pub use audit::{
     AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,
@@ -139,9 +139,10 @@ pub use staff::{
     set_staff_credentials, set_staff_setup_code, update_role_name, update_staff,
 };
 pub use stock::{
-    LotRow, MoveRow, StockRow, expired_qty, find_lot, find_move, find_stock, insert_lot,
-    insert_move, insert_stock, latest_move_id, list_expiring_lots, list_lots, list_moves,
-    set_lot_remaining, update_stock,
+    LotRow, MoveRow, StockRow, ThresholdRow, expired_qty, find_lot, find_move, find_stock,
+    insert_lot, insert_move, insert_stock, latest_move_id, list_expiring_lots, list_lots,
+    list_low_stock, list_moves, list_tracked_thresholds, low_stock_qty, set_lot_remaining,
+    set_low_stock_qty, update_stock,
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
@@ -758,6 +759,36 @@ impl Store {
             return Ok(Vec::new());
         }
         list_open_alerts(&self.conn)
+    }
+
+    /// Every open alert with the name of the product it is about (if any), oldest first.
+    pub fn alerts_with_products(&self) -> Result<Vec<(AlertRow, Option<String>)>, AppError> {
+        self.alerts()?
+            .into_iter()
+            .map(|a| {
+                let name = match &a.product_id {
+                    Some(id) => find_product(&self.conn, id)?.map(|p| p.name),
+                    None => None,
+                };
+                Ok((a, name))
+            })
+            .collect()
+    }
+
+    /// Live tracked products at or under their low-stock threshold, by name.
+    pub fn low_stock(&self) -> Result<Vec<ThresholdRow>, AppError> {
+        if !self.table_exists("stock")? {
+            return Ok(Vec::new());
+        }
+        list_low_stock(&self.conn)
+    }
+
+    /// Every live tracked non-bundle product with its quantity and low-stock threshold.
+    pub fn tracked_thresholds(&self) -> Result<Vec<ThresholdRow>, AppError> {
+        if !self.table_exists("stock")? {
+            return Ok(Vec::new());
+        }
+        list_tracked_thresholds(&self.conn)
     }
 
     /// Every console with an ended session awaiting its controller check, as (device, session).

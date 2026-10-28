@@ -20,16 +20,21 @@ pub enum AlertKind {
     /// A lot with stock left expires within the warning window or already has (raised by
     /// `stock.expiry_check` and `stock.in`; Story 5.7). A branch-level alert.
     StockExpiring,
+    /// A tracked product's quantity on hand fell to or under its low-stock threshold (raised by
+    /// any stock decrement and by `stock.threshold`; Story 5.8). One open per product; it records
+    /// the product, the quantity and the threshold.
+    StockLow,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 5] = [
+    pub const ALL: [AlertKind; 6] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
         Self::PrinterOffline,
         Self::StockExpiring,
+        Self::StockLow,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -40,6 +45,7 @@ impl AlertKind {
             Self::ControllerMissing => "controller_missing",
             Self::PrinterOffline => "printer_offline",
             Self::StockExpiring => "stock_expiring",
+            Self::StockLow => "stock_low",
         }
     }
 
@@ -56,6 +62,7 @@ impl AlertKind {
             Self::ControllerMissing => "controller",
             Self::PrinterOffline => "printer",
             Self::StockExpiring => "expiring",
+            Self::StockLow => "low-stock",
         }
     }
 }
@@ -100,6 +107,22 @@ pub struct SnapshotAlert {
     pub device_id: Option<String>,
     #[ts(type = "number")]
     pub raised_at: i64,
+    /// The product a low-stock alert is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub product_id: Option<String>,
+    /// That product's name now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub product: Option<String>,
+    /// The quantity on hand a low-stock alert last saw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number", optional)]
+    pub qty: Option<i64>,
+    /// The threshold a low-stock alert crossed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number", optional)]
+    pub threshold: Option<i64>,
 }
 
 #[cfg(test)]

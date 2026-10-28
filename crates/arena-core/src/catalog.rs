@@ -1,9 +1,9 @@
 use arena_proto::{
     AppError, CatalogEntry, ComponentView, DEFAULT_STOCK_EXPIRY_WARN_DAYS, ExpiringLot, ExpiryView,
-    KEY_STOCK_EXPIRY_WARN_DAYS, Product, REASON_COMPONENT_INACTIVE, REASON_EXPIRED,
-    STOCK_EXPIRY_WARN_RANGE, add_days, availability, bundle_quantity, lot_expired,
+    KEY_STOCK_EXPIRY_WARN_DAYS, LowStockItem, LowStockView, Product, REASON_COMPONENT_INACTIVE,
+    REASON_EXPIRED, STOCK_EXPIRY_WARN_RANGE, add_days, availability, bundle_quantity, lot_expired,
 };
-use arena_store::{ProductRow, Store};
+use arena_store::{ProductRow, Store, ThresholdRow};
 
 struct Status {
     quantity: i64,
@@ -192,4 +192,19 @@ pub(crate) fn expiry_view(store: &Store, now_ms: i64) -> Result<ExpiryView, AppE
         }
     }
     Ok(view)
+}
+
+/// Inventory → Low stock: the tracked products at or under their threshold, and every tracked
+/// product with its quantity and threshold (to edit).
+pub(crate) fn low_stock_view(store: &Store) -> Result<LowStockView, AppError> {
+    let item = |r: ThresholdRow| LowStockItem {
+        product_id: r.product_id,
+        product: r.name,
+        qty: r.qty,
+        low_stock_qty: r.low_stock_qty,
+    };
+    Ok(LowStockView {
+        low: store.low_stock()?.into_iter().map(item).collect(),
+        tracked: store.tracked_thresholds()?.into_iter().map(item).collect(),
+    })
 }

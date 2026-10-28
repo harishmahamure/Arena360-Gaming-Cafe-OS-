@@ -2,7 +2,7 @@ use super::*;
 use crate::rbac::{ROLE_COUNTER, ROLE_KITCHEN, ROLE_MANAGER};
 use arena_proto::{
     AlertAck, ProductDelete, ProductUpsert, StaffUpsert, StockExpiryCheck, StockIn,
-    StockInReverted, StockWaste, StockWasteReverted, StockWriteOff,
+    StockInReverted, StockThreshold, StockWaste, StockWasteReverted, StockWriteOff,
 };
 
 pub(super) fn owner() -> Actor {
@@ -1283,4 +1283,534 @@ async fn a_replayed_write_off_applies_once() {
     let again = f.writer.submit_intent(i).await.unwrap();
     assert_eq!(first.changes.len(), again.changes.len());
     assert_eq!(reopen(&f).moves(&id).unwrap().len(), 2);
+}
+
+// ---- Story 5.8: low-stock thresholds and alerts ----
+
+fn low_alerts(f: &Fixture) -> Vec<arena_store::AlertRow> {
+    reopen(f)
+        .alerts()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == "stock_low")
+        .collect()
+}
+
+fn low_rows(f: &Fixture) -> usize {
+    reopen(f)
+        .rows(Table::Alerts)
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == RowValue::Text("stock_low".into()))
+        .count()
+}
+
+async fn set_threshold(
+    f: &Fixture,
+    actor: Actor,
+    id: &str,
+    value: Option<i64>,
+) -> Result<Applied, AppError> {
+    f.writer
+        .submit_intent(intent(
+            actor,
+            IntentPayload::StockThreshold(StockThreshold {
+                product_id: id.into(),
+                low_stock_qty: value,
+            }),
+        ))
+        .await
+}
+
+fn threshold_of(f: &Fixture, id: &str) -> Option<i64> {
+    reopen(f)
+        .tracked_thresholds()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.product_id == id)
+        .unwrap()
+        .low_stock_qty
+}
+
+#[tokio::test]
+async fn a_manager_sets_and_clears_a_threshold_and_it_is_stored_on_the_product() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 20, 100).await;
+    let a = set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    assert_eq!(kinds(&a), [("products", ChangeOp::Update)]);
+    assert_eq!(threshold_of(&f, &id), Some(5));
+    assert!(low_alerts(&f).is_empty());
+    set_threshold(&f, owner(), &id, Some(0)).await.unwrap();
+    assert_eq!(threshold_of(&f, &id), Some(0));
+    set_threshold(&f, owner(), &id, None).await.unwrap();
+    assert_eq!(threshold_of(&f, &id), None);
+    let max = arena_proto::MAX_STOCK_QTY;
+    set_threshold(&f, owner(), &id, Some(max)).await.unwrap();
+    assert_eq!(low_alerts(&f).len(), 1);
+}
+
+#[tokio::test]
+async fn crossing_the_threshold_raises_one_alert_and_later_decrements_update_it() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 8, 100).await;
+    set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    assert!(low_alerts(&f).is_empty());
+    let a = waste(&f, owner(), &id, 3, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert_eq!(held(&f, &id).0, 5);
+    assert_eq!(
+        kinds(&a),
+        [
+            ("stock", ChangeOp::Update),
+            ("stock_lots", ChangeOp::Update),
+            ("stock_moves", ChangeOp::Insert),
+            ("alerts", ChangeOp::Insert)
+        ]
+    );
+    let open = low_alerts(&f);
+    assert_eq!(open.len(), 1);
+    assert_eq!(
+        (
+            open[0].product_id.as_deref(),
+            open[0].qty,
+            open[0].threshold,
+            open[0].device_id.as_deref()
+        ),
+        (Some(id.as_str()), Some(5), Some(5), None)
+    );
+    // The recorded event: the change-log image carries the crossing quantity.
+    let change = reopen(&f)
+        .changes()
+        .unwrap()
+        .into_iter()
+        .rfind(|c| c.tbl == "alerts")
+        .unwrap();
+    let image: Row = rmp_serde::from_slice(&change.row).unwrap();
+    assert_eq!(image["qty"], RowValue::Integer(5));
+    assert_eq!(image["threshold"], RowValue::Integer(5));
+    assert_eq!(image["product_id"], RowValue::Text(id.clone()));
+    // Already low: the same alert follows the stock.
+    let a = waste(&f, owner(), &id, 1, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert_eq!(a.changes.iter().filter(|c| c.tbl == "alerts").count(), 1);
+    let open = low_alerts(&f);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].qty, Some(4));
+    assert_eq!(low_rows(&f), 1);
+}
+
+#[tokio::test]
+async fn after_an_acknowledgement_a_further_decrement_is_not_a_crossing() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 8, 100).await;
+    set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    waste(&f, owner(), &id, 4, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    let open = low_alerts(&f).remove(0);
+    ack(&f, &open.id).await;
+    assert!(low_alerts(&f).is_empty());
+    let a = waste(&f, owner(), &id, 1, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert!(a.changes.iter().all(|c| c.tbl != "alerts"));
+    assert!(low_alerts(&f).is_empty());
+    assert_eq!(low_rows(&f), 1);
+}
+
+#[tokio::test]
+async fn a_stock_in_that_lifts_the_product_above_the_threshold_acknowledges_the_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 8, 100).await;
+    set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    waste(&f, owner(), &id, 4, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert_eq!(held(&f, &id).0, 4);
+    // Still at or under the threshold: the alert stays and shows the new quantity.
+    stock_in(&f, &id, 1, 100).await;
+    let open = low_alerts(&f);
+    assert_eq!((open.len(), open[0].qty), (1, Some(5)));
+    let a = stock_in(&f, &id, 4, 100).await;
+    assert_eq!(held(&f, &id).0, 9);
+    assert!(a.changes.iter().any(|c| c.tbl == "alerts"));
+    assert!(low_alerts(&f).is_empty());
+    let row = reopen(&f)
+        .rows(Table::Alerts)
+        .unwrap()
+        .into_iter()
+        .find(|r| r["kind"] == RowValue::Text("stock_low".into()))
+        .unwrap();
+    assert_eq!(row["acked_by"], RowValue::Text("o".into()));
+    // A new crossing raises a new alert.
+    waste(&f, owner(), &id, 5, ReasonCode::Broken)
+        .await
+        .unwrap();
+    assert_eq!(low_alerts(&f).len(), 1);
+    assert_eq!(low_rows(&f), 2);
+}
+
+#[tokio::test]
+async fn reverting_a_waste_that_lifts_the_product_acknowledges_the_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 8, 100).await;
+    set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    let a = waste(&f, owner(), &id, 3, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert_eq!(low_alerts(&f).len(), 1);
+    let r = waste_undo(&f, owner(), &move_of(&a)).await.unwrap();
+    assert_eq!(held(&f, &id).0, 8);
+    assert!(r.changes.iter().any(|c| c.tbl == "alerts"));
+    assert!(low_alerts(&f).is_empty());
+}
+
+#[tokio::test]
+async fn reverting_a_stock_in_that_drops_the_product_to_the_threshold_raises_the_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 3, 100).await;
+    set_threshold(&f, owner(), &id, Some(4)).await.unwrap();
+    // The stock-in lifts the product from 3 to 8: the alert the threshold raised is acknowledged.
+    let a = stock_in(&f, &id, 5, 100).await;
+    assert_eq!(held(&f, &id).0, 8);
+    assert!(low_alerts(&f).is_empty());
+    undo(&f, owner(), &move_of(&a)).await.unwrap();
+    assert_eq!(held(&f, &id).0, 3);
+    let open = low_alerts(&f);
+    assert_eq!((open.len(), open[0].qty), (1, Some(3)));
+    assert_eq!(low_rows(&f), 2);
+}
+
+#[tokio::test]
+async fn no_threshold_or_an_untracked_product_never_raises() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 8, 100).await;
+    waste(&f, owner(), &id, 8, ReasonCode::Spoiled)
+        .await
+        .unwrap();
+    assert_eq!(low_rows(&f), 0);
+    // A product that stops being tracked after it got a threshold raises nothing either.
+    stock_in(&f, &id, 8, 100).await;
+    set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    let mut store = reopen(&f);
+    store
+        .write_tx(|tx| {
+            tx.execute(
+                "UPDATE products SET track_stock = 0 WHERE product_id = ?1",
+                [&id],
+            )
+            .map_err(arena_store::db_error)?;
+            decrement(tx, &id, 6, "waste", "s", T0).map(|_| ())
+        })
+        .unwrap();
+    assert_eq!(low_rows(&f), 0);
+}
+
+#[tokio::test]
+async fn a_decrement_from_the_sale_path_raises_the_alert_too() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 8, 100).await;
+    set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    let mut store = reopen(&f);
+    let written = store
+        .write_tx(|tx| decrement(tx, &id, 4, "sale", "s", T0 + 1))
+        .unwrap();
+    assert!(
+        written.iter().any(
+            |w| matches!(w.key, arena_store::RowKey::Alerts { .. }) && w.op == ChangeOp::Insert
+        )
+    );
+    let open = low_alerts(&f);
+    assert_eq!((open.len(), open[0].qty), (1, Some(4)));
+    // A decrement that starts at or under the threshold raises nothing new.
+    store
+        .write_tx(|tx| decrement(tx, &id, 1, "sale", "s", T0 + 2))
+        .unwrap();
+    let open = low_alerts(&f);
+    assert_eq!((open.len(), open[0].qty), (1, Some(3)));
+    assert_eq!(low_rows(&f), 1);
+}
+
+#[tokio::test]
+async fn a_write_off_that_takes_the_product_to_the_threshold_raises_the_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Milk")).await;
+    stock_in(&f, &id, 6, 100).await;
+    let old = day_after(&f, 0);
+    put_expiring(&f, &id, 4, 100, &old).await;
+    set_threshold(&f, owner(), &id, Some(6)).await.unwrap();
+    assert!(low_alerts(&f).is_empty());
+    f.clock.advance(DAY_MS);
+    let lot = lot_id_of(&f, &id, &old);
+    let a = write_off(&f, owner(), &lot).await.unwrap();
+    assert!(a.changes.iter().any(|c| c.tbl == "alerts"));
+    let open = low_alerts(&f);
+    assert_eq!(
+        (open.len(), open[0].qty, open[0].threshold),
+        (1, Some(6), Some(6))
+    );
+}
+
+#[tokio::test]
+async fn setting_a_threshold_at_or_above_the_quantity_raises_it_and_lifting_or_clearing_acknowledges()
+ {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 3, 100).await;
+    let a = set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    assert_eq!(
+        kinds(&a),
+        [("products", ChangeOp::Update), ("alerts", ChangeOp::Insert)]
+    );
+    let open = low_alerts(&f);
+    assert_eq!(
+        (open.len(), open[0].qty, open[0].threshold),
+        (1, Some(3), Some(5))
+    );
+    // Raising it further keeps the one alert and records the new threshold.
+    set_threshold(&f, owner(), &id, Some(7)).await.unwrap();
+    let open = low_alerts(&f);
+    assert_eq!((open.len(), open[0].threshold), (1, Some(7)));
+    assert_eq!(low_rows(&f), 1);
+    // Lowering it under the quantity on hand acknowledges the alert by the actor.
+    set_threshold(&f, owner(), &id, Some(2)).await.unwrap();
+    assert!(low_alerts(&f).is_empty());
+    set_threshold(&f, owner(), &id, Some(3)).await.unwrap();
+    assert_eq!(low_alerts(&f).len(), 1);
+    // Clearing it acknowledges too.
+    let a = set_threshold(&f, owner(), &id, None).await.unwrap();
+    assert_eq!(
+        kinds(&a),
+        [("products", ChangeOp::Update), ("alerts", ChangeOp::Update)]
+    );
+    assert!(low_alerts(&f).is_empty());
+    assert_eq!(threshold_of(&f, &id), None);
+}
+
+#[tokio::test]
+async fn a_threshold_on_a_product_that_was_never_stocked_raises_at_zero() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    set_threshold(&f, owner(), &id, Some(0)).await.unwrap();
+    let open = low_alerts(&f);
+    assert_eq!((open.len(), open[0].qty), (1, Some(0)));
+}
+
+#[tokio::test]
+async fn threshold_validation_names_the_field_and_writes_nothing() {
+    let f = bootstrapped().await;
+    let tracked = make(&f, up("Cola")).await;
+    stock_in(&f, &tracked, 3, 100).await;
+    let mut plain = up("Napkin");
+    plain.track_stock = false;
+    let untracked = make(&f, plain).await;
+    let mut combo = up("Combo");
+    combo.track_stock = false;
+    combo.bundle = true;
+    combo.components = vec![arena_proto::BundleComponent {
+        product_id: tracked.clone(),
+        qty: 2,
+    }];
+    let bundle = make(&f, combo).await;
+    let gone = make(&f, up("Gone")).await;
+    f.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ProductDelete(ProductDelete { id: gone.clone() }),
+        ))
+        .await
+        .unwrap();
+    let snapshot = |f: &Fixture| {
+        (
+            state(f),
+            reopen(f).rows(Table::Alerts).unwrap(),
+            reopen(f).rows(Table::Products).unwrap(),
+        )
+    };
+    let before = snapshot(&f);
+    for id in [untracked, bundle, gone, "nope".to_owned()] {
+        let e = set_threshold(&f, owner(), &id, Some(5)).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("product_id")),
+            "{id}"
+        );
+    }
+    for bad in [-1, arena_proto::MAX_STOCK_QTY + 1] {
+        let e = set_threshold(&f, owner(), &tracked, Some(bad))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.field.as_deref()),
+            (ErrorCode::ValidationFailed, Some("low_stock_qty")),
+            "{bad}"
+        );
+    }
+    // Nothing to do: the product already has no threshold.
+    let e = set_threshold(&f, owner(), &tracked, None)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Stale);
+    assert_eq!(before, snapshot(&f));
+    set_threshold(&f, owner(), &tracked, Some(2)).await.unwrap();
+    let e = set_threshold(&f, owner(), &tracked, Some(2))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Stale);
+}
+
+#[tokio::test]
+async fn a_counter_needs_a_manager_pin_to_set_a_threshold() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 3, 100).await;
+    let counter = staff(&f, "ctr", ROLE_COUNTER).await;
+    let manager = manager_with_pin(&f).await;
+    let before = state(&f);
+    let e = set_threshold(&f, counter.clone(), &id, Some(5))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::PermissionDenied);
+    assert_eq!(state(&f), before);
+    assert_eq!(threshold_of(&f, &id), None);
+    let elevated = Intent {
+        elevated_by: Some(ElevatedBy {
+            kind: ElevationKind::Pin,
+            id: manager.clone(),
+            mode: ElevationMode::Hub,
+            verifier_version: 1,
+        }),
+        ..intent(
+            counter.clone(),
+            IntentPayload::StockThreshold(StockThreshold {
+                product_id: id.clone(),
+                low_stock_qty: Some(5),
+            }),
+        )
+    };
+    f.writer.submit_intent(elevated).await.unwrap();
+    assert_eq!(threshold_of(&f, &id), Some(5));
+    assert_eq!(low_alerts(&f).len(), 1);
+    let change = reopen(&f)
+        .changes()
+        .unwrap()
+        .into_iter()
+        .rfind(|c| c.tbl == "products")
+        .unwrap();
+    assert_eq!(change.actor_id, counter.id);
+    assert_eq!(change.elevated_by_id.as_deref(), Some(manager.as_str()));
+}
+
+#[tokio::test]
+async fn the_snapshot_carries_the_product_quantity_and_threshold_of_a_low_stock_alert() {
+    let f = bootstrapped().await;
+    let id = make(&f, up("Cola")).await;
+    stock_in(&f, &id, 3, 100).await;
+    set_threshold(&f, owner(), &id, Some(5)).await.unwrap();
+    let snapshot = crate::snapshot::read_snapshot(&reopen(&f), T0).unwrap();
+    let alert = snapshot
+        .alerts
+        .iter()
+        .find(|a| a.kind == arena_proto::AlertKind::StockLow)
+        .unwrap();
+    assert_eq!(
+        (
+            alert.product_id.as_deref(),
+            alert.product.as_deref(),
+            alert.qty,
+            alert.threshold
+        ),
+        (Some(id.as_str()), Some("Cola"), Some(3), Some(5))
+    );
+    let view = crate::SnapshotReader::open(&f.path)
+        .unwrap()
+        .low_stock()
+        .unwrap();
+    assert_eq!(view.low.len(), 1);
+    assert_eq!(view.tracked.len(), 1);
+    assert_eq!(
+        (
+            view.low[0].product.as_str(),
+            view.low[0].qty,
+            view.low[0].low_stock_qty
+        ),
+        ("Cola", 3, Some(5))
+    );
+}
+
+#[tokio::test]
+async fn two_products_each_hold_their_own_open_low_stock_alert() {
+    let f = bootstrapped().await;
+    let cola = make(&f, up("Cola")).await;
+    let chips = make(&f, up("Chips")).await;
+    for id in [&cola, &chips] {
+        stock_in(&f, id, 8, 100).await;
+        set_threshold(&f, owner(), id, Some(5)).await.unwrap();
+        waste(&f, owner(), id, 3, ReasonCode::Spoiled)
+            .await
+            .unwrap();
+    }
+    let open = low_alerts(&f);
+    assert_eq!(open.len(), 2);
+    let mut ids: Vec<_> = open.iter().filter_map(|a| a.product_id.clone()).collect();
+    ids.sort();
+    let mut want = vec![cola.clone(), chips.clone()];
+    want.sort();
+    assert_eq!(ids, want);
+    f.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::AlertAck(AlertAck {
+                alert_id: open[0].id.clone(),
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(low_alerts(&f).len(), 1);
+}
+
+#[tokio::test]
+async fn deleting_or_untracking_a_product_acknowledges_its_open_low_stock_alert() {
+    let f = bootstrapped().await;
+    let cola = make(&f, up("Cola")).await;
+    let chips = make(&f, up("Chips")).await;
+    for id in [&cola, &chips] {
+        stock_in(&f, id, 8, 100).await;
+        set_threshold(&f, owner(), id, Some(5)).await.unwrap();
+        waste(&f, owner(), id, 3, ReasonCode::Spoiled)
+            .await
+            .unwrap();
+    }
+    assert_eq!(low_alerts(&f).len(), 2);
+    let a = make(
+        &f,
+        ProductUpsert {
+            id: Some(cola.clone()),
+            track_stock: false,
+            ..up("Cola")
+        },
+    )
+    .await;
+    assert_eq!(a, cola);
+    let open = low_alerts(&f);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].product_id.as_deref(), Some(chips.as_str()));
+    f.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ProductDelete(ProductDelete { id: chips }),
+        ))
+        .await
+        .unwrap();
+    assert!(low_alerts(&f).is_empty());
 }

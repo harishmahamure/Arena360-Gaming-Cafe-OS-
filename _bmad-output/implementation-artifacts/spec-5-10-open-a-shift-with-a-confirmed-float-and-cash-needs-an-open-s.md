@@ -2,7 +2,7 @@
 title: 'Story 5.10: Open a shift with a confirmed float, and cash needs an open shift'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: 'c72b44e'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -89,9 +89,11 @@ context:
 
 ## Review Triage Log
 
+Code review (2026-10-28): no blocking findings. Every cash writer goes through the shift gate, every Undo writes its compensating row, and the migration enforces one open shift and an append-only ledger. fmt, clippy -D warnings, cargo tests and hub svelte-check are clean.
+
 ## Auto Run Result
 
-Status: review
+Status: done
 
 - **Pre-existing failures on this Windows host** (unrelated to shifts): `arena-tasks` `trusted_time_is_cloud_time_plus_monotonic_elapsed` (needs 8 days of uptime for `Instant::checked_sub`) and `a_printer_that_stops_reading_times_out`; `arena-kiosk-svc` privileged-registry and pipe tests; `arena-cloud` `backup` hung-run and `binary` unreachable-at-start tests; `arena-e2e` is unix-only.
 - **Residual risks:** shift close and the expected-cash maths are 5.26; a `sale_reverted` row has no audit `reverts` link; the Shift screen refreshes its event count every 5 s through the snapshot.

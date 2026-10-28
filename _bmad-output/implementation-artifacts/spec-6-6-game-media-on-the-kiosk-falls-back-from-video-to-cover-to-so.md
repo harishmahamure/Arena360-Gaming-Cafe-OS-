@@ -2,7 +2,7 @@
 title: 'Story 6.6: Game media on the kiosk falls back from video to cover to solid'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '3d7319ed49b153940663ed810b41ce522277e4f8'
 review_loop_iteration: 0
 followup_review_recommended: false

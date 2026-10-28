@@ -2,7 +2,7 @@
 title: 'Story 5.27: Reports screen with daily sales and sessions'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '98b2236697f8f55165a3002fed82c028672a33bf'
 context:

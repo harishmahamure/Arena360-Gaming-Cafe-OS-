@@ -703,7 +703,7 @@ enum Check {
 fn check_of(t: &StockTarget) -> Option<Check> {
     match (t.window.is_empty(), &t.open_alert) {
         (false, _) if t.today.is_some() && !t.raised_today => Some(Check::Raise),
-        (true, Some(_)) => Some(Check::Clear),
+        (true, Some(_)) if t.today.is_some() => Some(Check::Clear),
         _ => None,
     }
 }

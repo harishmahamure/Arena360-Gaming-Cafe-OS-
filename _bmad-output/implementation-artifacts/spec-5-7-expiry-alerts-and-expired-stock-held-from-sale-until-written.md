@@ -2,7 +2,7 @@
 title: 'Story 5.7: Expiry alerts, and expired stock held from sale until written off'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '46c0ce0'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -84,3 +84,5 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Code review (blind, edge-case, acceptance): fixed bundles with an expired component now read `expired` (was `out_of_stock`); the daily check no longer clears an open alert when the business day is unknown; the Expired page drops an elevation ticket instead of leaking it when busy; `isLot` validates `product` and `value_minor`. Deferred (see deferred-work.md): day-turn catalog touch when the alert was already raised, stale alert after waste/revert until the next sweep. Rejected: deleted-product lots (`find_product` does not filter deleted rows), per-write-off confirm (spec: no undo, PIN/permission gate stands).

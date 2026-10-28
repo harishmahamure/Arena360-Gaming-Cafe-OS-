@@ -14,7 +14,9 @@ const isLot = (l: unknown) =>
   l !== null &&
   typeof (l as { lot_id?: unknown }).lot_id === "string" &&
   typeof (l as { qty?: unknown }).qty === "number" &&
-  typeof (l as { expiry?: unknown }).expiry === "string";
+  typeof (l as { expiry?: unknown }).expiry === "string" &&
+  typeof (l as { product?: unknown }).product === "string" &&
+  typeof (l as { value_minor?: unknown }).value_minor === "number";
 
 /** `GET /ui/stock/expiry`: the lots inside the warning window and the lots already expired. */
 export async function loadExpiry(): Promise<ExpiryOutcome> {

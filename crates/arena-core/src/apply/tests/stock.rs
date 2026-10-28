@@ -1141,6 +1141,7 @@ async fn a_bundle_cannot_be_sold_from_an_expired_component() {
     assert!(combo_view(T0).available);
     let held = combo_view(T0 + DAY_MS);
     assert_eq!((held.available, held.quantity), (false, 0));
+    assert_eq!(held.reason.as_deref(), Some("expired"));
 }
 
 #[tokio::test]

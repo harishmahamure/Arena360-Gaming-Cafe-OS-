@@ -61,7 +61,10 @@
       approving = job;
       return;
     }
-    if (busy) return;
+    if (busy) {
+      if (ticket) void dropElevation(ticket);
+      return;
+    }
     busy = true;
     status = null;
     const outcome = await submitIntent(

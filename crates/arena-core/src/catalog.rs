@@ -52,12 +52,15 @@ fn status(store: &Store, p: &ProductRow, today: Option<&str>) -> Result<Status, 
     }
     let mut components = Vec::new();
     let mut parts = Vec::new();
+    let mut any_expired = false;
     for (id, qty) in store.components(&p.product_id)? {
         let row = store.product(&id)?;
         let live = row.as_ref().filter(|c| c.deleted_at.is_none());
         if live.is_some_and(|c| c.track_stock) {
             let held = store.stock(&id)?.map_or(0, |s| s.qty);
-            parts.push((sellable(store, &id, held, today)?.0, qty));
+            let (usable, has_expired) = sellable(store, &id, held, today)?;
+            any_expired |= has_expired;
+            parts.push((usable, qty));
         }
         components.push(ComponentView {
             name: row.as_ref().map_or_else(|| id.clone(), |c| c.name.clone()),
@@ -71,7 +74,10 @@ fn status(store: &Store, p: &ProductRow, today: Option<&str>) -> Result<Status, 
         (true, _) if components.iter().any(|c| !c.active) => {
             (false, Some(REASON_COMPONENT_INACTIVE))
         }
-        (true, _) => availability(true, false, quantity.is_some(), quantity.unwrap_or(0)),
+        (true, _) => match availability(true, false, quantity.is_some(), quantity.unwrap_or(0)) {
+            (false, Some("out_of_stock")) if any_expired => (false, Some(REASON_EXPIRED)),
+            other => other,
+        },
         gone => gone,
     };
     Ok(Status {

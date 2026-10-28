@@ -257,6 +257,7 @@ dependencies = [
  "arena-tasks",
  "axum",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

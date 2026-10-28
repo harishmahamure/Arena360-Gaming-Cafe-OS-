@@ -1,0 +1,53 @@
+{
+  "package": "in.arena360.hub",
+  "devices": [
+    {
+      "id": "android9-3gb",
+      "label": "Android 9, 3 GB RAM (the cheapest supported device)",
+      "api_level": 28,
+      "ram_gb": 3,
+      "runner_labels": ["self-hosted", "android-farm", "android9-3gb"]
+    },
+    {
+      "id": "android-latest",
+      "label": "Latest Android",
+      "api_level": 36,
+      "ram_gb": 4,
+      "runner_labels": ["self-hosted", "android-farm", "android-latest"]
+    }
+  ],
+  "load": {
+    "kiosks": 20,
+    "devices": 20,
+    "intents_per_s": 5,
+    "minutes": 60,
+    "mix": ["start", "pause", "resume", "extend", "transfer", "end", "settle"],
+    "timer_probe_every_s": 300,
+    "timer_probe_minutes": 2
+  },
+  "doze": {
+    "start_after_min": 15,
+    "minutes": 30,
+    "min_probes_inside": 2
+  },
+  "budgets": {
+    "apply": { "p95_ms": 100 },
+    "floor_update": { "max_ms": 2000 },
+    "kiosk_update": { "max_ms": 2000 },
+    "frame_block_ms": 100,
+    "timer_late_ms": 5000
+  },
+  "egress": {
+    "probe": ["1.1.1.1:443", "8.8.8.8:443"],
+    "ad_domains": [
+      "doubleclick.net",
+      "googlesyndication.com",
+      "googleadservices.com",
+      "admob.com",
+      "gstatic.com",
+      "googleapis.com",
+      "google.com"
+    ]
+  },
+  "notes": "Budgets are the story's numbers (NFR1, NFR3, NFR9, NFR17): change them here in a reviewed commit, never in the job. A later story that adds a measured operation (for example the daily rollup, NFR5) adds one object entry under budgets, such as daily_rollup with a p95_ms, and its test writes that operation into the report ops; the harness is not touched."
+}

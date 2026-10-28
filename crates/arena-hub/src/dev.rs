@@ -151,6 +151,18 @@ pub async fn seed(
                 IntentPayload::BranchBootstrap(seed_payload()),
             ))
             .await?;
+        // The fixture staff (four) and the Story 4.17 fleet exceed the Free caps (3 users), so
+        // the seeded branch carries roomy caps until a real licence replaces them.
+        writer
+            .apply_licence(arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier: arena_proto::Tier::Free,
+                flags: String::new(),
+                device_cap: 100,
+                user_cap: 10,
+            })
+            .await?;
         // Bootstrap writes the built-in roles in BUILTIN_ROLES order.
         let role_ids: Vec<&str> = bootstrap
             .changes

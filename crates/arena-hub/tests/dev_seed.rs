@@ -63,6 +63,11 @@ mod with_feature {
         assert_eq!(b["fy_start_month"], RowValue::Integer(4));
         let changes = store.changes().unwrap();
         // Bootstrap as the system; the device and the staff as the owner.
+        // `licence.apply` is the Hub's own write, not an intent of the seed.
+        let changes: Vec<_> = changes
+            .iter()
+            .filter(|c| !c.intent_kind.starts_with("licence"))
+            .collect();
         assert!(changes.iter().all(|c| c.actor_id == "dev-seed"));
         assert!(changes.iter().all(|c| match c.intent_kind.as_str() {
             "branch.bootstrap" => c.actor_kind == "system",

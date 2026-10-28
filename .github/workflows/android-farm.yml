@@ -1,0 +1,109 @@
+name: Android device farm
+
+# Story 4.17: the per-release proof of the Android Hub on real devices: a 60-minute mixed load of
+# start, pause, resume, extend, transfer, end and settle at 5/s from 20 fake kiosks over Wi-Fi,
+# 30 minutes of that in forced Doze with the screen off, ads on screen, the WAN cut, and the app
+# killed at the end. A missed budget fails the run, and the run is a required check of the
+# release (see docs/runbooks/android-farm.md). Not part of ci-ok: it needs the attached devices.
+#
+# One farm device per matrix entry, each on a self-hosted runner labelled `android-farm` and the
+# device id from deploy/android-farm/farm.json (`pnpm run check:farm` keeps the two in step).
+# The lab network has no route to the internet; its gateway captures SYNs and DNS answers for
+# the egress check.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: android-farm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build the debug APK and the seeding tool
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ANDROID_NDK_VERSION: 28.2.13676358
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-farm
+      - name: Install the pinned NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "ndk;${ANDROID_NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check:farm
+      - name: Debug APK (arm64)
+        run: pnpm --filter @arena/hub exec tauri android build --apk --debug --target aarch64 -- --locked
+      - name: The seeding tool for the device (arena-hub with dev-fixtures, arm64)
+        run: |
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang"
+          export CC_aarch64_linux_android="$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"
+          cargo build --locked --release -p arena-hub --features dev-fixtures --target aarch64-linux-android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-farm-build
+          path: |
+            apps/hub/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            target/aarch64-linux-android/release/arena-hub
+          if-no-files-found: error
+
+  farm:
+    name: ${{ matrix.device }}
+    needs: build
+    runs-on: [self-hosted, android-farm, "${{ matrix.device }}"]
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [android9-3gb, android-latest]
+    env:
+      ANDROID_SERIAL: ${{ vars[format('FARM_SERIAL_{0}', replace(matrix.device, '-', '_'))] }}
+      DEVICE_IP: ${{ vars[format('FARM_IP_{0}', replace(matrix.device, '-', '_'))] }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-farm-driver
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-farm-build
+          path: farm-build
+      - name: Load, Doze, ads, no WAN and a kill (about two hours)
+        run: |
+          apk=$(find farm-build -name '*.apk' | head -n 1)
+          scripts/android-farm/run.sh "$ANDROID_SERIAL" "$DEVICE_IP" "$apk" \
+            farm-build/target/aarch64-linux-android/release/arena-hub "farm-out/${{ matrix.device }}"
+        env:
+          FARM_GATEWAY_SYN: ${{ vars.FARM_GATEWAY_SYN }}
+          FARM_GATEWAY_DNS: ${{ vars.FARM_GATEWAY_DNS }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-farm-${{ matrix.device }}
+          path: farm-out/${{ matrix.device }}
+          if-no-files-found: ignore

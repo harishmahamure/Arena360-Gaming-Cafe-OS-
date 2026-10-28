@@ -24,10 +24,11 @@
     "check:secrets": "node scripts/check-secrets.mjs",
     "check:deploy": "node scripts/check-deploy.mjs",
     "check:play": "node scripts/play-release.mjs check",
+    "check:farm": "node scripts/android-farm.mjs check",
     "test:scripts": "node --test scripts/*.test.mjs",
     "format:check": "prettier --check .",
     "check:rust": "cargo fmt --check && cargo clippy --locked --workspace --all-targets -- -D warnings",
-    "check": "pnpm run check:rust && pnpm run check:generated && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run check:protocol && pnpm run check:strings && pnpm run check:tokens-fresh && pnpm run check:contrast && pnpm run check:tokens-used && pnpm run check:hex && pnpm run check:ads && pnpm run check:secrets && pnpm run check:deploy && pnpm run check:play && pnpm run test:scripts"
+    "check": "pnpm run check:rust && pnpm run check:generated && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run check:protocol && pnpm run check:strings && pnpm run check:tokens-fresh && pnpm run check:contrast && pnpm run check:tokens-used && pnpm run check:hex && pnpm run check:ads && pnpm run check:secrets && pnpm run check:deploy && pnpm run check:play && pnpm run check:farm && pnpm run test:scripts"
   },
   "devDependencies": {
     "prettier": "3.9.10",

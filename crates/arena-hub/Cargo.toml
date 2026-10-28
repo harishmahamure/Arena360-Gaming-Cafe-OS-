@@ -30,6 +30,7 @@ arena-store = { workspace = true, features = ["control"] }
 axum.workspace = true
 ulid.workspace = true
 arena-kiosk-core.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net"] }
 rusqlite.workspace = true

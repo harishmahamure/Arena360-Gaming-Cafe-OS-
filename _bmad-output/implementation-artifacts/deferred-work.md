@@ -468,3 +468,13 @@
 - The Play pre-launch report cannot be read through the API: `promote` trusts a hand-written `prelaunch.json`. The heartbeat-gap metric for a version has no query yet (the halt rule takes the number as an argument); `promote --since` is typed by the release manager because the current stage's start time is not stored.
 - The install rule is enforced by the page (open sessions from the snapshot); the Kotlin `install()` does not check sessions itself. The Play prompt for a flexible update appears when the check finds one, which can be mid-shift.
 - `release-android.yml` repeats the AAB build steps of the `android` job in `ci.yml`; fold them into one reusable workflow when both are next touched. The tag is not compared with the app version (both are `0.1.0`, workspace version).
+
+## Deferred from: Story 4.17
+
+- Nothing here has run on a device or a farm: `run.sh`, the `android-farm.yml` workflow (APK build, arm64 seeding tool, runner labels and `FARM_*` variables), `adb` Doze control, `dumpsys gfxinfo` framestats and the gateway captures are written from the documented tools and tested only against fakes and fixtures. The `android_fleet` load and verify phases ran against a local Hub (6 to 8 s load), not for 60 minutes.
+- Apply latency is measured as the round trip of `POST /ui/intent` (over `adb forward` on a device), an upper bound on server-side apply; the Hub exposes no apply timing of its own.
+- The kill is at the end of the load, not during it (the test needs its Hub for the whole load); the in-flight timer probes and the resend of every acknowledged intent stand in for "during". The core-level kill-during-burst check stays in `arena-core` `floor_load` (Story 3.37).
+- Frame blocking is read from `gfxinfo` for the whole run, not only while an ad loads, and `gfxinfo` sees the native window, not WebView compositing; an ad-load marker from `ArenaAds.kt` would narrow it.
+- Only the reserved probe device's time-up is timed. Time-up locks on kiosks are not asserted (the fake kiosks do not draw), and a kiosk receiving the `pc_command` lock is not checked.
+- `dev seed` now applies a roomy licence (100 devices, 10 users) before the fixture staff: the four fixture staff already broke `dev seed` and `dev_seed`/`lan` tests under the Free user cap (Story 4.9), and the fleet needs 20 devices. The pairing licence recorded at the end puts the Free caps back, so the fleet revokes the seeded "Dev Kiosk" to stay under the cap of 20.
+- The egress check needs gateway captures the lab must provide (`FARM_GATEWAY_SYN`, `FARM_GATEWAY_DNS`); without them the step is skipped. Ad destinations are matched by DNS name from the resolver's log, so a CDN IP shared with a non-ad name fails the check by design.

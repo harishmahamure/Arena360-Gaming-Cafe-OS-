@@ -1834,6 +1834,14 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   and enables **Install and restart** only while no session is active, paused or in grace
   (`apps/hub/src/lib/update.ts`); an update Play installs by itself restarts the service through
   `BootReceiver` (`MY_PACKAGE_REPLACED`). Not runnable locally: the Gradle/Kotlin build, the
+- **Device-farm proof (Story 4.17):** `.github/workflows/android-farm.yml` runs on `v*` tags on an
+  Android 9 / 3 GB device and a latest-Android device: `crates/arena-hub/tests/android_fleet.rs`
+  drives 20 fake kiosks (pinned TLS) and a Hub UI stream through a 60-minute start / pause / resume /
+  extend / transfer / end / settle load at 5/s, with 30 minutes in forced Doze, timer probes, the
+  frame-time and egress checks and a kill-and-restart verify, and `scripts/android-farm.mjs verify`
+  fails the release against `deploy/android-farm/farm.json` (`pnpm run check:farm` keeps the config
+  at the story's floors). The same test runs a 6-second load against a local Hub on every push.
+  Runbook: `docs/runbooks/android-farm.md`. Not run here: any device.
   Play API calls against a real account, the pre-launch report and a real in-app update.
 - **Checks:** `node scripts/check-android.mjs manifest` checks the backup rules, the cleartext
   policy, duplicate manifest entries and that `KeystoreBridge.kt` uses `AndroidKeyStore` with

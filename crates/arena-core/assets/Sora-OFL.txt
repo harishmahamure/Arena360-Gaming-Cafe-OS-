@@ -1,0 +1,7 @@
+Sora-Regular.ttf is the default (Regular, wght 400) instance of the Sora variable font, taken
+from @fontsource-variable/sora 5.3.0 (the Latin subset the Hub UI already bundles), decoded from
+WOFF2 to TrueType unchanged. Sora is Copyright 2019 The Sora Project Authors
+(https://github.com/sora-xor/sora-font) and is licensed under the SIL Open Font License,
+Version 1.1: https://openfontlicense.org
+
+The PDF export (src/pdf.rs) embeds it so a report renders with no network fetch.

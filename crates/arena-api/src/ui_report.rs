@@ -6,6 +6,7 @@
 //! `GET /ui/reports/gst` and `POST /ui/reports/gst/export` (the GSTR-1 ZIP, written to a folder).
 //! Story 5.30 adds `GET /ui/reports/players` and `GET /ui/reports/staff` (same range rules).
 //! Story 5.31 adds `GET /ui/reports/stock` and its `/moves`, `/waste` and `/expiring` reads.
+//! Story 5.32 adds `POST /ui/reports/export` (any report as CSV or PDF, written to a folder).
 
 use std::sync::Arc;
 
@@ -340,6 +341,56 @@ pub(crate) async fn stock_expiring(
     let now = auth.clock().now_ms();
     match tokio::task::spawn_blocking(move || reader.expiry(now)).await {
         Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+const REPORT_EXPORT_SHAPE: &str =
+    "the body must be {\"report\": string, \"format\": \"csv\" | \"pdf\", \"folder\": string, ...}";
+
+/// `POST /ui/reports/export` (`report.view`): writes one report as CSV or PDF into `folder`
+/// (Story 5.32). The figures come from the same reads as the screens; the PDF is rendered here
+/// with the bundled font, so no network call is made. `VALIDATION_FAILED` names the bad field
+/// (`report`, `from`, `to`, `month`, `shift_id`, or `folder` with a reason).
+pub(crate) async fn export(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(denied) = gate(&auth, &headers).await {
+        return denied;
+    }
+    let Ok(req) = serde_json::from_slice::<arena_proto::ReportExportRequest>(&body) else {
+        return fail(bad_frame(REPORT_EXPORT_SHAPE));
+    };
+    let kek = if req.report == "players" {
+        match player_kek(&auth) {
+            Ok(kek) => Some(kek),
+            Err(e) => return fail(e),
+        }
+    } else {
+        None
+    };
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    let job = tokio::task::spawn_blocking(move || {
+        let key = match &kek {
+            Some(kek) => Some(kek.kek()?),
+            None => None,
+        };
+        let (file_name, bytes) = reader.export_report(&req, now, key.as_ref())?;
+        let path = write_export(&req.folder, &file_name, &bytes)?;
+        Ok::<_, AppError>(arena_proto::ReportExported {
+            file_name,
+            path: path.to_string_lossy().into_owned(),
+            bytes: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
+            format: req.format,
+        })
+    })
+    .await;
+    match job {
+        Ok(Ok(done)) => Json(done).into_response(),
         Ok(Err(e)) => fail(ui_error(e)),
         Err(_) => fail(internal()),
     }

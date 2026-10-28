@@ -3252,6 +3252,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/reports/shifts/{id}", get(crate::ui_report::shift))
         .route("/ui/reports/gst", get(crate::ui_report::gst))
         .route("/ui/reports/gst/export", post(crate::ui_report::gst_export))
+        .route("/ui/reports/export", post(crate::ui_report::export))
         .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
         .route(
             "/ui/discount/preview",
@@ -6522,6 +6523,249 @@ pub(crate) mod tests {
         let products = waste["by_product"].as_array().unwrap();
         assert_eq!(products[0]["product"], "Cola");
         assert_eq!(products[1]["product"], "Apple");
+    }
+
+    /// Story 5.32: `POST /ui/reports/export` needs `report.view`, writes the CSV and the PDF of a
+    /// report whose figures are the screen's, and refuses a bad report, range or folder by field.
+    #[tokio::test]
+    async fn a_report_exports_to_csv_and_pdf_with_the_figures_of_its_screen() {
+        let hub = hub().await;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_string_lossy().into_owned();
+        let ask = |report: &str, format: &str, extra: serde_json::Value| {
+            let mut body = json!({"report": report, "format": format, "folder": folder});
+            body.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            body
+        };
+        let day = json!({"from": "2027-01-15", "to": "2027-01-15"});
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            None,
+            Some(ask("stock-on-hand", "csv", json!({}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            Some(&counter),
+            Some(ask("stock-on-hand", "csv", json!({}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        assert_eq!(reply["code"], "PERMISSION_DENIED");
+
+        // Refused by field: an unknown report, a missing or reversed range, an unusable folder.
+        for (body, field) in [
+            (ask("nope", "csv", json!({})), "report"),
+            (ask("stock-moves", "csv", json!({})), "from"),
+            (
+                ask(
+                    "stock-waste",
+                    "pdf",
+                    json!({"from": "2027-01-16", "to": "2027-01-15"}),
+                ),
+                "to",
+            ),
+            (ask("z-report", "csv", json!({})), "shift_id"),
+            (ask("gst", "csv", json!({})), "month"),
+            (
+                json!({"report": "stock-on-hand", "format": "csv", "folder": "/no/such/folder"}),
+                "folder",
+            ),
+        ] {
+            let (status, reply) = call(
+                &hub,
+                "POST",
+                "/ui/reports/export",
+                Some(&manager),
+                Some(body),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{field}: {reply}");
+            assert_eq!(reply["field"], field, "{reply}");
+        }
+        // Every other report exports too, with no data yet.
+        for report in [
+            "daily-sales",
+            "sessions",
+            "shifts",
+            "players",
+            "staff",
+            "stock-moves",
+            "stock-waste",
+            "stock-expiring",
+        ] {
+            for format in ["csv", "pdf"] {
+                let (status, done) = call(
+                    &hub,
+                    "POST",
+                    "/ui/reports/export",
+                    Some(&manager),
+                    Some(ask(report, format, day.clone())),
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK, "{report} {format}: {done}");
+            }
+        }
+        for entry in std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+        {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            Some(&manager),
+            Some(json!({"report": "stock-on-hand", "format": "xls", "folder": folder})),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "nothing written"
+        );
+
+        // Cola 20 at 15.00 (value 300.00), a stock-in, a waste and an undone waste.
+        let manager_id = hub.manager_id.clone();
+        let at = T0 + 4 * 3_600_000;
+        let seed = format!(
+            "INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
+                                   track_stock, image, kitchen, favourite, active, bundle, rev,
+                                   created_at, updated_at)
+             VALUES ('PA', 'Cola', 'Drinks', 50, 0, '', 1, '', 0, 0, 1, 0, 1, 0, 0);
+             INSERT INTO stock (product_id, qty, avg_cost_minor, rev, created_at, updated_at)
+             VALUES ('PA', 20, 1500, 1, 0, 0);
+             INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
+                    before_avg_cost_minor, unit_cost_minor, supplier, lots_used, staff_id, at, rev,
+                    created_at, updated_at, waste_reason, value_minor)
+             VALUES ('M1', 'PA', 'stock_in', 25, 0, 0, 1500, '', '[]', '{by}', {t1}, 1, 0, 0, NULL, 0),
+                    ('M2', 'PA', 'waste', -4, 25, 1500, 1500, '', '[]', '{by}', {t2}, 1, 0, 0, 'spoiled', 6000),
+                    ('M3', 'PA', 'waste_reverted', 1, 21, 1500, 1500, '', '[]', '{by}', {t3}, 1, 0, 0, 'spoiled', 1500);",
+            by = manager_id,
+            t1 = at,
+            t2 = at + 1_000,
+            t3 = at + 2_000,
+        );
+        hub.writer
+            .submit(move |tx| {
+                tx.execute_batch(&seed)
+                    .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))
+            })
+            .await
+            .unwrap();
+        let read = |done: &serde_json::Value| {
+            let name = done["file_name"].as_str().unwrap();
+            std::fs::read_to_string(dir.path().join(name)).unwrap()
+        };
+
+        // The CSV: the screen's figures in major units with the currency code.
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            Some(&manager),
+            Some(ask("stock-on-hand", "csv", json!({}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert!(
+            done["file_name"]
+                .as_str()
+                .unwrap()
+                .ends_with("_stock-on-hand.csv"),
+            "{done}"
+        );
+        assert_eq!(done["format"], "csv");
+        let csv = read(&done);
+        assert_eq!(done["bytes"], csv.len());
+        let rows: Vec<&str> = csv.trim_start_matches('\u{FEFF}').lines().collect();
+        assert_eq!(rows[0], "Product,Quantity,Average cost,Value,Currency");
+        assert_eq!(rows[1], "Cola,20,15.00,300.00,INR");
+        assert_eq!(rows[2], "Total,,,300.00,INR");
+
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            Some(&manager),
+            Some(ask("stock-waste", "csv", day.clone())),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        let csv = read(&done);
+        // 4 spoiled less the 1 undone is 3 at 15.00: the screen's 4500 minor.
+        let (_, waste) = call(
+            &hub,
+            "GET",
+            "/ui/reports/stock/waste?from=2027-01-15&to=2027-01-15",
+            Some(&manager),
+            None,
+        )
+        .await;
+        assert_eq!(waste["total_value_minor"], 4500);
+        assert!(csv.contains("Spoiled,3,45.00,INR"), "{csv}");
+        assert!(csv.contains("Total,3,45.00,INR"), "{csv}");
+        assert!(csv.contains("Expired write-off,0,0.00,INR"), "{csv}");
+
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            Some(&manager),
+            Some(ask("stock-moves", "csv", day)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        let csv = read(&done);
+        assert!(
+            csv.contains(",Cola,Waste,Spoiled,-4,-60.00,Manager,INR"),
+            "{csv}"
+        );
+        assert!(
+            csv.contains(",Cola,Stock in,,25,375.00,Manager,INR"),
+            "{csv}"
+        );
+
+        // The PDF: an A4 file in the bundled font that shows the same figures, grouped the
+        // branch's way.
+        let (status, done) = call(
+            &hub,
+            "POST",
+            "/ui/reports/export",
+            Some(&manager),
+            Some(ask("stock-on-hand", "pdf", json!({}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        let name = done["file_name"].as_str().unwrap();
+        assert!(name.ends_with("_stock-on-hand.pdf"), "{name}");
+        let pdf = std::fs::read(dir.path().join(name)).unwrap();
+        assert_eq!(done["bytes"], pdf.len());
+        assert!(pdf.starts_with(b"%PDF-1.5"));
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/MediaBox [0 0 595 842]"));
+        let shows =
+            |s: &str| text.contains(&format!("<{}>", arena_core::report_export::pdf_hex(s)));
+        assert!(shows("300.00"), "the total value");
+        assert!(shows("Stock on hand"));
+        assert!(shows("Cola"));
+        let parts = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".part"))
+            .count();
+        assert_eq!(parts, 0, "no temporary file is left behind");
     }
 
     /// Story 5.30: the Players and Staff reads need `report.view` and a valid range; Players also

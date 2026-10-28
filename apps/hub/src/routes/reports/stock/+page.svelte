@@ -8,6 +8,7 @@
   import { SESSION_DEPENDENCY, hasPermission } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
   import { sessionStaff } from "../../../lib/operating";
+  import ExportPanel from "../../../lib/ExportPanel.svelte";
   import ReportRange from "../../../lib/ReportRange.svelte";
   import ScrollRegion from "../../../lib/ScrollRegion.svelte";
   import {
@@ -416,6 +417,19 @@
               {/if}
             {/each}
           {/if}
+        {/if}
+
+        {#if current === "levels" && levels}
+          <ExportPanel report="stock-on-hand" />
+        {:else if current === "moves" && moves}
+          <ExportPanel
+            report="stock-moves"
+            selection={{ from: moves.from, to: moves.to, product, reason }}
+          />
+        {:else if current === "waste" && waste}
+          <ExportPanel report="stock-waste" selection={{ from: waste.from, to: waste.to }} />
+        {:else if current === "expiring" && expiry}
+          <ExportPanel report="stock-expiring" />
         {/if}
       {/snippet}
     </TabControl>

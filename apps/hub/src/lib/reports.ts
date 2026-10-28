@@ -4,6 +4,8 @@ import type {
   GstExported,
   GstMonth,
   PlayersReport,
+  ReportExportRequest,
+  ReportExported,
   SessionsReport,
   SettingEntry,
   ShiftList,
@@ -383,3 +385,21 @@ export function folderProblem(reason: string): MessageKey {
       return "hub.gst.folder_required";
   }
 }
+
+/**
+ * `POST /ui/reports/export`: the Hub writes one report as CSV or PDF into `folder` (a path on
+ * its own disk or a USB drive) and answers what it wrote. The figures are the screen's.
+ */
+export const exportReport = (request: ReportExportRequest) =>
+  gstCall<ReportExported>(
+    `${REPORTS_URL}/export`, // i18n-ignore
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    },
+    (b) => typeof b === "object" && b !== null && typeof (b as ReportExported).path === "string",
+  );
+
+/** The settings key of the backup folder; a plain path there is a good first guess for exports. */
+export const BACKUP_DIR_KEY = "system.backup_dir";

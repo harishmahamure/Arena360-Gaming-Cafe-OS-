@@ -7,6 +7,7 @@
   import { SESSION_DEPENDENCY, hasPermission } from "../../../../lib/auth";
   import { branchLocale } from "../../../../lib/locale.svelte";
   import { sessionStaff } from "../../../../lib/operating";
+  import ExportPanel from "../../../../lib/ExportPanel.svelte";
   import { loadZReport, reprintZReport } from "../../../../lib/reports";
   import ScrollRegion from "../../../../lib/ScrollRegion.svelte";
   import { EXPENSE_CATEGORY_LABELS, VARIANCE_REASON_LABELS } from "../../../../lib/shift";
@@ -410,6 +411,8 @@
           </div>
         {/if}
       </dl>
+
+      <ExportPanel report="z-report" selection={{ shift_id: view.shift_id }} />
     {/if}
   {/if}
 </section>

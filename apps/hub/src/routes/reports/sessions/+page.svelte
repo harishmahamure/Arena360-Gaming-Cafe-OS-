@@ -8,6 +8,7 @@
   import { SESSION_DEPENDENCY, hasPermission } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
   import { sessionStaff } from "../../../lib/operating";
+  import ExportPanel from "../../../lib/ExportPanel.svelte";
   import ReportRange from "../../../lib/ReportRange.svelte";
   import ScrollRegion from "../../../lib/ScrollRegion.svelte";
   import {
@@ -197,6 +198,8 @@
           </tbody>
         </table>
       </ScrollRegion>
+
+      <ExportPanel report="sessions" selection={{ from: view.from, to: view.to }} />
     {/if}
   {/if}
 </section>

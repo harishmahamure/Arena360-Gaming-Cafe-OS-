@@ -41,6 +41,7 @@ mod process;
 mod receipt;
 mod refund;
 mod report;
+mod report_export;
 mod scope;
 mod session;
 mod setup_devices;
@@ -254,6 +255,7 @@ pub use report::{
     ShiftVariance, StaffReport, StaffRow, ZCashLine, ZReference, ZReferenceGroup, ZRefund, ZReport,
     ZVoid, ZWaste,
 };
+pub use report_export::{EXPORT_REPORTS, ExportFormat, ReportExportRequest, ReportExported};
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
     BillItem, BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,

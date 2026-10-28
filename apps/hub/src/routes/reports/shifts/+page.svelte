@@ -8,6 +8,7 @@
   import { SESSION_DEPENDENCY, hasPermission } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
   import { sessionStaff } from "../../../lib/operating";
+  import ExportPanel from "../../../lib/ExportPanel.svelte";
   import { loadShiftList } from "../../../lib/reports";
   import ScrollRegion from "../../../lib/ScrollRegion.svelte";
 
@@ -103,6 +104,8 @@
           </table>
         </ScrollRegion>
       {/if}
+
+      <ExportPanel report="shifts" unavailable={shifts.length === 0} />
     {/if}
   {/if}
 </section>

@@ -5,6 +5,7 @@ import type {
   GstExported,
   GstMonth,
   PlayersReport,
+  ReportExported,
   SessionsReport,
   ExpiryView,
   ShiftList,
@@ -405,6 +406,8 @@ type Hub = {
   sent: unknown[];
   shiftStatus: number;
   exported: unknown[];
+  /** The bodies of `POST /ui/reports/export`. */
+  files: Record<string, unknown>[];
   empty: boolean;
 };
 
@@ -415,7 +418,7 @@ async function open(
   tax: string = GST_TAX,
   empty = false,
 ): Promise<Hub> {
-  const hub: Hub = { asked: [], sent: [], shiftStatus: 200, exported: [], empty };
+  const hub: Hub = { asked: [], sent: [], shiftStatus: 200, exported: [], files: [], empty };
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "tok"));
   await page.route(`${HUB}/**`, async (route: Route) => {
     const req = route.request();
@@ -492,6 +495,33 @@ async function open(
           path: `${body.folder}/GSTR1_DEV01_${body.month}.zip`,
           bytes: 2048,
           month: { ...GST_MONTH, month: body.month },
+        };
+        return ok(route, done);
+      }
+      case "/ui/reports/export": {
+        const body = route.request().postDataJSON() as {
+          report: string;
+          format: "csv" | "pdf";
+          folder: string;
+        };
+        hub.files.push(body);
+        if (body.folder === "/bad") {
+          return route.fulfill({
+            status: 422,
+            contentType: "application/json",
+            headers: CORS,
+            body: JSON.stringify({
+              code: "VALIDATION_FAILED",
+              message: "not_writable",
+              field: "folder",
+            }),
+          });
+        }
+        const done: ReportExported = {
+          file_name: `DEV01_${body.report}.${body.format}`,
+          path: `${body.folder}/DEV01_${body.report}.${body.format}`,
+          bytes: 512,
+          format: body.format,
         };
         return ok(route, done);
       }
@@ -1136,4 +1166,112 @@ test("the Stock screen has no accessibility violations on any tab", async ({ pag
   await expect(page.getByTestId("expiring-table")).toBeVisible();
   await page.waitForTimeout(250); // the tab's 120 ms fill transition must finish before axe samples it
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+// Story 5.32: every report exports to CSV and PDF with the figures on screen.
+
+test("Daily sales exports its range as CSV and as PDF into the chosen folder", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/daily-sales");
+  await expect(page.getByTestId("sales-gross")).toBeVisible();
+  const today = hub.asked[0].split(" ")[1];
+  // The backup folder is offered as the first guess.
+  await expect(page.getByTestId("export-folder")).toHaveValue("/mnt/usb");
+  await page.getByTestId("export-folder").fill("/media/usb");
+  await page.getByRole("button", { name: en["hub.reports.export.csv"] }).click();
+  await expect(page.getByTestId("export-saved")).toHaveText(
+    "Saved /media/usb/DEV01_daily-sales.csv.",
+  );
+  await page.getByRole("button", { name: en["hub.reports.export.pdf"] }).click();
+  await expect(page.getByTestId("export-saved")).toHaveText(
+    "Saved /media/usb/DEV01_daily-sales.pdf.",
+  );
+  expect(hub.files).toEqual([
+    { report: "daily-sales", format: "csv", folder: "/media/usb", from: today, to: today },
+    { report: "daily-sales", format: "pdf", folder: "/media/usb", from: today, to: today },
+  ]);
+});
+
+test("an export folder the Hub refuses is named and another is offered", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/sessions");
+  await expect(page.getByTestId("export-panel")).toBeVisible();
+  await page.getByTestId("export-folder").fill("/bad");
+  await page.getByRole("button", { name: en["hub.reports.export.pdf"] }).click();
+  await expect(page.getByTestId("export-folder-error")).toContainText(
+    en["hub.settings.system.invalid.not_writable"],
+  );
+  await expect(page.getByTestId("export-folder-error")).toContainText(
+    en["hub.reports.export.another"],
+  );
+  await expect(page.getByTestId("export-saved")).toHaveCount(0);
+  await page.getByTestId("export-folder").fill("");
+  await page.getByRole("button", { name: en["hub.reports.export.csv"] }).click();
+  await expect(page.getByTestId("export-folder-error")).toContainText(
+    en["hub.reports.export.folder_required"],
+  );
+  expect(hub.files).toHaveLength(1);
+});
+
+test("the Z-report exports its shift", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/shifts/SH1");
+  await expect(page.getByTestId("z-sales-total")).toBeVisible();
+  await page.getByRole("button", { name: en["hub.reports.export.csv"] }).click();
+  await expect(page.getByTestId("export-saved")).toBeVisible();
+  expect(hub.files[0]).toMatchObject({ report: "z-report", shift_id: "SH1", format: "csv" });
+});
+
+test("the GST view exports the month on screen", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/gst");
+  await page.getByTestId("gst-month").fill("2026-10");
+  await page.getByRole("button", { name: en["hub.gst.show"] }).click();
+  await expect(page.getByTestId("export-panel")).toBeVisible();
+  await page.getByRole("button", { name: en["hub.reports.export.pdf"] }).click();
+  await expect(page.getByTestId("export-saved")).toBeVisible();
+  expect(hub.files[0]).toMatchObject({ report: "gst", month: "2026-10", format: "pdf" });
+});
+
+test("Shifts, Players and Staff export", async ({ page }) => {
+  for (const [path, report, format] of [
+    ["/reports/shifts", "shifts", "csv"],
+    ["/reports/players", "players", "csv"],
+    ["/reports/staff", "staff", "pdf"],
+  ] as const) {
+    const hub = await open(page, ["report.view"], path);
+    await expect(page.getByTestId("export-panel")).toBeVisible();
+    await page.getByRole("button", { name: en[`hub.reports.export.${format}`] }).click();
+    await expect(page.getByTestId("export-saved")).toBeVisible();
+    expect(hub.files[0]).toMatchObject({ report, format });
+  }
+});
+
+test("every Stock tab exports what it shows, with the movement filters", async ({ page }) => {
+  const hub = await open(page, ["report.view"], "/reports/stock");
+  await expect(page.getByTestId("stock-table")).toBeVisible();
+  await page.getByRole("button", { name: en["hub.reports.export.csv"] }).click();
+  await expect(page.getByTestId("export-saved")).toBeVisible();
+  expect(hub.files[0]).toMatchObject({ report: "stock-on-hand", format: "csv" });
+
+  await page.getByRole("tab", { name: en["hub.stock.tab.moves"] }).click();
+  await expect(page.getByTestId("moves-table")).toBeVisible();
+  await page.getByTestId("stock-filter-reason").selectOption("stock_in");
+  await expect(page.getByTestId("moves-table").locator("tbody tr")).toHaveCount(1);
+  await page.getByRole("button", { name: en["hub.reports.export.pdf"] }).click();
+  await expect(page.getByTestId("export-saved")).toBeVisible();
+  expect(hub.files[1]).toMatchObject({
+    report: "stock-moves",
+    format: "pdf",
+    product: "",
+    reason: "stock_in",
+  });
+
+  await page.getByRole("tab", { name: en["hub.stock.tab.waste"] }).click();
+  await expect(page.getByTestId("waste-reasons")).toBeVisible();
+  await page.getByRole("button", { name: en["hub.reports.export.csv"] }).click();
+  await expect(page.getByTestId("export-saved")).toBeVisible();
+  expect(hub.files[2]).toMatchObject({ report: "stock-waste", format: "csv" });
+
+  await page.getByRole("tab", { name: en["hub.stock.tab.expiring"] }).click();
+  await expect(page.getByTestId("expiring-table")).toBeVisible();
+  await page.getByRole("button", { name: en["hub.reports.export.csv"] }).click();
+  await expect(page.getByTestId("export-saved")).toBeVisible();
+  expect(hub.files[3]).toMatchObject({ report: "stock-expiring", format: "csv" });
 });

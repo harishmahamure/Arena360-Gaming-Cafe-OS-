@@ -8,6 +8,7 @@
   import { SESSION_DEPENDENCY, hasPermission, loadSettings } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
   import { sessionStaff } from "../../../lib/operating";
+  import ExportPanel from "../../../lib/ExportPanel.svelte";
   import ScrollRegion from "../../../lib/ScrollRegion.svelte";
   import {
     businessMonthNow,
@@ -241,6 +242,8 @@
           <p class="type-hub-body" data-testid="gst-saved">{t("hub.gst.saved", { path: saved })}</p>
         {/if}
       </div>
+
+      <ExportPanel report="gst" selection={{ month: view.month }} />
     {/if}
   {/if}
 </section>

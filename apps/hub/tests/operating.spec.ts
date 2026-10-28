@@ -57,6 +57,7 @@ function newHub(): Hub {
       ["branch.fulfilment", { value: "counter", rev: 1 }],
       ["kiosk.volume_default", { value: "50", rev: 1 }],
       ["system.backup_dir", { value: "", rev: 1 }],
+      ["system.media_cap_gb", { value: "10", rev: 1 }],
       ["branch.ads_consent", { value: NO_CONSENT, rev: 1 }],
       ["branch.ads_rating", { value: "PG", rev: 1 }],
     ]),
@@ -148,6 +149,18 @@ async function stub(page: Page, hub: Hub, token: string) {
           200,
           [...hub.settings].map(([key, row]) => ({ key, ...row })),
         );
+      case "/ui/media-cache": {
+        if (!STAFF[auth]) return json(route, 401, AUTH_FAILED);
+        const gib = 2 ** 30;
+        return json(route, 200, {
+          used_bytes: 1.5 * gib,
+          cover_bytes: 0.5 * gib,
+          video_bytes: gib,
+          cap_bytes: Number(hub.settings.get("system.media_cap_gb")!.value) * gib,
+          catalog_version: 4,
+          games: 120,
+        });
+      }
       case "/ui/elevate": {
         if (!STAFF[auth]) return json(route, 401, AUTH_FAILED);
         const body = req.postDataJSON() as { items: unknown[]; pin: string };
@@ -422,6 +435,54 @@ test("System saves a backup location and shows the Hub's writable check inline",
     base_rev: 1,
   });
   await expect(page.getByTestId("system-backup-unset")).toHaveCount(0);
+});
+
+test("System shows the game media cache's used and cap sizes and a manager changes the cap", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "/settings/system");
+  await expect(
+    page.getByRole("heading", { name: en["hub.settings.system.media.title"] }),
+  ).toBeVisible();
+  await expect(page.getByTestId("media-cache-used")).toHaveText("Used 1.5 GB of 10 GB");
+  await expect(page.getByTestId("media-cache-detail")).toHaveText(
+    "Covers 512 MB · Videos 1 GB · 120 games",
+  );
+  const cap = page.getByLabel(en["hub.settings.system.media.cap"]);
+  await expectTarget(cap);
+  const apply = page.getByRole("button", { name: en["hub.settings.system.media.apply"] });
+  await expect(apply).toBeDisabled();
+  await expectNoSeriousAxe(page);
+
+  // Below the 1 GB minimum: refused on the screen, nothing sent.
+  const before = hub.intents.length;
+  await cap.fill("0");
+  await apply.click();
+  await expect(page.getByTestId("media-cache-error")).toContainText(
+    en["hub.settings.system.media.cap_invalid"],
+  );
+  await expect(cap).toHaveAttribute("aria-invalid", "true");
+  expect(hub.intents.length).toBe(before);
+
+  await cap.fill("20");
+  await apply.click();
+  await expect(page.getByTestId("media-cache-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents.at(-1)).toEqual({
+    kind: "settings.set",
+    key: "system.media_cap_gb",
+    value: "20",
+    base_rev: 1,
+  });
+  await expect(page.getByTestId("media-cache-used")).toHaveText("Used 1.5 GB of 20 GB");
+  await expect(page.getByTestId("media-cache-error")).toHaveText("");
+});
+
+test("A counter sees the media cache sizes but cannot change the cap", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub, "/settings/system", "counter-token");
+  await expect(page.getByTestId("media-cache-used")).toHaveText("Used 1.5 GB of 10 GB");
+  await expect(page.getByLabel(en["hub.settings.system.media.cap"])).toBeDisabled();
 });
 
 test("Browse fills the backup location where the Tauri dialog is available", async ({ page }) => {

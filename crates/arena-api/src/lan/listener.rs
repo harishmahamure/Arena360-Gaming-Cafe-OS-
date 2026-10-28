@@ -173,6 +173,7 @@ async fn serve_tls(
             return answer_pair(&mut tls, peer, &head, &hub).await;
         }
         Route::Pair => return respond(&mut tls, "404 Not Found", "not found").await,
+        Route::Media => return super::media::answer(&mut tls, peer, &head, &hub).await,
         _ => {}
     }
     let stream = Prefixed {
@@ -219,6 +220,8 @@ pub(crate) enum Route {
     Placeholder,
     HubInfo,
     Pair,
+    /// `GET /media/<sha256>`: a cached game file for a paired kiosk (TLS only).
+    Media,
     NotFound,
 }
 
@@ -234,6 +237,9 @@ pub(crate) fn route(request_line: &str) -> Route {
     }
     if method != "GET" {
         return Route::NotFound;
+    }
+    if path.starts_with("/media/") {
+        return Route::Media;
     }
     match path {
         "/ws" => Route::Ws,
@@ -360,6 +366,8 @@ async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
         Route::HubInfo => answer_hub_info(&mut tcp, &hub).await,
         Route::Placeholder => respond(&mut tcp, "200 OK", PLACEHOLDER).await,
         Route::NotFound | Route::Pair => respond(&mut tcp, "404 Not Found", "not found").await,
+        // Media is for paired kiosks over TLS: a plain request is refused.
+        Route::Media => super::media::unauthorized(&mut tcp).await,
         Route::Ws => {
             let stream = Prefixed {
                 prefix: head,
@@ -436,6 +444,11 @@ mod tests {
         assert_eq!(route("GET /hub-info?x HTTP/1.1"), Route::HubInfo);
         assert_eq!(route("POST /hub-info HTTP/1.1"), Route::NotFound);
         assert_eq!(route("GET /hub-info/x HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("GET /media/abc HTTP/1.1"), Route::Media);
+        assert_eq!(route("GET /media/ HTTP/1.1"), Route::Media);
+        assert_eq!(route("GET /media/a?x=1 HTTP/1.1"), Route::Media);
+        assert_eq!(route("POST /media/abc HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("GET /media HTTP/1.1"), Route::NotFound);
         assert_eq!(route("garbage"), Route::NotFound);
         assert_eq!(route("POST /pair HTTP/1.1"), Route::Pair);
         assert_eq!(route("GET /pair HTTP/1.1"), Route::NotFound);

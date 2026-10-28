@@ -9,6 +9,10 @@ pub const KEY_BACKUP_DIR: &str = "system.backup_dir";
 pub const KEY_ADS_CONSENT: &str = "branch.ads_consent";
 pub const KEY_ADS_RATING: &str = "branch.ads_rating";
 pub const KEY_SETUP_LIVE: &str = "setup.live";
+/// The game media cache cap in GiB (Story 6.2): an integer from 1 to 10000.
+pub const KEY_MEDIA_CAP_GB: &str = "system.media_cap_gb";
+pub const DEFAULT_MEDIA_CAP_GB: &str = "10";
+pub const MEDIA_CAP_GB_RANGE: (i64, i64) = (1, 10_000);
 
 pub const DEFAULT_OPENING_HOURS: &str = r#"[{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true},{"closed":true}]"#;
 pub const DEFAULT_OPENING_HOURS_SET: &str = "false";
@@ -238,6 +242,25 @@ pub enum TestSessionState {
     Running,
     Passed,
     Failed,
+}
+
+/// What the Hub's game media cache holds (Story 6.2): bytes of stored files, the cap, the
+/// catalogue version it follows and how many games it knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MediaCacheStatus {
+    #[ts(type = "number")]
+    pub used_bytes: u64,
+    #[ts(type = "number")]
+    pub cover_bytes: u64,
+    #[ts(type = "number")]
+    pub video_bytes: u64,
+    #[ts(type = "number")]
+    pub cap_bytes: u64,
+    #[ts(type = "number")]
+    pub catalog_version: u64,
+    #[ts(type = "number")]
+    pub games: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -19,6 +19,7 @@ pub mod import_products;
 pub mod import_starter;
 pub mod invoice;
 pub mod locale;
+pub mod media_cache;
 pub mod pairing;
 mod pdf;
 pub mod players;

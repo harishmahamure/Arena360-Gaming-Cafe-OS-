@@ -13,6 +13,7 @@
     submitIntent,
   } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
+  import MediaCachePanel from "../../../lib/MediaCachePanel.svelte";
   import { KEY_BACKUP_DIR, folderLabel, sessionStaff, snapshotOf } from "../../../lib/operating";
   import { bridge } from "../../../lib/service.svelte";
   import { SNAPSHOT_DEPENDENCY } from "../../../lib/snapshot";
@@ -396,6 +397,7 @@
       </div>
     </form>
   {/if}
+  <MediaCachePanel {canEdit} />
 </section>
 
 <style>

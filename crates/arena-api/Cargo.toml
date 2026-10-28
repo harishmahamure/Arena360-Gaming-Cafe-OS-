@@ -11,7 +11,7 @@ arena-core.workspace = true
 arena-proto.workspace = true
 axum.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "fs", "io-util"] }
 serde_json.workspace = true
 sha2.workspace = true
 rustls.workspace = true

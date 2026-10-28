@@ -418,6 +418,7 @@ pub struct UiAuth {
     pair_gate: Option<arena_core::PairGate>,
     kek: Option<Arc<dyn arena_core::players::Kek>>,
     player_index: Arc<Mutex<arena_core::players::PlayerIndex>>,
+    media: Option<Arc<arena_core::media_cache::MediaCache>>,
 }
 
 pub type BackupProbe =
@@ -471,8 +472,15 @@ impl UiAuth {
             pair_gate: None,
             kek: None,
             player_index: Arc::default(),
+            media: None,
             streams: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Answers `GET /ui/media-cache` from `cache` (Story 6.2).
+    pub fn with_media_cache(mut self, cache: Arc<arena_core::media_cache::MediaCache>) -> Self {
+        self.media = Some(cache);
+        self
     }
 
     pub fn with_player_kek(mut self, kek: Arc<dyn arena_core::players::Kek>) -> Self {
@@ -3190,6 +3198,23 @@ async fn settings(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Respon
     }
 }
 
+async fn media_cache(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth.session(&headers).await {
+        return fail(e);
+    }
+    let Some(cache) = auth.media.clone() else {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "the game media cache is not available on this hub",
+        )));
+    };
+    match tokio::task::spawn_blocking(move || cache.status()).await {
+        Ok(Ok(status)) => Json(status).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 /// A CSV file may be 1.5 MB, which JSON escaping can double.
 const IMPORT_BODY_LIMIT: axum::extract::DefaultBodyLimit =
     axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024);
@@ -3223,6 +3248,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/players/update", post(player_update))
         .route("/ui/players/password", post(player_password))
         .route("/ui/settings", get(settings))
+        .route("/ui/media-cache", get(media_cache))
         .route("/ui/staff", get(staff_list))
         .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))
@@ -3451,6 +3477,7 @@ pub(crate) mod tests {
         /// The LAN registry behind the auth's presence (tests register sessions in it).
         pub(crate) lan: Arc<crate::lan::registry::Registry>,
         pub(crate) pairing: Arc<crate::pairing::Pairing>,
+        pub(crate) media: Arc<arena_core::media_cache::MediaCache>,
     }
 
     pub(crate) const TEST_KEK: [u8; 32] = [4; 32];
@@ -3601,6 +3628,13 @@ pub(crate) mod tests {
                 .unwrap();
             ids.push(applied.changes[0].row_id.clone());
         }
+        let media = Arc::new(
+            arena_core::media_cache::MediaCache::open(
+                dir.path().join("reference"),
+                Arc::new(|| 1 << 30),
+            )
+            .unwrap(),
+        );
         let lan = Arc::new(crate::lan::registry::Registry::default());
         let pairing = Arc::new(
             crate::pairing::Pairing::new(clock.clone())
@@ -3616,6 +3650,7 @@ pub(crate) mod tests {
         .with_status(status_tx.subscribe())
         .with_events_config(config)
         .with_presence(crate::lan::Presence::of(Arc::clone(&lan)))
+        .with_media_cache(Arc::clone(&media))
         .with_pairing(Arc::clone(&pairing));
         let auth = Arc::new(if with_kek {
             auth.with_player_kek(Arc::new(TestKek))
@@ -3625,6 +3660,7 @@ pub(crate) mod tests {
         Hub {
             lan,
             pairing,
+            media,
             _status: status_tx,
             _dir: dir,
             path,
@@ -8487,6 +8523,67 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::OK, "{view}");
         assert_eq!(view["low"], json!([]));
         assert_eq!(view["tracked"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn the_media_cache_page_needs_a_session_and_reports_used_and_cap_sizes() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/media-cache", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, empty) = call(&hub, "GET", "/ui/media-cache", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(
+            empty,
+            json!({
+                "used_bytes": 0, "cover_bytes": 0, "video_bytes": 0,
+                "cap_bytes": 1u64 << 30, "catalog_version": 0, "games": 0
+            })
+        );
+
+        let sha = |c: char| c.to_string().repeat(64);
+        let media = |kind: &str, c: char, bytes: u64| arena_proto::CatalogMedia {
+            kind: kind.into(),
+            sha256: sha(c),
+            bytes,
+            url: format!("https://cdn.example/catalog/{}.png", sha(c)),
+        };
+        hub.media
+            .apply_manifest(&arena_proto::CatalogManifest {
+                catalog_version: 7,
+                games: vec![arena_proto::CatalogGame {
+                    id: "G".into(),
+                    rev: 1,
+                    deleted: false,
+                    name: Some("Game".into()),
+                    launcher: None,
+                    category: None,
+                    age_rating: None,
+                    signatures: vec![],
+                    media: vec![media("cover", 'a', 10), media("video", 'b', 90)],
+                }],
+            })
+            .unwrap();
+        for (c, bytes) in [('a', 10usize), ('b', 90)] {
+            let file = hub
+                .media
+                .files()
+                .unwrap()
+                .into_iter()
+                .find(|f| f.sha256 == sha(c))
+                .unwrap();
+            std::fs::write(hub.media.part_path(&file.sha256), vec![1u8; bytes]).unwrap();
+            hub.media.commit(&file, T0).unwrap();
+        }
+        let (status, full) = call(&hub, "GET", "/ui/media-cache", Some(&counter), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            full,
+            json!({
+                "used_bytes": 100, "cover_bytes": 10, "video_bytes": 90,
+                "cap_bytes": 1u64 << 30, "catalog_version": 7, "games": 1
+            })
+        );
     }
 
     #[tokio::test]

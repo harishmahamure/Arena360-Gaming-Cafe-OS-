@@ -4,13 +4,14 @@
 //! - `:7401`: the first byte is sniffed. `0x16` (a TLS ClientHello) is served exactly like
 //!   `:7400`; anything else is plain HTTP: `GET /ws` upgrades to a WebSocket for the browser
 //!   classes (`kds`, `phone`), `/kitchen` and `/console/<tv>` return a placeholder page, and
-//!   every other path is 404.
+//!   every other path is 404. `GET /media/<sha256>` is answered on TLS only (Story 6.2).
 //!
 //! Every session starts with `hello` (see [`session`]); class scopes come from `arena-proto`.
 //! Only a primary Hub serves intents; a follower answers `hello` and refuses every intent with
 //! `NOT_PRIMARY`. Committed intents are pushed to every session ([`registry`]).
 
 pub mod listener;
+mod media;
 mod pair;
 pub(crate) mod registry;
 mod session;
@@ -171,6 +172,8 @@ pub struct LanHub {
     pub staff: Option<Arc<StaffDirectory>>,
     pub info: Option<Arc<HubInfoSource>>,
     pub pairing: Option<Arc<crate::pairing::Pairing>>,
+    /// The game media cache `GET /media/<sha256>` serves from (Story 6.2).
+    pub media: Option<Arc<arena_core::media_cache::MediaCache>>,
     registry: Arc<registry::Registry>,
     /// Bounds concurrent argon2id token checks across all connections.
     verify_permits: Arc<tokio::sync::Semaphore>,
@@ -198,6 +201,7 @@ impl LanHub {
             staff: None,
             info: None,
             pairing: None,
+            media: None,
             registry: Arc::new(registry::Registry::default()),
             verify_permits: Arc::new(tokio::sync::Semaphore::new(VERIFY_CONCURRENCY)),
             throttle: throttle::HelloThrottle::default(),
@@ -214,6 +218,12 @@ impl LanHub {
 
     pub fn with_pairing(mut self, pairing: Arc<crate::pairing::Pairing>) -> Self {
         self.pairing = Some(pairing);
+        self
+    }
+
+    /// Serves `GET /media/<sha256>` on `:7401` from `cache` (Story 6.2).
+    pub fn with_media(mut self, cache: Arc<arena_core::media_cache::MediaCache>) -> Self {
+        self.media = Some(cache);
         self
     }
 

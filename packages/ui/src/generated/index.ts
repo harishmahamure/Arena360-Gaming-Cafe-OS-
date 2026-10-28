@@ -206,6 +206,7 @@ export type { LowStockItem } from "./LowStockItem";
 export type { LowStockView } from "./LowStockView";
 export type { ManagerVerifier } from "./ManagerVerifier";
 export type { ManualDiscount } from "./ManualDiscount";
+export type { MediaCacheStatus } from "./MediaCacheStatus";
 export type { MfaState } from "./MfaState";
 export type { NamedSales } from "./NamedSales";
 export type { NewReturning } from "./NewReturning";

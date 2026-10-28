@@ -27,6 +27,7 @@ mod player_packs;
 mod players;
 mod pricing_rules;
 mod products;
+mod reference;
 mod refunds;
 mod reports;
 mod sessions;
@@ -143,6 +144,7 @@ pub use products::{
     insert_product, list_components, list_products, live_bundles_with, set_product_deleted,
     update_product,
 };
+pub use reference::{FileKind, FileState, RefFile, RefGame, ReferenceDb, is_sha256_hex};
 pub use refunds::{
     CreditNoteSource, NewRefund, NewRefundPayment, RefundLineRow, RefundOrder, RefundRow,
     add_line_refunded, deactivate_pack, find_order_by_invoice, find_refund, insert_refund,

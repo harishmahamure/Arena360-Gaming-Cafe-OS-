@@ -26,6 +26,11 @@ use arena_proto::{
     KEY_LICENCE_FLAGS, KITCHEN_KOT_MODES,
 };
 use arena_proto::{
+    DEFAULT_MEDIA_CAP_GB, DEFAULT_SETUP_LIVE, DEFAULT_SHIFT_VARIANCE_THRESHOLD,
+    DEFAULT_TEST_SESSION, KEY_MEDIA_CAP_GB, KEY_SETUP_LIVE, KEY_SHIFT_VARIANCE_THRESHOLD,
+    KEY_TEST_SESSION, MAX_CASH_MOVE_MINOR, MEDIA_CAP_GB_RANGE,
+};
+use arena_proto::{
     DEFAULT_NOTIFY, DEFAULT_RECEIPT_ADDRESS, DEFAULT_RECEIPT_DEFAULT, DEFAULT_RECEIPT_DRAWER,
     DEFAULT_RECEIPT_PHONE, KEY_NOTIFY_CREDIT_REMINDER, KEY_NOTIFY_LOW_BALANCE,
     KEY_NOTIFY_SESSION_ENDING, KEY_NOTIFY_WHATSAPP_RECEIPT, KEY_RECEIPT_ADDRESS,
@@ -36,10 +41,6 @@ use arena_proto::{
 use arena_proto::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
-};
-use arena_proto::{
-    DEFAULT_SETUP_LIVE, DEFAULT_SHIFT_VARIANCE_THRESHOLD, DEFAULT_TEST_SESSION, KEY_SETUP_LIVE,
-    KEY_SHIFT_VARIANCE_THRESHOLD, KEY_TEST_SESSION, MAX_CASH_MOVE_MINOR,
 };
 use arena_proto::{
     DEFAULT_TAX, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME, KEY_TAX, TaxSettings,
@@ -144,6 +145,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
         KEY_SHIFT_VARIANCE_THRESHOLD,
         DEFAULT_SHIFT_VARIANCE_THRESHOLD,
     ),
+    (KEY_MEDIA_CAP_GB, DEFAULT_MEDIA_CAP_GB),
 ];
 
 pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
@@ -155,7 +157,8 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 28] = [
+pub const KEYED_FIELD_KEYS: [&str; 29] = [
+    KEY_MEDIA_CAP_GB,
     KEY_RECEIPT_ADDRESS,
     KEY_RECEIPT_PHONE,
     KEY_RECEIPT_DEFAULT,
@@ -363,6 +366,13 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         SettingRule::Integer {
             min: 0,
             max: MAX_CASH_MOVE_MINOR,
+        },
+    ),
+    (
+        KEY_MEDIA_CAP_GB,
+        SettingRule::Integer {
+            min: MEDIA_CAP_GB_RANGE.0,
+            max: MEDIA_CAP_GB_RANGE.1,
         },
     ),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
@@ -662,6 +672,19 @@ mod tests {
                 assert!(!rule(key).accepts(v), "{key}={v:?}");
             }
         }
+    }
+
+    #[test]
+    fn media_cap_rule_is_one_to_ten_thousand_gib_and_defaults_to_ten() {
+        let rule = setting_rule(KEY_MEDIA_CAP_GB).unwrap();
+        for ok in ["1", "10", "10000"] {
+            assert!(rule.accepts(ok), "{ok}");
+        }
+        for bad in ["", "0", "10001", "-1", "1.5", "ten", " 10", "+10"] {
+            assert!(!rule.accepts(bad), "{bad:?}");
+        }
+        assert!(DEFAULT_SETTINGS.contains(&(KEY_MEDIA_CAP_GB, "10")));
+        assert!(KEYED_FIELD_KEYS.contains(&KEY_MEDIA_CAP_GB));
     }
 
     #[test]

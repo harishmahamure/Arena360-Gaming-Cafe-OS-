@@ -1,18 +1,23 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
-    AppError, CommandResult, CommandResultAck, CommandsPage, ErrorCode, HeartbeatRequest,
-    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, SETUP_MAX_BYTES,
-    SetupTemplateOutcome, SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
+    AppError, CATALOG_MANIFEST_PATH, CatalogManifest, CommandResult, CommandResultAck,
+    CommandsPage, ErrorCode, HeartbeatRequest, HeartbeatResponse, HubPairRequest, HubPairResponse,
+    HubPlatform, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored, UiError,
+    normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
+use sha2::{Digest, Sha256};
 
 use crate::connectivity::CloudHost;
 use crate::keystore::{Keystore, mint_kek};
 
 pub const CLOUD_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a media download may go without receiving a byte.
+pub const MEDIA_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_RETRY_AFTER_S: u32 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,9 +87,22 @@ pub enum CloudFailure {
     Unreachable(String),
 }
 
+/// Why a media download did not produce a verified file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaFailure {
+    /// No answer, or the stream broke (the WAN is down).
+    Unreachable(String),
+    /// The CDN answered with this status (a redirect is refused and lands here too).
+    Refused(u16),
+    /// The body is not the file the manifest describes.
+    Mismatch(&'static str),
+}
+
 #[derive(Debug, Clone)]
 pub struct CloudClient {
     http: reqwest::Client,
+    /// For media downloads: no total timeout (a video is large), a read timeout instead.
+    media: reqwest::Client,
     base: String,
 }
 
@@ -100,16 +118,25 @@ impl CloudClient {
         .map_err(|e| e.to_string())?
         .with_root_certificates(roots)
         .with_no_client_auth();
-        let http = reqwest::Client::builder()
-            .tls_backend_preconfigured(tls)
-            .https_only(!endpoint.plain_http)
-            .redirect(reqwest::redirect::Policy::none())
+        let builder = |tls: rustls::ClientConfig| {
+            reqwest::Client::builder()
+                .tls_backend_preconfigured(tls)
+                .https_only(!endpoint.plain_http)
+                .redirect(reqwest::redirect::Policy::none())
+                .user_agent(concat!("arena-hub/", env!("CARGO_PKG_VERSION")))
+        };
+        let http = builder(tls.clone())
             .timeout(CLOUD_TIMEOUT)
-            .user_agent(concat!("arena-hub/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| e.without_url().to_string())?;
+        let media = builder(tls)
+            .connect_timeout(CLOUD_TIMEOUT)
+            .read_timeout(MEDIA_READ_TIMEOUT)
             .build()
             .map_err(|e| e.without_url().to_string())?;
         Ok(Self {
             http,
+            media,
             base: endpoint.base_url(),
         })
     }
@@ -235,6 +262,94 @@ impl CloudClient {
         Ok(())
     }
 
+    /// The games published or withdrawn since catalogue version `since` (Story 6.1), or `None`
+    /// when the cloud answers 304: nothing changed.
+    pub async fn catalog_manifest(
+        &self,
+        token: &str,
+        since: u64,
+    ) -> Result<Option<CatalogManifest>, CloudFailure> {
+        let call = self
+            .http
+            .get(format!(
+                "{}/v1{CATALOG_MANIFEST_PATH}?since={since}",
+                self.base
+            ))
+            .bearer_auth(token);
+        self.send_maybe(call).await
+    }
+
+    /// Streams the media file at `url` into `part`, counting its bytes and hashing it on the
+    /// way, and keeps it only when its size and SHA-256 are the manifest's. The URL is a CDN
+    /// link: no token is sent, redirects are refused, and https is required unless the cloud
+    /// endpoint is plain-http loopback. On any failure `part` is removed.
+    pub async fn fetch_media(
+        &self,
+        url: &str,
+        part: &Path,
+        bytes: u64,
+        sha256: &str,
+    ) -> Result<(), MediaFailure> {
+        let result = self.stream_media(url, part, bytes, sha256).await;
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(part).await;
+        }
+        result
+    }
+
+    async fn stream_media(
+        &self,
+        url: &str,
+        part: &Path,
+        bytes: u64,
+        sha256: &str,
+    ) -> Result<(), MediaFailure> {
+        use tokio::io::AsyncWriteExt;
+        let unreachable =
+            |e: reqwest::Error| MediaFailure::Unreachable(e.without_url().to_string());
+        let mut res = self.media.get(url).send().await.map_err(unreachable)?;
+        let status = res.status().as_u16();
+        if status != 200 {
+            return Err(MediaFailure::Refused(status));
+        }
+        if res.content_length().is_some_and(|n| n != bytes) {
+            return Err(MediaFailure::Mismatch("the size differs from the manifest"));
+        }
+        let mut file = tokio::fs::File::create(part).await.map_err(|e| {
+            MediaFailure::Unreachable(format!("cannot write {}: {e}", part.display()))
+        })?;
+        let mut hasher = Sha256::new();
+        let mut total: u64 = 0;
+        while let Some(chunk) = res.chunk().await.map_err(unreachable)? {
+            total += chunk.len() as u64;
+            if total > bytes {
+                return Err(MediaFailure::Mismatch("longer than the manifest says"));
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| MediaFailure::Unreachable(format!("cannot write the file: {e}")))?;
+        }
+        file.flush()
+            .await
+            .map_err(|e| MediaFailure::Unreachable(format!("cannot write the file: {e}")))?;
+        drop(file);
+        if total != bytes {
+            return Err(MediaFailure::Mismatch("shorter than the manifest says"));
+        }
+        let got: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if got != sha256 {
+            return Err(MediaFailure::Mismatch(
+                "the SHA-256 differs from the manifest",
+            ));
+        }
+        Ok(())
+    }
+
     async fn post<Q: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -258,11 +373,24 @@ impl CloudClient {
         &self,
         call: reqwest::RequestBuilder,
     ) -> Result<R, CloudFailure> {
+        self.send_maybe(call)
+            .await?
+            .ok_or_else(|| CloudFailure::Unreachable("status 304 without an error body".into()))
+    }
+
+    /// Like [`send`](Self::send), but a 304 is `Ok(None)`.
+    async fn send_maybe<R: serde::de::DeserializeOwned>(
+        &self,
+        call: reqwest::RequestBuilder,
+    ) -> Result<Option<R>, CloudFailure> {
         let res = call
             .send()
             .await
             .map_err(|e| CloudFailure::Unreachable(e.without_url().to_string()))?;
         let status = res.status().as_u16();
+        if status == 304 {
+            return Ok(None);
+        }
         let retry_after_s = res
             .headers()
             .get(reqwest::header::RETRY_AFTER)
@@ -274,6 +402,7 @@ impl CloudClient {
             .map_err(|e| CloudFailure::Unreachable(e.without_url().to_string()))?;
         if status == 200 {
             return serde_json::from_slice(&bytes)
+                .map(Some)
                 .map_err(|e| CloudFailure::Unreachable(format!("unreadable answer: {e}")));
         }
         match serde_json::from_slice::<AppError>(&bytes) {

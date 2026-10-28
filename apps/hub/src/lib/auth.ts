@@ -8,6 +8,7 @@ import type {
   ElevationItem,
   Intent,
   IntentPayload,
+  MediaCacheStatus,
   UiIntentResult,
   Permission,
   PlayerEditForm,
@@ -35,6 +36,7 @@ export const PLAYERS_URL = "http://127.0.0.1:7409/ui/players";
 export const PLAYER_PROFILE_URL = "http://127.0.0.1:7409/ui/players/profile";
 export const PLAYER_WALLET_URL = "http://127.0.0.1:7409/ui/players/wallet";
 export const SESSIONS_URL = "http://127.0.0.1:7409/ui/sessions";
+export const MEDIA_CACHE_URL = "http://127.0.0.1:7409/ui/media-cache";
 export const SESSION_CONVERT_URL = "http://127.0.0.1:7409/ui/sessions/convert";
 export const PLAYER_UPDATE_URL = "http://127.0.0.1:7409/ui/players/update";
 export const PLAYER_PASSWORD_URL = "http://127.0.0.1:7409/ui/players/password";
@@ -419,6 +421,9 @@ export const loadPlayer = (id: string) =>
 export const loadWallet = (id: string) => getJson<WalletView>(withQuery(PLAYER_WALLET_URL, { id }));
 
 export const loadSessions = () => getJson<SessionListView>(SESSIONS_URL);
+
+/** `GET /ui/media-cache`: what the game media cache holds and its cap (Story 6.2). */
+export const loadMediaCache = () => getJson<MediaCacheStatus>(MEDIA_CACHE_URL);
 
 export async function convertSession(
   sessionId: string,

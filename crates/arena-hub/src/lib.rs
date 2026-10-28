@@ -358,25 +358,42 @@ async fn run(
         }),
     );
 
+    // The game media cache (Story 6.2): its own database and files under `reference/`, outside the
+    // branch store. It is not critical: without it the Hub runs and serves no media.
+    let media_cache = {
+        let cap_source = Arc::clone(&snapshots);
+        let cap: arena_core::media_cache::CapFn = Arc::new(move || {
+            arena_core::media_cache::media_cap_bytes(&cap_source.settings().unwrap_or_default())
+        });
+        match arena_core::media_cache::MediaCache::open(cfg.data_dir.join("reference"), cap) {
+            Ok(cache) => Some(Arc::new(cache)),
+            Err(e) => {
+                tracing::error!(code = e.code.as_str(), detail = %e.message, "the game media cache could not be opened");
+                None
+            }
+        }
+    };
     let pairing = Arc::new(arena_api::pairing::Pairing::new(Arc::clone(&clock))?);
-    let lan_hub = Arc::new(
-        LanHub::new(
-            writer.clone(),
-            status_rx.clone(),
-            Arc::clone(&clock),
-            devices,
-            server_tls,
-            env!("CARGO_PKG_VERSION"),
-        )
-        .with_staff(Arc::clone(&staff))
-        .with_pairing(Arc::clone(&pairing))
-        .with_info(HubInfoSource {
-            reader: Arc::clone(&snapshots),
-            hub_name,
-            lan_port: cfg.lan_port,
-            web_port: cfg.web_port,
-        }),
-    );
+    let mut lan_hub = LanHub::new(
+        writer.clone(),
+        status_rx.clone(),
+        Arc::clone(&clock),
+        devices,
+        server_tls,
+        env!("CARGO_PKG_VERSION"),
+    )
+    .with_staff(Arc::clone(&staff))
+    .with_pairing(Arc::clone(&pairing))
+    .with_info(HubInfoSource {
+        reader: Arc::clone(&snapshots),
+        hub_name,
+        lan_port: cfg.lan_port,
+        web_port: cfg.web_port,
+    });
+    if let Some(cache) = &media_cache {
+        lan_hub = lan_hub.with_media(Arc::clone(cache));
+    }
+    let lan_hub = Arc::new(lan_hub);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     #[cfg(feature = "dev-fixtures")]
     let fake_printer = (cfg.printer == config::PrinterChoice::Fake)
@@ -417,6 +434,9 @@ async fn run(
     ));
     if let Some(folder) = &backup_folder {
         ui_auth = ui_auth.with_backup_folder(Arc::clone(folder));
+    }
+    if let Some(cache) = &media_cache {
+        ui_auth = ui_auth.with_media_cache(Arc::clone(cache));
     }
     let ui_auth = Arc::new(ui_auth);
     let cloud = CloudClient::new(&CloudEndpoint {
@@ -493,6 +513,20 @@ async fn run(
         )
         .run(),
     );
+    // The catalogue and media pull (Story 6.2): primary only, never through the writer.
+    let catalog_job = media_cache.clone().map(|cache| {
+        tokio::spawn(
+            arena_tasks::CatalogPullTask::new(
+                cloud.clone(),
+                Arc::clone(&keystore),
+                pair_gate.clone(),
+                status_tx.clone(),
+                cache,
+                Arc::clone(&clock),
+            )
+            .run(),
+        )
+    });
     let test_session_job = writer.clone().map(|w| {
         tokio::spawn(
             arena_tasks::TestSessionTask::new(w, Arc::clone(&snapshots), Arc::clone(&clock)).run(),
@@ -691,6 +725,10 @@ async fn run(
     let _ = template_job.await;
     template_apply_job.abort();
     let _ = template_apply_job.await;
+    if let Some(job) = catalog_job {
+        job.abort();
+        let _ = job.await;
+    }
     setup_job.abort();
     let _ = setup_job.await;
     if let Some(job) = backup_job {

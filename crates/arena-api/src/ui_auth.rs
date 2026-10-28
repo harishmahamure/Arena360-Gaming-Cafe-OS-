@@ -1497,12 +1497,14 @@ fn item_permissions(items: &[ElevationItem]) -> Result<Needs, UiError> {
         match kind.requirement() {
             Requirement::Perm(p) => {
                 // A counter sale is only ever approved to override short stock, which also
-                // needs `stock.override`, and a discount needs `discount.manual` (`apply()`
-                // checks both on the approver).
+                // needs `stock.override`, a discount needs `discount.manual`, and a close is only
+                // ever approved for a difference over the threshold, which needs
+                // `shift.override_variance` (`apply()` checks each on the approver).
                 let wanted = [
                     Some(p),
                     matches!(kind, IntentKind::PosSale | IntentKind::OrderPlace)
                         .then_some(Permission::StockOverride),
+                    (kind == IntentKind::ShiftClose).then_some(Permission::ShiftOverrideVariance),
                     (item.discount == Some(true)).then_some(Permission::DiscountManual),
                 ];
                 for p in wanted.into_iter().flatten() {

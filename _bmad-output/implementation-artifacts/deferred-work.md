@@ -518,6 +518,6 @@
 ## Story 5.26 (close a shift)
 
 - An Undo of a cash sale (or a refund) made after its shift has closed still writes its compensating `sale_reverted` row against the closed shift, so that shift's stored `expected_minor` no longer equals the sum of its `cash_events`; Z-report (Story 5.28) must read the stored figures and show late rows as corrections.
-- The elevation ticket for `shift.close` only checks that the approver holds `shift.close`; an approver without `shift.override_variance` is refused at apply time (`VARIANCE_OVER_THRESHOLD`) after the PIN was spent. Built-in Manager and Owner hold both.
+- The blind count is a UI convention: `GET /ui/shift/count` reveals the expected cash for any stated count and is not rate-limited or logged. A deposit at close needs only `shift.close`, not `cash.manage`, as the spec states. The count cap is `MAX_CASH_MOVE_MINOR` (a drawer holding more can not be closed).
 - The variance threshold is stored in minor units and defaults to `10000` whatever the branch currency's decimals; Settings → Shift edits it in the currency's own units.
 - Owner alert for an over-threshold close (`shift.closed` carrying variance, reason, staff and approver) is Epic 8; the shifts row already holds all four.

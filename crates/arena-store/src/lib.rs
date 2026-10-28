@@ -1127,8 +1127,6 @@ impl Store {
         find_pack_for_order(&self.conn, order_id)
     }
 
-    /// The branch's open shift and the float the next one would offer, with the number of cash
-    /// events so far. An older database without the tables reads as no shift and a float of 0.
     /// The reveal for a stated count against the open shift (Story 5.26), or `None` with no
     /// shift open. The expected cash is never read without a count.
     pub fn shift_count(
@@ -1144,6 +1142,8 @@ impl Store {
         }
     }
 
+    /// The branch's open shift and the float the next one would offer, with the number of cash
+    /// events so far. An older database without the tables reads as no shift and a float of 0.
     pub fn shift_state(&self) -> Result<arena_proto::ShiftState, AppError> {
         if !self.table_exists("shifts")? {
             return Ok(arena_proto::ShiftState {

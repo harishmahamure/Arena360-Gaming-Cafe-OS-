@@ -1438,7 +1438,7 @@ mod tests {
             );
             expense.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
             writer.submit_intent(expense).await.unwrap();
-            // Closing the shift updates its row with the count, and the deposit at close adds one.
+            // Closing the shift updates its row with the count.
             let mut close = submit(
                 IntentPayload::ShiftClose(arena_proto::ShiftClose {
                     counted_minor: 0,

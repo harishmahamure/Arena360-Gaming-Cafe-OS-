@@ -163,10 +163,10 @@ pub enum IntentKind {
     /// Opens the branch's shift with a confirmed cash float.
     #[serde(rename = "shift.open")]
     ShiftOpen,
-    /// Cash taken from the drawer to the safe, with a slip reference (Story 5.25).
     /// Closes the shift with a blind count and a signed variance (Story 5.26).
     #[serde(rename = "shift.close")]
     ShiftClose,
+    /// Cash taken from the drawer to the safe, with a slip reference (Story 5.25).
     #[serde(rename = "cash.deposit")]
     CashDeposit,
     /// An expense paid from the drawer or by the owner (Story 5.25).

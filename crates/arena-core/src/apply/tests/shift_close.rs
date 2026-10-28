@@ -191,6 +191,54 @@ async fn a_manager_closes_over_the_threshold_with_a_reason_and_no_pin() {
     );
 }
 
+/// A Counter with a PIN: able to approve an elevation, but holding no `shift.override_variance`.
+async fn counter_with_pin(f: &Fixture, login: &str) -> String {
+    let rid = match reopen(f)
+        .rows(Table::Roles)
+        .unwrap()
+        .into_iter()
+        .find(|r| r["name"] == RowValue::Text(ROLE_COUNTER.into()))
+        .unwrap()["role_id"]
+        .clone()
+    {
+        RowValue::Text(t) => t,
+        other => panic!("{other:?}"),
+    };
+    f.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                staff_id: None,
+                login: login.into(),
+                display_name: login.into(),
+                role_id: rid,
+                password_hash: Some(crate::staff::hash_secret("pw").unwrap()),
+                pin_hash: Some(crate::staff::hash_secret("8765").unwrap()),
+                active: true,
+                setup_code_hash: None,
+                setup_expires_at: None,
+            }),
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone()
+}
+
+#[tokio::test]
+async fn an_approver_without_the_override_permission_cannot_approve_a_variance() {
+    let f = bootstrapped_closed().await;
+    let counter = staff(&f, "asha", ROLE_COUNTER).await;
+    let colleague = counter_with_pin(&f, "ben").await;
+    submit(&f, counter.clone(), open(100_000)).await.unwrap();
+    let mut c = close(89_999);
+    c.reason = Some(VarianceReason::CountingError);
+    let err = elevated(&f, counter, &colleague, c).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::VarianceOverThreshold);
+    assert_eq!(text(&only_shift(&f), "state"), "open");
+}
+
 #[tokio::test]
 async fn the_threshold_is_a_branch_setting() {
     let f = bootstrapped_closed().await;

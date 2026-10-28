@@ -77,8 +77,8 @@
       return;
     }
     error =
-      outcome.kind === "error" && outcome.error?.code === "SHIFT_NOT_OPEN"
-        ? "hub.shift.close.err.shift"
+      outcome.kind === "error" && outcome.error
+        ? refusal(outcome.error.code, outcome.error.field)
         : "hub.shift.close.err.failed";
   }
 
@@ -125,6 +125,10 @@
     if (outcome.kind === "locked") {
       return { ok: false, message: "ui.pin.locked", retryAfterS: outcome.retryAfterS } as const;
     }
+    if (outcome.kind === "signed_out") {
+      ontimeout();
+      return { ok: false, message: "ui.pin.unreachable" } as const;
+    }
     if (outcome.kind !== "ticket") return { ok: false, message: "ui.pin.unreachable" } as const;
     void send(outcome.ticket);
     return { ok: true } as const;
@@ -149,6 +153,9 @@
     }
     if (ticket) void dropElevation(ticket);
     step = "count";
+    // The drawer moved since the reveal, so the difference on screen is stale: count again to see
+    // the current one (and the reason and PIN it may now need).
+    if (outcome.kind === "error" && outcome.error.code === "VARIANCE_OVER_THRESHOLD") reveal = null;
     error =
       outcome.kind === "error"
         ? refusal(outcome.error.code, outcome.error.field)

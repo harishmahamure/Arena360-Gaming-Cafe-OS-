@@ -2,7 +2,7 @@
 title: 'Story 5.26: Close a shift with a blind count and a signed variance'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: 'a589c926fea9ec8dbbae32906804afc425fc7d6c'
 context:
@@ -87,3 +87,8 @@ The close stores its result on the `shifts` row (an update change) rather than a
 ## Verification
 
 **Commands:** `cargo fmt --check`; `cargo clippy --locked -D warnings --all-targets` and `cargo test` for `arena-proto`, `arena-store`, `arena-core`, `arena-api`, `arena-replay`, `arena-kiosk-core`; `pnpm gen:types`, `check:strings`, `check:protocol`, `check:layers`, `check:hex`, `format:check`; Hub `pnpm check`; Playwright `shift-close.spec.ts cash-moves.spec.ts shift.spec.ts pos.spec.ts audit.spec.ts` in `apps/hub`.
+
+## Review Findings (code review, 2026-10-28)
+
+Patched: the PIN elevation for `shift.close` now needs `shift.override_variance` on the approver; a stale reveal is dropped after `VARIANCE_OVER_THRESHOLD`; reveal errors map to specific messages; a signed-out session during the PIN step returns to sign-in; misplaced doc comments (`intent.rs`, `arena-store/src/lib.rs`) and the replay comment fixed; core test added for an approver without the override permission.
+Deferred (see `deferred-work.md`): blind count is a UI convention, deposit at close needs only `shift.close`, count cap.

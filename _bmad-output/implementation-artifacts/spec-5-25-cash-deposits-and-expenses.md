@@ -2,7 +2,7 @@
 title: 'Story 5.25: Cash deposits and expenses'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '7112bf2cd988fc6f06f75584e3191ad0660b055d'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
@@ -64,6 +64,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-28): no blocking findings; fmt, clippy and Rust tests re-run green.
 
 Verification (2026-10-28): fmt, clippy -D warnings, cargo test (proto, store, core, api, replay, kiosk-core), `check:strings`, `check:protocol`, `check:layers`, `check:hex`, `format:check`, Hub svelte-check, Playwright `cash-moves`, `shift`, `pos`, `audit` pass. `check:generated` lists the new generated files until they are committed.
 

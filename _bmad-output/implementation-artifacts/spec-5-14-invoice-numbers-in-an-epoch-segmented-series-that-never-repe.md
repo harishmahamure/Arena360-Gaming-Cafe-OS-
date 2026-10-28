@@ -2,7 +2,7 @@
 title: 'Story 5.14: Invoice numbers in an epoch-segmented series that never repeat'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: 'a595de26c0e8226d12c27bd252ce3bd158ac6c0b'
 baseline_revision: 'a595de26c0e8226d12c27bd252ce3bd158ac6c0b'
 review_loop_iteration: 0

@@ -2,7 +2,7 @@
 title: 'Story 5.28: Z-report at shift close'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '60e0f1227d9d9e608376c9e3cfabd607872f53e9'
 followup_review_recommended: false
@@ -91,3 +91,9 @@ The report is stored at close because an Undo after close writes its compensatin
 ## Verification
 
 **Commands:** `cargo fmt --check`; `cargo clippy --locked -D warnings --all-targets` and `cargo test` for `arena-proto`, `arena-store`, `arena-core`, `arena-api`, `arena-tasks`, `arena-replay`, `arena-kiosk-core`; `pnpm gen:types`, `check:generated`, `check:strings`, `check:protocol`, `check:layers`, `check:hex`, `format:check`; Hub `pnpm check`; Playwright `reports.spec.ts shift-close.spec.ts` in `apps/hub`.
+
+## Review Triage Log (code review)
+
+- Fixed: undone waste was counted as a second positive waste line (store query now signed, net-zero rows dropped; test added).
+- Fixed: Z-report page did not reload when the route id changed (now an `$effect`); refunds keyed by index; a variance note with no reason now shows on screen; note asserted end to end.
+- Deferred: inclusive `BETWEEN` window edges at a same-millisecond close/open; Shifts list capped at 100 with no pagination; reprint error mapping is coarse; print-task wake-up on `shifts` has no `run()`-level test.

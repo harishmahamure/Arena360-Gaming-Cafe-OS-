@@ -31,7 +31,8 @@ pub struct ZRefundRow {
     pub amount_minor: i64,
 }
 
-/// Stock written off in the window, one row per waste move.
+/// Stock written off in the window, one row per waste move; an undone waste is a negative row so
+/// the pair nets to zero.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZWasteRow {
     pub reason: String,
@@ -161,7 +162,9 @@ pub fn load_z_report_rows(
 
     let waste = conn
         .prepare(
-            "SELECT waste_reason, ABS(delta), value_minor FROM stock_moves
+            "SELECT waste_reason, -delta,
+                    CASE WHEN reason = 'waste_reverted' THEN -value_minor ELSE value_minor END
+             FROM stock_moves
              WHERE waste_reason IS NOT NULL AND at BETWEEN ?1 AND ?2 ORDER BY at, move_id",
         )
         .map_err(db_error)?

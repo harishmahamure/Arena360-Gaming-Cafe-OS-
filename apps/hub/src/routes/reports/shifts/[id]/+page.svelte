@@ -2,7 +2,6 @@
   import { Button, formatDateTime, formatMoney, formatTime, t } from "@arena/ui";
   import type { ReportAmount, ZReport } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
-  import { onMount } from "svelte";
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
   import { SESSION_DEPENDENCY, hasPermission } from "../../../../lib/auth";
@@ -70,7 +69,11 @@
     if (outcome.kind === "ok") view = outcome.view;
   }
 
-  onMount(() => {
+  $effect(() => {
+    void shiftId;
+    view = null;
+    status = null;
+    refusal = null;
     if (allowed) void load();
   });
 
@@ -278,7 +281,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each view.refunds as r (r.credit_note_no)}
+              {#each view.refunds as r, i (i)}
                 <tr data-testid="z-refund-row">
                   <th scope="row">{r.credit_note_no}</th>
                   <td>{r.method ? label(METHOD, r.method) : ""}</td>
@@ -393,6 +396,11 @@
                 : view.variance_reason}
               {view.variance_note ? ` · ${view.variance_note}` : ""}
             </dd>
+          </div>
+        {:else if view.variance_note}
+          <div>
+            <dt class="type-hub-label">{t("hub.zreport.reason")}</dt>
+            <dd data-testid="z-reason">{view.variance_note}</dd>
           </div>
         {/if}
         {#if view.approver}

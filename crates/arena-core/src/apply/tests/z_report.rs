@@ -443,8 +443,8 @@ async fn a_variance_reason_and_approver_and_a_deposit_at_close_are_in_the_report
                 amount_minor: 70_000,
                 reference: "SLIP-9".into(),
             }),
-            reason: Some(arena_proto::VarianceReason::UnrecordedExpense),
-            note: None,
+            reason: Some(arena_proto::VarianceReason::Other),
+            note: Some("tea money".into()),
         }),
     );
     i.elevated_by = Some(ElevatedBy {
@@ -461,7 +461,8 @@ async fn a_variance_reason_and_approver_and_a_deposit_at_close_are_in_the_report
         (z.expected_minor, z.counted_minor, z.variance_minor),
         (100_000, 80_000, -20_000)
     );
-    assert_eq!(z.variance_reason.as_deref(), Some("unrecorded_expense"));
+    assert_eq!(z.variance_reason.as_deref(), Some("other"));
+    assert_eq!(z.variance_note.as_deref(), Some("tea money"));
     assert_eq!(z.approver.as_deref(), Some("mgr"));
     assert_eq!(z.closed_by, "asha");
     assert_eq!(z.deposits.len(), 1);
@@ -637,4 +638,37 @@ async fn the_reader_refuses_an_unknown_and_an_open_shift_and_lists_closed_ones()
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("Z-Report") && !text.contains("Reprint"));
     assert!(reader.z_report_bytes("NOPE", false, 0).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn an_undone_waste_nets_to_zero_in_the_report() {
+    let f = bootstrapped_closed().await;
+    submit(&f, owner(), open(100_000)).await.unwrap();
+    let cola = product(&f, "Cola", 4_000, 30).await;
+    let mut waste = intent(
+        owner(),
+        IntentPayload::StockWaste(StockWaste {
+            product_id: cola,
+            qty: 2,
+        }),
+    );
+    waste.reason = Some(ReasonCode::Spoiled);
+    waste.issued_at = f.clock.now_ms();
+    f.writer.submit_intent(waste).await.unwrap();
+    let wasted = table(&f, Table::StockMoves)
+        .into_iter()
+        .find(|m| text(m, "reason") == "waste")
+        .map(|m| text(&m, "move_id"))
+        .unwrap();
+    submit(
+        &f,
+        owner(),
+        IntentPayload::StockWasteReverted(arena_proto::StockWasteReverted { move_id: wasted }),
+    )
+    .await
+    .unwrap();
+    submit(&f, owner(), IntentPayload::ShiftClose(close(100_000)))
+        .await
+        .unwrap();
+    assert!(z_of(&f).waste.is_empty());
 }

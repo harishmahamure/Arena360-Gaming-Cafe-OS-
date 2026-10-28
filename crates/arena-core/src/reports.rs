@@ -467,6 +467,7 @@ pub fn z_report(rows: &ZReportRows, tz: Tz) -> ZReport {
         refunds,
         waste: waste
             .into_iter()
+            .filter(|(_, (qty, value_minor))| *qty != 0 || *value_minor != 0)
             .map(|(reason, (qty, value_minor))| ZWaste {
                 reason: reason.to_owned(),
                 qty,

@@ -18,10 +18,13 @@ import {
 import type { CartLine } from "./pos";
 import { SNAPSHOT_DEPENDENCY } from "./snapshot";
 
-export type UndoKind = "end" | "forced" | "settle" | "topup" | "collect" | "plan" | "pos";
+export type UndoKind = "end" | "forced" | "settle" | "topup" | "collect" | "plan" | "pos" | "order";
 
-/** What an undone counter sale gives back to the POS screen: the cart it sold and for whom. */
-export type PosRestore = { cart: CartLine[]; player: PlayerHit | null };
+/**
+ * What an undone counter sale or session order gives back to the POS screen: the cart it sold
+ * and for whom (a player, or the session the order went on).
+ */
+export type PosRestore = { cart: CartLine[]; player: PlayerHit | null; session?: string | null };
 
 /** Set when a counter sale is undone; the POS screen takes it and refills its cart. */
 export const posRestore: { current: PosRestore | null } = $state({ current: null });
@@ -40,8 +43,10 @@ export type Undo = {
   notice?: MessageKey;
   refused?: boolean;
   error?: MessageKey;
-  /** For a counter sale: the cart to put back when it is undone. */
+  /** For a counter sale or an order: the cart to put back when it is undone. */
   restore?: PosRestore;
+  /** For an order on a session bill: the placement its Undo takes back. */
+  placementId?: string;
 };
 
 export const undo: { current: Undo | null; now: number } = $state({
@@ -61,6 +66,7 @@ const PERMISSION: Record<UndoKind, Permission> = {
   collect: "credit.collect",
   plan: "wallet.topup",
   pos: "pos.sell",
+  order: "pos.sell",
 };
 
 const payloadOf = (u: Undo): IntentPayload =>
@@ -76,7 +82,13 @@ const payloadOf = (u: Undo): IntentPayload =>
             ? { kind: "credit.collect.reverted", order_id: u.id }
             : u.kind === "pos"
               ? { kind: "pos.sale.reverted", order_id: u.id }
-              : { kind: "session.settle.reverted", order_id: u.id };
+              : u.kind === "order"
+                ? {
+                    kind: "order.place.reverted",
+                    order_id: u.id,
+                    placement_id: u.placementId ?? "",
+                  }
+                : { kind: "session.settle.reverted", order_id: u.id };
 
 const DONE: Record<UndoKind, MessageKey> = {
   end: "hub.undo.done.end",
@@ -86,6 +98,7 @@ const DONE: Record<UndoKind, MessageKey> = {
   collect: "hub.undo.done.collect",
   plan: "hub.undo.done.plan",
   pos: "hub.undo.done.pos",
+  order: "hub.undo.done.order",
 };
 
 export const undoPermission = (u: Undo): Permission => PERMISSION[u.kind];
@@ -130,7 +143,7 @@ export function offerUndo(
   endKind: "end" | "forced" = "end",
   restore?: PosRestore,
 ): void {
-  const { ended, settled } = result;
+  const { ended, settled, placed } = result;
   const now = Date.now();
   if (ended) {
     if (ended.irreversible) return closeUndo();
@@ -151,6 +164,17 @@ export function offerUndo(
       rev: settled.order_rev,
       amountMinor: settled.total_minor,
       closesAt: now + (settled.undo_until - settled.settled_at),
+      restore,
+    });
+  } else if (placed) {
+    open({
+      kind: "order",
+      id: placed.order_id,
+      orderId: placed.order_id,
+      rev: placed.order_rev,
+      amountMinor: placed.total_minor,
+      closesAt: now + (placed.undo_until - placed.placed_at),
+      placementId: placed.placement_id,
       restore,
     });
   }

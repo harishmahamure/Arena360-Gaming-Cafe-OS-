@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatMoney, formatTime } from "../format.js";
-  import type { BillLine, SnapshotLocale } from "../generated";
+  import type { BillItem, BillLine, SnapshotLocale } from "../generated";
   import { t } from "../messages/index.js";
 
   let {
@@ -11,6 +11,7 @@
     locale,
     tz,
     names,
+    items = [],
     group = false,
   }: {
     lines: BillLine[];
@@ -20,6 +21,8 @@
     locale: SnapshotLocale;
     tz: string | undefined;
     names: Record<string, string>;
+    /** The products placed on the bill, listed after the session lines. */
+    items?: BillItem[];
     group?: boolean;
   } = $props();
 
@@ -47,6 +50,12 @@
           })}</span
         >
         <span class="amount tabular-nums">{money(l.amount_minor)}</span>
+      </li>
+    {/each}
+    {#each items as item, i (i)}
+      <li data-testid="bill-item">
+        <span>{t("hub.bill.item", { qty: item.qty, name: item.label })}</span>
+        <span class="amount tabular-nums">{money(item.amount_minor)}</span>
       </li>
     {/each}
   </ul>

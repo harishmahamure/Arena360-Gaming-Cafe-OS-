@@ -1595,6 +1595,7 @@ async fn a_started_session_unlocks_ticks_and_locks_at_its_lock_time() {
         lock_after_ms,
         time_up_mode: "clean_up".into(),
         grace_ms: 0,
+        ordered_items: 0,
     };
     assert_eq!(
         presence.push_pc_command(
@@ -1669,6 +1670,7 @@ async fn a_paused_session_covers_the_screen_keeps_its_session_and_resumes_on_a_s
         lock_after_ms,
         time_up_mode: "clean_up".into(),
         grace_ms: 0,
+        ordered_items: 0,
     };
     presence.push_session_started(&hub.device_id, "S1", screen(1_500));
     app.until(|m| {

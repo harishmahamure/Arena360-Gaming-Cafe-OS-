@@ -33,6 +33,7 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
             warning_min,
             lock_at: now + Duration::from_millis(s.lock_after_ms),
             grace_ms: s.grace_ms,
+            ordered_items: s.ordered_items,
             hold: s.time_up_mode == TimeUpMode::StaffHandles.as_str(),
         });
     });

@@ -196,6 +196,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 47,
         sql: include_str!("../migrations/0047_pos_sales.sql"),
     },
+    Migration {
+        version: 48,
+        sql: include_str!("../migrations/0048_session_orders.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -210,6 +214,71 @@ mod tests {
         for (i, m) in MIGRATIONS.iter().enumerate() {
             assert_eq!(m.version as usize, i + 1);
         }
+    }
+
+    /// Migration 48 adds the placement columns in place: existing rows keep their data and read
+    /// `NULL`, and the stock ledger stays append-only for the new column too.
+    #[test]
+    fn the_session_orders_migration_adds_placement_columns_without_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 48) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                 created_at, updated_at, kind)
+             VALUES ('O1', 'open', 5, 5, 'd', 'f', 0, 0, 0, 'session');
+             INSERT INTO order_lines (id, order_id, from_at, to_at, minutes, rate_minor_per_hour,
+                                      amount_minor, position, rev, created_at, updated_at)
+             VALUES ('L1', 'O1', 0, 0, 0, 0, 5, 0, 0, 0, 0);
+             INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
+                                   track_stock, image, active, bundle, favourite, kitchen, rev,
+                                   created_at, updated_at)
+             VALUES ('PR', 'Cola', '', 1, 0, '', 1, '', 1, 0, 0, 0, 0, 0, 0);
+             INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
+                                      before_avg_cost_minor, unit_cost_minor, supplier, lots_used,
+                                      staff_id, at, order_id, rev, created_at, updated_at)
+             VALUES ('M1', 'PR', 'sale', -1, 1, 0, 0, '', '[]', 'S', 0, 'O1', 0, 0, 0);",
+        )
+        .unwrap();
+        conn.execute_batch("BEGIN").unwrap();
+        conn.execute_batch(MIGRATIONS[47].sql).unwrap();
+        conn.execute_batch("COMMIT").unwrap();
+
+        let line: (Option<String>, Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT placement_id, placed_by, placed_at FROM order_lines WHERE id = 'L1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(line, (None, None, None));
+        let moved: Option<String> = conn
+            .query_row(
+                "SELECT placement_id FROM stock_moves WHERE move_id = 'M1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(moved, None);
+        conn.execute_batch(
+            "INSERT INTO order_lines (id, order_id, from_at, to_at, minutes, rate_minor_per_hour,
+                                      amount_minor, position, rev, created_at, updated_at,
+                                      placement_id, placed_by, placed_at)
+             VALUES ('L2', 'O1', 0, 0, 0, 0, 5, 1000, 0, 0, 0, 'P1', 'S', 7);",
+        )
+        .unwrap();
+        // The old triggers still hold, and placement_id is covered by them.
+        assert!(
+            conn.execute("UPDATE stock_moves SET placement_id = 'P1'", [])
+                .is_err()
+        );
+        assert!(
+            conn.execute("UPDATE stock_moves SET note = 'x'", [])
+                .is_err()
+        );
+        assert!(conn.execute("DELETE FROM stock_moves", []).is_err());
     }
 
     /// Migration 47 rebuilds `orders`: the rows of the tables that point at it must survive, the

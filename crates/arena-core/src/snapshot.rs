@@ -148,8 +148,10 @@ fn bills(
                 session_rev: Option<i64>,
                 guest: Option<bool>,
                 group_bill_id: Option<String>,
-                lines: Vec<arena_proto::BillLine>| {
-        let subtotal_minor = lines.iter().map(|l| l.amount_minor).sum();
+                lines: Vec<arena_proto::BillLine>,
+                items: Vec<arena_proto::BillItem>| {
+        let subtotal_minor = lines.iter().map(|l| l.amount_minor).sum::<i64>()
+            + items.iter().map(|i| i.amount_minor).sum::<i64>();
         arena_proto::SnapshotBill {
             session_id,
             device_id,
@@ -161,6 +163,7 @@ fn bills(
             guest,
             group_bill_id,
             lines,
+            items,
             subtotal_minor,
             paid_minor: 0,
             remaining_minor: subtotal_minor,
@@ -169,6 +172,28 @@ fn bills(
     let rule_name = |id: Option<&str>| {
         id.and_then(|id| rules.iter().find(|r| r.rule_id == id))
             .map(|r| r.name.clone())
+    };
+    // The products placed on a bill, by order id.
+    let items_of = |order_id: &str| -> Vec<arena_proto::BillItem> {
+        order_lines
+            .iter()
+            .filter(|l| l.order_id == order_id)
+            .filter_map(|l| {
+                Some(arena_proto::BillItem {
+                    label: l.label.clone()?,
+                    qty: l.qty.unwrap_or(1),
+                    amount_minor: l.amount_minor,
+                })
+            })
+            .collect()
+    };
+    // A running postpaid session shows its placed products on its own live bill; its order is
+    // not a separate bill to settle until the session ends. A block session's order is its bill.
+    let folded = |order: &arena_store::OpenOrder| {
+        order
+            .session_id
+            .as_ref()
+            .is_some_and(|id| sessions.iter().any(|s| &s.id == id && s.mode != "block"))
     };
     let live = sessions.iter().map(|s| {
         let own: Vec<_> = segments
@@ -192,13 +217,19 @@ fn bills(
             s.player_id.is_none().then_some(true),
             s.group_bill_id.clone(),
             lines,
+            orders
+                .iter()
+                .find(|o| o.session_id.as_deref() == Some(s.id.as_str()) && folded(o))
+                .map(|o| items_of(&o.id))
+                .unwrap_or_default(),
         )
     });
-    let open = orders.into_iter().map(|o| {
+    let open = orders.iter().filter(|o| !folded(o)).map(|o| {
         let guest = o.player_id.is_none() && o.session_id.is_some();
+        let items = items_of(&o.id);
         let lines = order_lines
             .iter()
-            .filter(|l| l.order_id == o.id)
+            .filter(|l| l.order_id == o.id && l.label.is_none())
             .map(|l| arena_proto::BillLine {
                 device_id: l.device_id.clone(),
                 from_at: l.from_at,
@@ -210,16 +241,17 @@ fn bills(
             })
             .collect();
         bill(
-            o.session_id.unwrap_or_default(),
-            o.device_id,
-            Some(o.id),
+            o.session_id.clone().unwrap_or_default(),
+            o.device_id.clone(),
+            Some(o.id.clone()),
             Some(o.rev),
             o.player_id.as_ref().map(|_| o.wallet_minor.unwrap_or(0)),
             o.credit.as_ref().map(credit_view),
             o.session_rev,
             guest.then_some(true),
-            o.group_bill_id,
+            o.group_bill_id.clone(),
             lines,
+            items,
         )
     });
     live.chain(open).collect()
@@ -641,6 +673,28 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.settlement(order_id)
+    }
+
+    /// An order's `rev`, total and when `placement_id` placed its lines (see `Store::placement`).
+    pub fn placement(
+        &self,
+        order_id: &str,
+        placement_id: &str,
+    ) -> Result<Option<(i64, i64, i64)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.placement(order_id, placement_id)
+    }
+
+    /// The session and order a placement put products on.
+    pub fn placed_order(&self, placement_id: &str) -> Result<Option<(String, String)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.placed_order(placement_id)
     }
 
     pub fn is_pos_sale(&self, order_id: &str) -> Result<bool, AppError> {

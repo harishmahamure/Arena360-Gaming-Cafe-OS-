@@ -285,6 +285,7 @@ fn screen_message(s: crate::pc::Screen) -> IpcMsg {
                 left.as_millis().saturating_sub(u128::from(v.grace_ms)) as u64
             }),
             grace_ms: v.grace_ms,
+            ordered_items: v.ordered_items,
         }),
     }
 }

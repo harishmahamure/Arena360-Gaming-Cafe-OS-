@@ -52,10 +52,12 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
 /// A stock override at the counter needs `stock.override` on top of the sale: the actor's own,
 /// or the elevating manager's.
 fn overriding_stock(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
-    let IntentPayload::PosSale(s) = &intent.payload else {
-        return Ok(());
+    let over = match &intent.payload {
+        IntentPayload::PosSale(s) => s.stock_override,
+        IntentPayload::OrderPlace(p) => p.stock_override,
+        _ => return Ok(()),
     };
-    if s.stock_override != Some(true) || intent.actor.kind == ActorKind::Owner {
+    if over != Some(true) || intent.actor.kind == ActorKind::Owner {
         return Ok(());
     }
     let holder = intent
@@ -219,6 +221,8 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::PlanSellReverted(_)
             | Target::PosSale(_)
             | Target::PosSaleReverted(_)
+            | Target::OrderPlace(_)
+            | Target::OrderPlaceReverted(_)
             | Target::CreditSetLimit(_)
             | Target::CreditCollect(_)
             | Target::CreditCollectReverted(_)
@@ -297,7 +301,8 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionAssign(t) => super::session::base_rev_assign(intent, t),
         Target::WalletTopup(_) => Ok(()),
         Target::WalletTopupReverted(t) => super::wallet::base_rev_topup_reverted(intent, t),
-        Target::PlanSell(_) | Target::PosSale(_) => Ok(()),
+        Target::PlanSell(_) | Target::PosSale(_) | Target::OrderPlace(_) => Ok(()),
+        Target::OrderPlaceReverted(t) => super::order_place::base_rev_place_reverted(intent, t),
         Target::PosSaleReverted(t) => super::pos_sale::base_rev_sale_reverted(intent, t),
         Target::PlanSellReverted(t) => super::plan_sales::base_rev_sell_reverted(intent, t),
         Target::CreditSetLimit(_) => Ok(()),

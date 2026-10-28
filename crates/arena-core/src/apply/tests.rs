@@ -25,6 +25,7 @@ mod console;
 mod extend;
 mod force_end;
 mod group_bill;
+mod order_place;
 mod plans;
 mod players;
 mod pos_sale;

@@ -134,6 +134,10 @@ pub struct UiIntentResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ended: Option<crate::session::EndOutcome>,
+    /// For `order.place`: the order the products went on, for the Undo toast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub placed: Option<crate::pos::PlaceOutcome>,
 }
 
 /// Most intents one elevation ticket may cover.

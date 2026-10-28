@@ -11,6 +11,8 @@
 //!   another window sharing the token), so every window locks and unlocks together.
 //! - `event: bill.settled`, data [`BillSettledEvent`]: a `session.settle` committed (the receipt hook);
 //!   the view reloads the snapshot, which no longer lists the bill.
+//! - `event: order.placed`, data [`OrderPlacedEvent`](arena_proto::OrderPlacedEvent): an `order.place`
+//!   committed; open bills and the floor reload.
 //! - `event: wallet.changed`, data [`WalletChangedEvent`]: a wallet balance moved (a top-up, a credit spend, a
 //!   wallet payment or an undo of either); open profiles and bills reload.
 //! - `event: bill.reverted`, data [`BillRevertedEvent`]: a `session.end.reverted` or
@@ -52,8 +54,8 @@ use std::time::Duration;
 
 use arena_core::{Applied, Clock, HubStatus, Role, SnapshotReader, WriterHandle};
 use arena_proto::{
-    AppliedEvent, BillRevertedEvent, BillSettledEvent, SessionStartedEvent, SettingsChangedEvent,
-    SnapshotLocale, SnapshotUi, WalletChangedEvent,
+    AppliedEvent, BillRevertedEvent, BillSettledEvent, OrderPlacedEvent, SessionStartedEvent,
+    SettingsChangedEvent, SnapshotLocale, SnapshotUi, WalletChangedEvent,
 };
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -252,6 +254,18 @@ fn sold_order(applied: &Applied) -> Option<String> {
         .map(|c| c.row_id.clone())
 }
 
+/// Whether a commit inserted order lines on an order without a payment: a candidate placement
+/// (the caller looks the intent id up as a placement).
+fn placed_candidate(applied: &Applied) -> bool {
+    let has = |tbl: &str| {
+        applied
+            .changes
+            .iter()
+            .any(|c| c.tbl == tbl && c.op == arena_core::ChangeOp::Insert)
+    };
+    has("order_lines") && !has("payments")
+}
+
 fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
     applied
         .changes
@@ -264,11 +278,13 @@ fn wallet_changed(applied: &Applied) -> Option<WalletChangedEvent> {
 
 fn bill_reverted(applied: &Applied) -> Option<BillRevertedEvent> {
     let order = applied.changes.iter().find(|c| c.tbl == "orders")?;
+    // An Undo of End that keeps the order (products were placed on it) or of one placement
+    // deletes order lines and leaves the order standing.
     let reopened = order.op == arena_core::ChangeOp::Delete
-        || applied
-            .changes
-            .iter()
-            .any(|c| c.tbl == "payments" && c.op == arena_core::ChangeOp::Delete);
+        || applied.changes.iter().any(|c| {
+            matches!(c.tbl.as_str(), "payments" | "order_lines")
+                && c.op == arena_core::ChangeOp::Delete
+        });
     reopened.then(|| BillRevertedEvent {
         order_id: order.row_id.clone(),
     })
@@ -392,6 +408,19 @@ impl HubTask {
                                 let settled = BillSettledEvent { order_id, collection: None };
                                 let data = serde_json::to_string(&settled).unwrap_or_default();
                                 self.send("bill.settled", data, false);
+                            }
+                        }
+                        if placed_candidate(&applied) {
+                            let (reader, id) = (Arc::clone(&self.reader), applied.intent_id.clone());
+                            let placed = tokio::task::spawn_blocking(move || reader.placed_order(&id))
+                                .await
+                                .ok()
+                                .and_then(Result::ok)
+                                .flatten();
+                            if let Some((session_id, order_id)) = placed {
+                                let event = OrderPlacedEvent { session_id, order_id };
+                                let data = serde_json::to_string(&event).unwrap_or_default();
+                                self.send("order.placed", data, false);
                             }
                         }
                         if let Some(reverted) = bill_reverted(&applied) {
@@ -777,6 +806,35 @@ mod tests {
         assert_eq!(bill_reverted(&unend).unwrap().order_id, "O");
         let end = applied(&[("sessions", "S", Update), ("orders", "O", Insert)]);
         assert!(bill_reverted(&end).is_none());
+    }
+
+    #[test]
+    fn an_undo_that_keeps_the_order_is_a_revert_and_a_placement_is_a_candidate() {
+        use arena_core::ChangeOp::{Delete, Insert, Update};
+        // Undo of End on an order that holds placed products: the order stays, its time lines go.
+        let unend = applied(&[
+            ("sessions", "S", Update),
+            ("order_lines", "L", Delete),
+            ("orders", "O", Update),
+        ]);
+        assert_eq!(bill_reverted(&unend).unwrap().order_id, "O");
+        // Undo of one placement.
+        let unplace = applied(&[
+            ("stock_moves", "M", Insert),
+            ("order_lines", "L", Delete),
+            ("orders", "O", Update),
+        ]);
+        assert_eq!(bill_reverted(&unplace).unwrap().order_id, "O");
+        // A placement and an End insert order lines without a payment; a sale has one.
+        let place = applied(&[("orders", "O", Insert), ("order_lines", "L", Insert)]);
+        assert!(placed_candidate(&place));
+        assert!(bill_reverted(&place).is_none() && bill_settled(&place).is_none());
+        let sale = applied(&[
+            ("orders", "O", Insert),
+            ("order_lines", "L", Insert),
+            ("payments", "P", Insert),
+        ]);
+        assert!(!placed_candidate(&sale));
     }
 
     #[test]

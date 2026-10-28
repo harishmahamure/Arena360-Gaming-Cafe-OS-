@@ -7,8 +7,8 @@
 use arena_proto::{AppError, ErrorCode, GroupPayer, Intent, SessionGroup, SessionMode};
 use arena_store::{
     ChangeOp, GroupBillRow, LiveSession, OrderRow, RowKey, SegmentRow, StoreTx, find_group_bill,
-    find_group_order, find_player, find_session, insert_group_bill, list_group_sessions,
-    list_segments, set_group_payer, set_order_payer, set_session_group,
+    find_group_order, find_order_for_session, find_player, find_session, insert_group_bill,
+    list_group_sessions, list_segments, set_group_payer, set_order_payer, set_session_group,
 };
 
 use super::mutate::Written;
@@ -60,20 +60,32 @@ pub(super) fn load_end(
 pub(crate) struct GroupTarget {
     host: Option<LiveSession>,
     members: Vec<Option<LiveSession>>,
+    /// Whether the host / each member already has a bill order (products placed on it).
+    host_ordered: bool,
+    ordered: Vec<bool>,
 }
 
 pub(super) fn load(tx: &StoreTx<'_>, g: &SessionGroup) -> Result<GroupTarget, AppError> {
     let Some(host) = find_session(tx, &g.session_id)? else {
         return Ok(GroupTarget::default());
     };
-    let members = g
+    let members: Vec<Option<LiveSession>> = g
         .member_ids
         .iter()
         .map(|id| find_session(tx, id))
         .collect::<Result<_, _>>()?;
+    let ordered = members
+        .iter()
+        .map(|m| match m {
+            Some(m) => Ok(find_order_for_session(tx, &m.id)?.is_some()),
+            None => Ok(false),
+        })
+        .collect::<Result<_, AppError>>()?;
     Ok(GroupTarget {
+        host_ordered: find_order_for_session(tx, &host.id)?.is_some(),
         host: Some(host),
         members,
+        ordered,
     })
 }
 
@@ -88,9 +100,15 @@ pub(super) fn base_rev(intent: &Intent, t: &GroupTarget) -> Result<(), AppError>
     check_rev(intent, h.rev, "session.group")
 }
 
-fn joinable(s: &LiveSession, field: &str) -> Result<(), AppError> {
+fn joinable(s: &LiveSession, ordered: bool, field: &str) -> Result<(), AppError> {
     if s.mode != SessionMode::Postpaid.as_str() {
         return Err(invalid(field, SHARE_REFUSAL));
+    }
+    if ordered {
+        return Err(invalid(
+            field,
+            "A session with an order on its bill cannot share a bill",
+        ));
     }
     if !matches!(s.state.as_str(), "active" | "paused") {
         return Err(invalid(field, "only a running session can share a bill"));
@@ -106,11 +124,17 @@ pub(super) fn validate(g: &SessionGroup, t: &GroupTarget) -> Result<(), AppError
             "no such session",
         ));
     };
-    joinable(host, "session_id")?;
+    joinable(host, t.host_ordered, "session_id")?;
     if g.member_ids.is_empty() || g.member_ids.len() > MEMBERS_MAX {
         return Err(invalid("member_ids", "pick 1 to 32 sessions to add"));
     }
-    for (i, (id, member)) in g.member_ids.iter().zip(&t.members).enumerate() {
+    for (i, ((id, member), ordered)) in g
+        .member_ids
+        .iter()
+        .zip(&t.members)
+        .zip(&t.ordered)
+        .enumerate()
+    {
         if *id == g.session_id || g.member_ids[..i].contains(id) {
             return Err(invalid("member_ids", "each session can be added once"));
         }
@@ -121,7 +145,7 @@ pub(super) fn validate(g: &SessionGroup, t: &GroupTarget) -> Result<(), AppError
                 "no such session",
             ));
         };
-        joinable(m, "member_ids")?;
+        joinable(m, *ordered, "member_ids")?;
         if m.group_bill_id.is_some() && m.group_bill_id != host.group_bill_id {
             return Err(invalid(
                 "member_ids",
@@ -174,7 +198,11 @@ pub(super) fn join_new(
 }
 
 /// Whether a session started now may join the group bill of `host`.
-pub(super) fn check_start(mode: SessionMode, host: Option<&LiveSession>) -> Result<(), AppError> {
+pub(super) fn check_start(
+    mode: SessionMode,
+    host: Option<&LiveSession>,
+    host_ordered: bool,
+) -> Result<(), AppError> {
     if mode != SessionMode::Postpaid {
         return Err(invalid("group_with", SHARE_REFUSAL));
     }
@@ -184,7 +212,7 @@ pub(super) fn check_start(mode: SessionMode, host: Option<&LiveSession>) -> Resu
             "group_with",
             "no such session",
         )),
-        Some(h) => joinable(h, "group_with"),
+        Some(h) => joinable(h, host_ordered, "group_with"),
     }
 }
 

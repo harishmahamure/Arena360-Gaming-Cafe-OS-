@@ -22,6 +22,7 @@
     collect: "hub.undo.collected",
     plan: "hub.undo.plan_sold",
     pos: "hub.undo.pos_sold",
+    order: "hub.undo.ordered",
   };
 </script>
 

@@ -383,6 +383,16 @@ pub(super) fn mutate(
             }
             _ => Err(mismatch()),
         },
+        IntentPayload::OrderPlace(p) => match target {
+            Target::OrderPlace(t) => super::order_place::mutate_place(tx, intent, p, t, now_ms),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::OrderPlaceReverted(r) => match target {
+            Target::OrderPlaceReverted(t) => {
+                super::order_place::mutate_place_reverted(tx, intent, r, t, now_ms)
+            }
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditSetLimit(c) => match target {
             Target::CreditSetLimit(t) => super::credit::mutate_set_limit(tx, c, t),
             _ => Err(mismatch()),

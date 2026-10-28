@@ -275,7 +275,10 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
                   ? "session.transfer"
                   : kind === "session.end.reverted"
                     ? "session.end"
-                    : kind === "session.settle" || kind === "session.settle.reverted"
+                    : kind === "session.settle" ||
+                        kind === "session.settle.reverted" ||
+                        kind === "order.place" ||
+                        kind === "order.place.reverted"
                       ? "pos.sell"
                       : kind === "credit.collect" || kind === "credit.collect.reverted"
                         ? "credit.collect"

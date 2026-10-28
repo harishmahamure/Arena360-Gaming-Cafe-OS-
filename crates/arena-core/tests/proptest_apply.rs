@@ -219,6 +219,15 @@ enum Op {
         undo: bool,
         late: bool,
     },
+    /// Products placed on a running session's bill (stock may refuse), then maybe the
+    /// placement's Undo (late or in time).
+    OrderPlace {
+        slot: u8,
+        pick: u8,
+        qty: u8,
+        undo: bool,
+        late: bool,
+    },
     /// A cash top-up for a player, then maybe its Undo (late or in time).
     WalletTopup {
         player: u8,
@@ -514,6 +523,9 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         3 => (any::<u8>(), 1..=6u8, any::<bool>(), any::<bool>(), prop::bool::weighted(0.3)).prop_map(
             |(pick, qty, second, undo, late)| Op::PosSale { pick, qty, second, undo, late }
+        ),
+        3 => (0..3u8, any::<u8>(), 1..=6u8, any::<bool>(), prop::bool::weighted(0.3)).prop_map(
+            |(slot, pick, qty, undo, late)| Op::OrderPlace { slot, pick, qty, undo, late }
         ),
         2 => (any::<u8>(), 0..3000u16).prop_map(|(player, limit)| Op::CreditSet { player, limit }),
         2 => (
@@ -1694,6 +1706,99 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
             }
         }
+        Op::OrderPlace {
+            slot,
+            pick,
+            qty,
+            undo,
+            late,
+        } => {
+            let live: Vec<_> = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .filter(|s| ["active", "paused", "grace"].contains(&text(s, "state").as_str()))
+                .collect();
+            let products: Vec<_> = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .filter(|p| p.active)
+                .collect();
+            let (Some(session), false) = (
+                live.get(usize::from(*slot) % live.len().max(1)),
+                products.is_empty(),
+            ) else {
+                return Ok(());
+            };
+            let product = &products[usize::from(*pick) % products.len()];
+            let supported = session["group_bill_id"] == RowValue::Null
+                && ["postpaid", "block"].contains(&text(session, "mode").as_str());
+            let stock_before = stock_image(hub);
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::OrderPlace(arena_proto::OrderPlace {
+                    session_id: text(session, "id"),
+                    lines: vec![arena_proto::PosSaleLine {
+                        product_id: product.product_id.clone(),
+                        qty: i64::from(*qty),
+                    }],
+                    stock_override: None,
+                }),
+                None,
+            ));
+            let applied = match out {
+                Ok(applied) => applied,
+                Err(e) => {
+                    // A refusal (unsupported or settled bill, short stock, a bundle part switched
+                    // off) writes nothing.
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::OutOfStock
+                                | ErrorCode::BundleShort
+                                | ErrorCode::ValidationFailed
+                        ),
+                        "{:?}",
+                        e
+                    );
+                    prop_assert_eq!(hub.change_count(), before);
+                    prop_assert_eq!(stock_image(hub), stock_before);
+                    return Ok(());
+                }
+            };
+            prop_assert!(supported, "an unsupported session took an order");
+            let order = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .find(|o| o["session_id"] == session["id"])
+                .unwrap();
+            prop_assert_eq!(text(&order, "status"), "open");
+            if *undo {
+                if *late {
+                    hub.clock.advance(arena_proto::UNDO_WINDOW_MS + 1);
+                }
+                let after_forward = hub.change_count();
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::OrderPlaceReverted(arena_proto::OrderPlaceReverted {
+                        order_id: text(&order, "id"),
+                        placement_id: applied.intent_id.clone(),
+                    }),
+                    Some(int(&order, "rev")),
+                ));
+                if *late {
+                    prop_assert_eq!(code(&out), Some((ErrorCode::UndoNotAllowed, None)));
+                    prop_assert_eq!(hub.change_count(), after_forward);
+                } else {
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                    prop_assert_eq!(stock_image(hub), stock_before);
+                }
+            }
+        }
         Op::ShiftOpen { float } => {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::ShiftOpen(arena_proto::ShiftOpen {
@@ -2311,12 +2416,25 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             prop_assert_eq!(hub.change_count(), after);
         }
         Op::SessionSettle { slot, short, split } => {
+            // A running postpaid session's bill settles once the session ends.
+            let running: Vec<String> = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .into_iter()
+                .filter(|s| {
+                    ["active", "paused", "grace"].contains(&text(s, "state").as_str())
+                        && text(s, "mode") != "block"
+                })
+                .map(|s| text(&s, "id"))
+                .collect();
             let open: Vec<_> = hub
                 .reader
                 .rows(Table::Orders)
                 .unwrap()
                 .into_iter()
                 .filter(|o| text(o, "status") == "open")
+                .filter(|o| !matches!(&o["session_id"], RowValue::Text(s) if running.contains(s)))
                 .collect();
             let Some(order) = open.get(usize::from(*slot) % open.len().max(1)) else {
                 return Ok(());
@@ -3676,6 +3794,17 @@ fn assert_sessions_hold(hub: &Hub) -> Result<(), TestCaseError> {
 
 fn assert_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
     let payments = hub.reader.rows(Table::Payments).unwrap();
+    // An order that holds placed products totals its lines, and a placed line has its stamp.
+    let lines = hub.reader.rows(Table::OrderLines).unwrap();
+    for o in hub.reader.rows(Table::Orders).unwrap() {
+        let id = text(&o, "id");
+        let own: Vec<_> = lines.iter().filter(|l| text(l, "order_id") == id).collect();
+        if own.iter().any(|l| l["placement_id"] != RowValue::Null) {
+            let sum: i64 = own.iter().map(|l| int(l, "amount_minor")).sum();
+            prop_assert_eq!(int(&o, "total_minor"), sum, "order {} total", id);
+            prop_assert_eq!(int(&o, "subtotal_minor"), sum, "order {} subtotal", id);
+        }
+    }
     for p in &payments {
         let reference = match &p["reference"] {
             RowValue::Text(t) => Some(t.clone()),

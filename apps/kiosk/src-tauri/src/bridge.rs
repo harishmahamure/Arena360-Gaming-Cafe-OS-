@@ -788,6 +788,7 @@ mod tests {
                     warning_min: None,
                     grace_in_ms: None,
                     grace_ms: 0,
+                    ordered_items: 0,
                 }),
             },
             at,

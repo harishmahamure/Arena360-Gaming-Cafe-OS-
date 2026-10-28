@@ -111,3 +111,48 @@ pub struct PosSalesView {
     pub business_day: String,
     pub sales: Vec<PosSaleView>,
 }
+
+/// The payload of `order.place` (Story 5.12): products added to a running session's bill order.
+/// The intent id is the placement's id. A short bundle part sells with `stock_override` (needs
+/// `stock.override`), as in `pos.sale`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderPlace {
+    pub session_id: String,
+    pub lines: Vec<PosSaleLine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stock_override: Option<bool>,
+}
+
+/// The payload of `order.place.reverted`: Undo of one placement within its window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderPlaceReverted {
+    pub order_id: String,
+    pub placement_id: String,
+}
+
+/// What a placement returns to the Hub, for the Undo toast.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlaceOutcome {
+    pub order_id: String,
+    #[ts(type = "number")]
+    pub order_rev: i64,
+    pub placement_id: String,
+    #[ts(type = "number")]
+    pub placed_at: i64,
+    #[ts(type = "number")]
+    pub undo_until: i64,
+    #[ts(type = "number")]
+    pub total_minor: i64,
+}
+
+/// A placed order has been added to a running session's bill (the `order.placed` UI event).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderPlacedEvent {
+    pub session_id: String,
+    pub order_id: String,
+}

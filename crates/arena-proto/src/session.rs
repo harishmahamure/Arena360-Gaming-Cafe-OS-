@@ -606,6 +606,17 @@ pub struct BillLine {
     pub rule_name: Option<String>,
 }
 
+/// A product line on a session bill: what was placed, how many, and what it cost.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BillItem {
+    pub label: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SnapshotBill {
@@ -634,6 +645,10 @@ pub struct SnapshotBill {
     #[ts(optional)]
     pub group_bill_id: Option<String>,
     pub lines: Vec<BillLine>,
+    /// The products placed on the bill, after the session lines.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<BillItem>>")]
+    pub items: Vec<BillItem>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,
     #[ts(type = "number")]
@@ -737,6 +752,10 @@ pub struct SessionScreen {
     #[serde(default)]
     #[ts(type = "number")]
     pub grace_ms: u64,
+    /// How many items were placed on the session's bill; the kiosk shows "Ordered: n items".
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub ordered_items: u64,
 }
 
 #[cfg(test)]

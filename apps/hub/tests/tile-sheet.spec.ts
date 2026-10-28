@@ -1,6 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
-import type { SessionStaff, SnapshotDevice, SnapshotSession } from "@arena/ui/generated";
+import type {
+  SessionStaff,
+  SnapshotBill,
+  SnapshotDevice,
+  SnapshotSession,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { CORS, HUB, device, json, snapshot } from "./floor-fixture";
 
@@ -17,6 +22,12 @@ const STAFF: Record<string, SessionStaff> = {
     role_name: "Counter",
     permissions: ["device.screen", "session.start"],
   },
+  "seller-token": {
+    staff_id: "01JSELLER00000000000000000",
+    display_name: "Seller",
+    role_name: "Counter",
+    permissions: ["device.screen", "session.start", "pos.sell"],
+  },
 };
 
 type Sent = {
@@ -28,6 +39,7 @@ type Sent = {
 type Hub = {
   devices: SnapshotDevice[];
   sessions: SnapshotSession[];
+  bills?: SnapshotBill[];
   sent: Sent[];
   elevations: { items: unknown[]; pin: string }[];
   ack: boolean;
@@ -120,6 +132,7 @@ async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise
           rate_minor: 5000,
         });
         snap.sessions = hub.sessions;
+        snap.bills = hub.bills ?? [];
         snap.ui = { idle_lock_minutes: 5, hc: hub.hc };
         return json(route, snap);
       }
@@ -574,3 +587,71 @@ for (const hc of [false, true]) {
     await clean(page);
   });
 }
+
+test("an in-session PC offers Order to staff who can sell, and it opens the POS on that session", async ({
+  page,
+}) => {
+  await open(page, "seller-token");
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await act(page, en["hub.session.order"]).click();
+  await expect(page).toHaveURL(/\/pos\?session=S2$/);
+});
+
+test("Order is not offered without pos.sell, on a free PC, or on a session in a group bill", async ({
+  page,
+}) => {
+  await open(page, "counter-token");
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(act(page, en["hub.session.order"])).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await face(page, "PC 1").focus();
+  await page.keyboard.press("Enter");
+  await expect(act(page, en["hub.session.order"])).toHaveCount(0);
+
+  const grouped = sessions().map((s) => ({ ...s, mode: "postpaid", group_bill_id: "G9" }));
+  await open(page, "seller-token", { sessions: grouped });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(act(page, en["hub.session.order"])).toHaveCount(0);
+});
+
+test("the running bill lists the products placed on it after the session lines", async ({
+  page,
+}) => {
+  const bill: SnapshotBill = {
+    session_id: "S2",
+    device_id: device(2, {}).device_id,
+    session_rev: 1,
+    lines: [
+      {
+        device_id: device(2, {}).device_id,
+        from_at: Date.now() - 3_725_000,
+        to_at: Date.now(),
+        minutes: 62,
+        rate_minor_per_hour: 10000,
+        amount_minor: 10333,
+      },
+    ],
+    items: [
+      { label: "Cola", qty: 2, amount_minor: 8000 },
+      { label: "Chips", qty: 1, amount_minor: 1000 },
+    ],
+    subtotal_minor: 19333,
+    paid_minor: 0,
+    remaining_minor: 19333,
+  };
+  await open(page, "seller-token", { bills: [bill] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const breakdown = page.getByTestId("session-bill").getByTestId("bill-breakdown");
+  await expect(breakdown.getByTestId("bill-line")).toHaveCount(1);
+  const items = breakdown.getByTestId("bill-item");
+  await expect(items).toHaveCount(2);
+  await expect(items.first()).toContainText("2 × Cola");
+  await expect(items.first()).toContainText("80.00");
+  await expect(breakdown.getByTestId("bill-subtotal")).toContainText("193.33");
+  // The order is part of the running session's bill: there is no settle bar yet.
+  await expect(page.getByTestId("settle-bar")).toHaveCount(0);
+});

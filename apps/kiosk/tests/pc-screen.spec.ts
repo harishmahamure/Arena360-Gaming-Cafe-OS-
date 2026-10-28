@@ -179,3 +179,17 @@ test("a session in its grace says time is up and counts the grace down", async (
   );
   expect(await serious(page)).toEqual([]);
 });
+
+test("the session screen shows how many items were ordered, and only when there are some", async ({
+  page,
+}) => {
+  await openWithShell(page);
+  const session = (ordered_items?: number) =>
+    shown({ session: { device_name: "PC 7", elapsed_ms: 5_000, ordered_items } });
+  await emit(page, session());
+  await expect(page.getByTestId("session")).toBeVisible();
+  await expect(page.getByTestId("ordered")).toHaveCount(0);
+  await emit(page, session(3));
+  await expect(page.getByTestId("ordered")).toHaveText("Ordered: 3 items");
+  expect(await serious(page)).toEqual([]);
+});

@@ -229,6 +229,7 @@ export type PcScreen = {
     warning_min: number | null;
     grace_in_ms: number | null;
     grace_ms: number;
+    ordered_items: number;
   } | null;
 };
 
@@ -244,6 +245,7 @@ const screenOf = (v: unknown): PcScreen | null => {
         warning_min?: unknown;
         grace_in_ms?: unknown;
         grace_ms?: unknown;
+        ordered_items?: unknown;
       }
     | null
     | undefined;
@@ -255,6 +257,7 @@ const screenOf = (v: unknown): PcScreen | null => {
           warning_min: typeof s.warning_min === "number" ? s.warning_min : null,
           grace_in_ms: typeof s.grace_in_ms === "number" ? s.grace_in_ms : null,
           grace_ms: typeof s.grace_ms === "number" ? s.grace_ms : 0,
+          ordered_items: typeof s.ordered_items === "number" ? s.ordered_items : 0,
         }
       : null;
   return {

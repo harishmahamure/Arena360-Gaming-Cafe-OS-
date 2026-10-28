@@ -122,6 +122,11 @@ pub enum IntentKind {
     PosSale,
     #[serde(rename = "pos.sale.reverted")]
     PosSaleReverted,
+    /// Products added to a running session's bill order.
+    #[serde(rename = "order.place")]
+    OrderPlace,
+    #[serde(rename = "order.place.reverted")]
+    OrderPlaceReverted,
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials,
     #[serde(rename = "staff.deactivate")]
@@ -238,7 +243,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 78] = [
+    pub const ALL: [IntentKind; 80] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -271,6 +276,8 @@ impl IntentKind {
         Self::PlanSellReverted,
         Self::PosSale,
         Self::PosSaleReverted,
+        Self::OrderPlace,
+        Self::OrderPlaceReverted,
         Self::StaffSetCredentials,
         Self::StaffDeactivate,
         Self::StockIn,
@@ -354,6 +361,8 @@ impl IntentKind {
             Self::PlanSellReverted => "plan.sell.reverted",
             Self::PosSale => "pos.sale",
             Self::PosSaleReverted => "pos.sale.reverted",
+            Self::OrderPlace => "order.place",
+            Self::OrderPlaceReverted => "order.place.reverted",
             Self::StaffSetCredentials => "staff.set_credentials",
             Self::StaffDeactivate => "staff.deactivate",
             Self::StockIn => "stock.in",
@@ -454,7 +463,11 @@ impl IntentKind {
             | Self::StockWriteOff
             | Self::StockExpiryCheck
             | Self::StockThreshold => IntentCategory::Catalog,
-            Self::ShiftOpen | Self::PosSale | Self::PosSaleReverted => IntentCategory::Money,
+            Self::ShiftOpen
+            | Self::PosSale
+            | Self::PosSaleReverted
+            | Self::OrderPlace
+            | Self::OrderPlaceReverted => IntentCategory::Money,
             Self::PlayerCreate | Self::PlayerUpdate | Self::PlayerPasswordReset => {
                 IntentCategory::Player
             }
@@ -557,7 +570,9 @@ impl IntentKind {
             | Self::SessionSettleReverted
             | Self::GroupPayer
             | Self::PosSale
-            | Self::PosSaleReverted => Requirement::Perm(Permission::PosSell),
+            | Self::PosSaleReverted
+            | Self::OrderPlace
+            | Self::OrderPlaceReverted => Requirement::Perm(Permission::PosSell),
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
             Self::SessionExtend => Requirement::Perm(Permission::SessionExtend),
             Self::SessionTransfer => Requirement::Perm(Permission::SessionTransfer),
@@ -633,6 +648,8 @@ impl IntentKind {
             | Self::PlanSellReverted
             | Self::PosSale
             | Self::PosSaleReverted
+            | Self::OrderPlace
+            | Self::OrderPlaceReverted
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
@@ -1143,6 +1160,10 @@ pub enum IntentPayload {
     PosSale(crate::PosSale),
     #[serde(rename = "pos.sale.reverted")]
     PosSaleReverted(crate::PosSaleReverted),
+    #[serde(rename = "order.place")]
+    OrderPlace(crate::OrderPlace),
+    #[serde(rename = "order.place.reverted")]
+    OrderPlaceReverted(crate::OrderPlaceReverted),
     #[serde(rename = "staff.set_credentials")]
     StaffSetCredentials(StaffSetCredentials),
     #[serde(rename = "staff.deactivate")]
@@ -1272,6 +1293,8 @@ impl IntentPayload {
             Self::PlanSellReverted(_) => IntentKind::PlanSellReverted,
             Self::PosSale(_) => IntentKind::PosSale,
             Self::PosSaleReverted(_) => IntentKind::PosSaleReverted,
+            Self::OrderPlace(_) => IntentKind::OrderPlace,
+            Self::OrderPlaceReverted(_) => IntentKind::OrderPlaceReverted,
             Self::StaffSetCredentials(_) => IntentKind::StaffSetCredentials,
             Self::StaffDeactivate(_) => IntentKind::StaffDeactivate,
             Self::StockIn(_) => IntentKind::StockIn,
@@ -1579,7 +1602,9 @@ mod tests {
                 | "session.settle.reverted"
                 | "group.payer"
                 | "pos.sale"
-                | "pos.sale.reverted" => Requirement::Perm(Permission::PosSell),
+                | "pos.sale.reverted"
+                | "order.place"
+                | "order.place.reverted" => Requirement::Perm(Permission::PosSell),
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "session.extend" => Requirement::Perm(Permission::SessionExtend),
                 "session.transfer" => Requirement::Perm(Permission::SessionTransfer),

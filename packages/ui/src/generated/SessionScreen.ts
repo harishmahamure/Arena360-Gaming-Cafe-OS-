@@ -10,4 +10,8 @@ export type SessionScreen = {
    * The grace at the end of `lock_after_ms`; the kiosk shows "Time's up" while it runs.
    */
   grace_ms: number;
+  /**
+   * How many items were placed on the session's bill; the kiosk shows "Ordered: n items".
+   */
+  ordered_items: number;
 };

@@ -1480,7 +1480,8 @@ fn item_permissions(items: &[ElevationItem]) -> Result<Needs, UiError> {
                 // needs `stock.override` (`apply()` checks it on the approver).
                 let wanted = [
                     Some(p),
-                    (kind == IntentKind::PosSale).then_some(Permission::StockOverride),
+                    matches!(kind, IntentKind::PosSale | IntentKind::OrderPlace)
+                        .then_some(Permission::StockOverride),
                 ];
                 for p in wanted.into_iter().flatten() {
                     if !perms.contains(&p) {
@@ -2129,6 +2130,10 @@ async fn run_intent(
         arena_proto::IntentPayload::SessionExtend(e) => Some((e.session_id.clone(), false)),
         _ => None,
     };
+    let placing = match &intent.payload {
+        arena_proto::IntentPayload::OrderPlace(p) => Some(p.session_id.clone()),
+        _ => None,
+    };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
@@ -2205,6 +2210,22 @@ async fn run_intent(
                     .flatten()
                     .map(|c| c.row_id.clone())
             });
+            let placed = match &placing {
+                Some(session_id) => {
+                    // The kiosk shows "Ordered: n items"; a paused session stays covered.
+                    let (reader, id) = (Arc::clone(&auth.reader), session_id.clone());
+                    let paused = tokio::task::spawn_blocking(move || reader.session_paused(&id))
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .unwrap_or(true);
+                    if !paused {
+                        push_pause_state(auth, session_id, false, &cmd_id).await;
+                    }
+                    place_outcome(auth, &applied, &applied.intent_id).await
+                }
+                None => None,
+            };
             let settled = match settling {
                 Some(order_id) => settle_outcome(auth, &order_id, &cmd_id).await,
                 None => None,
@@ -2217,6 +2238,7 @@ async fn run_intent(
                 applied: crate::lan::registry::summary(&applied),
                 settled,
                 ended,
+                placed,
             })
             .into_response()
         }
@@ -2377,6 +2399,45 @@ async fn settle_outcome(
         irreversible: settlement.irreversible,
         collection,
     })
+}
+
+/// What a placement committed, read back from the order and its lines so a retried key answers
+/// the same.
+async fn place_outcome(
+    auth: &Arc<UiAuth>,
+    applied: &arena_core::Applied,
+    placement_id: &str,
+) -> Option<arena_proto::PlaceOutcome> {
+    let order_id = applied
+        .changes
+        .iter()
+        .find(|c| c.tbl == "orders")?
+        .row_id
+        .clone();
+    let (reader, order, placement) = (
+        Arc::clone(&auth.reader),
+        order_id.clone(),
+        placement_id.to_owned(),
+    );
+    match tokio::task::spawn_blocking(move || reader.placement(&order, &placement)).await {
+        Ok(Ok(Some((rev, total_minor, placed_at)))) => Some(arena_proto::PlaceOutcome {
+            order_id,
+            order_rev: rev,
+            placement_id: placement_id.to_owned(),
+            placed_at,
+            undo_until: placed_at + arena_proto::UNDO_WINDOW_MS,
+            total_minor,
+        }),
+        Ok(Ok(None)) => None,
+        Ok(Err(e)) => {
+            tracing::warn!(order_id, error = %e, "could not read the placement");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(order_id, error = %e, "the placement read failed");
+            None
+        }
+    }
 }
 
 /// What an End committed, read back from the rows so a retried key answers the same.
@@ -3868,6 +3929,130 @@ pub(crate) mod tests {
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{reply}");
         assert_eq!(reply["code"], "PC_BUSY");
+    }
+
+    #[tokio::test]
+    async fn placing_an_order_replies_with_the_undo_outcome_pushes_the_kiosk_count_and_undoes() {
+        use arena_proto::{OrderPlace, OrderPlaceReverted, PosSaleLine, ProductUpsert, StockIn};
+        let hub = hub().await;
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let device = rated_pc(&hub, arena_core::devices::hash_token_secret("s").unwrap()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(start_body(&device)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let session_id = reply["applied"]["changes"][0]["row_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        rx.recv().await.unwrap();
+        let who = || Actor {
+            kind: ActorKind::Staff,
+            id: "x".into(),
+        };
+        let post = |token: String, payload: IntentPayload, rev: Option<i64>| {
+            let hub = &hub;
+            async move {
+                call(
+                    hub,
+                    "POST",
+                    "/ui/intent",
+                    Some(&token),
+                    Some(json!({ "intent": intent_as(who(), payload, rev) })),
+                )
+                .await
+            }
+        };
+        let (status, _) = post(
+            manager.clone(),
+            IntentPayload::ProductUpsert(ProductUpsert {
+                id: None,
+                name: "Chips".into(),
+                category: String::new(),
+                price_minor: 1_000,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+                bundle: false,
+                components: Vec::new(),
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        let chips = listed[0]["id"].as_str().unwrap().to_owned();
+        let (status, _) = post(
+            manager,
+            IntentPayload::StockIn(StockIn {
+                product_id: chips.clone(),
+                qty: 5,
+                unit_cost_minor: 400,
+                supplier: String::new(),
+                expiry: None,
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let place = IntentPayload::OrderPlace(OrderPlace {
+            session_id: session_id.clone(),
+            lines: vec![PosSaleLine {
+                product_id: chips.clone(),
+                qty: 2,
+            }],
+            stock_override: None,
+        });
+        let (status, reply) = post(token.clone(), place, None).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let placed = &reply["placed"];
+        assert_eq!(placed["total_minor"], 2_000);
+        assert_eq!(
+            placed["undo_until"].as_i64().unwrap() - hub.clock.now_ms(),
+            arena_proto::UNDO_WINDOW_MS
+        );
+        assert!(reply["settled"].is_null() && reply["ended"].is_null());
+        // The kiosk screen is refreshed with the count.
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the screen pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::SessionStarted { session, .. },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a session.started event")
+        };
+        assert_eq!(session.ordered_items, 2);
+
+        // The Undo takes the order's rev and the placement id.
+        let (status, reply) = post(
+            token.clone(),
+            IntentPayload::OrderPlaceReverted(OrderPlaceReverted {
+                order_id: placed["order_id"].as_str().unwrap().into(),
+                placement_id: placed["placement_id"].as_str().unwrap().into(),
+            }),
+            placed["order_rev"].as_i64(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/products", Some(&token), None).await;
+        assert_eq!(listed[0]["quantity"], 5);
     }
 
     #[tokio::test]

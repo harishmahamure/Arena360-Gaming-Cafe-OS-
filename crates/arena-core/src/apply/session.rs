@@ -6,14 +6,15 @@ use arena_proto::{
 use arena_store::{
     ChangeOp, CreditRow, DeviceMetaRow, LiveSession, NewOrder, NewOrderLine, NewPayment,
     NewSession, NewWalletTxn, OrderRow, OrderTxn, RateRow, RowKey, SegmentRow, StoreTx, Table,
-    adjust_outstanding, adjust_wallet, assign_order_player, assign_session_player, close_segments,
-    delete_row, device_has_live_session, effect_recorded, end_session, find_active_rate,
-    find_credit, find_device_meta, find_order, find_order_for_session, find_player, find_session,
-    find_wallet, fold_pause, forward_intent_id, insert_order, insert_order_line, insert_payment,
-    insert_segment, insert_session, insert_wallet_txn, list_order_line_ids, list_order_wallet_txns,
-    list_payment_ids, list_segments, next_guest_no, pause_session, read_row, reopen_order,
+    add_order_amount, adjust_outstanding, adjust_wallet, assign_order_player,
+    assign_session_player, close_segments, count_product_lines, delete_row,
+    device_has_live_session, effect_recorded, end_session, find_active_rate, find_credit,
+    find_device_meta, find_order, find_order_for_session, find_player, find_session, find_wallet,
+    fold_pause, forward_intent_id, insert_order, insert_order_line, insert_payment, insert_segment,
+    insert_session, insert_wallet_txn, list_order_wallet_txns, list_payment_ids,
+    list_segment_line_ids, list_segments, next_guest_no, pause_session, read_row, reopen_order,
     reopen_segments, reopen_session, resume_session, set_device_state, set_group_state,
-    set_order_group, set_override_day, settle_order, sum_reserved_minor,
+    set_order_group, set_override_day, settle_order, sum_reserved_minor, sum_segment_amounts,
 };
 
 use super::mutate::Written;
@@ -31,6 +32,7 @@ pub(crate) struct SessionTarget {
     unchecked: bool,
     prepaid: super::prepaid::StartExtras,
     group_host: Option<LiveSession>,
+    group_host_ordered: bool,
 }
 
 pub(super) fn invalid(field: &str, message: &str) -> AppError {
@@ -74,6 +76,10 @@ pub(super) fn load(
         Some(id) => find_session(tx, id)?,
         None => None,
     };
+    let group_host_ordered = match &group_host {
+        Some(h) => find_order_for_session(tx, &h.id)?.is_some(),
+        None => false,
+    };
     Ok(SessionTarget {
         device,
         busy,
@@ -83,6 +89,7 @@ pub(super) fn load(
         unchecked,
         prepaid,
         group_host,
+        group_host_ordered,
     })
 }
 
@@ -178,7 +185,7 @@ pub(super) fn validate(
         ));
     }
     if s.group_with.is_some() {
-        super::group_bill::check_start(s.mode, t.group_host.as_ref())?;
+        super::group_bill::check_start(s.mode, t.group_host.as_ref(), t.group_host_ordered)?;
     }
     super::prepaid::check_start(s, group_id, &t.prepaid)
 }
@@ -300,6 +307,9 @@ pub(crate) struct EndTarget {
     device: Option<DeviceMetaRow>,
     close: super::prepaid::CloseExtras,
     group: Option<super::group_bill::GroupEnd>,
+    /// The bill order the session already has (one a placement opened), which the segment lines
+    /// join instead of a new order.
+    order: Option<OrderRow>,
 }
 
 pub(super) fn load_end(tx: &StoreTx<'_>, e: &SessionEnd) -> Result<EndTarget, AppError> {
@@ -311,6 +321,7 @@ pub(super) fn load_end(tx: &StoreTx<'_>, e: &SessionEnd) -> Result<EndTarget, Ap
         device: find_device_meta(tx, &session.device_id)?,
         close: super::prepaid::load_close(tx, &session)?,
         group: super::group_bill::load_end(tx, &session)?,
+        order: find_order_for_session(tx, &session.id)?,
         session: Some(session),
     })
 }
@@ -433,32 +444,47 @@ pub(super) fn mutate_end(
         written.extend(t.segments.iter().map(|seg| segment_written(&seg.id)));
     }
     if billed.is_some() {
-        let order_id = ulid::Ulid::generate().to_string();
         let group = billed.flatten();
         let (player_id, guest_no) = match group {
             Some(g) => (g.group.payer_player_id.as_deref(), g.group.payer_guest_no),
             None => (s.player_id.as_deref(), s.guest_no),
         };
-        insert_order(
-            tx,
-            &NewOrder {
-                id: &order_id,
-                session_id: &s.id,
-                player_id,
-                guest_no,
-                device_id: &s.device_id,
-                subtotal_minor: subtotal,
-                business_day: &s.business_day,
-                fy: &s.fy,
-            },
-        )?;
-        written.push(Written {
-            key: RowKey::Orders {
-                id: order_id.clone(),
-            },
-            op: ChangeOp::Insert,
-            before: None,
-        });
+        // A session whose order already holds placed products ends into that order.
+        let order_id = match &t.order {
+            Some(o) => {
+                add_order_amount(tx, &o.id, subtotal)?;
+                written.push(Written {
+                    key: RowKey::Orders { id: o.id.clone() },
+                    op: ChangeOp::Update,
+                    before: None,
+                });
+                o.id.clone()
+            }
+            None => {
+                let order_id = ulid::Ulid::generate().to_string();
+                insert_order(
+                    tx,
+                    &NewOrder {
+                        id: &order_id,
+                        session_id: &s.id,
+                        player_id,
+                        guest_no,
+                        device_id: &s.device_id,
+                        subtotal_minor: subtotal,
+                        business_day: &s.business_day,
+                        fy: &s.fy,
+                    },
+                )?;
+                written.push(Written {
+                    key: RowKey::Orders {
+                        id: order_id.clone(),
+                    },
+                    op: ChangeOp::Insert,
+                    before: None,
+                });
+                order_id
+            }
+        };
         if let Some(g) = group {
             set_order_group(tx, &order_id, &g.group.id)?;
             set_group_state(tx, &g.group.id, "closed")?;
@@ -522,6 +548,8 @@ pub(crate) struct SettleTarget {
     pub(super) credit_blocked: bool,
     pub(super) business_day: String,
     pub(super) shift_open: bool,
+    /// The bill is a postpaid session's that is still running: it settles once the session ends.
+    running: bool,
 }
 
 pub(super) fn load_settle(
@@ -536,6 +564,12 @@ pub(super) fn load_settle(
         &s.payments,
         now_ms,
     )?;
+    target.running = match order.as_ref().and_then(|o| o.session_id.as_deref()) {
+        Some(id) => find_session(tx, id)?.is_some_and(|s| {
+            super::group_bill::is_running(&s) && s.mode != SessionMode::Block.as_str()
+        }),
+        None => false,
+    };
     target.order = order;
     Ok(target)
 }
@@ -577,6 +611,7 @@ pub(super) fn load_payer(
         credit_blocked,
         business_day,
         shift_open: arena_store::open_shift_id(tx)?.is_some(),
+        running: false,
     })
 }
 
@@ -652,6 +687,12 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
             ));
         }
         _ => return Err(invalid("order_id", "this bill is void")),
+    }
+    if t.running {
+        return Err(invalid(
+            "order_id",
+            "this session is still running; end it to settle the bill",
+        ));
     }
     validate_payments(
         &s.payments,
@@ -1173,7 +1214,10 @@ pub(super) fn mutate_end_reverted(
             before: None,
         });
     }
-    for id in list_order_line_ids(tx, &o.id)? {
+    // Only the session (time) lines go: products placed on the bill stay, and with them the
+    // order, whose total shrinks by the time lines.
+    let segment_total = sum_segment_amounts(tx, &o.id)?;
+    for id in list_segment_line_ids(tx, &o.id)? {
         let key = RowKey::OrderLines { id };
         let before = read_row(tx, &key)?;
         delete_row(tx, Table::OrderLines, &before)?;
@@ -1184,13 +1228,22 @@ pub(super) fn mutate_end_reverted(
         });
     }
     let key = RowKey::Orders { id: o.id.clone() };
-    let before = read_row(tx, &key)?;
-    delete_row(tx, Table::Orders, &before)?;
-    written.push(Written {
-        key,
-        op: ChangeOp::Delete,
-        before: Some(before),
-    });
+    if count_product_lines(tx, &o.id)? == 0 {
+        let before = read_row(tx, &key)?;
+        delete_row(tx, Table::Orders, &before)?;
+        written.push(Written {
+            key,
+            op: ChangeOp::Delete,
+            before: Some(before),
+        });
+    } else {
+        add_order_amount(tx, &o.id, -segment_total)?;
+        written.push(Written {
+            key,
+            op: ChangeOp::Update,
+            before: None,
+        });
+    }
     if let Some(group_id) = &o.group_bill_id {
         set_group_state(tx, group_id, "open")?;
         written.push(Written {

@@ -128,6 +128,10 @@ pub use sessions::{
     settle_order, sum_reserved_minor,
 };
 pub use sessions::{
+    PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines, find_placed_order,
+    list_ordered_counts, list_placement_lines, list_segment_line_ids, sum_segment_amounts,
+};
+pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
     list_sessions_for_day, move_open_orders, move_session, pause_session, reprice_wallet_session,
     resume_session,
@@ -147,8 +151,8 @@ pub use staff::{
 pub use stock::{
     LotRow, MoveRow, StockRow, ThresholdRow, expired_qty, find_lot, find_move, find_stock,
     insert_lot, insert_move, insert_stock, latest_move_id, list_expiring_lots, list_lots,
-    list_low_stock, list_moves, list_order_moves, list_tracked_thresholds, low_stock_qty,
-    set_lot_remaining, set_low_stock_qty, update_stock,
+    list_low_stock, list_moves, list_order_moves, list_placement_moves, list_tracked_thresholds,
+    low_stock_qty, set_lot_remaining, set_low_stock_qty, update_stock,
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
@@ -820,6 +824,14 @@ impl Store {
         list_pos_sales(&self.conn, business_day)
     }
 
+    /// How many items each session has had placed on its bill (sessions with none are absent).
+    pub fn ordered_counts(&self) -> Result<std::collections::BTreeMap<String, i64>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(std::collections::BTreeMap::new());
+        }
+        list_ordered_counts(&self.conn)
+    }
+
     pub fn live_segments(&self) -> Result<Vec<SegmentRow>, AppError> {
         if !self.table_exists("session_segments")? {
             return Ok(Vec::new());
@@ -881,6 +893,34 @@ impl Store {
             return Ok(0);
         }
         wallet_balance(&self.conn, player_id)
+    }
+
+    /// An order's `rev` and total, and when `placement_id` put its lines on it (`None` when the
+    /// placement left no lines).
+    pub fn placement(
+        &self,
+        order_id: &str,
+        placement_id: &str,
+    ) -> Result<Option<(i64, i64, i64)>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        let Some(order) = find_order(&self.conn, order_id)? else {
+            return Ok(None);
+        };
+        let lines = list_placement_lines(&self.conn, order_id, placement_id)?;
+        Ok(lines
+            .first()
+            .and_then(|l| l.placed_at)
+            .map(|at| (order.rev, order.total_minor, at)))
+    }
+
+    /// The session and order a placement put products on (`None` when it left no lines).
+    pub fn placed_order(&self, placement_id: &str) -> Result<Option<(String, String)>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        find_placed_order(&self.conn, placement_id)
     }
 
     pub fn settlement(&self, order_id: &str) -> Result<Option<Settlement>, AppError> {

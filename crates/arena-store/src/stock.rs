@@ -46,13 +46,15 @@ pub struct MoveRow {
     pub note: Option<String>,
     /// The manager who approved the move (a sale override).
     pub elevated_by: Option<String>,
+    /// The `order.place` intent a `sale` or `sale_reverted` move belongs to (a session bill).
+    pub placement_id: Option<String>,
 }
 
 const LOT_COLUMNS: &str =
     "lot_id, product_id, qty_in, qty_remaining, unit_cost_minor, expiry, received_at";
 const MOVE_COLUMNS: &str = "move_id, product_id, reason, delta, before_qty, before_avg_cost_minor, \
                             unit_cost_minor, supplier, lot_id, lots_used, staff_id, at, \
-                            waste_reason, value_minor, order_id, note, elevated_by";
+                            waste_reason, value_minor, order_id, note, elevated_by, placement_id";
 
 fn lot(r: &rusqlite::Row<'_>) -> rusqlite::Result<LotRow> {
     Ok(LotRow {
@@ -85,6 +87,7 @@ fn mv(r: &rusqlite::Row<'_>) -> rusqlite::Result<MoveRow> {
         order_id: r.get(14)?,
         note: r.get(15)?,
         elevated_by: r.get(16)?,
+        placement_id: r.get(17)?,
     })
 }
 
@@ -194,9 +197,9 @@ pub fn insert_move(conn: &Connection, m: &MoveRow) -> Result<(), AppError> {
         "INSERT INTO stock_moves (move_id, product_id, reason, delta, before_qty,
                                   before_avg_cost_minor, unit_cost_minor, supplier, lot_id,
                                   lots_used, staff_id, at, waste_reason, value_minor, order_id,
-                                  note, elevated_by, rev, created_at, updated_at)
+                                  note, elevated_by, placement_id, rev, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                 0, 0, 0)",
+                 ?18, 0, 0, 0)",
         params![
             m.move_id,
             m.product_id,
@@ -214,7 +217,8 @@ pub fn insert_move(conn: &Connection, m: &MoveRow) -> Result<(), AppError> {
             m.value_minor,
             m.order_id,
             m.note,
-            m.elevated_by
+            m.elevated_by,
+            m.placement_id
         ],
     )
     .map_err(db_error)?;
@@ -255,6 +259,24 @@ pub fn list_order_moves(
         .map_err(db_error)?;
     let rows = stmt
         .query_map(params![order_id, reason], mv)
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// The moves one placement wrote with this `reason`, in the order they were written.
+pub fn list_placement_moves(
+    conn: &Connection,
+    placement_id: &str,
+    reason: &str,
+) -> Result<Vec<MoveRow>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {MOVE_COLUMNS} FROM stock_moves WHERE placement_id = ?1 AND reason = ?2
+             ORDER BY rowid"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![placement_id, reason], mv)
         .map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }

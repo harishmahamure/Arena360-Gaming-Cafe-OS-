@@ -249,3 +249,66 @@ test("a cart becomes the lines of pos.sale", () => {
     { product_id: "B", qty: 1 },
   ]);
 });
+
+// Attaching the cart to a running session (Story 5.12).
+import type { SnapshotDevice, SnapshotSession } from "@arena/ui/generated";
+import { cartAmount, orderSessions, takesOrder } from "../src/lib/pos-session";
+
+const session = (id: string, extra: Partial<SnapshotSession> = {}): SnapshotSession => ({
+  id,
+  device_id: `d-${id}`,
+  state: "active",
+  started_at: 1,
+  rev: 1,
+  paused_total_ms: 0,
+  mode: "postpaid",
+  ...extra,
+});
+
+test("only a running postpaid session outside a group bill, or a block session, takes an order", () => {
+  expect(takesOrder(session("a"))).toBe(true);
+  expect(takesOrder(session("a", { state: "paused" }))).toBe(true);
+  expect(takesOrder(session("a", { mode: null }))).toBe(true);
+  expect(takesOrder(session("a", { mode: "block" }))).toBe(true);
+  expect(takesOrder(session("a", { group_bill_id: "G" }))).toBe(false);
+  for (const mode of ["pack", "pass", "wallet"]) {
+    expect(takesOrder(session("a", { mode }))).toBe(false);
+  }
+  for (const state of ["ended", "expired", "orphaned"]) {
+    expect(takesOrder(session("a", { state }))).toBe(false);
+  }
+});
+
+test("order sessions are listed in start order with the player and the PC name", () => {
+  const devices = [
+    { device_id: "d-b", label: "PC 2" },
+    { device_id: "d-a", label: "PC 1" },
+  ] as SnapshotDevice[];
+  const list = orderSessions(
+    [
+      session("b", { started_at: 20, username: "asha" }),
+      session("a", { started_at: 10, guest_no: 3 }),
+      session("c", { mode: "wallet" }),
+    ],
+    devices,
+  );
+  expect(list.map((s) => [s.session.id, s.player, s.device])).toEqual([
+    ["a", null, "PC 1"],
+    ["b", "asha", "PC 2"],
+  ]);
+});
+
+test("an order adds each line at the product price with no tax", () => {
+  const cola = product("cola", { price_minor: 4000 });
+  const chips = product("chips", { price_minor: 1000 });
+  expect(
+    cartAmount(
+      [
+        { productId: "cola", qty: 2 },
+        { productId: "chips", qty: 3 },
+        { productId: "gone", qty: 9 },
+      ],
+      index(cola, chips),
+    ),
+  ).toBe(11000);
+});

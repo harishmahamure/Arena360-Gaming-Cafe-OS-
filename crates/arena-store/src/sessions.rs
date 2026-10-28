@@ -102,6 +102,9 @@ pub struct OrderLineRow {
     pub rate_minor_per_hour: i64,
     pub amount_minor: i64,
     pub rule_id: Option<String>,
+    /// The product's name when this is a placed product line (`None` for a session line).
+    pub label: Option<String>,
+    pub qty: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,7 +560,8 @@ pub fn list_open_order_lines(conn: &Connection) -> Result<Vec<OrderLineRow>, App
     let mut stmt = conn
         .prepare(
             "SELECT l.order_id, COALESCE(l.device_id, ''), l.from_at, l.to_at, l.minutes,
-                    l.rate_minor_per_hour, l.amount_minor, g.rule_id
+                    l.rate_minor_per_hour, l.amount_minor, g.rule_id,
+                    CASE WHEN l.product_id IS NULL THEN NULL ELSE COALESCE(l.label, '') END, l.qty
              FROM order_lines l JOIN orders o ON o.id = l.order_id
                   LEFT JOIN session_segments g ON g.id = l.session_segment_id
              WHERE o.status = 'open' ORDER BY l.order_id, l.position",
@@ -573,6 +577,8 @@ pub fn list_open_order_lines(conn: &Connection) -> Result<Vec<OrderLineRow>, App
             rate_minor_per_hour: r.get(5)?,
             amount_minor: r.get(6)?,
             rule_id: r.get(7)?,
+            label: r.get(8)?,
+            qty: r.get(9)?,
         })
     })
     .map_err(db_error)?
@@ -673,6 +679,119 @@ pub fn list_order_line_ids(conn: &Connection, order_id: &str) -> Result<Vec<Stri
         "SELECT id FROM order_lines WHERE order_id = ?1 ORDER BY position, id",
         order_id,
     )
+}
+
+/// The ids of an order's session (time) lines, leaving its product lines out.
+pub fn list_segment_line_ids(conn: &Connection, order_id: &str) -> Result<Vec<String>, AppError> {
+    ids(
+        conn,
+        "SELECT id FROM order_lines WHERE order_id = ?1 AND product_id IS NULL
+         ORDER BY position, id",
+        order_id,
+    )
+}
+
+/// The total of an order's session (time) lines, leaving its product lines out.
+pub fn sum_segment_amounts(conn: &Connection, order_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(amount_minor), 0) FROM order_lines
+         WHERE order_id = ?1 AND product_id IS NULL",
+        [order_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// A product line added by a placement, as its Undo needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacedLine {
+    pub id: String,
+    pub amount_minor: i64,
+    pub placed_by: Option<String>,
+    pub placed_at: Option<i64>,
+}
+
+/// The lines one placement added to an order.
+pub fn list_placement_lines(
+    conn: &Connection,
+    order_id: &str,
+    placement_id: &str,
+) -> Result<Vec<PlacedLine>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, amount_minor, placed_by, placed_at FROM order_lines
+             WHERE order_id = ?1 AND placement_id = ?2 ORDER BY position, id",
+        )
+        .map_err(db_error)?;
+    stmt.query_map(params![order_id, placement_id], |r| {
+        Ok(PlacedLine {
+            id: r.get(0)?,
+            amount_minor: r.get(1)?,
+            placed_by: r.get(2)?,
+            placed_at: r.get(3)?,
+        })
+    })
+    .map_err(db_error)?
+    .collect::<Result<_, _>>()
+    .map_err(db_error)
+}
+
+/// The session and order a placement put products on.
+pub fn find_placed_order(
+    conn: &Connection,
+    placement_id: &str,
+) -> Result<Option<(String, String)>, AppError> {
+    conn.query_row(
+        "SELECT o.session_id, o.id FROM order_lines l JOIN orders o ON o.id = l.order_id
+         WHERE l.placement_id = ?1 AND o.session_id IS NOT NULL LIMIT 1",
+        [placement_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// How many product lines an order holds (the next placement's lines follow them).
+pub fn count_product_lines(conn: &Connection, order_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM order_lines WHERE order_id = ?1 AND product_id IS NOT NULL",
+        [order_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// Raises (or, negative, lowers) an open bill's subtotal and total by `delta_minor`.
+pub fn add_order_amount(
+    conn: &Connection,
+    order_id: &str,
+    delta_minor: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET subtotal_minor = subtotal_minor + ?2, total_minor = total_minor + ?2
+         WHERE id = ?1",
+        params![order_id, delta_minor],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The items placed on each session's bill order (the sum of its product line quantities), for
+/// the sessions that have any.
+pub fn list_ordered_counts(
+    conn: &Connection,
+) -> Result<std::collections::BTreeMap<String, i64>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.session_id, SUM(l.qty) FROM order_lines l JOIN orders o ON o.id = l.order_id
+             WHERE o.session_id IS NOT NULL AND l.product_id IS NOT NULL
+             GROUP BY o.session_id",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)
 }
 
 pub fn list_payment_ids(conn: &Connection, order_id: &str) -> Result<Vec<String>, AppError> {
@@ -1189,15 +1308,23 @@ pub struct NewProductLine<'a> {
     pub amount_minor: i64,
     pub position: i64,
     pub at: i64,
+    /// The placement (`order.place` intent id) and the staff member that added the line; `None`
+    /// for a counter sale's line.
+    pub placement: Option<(&'a str, &'a str)>,
 }
+
+/// Where the first product line of a session bill sits: after every session (time) line.
+pub const PRODUCT_LINE_BASE: i64 = 1000;
 
 pub fn insert_product_line(conn: &Connection, l: &NewProductLine<'_>) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO order_lines (id, order_id, session_segment_id, device_id, from_at, to_at,
                                   minutes, rate_minor_per_hour, amount_minor, position, rev,
                                   created_at, updated_at, label, product_id, qty,
-                                  unit_price_minor, tax_rate_bp)
-         VALUES (?1, ?2, NULL, NULL, ?3, ?3, 0, 0, ?4, ?5, 0, 0, 0, ?6, ?7, ?8, ?9, ?10)",
+                                  unit_price_minor, tax_rate_bp, placement_id, placed_by,
+                                  placed_at)
+         VALUES (?1, ?2, NULL, NULL, ?3, ?3, 0, 0, ?4, ?5, 0, 0, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                 ?13)",
         params![
             l.id,
             l.order_id,
@@ -1208,7 +1335,10 @@ pub fn insert_product_line(conn: &Connection, l: &NewProductLine<'_>) -> Result<
             l.product_id,
             l.qty,
             l.unit_price_minor,
-            l.tax_rate_bp
+            l.tax_rate_bp,
+            l.placement.map(|p| p.0),
+            l.placement.map(|p| p.1),
+            l.placement.map(|_| l.at)
         ],
     )
     .map_err(db_error)?;

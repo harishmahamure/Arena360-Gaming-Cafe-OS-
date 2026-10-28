@@ -89,6 +89,9 @@ pub struct PcSession {
     pub grace_in_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub grace_ms: u64,
+    /// How many items were placed on the session's bill (shown as "Ordered: n items").
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ordered_items: u64,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -381,6 +384,7 @@ mod tests {
                 warning_min: Some(5),
                 grace_in_ms: Some(3),
                 grace_ms: 4,
+                ordered_items: 2,
             }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);

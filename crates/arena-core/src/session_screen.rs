@@ -87,13 +87,14 @@ pub fn session_screens(
     store: &Store,
     now_ms: i64,
 ) -> Result<Vec<(String, SessionScreen)>, AppError> {
-    let (sessions, devices, meta, settings, branch) = store.read_consistent(|s| {
+    let (sessions, devices, meta, settings, branch, ordered) = store.read_consistent(|s| {
         Ok((
             s.live_sessions()?,
             s.devices()?,
             s.devices_meta()?,
             s.settings()?,
             s.branch_locale()?,
+            s.ordered_counts()?,
         ))
     })?;
     let lock_after = closing_in(branch, &settings, now_ms).unwrap_or(DAY_MS);
@@ -118,6 +119,9 @@ pub fn session_screens(
                 _ => None,
             };
             let screen = SessionScreen {
+                ordered_items: ordered
+                    .get(&s.id)
+                    .map_or(0, |n| u64::try_from(*n).unwrap_or(0)),
                 session_id: s.id,
                 device_name: name,
                 elapsed_ms: u64::try_from(

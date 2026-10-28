@@ -25,7 +25,7 @@
     ReasonCode,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
-  import { invalidate } from "$app/navigation";
+  import { goto, invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
   import { pushBack } from "./back";
   import {
@@ -39,6 +39,7 @@
   import ConvertGuest from "./players/ConvertGuest.svelte";
   import ExtendOptions from "./players/ExtendOptions.svelte";
   import PlayerLookup from "./players/PlayerLookup.svelte";
+  import { takesOrder } from "./pos-session";
   import StartOptions from "./players/StartOptions.svelte";
   import RuleChips from "./RuleChips.svelte";
   import { liveRate, ruleChips } from "./rules";
@@ -264,6 +265,10 @@
   const groupTotal = $derived(groupLines.reduce((sum, l) => sum + l.amount_minor, 0));
   const canGroup = $derived(
     session?.mode === "postpaid" && ["active", "paused"].includes(session.state),
+  );
+  // Products go on a running postpaid session (not in a group bill) or a block session.
+  const canOrder = $derived(
+    hasPermission(staff, "pos.sell") && session !== undefined && takesOrder(session),
   );
 
   function sendMessage(event: SubmitEvent) {
@@ -526,6 +531,7 @@
     {#if unpaid.group_bill_id && groupView}
       <BillBreakdown
         lines={unpaid.lines}
+        items={unpaid.items}
         subtotal={unpaid.subtotal_minor}
         paid={unpaid.paid_minor}
         remaining={unpaid.remaining_minor}
@@ -541,6 +547,17 @@
         {canLookup}
         {busy}
         onpayer={setPayer}
+      />
+    {:else if unpaid.items?.length}
+      <BillBreakdown
+        lines={unpaid.lines}
+        items={unpaid.items}
+        subtotal={unpaid.subtotal_minor}
+        paid={unpaid.paid_minor}
+        remaining={unpaid.remaining_minor}
+        {locale}
+        {tz}
+        {names}
       />
     {/if}
     <!-- On a phone this region stays pinned to the bottom of the sheet while the rest scrolls. -->
@@ -696,6 +713,7 @@
         {:else if bill && locale}
           <BillBreakdown
             lines={bill.lines}
+            items={bill.items}
             subtotal={bill.subtotal_minor}
             paid={bill.paid_minor}
             remaining={bill.remaining_minor}
@@ -785,6 +803,15 @@
               onclick={ontransfer}
             />
           {/if}
+        {/if}
+        {#if canOrder}
+          <Button
+            label="hub.session.order"
+            variant="secondary"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => void goto(`/pos?${new URLSearchParams({ session: session.id })}`)}
+          />
         {/if}
         {#if forcing}
           <ReasonPicker

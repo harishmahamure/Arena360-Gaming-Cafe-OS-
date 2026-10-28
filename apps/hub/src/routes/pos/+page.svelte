@@ -28,7 +28,7 @@
   import { catalog } from "../../lib/catalog.svelte";
   import { branchLocale } from "../../lib/locale.svelte";
   import { isTextEntry } from "../../lib/nav";
-  import { sessionStaff } from "../../lib/operating";
+  import { sessionStaff, snapshotOf } from "../../lib/operating";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
   import {
     ALL,
@@ -48,6 +48,7 @@
     type Refusal,
   } from "../../lib/pos";
   import { loadPosSales } from "../../lib/pos-sales";
+  import { cartAmount, orderSessions } from "../../lib/pos-session";
   import { loadProducts, priceText } from "../../lib/products";
   import SettleBar from "../../lib/SettleBar.svelte";
   import { KEY_TAX, parseTax, type Tax } from "../../lib/tax";
@@ -69,6 +70,10 @@
   let attached = $state<PlayerHit | null>(null);
   let choosing = $state(false);
   let cartOpen = $state(false);
+
+  // The session the cart is attached to (Story 5.12): `?session=<id>` from a tile's Order, or one
+  // picked with Change. The cart then adds to that session's bill instead of settling.
+  let attachedId = $state<string | null>(page.url.searchParams.get("session"));
 
   // Settling (Story 5.11).
   let tax: Tax = $state(DEFAULT_TAX);
@@ -127,7 +132,22 @@
     wallet_minor: attached ? walletMinor : null,
     credit: attached ? credit : null,
   });
+  const snapshot = $derived(snapshotOf(page.data));
+  const running = $derived(orderSessions(snapshot?.sessions ?? [], snapshot?.devices ?? []));
+  const attachedSession = $derived(running.find((s) => s.session.id === attachedId) ?? null);
+  // What an order adds to the session bill: the lines at their prices, no tax.
+  const placedAmount = $derived(cartAmount(cart, byId));
   const sheet = $derived(viewport.phone && cartOpen);
+  const sessionHeader = $derived(
+    attachedSession
+      ? t("hub.pos.cart.in_session", {
+          player:
+            attachedSession.player ??
+            t("hub.session.guest", { n: attachedSession.session.guest_no ?? 0 }),
+          device: attachedSession.device,
+        })
+      : null,
+  );
   const who = $derived(attached ? attached.name || attached.username || attached.phone : null);
 
   const METHOD_NAME: Record<PaymentMethod, MessageKey> = {
@@ -187,6 +207,14 @@
     }
   });
 
+  // A tile's Order opens the POS on its session.
+  $effect(() => {
+    const id = page.url.searchParams.get("session");
+    untrack(() => {
+      if (id) attachedId = id;
+    });
+  });
+
   // The attached player's wallet and credit join the payment methods.
   $effect(() => {
     const id = attached?.player_id ?? null;
@@ -224,6 +252,7 @@
       if (cart.length === 0) {
         cart = restored.cart;
         attached = restored.player;
+        if (restored.session) attachedId = restored.session;
       }
       refusals = {};
       notice = null;
@@ -324,6 +353,84 @@
     VALIDATION_FAILED: "hub.pos.err.lines",
   };
 
+  /** Adds the cart to the attached session's bill. `over` orders a short bundle anyway. */
+  async function place(over = false, ticket?: string) {
+    const target = attachedSession;
+    if (busy || lines.length === 0 || !target) return;
+    busy = true;
+    error = null;
+    const payload: IntentPayload = {
+      kind: "order.place",
+      session_id: target.session.id,
+      lines: saleLines(cart),
+      stock_override: over ? true : undefined,
+    };
+    const body = JSON.stringify(payload);
+    const key = attempt?.body === body ? attempt.key : newIdempotencyKey();
+    attempt = { key, body };
+    const amount = placedAmount;
+    const ordered = {
+      cart: cart.map((l) => ({ ...l })),
+      player: null,
+      session: target.session.id,
+    };
+    const outcome = await submitIntent(payload, key, undefined, {
+      elevationTicket: ticket,
+    }).finally(() => (busy = false));
+    if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    if (outcome.kind === "applied") {
+      attempt = null;
+      shortfall = null;
+      offerUndo(outcome.result, "pos", "end", ordered);
+      cart = [];
+      refusals = {};
+      cartOpen = false;
+      notice = {
+        tone: "ok",
+        text: t("hub.pos.session.placed", { amount: money(amount) }),
+      };
+      void load();
+      return;
+    }
+    if (ticket) void dropElevation(ticket);
+    if (outcome.kind !== "error") {
+      error = "hub.pos.err.unreachable";
+      return;
+    }
+    const { code, message, field } = outcome.error;
+    if (code === "BUNDLE_SHORT") {
+      approvalPrompt = "hub.pos.override.approves_order";
+      shortfall = { message, payments: [] };
+      return;
+    }
+    if (code === "PIN_REQUIRED" && over) {
+      approvalPrompt = "ui.pin.again";
+      shortfall = { message: shortfall?.message ?? message, payments: [] };
+      return;
+    }
+    error =
+      code === "VALIDATION_FAILED" && field === "session_id"
+        ? "hub.pos.err.session"
+        : code === "NOT_FOUND"
+          ? "hub.pos.err.session"
+          : code === "VALIDATION_FAILED"
+            ? "hub.pos.err.lines"
+            : code === "PERMISSION_DENIED"
+              ? "hub.refusal.permission"
+              : code === "OUT_OF_STOCK"
+                ? "hub.pos.err.out_of_stock"
+                : "hub.pos.err.place";
+    if (code === "OUT_OF_STOCK") void load();
+  }
+
+  /** Carries out the refused cart again with the stock override. */
+  function sellAnyway(ticket?: string) {
+    const pending = shortfall;
+    if (!pending) return;
+    if (attachedSession) void place(true, ticket);
+    else void settle(pending.payments, true, ticket);
+  }
+
   /** Settles the cart. `over` sells a short bundle anyway (needs `stock.override`). */
   async function settle(payments: PaymentRow[], over = false, ticket?: string) {
     if (busy || lines.length === 0) return;
@@ -382,7 +489,10 @@
   async function approve(pin: string) {
     const pending = shortfall;
     if (!pending) return { ok: false, message: "ui.pin.failed" } as const;
-    const outcome = await elevate([{ intent_kind: "pos.sale" }], pin);
+    const outcome = await elevate(
+      [{ intent_kind: attachedSession ? "order.place" : "pos.sale" }],
+      pin,
+    );
     if (outcome.kind === "signed_out") {
       await invalidate(SESSION_DEPENDENCY);
       return { ok: false, message: "ui.pin.unreachable" } as const;
@@ -392,12 +502,24 @@
       return { ok: false, message: "ui.pin.locked", retryAfterS: outcome.retryAfterS } as const;
     }
     if (outcome.kind !== "ticket") return { ok: false, message: "ui.pin.unreachable" } as const;
-    void settle(pending.payments, true, outcome.ticket);
+    sellAnyway(outcome.ticket);
     return { ok: true } as const;
   }
 
+  /** A looked-up player attaches their running session, or (without one) the sale itself. */
   async function pick(hit: PlayerHit | null) {
-    attached = hit;
+    const theirs = hit ? running.find((s) => s.session.player_id === hit.player_id) : undefined;
+    attachedId = theirs?.session.id ?? null;
+    attached = theirs ? null : hit;
+    choosing = false;
+    await tick();
+    changeButton?.focus();
+  }
+
+  /** Attaches the cart to a running session picked by its PC. */
+  async function pickSession(id: string) {
+    attachedId = id;
+    attached = null;
     choosing = false;
     await tick();
     changeButton?.focus();
@@ -446,7 +568,9 @@
     <div class="cart-head">
       <h2 class="type-hub-title" id="cart-title">{t("hub.pos.cart.title")}</h2>
       <p class="who type-hub-label">
-        <span data-testid="cart-for">{who ?? t("hub.pos.cart.walkup")}</span>
+        <span data-testid="cart-for" data-session-id={attachedSession?.session.id}
+          >{sessionHeader ?? who ?? t("hub.pos.cart.walkup")}</span
+        >
         <button
           type="button"
           class="ui-interactive link type-hub-label"
@@ -460,6 +584,29 @@
     {#if choosing}
       <div class="chooser" data-testid="cart-chooser">
         <h3 class="type-hub-label">{t("hub.pos.player.title")}</h3>
+        {#if running.length > 0}
+          <div class="running" role="group" aria-label={t("hub.pos.session.running")}>
+            <p class="type-hub-label">{t("hub.pos.session.running")}</p>
+            <ul class="sessions" data-testid="cart-sessions">
+              {#each running as s (s.session.id)}
+                <li>
+                  <button
+                    type="button"
+                    class="ui-interactive link type-hub-body"
+                    data-testid="cart-session-option"
+                    data-session-id={s.session.id}
+                    aria-pressed={s.session.id === attachedSession?.session.id}
+                    onclick={() => void pickSession(s.session.id)}
+                    >{t("hub.pos.session.pick", {
+                      player: s.player ?? t("hub.session.guest", { n: s.session.guest_no ?? 0 }),
+                      device: s.device,
+                    })}</button
+                  >
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
         <PlayerLookup onpick={(hit) => void pick(hit)} onguest={() => void pick(null)} />
         <Button
           label="hub.pos.player.cancel"
@@ -521,7 +668,11 @@
           </li>
         {/each}
       </ul>
-      {#if bill.tax_minor > 0}
+      {#if attachedSession}
+        <p class="type-hub-label tabular-nums" data-testid="cart-placed-total">
+          {t("hub.pos.session.total", { amount: money(placedAmount) })}
+        </p>
+      {:else if bill.tax_minor > 0}
         <dl class="breakup type-hub-label tabular-nums" data-testid="pos-tax">
           <div>
             <dt>{t("hub.pos.subtotal")}</dt>
@@ -538,7 +689,22 @@
     {/if}
   </section>
 
-  {#if lines.length > 0 && locale}
+  {#if attachedSession}
+    <section
+      class="settle"
+      data-component="settle-bar"
+      data-testid="order-bar"
+      aria-labelledby="pos-order-title"
+    >
+      <h3 class="type-hub-title" id="pos-order-title">{t("hub.pos.session.bar")}</h3>
+      <Button
+        label="hub.pos.session.add"
+        disabled={busy || lines.length === 0}
+        disabledReason={busy ? "hub.sheet.waiting" : "hub.pos.session.add_empty"}
+        onclick={() => void place()}
+      />
+    </section>
+  {:else if lines.length > 0 && locale}
     <SettleBar
       bill={settleBill}
       {locale}
@@ -577,10 +743,10 @@
       {#if hasPermission(staff, "stock.override")}
         <div class="override-actions">
           <Button
-            label="hub.pos.override.sell"
+            label={attachedSession ? "hub.pos.override.order" : "hub.pos.override.sell"}
             disabled={busy}
             disabledReason="hub.sheet.waiting"
-            onclick={() => shortfall && void settle(shortfall.payments, true)}
+            onclick={() => sellAnyway()}
           />
           <Button
             label="hub.pos.override.cancel"
@@ -1126,9 +1292,22 @@
     gap: var(--space-2);
   }
 
-  .chooser {
+  .chooser,
+  .running {
     display: grid;
     gap: var(--space-3);
+  }
+
+  .running p {
+    margin: 0;
+  }
+
+  .sessions {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
   .empty {

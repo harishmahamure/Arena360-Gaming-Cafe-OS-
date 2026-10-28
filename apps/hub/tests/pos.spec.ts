@@ -6,6 +6,7 @@ import type {
   PosSaleView,
   Product,
   ShiftState,
+  SnapshotSession,
   WalletView,
 } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
@@ -386,6 +387,8 @@ type Hub = {
   /** Refusals the next intents answer with, oldest first. */
   refuse: { status: number; code: string; message?: string }[];
   wallet: WalletView;
+  /** The running sessions the snapshot lists (Story 5.12). */
+  sessions?: SnapshotSession[];
 };
 
 const SHIFT: ShiftState = {
@@ -424,15 +427,16 @@ const TAX: Tax = {
   rate_bp: 0,
 };
 
-async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS) {
+async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS, path = "/pos") {
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "counter-token"));
   await page.route(`${HUB}/**`, async (route: Route) => {
     const req = route.request();
     if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
     switch (new URL(req.url()).pathname) {
       case "/ui/snapshot": {
-        const snap = snapshot([device(1, {})]);
+        const snap = snapshot(hub.sessions ? [1, 2, 3].map((n) => device(n, {})) : [device(1, {})]);
         snap.shift = hub.shift;
+        snap.sessions = hub.sessions ?? [];
         return ok(route, snap);
       }
       case "/ui/me":
@@ -507,6 +511,17 @@ async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS) {
                   irreversible: false,
                 }
               : undefined,
+          placed:
+            body.intent.payload.kind === "order.place"
+              ? {
+                  order_id: "O9",
+                  order_rev: 2,
+                  placement_id: "PL9",
+                  placed_at: now,
+                  undo_until: now + 8000,
+                  total_minor: 12000,
+                }
+              : undefined,
         });
       }
       case "/ui/events":
@@ -520,7 +535,7 @@ async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS) {
         return route.fulfill({ status: 404, headers: CORS, body: "{}" });
     }
   });
-  await page.goto("/pos");
+  await page.goto(path);
   await expect(page.getByTestId("pos")).toBeVisible();
 }
 
@@ -856,4 +871,202 @@ test("the live settle bar has no serious accessibility violations", async ({ pag
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual(
     [],
   );
+});
+
+// ---- Story 5.12: attach an order to a running session ----
+
+const running = (id: string, device_id: string, extra: Partial<SnapshotSession> = {}) =>
+  ({
+    id,
+    device_id,
+    state: "active",
+    started_at: 1,
+    rev: 1,
+    paused_total_ms: 0,
+    mode: "postpaid",
+    ...extra,
+  }) as SnapshotSession;
+
+const SESSIONS: SnapshotSession[] = [
+  running("S1", device(1, {}).device_id, { username: "asha", player_id: "PL1" }),
+  running("S2", device(2, {}).device_id, { guest_no: 4, started_at: 2 }),
+  running("S3", device(3, {}).device_id, { mode: "wallet", started_at: 3 }),
+];
+
+const ordering = (extra: Partial<Hub> = {}) => newHub({ sessions: SESSIONS, ...extra });
+const placeOf = (hub: Hub) => hub.sent.filter((s) => s.payload.kind === "order.place");
+
+// The snapshot lists three PCs for these sessions.
+async function openOrdering(page: Page, hub: Hub, session: string | null) {
+  await openHub(page, hub, PRODUCTS, session ? `/pos?session=${session}` : "/pos");
+}
+
+test("a tile's Order opens the POS attached to the session, and the header names it", async ({
+  page,
+}, info) => {
+  const hub = ordering();
+  await openOrdering(page, hub, "S1");
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await expect(page.getByTestId("cart-for")).toHaveText(/In session · asha · PC \d/);
+  // The settle bar is replaced by "Add to session bill"; there is no payment form.
+  await expect(page.getByTestId("order-bar")).toBeVisible();
+  await expect(page.getByTestId("settle-bar")).toHaveCount(0);
+  await expect(page.getByTestId("order-bar").getByRole("button")).toHaveText(
+    en["hub.pos.session.add"],
+  );
+  await expect(page.getByTestId("cart-placed-total")).toContainText("60.00");
+});
+
+test("Add to session bill sends order.place, shows the Undo and keeps the session attached", async ({
+  page,
+}, info) => {
+  const hub = ordering();
+  await openOrdering(page, hub, "S1");
+  await tile(page, "Cola").click();
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await page.getByTestId("order-bar").getByRole("button").click();
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(placeOf(hub)).toHaveLength(1);
+  expect(placeOf(hub)[0].payload).toEqual({
+    kind: "order.place",
+    session_id: "S1",
+    lines: [{ product_id: "P1", qty: 2 }],
+  });
+  expect(placeOf(hub)[0].rev).toBeUndefined();
+  // A second placement goes to the same session.
+  await page.getByRole("button", { name: en["hub.pos.all"], exact: true }).click();
+  await tile(page, "Chips").click();
+  await openCart(page, info);
+  await expect(page.getByTestId("cart-for")).toContainText("asha");
+  await page.getByTestId("order-bar").getByRole("button").click();
+  await expect.poll(() => placeOf(hub).length).toBe(2);
+  expect(placeOf(hub)[1].payload).toMatchObject({ session_id: "S1" });
+});
+
+test("Undo of an order sends order.place.reverted with the order rev and puts the cart back", async ({
+  page,
+}, info) => {
+  const hub = ordering();
+  await openOrdering(page, hub, "S2");
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await expect(page.getByTestId("cart-for")).toContainText("Guest 4 · PC 2");
+  await page.getByTestId("order-bar").getByRole("button").click();
+  await expect(page.getByTestId("undo-toast")).toContainText("120.00");
+  await page.getByTestId("undo-action").click();
+  await expect(page.getByTestId("undo-notice")).toHaveText(en["hub.undo.done.order"]);
+  const undone = hub.sent.at(-1);
+  expect(undone?.payload).toEqual({
+    kind: "order.place.reverted",
+    order_id: "O9",
+    placement_id: "PL9",
+  });
+  expect(undone?.rev).toBe(2);
+  await openCart(page, info);
+  await expect(lineOf(page, "Cola").getByTestId("line-qty")).toHaveText("1");
+  await expect(page.getByTestId("cart-for")).toContainText("Guest 4");
+});
+
+test("Change attaches any running session by device or player, or goes back to a guest", async ({
+  page,
+}, info) => {
+  const hub = ordering();
+  await openOrdering(page, hub, null);
+  await page.getByRole("button", { name: en["hub.pos.all"], exact: true }).click();
+  await tile(page, "Chips").click();
+  await openCart(page, info);
+  await expect(page.getByTestId("cart-for")).toHaveText(en["hub.pos.cart.walkup"]);
+  await expect(page.getByTestId("settle-bar")).toBeVisible();
+  await page.getByTestId("cart-change").click();
+  const options = page.getByTestId("cart-session-option");
+  // Only sessions that take an order are offered (the wallet session is not).
+  await expect(options).toHaveCount(2);
+  await options.filter({ hasText: "Guest 4" }).click();
+  await expect(page.getByTestId("cart-for")).toContainText("Guest 4");
+  await expect(page.getByTestId("order-bar")).toBeVisible();
+  // Looking a player up attaches their running session.
+  await page.getByTestId("cart-change").click();
+  const chooser = page.getByTestId("cart-chooser");
+  await chooser.locator("[data-player-lookup]").fill("9876");
+  await chooser.getByTestId("player-hits").getByRole("button", { name: /Asha/ }).click();
+  await expect(page.getByTestId("cart-for")).toContainText("asha");
+  // Guest goes back to the counter sale.
+  await page.getByTestId("cart-change").click();
+  await page
+    .getByTestId("cart-chooser")
+    .getByRole("button", { name: en["hub.players.lookup.guest"], exact: true })
+    .click();
+  await expect(page.getByTestId("cart-for")).toHaveText(en["hub.pos.cart.walkup"]);
+  await expect(page.getByTestId("settle-bar")).toBeVisible();
+  await expect(page.getByTestId("order-bar")).toHaveCount(0);
+});
+
+test("a short bundle on an order offers the manager PIN and orders with the override", async ({
+  page,
+}, info) => {
+  const hub = ordering({
+    refuse: [{ status: 409, code: "BUNDLE_SHORT", message: "Not enough Chips for Combo." }],
+  });
+  await openOrdering(page, hub, "S1");
+  await page.getByRole("button", { name: "Combos", exact: true }).click();
+  await tile(page, "Combo").click();
+  await openCart(page, info);
+  await page.getByTestId("order-bar").getByRole("button").click();
+  const panel = page.getByTestId("pos-override");
+  await expect(panel.getByTestId("pos-short-message")).toHaveText("Not enough Chips for Combo.");
+  await expect(panel.locator("[data-component=inline-pin]")).toBeVisible();
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  expect(hub.elevations.at(-1)).toMatchObject({
+    items: [{ intent_kind: "order.place" }],
+    pin: "2222",
+  });
+  expect(placeOf(hub)).toHaveLength(2);
+  expect(placeOf(hub)[1].payload).toMatchObject({ stock_override: true, session_id: "S1" });
+  expect(placeOf(hub)[1].ticket).toBe("T1");
+});
+
+test("a session that no longer takes an order says so and keeps the cart", async ({
+  page,
+}, info) => {
+  const hub = ordering({
+    refuse: [
+      {
+        status: 400,
+        code: "VALIDATION_FAILED",
+        message: "an order goes on a running session",
+      },
+    ],
+  });
+  await openOrdering(page, hub, "S1");
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await page.getByTestId("order-bar").getByRole("button").click();
+  await expect(page.getByTestId("pos-error")).toBeVisible();
+  await expect(page.getByTestId("undo-toast")).toHaveCount(0);
+  await expect(lineOf(page, "Cola")).toBeVisible();
+});
+
+test("Add to session bill is disabled with a reason while the cart is empty", async ({
+  page,
+}, info) => {
+  test.skip(isPhone(info), "the phone cart bar shows only once the cart has a line");
+  await openOrdering(page, ordering(), "S1");
+  const bar = page.getByTestId("order-bar");
+  await expect(bar.getByRole("button")).toHaveAttribute("aria-disabled", "true");
+  await expect(bar).toContainText(en["hub.pos.session.add_empty"]);
+});
+
+test("the attached POS has no serious accessibility violations", async ({ page }, info) => {
+  await openOrdering(page, ordering(), "S1");
+  await tile(page, "Cola").click();
+  await openCart(page, info);
+  await page.getByTestId("cart-change").click();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
+  ).toEqual([]);
 });

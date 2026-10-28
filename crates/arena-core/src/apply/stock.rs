@@ -221,6 +221,7 @@ pub(super) fn mutate_in(
             order_id: None,
             note: None,
             elevated_by: None,
+            placement_id: None,
         },
     )?;
     let mut out = vec![
@@ -286,6 +287,7 @@ pub(super) fn mutate_revert(
             order_id: None,
             note: None,
             elevated_by: None,
+            placement_id: None,
         },
     )?;
     let mut out = vec![
@@ -469,6 +471,7 @@ pub(super) fn mutate_waste_revert(
             order_id: None,
             note: None,
             elevated_by: None,
+            placement_id: None,
         },
     )?;
     out.push(write(
@@ -566,6 +569,7 @@ fn consume(
             order_id: None,
             note: None,
             elevated_by: None,
+            placement_id: None,
         },
     )?;
     out.push(write(
@@ -736,6 +740,7 @@ pub(super) fn mutate_write_off(
             order_id: None,
             note: None,
             elevated_by: None,
+            placement_id: None,
         },
     )?;
     let mut out = vec![
@@ -1037,6 +1042,7 @@ pub(super) fn raise_for_sale(
             order_id: Some(order_id.to_owned()),
             note: Some(NOTE_SALE_OVERRIDE.to_owned()),
             elevated_by: elevated_by.map(str::to_owned),
+            placement_id: None,
         },
     )?;
     Ok(vec![
@@ -1052,6 +1058,15 @@ pub(super) fn raise_for_sale(
     ])
 }
 
+/// The sale a stock plan is carried out for.
+pub(super) struct StockFor<'a> {
+    pub(super) order_id: &'a str,
+    /// The placement (`order.place` intent id) a session bill's stock moves are tagged with.
+    pub(super) placement_id: Option<&'a str>,
+    /// The business day, against which lots are expired.
+    pub(super) today: &'a str,
+}
+
 /// A counter sale's stock: lowers a product by `qty` from its lots, earliest expiry first, never
 /// from a lot past its expiry date on `today`, and appends the `sale` move valued at the average
 /// cost. `OUT_OF_STOCK` when the usable lots hold less (the sale validated this already).
@@ -1059,11 +1074,11 @@ pub(super) fn take_for_sale(
     tx: &StoreTx<'_>,
     product_id: &str,
     qty: i64,
-    order_id: &str,
+    sale: &StockFor<'_>,
     staff_id: &str,
-    today: &str,
     now: i64,
 ) -> Result<Vec<Written>, AppError> {
+    let (order_id, placement_id, today) = (sale.order_id, sale.placement_id, sale.today);
     let short = || AppError::with_field(ErrorCode::OutOfStock, "lines", "not enough stock on hand");
     let stock = find_stock(tx, product_id)?.ok_or_else(short)?;
     let lots = list_lots(tx, product_id)?;
@@ -1120,6 +1135,7 @@ pub(super) fn take_for_sale(
             order_id: Some(order_id.to_owned()),
             note: None,
             elevated_by: None,
+            placement_id: placement_id.map(str::to_owned),
         },
     )?;
     out.push(write(
@@ -1160,6 +1176,7 @@ pub(super) fn restore_sale_moves(
     tx: &StoreTx<'_>,
     moves: &[MoveRow],
     order_id: &str,
+    placement_id: Option<&str>,
     staff_id: &str,
     now: i64,
 ) -> Result<(Vec<Written>, Vec<StockChange>), AppError> {
@@ -1203,6 +1220,7 @@ pub(super) fn restore_sale_moves(
                 order_id: Some(order_id.to_owned()),
                 note: None,
                 elevated_by: None,
+                placement_id: placement_id.map(str::to_owned),
             },
         )?;
         out.push(write(

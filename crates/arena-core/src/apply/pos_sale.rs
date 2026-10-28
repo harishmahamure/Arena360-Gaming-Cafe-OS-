@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arena_proto::{
     AppError, ErrorCode, Intent, KEY_TAX, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_SALE, PosSale,
-    PosSaleReverted, TaxMode, TaxSettings, lot_expired,
+    PosSaleLine, PosSaleReverted, TaxMode, TaxSettings, lot_expired,
 };
 use arena_store::{
     ChangeOp, LotRow, MoveRow, NewPosOrder, NewProductLine, OrderRow, OrderTxn, ProductRow, RowKey,
@@ -23,40 +23,51 @@ use super::session::{
     SettleTarget, Stamp, check_rev, in_window, insert_payments, invalid, load_payer,
     record_payer_txns, same_staff, undo_denied, validate_payments,
 };
+pub(super) use super::stock::StockFor;
 use crate::invoice::tax::{Bill, Line, compute};
 
 /// A bundle's component, as the sale found it.
-struct Part {
-    product: Option<ProductRow>,
-    qty: i64,
+pub(super) struct Part {
+    pub(super) product: Option<ProductRow>,
+    pub(super) qty: i64,
 }
 
 /// A sale line's product, with its components when it is a bundle.
-struct Item {
-    product: Option<ProductRow>,
-    parts: Vec<Part>,
+pub(super) struct Item {
+    pub(super) product: Option<ProductRow>,
+    pub(super) parts: Vec<Part>,
 }
 
 /// The stock of a tracked product at the moment of the sale.
-struct Held {
-    qty: i64,
+pub(super) struct Held {
+    pub(super) qty: i64,
     /// What may be sold: the quantity less lots past their expiry date.
-    usable: i64,
+    pub(super) usable: i64,
+}
+
+/// What a set of sale lines reads from the branch: each line's product (and bundle parts), the
+/// stock held and the tax settings.
+pub(super) struct Basket {
+    pub(super) items: Vec<Item>,
+    pub(super) held: BTreeMap<String, Held>,
+    pub(super) tax: TaxSettings,
 }
 
 pub(crate) struct SaleTarget {
-    items: Vec<Item>,
-    held: BTreeMap<String, Held>,
-    tax: TaxSettings,
+    basket: Basket,
     player: bool,
     payer: SettleTarget,
 }
 
-fn internal(message: &str) -> AppError {
+pub(super) fn internal(message: &str) -> AppError {
     AppError::new(ErrorCode::Internal, message)
 }
 
-fn load_held(tx: &StoreTx<'_>, product_id: &str, today: Option<&str>) -> Result<Held, AppError> {
+pub(super) fn load_held(
+    tx: &StoreTx<'_>,
+    product_id: &str,
+    today: Option<&str>,
+) -> Result<Held, AppError> {
     let qty = find_stock(tx, product_id)?.map_or(0, |s| s.qty);
     let expired: i64 = list_lots(tx, product_id)?
         .iter()
@@ -72,11 +83,11 @@ fn load_held(tx: &StoreTx<'_>, product_id: &str, today: Option<&str>) -> Result<
     })
 }
 
-pub(super) fn load_sale(
+pub(super) fn load_basket(
     tx: &StoreTx<'_>,
-    s: &PosSale,
+    lines: &[PosSaleLine],
     now_ms: i64,
-) -> Result<SaleTarget, AppError> {
+) -> Result<Basket, AppError> {
     let tax = match find_setting(tx, KEY_TAX)? {
         Some(row) => TaxSettings::parse(&row.value)
             .ok_or_else(|| internal("the tax settings cannot be read"))?,
@@ -85,7 +96,7 @@ pub(super) fn load_sale(
     let today = crate::locale::stamp(tx, now_ms)?.map(|(day, _)| day);
     let mut items = Vec::new();
     let mut held = BTreeMap::new();
-    for line in s.lines.iter().take(MAX_SALE_LINES + 1) {
+    for line in lines.iter().take(MAX_SALE_LINES + 1) {
         let product = find_product(tx, &line.product_id)?;
         let mut parts = Vec::new();
         if let Some(p) = product.as_ref().filter(|p| p.bundle) {
@@ -110,6 +121,15 @@ pub(super) fn load_sale(
         }
         items.push(Item { product, parts });
     }
+    Ok(Basket { items, held, tax })
+}
+
+pub(super) fn load_sale(
+    tx: &StoreTx<'_>,
+    s: &PosSale,
+    now_ms: i64,
+) -> Result<SaleTarget, AppError> {
+    let basket = load_basket(tx, &s.lines, now_ms)?;
     let player_id = s.player_id.as_deref();
     let player = match player_id {
         Some(id) => find_player(tx, id)?.is_some(),
@@ -117,9 +137,7 @@ pub(super) fn load_sale(
     };
     let payer = load_payer(tx, player_id.filter(|_| player), &s.payments, now_ms)?;
     Ok(SaleTarget {
-        items,
-        held,
-        tax,
+        basket,
         player,
         payer,
     })
@@ -131,12 +149,12 @@ fn sellable(p: &Option<ProductRow>) -> bool {
 }
 
 /// The shape of the lines and that every product (and bundle component) can be sold.
-fn check_lines(s: &PosSale, t: &SaleTarget) -> Result<(), AppError> {
-    if s.lines.is_empty() || s.lines.len() > MAX_SALE_LINES {
+pub(super) fn check_lines(lines: &[PosSaleLine], t: &Basket) -> Result<(), AppError> {
+    if lines.is_empty() || lines.len() > MAX_SALE_LINES {
         return Err(invalid("lines", "a sale takes 1 to 100 lines"));
     }
     let mut seen = BTreeSet::new();
-    for (i, (line, item)) in s.lines.iter().zip(&t.items).enumerate() {
+    for (i, (line, item)) in lines.iter().zip(&t.items).enumerate() {
         let field = format!("lines[{i}]");
         if !(1..=MAX_SALE_QTY).contains(&line.qty) {
             return Err(invalid(&field, "quantity must be 1 to 999"));
@@ -155,17 +173,17 @@ fn check_lines(s: &PosSale, t: &SaleTarget) -> Result<(), AppError> {
 }
 
 /// What the sale costs: each line at its unit price and rate, the tax computed once per rate.
-struct Priced {
-    bill: Bill,
+pub(super) struct Priced {
+    pub(super) bill: Bill,
     /// Per line: the rate it was taxed at and its amount.
-    lines: Vec<(u16, i64)>,
+    pub(super) lines: Vec<(u16, i64)>,
 }
 
-fn price(s: &PosSale, t: &SaleTarget) -> Result<Priced, AppError> {
+pub(super) fn price(sale: &[PosSaleLine], t: &Basket) -> Result<Priced, AppError> {
     let gst = t.tax.tax_mode() == TaxMode::GstIn;
-    let mut lines = Vec::with_capacity(s.lines.len());
-    let mut taxed = Vec::with_capacity(s.lines.len());
-    for (i, (line, item)) in s.lines.iter().zip(&t.items).enumerate() {
+    let mut lines = Vec::with_capacity(sale.len());
+    let mut taxed = Vec::with_capacity(sale.len());
+    for (i, (line, item)) in sale.iter().zip(&t.items).enumerate() {
         let p = item
             .product
             .as_ref()
@@ -191,12 +209,16 @@ fn price(s: &PosSale, t: &SaleTarget) -> Result<Priced, AppError> {
 }
 
 /// What the sale does to stock: units taken per product, and the units an override raises first.
-struct StockPlan {
-    takes: Vec<(String, i64)>,
-    raises: BTreeMap<String, i64>,
+pub(super) struct StockPlan {
+    pub(super) takes: Vec<(String, i64)>,
+    pub(super) raises: BTreeMap<String, i64>,
 }
 
-fn plan_stock(s: &PosSale, t: &SaleTarget, over: bool) -> Result<StockPlan, AppError> {
+pub(super) fn plan_stock(
+    sale: &[PosSaleLine],
+    t: &Basket,
+    over: bool,
+) -> Result<StockPlan, AppError> {
     let tracked = |p: &ProductRow| !p.bundle && p.track_stock;
     let mut need: BTreeMap<&str, i64> = BTreeMap::new();
     let mut order: Vec<&str> = Vec::new();
@@ -204,7 +226,7 @@ fn plan_stock(s: &PosSale, t: &SaleTarget, over: bool) -> Result<StockPlan, AppE
     // What the plain lines alone ask of a product: a bundle's part may be raised by an
     // override, a plain line never.
     let mut plain: BTreeMap<&str, i64> = BTreeMap::new();
-    for (line, item) in s.lines.iter().zip(&t.items) {
+    for (line, item) in sale.iter().zip(&t.items) {
         let Some(p) = &item.product else { continue };
         if p.bundle {
             for part in &item.parts {
@@ -225,7 +247,7 @@ fn plan_stock(s: &PosSale, t: &SaleTarget, over: bool) -> Result<StockPlan, AppE
         }
     }
     let mut raises = BTreeMap::new();
-    for (i, (_, item)) in s.lines.iter().zip(&t.items).enumerate() {
+    for (i, (_, item)) in sale.iter().zip(&t.items).enumerate() {
         let Some(p) = &item.product else { continue };
         let checked: Vec<&ProductRow> = if p.bundle {
             item.parts
@@ -274,7 +296,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "pos.sale takes no base_rev"));
     }
-    check_lines(s, t)?;
+    check_lines(&s.lines, &t.basket)?;
     if s.player_id.is_some() && !t.player {
         return Err(AppError::with_field(
             ErrorCode::NotFound,
@@ -282,7 +304,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
             "no such player",
         ));
     }
-    let priced = price(s, t)?;
+    let priced = price(&s.lines, &t.basket)?;
     validate_payments(
         &s.payments,
         s.credit_override,
@@ -290,7 +312,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
         s.player_id.is_some(),
         priced.bill.total_minor,
     )?;
-    plan_stock(s, t, s.stock_override == Some(true))?;
+    plan_stock(&s.lines, &t.basket, s.stock_override == Some(true))?;
     Ok(())
 }
 
@@ -303,8 +325,8 @@ pub(super) fn mutate_sale(
 ) -> Result<Vec<Written>, AppError> {
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?
         .ok_or_else(|| internal("the branch has not been bootstrapped"))?;
-    let priced = price(s, t)?;
-    let plan = plan_stock(s, t, s.stock_override == Some(true))?;
+    let priced = price(&s.lines, &t.basket)?;
+    let plan = plan_stock(&s.lines, &t.basket, s.stock_override == Some(true))?;
     let breakup = serde_json::to_string(&priced.bill.breakup)
         .map_err(|_| internal("the tax breakup cannot be written"))?;
     let order_id = ulid::Ulid::generate().to_string();
@@ -330,8 +352,12 @@ pub(super) fn mutate_sale(
         op: ChangeOp::Insert,
         before: None,
     }];
-    for (i, ((line, item), (rate_bp, amount))) in
-        s.lines.iter().zip(&t.items).zip(&priced.lines).enumerate()
+    for (i, ((line, item), (rate_bp, amount))) in s
+        .lines
+        .iter()
+        .zip(&t.basket.items)
+        .zip(&priced.lines)
+        .enumerate()
     {
         let p = item
             .product
@@ -351,6 +377,7 @@ pub(super) fn mutate_sale(
                 amount_minor: *amount,
                 position: i as i64,
                 at: now_ms,
+                placement: None,
             },
         )?;
         written.push(Written {
@@ -374,13 +401,40 @@ pub(super) fn mutate_sale(
         t.payer.credit.as_ref(),
         &mut written,
     )?;
+    move_stock(
+        tx,
+        intent,
+        &t.basket,
+        &plan,
+        &StockFor {
+            order_id: &order_id,
+            placement_id: None,
+            today: &business_day,
+        },
+        now_ms,
+        &mut written,
+    )?;
+    Ok(written)
+}
+
+/// Carries out a stock plan: each override raise first, then each take from the lots, with the
+/// low-stock hook after a product changes.
+pub(super) fn move_stock(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    basket: &Basket,
+    plan: &StockPlan,
+    sale: &StockFor<'_>,
+    now_ms: i64,
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
     let elevated_by = intent.elevated_by.as_ref().map(|e| e.id.as_str());
     for (product_id, raise) in &plan.raises {
         written.extend(super::stock::raise_for_sale(
             tx,
             product_id,
             *raise,
-            &order_id,
+            sale.order_id,
             &intent.actor.id,
             elevated_by,
             now_ms,
@@ -391,12 +445,11 @@ pub(super) fn mutate_sale(
             tx,
             product_id,
             *qty,
-            &order_id,
+            sale,
             &intent.actor.id,
-            &business_day,
             now_ms,
         )?);
-        let before = t.held.get(product_id).map_or(0, |h| h.qty);
+        let before = basket.held.get(product_id).map_or(0, |h| h.qty);
         let after = before + plan.raises.get(product_id).copied().unwrap_or(0) - qty;
         written.extend(super::stock::low_after_change(
             tx,
@@ -407,7 +460,7 @@ pub(super) fn mutate_sale(
             now_ms,
         )?);
     }
-    Ok(written)
+    Ok(())
 }
 
 #[derive(Default)]
@@ -525,7 +578,7 @@ pub(super) fn mutate_sale_reverted(
         &mut written,
     )?;
     let (stock_rows, changed) =
-        super::stock::restore_sale_moves(tx, &t.moves, &o.id, &intent.actor.id, now_ms)?;
+        super::stock::restore_sale_moves(tx, &t.moves, &o.id, None, &intent.actor.id, now_ms)?;
     written.extend(stock_rows);
     for (product_id, before, after) in changed {
         written.extend(super::stock::low_after_change(

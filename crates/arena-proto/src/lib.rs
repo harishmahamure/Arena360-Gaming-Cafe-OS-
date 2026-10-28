@@ -181,8 +181,8 @@ pub use players::{
 };
 pub use pos::{
     MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST, MOVE_SALE, MOVE_SALE_REVERTED,
-    NOTE_SALE_OVERRIDE, PosSale, PosSaleLine, PosSaleLineView, PosSalePaymentView, PosSaleReverted,
-    PosSaleView, PosSalesView,
+    NOTE_SALE_OVERRIDE, OrderPlace, OrderPlaceReverted, OrderPlacedEvent, PlaceOutcome, PosSale,
+    PosSaleLine, PosSaleLineView, PosSalePaymentView, PosSaleReverted, PosSaleView, PosSalesView,
 };
 pub use pricing::{
     RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,
@@ -208,7 +208,7 @@ pub use process::{
 };
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
-    BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,
+    BillItem, BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,
     CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, CREDIT_OVERDUE_DAYS, ClearedSpend, ControllerCheck,
     ControllerResult, CreditAging, CreditAutoPause, CreditCollect, CreditCollectReverted,
     CreditCollection, CreditSetLimit, CreditView, DEFAULT_REMINDER_DAYS, EXTEND_OPTIONS_MIN,

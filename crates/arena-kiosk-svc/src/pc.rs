@@ -27,6 +27,7 @@ pub struct ScreenSession {
     /// When the grace after the end time runs out and the kiosk locks.
     pub lock_at: Instant,
     pub grace_ms: u64,
+    pub ordered_items: u64,
     /// The branch's time-up mode is "Staff handles".
     pub hold: bool,
 }

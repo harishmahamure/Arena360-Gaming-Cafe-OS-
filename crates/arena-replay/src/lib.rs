@@ -1057,6 +1057,48 @@ mod tests {
             };
             writer.submit_intent(end_of(&first, 2)).await.unwrap();
             writer.submit_intent(end_of(&friend, 1)).await.unwrap();
+            // Products placed on a running session's bill: two placements, the second undone,
+            // then the End joins its time line to the same order.
+            let third = writer
+                .submit_intent(host(&kiosk, None))
+                .await
+                .unwrap()
+                .changes[0]
+                .row_id
+                .clone();
+            let place = |qty: i64| {
+                submit(
+                    IntentPayload::OrderPlace(arena_proto::OrderPlace {
+                        session_id: third.clone(),
+                        lines: vec![arena_proto::PosSaleLine {
+                            product_id: cola.clone(),
+                            qty,
+                        }],
+                        stock_override: None,
+                    }),
+                    None,
+                )
+            };
+            writer.submit_intent(place(1)).await.unwrap();
+            let second = writer.submit_intent(place(2)).await.unwrap();
+            let bill = second
+                .changes
+                .iter()
+                .find(|c| c.tbl == "orders")
+                .unwrap()
+                .row_id
+                .clone();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::OrderPlaceReverted(arena_proto::OrderPlaceReverted {
+                        order_id: bill,
+                        placement_id: second.intent_id.clone(),
+                    }),
+                    Some(2),
+                ))
+                .await
+                .unwrap();
+            writer.submit_intent(end_of(&third, 1)).await.unwrap();
             let raise = |kind: arena_proto::AlertKind| {
                 let mut intent = submit(
                     IntentPayload::AlertRaise(arena_proto::AlertRaise::new(

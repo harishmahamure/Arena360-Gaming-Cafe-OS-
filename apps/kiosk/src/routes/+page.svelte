@@ -21,6 +21,7 @@
     warning: number | null;
     graceFrom: number | null;
     graceMs: number;
+    ordered: number;
   } | null>(null);
   const graceLeft = $derived(
     session === null || session.graceFrom === null
@@ -53,6 +54,7 @@
           warning: s.session.warning_min,
           graceFrom: s.session.grace_in_ms === null ? null : now + s.session.grace_in_ms,
           graceMs: s.session.grace_ms,
+          ordered: s.session.ordered_items,
         }
       : null;
   };
@@ -110,6 +112,11 @@
         {t("player.session.warning", { minutes: session.warning })}
       </p>
     {/if}
+    {#if session.ordered > 0}
+      <p class="ordered type-kiosk-body" data-testid="ordered">
+        {t("player.session.ordered", { count: session.ordered })}
+      </p>
+    {/if}
   </main>
 {:else}
   <!-- No session yet: the locked placeholder (login comes with the session stories). -->
@@ -139,6 +146,7 @@
   .brand,
   .hint,
   .clock,
+  .ordered,
   .warning {
     margin: 0;
   }

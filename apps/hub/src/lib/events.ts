@@ -29,6 +29,8 @@ export type EventHandlers = {
   onGroupsChanged?: (byOwner: boolean) => void;
   /** `catalog.changed`: a product was written; reload the product list. */
   onCatalogChanged?: () => void;
+  /** `library.changed`: the branch game library was written; reload the Games screen. */
+  onLibraryChanged?: () => void;
   /** `connectivity.changed`: the WAN probe found a link down or back up. */
   onConnectivityChanged?: (event: Connectivity) => void;
   /** `device.admin_unlock_ack`: a kiosk granted a remote unlock. */
@@ -150,6 +152,7 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
       }
     });
     es.addEventListener("catalog.changed", () => handlers.onCatalogChanged?.());
+    es.addEventListener("library.changed", () => handlers.onLibraryChanged?.());
     es.addEventListener("device.admin_unlock_ack", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent<string>).data) as Partial<AdminUnlockAckEvent>;

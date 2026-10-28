@@ -28,6 +28,8 @@ export type IntentKind =
   | "zone.upsert"
   | "zone.delete"
   | "device.place"
+  | "library.upsert"
+  | "library.delete"
   | "product.upsert"
   | "product.delete"
   | "plan.upsert"

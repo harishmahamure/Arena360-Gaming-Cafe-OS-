@@ -15,6 +15,8 @@
 //!   cached values (they still apply offline). The applied revisions start from the cached
 //!   ones, so an older revision never replaces a newer one. This kiosk's own high contrast
 //!   (`display.hc.<device_id>`) is read and applied the same way ([`crate::theme`]).
+//! - **Library:** the branch game and app library (`kiosk.library`, Story 6.3) is read and applied
+//!   the same way and cached for cold starts ([`crate::library`]).
 //! - **Admin exit:** the live client is shared with [`crate::admin_exit`] (online PIN checks);
 //!   a pushed `verifier` is stored when newer, and `admin_unlock` grants a remote exit and is
 //!   acknowledged.
@@ -192,6 +194,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
             revs.seed(&q, &crate::theme::key_for(id));
         }
         crate::operating::seed(&q, &mut revs);
+        crate::library::seed(&q, &mut revs);
         revs
     };
     tokio::select! {
@@ -206,6 +209,10 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
     }
     tokio::select! {
         () = fetch_operating(ctx, client, &mut revs) => {}
+        _ = stop.changed() => return Ended::Shutdown,
+    }
+    tokio::select! {
+        () = fetch_library(ctx, client, &mut revs) => {}
         _ = stop.changed() => return Ended::Shutdown,
     }
     // Set once when a replay stops; new events do not push it back.
@@ -250,6 +257,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                     Some(HubEvent::SettingsChanged(values)) => {
                         apply_settings(ctx, &values.values, &mut revs);
                         crate::operating::apply(ctx, &values.values, &mut revs);
+                        crate::library::apply(ctx, &values.values, &mut revs);
                         if let Some(id) = &device_id {
                             crate::theme::apply(ctx, id, &values.values, &mut revs);
                         }
@@ -369,6 +377,25 @@ async fn fetch_operating(ctx: &Ctx, client: &HubClient, revs: &mut AppliedRevs) 
         Err(_) => tracing::warn!(
             timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
             "settings.get timed out; keeping the cached operating settings"
+        ),
+    }
+}
+
+/// Asks the Hub for the branch game library and caches it. A failure, or no answer within
+/// [`SETTINGS_TIMEOUT`], keeps the cached library (it still applies offline).
+async fn fetch_library(ctx: &Ctx, client: &HubClient, revs: &mut AppliedRevs) {
+    let body = serde_json::json!({ "keys": crate::library::KEYS });
+    match tokio::time::timeout(SETTINGS_TIMEOUT, client.request("settings.get", body)).await {
+        Ok(Ok(frame)) => match frame.body {
+            FrameBody::SettingsValues(v) => crate::library::apply(ctx, &v.values, revs),
+            other => tracing::warn!(kind = other.kind(), "unexpected reply to settings.get"),
+        },
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "settings.get failed; keeping the cached game library")
+        }
+        Err(_) => tracing::warn!(
+            timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
+            "settings.get timed out; keeping the cached game library"
         ),
     }
 }

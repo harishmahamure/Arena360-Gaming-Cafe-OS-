@@ -693,6 +693,11 @@ impl UiAuth {
         &self.reader
     }
 
+    /// The game catalogue cache, when this hub has one (Story 6.2).
+    pub(crate) fn media(&self) -> Option<&Arc<arena_core::media_cache::MediaCache>> {
+        self.media.as_ref()
+    }
+
     pub(crate) fn writer(&self) -> Option<&WriterHandle> {
         self.writer.as_ref()
     }
@@ -2087,6 +2092,13 @@ async fn run_intent(
             Err(_) => return fail(internal()),
         }
     }
+    // A linked library entry takes its name, launcher and age rating from the catalogue, which
+    // only this layer can read; an unknown catalogue id is refused before a ticket is spent.
+    if let arena_proto::IntentPayload::LibraryUpsert(u) = &mut intent.payload
+        && let Err(e) = crate::ui_library::link_catalogue(auth, u).await
+    {
+        return fail(ui_error(e));
+    }
     let can_edit = me.permissions.contains(&Permission::SettingsEdit);
     let mut redeemed = None;
     if let Some(ticket) = elevation_ticket {
@@ -3249,6 +3261,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/players/password", post(player_password))
         .route("/ui/settings", get(settings))
         .route("/ui/media-cache", get(media_cache))
+        .route("/ui/library", get(crate::ui_library::list))
         .route("/ui/staff", get(staff_list))
         .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))

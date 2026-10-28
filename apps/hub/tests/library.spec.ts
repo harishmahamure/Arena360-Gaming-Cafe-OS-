@@ -1,0 +1,400 @@
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test, type Page, type Route } from "@playwright/test";
+import type { HubSnapshot, LibraryEntryView, SessionStaff } from "@arena/ui/generated";
+import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { ORIGIN } from "./origin";
+
+const HUB = "http://127.0.0.1:7409";
+const CORS = {
+  "access-control-allow-origin": ORIGIN,
+  "access-control-allow-methods": "GET, POST",
+  "access-control-allow-headers": "authorization, content-type",
+};
+const STAFF: Record<string, SessionStaff> = {
+  "manager-token": {
+    staff_id: "01JMANAGER0000000000000000",
+    display_name: "Manager",
+    role_name: "Manager",
+    permissions: ["games.manage"],
+  },
+  "counter-token": {
+    staff_id: "01JCOUNTER0000000000000000",
+    display_name: "Counter",
+    role_name: "Counter",
+    permissions: ["session.start"],
+  },
+};
+
+type Payload = Record<string, unknown> & { kind: string };
+type Hub = {
+  entries: LibraryEntryView[];
+  intents: { payload: Payload; base_rev?: number; ticket?: string }[];
+  elevations: { items: { intent_kind: string }[]; pin: string }[];
+  /** The field a save is refused on (`VALIDATION_FAILED`), if any. */
+  refuse?: string;
+  stale: boolean;
+  /** Pushed on the next event stream the page opens. */
+  push: string[];
+};
+
+const newHub = (): Hub => ({ entries: [], intents: [], elevations: [], stale: false, push: [] });
+
+const entry = (over: Partial<LibraryEntryView> = {}): LibraryEntryView => ({
+  id: "L1",
+  kind: "game",
+  name: "Counter-Strike 2",
+  launcher: "steam",
+  executable_path: "C:\\Games\\CS2\\cs2.exe",
+  launch_uri: "",
+  launch_args: "",
+  category: "Shooter",
+  tags: ["fps", "esports"],
+  age_rating: "18+",
+  enabled: true,
+  catalog_id: null,
+  rev: 3,
+  ...over,
+});
+
+const snapshot = (): HubSnapshot => ({
+  branch: { name: "Dev Branch", branch_code: "DEV01" },
+  groups: [],
+  zones: [],
+  devices: [],
+  locale: {
+    currency: "INR",
+    exponent: 2,
+    symbol: "₹",
+    symbol_position: "before",
+    number_format: "indian",
+    tz: "Asia/Kolkata",
+    day_start_min: 360,
+    fy_start_month: 4,
+    pending: null,
+  },
+  ui: { idle_lock_minutes: 5, hc: false },
+  connectivity: { state: "online", checked_at: null },
+  lan: null,
+  paired: true,
+});
+
+const json = (route: Route, status: number, body: unknown) =>
+  route.fulfill({
+    status,
+    contentType: "application/json",
+    headers: CORS,
+    body: JSON.stringify(body),
+  });
+
+async function open(page: Page, hub: Hub, token = "manager-token") {
+  await page.addInitScript((t) => sessionStorage.setItem("arena.hub.token", t), token);
+  await page.route(`${HUB}/**`, async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
+    const auth = (req.headers()["authorization"] ?? "").replace(/^Bearer /, "");
+    switch (new URL(req.url()).pathname) {
+      case "/ui/snapshot":
+        return json(route, 200, snapshot());
+      case "/ui/me":
+        return json(route, 200, STAFF[auth]);
+      case "/ui/library":
+        return json(route, 200, { entries: hub.entries });
+      case "/ui/events": {
+        const pushed = hub.push.splice(0).map((e) => `event: ${e}\ndata: {}\n\n`);
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          headers: CORS,
+          body: `retry: 300\n\n${pushed.join("")}`,
+        });
+      }
+      case "/ui/elevate": {
+        const body = req.postDataJSON() as Hub["elevations"][number];
+        hub.elevations.push(body);
+        if (body.pin !== "2222") return json(route, 403, { code: "PIN_REJECTED", message: "no" });
+        return json(route, 200, { ticket: "T1", items: body.items, expires_in_s: 60 });
+      }
+      case "/ui/intent": {
+        const body = req.postDataJSON() as {
+          intent: { payload: Payload; base_rev?: number };
+          elevation_ticket?: string;
+        };
+        const { payload } = body.intent;
+        hub.intents.push({
+          payload,
+          base_rev: body.intent.base_rev,
+          ticket: body.elevation_ticket,
+        });
+        if (hub.refuse) {
+          return json(route, 422, {
+            code: "VALIDATION_FAILED",
+            message: "no",
+            field: hub.refuse,
+          });
+        }
+        if (hub.stale) {
+          return json(route, 409, { code: "STALE", message: "changed", field: "base_rev" });
+        }
+        if (payload.kind === "library.delete") {
+          hub.entries = hub.entries.filter((e) => e.id !== payload.id);
+        } else {
+          const existing = hub.entries.find((e) => e.id === payload.id);
+          const next: LibraryEntryView = {
+            id: (payload.id as string | undefined) ?? `L${hub.entries.length + 1}`,
+            kind: payload.entry_kind as string,
+            name: payload.name as string,
+            launcher: payload.launcher as string,
+            executable_path: payload.executable_path as string,
+            launch_uri: payload.launch_uri as string,
+            launch_args: payload.launch_args as string,
+            category: payload.category as string,
+            tags: payload.tags as string[],
+            age_rating: payload.age_rating as string,
+            enabled: payload.enabled as boolean,
+            catalog_id: (payload.catalog_id as string | undefined) ?? null,
+            rev: (existing?.rev ?? 0) + 1,
+          };
+          if (existing) Object.assign(existing, next);
+          else hub.entries.push(next);
+        }
+        return json(route, 200, { applied: { intent_id: "I", changes: [] } });
+      }
+      default:
+        return route.fulfill({ status: 404, headers: CORS });
+    }
+  });
+  await page.goto("/settings/games");
+  await expect(page.getByTestId("game-form")).toBeVisible();
+}
+
+async function expectNoSeriousAxe(page: Page) {
+  const results = await new AxeBuilder({ page }).analyze();
+  const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual(
+    [],
+  );
+}
+
+const add = (page: Page) => page.getByRole("button", { name: en["hub.games.add"] });
+const save = (page: Page) => page.getByRole("button", { name: en["hub.games.save"] });
+const status = (page: Page) => page.getByTestId("game-status");
+
+test("a manager adds a game with its launcher, path, category, tags and age rating", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  await expectNoSeriousAxe(page);
+
+  await page.getByLabel(en["hub.games.name"], { exact: true }).fill(" Valorant ");
+  await page.getByLabel(en["hub.games.launcher"]).selectOption("riot");
+  await page.getByLabel(en["hub.games.exe"]).fill("C:\\Riot Games\\VALORANT\\live\\val.exe");
+  await page.getByLabel(en["hub.games.uri"]).fill("riot://launch");
+  await page.getByLabel(en["hub.games.args"]).fill("--fullscreen");
+  await page.getByLabel(en["hub.games.category"]).fill("Shooter");
+  await page.getByLabel(en["hub.games.tags"]).fill("fps, team , FPS, tactical");
+  await page.getByLabel(en["hub.games.age"], { exact: true }).fill("16+");
+  await add(page).click();
+  await expect(status(page)).toHaveText(en["hub.settings.saved"]);
+  expect(hub.intents[0].payload).toEqual({
+    kind: "library.upsert",
+    entry_kind: "game",
+    name: "Valorant",
+    launcher: "riot",
+    executable_path: "C:\\Riot Games\\VALORANT\\live\\val.exe",
+    launch_uri: "riot://launch",
+    launch_args: "--fullscreen",
+    category: "Shooter",
+    tags: ["fps", "team", "tactical"],
+    age_rating: "16+",
+    enabled: true,
+  });
+  expect(hub.intents[0].base_rev).toBeUndefined();
+
+  const row = page.getByTestId("game-row");
+  await expect(row).toHaveCount(1);
+  await expect(page.getByTestId("game-name")).toHaveText("Valorant");
+  await expect(page.getByTestId("game-launcher")).toHaveText(en["hub.games.launcher.riot"]);
+  await expect(page.getByTestId("game-path")).toHaveText("C:\\Riot Games\\VALORANT\\live\\val.exe");
+  await expect(page.getByTestId("game-tags")).toHaveText("fps, team, tactical");
+  await expectNoSeriousAxe(page);
+});
+
+test("an app with only a launch link needs no path and can be hidden", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  await page.getByRole("radio", { name: en["hub.games.kind.app"] }).check();
+  await page.getByLabel(en["hub.games.name"], { exact: true }).fill("Spotify");
+  await page.getByLabel(en["hub.games.launcher"]).selectOption("none");
+  await page.getByLabel(en["hub.games.uri"]).fill("spotify://");
+  await page.getByLabel(en["hub.games.enabled"]).uncheck();
+  await add(page).click();
+  await expect(status(page)).toHaveText(en["hub.settings.saved"]);
+  expect(hub.intents[0].payload).toMatchObject({
+    kind: "library.upsert",
+    entry_kind: "app",
+    executable_path: "",
+    launch_uri: "spotify://",
+    enabled: false,
+  });
+  await expect(page.getByTestId("game-row")).toContainText(en["hub.games.badge.disabled"]);
+});
+
+test("bad input shows its message in place and sends nothing", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  // A name of spaces passes the browser's required check but is empty once trimmed.
+  await page.getByLabel(en["hub.games.name"], { exact: true }).fill("   ");
+  await add(page).click();
+  await expect(page.getByTestId("game-form")).toContainText(en["hub.games.invalid.name"]);
+  await expect(page.getByTestId("game-form")).toContainText(
+    en["hub.games.invalid.executable_path"],
+  );
+
+  await page.getByLabel(en["hub.games.name"], { exact: true }).fill("Game");
+  await page.getByLabel(en["hub.games.exe"]).fill("games\\g.exe");
+  await add(page).click();
+  await expect(page.getByLabel(en["hub.games.exe"])).toHaveAttribute("aria-invalid", "true");
+
+  await page.getByLabel(en["hub.games.exe"]).fill("C:\\Games\\*.exe");
+  await add(page).click();
+  await expect(page.getByLabel(en["hub.games.exe"])).toHaveAttribute("aria-invalid", "true");
+
+  await page.getByLabel(en["hub.games.exe"]).fill("C:\\Games\\g.exe");
+  await page.getByLabel(en["hub.games.uri"]).fill("nonsense");
+  await add(page).click();
+  await expect(page.getByTestId("game-form")).toContainText(en["hub.games.invalid.launch_uri"]);
+
+  await page.getByLabel(en["hub.games.uri"]).fill("");
+  await page.getByLabel(en["hub.games.tags"]).fill("1,2,3,4,5,6,7,8,9,10,11");
+  await add(page).click();
+  await expect(page.getByTestId("game-form")).toContainText(en["hub.games.invalid.tags"]);
+  expect(hub.intents).toHaveLength(0);
+});
+
+test("the Hub's field refusal lands on that field", async ({ page }) => {
+  const hub = newHub();
+  hub.refuse = "executable_path";
+  await open(page, hub);
+  await page.getByLabel(en["hub.games.name"], { exact: true }).fill("Game");
+  await page.getByLabel(en["hub.games.exe"]).fill("C:\\Games\\g.exe");
+  await add(page).click();
+  await expect(page.getByTestId("game-form")).toContainText(
+    en["hub.games.invalid.executable_path"],
+  );
+  expect(hub.intents).toHaveLength(1);
+});
+
+test("editing sends the rev and keeps the fields it was not asked to change", async ({ page }) => {
+  const hub = newHub();
+  hub.entries = [entry()];
+  await open(page, hub);
+  await expect(page.getByTestId("game-name")).toHaveText("Counter-Strike 2");
+  await page.getByRole("button", { name: "Edit Counter-Strike 2" }).click();
+  await expect(page.getByLabel(en["hub.games.name"], { exact: true })).toHaveValue(
+    "Counter-Strike 2",
+  );
+  await expect(page.getByLabel(en["hub.games.tags"])).toHaveValue("fps, esports");
+  await page.getByLabel(en["hub.games.category"]).fill("Action");
+  await page.getByLabel(en["hub.games.enabled"]).uncheck();
+  await save(page).click();
+  await expect(status(page)).toHaveText(en["hub.settings.saved"]);
+  expect(hub.intents[0].base_rev).toBe(3);
+  expect(hub.intents[0].payload).toMatchObject({
+    kind: "library.upsert",
+    id: "L1",
+    name: "Counter-Strike 2",
+    category: "Action",
+    tags: ["fps", "esports"],
+    enabled: false,
+  });
+  await expect(page.getByTestId("game-row")).toContainText(en["hub.games.badge.disabled"]);
+});
+
+test("a catalogue-linked entry shows its name, launcher and age rating read-only", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.entries = [entry({ catalog_id: "01JCATALOG" })];
+  await open(page, hub);
+  await expect(page.getByTestId("game-row")).toContainText(en["hub.games.badge.catalog"]);
+  await page.getByRole("button", { name: "Edit Counter-Strike 2" }).click();
+  await expect(page.getByTestId("game-linked")).toBeVisible();
+  await expect(page.getByTestId("game-locked-name")).toHaveText("Counter-Strike 2");
+  await expect(page.getByTestId("game-locked-launcher")).toHaveText(en["hub.games.launcher.steam"]);
+  await expect(page.getByTestId("game-locked-age")).toHaveText("18+");
+  await expect(page.getByLabel(en["hub.games.name"], { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel(en["hub.games.launcher"])).toHaveCount(0);
+  await expect(page.getByLabel(en["hub.games.age"], { exact: true })).toHaveCount(0);
+  // Category and tags stay editable.
+  await page.getByLabel(en["hub.games.category"]).fill("Competitive");
+  await page.getByLabel(en["hub.games.tags"]).fill("ranked");
+  await save(page).click();
+  await expect(status(page)).toHaveText(en["hub.settings.saved"]);
+  expect(hub.intents[0].payload).toMatchObject({
+    id: "L1",
+    name: "Counter-Strike 2",
+    launcher: "steam",
+    age_rating: "18+",
+    catalog_id: "01JCATALOG",
+    category: "Competitive",
+    tags: ["ranked"],
+  });
+});
+
+test("a stale edit reloads the entry and asks to try again", async ({ page }) => {
+  const hub = newHub();
+  hub.entries = [entry()];
+  hub.stale = true;
+  await open(page, hub);
+  await page.getByRole("button", { name: "Edit Counter-Strike 2" }).click();
+  await save(page).click();
+  await expect(status(page)).toContainText(en["hub.games.stale"]);
+});
+
+test("removing an entry sends library.delete with its rev", async ({ page }) => {
+  const hub = newHub();
+  hub.entries = [entry()];
+  await open(page, hub);
+  await page.getByRole("button", { name: "Remove Counter-Strike 2" }).click();
+  await expect(status(page)).toHaveText(en["hub.games.removed"]);
+  expect(hub.intents[0]).toMatchObject({
+    payload: { kind: "library.delete", id: "L1" },
+    base_rev: 3,
+  });
+  await expect(page.getByTestId("game-row")).toHaveCount(0);
+  await expect(page.getByText(en["hub.games.empty"])).toBeVisible();
+});
+
+test("the list reloads when the Hub pushes library.changed", async ({ page }) => {
+  const hub = newHub();
+  hub.entries = [entry()];
+  await open(page, hub);
+  await expect(page.getByTestId("game-row")).toHaveCount(1);
+  hub.entries = [
+    entry(),
+    entry({ id: "L2", name: "Apex", executable_path: "C:\\Games\\apex.exe" }),
+  ];
+  hub.push.push("library.changed");
+  await expect(page.getByTestId("game-row")).toHaveCount(2, { timeout: 10_000 });
+});
+
+test("a Counter's save asks a manager's PIN in place and is applied with the ticket", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "counter-token");
+  await page.getByLabel(en["hub.games.name"], { exact: true }).fill("Dota 2");
+  await page.getByLabel(en["hub.games.exe"]).fill("C:\\Games\\dota.exe");
+  await add(page).click();
+  await expect(page.getByTestId("game-approval")).toBeVisible();
+  expect(hub.intents).toHaveLength(0);
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(status(page)).toHaveText(en["hub.settings.saved"]);
+  expect(hub.elevations.at(-1)).toEqual({
+    items: [{ intent_kind: "library.upsert" }],
+    pin: "2222",
+  });
+  expect(hub.intents[0].ticket).toBe("T1");
+});

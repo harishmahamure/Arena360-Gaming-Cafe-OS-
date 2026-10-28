@@ -2035,6 +2035,80 @@ async fn the_kiosk_stores_the_pushed_fulfilment_and_default_volume() {
     assert_eq!(cached("billing.rounding_min"), None);
 }
 
+// ---- Story 6.3: the branch game library ----
+
+impl Hub {
+    /// Adds a Steam game to the branch library as the owner.
+    async fn add_game(&self, name: &str, path: &str) {
+        self.writer
+            .submit_intent(intent(
+                owner(),
+                IntentPayload::LibraryUpsert(arena_proto::LibraryUpsert {
+                    id: None,
+                    entry_kind: "game".into(),
+                    name: name.into(),
+                    launcher: "steam".into(),
+                    executable_path: path.into(),
+                    launch_uri: String::new(),
+                    launch_args: String::new(),
+                    category: String::new(),
+                    tags: Vec::new(),
+                    age_rating: String::new(),
+                    enabled: true,
+                    catalog_id: None,
+                }),
+            ))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_kiosk_caches_the_library_after_hello_and_when_it_changes_and_keeps_it_offline() {
+    let mut hub = Hub::seeded().await;
+    hub.add_game("Counter-Strike 2", r"C:\Games\cs2.exe").await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let names = || {
+        arena_kiosk_svc::library::load(&ctx.queue.lock().unwrap())
+            .into_iter()
+            .map(|e| e.name)
+            .collect::<Vec<_>>()
+    };
+    eventually("the library read after hello", || names().len() == 1).await;
+    assert_eq!(names(), ["Counter-Strike 2"]);
+    let first = arena_kiosk_svc::library::load(&ctx.queue.lock().unwrap());
+    assert_eq!(first[0].launcher, "steam");
+    assert_eq!(first[0].executable_path, r"C:\Games\cs2.exe");
+
+    hub.add_game("Apex", r"C:\Games\apex.exe").await;
+    eventually("the pushed library", || names().len() == 2).await;
+    assert_eq!(names(), ["Apex", "Counter-Strike 2"], "ordered by name");
+
+    // The Hub goes away and the kiosk restarts: it still has the last library it received.
+    hub.down().await;
+    kiosk.runtime.take().unwrap().shutdown().await;
+    let cached = arena_kiosk_svc::queue::QueueDb::open(&kiosk.data.queue()).unwrap();
+    assert_eq!(
+        arena_kiosk_svc::library::load(&cached)
+            .into_iter()
+            .map(|e| e.name)
+            .collect::<Vec<_>>(),
+        ["Apex", "Counter-Strike 2"]
+    );
+    drop(cached);
+    kiosk.start();
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    assert_eq!(
+        arena_kiosk_svc::library::load(&ctx.queue.lock().unwrap()).len(),
+        2,
+        "a cold start with the Hub down uses the cached library"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cold_start_offline_sends_the_cached_high_contrast_first() {
     let hub = Hub::seeded().await;

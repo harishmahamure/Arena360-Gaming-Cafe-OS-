@@ -11,6 +11,9 @@ pub mod ui_auth;
 mod ui_coupons;
 pub mod ui_events;
 mod ui_import;
+mod ui_library;
+#[cfg(test)]
+mod ui_library_tests;
 pub mod ui_pair;
 mod ui_pairing;
 #[cfg(test)]

@@ -35,6 +35,7 @@ export type Permission =
   | "device.screen"
   | "user.manage"
   | "settings.edit"
+  | "games.manage"
   | "backup.export"
   | "ops.promote"
   | "ops.restore"

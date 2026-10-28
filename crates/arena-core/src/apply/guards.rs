@@ -283,6 +283,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::AdminUnlock(_)
             | Target::Group(_)
             | Target::Zone(_)
+            | Target::Library(_)
             | Target::Product(_)
             | Target::Import(_)
             | Target::ImportPlayers(_)
@@ -430,6 +431,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::Role(t) => staff_roles::base_rev_role(intent, t),
         Target::Group(t) => groups::base_rev(intent, t),
         Target::Zone(t) => zones::base_rev(intent, t),
+        Target::Library(t) => super::library::base_rev(intent, t),
         Target::Product(t) => products::base_rev(intent, t),
         Target::Import(_)
         | Target::ImportPlayers(_)

@@ -33,6 +33,7 @@ const MODULE_LABELS: Record<string, MessageKey> = {
   session: "hub.audit.module.session",
   alert: "hub.audit.module.alert",
   order: "hub.audit.module.order",
+  library: "hub.audit.module.library",
 };
 
 /** Intent kinds with a catalogue label; any other kind shows as it is (`settings.set`). */
@@ -53,6 +54,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "plan.sell.reverted": "hub.audit.intent.plan.sell.reverted",
   "rule.upsert": "hub.audit.intent.rule.upsert",
   "coupon.upsert": "hub.audit.intent.coupon.upsert",
+  "library.upsert": "hub.audit.intent.library.upsert",
+  "library.delete": "hub.audit.intent.library.delete",
   "credit.collect": "hub.audit.intent.credit.collect",
   "credit.collect.reverted": "hub.audit.intent.credit.collect.reverted",
   "credit.auto_pause": "hub.audit.intent.credit.auto_pause",

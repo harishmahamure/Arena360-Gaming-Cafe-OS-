@@ -50,7 +50,7 @@
     syncAlerts,
     type AlertRow,
   } from "../lib/alerts.svelte";
-  import { catalog } from "../lib/catalog.svelte";
+  import { catalog, library } from "../lib/catalog.svelte";
   import { alertCount, refreshAccess, service } from "../lib/service.svelte";
   import { adRatingOf, ads } from "../lib/ads";
   import { AdMetrics } from "../lib/ad-metrics";
@@ -441,6 +441,9 @@
         onCatalogChanged: () => {
           catalog.version++;
           void refresh();
+        },
+        onLibraryChanged: () => {
+          library.version++;
         },
         onConnectivityChanged: (e) => takeLink(e),
         onEntitlementChanged: (e) => ads.evaluate(e.tier),

@@ -34,6 +34,7 @@ mod import_players;
 mod import_products;
 mod import_setup;
 mod invoice;
+mod library;
 mod order_line;
 mod order_place;
 mod order_void;
@@ -4199,11 +4200,12 @@ mod process_lists {
         let applied = f.writer.seed_defaults().await.unwrap().unwrap();
         let mut ids: Vec<&str> = applied.changes.iter().map(|c| c.row_id.as_str()).collect();
         ids.sort_unstable();
-        assert_eq!(ids.len(), 4);
-        assert!(ids[0].ends_with("/kiosk.process_allow"), "{ids:?}");
-        assert!(ids[1].ends_with("/kiosk.process_block"), "{ids:?}");
-        assert!(ids[2].ends_with("/kiosk.process_mode"), "{ids:?}");
-        assert!(ids[3].ends_with("/kiosk.volume_default"), "{ids:?}");
+        assert_eq!(ids.len(), 5);
+        assert!(ids[0].ends_with("/kiosk.library"), "{ids:?}");
+        assert!(ids[1].ends_with("/kiosk.process_allow"), "{ids:?}");
+        assert!(ids[2].ends_with("/kiosk.process_block"), "{ids:?}");
+        assert!(ids[3].ends_with("/kiosk.process_mode"), "{ids:?}");
+        assert!(ids[4].ends_with("/kiosk.volume_default"), "{ids:?}");
         assert_eq!(
             setting(&reopen(&f), "kiosk.process_block")["value"],
             RowValue::Text(DEFAULT_PROCESS_BLOCK.into())

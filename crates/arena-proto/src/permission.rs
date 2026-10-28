@@ -76,6 +76,9 @@ pub enum Permission {
     UserManage,
     #[serde(rename = "settings.edit")]
     SettingsEdit,
+    /// Edit the branch game and app library (Settings → Games).
+    #[serde(rename = "games.manage")]
+    GamesManage,
     #[serde(rename = "backup.export")]
     BackupExport,
     #[serde(rename = "ops.promote")]
@@ -90,7 +93,7 @@ pub enum Permission {
 
 impl Permission {
     /// Every catalogue permission, grouped by module.
-    pub const ALL: [Permission; 36] = [
+    pub const ALL: [Permission; 37] = [
         Self::PlayerManage,
         Self::PlayerView,
         Self::WalletTopup,
@@ -122,6 +125,7 @@ impl Permission {
         Self::DeviceScreen,
         Self::UserManage,
         Self::SettingsEdit,
+        Self::GamesManage,
         Self::BackupExport,
         Self::OpsPromote,
         Self::OpsRestore,
@@ -163,6 +167,7 @@ impl Permission {
             Self::DeviceScreen => "device.screen",
             Self::UserManage => "user.manage",
             Self::SettingsEdit => "settings.edit",
+            Self::GamesManage => "games.manage",
             Self::BackupExport => "backup.export",
             Self::OpsPromote => "ops.promote",
             Self::OpsRestore => "ops.restore",
@@ -210,6 +215,7 @@ impl Permission {
             }
             Self::UserManage => "users",
             Self::SettingsEdit => "settings",
+            Self::GamesManage => "games",
             Self::BackupExport | Self::OpsPromote | Self::OpsRestore => "ops",
             Self::ReportView | Self::AuditView => "views",
         }
@@ -252,6 +258,9 @@ mod tests {
         assert_eq!(Permission::DeviceRemote.module(), "device");
         assert_eq!(Permission::CreditCollect.module(), "wallet");
         assert_eq!(Permission::AuditView.module(), "views");
+        assert_eq!(Permission::GamesManage.module(), "games");
+        assert_eq!(Permission::GamesManage.as_str(), "games.manage");
+        assert_eq!(Permission::ALL.len(), 37);
     }
 
     #[test]

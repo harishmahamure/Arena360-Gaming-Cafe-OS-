@@ -222,6 +222,11 @@ impl MediaCache {
         self.db()?.catalog_version()
     }
 
+    /// The cached catalogue game with this id (Story 6.3: the library links to it).
+    pub fn game(&self, id: &str) -> Result<Option<arena_store::RefGame>, AppError> {
+        self.db()?.game(id)
+    }
+
     /// Stores a manifest and deletes the files nothing references any more.
     pub fn apply_manifest(&self, manifest: &CatalogManifest) -> Result<Applied, AppError> {
         let orphans = self.db()?.apply_manifest(manifest)?;

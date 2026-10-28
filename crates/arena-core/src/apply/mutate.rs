@@ -230,6 +230,14 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::ZoneDelete(z) => zones::mutate_delete(tx, z, now_ms),
+        IntentPayload::LibraryUpsert(u) => match target {
+            Target::Library(t) => super::library::mutate_upsert(tx, u, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::LibraryDelete(d) => match target {
+            Target::Library(t) => super::library::mutate_delete(tx, d, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DevicePlace(d) => zones::mutate_place(tx, d),
         IntentPayload::StaffSetCredentials(c) => super::staff_credentials::mutate(tx, c),
         IntentPayload::StaffDeactivate(d) => super::staff_deactivate::mutate(tx, d),

@@ -40,6 +40,8 @@ import type { ImportSetup } from "./ImportSetup";
 import type { InvoiceIssue } from "./InvoiceIssue";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
+import type { LibraryDelete } from "./LibraryDelete";
+import type { LibraryUpsert } from "./LibraryUpsert";
 import type { LicenceApply } from "./LicenceApply";
 import type { OrderLineCancel } from "./OrderLineCancel";
 import type { OrderLineServed } from "./OrderLineServed";
@@ -125,6 +127,8 @@ export type IntentPayload =
   | ({ kind: "zone.upsert" } & ZoneUpsert)
   | ({ kind: "zone.delete" } & ZoneDelete)
   | ({ kind: "device.place" } & DevicePlace)
+  | ({ kind: "library.upsert" } & LibraryUpsert)
+  | ({ kind: "library.delete" } & LibraryDelete)
   | ({ kind: "product.upsert" } & ProductUpsert)
   | ({ kind: "product.delete" } & ProductDelete)
   | ({ kind: "plan.upsert" } & PlanUpsert)

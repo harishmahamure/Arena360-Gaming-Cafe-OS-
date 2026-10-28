@@ -29,6 +29,7 @@ mod intent;
 mod kiosk;
 mod kiosk_pairing;
 mod kitchen;
+mod library;
 pub mod licence;
 mod operating;
 pub mod pairing;
@@ -179,6 +180,15 @@ pub use kitchen::{
     KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_CLOCK, KEY_LICENCE_FLAGS,
     KEY_LICENCE_STATUS, KEY_LICENCE_TIER, KEY_USER_CAP, KITCHEN_GATED_KEYS, KITCHEN_KOT_MODES,
     TierGate, has_flag, kitchen_gate,
+};
+pub use library::{
+    DEFAULT_KIOSK_LIBRARY, KEY_KIOSK_LIBRARY, KioskLibraryEntry, LIBRARY_AGE_RATING_MAX,
+    LIBRARY_ARGS_MAX, LIBRARY_CATALOG_ID_MAX, LIBRARY_CATEGORY_MAX, LIBRARY_KINDS,
+    LIBRARY_LAUNCHERS, LIBRARY_NAME_MAX, LIBRARY_PATH_MAX, LIBRARY_TAG_MAX, LIBRARY_TAGS_MAX,
+    LIBRARY_URI_MAX, LibraryDelete, LibraryEntryView, LibraryUpsert, LibraryView,
+    MAX_LIBRARY_ENTRIES, MAX_LIBRARY_VALUE_CHARS, is_launch_uri, is_library_path,
+    launcher_from_catalogue, launcher_install_globs, library_rules, parse_kiosk_library,
+    tags_from_json, tags_to_json,
 };
 pub use licence::{LicenceClaims, LicenceError, VerifyKey};
 pub use operating::{

@@ -69,11 +69,12 @@ pub enum Table {
     Coupons,
     CouponTargets,
     Refunds,
+    LibraryEntries,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 42] = [
+    pub const ALL: [Table; 43] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -116,6 +117,7 @@ impl Table {
         Table::Coupons,
         Table::CouponTargets,
         Table::Refunds,
+        Table::LibraryEntries,
     ];
 
     /// The SQL table name.
@@ -163,6 +165,7 @@ impl Table {
             Self::Coupons => "coupons",
             Self::CouponTargets => "coupon_targets",
             Self::Refunds => "refunds",
+            Self::LibraryEntries => "library_entries",
         }
     }
 
@@ -196,7 +199,8 @@ impl Table {
             | Self::CashEvents
             | Self::StockHolds
             | Self::NotifyOutbox
-            | Self::Refunds => &["id"],
+            | Self::Refunds
+            | Self::LibraryEntries => &["id"],
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
             Self::Coupons => &["coupon_id"],
@@ -252,6 +256,7 @@ impl Table {
             | Self::NotifyOutbox
             | Self::Coupons
             | Self::Refunds
+            | Self::LibraryEntries
             | Self::Plans => true,
             Self::Settings
             | Self::RolePerms
@@ -404,6 +409,9 @@ pub enum RowKey {
     Refunds {
         id: String,
     },
+    LibraryEntries {
+        id: String,
+    },
     Coupons {
         coupon_id: String,
     },
@@ -447,6 +455,7 @@ impl RowKey {
             Self::InvoiceSequences { .. } => Table::InvoiceSequences,
             Self::NotifyOutbox { .. } => Table::NotifyOutbox,
             Self::Refunds { .. } => Table::Refunds,
+            Self::LibraryEntries { .. } => Table::LibraryEntries,
             Self::Coupons { .. } => Table::Coupons,
             Self::CouponTargets { .. } => Table::CouponTargets,
             Self::Players { .. } => Table::Players,
@@ -514,6 +523,7 @@ impl RowKey {
             | Self::StockHolds { id }
             | Self::NotifyOutbox { id }
             | Self::Refunds { id }
+            | Self::LibraryEntries { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => id.clone(),
         }
@@ -612,6 +622,7 @@ impl RowKey {
             Table::StockHolds => Self::StockHolds { id: text("id")? },
             Table::NotifyOutbox => Self::NotifyOutbox { id: text("id")? },
             Table::Refunds => Self::Refunds { id: text("id")? },
+            Table::LibraryEntries => Self::LibraryEntries { id: text("id")? },
             Table::Coupons => Self::Coupons {
                 coupon_id: text("coupon_id")?,
             },
@@ -686,6 +697,7 @@ impl RowKey {
             | Self::StockHolds { id }
             | Self::NotifyOutbox { id }
             | Self::Refunds { id }
+            | Self::LibraryEntries { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => vec![id],
         }

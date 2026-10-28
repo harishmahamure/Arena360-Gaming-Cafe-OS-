@@ -20,6 +20,7 @@
     { href: "/settings/plans", label: "hub.settings.nav.plans" },
     { href: "/settings/rules", label: "hub.settings.nav.rules" },
     { href: "/settings/coupons", label: "hub.settings.nav.coupons" },
+    { href: "/settings/games", label: "hub.settings.nav.games" },
     { href: "/settings/printer", label: "hub.settings.nav.printer" },
     { href: "/settings/kitchen", label: "hub.settings.nav.kitchen" },
     { href: "/settings/inventory", label: "hub.settings.nav.inventory" },

@@ -1617,6 +1617,36 @@ impl SnapshotReader {
         })
     }
 
+    /// Every live entry of the branch game and app library, enabled or not, ordered by name
+    /// (Story 6.3). The name, launcher and age rating of a linked entry are as stored; the API
+    /// layer shows the catalogue's.
+    pub fn library(&self) -> Result<Vec<arena_proto::LibraryEntryView>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            Ok(s.library_entries()?
+                .into_iter()
+                .map(|e| arena_proto::LibraryEntryView {
+                    id: e.id,
+                    kind: e.kind,
+                    name: e.name,
+                    launcher: e.launcher,
+                    executable_path: e.executable_path,
+                    launch_uri: e.launch_uri,
+                    launch_args: e.launch_args,
+                    category: e.category,
+                    tags: e.tags,
+                    age_rating: e.age_rating,
+                    enabled: e.enabled,
+                    catalog_id: e.catalog_id,
+                    rev: e.rev,
+                })
+                .collect())
+        })
+    }
+
     /// What a coupon code would do to a bill, by the pricing a settle uses (Story 5.21).
     pub fn coupon_preview(
         &self,

@@ -105,6 +105,12 @@ pub enum IntentKind {
     ZoneDelete,
     #[serde(rename = "device.place")]
     DevicePlace,
+    /// Adds or edits an entry of the branch game and app library (`games.manage`).
+    #[serde(rename = "library.upsert")]
+    LibraryUpsert,
+    /// Soft-deletes a library entry.
+    #[serde(rename = "library.delete")]
+    LibraryDelete,
     #[serde(rename = "product.upsert")]
     ProductUpsert,
     #[serde(rename = "product.delete")]
@@ -309,7 +315,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 99] = [
+    pub const ALL: [IntentKind; 101] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -334,6 +340,8 @@ impl IntentKind {
         Self::ZoneUpsert,
         Self::ZoneDelete,
         Self::DevicePlace,
+        Self::LibraryUpsert,
+        Self::LibraryDelete,
         Self::ProductUpsert,
         Self::ProductDelete,
         Self::PlanUpsert,
@@ -438,6 +446,8 @@ impl IntentKind {
             Self::ZoneUpsert => "zone.upsert",
             Self::ZoneDelete => "zone.delete",
             Self::DevicePlace => "device.place",
+            Self::LibraryUpsert => "library.upsert",
+            Self::LibraryDelete => "library.delete",
             Self::ProductUpsert => "product.upsert",
             Self::ProductDelete => "product.delete",
             Self::PlanUpsert => "plan.upsert",
@@ -529,6 +539,8 @@ impl IntentKind {
             | Self::AdsConsent
             | Self::PrinterStatus
             | Self::LicenceApply
+            | Self::LibraryUpsert
+            | Self::LibraryDelete
             | Self::AdImpressionRecorded
             | Self::AdRequestRecorded => IntentCategory::Settings,
             Self::DeviceRegister
@@ -632,6 +644,7 @@ impl IntentKind {
             Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => {
                 Requirement::Perm(Permission::SettingsEdit)
             }
+            Self::LibraryUpsert | Self::LibraryDelete => Requirement::Perm(Permission::GamesManage),
             Self::DeviceRegister
             | Self::GroupUpsert
             | Self::GroupDelete
@@ -784,6 +797,8 @@ impl IntentKind {
             | Self::ZoneUpsert
             | Self::ZoneDelete
             | Self::DevicePlace
+            | Self::LibraryUpsert
+            | Self::LibraryDelete
             | Self::ProductUpsert
             | Self::ProductDelete
             | Self::PlanUpsert
@@ -1324,6 +1339,10 @@ pub enum IntentPayload {
     ZoneDelete(ZoneDelete),
     #[serde(rename = "device.place")]
     DevicePlace(DevicePlace),
+    #[serde(rename = "library.upsert")]
+    LibraryUpsert(crate::LibraryUpsert),
+    #[serde(rename = "library.delete")]
+    LibraryDelete(crate::LibraryDelete),
     #[serde(rename = "product.upsert")]
     ProductUpsert(crate::ProductUpsert),
     #[serde(rename = "product.delete")]
@@ -1503,6 +1522,8 @@ impl IntentPayload {
             Self::ZoneUpsert(_) => IntentKind::ZoneUpsert,
             Self::ZoneDelete(_) => IntentKind::ZoneDelete,
             Self::DevicePlace(_) => IntentKind::DevicePlace,
+            Self::LibraryUpsert(_) => IntentKind::LibraryUpsert,
+            Self::LibraryDelete(_) => IntentKind::LibraryDelete,
             Self::ProductUpsert(_) => IntentKind::ProductUpsert,
             Self::ProductDelete(_) => IntentKind::ProductDelete,
             Self::PlanUpsert(_) => IntentKind::PlanUpsert,
@@ -1719,6 +1740,48 @@ mod tests {
     }
 
     #[test]
+    fn library_payloads_round_trip() {
+        let up = IntentPayload::LibraryUpsert(crate::LibraryUpsert {
+            id: None,
+            entry_kind: "game".into(),
+            name: "CS2".into(),
+            launcher: "steam".into(),
+            executable_path: r"C:\Games\cs2.exe".into(),
+            launch_uri: String::new(),
+            launch_args: String::new(),
+            category: "Shooter".into(),
+            tags: vec!["fps".into()],
+            age_rating: "18+".into(),
+            enabled: true,
+            catalog_id: None,
+        });
+        let json = serde_json::to_value(&up).unwrap();
+        assert_eq!(json["kind"], "library.upsert");
+        assert!(json.get("id").is_none() && json.get("catalog_id").is_none());
+        assert_eq!(serde_json::from_value::<IntentPayload>(json).unwrap(), up);
+        // Optional text fields may be left out.
+        let min: IntentPayload = serde_json::from_value(serde_json::json!({
+            "kind": "library.upsert", "entry_kind": "app", "name": "N", "launcher": "none",
+            "launch_uri": "x://y", "enabled": false
+        }))
+        .unwrap();
+        assert_eq!(min.kind(), IntentKind::LibraryUpsert);
+        let missing: Result<IntentPayload, _> = serde_json::from_value(serde_json::json!({
+            "kind": "library.upsert", "name": "N", "launcher": "none"
+        }));
+        assert!(missing.is_err(), "entry_kind and enabled are required");
+        let del: IntentPayload =
+            serde_json::from_value(serde_json::json!({"kind": "library.delete", "id": "L"}))
+                .unwrap();
+        assert_eq!(del.kind(), IntentKind::LibraryDelete);
+        assert_eq!(IntentKind::LibraryUpsert.as_str(), "library.upsert");
+        assert_eq!(
+            IntentKind::LibraryDelete.requirement(),
+            Requirement::Perm(Permission::GamesManage)
+        );
+    }
+
+    #[test]
     fn maintenance_payload_round_trips() {
         let on: IntentPayload = serde_json::from_value(
             serde_json::json!({"kind": "device.maintenance", "device_id": "D", "on": true, "note": "fan"}),
@@ -1812,6 +1875,7 @@ mod tests {
                     Requirement::Perm(Permission::DeviceRemote)
                 }
                 "device.screen" => Requirement::Perm(Permission::DeviceScreen),
+                "library.upsert" | "library.delete" => Requirement::Perm(Permission::GamesManage),
                 "device.admin_exit" | "device.admin_relock" => Requirement::Device,
                 "staff.upsert" | "role.upsert" | "staff.deactivate" => {
                     Requirement::Perm(Permission::UserManage)

@@ -1047,6 +1047,86 @@ async fn a_kiosk_list_change_is_pushed_to_paired_sessions_but_not_browsers() {
     assert!(next.is_err(), "kds got {next:?}");
 }
 
+// ---- Story 6.3: the branch library reaches every paired kiosk as `kiosk.library` ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_library_change_reaches_paired_kiosks_within_two_seconds() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    let mut kds = hub.plain().await;
+    hello_ok(
+        &mut kds,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    // The kiosk reads the seeded, empty library.
+    let frame = client
+        .request("settings.get", settings_get_body(&["kiosk.library"]))
+        .await
+        .unwrap();
+    let FrameBody::SettingsValues(v) = frame.body else {
+        panic!("{frame:?}")
+    };
+    assert_eq!(
+        (v.values[0].key.as_str(), v.values[0].value.as_str()),
+        ("kiosk.library", "[]")
+    );
+
+    let started = Instant::now();
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::LibraryUpsert(arena_proto::LibraryUpsert {
+                id: None,
+                entry_kind: "game".into(),
+                name: "Counter-Strike 2".into(),
+                launcher: "steam".into(),
+                executable_path: r"C:\Games\cs2.exe".into(),
+                launch_uri: String::new(),
+                launch_args: String::new(),
+                category: String::new(),
+                tags: Vec::new(),
+                age_rating: String::new(),
+                enabled: true,
+                catalog_id: None,
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    while !(seen.iter().any(|k| k == "kiosk.library")
+        && seen.iter().any(|k| k == "kiosk.process_allow"))
+    {
+        let values = next_settings(&mut events, 2_000)
+            .await
+            .expect("pushed within 2 s");
+        for e in values {
+            if e.key == "kiosk.library" {
+                let list = arena_proto::parse_kiosk_library(&e.value).unwrap();
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].name, "Counter-Strike 2");
+                assert_eq!(e.rev, 2);
+            }
+            if e.key == "kiosk.process_allow" {
+                assert!(e.value.contains(r"C:\\Games\\cs2.exe"), "{}", e.value);
+                assert!(e.value.contains("Steam"), "{}", e.value);
+            }
+            seen.push(e.key);
+        }
+    }
+    assert!(started.elapsed() < Duration::from_secs(2));
+    // The kds session hears nothing.
+    ping(&mut kds, "p1").await;
+    let next = tokio::time::timeout(Duration::from_millis(300), kds.next()).await;
+    assert!(next.is_err(), "kds got {next:?}");
+}
+
 // ---- Story 1.21: a kiosk reads and hears only its own high-contrast setting ----
 
 /// Waits up to `ms` for the next `settings.changed` on `events`.

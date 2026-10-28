@@ -512,6 +512,9 @@ impl HubTask {
                             .unwrap_or(false);
                             self.send("groups.changed", format!(r#"{{"by_owner":{owner}}}"#), false);
                         }
+                        if applied.changes.iter().any(|c| c.tbl == "library_entries") {
+                            self.send("library.changed", "{}".into(), false);
+                        }
                         let products = crate::lan::registry::product_ids(&applied);
                         if !products.is_empty() {
                             let reader = Arc::clone(&self.reader);
@@ -1568,6 +1571,46 @@ mod tests {
             seen[1],
             serde_json::json!({"products": [{"product_id": free.changes[0].row_id, "available": true}]})
         );
+    }
+
+    #[tokio::test]
+    async fn a_library_change_pushes_library_changed() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let entry = IntentPayload::LibraryUpsert(arena_proto::LibraryUpsert {
+            id: None,
+            entry_kind: "game".into(),
+            name: "CS2".into(),
+            launcher: "steam".into(),
+            executable_path: r"C:\Games\cs2.exe".into(),
+            launch_uri: String::new(),
+            launch_args: String::new(),
+            category: String::new(),
+            tags: Vec::new(),
+            age_rating: String::new(),
+            enabled: true,
+            catalog_id: None,
+        });
+        let owner = Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        hub.writer
+            .submit_intent(intent_as(owner, entry, None))
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, data) = next_event(&mut frames).await.unwrap();
+            if event == "library.changed" {
+                assert_eq!(data, serde_json::json!({}));
+                break;
+            }
+            seen.push(event);
+            assert!(seen.len() < 6, "{seen:?}");
+        }
     }
 
     #[tokio::test]

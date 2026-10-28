@@ -19,6 +19,7 @@ mod group_bills;
 mod gst;
 mod identity;
 mod invoices;
+mod library;
 mod migrations;
 mod notify;
 mod outbox;
@@ -112,6 +113,10 @@ pub use identity::{
 pub use invoices::{
     INVOICED_KINDS, InvoiceOrder, find_invoice_order, find_sequence, list_unnumbered,
     set_invoice_no, set_order_buyer, take_sequence,
+};
+pub use library::{
+    LibraryRow, LibraryWrite, find_library_entry, insert_library_entry, list_library_entries,
+    set_library_entry_deleted, update_library_entry,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{
@@ -1464,6 +1469,14 @@ impl Store {
                 Ok((c, targets))
             })
             .collect()
+    }
+
+    /// Every live library entry, ordered by name (empty before migration 62).
+    pub fn library_entries(&self) -> Result<Vec<LibraryRow>, AppError> {
+        if !self.table_exists("library_entries")? {
+            return Ok(Vec::new());
+        }
+        list_library_entries(&self.conn)
     }
 
     pub fn pricing_rules(&self) -> Result<Vec<PricingRuleRow>, AppError> {

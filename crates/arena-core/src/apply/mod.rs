@@ -48,6 +48,7 @@ mod import_players;
 mod import_setup;
 mod invoice_issue;
 mod kiosk_log;
+mod library;
 mod licence;
 mod maintenance;
 mod mutate;
@@ -179,6 +180,8 @@ pub(crate) enum Target {
     AdminUnlock(Box<admin_exit::UnlockTarget>),
     Group(Box<groups::GroupTarget>),
     Zone(Box<zones::ZoneTarget>),
+    /// `library.upsert`, `library.delete`: the entry, the live library and the derived settings.
+    Library(Box<library::LibraryTarget>),
     Product(Box<products::ProductTarget>),
     /// `import.products`: the products and stock the chunk is checked against.
     Import(Box<import::ImportTarget>),
@@ -271,6 +274,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         }
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
+        }
+        P::LibraryUpsert(_) | P::LibraryDelete(_) => {
+            Target::Library(Box::new(library::load(tx, &intent.payload)?))
         }
         P::DeviceScreen(_) | P::DevicePower(_) => {
             Target::Pc(Box::new(pc_command::load(tx, &intent.payload)?))

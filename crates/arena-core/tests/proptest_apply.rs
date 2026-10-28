@@ -117,6 +117,18 @@ enum Op {
         stale: bool,
         who: Index,
     },
+    /// `library.upsert` / `library.delete` (Story 6.3) by a staff member of a built-in role (or an
+    /// admin): an add, an edit or a delete of the first live entry, with a valid, unsafe,
+    /// duplicate, missing or relative executable path, a fresh or a stale `base_rev`. The derived
+    /// `kiosk.library` and the library's rules in `kiosk.process_allow` always follow the entries.
+    Library {
+        action: u8,
+        path_kind: u8,
+        launcher: u8,
+        enabled: bool,
+        stale: bool,
+        who: Index,
+    },
     /// `coupon.upsert` of a percent or fixed coupon (valid or not) by a staff member of a built-in
     /// role; when it saves, a cash counter sale applies its code (or an unknown one), then maybe the
     /// sale's Undo. A coupon's `used` always equals the settled orders that took it.
@@ -556,6 +568,22 @@ fn op() -> impl Strategy<Value = Op> {
                 mask,
                 percent,
                 edit,
+                stale,
+                who,
+            }),
+        3 => (
+            0..5u8,
+            prop_oneof![5 => Just(0u8), 1 => Just(1u8), 1 => Just(2u8), 1 => Just(3u8), 1 => Just(4u8)],
+            0..5u8,
+            prop::bool::weighted(0.7),
+            prop::bool::weighted(0.25),
+            any::<Index>(),
+        )
+            .prop_map(|(action, path_kind, launcher, enabled, stale, who)| Op::Library {
+                action,
+                path_kind,
+                launcher,
+                enabled,
                 stale,
                 who,
             }),
@@ -2077,6 +2105,128 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         prop_assert_eq!(state, "skipped", "an undone sale is never messaged");
                     }
                 }
+            }
+        }
+        Op::Library {
+            action,
+            path_kind,
+            launcher,
+            enabled,
+            stale,
+            who,
+        } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let live = hub.reader.library_entries().unwrap();
+            let first = live.first().cloned();
+            // 0 add, 1 and 2 edit, 3 and 4 delete.
+            let adding = *action == 0;
+            let deleting = *action >= 3;
+            if !adding && first.is_none() {
+                return Ok(());
+            }
+            let launcher_name = arena_proto::LIBRARY_LAUNCHERS[usize::from(*launcher) % 5];
+            let fresh_path = format!(r"C:\Games\p{}\g.exe", hub.change_count());
+            // Editing the first entry cannot collide with itself; duplicates need an add.
+            let path_kind = if adding || *path_kind != 1 {
+                *path_kind
+            } else {
+                0
+            };
+            let (path, uri) = match path_kind {
+                0 => (fresh_path, String::new()),
+                1 => (
+                    first
+                        .as_ref()
+                        .map_or(fresh_path.clone(), |f| f.executable_path.clone()),
+                    String::new(),
+                ),
+                2 => (r"C:\Users\p\g.exe".to_owned(), String::new()),
+                3 => (String::new(), String::new()),
+                _ => (r"games\g.exe".to_owned(), String::new()),
+            };
+            let (launcher_name, kind) = match (path_kind, adding, &first) {
+                (1, true, Some(f)) if !f.executable_path.is_empty() => {
+                    (f.launcher.as_str(), f.kind.as_str())
+                }
+                _ => (launcher_name, "game"),
+            };
+            let duplicate = path_kind == 1
+                && adding
+                && first
+                    .as_ref()
+                    .is_some_and(|f| !f.executable_path.is_empty());
+            let valid = match path_kind {
+                0 => true,
+                1 => !duplicate,
+                _ => false,
+            };
+            let editing = (!adding && !deleting).then(|| first.clone()).flatten();
+            let payload = if deleting {
+                IntentPayload::LibraryDelete(arena_proto::LibraryDelete {
+                    id: first.as_ref().unwrap().id.clone(),
+                })
+            } else {
+                IntentPayload::LibraryUpsert(arena_proto::LibraryUpsert {
+                    id: editing.as_ref().map(|e| e.id.clone()),
+                    entry_kind: kind.into(),
+                    name: format!("Game {}", hub.change_count()),
+                    launcher: launcher_name.into(),
+                    executable_path: path,
+                    launch_uri: uri,
+                    launch_args: String::new(),
+                    category: "Action".into(),
+                    tags: vec!["tag".into()],
+                    age_rating: String::new(),
+                    enabled: *enabled,
+                    catalog_id: None,
+                })
+            };
+            let target = if deleting {
+                first.clone()
+            } else {
+                editing.clone()
+            };
+            let base_rev = target
+                .as_ref()
+                .map(|e| if *stale { e.rev + 1 } else { e.rev });
+            let mut intent = hub.intent(payload, base_rev);
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len()) {
+                    Some(id) => Actor {
+                        kind: ActorKind::Staff,
+                        id: id.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let owner = intent.actor.kind == ActorKind::Owner;
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), before);
+            } else if target.is_some() && *stale && !owner {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before);
+            } else if !deleting && !valid {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert!(hub.change_count() > before);
             }
         }
         Op::Coupon {
@@ -5583,6 +5733,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_holds_hold(&hub)?;
                 assert_invoices_hold(&hub)?;
                 assert_coupons_hold(&hub)?;
+                assert_library_holds(&hub)?;
                 assert_discounts_hold(&hub)?;
                 assert_voids_hold(&hub)?;
                 assert_refunds_hold(&hub)?;
@@ -5596,6 +5747,59 @@ fn apply_invariants_hold_over_random_intent_sequences() {
             assert_replay_reproduces(&hub)
         })
         .unwrap();
+}
+
+/// The library invariants (Story 6.3): `kiosk.library` lists exactly the enabled live entries
+/// ordered by name, and every enabled entry's rules are in `kiosk.process_allow`.
+fn assert_library_holds(hub: &Hub) -> Result<(), TestCaseError> {
+    let (Some(lib), Some(allow)) = (
+        hub.setting("kiosk.library"),
+        hub.setting("kiosk.process_allow"),
+    ) else {
+        return Ok(());
+    };
+    let live = hub.reader.library_entries().unwrap();
+    let mut want: Vec<_> = live
+        .iter()
+        .filter(|e| e.enabled)
+        .map(|e| (e.name.to_lowercase(), e.id.clone()))
+        .collect();
+    want.sort();
+    let got: Vec<arena_proto::KioskLibraryEntry> =
+        serde_json::from_str(&text(&lib, "value")).unwrap();
+    prop_assert_eq!(
+        got.iter()
+            .map(|e| (e.name.to_lowercase(), e.id.clone()))
+            .collect::<Vec<_>>(),
+        want
+    );
+    let rules: Vec<arena_proto::ProcessRule> =
+        serde_json::from_str(&text(&allow, "value")).unwrap();
+    prop_assert!(
+        arena_proto::parse_process_rules(arena_proto::ProcessList::Allow, &text(&allow, "value"))
+            .is_ok()
+    );
+    for e in live.iter().filter(|e| e.enabled) {
+        for rule in arena_proto::library_rules(&e.executable_path, &e.launcher) {
+            prop_assert!(
+                rules
+                    .iter()
+                    .any(|r| r.path_glob.eq_ignore_ascii_case(&rule.path_glob)),
+                "{} is missing from the allow-list",
+                rule.path_glob
+            );
+        }
+    }
+    // No two live entries share a kind, launcher and path.
+    let mut seen = std::collections::HashSet::new();
+    for e in live.iter().filter(|e| !e.executable_path.is_empty()) {
+        prop_assert!(seen.insert((
+            e.kind.clone(),
+            e.launcher.clone(),
+            e.executable_path.to_lowercase()
+        )));
+    }
+    Ok(())
 }
 
 /// The outbox invariants: a queued print names a settled order, and a settled order with a total

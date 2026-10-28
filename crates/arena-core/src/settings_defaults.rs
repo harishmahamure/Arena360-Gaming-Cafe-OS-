@@ -3,11 +3,11 @@
 use arena_proto::{
     ADS_RATINGS, BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap,
     DEFAULT_ADS_CONSENT, DEFAULT_ADS_RATING, DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT,
-    DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET, DEFAULT_PROCESS_ALLOW,
-    DEFAULT_PROCESS_BLOCK, FULFILMENT_MODES, HC_DEFAULT, KEY_ADS_CONSENT, KEY_ADS_RATING,
-    KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_HC_HUB, KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS,
-    KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK, KEY_PROCESS_MODE,
-    KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
+    DEFAULT_KIOSK_LIBRARY, DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET,
+    DEFAULT_PROCESS_ALLOW, DEFAULT_PROCESS_BLOCK, FULFILMENT_MODES, HC_DEFAULT, KEY_ADS_CONSENT,
+    KEY_ADS_RATING, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_HC_HUB, KEY_KIOSK_LIBRARY,
+    KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW,
+    KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
 };
 use arena_proto::{
     BILLING_GRACE_RANGE, BILLING_MINIMUM_RANGE, BILLING_ROUNDING_RANGE,
@@ -111,6 +111,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_PROCESS_BLOCK, DEFAULT_PROCESS_BLOCK),
     // A new branch enforces; an upgraded one is backfilled in report mode ([`backfill_value`]).
     (KEY_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE),
+    // Story 6.3: the enabled library entries, derived by `library.upsert` / `library.delete`.
+    (KEY_KIOSK_LIBRARY, DEFAULT_KIOSK_LIBRARY),
     // Story 1.21: high contrast for the Hub UI. Each paired device's `display.hc.<id>` row is
     // created by `device.register` (and backfilled by `branch.seed_defaults`).
     (KEY_HC_HUB, HC_DEFAULT),
@@ -148,7 +150,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_MEDIA_CAP_GB, DEFAULT_MEDIA_CAP_GB),
 ];
 
-pub const SYSTEM_MANAGED_KEYS: [&str; 6] = [
+pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
+    KEY_KIOSK_LIBRARY,
     KEY_BRANCH_CODE_LOCKED_AT,
     KEY_OPENING_HOURS_SET,
     KEY_ADS_CONSENT,
@@ -222,6 +225,8 @@ pub enum SettingRule {
     /// A kiosk process list: a JSON array of at most 500 `{path_glob, signer?}` rules
     /// (`arena_proto::parse_process_rules`), up to `MAX_PROCESS_RULES_CHARS` long.
     ProcessRules(ProcessList),
+    /// The derived `kiosk.library`: a JSON array of `KioskLibraryEntry`.
+    KioskLibrary,
     /// `"true"` or `"false"`.
     Bool,
     OpeningHours,
@@ -298,6 +303,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         SettingRule::ProcessRules(ProcessList::Block),
     ),
     (KEY_PROCESS_MODE, SettingRule::OneOf(ProcessMode::VALUES)),
+    (KEY_KIOSK_LIBRARY, SettingRule::KioskLibrary),
     (KEY_OPENING_HOURS, SettingRule::OpeningHours),
     (KEY_OPENING_HOURS_SET, SettingRule::Bool),
     (KEY_FULFILMENT, SettingRule::OneOf(FULFILMENT_MODES)),
@@ -419,6 +425,7 @@ impl SettingRule {
             Self::TimeZone => value.parse::<chrono_tz::Tz>().is_ok(),
             Self::OneOf(words) => words.contains(&value),
             Self::ProcessRules(list) => arena_proto::parse_process_rules(list, value).is_ok(),
+            Self::KioskLibrary => arena_proto::parse_kiosk_library(value).is_some(),
             Self::Bool => matches!(value, "true" | "false"),
             Self::OpeningHours => arena_proto::parse_opening_hours(value).is_ok(),
             Self::Path => {
@@ -447,6 +454,7 @@ impl SettingRule {
     pub fn max_chars(self) -> usize {
         match self {
             Self::ProcessRules(_) => arena_proto::MAX_PROCESS_RULES_CHARS,
+            Self::KioskLibrary => arena_proto::MAX_LIBRARY_VALUE_CHARS,
             _ => crate::apply::MAX_SETTING_VALUE_CHARS,
         }
     }

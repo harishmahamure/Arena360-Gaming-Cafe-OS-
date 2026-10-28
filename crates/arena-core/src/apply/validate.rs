@@ -132,6 +132,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Zone(t) => zones::validate_delete(t),
             _ => Err(internal_target()),
         },
+        IntentPayload::LibraryUpsert(u) => match target {
+            Target::Library(t) => super::library::validate_upsert(u, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::LibraryDelete(_) => match target {
+            Target::Library(t) => super::library::validate_delete(t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::DeviceScreen(_) | IntentPayload::DevicePower(_) => match target {
             Target::Pc(t) => super::pc_command::validate(intent, t),
             _ => Err(internal_target()),

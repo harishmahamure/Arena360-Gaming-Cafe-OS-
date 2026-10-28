@@ -131,7 +131,9 @@ pub fn export(conn: &DbConn, now_ms: i64) -> Result<SetupFile, AppError> {
 
     let mut coupons = Vec::new();
     for c in &ctx.coupons {
-        let mut targets: Vec<SetupCouponTarget> = list_coupon_targets(conn, &c.coupon_id)?
+        let stored = list_coupon_targets(conn, &c.coupon_id)?;
+        let stored_len = stored.len();
+        let mut targets: Vec<SetupCouponTarget> = stored
             .into_iter()
             .filter_map(|(kind, id)| {
                 let name = match kind.as_str() {
@@ -147,6 +149,10 @@ pub fn export(conn: &DbConn, now_ms: i64) -> Result<SetupFile, AppError> {
                 Some(SetupCouponTarget { kind, name })
             })
             .collect();
+        // A coupon whose target is gone would travel as a coupon for everything: leave it out.
+        if targets.len() != stored_len {
+            continue;
+        }
         targets.sort_by(|a, b| (&a.kind, &a.name).cmp(&(&b.kind, &b.name)));
         coupons.push(SetupCoupon {
             code: c.code.clone(),
@@ -785,7 +791,7 @@ pub(crate) fn analyse(file: &SetupFile, ctx: &Context) -> Result<Analysis, AppEr
                 "plan" => plans
                     .plans
                     .iter()
-                    .find(|(p, _)| p.name == target.name.trim())
+                    .find(|(p, _)| p.name.trim().eq_ignore_ascii_case(target.name.trim()))
                     .map(|(p, _)| p.plan_id.clone())
                     .ok_or("no_plan"),
                 "product" => find_product(&pctx.existing, &target.name)

@@ -5,7 +5,7 @@ use arena_proto::{
     ActorKind, AppError, ElevatedBy, ElevationKind, ElevationMode, ErrorCode, FLAG_KITCHEN, Intent,
     IntentPayload, Requirement, TierGate,
 };
-use arena_store::{StoreTx, find_device, find_staff, read_lease};
+use arena_store::{StoreTx, find_device, find_group_by_name, find_staff, read_lease};
 
 use super::{
     ApplyCtx, Target, admin_exit, coupon, devices, groups, maintenance, plans, players, products,
@@ -59,7 +59,17 @@ fn importing_setup(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     let IntentPayload::ImportSetup(i) = &intent.payload else {
         return Ok(());
     };
-    if i.file.groups.is_empty() || intent.actor.kind == ActorKind::Owner {
+    if intent.actor.kind == ActorKind::Owner {
+        return Ok(());
+    }
+    let mut creates = false;
+    for g in &i.file.groups {
+        if find_group_by_name(tx, g.name.trim())?.is_none() {
+            creates = true;
+            break;
+        }
+    }
+    if !creates {
         return Ok(());
     }
     let holder = intent

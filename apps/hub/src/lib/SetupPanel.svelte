@@ -83,6 +83,8 @@
   async function choose(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
+    // Let the same file be chosen again after an error or an import.
+    input.value = "";
     preview = result = null;
     problem = null;
     json = "";

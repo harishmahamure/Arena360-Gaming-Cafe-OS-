@@ -138,7 +138,7 @@ pub(super) fn mutate(
                         "group" => group_id(tx, name)?,
                         "plan" => list_plans(tx)?
                             .into_iter()
-                            .find(|p| p.name == name)
+                            .find(|p| p.name.trim().eq_ignore_ascii_case(name))
                             .map(|p| p.plan_id)
                             .ok_or_else(|| {
                                 AppError::new(ErrorCode::Internal, "a plan of the file is missing")

@@ -2,7 +2,7 @@
 title: 'Story 5.36: Export and import a branch setup file'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '86c3511'
 followup_review_recommended: false
@@ -91,3 +91,9 @@ Unattended build: `cargo fmt --check`, `cargo clippy --locked -D warnings --all-
 ## Verification
 
 **Commands:** `cargo fmt --check`; `cargo clippy --locked -D warnings --all-targets` and `cargo test` for `arena-proto`, `arena-store`, `arena-core`, `arena-api`; `pnpm gen:types`, `check:generated` (after commit), `check:strings`, `check:protocol`, `check:layers`, `check:hex`, `format:check`; Hub `pnpm check`; Playwright `import.spec.ts`, `settings.spec.ts` in `apps/hub`.
+
+## Code Review (2026-10-28)
+
+Fixed: `device.manage` is now required only when the file creates a group (was: whenever it lists one); a coupon's plan target matches without case in the dry-run and the intent; a coupon whose target no longer resolves is left out of an export instead of travelling unrestricted; the file input resets so the same file can be chosen again.
+
+Deferred (non-blocking): a retry of an already-applied commit shows 422 (spec: second commit is 422); dry-run vs apply placeholder rows for bundle components; extra tests (device.manage with a catalog-only role, size limits, retry keeps `import_id`, invalid group/rate/product/coupon skips); explicit tie-break ordering of equal-name rules/products on export.

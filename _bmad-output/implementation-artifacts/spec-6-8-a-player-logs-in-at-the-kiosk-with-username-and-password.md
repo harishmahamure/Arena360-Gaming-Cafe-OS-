@@ -2,7 +2,7 @@
 title: 'Story 6.8: A player logs in at the kiosk with username and password'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'd6e1b41eaa96766c807a620b6fe756c8ec667fa8'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -119,3 +119,13 @@ Authentication is a request/response frame, not an intent: a kiosk must not be a
 - The kiosk version in the footer is the workspace version, read from `Cargo.toml` by `apps/kiosk/vite.config.js` at build time (`__KIOSK_VERSION__`).
 - `AttractView.device_name` and `zone` are `#[serde(default)]`, so an attract view cached by an older service still reads (empty label and zone).
 - The Hub tile tag is the new `locked-out` `AlertBadge` tag ("LOCKED OUT"), with the label `hub.alerts.kind.login_lockout`.
+
+## Code Review (2026-10-29)
+
+Four reviewers (blind, edge case, verification gap, acceptance). Fixed in code:
+
+- A throttle reservation abandoned by a dropped/aborted request (session closed mid-check) leaked and could lock a device for good; `Reservation` guard in `arena-api/src/lan/player_login.rs` now gives it back on drop.
+- The kiosk kept its wrong-try count across a `busy` answer while the Hub resets it on a correct password; `recordOutcome` now clears it on `busy`.
+- Removed the unused `HOLDING_IDLE_MS`.
+
+Deferred (non-blocking): Hub error frames (`NOT_PRIMARY`, `UNSUPPORTED`) read as "reconnecting" in the UI; 10 s app timeout vs a slow Hub answer; stale "reconnecting" text after the link returns; byte-length vs `maxlength` on the username; extra tests (busy for paused/grace/expired states, `retry_s` other than 60, lock surviving close/reopen, real-Hub wiring of the player KEK, shell command registration).

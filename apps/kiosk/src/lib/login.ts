@@ -12,8 +12,6 @@ import type { PlayerContext } from "@arena/ui/generated";
 export const LOGIN_MAX_FAILURES = 5;
 /** How long the form stays disabled after the fifth wrong try. */
 export const LOGIN_LOCK_S = 60;
-/** The holding step, like the form, returns to attract after this long without input. */
-export const HOLDING_IDLE_MS = 60_000;
 /** How long the app waits for the service's answer before it calls the counter unreachable. */
 export const LOGIN_TIMEOUT_MS = 10_000;
 
@@ -86,6 +84,10 @@ export function recordOutcome(outcome: LoginOutcome, now: number): void {
       failures = 0;
       lockedUntil = null;
       break;
+    case "busy":
+      // The password was right, so the Hub clears its count; so does this screen.
+      failures = 0;
+      break;
     case "rejected":
       failures += 1;
       if (failures >= LOGIN_MAX_FAILURES) {
@@ -98,7 +100,7 @@ export function recordOutcome(outcome: LoginOutcome, now: number): void {
       lockedUntil = now + outcome.retryS * 1000;
       break;
     default:
-      // Busy and unreachable are not wrong tries.
+      // Unreachable is not a wrong try.
       break;
   }
 }

@@ -32,6 +32,31 @@ use tokio::time::Instant;
 
 use super::LanHub;
 use super::session::LAN_SYSTEM_ACTOR;
+use super::throttle::AdminPinThrottle;
+
+/// A reserved throttle check. If the request is dropped before it is finished (the session ended
+/// or its task was aborted mid-check) the reservation is given back, so abandoned checks cannot
+/// pile up until the device is locked for good.
+struct Reservation<'a> {
+    throttle: &'a AdminPinThrottle,
+    device: &'a str,
+    live: bool,
+}
+
+impl Reservation<'_> {
+    fn finish(mut self, ok: bool, now: Instant) -> Option<u32> {
+        self.live = false;
+        self.throttle.finish(self.device, ok, now)
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if self.live {
+            self.throttle.cancel(self.device);
+        }
+    }
+}
 
 fn app(code: ErrorCode, message: impl Into<String>) -> AppError {
     AppError::new(code, message)
@@ -73,6 +98,11 @@ pub(super) async fn authenticate_player(
     if let Err(retry_s) = hub.login_throttle.begin(device, Instant::now()) {
         return Ok(PlayerAuthResult::Locked { retry_s });
     }
+    let reservation = Reservation {
+        throttle: &hub.login_throttle,
+        device,
+        live: true,
+    };
     let checked = async {
         let _permit = Arc::clone(&hub.verify_permits)
             .acquire_owned()
@@ -94,14 +124,11 @@ pub(super) async fn authenticate_player(
     .await;
     let (candidate, matched) = match checked {
         Ok(c) => c,
-        Err(e) => {
-            // A check that could not run counts neither way.
-            hub.login_throttle.cancel(device);
-            return Err(e);
-        }
+        // A check that could not run counts neither way (the guard gives the reservation back).
+        Err(e) => return Err(e),
     };
     let Some(candidate) = candidate.filter(|_| matched) else {
-        let paused = hub.login_throttle.finish(device, false, Instant::now());
+        let paused = reservation.finish(false, Instant::now());
         tracing::info!(device_id = %device, paused = paused.is_some(), "player login refused");
         return Ok(match paused {
             Some(retry_s) => {
@@ -111,7 +138,7 @@ pub(super) async fn authenticate_player(
             None => PlayerAuthResult::Rejected,
         });
     };
-    hub.login_throttle.finish(device, true, Instant::now());
+    reservation.finish(true, Instant::now());
     if let Some(device_name) = candidate.busy_device_name {
         tracing::info!(device_id = %device, player_id = %candidate.player_id, "player login refused: already playing");
         return Ok(PlayerAuthResult::Busy { device_name });

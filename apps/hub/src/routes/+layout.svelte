@@ -222,8 +222,9 @@
       const field = document.querySelector<HTMLInputElement>(
         "[data-pos-search], [data-player-lookup]",
       );
+      // On the POS with the phone cart sheet open there is no field; leaving would drop the cart.
       if (field) field.focus();
-      else void goto("/players?lookup");
+      else if (current?.id !== "pos") void goto("/players?lookup");
       return;
     }
     const target = shortcutTarget(event, document.activeElement);

@@ -139,12 +139,12 @@ export class ScanBurst {
   key(key: string, now: number): string | null {
     if (key === "Enter") {
       const code = this.#chars;
-      const fast = now - this.#last <= SCAN_GAP_MS;
+      const fast = now - this.#last < SCAN_GAP_MS;
       this.reset();
       return fast && code.length >= SCAN_MIN_CHARS ? code : null;
     }
     if (key.length !== 1) return null;
-    this.#chars = now - this.#last <= SCAN_GAP_MS ? this.#chars + key : key;
+    this.#chars = now - this.#last < SCAN_GAP_MS ? this.#chars + key : key;
     this.#last = now;
     return null;
   }

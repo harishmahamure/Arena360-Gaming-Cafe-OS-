@@ -4,10 +4,12 @@ import {
   ALL,
   FAVOURITES,
   MAX_LINE_QTY,
+  SCAN_GAP_MS,
   ScanBurst,
   cartCount,
   cartTotal,
   findByBarcode,
+  lineShortage,
   step,
   unavailableTag,
   visibleProducts,
@@ -146,4 +148,19 @@ test("a burst of fast keys ending in Enter is a scan; slow or short ones are not
   burst.key("2", (t += 5));
   burst.key("3", (t += 5));
   expect(burst.key("Enter", (t += 5))).toBe("123");
+});
+
+test("a line whose stock dropped under it reports the shortage; a line within stock does not", () => {
+  const cola = product("cola", { quantity: 1 });
+  const cart = [{ productId: "cola", qty: 3 }];
+  expect(lineShortage(cart, cola, index(cola))).toEqual({ name: "cola", left: 1 });
+  const ok = product("cola", { quantity: 3 });
+  expect(lineShortage(cart, ok, index(ok))).toBeNull();
+});
+
+test("keys exactly the gap apart are typing, not a scan", () => {
+  const burst = new ScanBurst();
+  let t = 1000;
+  for (const key of "8901") burst.key(key, (t += SCAN_GAP_MS));
+  expect(burst.key("Enter", (t += SCAN_GAP_MS))).toBeNull();
 });

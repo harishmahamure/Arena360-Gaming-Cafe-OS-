@@ -98,27 +98,38 @@
   }
 
   /** Puts one of `product` in the cart (a tile, a scan); a refusal goes in the notice. */
-  function add(product: Product) {
+  function add(product: Product): boolean {
     const tag = unavailableTag(product);
     if (tag) {
       notice = {
         tone: "refusal",
         text: t("hub.pos.cannot_add", { name: product.name, reason: t(tag).toLowerCase() }),
       };
-      return;
+      return false;
     }
     const moved = step(cart, product, 1, byId);
     if (moved.refusal) {
       notice = { tone: "refusal", text: refusalText(moved.refusal) };
-      return;
+      return false;
     }
     cart = moved.cart;
     refusals = {};
     notice = { tone: "ok", text: t("hub.pos.added", { name: product.name }) };
+    return true;
   }
 
   /** The ± steppers: a step up past what is on hand is refused under that line. */
   function nudge(product: Product, delta: number) {
+    const tag = delta > 0 ? unavailableTag(product) : null;
+    if (tag) {
+      refusals = {
+        [product.id]: t("hub.pos.cannot_add", {
+          name: product.name,
+          reason: t(tag).toLowerCase(),
+        }),
+      };
+      return;
+    }
     const moved = step(cart, product, delta, byId);
     if (moved.refusal) {
       refusals = { [product.id]: refusalText(moved.refusal) };
@@ -130,29 +141,31 @@
     if (cart.length === 0) cartOpen = false;
   }
 
-  function scan(code: string) {
+  /** Adds the product with this exact barcode; false when nothing was added. */
+  function scan(code: string): boolean {
     const wanted = code.trim();
-    if (!wanted) return;
+    if (!wanted) return false;
     const product = findByBarcode(products, wanted);
     if (!product) {
       notice = { tone: "refusal", text: t("hub.pos.barcode_unknown", { code: wanted }) };
-      return;
+      return false;
     }
-    add(product);
+    return add(product);
   }
 
   function onSearchKey(event: KeyboardEvent) {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    if (!query.trim()) return;
-    scan(query);
-    query = "";
+    if (event.isComposing || !query.trim()) return;
+    // A code that added nothing stays in the field so a mistyped digit can be fixed.
+    if (scan(query)) query = "";
   }
 
   /** A keyboard-wedge scan while focus is on the POS outside a text field. */
   function onWindowKey(event: KeyboardEvent) {
     if (event.ctrlKey || event.altKey || event.metaKey || event.defaultPrevented) return;
-    if (isTextEntry(document.activeElement)) return burst.reset();
+    // Behind the phone sheet the notice is not on screen, so a scan there would fail silently.
+    if (sheet || event.repeat || isTextEntry(document.activeElement)) return burst.reset();
     const code = burst.key(event.key, event.timeStamp);
     if (code === null) return;
     event.preventDefault();
@@ -565,9 +578,11 @@
     cursor: pointer;
   }
 
-  .tile:disabled {
+  .tile.ui-interactive:disabled {
     color: var(--text);
     cursor: not-allowed;
+    /* Only the photo dims; the name, price and tag stay at full ink. */
+    opacity: 1;
   }
 
   .photo {

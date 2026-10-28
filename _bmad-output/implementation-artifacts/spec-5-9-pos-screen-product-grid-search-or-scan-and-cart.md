@@ -2,7 +2,7 @@
 title: 'Story 5.9: POS screen — product grid, search or scan, and cart'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: '703880d1bcf4ae232da8952bd91cc2f365740f24'
 baseline_revision: '703880d1bcf4ae232da8952bd91cc2f365740f24'
 route: 'dispatch'
@@ -78,6 +78,9 @@ context:
 
 ## Review Triage Log
 
+- patched: cart + stepper now refuses inactive/expired/out-of-stock products; unknown or refused code stays in the field; IME Enter and key auto-repeat ignored; scan bursts ignored behind the phone sheet; Ctrl+K on POS no longer navigates away when the sheet hides the field; disabled tile keeps full-ink name, price and tag; burst gap is strictly under 50 ms; unit tests for lineShortage and the gap edge.
+- deferred: focus trap in the phone sheet, a stale-load notice, Back-event and reload-under-cart Playwright cases (server re-checks at sale in 5.11).
+
 ## Design Notes
 
 - Product prices are summed as listed; the per-rate tax breakup and the real settle action arrive with Story 5.11, so the settle bar's button is disabled with its reason.
@@ -93,7 +96,7 @@ context:
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 - **Change:** the POS screen (grid, category strip, search or scan, cart with live availability, settle-bar region, phone cart bar and sheet); Ctrl+K targets the POS search on POS.
 - **Files:** `apps/hub/src/lib/pos.ts`, `apps/hub/src/routes/pos/+page.svelte`, `apps/hub/src/routes/+layout.svelte`, `packages/ui/src/messages/en.json`, `apps/hub/tests/{pos.spec,pos.unit.spec,shell.spec}.ts`.

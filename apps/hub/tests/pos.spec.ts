@@ -228,6 +228,8 @@ test("an unknown code says so and adds nothing; a barcode of an unavailable prod
     "⚠ " + en["hub.pos.barcode_unknown"].replace("{code}", "0000"),
   );
   await expect(page.getByTestId("phone-cart-bar")).toHaveCount(0);
+  // A code that added nothing stays in the field so it can be corrected.
+  await expect(search).toHaveValue("0000");
   await search.fill("8903");
   await search.press("Enter");
   await expect(page.getByTestId("pos-notice")).toContainText(

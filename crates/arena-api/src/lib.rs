@@ -8,6 +8,7 @@ pub mod pairing;
 mod ui_ads;
 pub mod ui_audit;
 pub mod ui_auth;
+mod ui_coupons;
 pub mod ui_events;
 pub mod ui_pair;
 mod ui_pairing;

@@ -647,6 +647,7 @@ async fn available_stock_is_on_hand_less_open_holds_for_sales_and_the_catalogue(
     // A counter sale of 2 is refused, a sale of 1 goes through.
     let sale = |qty: i64| PosSale {
         business: None,
+        coupon: None,
         lines: vec![PosSaleLine {
             product_id: id.clone(),
             qty,
@@ -688,6 +689,7 @@ async fn counter_sale_lines_are_served_in_both_modes() {
             owner(),
             IntentPayload::PosSale(PosSale {
                 business: None,
+                coupon: None,
                 lines: vec![PosSaleLine {
                     product_id: id.clone(),
                     qty: 2,

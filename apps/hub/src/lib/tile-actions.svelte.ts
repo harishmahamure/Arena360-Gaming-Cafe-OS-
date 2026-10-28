@@ -85,6 +85,7 @@ const REFUSALS: Record<string, MessageKey> = {
   CREDIT_LIMIT: "hub.settle.credit_limit",
   OVERRIDE_USED_TODAY: "hub.settle.override_used",
   REFERENCE_REQUIRED: "hub.settle.reference",
+  COUPON_INVALID: "hub.settle.coupon.refused",
   "STALE:session.settle": "hub.settle.stale",
   PACK_EXPIRED: "hub.session.pack_expired",
   PLAN_NOT_FOR_GROUP: "hub.session.pack_group",
@@ -232,9 +233,10 @@ export const settleJob = (
   rev: number,
   receipt?: ReceiptChoice,
   business?: BusinessBuyer,
+  coupon?: string,
 ) =>
   job(
-    { kind: "session.settle", order_id, payments, receipt, business },
+    { kind: "session.settle", order_id, payments, receipt, business, coupon },
     { track: "none", rev, done: "hub.sheet.done.settled" },
   );
 

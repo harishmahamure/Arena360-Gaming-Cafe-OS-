@@ -14,7 +14,7 @@ use arena_proto::{
     AppError, LocalePending, NumberFormat, PendingNumber, PendingText, SnapshotLocale,
     SymbolPosition,
 };
-use arena_store::{BranchLocale, SettingRow, StoreTx, find_branch_locale, list_settings};
+use arena_store::{BranchLocale, SettingRow, find_branch_locale, list_settings};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
 use chrono_tz::Tz;
 
@@ -257,7 +257,7 @@ pub fn next_rollover(rows: &[LocaleSetting], now_ms: i64) -> Option<i64> {
 }
 
 /// The locale rows of the branch inside `tx`, or `None` before bootstrap.
-pub fn read_rows(tx: &StoreTx<'_>) -> Result<Option<Vec<LocaleSetting>>, AppError> {
+pub fn read_rows(tx: &arena_store::DbConn) -> Result<Option<Vec<LocaleSetting>>, AppError> {
     let Some(branch) = find_branch_locale(tx)? else {
         return Ok(None);
     };
@@ -266,7 +266,7 @@ pub fn read_rows(tx: &StoreTx<'_>) -> Result<Option<Vec<LocaleSetting>>, AppErro
 
 /// **stamp** (business day): the `(business_day, fy)` of a change written at `now_ms`, under the
 /// locale in effect then; `None` before the branch exists.
-pub fn stamp(tx: &StoreTx<'_>, now_ms: i64) -> Result<Option<(String, String)>, AppError> {
+pub fn stamp(tx: &arena_store::DbConn, now_ms: i64) -> Result<Option<(String, String)>, AppError> {
     Ok(read_rows(tx)?.map(|rows| {
         let (day, locale) = resolve(&rows, now_ms);
         (day.to_string(), fy_of(day, locale.fy_start_month))
@@ -274,7 +274,7 @@ pub fn stamp(tx: &StoreTx<'_>, now_ms: i64) -> Result<Option<(String, String)>, 
 }
 
 /// The branch time zone in effect at `now_ms` (`None` before the branch exists).
-pub fn tz_at(tx: &StoreTx<'_>, now_ms: i64) -> Result<Option<Tz>, AppError> {
+pub fn tz_at(tx: &arena_store::DbConn, now_ms: i64) -> Result<Option<Tz>, AppError> {
     Ok(read_rows(tx)?.map(|rows| resolve(&rows, now_ms).1.tz))
 }
 
@@ -336,7 +336,7 @@ pub fn snapshot_locale(rows: &[LocaleSetting], now_ms: i64) -> SnapshotLocale {
 /// `minor` units as the branch writes money at `now_ms`: the shared formatter of the UI
 /// (`₹1,23,456.78`, no decimals for a zero exponent, the symbol after the number when the branch
 /// puts it there).
-pub fn format_money(tx: &StoreTx<'_>, now_ms: i64, minor: i64) -> Result<String, AppError> {
+pub fn format_money(tx: &arena_store::DbConn, now_ms: i64, minor: i64) -> Result<String, AppError> {
     let Some(rows) = read_rows(tx)? else {
         return Ok(minor.to_string());
     };

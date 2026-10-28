@@ -8,6 +8,7 @@ import type { AuditReadGranted } from "./AuditReadGranted";
 import type { BranchBootstrap } from "./BranchBootstrap";
 import type { BranchSeedDefaults } from "./BranchSeedDefaults";
 import type { ControllerCheck } from "./ControllerCheck";
+import type { CouponUpsert } from "./CouponUpsert";
 import type { CreditAutoPause } from "./CreditAutoPause";
 import type { CreditCollect } from "./CreditCollect";
 import type { CreditCollectReverted } from "./CreditCollectReverted";
@@ -118,6 +119,7 @@ export type IntentPayload =
   | ({ kind: "product.delete" } & ProductDelete)
   | ({ kind: "plan.upsert" } & PlanUpsert)
   | ({ kind: "rule.upsert" } & RuleUpsert)
+  | ({ kind: "coupon.upsert" } & CouponUpsert)
   | ({ kind: "plan.sell" } & PlanSell)
   | ({ kind: "plan.sell.reverted" } & PlanSellReverted)
   | ({ kind: "pos.sale" } & PosSale)

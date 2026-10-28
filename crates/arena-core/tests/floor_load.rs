@@ -333,6 +333,7 @@ fn next_intent(f: &Floor, rng: &mut Rng) -> Option<Intent> {
                     return Some(intent(
                         IntentPayload::SessionSettle(SessionSettle {
                             business: None,
+                            coupon: None,
                             order_id: text(o, "id"),
                             credit_override: None,
                             payments: vec![PaymentRow {

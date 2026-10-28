@@ -66,11 +66,13 @@ pub enum Table {
     CashEvents,
     InvoiceSequences,
     NotifyOutbox,
+    Coupons,
+    CouponTargets,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 39] = [
+    pub const ALL: [Table; 41] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -110,6 +112,8 @@ impl Table {
         Table::CashEvents,
         Table::InvoiceSequences,
         Table::NotifyOutbox,
+        Table::Coupons,
+        Table::CouponTargets,
     ];
 
     /// The SQL table name.
@@ -154,6 +158,8 @@ impl Table {
             Self::CashEvents => "cash_events",
             Self::InvoiceSequences => "invoice_sequences",
             Self::NotifyOutbox => "notify_outbox",
+            Self::Coupons => "coupons",
+            Self::CouponTargets => "coupon_targets",
         }
     }
 
@@ -189,6 +195,8 @@ impl Table {
             | Self::NotifyOutbox => &["id"],
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
+            Self::Coupons => &["coupon_id"],
+            Self::CouponTargets => &["coupon_id", "target_kind", "target_id"],
             Self::PlanGroups => &["plan_id", "group_id"],
             Self::InvoiceSequences => &["fy", "segment"],
             Self::Consents => &["consent_id"],
@@ -238,8 +246,13 @@ impl Table {
             | Self::CashEvents
             | Self::InvoiceSequences
             | Self::NotifyOutbox
+            | Self::Coupons
             | Self::Plans => true,
-            Self::Settings | Self::RolePerms | Self::BundleComponents | Self::PlanGroups => false,
+            Self::Settings
+            | Self::RolePerms
+            | Self::BundleComponents
+            | Self::PlanGroups
+            | Self::CouponTargets => false,
         }
     }
 
@@ -248,7 +261,7 @@ impl Table {
     pub fn is_versioned(self) -> bool {
         !matches!(
             self,
-            Self::RolePerms | Self::BundleComponents | Self::PlanGroups
+            Self::RolePerms | Self::BundleComponents | Self::PlanGroups | Self::CouponTargets
         )
     }
 
@@ -383,6 +396,14 @@ pub enum RowKey {
     NotifyOutbox {
         id: String,
     },
+    Coupons {
+        coupon_id: String,
+    },
+    CouponTargets {
+        coupon_id: String,
+        target_kind: String,
+        target_id: String,
+    },
 }
 
 impl RowKey {
@@ -417,6 +438,8 @@ impl RowKey {
             Self::CashEvents { .. } => Table::CashEvents,
             Self::InvoiceSequences { .. } => Table::InvoiceSequences,
             Self::NotifyOutbox { .. } => Table::NotifyOutbox,
+            Self::Coupons { .. } => Table::Coupons,
+            Self::CouponTargets { .. } => Table::CouponTargets,
             Self::Players { .. } => Table::Players,
             Self::Consents { .. } => Table::Consents,
             Self::Sessions { .. } => Table::Sessions,
@@ -461,6 +484,12 @@ impl RowKey {
             Self::PlanGroups { plan_id, group_id } => format!("{plan_id}/{group_id}"),
             Self::InvoiceSequences { fy, segment } => format!("{fy}/{segment}"),
             Self::PricingRules { rule_id } => rule_id.clone(),
+            Self::Coupons { coupon_id } => coupon_id.clone(),
+            Self::CouponTargets {
+                coupon_id,
+                target_kind,
+                target_id,
+            } => format!("{coupon_id}/{target_kind}/{target_id}"),
             Self::Players { player_id } => player_id.clone(),
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
@@ -572,6 +601,14 @@ impl RowKey {
             },
             Table::StockHolds => Self::StockHolds { id: text("id")? },
             Table::NotifyOutbox => Self::NotifyOutbox { id: text("id")? },
+            Table::Coupons => Self::Coupons {
+                coupon_id: text("coupon_id")?,
+            },
+            Table::CouponTargets => Self::CouponTargets {
+                coupon_id: text("coupon_id")?,
+                target_kind: text("target_kind")?,
+                target_id: text("target_id")?,
+            },
             Table::Sessions => Self::Sessions { id: text("id")? },
             Table::SessionSegments => Self::SessionSegments { id: text("id")? },
             Table::Orders => Self::Orders { id: text("id")? },
@@ -617,6 +654,12 @@ impl RowKey {
             Self::PlanGroups { plan_id, group_id } => vec![plan_id, group_id],
             Self::InvoiceSequences { fy, segment } => vec![fy, segment],
             Self::PricingRules { rule_id } => vec![rule_id],
+            Self::Coupons { coupon_id } => vec![coupon_id],
+            Self::CouponTargets {
+                coupon_id,
+                target_kind,
+                target_id,
+            } => vec![coupon_id, target_kind, target_id],
             Self::Players { player_id } => vec![player_id],
             Self::Wallets { player_id } | Self::CreditBalances { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],

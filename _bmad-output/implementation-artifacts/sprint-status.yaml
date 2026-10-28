@@ -145,7 +145,7 @@ development_status:
   5-18-cash-drawer-kicks-on-cash-sales: done
   5-19-whatsapp-receipt-queued-to-the-outbox: done
   5-20-b2b-invoice-with-the-customer-s-gstin: done
-  5-21-coupons-applied-at-settle: backlog
+  5-21-coupons-applied-at-settle: review
   5-22-manual-discount-with-manager-pin-and-reason: backlog
   5-23-void-an-unsettled-order-with-manager-pin: backlog
   5-24-refund-a-settled-order-with-a-credit-note: backlog

@@ -220,6 +220,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 53,
         sql: include_str!("../migrations/0053_business_invoice.sql"),
     },
+    Migration {
+        version: 54,
+        sql: include_str!("../migrations/0054_coupons.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -541,6 +545,71 @@ mod tests {
             conn.execute_batch("UPDATE orders SET buyer_name = 'Acme'")
                 .is_err(),
             "a name without a GSTIN is refused"
+        );
+    }
+
+    /// Migration 54 adds the coupon tables and the order's coupon columns: a code is unique and
+    /// upper-case, a coupon is a percent or an amount and never both, and an existing order has none.
+    #[test]
+    fn the_coupon_migration_adds_unique_upper_case_codes_and_nullable_order_columns() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 54) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                 created_at, updated_at, kind)
+             VALUES ('O1', 'settled', 5, 5, 'd', 'f', 0, 0, 0, 'pos_sale');",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATIONS[53].sql).unwrap();
+        let coupon: (Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT coupon_code, coupon_minor FROM orders WHERE id = 'O1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(coupon, (None, None), "an existing order took no coupon");
+        let insert = |id: &str, code: &str, pct: &str, amt: &str| {
+            conn.execute_batch(&format!(
+                "INSERT INTO coupons (coupon_id, code, percent_bp, amount_minor, active, rev,
+                                      created_at, updated_at)
+                 VALUES ('{id}', '{code}', {pct}, {amt}, 1, 0, 0, 0)"
+            ))
+        };
+        insert("C1", "SAVE10", "1000", "NULL").unwrap();
+        insert("C2", "FLAT5", "NULL", "500").unwrap();
+        assert!(
+            insert("C3", "SAVE10", "500", "NULL").is_err(),
+            "a code is unique"
+        );
+        assert!(
+            insert("C4", "lower", "500", "NULL").is_err(),
+            "a code is upper-case"
+        );
+        assert!(
+            insert("C5", "BOTH1", "500", "500").is_err(),
+            "not both kinds"
+        );
+        assert!(
+            insert("C6", "NONE1", "NULL", "NULL").is_err(),
+            "one kind is needed"
+        );
+        assert!(
+            insert("C7", "OVER1", "10001", "NULL").is_err(),
+            "at most 100%"
+        );
+        conn.execute_batch("INSERT INTO coupon_targets VALUES ('C1', 'product', 'P')")
+            .unwrap();
+        assert!(
+            conn.execute_batch("INSERT INTO coupon_targets VALUES ('C1', 'shelf', 'P')")
+                .is_err()
+        );
+        assert!(
+            conn.execute_batch("UPDATE orders SET coupon_minor = 0 WHERE id = 'O1'")
+                .is_err(),
+            "a coupon takes something off"
         );
     }
 }

@@ -552,6 +552,8 @@ pub(crate) struct SettleTarget {
     running: bool,
     /// The bill still has lines that are not served (Story 5.13).
     unserved: bool,
+    /// The coupon the settle names, with the bill it is priced on (Story 5.21).
+    coupon: Option<super::coupon::CouponBill>,
 }
 
 pub(super) fn load_settle(
@@ -575,6 +577,10 @@ pub(super) fn load_settle(
     target.unserved = match &order {
         Some(o) => count_unserved_lines(tx, &o.id)? > 0,
         None => false,
+    };
+    target.coupon = match (&s.coupon, &order) {
+        (Some(code), Some(o)) => Some(super::coupon::load_session_bill(tx, code, &o.id, now_ms)?),
+        _ => None,
     };
     target.order = order;
     Ok(target)
@@ -619,6 +625,7 @@ pub(super) fn load_payer(
         shift_open: arena_store::open_shift_id(tx)?.is_some(),
         running: false,
         unserved: false,
+        coupon: None,
     })
 }
 
@@ -707,12 +714,16 @@ pub(super) fn validate_settle(s: &SessionSettle, t: &SettleTarget) -> Result<(),
             "Mark served or cancel unserved items first",
         ));
     }
+    let total = match &t.coupon {
+        Some(bill) => o.total_minor - bill.quote(o.total_minor)?.discount_minor,
+        None => o.total_minor,
+    };
     validate_payments(
         &s.payments,
         s.credit_override,
         t,
         o.player_id.is_some(),
-        o.total_minor,
+        total,
     )
 }
 
@@ -922,6 +933,10 @@ pub(super) fn mutate_settle(
         op: ChangeOp::Update,
         before: None,
     });
+    if let (Some(bill), Some(o)) = (&t.coupon, &t.order) {
+        let quote = bill.quote(o.total_minor)?;
+        super::coupon::redeem(tx, &quote, &s.order_id, true, &mut written)?;
+    }
     let player_id = t.order.as_ref().and_then(|o| o.player_id.as_deref());
     record_payer_txns(
         tx,
@@ -1438,6 +1453,7 @@ pub(super) fn mutate_settle_reverted(
             });
         }
     }
+    super::coupon::release_on_revert(tx, &o.id, true, &mut written)?;
     reopen_order(tx, &o.id)?;
     written.push(Written {
         key: RowKey::Orders { id: o.id.clone() },

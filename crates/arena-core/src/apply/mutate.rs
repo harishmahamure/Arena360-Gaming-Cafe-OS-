@@ -7,8 +7,8 @@ use arena_store::{
 };
 
 use super::{
-    Target, devices, groups, maintenance, plans, players, products, rates, rules, settings_set,
-    staff_roles, stock, zones,
+    Target, coupon, devices, groups, maintenance, plans, players, products, rates, rules,
+    settings_set, staff_roles, stock, zones,
 };
 use crate::rbac::{BUILTIN_ROLES, builtin_perms};
 use crate::settings_defaults::{DEFAULT_SETTINGS, bootstrap_locale_settings};
@@ -243,6 +243,10 @@ pub(super) fn mutate(
         },
         IntentPayload::RuleUpsert(u) => match target {
             Target::Rule(t) => rules::mutate(tx, u, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::CouponUpsert(u) => match target {
+            Target::Coupon(t) => coupon::mutate(tx, u, t),
             _ => Err(mismatch()),
         },
         IntentPayload::ProductDelete(p) => match target {

@@ -13,6 +13,7 @@ mod billing;
 mod catalog;
 mod commands;
 mod connectivity;
+mod coupon;
 pub mod currency;
 mod device_spec;
 mod discovery;
@@ -94,6 +95,11 @@ pub use commands::{
     is_setup_command,
 };
 pub use connectivity::{Connectivity, ConnectivityState};
+pub use coupon::{
+    COUPON_CODE_MAX_CHARS, COUPON_CODE_MIN_CHARS, COUPON_MAX_PERCENT_BP, COUPON_MAX_TARGETS,
+    COUPON_TARGET_KINDS, CouponPreview, CouponPreviewRequest, CouponTarget, CouponUpsert,
+    CouponView, coupon_code_normal, coupon_code_valid,
+};
 pub use device_spec::{
     DeviceSpec, MIN_FREE_BYTES, MIN_FREE_GB, MIN_RAM_BYTES, MIN_RAM_GB, SpecFailure,
     SpecRequirement, check_device, meminfo_total_bytes,

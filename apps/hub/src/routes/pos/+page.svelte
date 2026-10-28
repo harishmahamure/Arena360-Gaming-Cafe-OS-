@@ -362,6 +362,7 @@
     CREDIT_LIMIT: "hub.settle.credit_limit",
     CREDIT_PAUSED: "hub.plans.sell.credit_paused",
     REFERENCE_REQUIRED: "hub.settle.reference",
+    COUPON_INVALID: "hub.settle.coupon.refused",
     OUT_OF_STOCK: "hub.pos.err.out_of_stock",
     SHIFT_NOT_OPEN: "hub.settle.shift_closed",
     PERMISSION_DENIED: "hub.refusal.permission",
@@ -451,6 +452,8 @@
   let chosenReceipt: ReceiptChoice | undefined;
   // The business a "Business invoice" settle is made out to (Story 5.20).
   let chosenBusiness: BusinessBuyer | undefined;
+  // The coupon code of the settle in flight (Story 5.21).
+  let chosenCoupon: string | undefined;
 
   /** Settles the cart. `over` sells a short bundle anyway (needs `stock.override`). */
   async function settle(payments: PaymentRow[], over = false, ticket?: string) {
@@ -465,6 +468,7 @@
       stock_override: over ? true : undefined,
       receipt: chosenReceipt,
       business: chosenBusiness,
+      coupon: chosenCoupon,
     };
     const body = JSON.stringify(payload);
     const key = attempt?.body === body ? attempt.key : newIdempotencyKey();
@@ -732,15 +736,17 @@
       bill={settleBill}
       {locale}
       {busy}
-      onsettle={(payments, receipt, business) => {
+      onsettle={(payments, receipt, business, coupon) => {
         chosenReceipt = receipt;
         chosenBusiness = business;
+        chosenCoupon = coupon;
         void settle(payments);
       }}
       title="hub.pos.settle.title"
       prefillCash
       hotkey
       receiptChoice
+      couponSource={{ lines: saleLines(cart) }}
     />
   {:else}
     <section

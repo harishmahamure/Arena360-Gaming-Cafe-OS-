@@ -30,6 +30,7 @@ mod branch_code;
 mod business_invoice;
 mod changes;
 mod controller_check;
+mod coupon;
 mod credit;
 mod credit_collect;
 pub(crate) mod credit_pause;
@@ -89,6 +90,7 @@ use crate::clock::Clock;
 use crate::status::{Epoch, Role};
 
 pub use branch_code::lock_branch_code;
+pub use coupon::preview as coupon_preview;
 pub use devices::MAX_VERSION_LEN;
 pub use frame::{is_ulid, validate_frame};
 pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE};
@@ -175,6 +177,7 @@ pub(crate) enum Target {
     Rate(Box<rates::RateTarget>),
     Plan(Box<plans::PlanTarget>),
     Rule(Box<rules::RuleTarget>),
+    Coupon(Box<coupon::EditTarget>),
     TestSession(Box<test_session::SessionTarget>),
     Pc(Box<pc_command::PcTarget>),
     Player(Box<players::PlayerTarget>),
@@ -243,6 +246,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::RateUpsert(_) => Target::Rate(Box::new(rates::load(tx, &intent.payload)?)),
         P::PlanUpsert(_) => Target::Plan(Box::new(plans::load(tx, &intent.payload)?)),
         P::RuleUpsert(_) => Target::Rule(Box::new(rules::load(tx, &intent.payload)?)),
+        P::CouponUpsert(_) => Target::Coupon(Box::new(coupon::load(tx, &intent.payload)?)),
         P::DeviceTestSessionStart(_) | P::DeviceTestSessionCompleted(_) => {
             test_session::load(tx, &intent.payload)?
         }

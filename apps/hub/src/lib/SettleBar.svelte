@@ -9,6 +9,7 @@
   } from "@arena/ui";
   import type {
     BusinessBuyer,
+    CouponPreview,
     PaymentMethod,
     PaymentRow,
     PrinterReady,
@@ -19,6 +20,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { tick, untrack, type Snippet } from "svelte";
   import { buyerErrors, toBuyer } from "./business";
+  import { normaliseCode, previewCoupon, type CouponSource } from "./coupons";
   import { printerReady } from "./printer";
   import { cashBlocked } from "./shift.svelte";
   import {
@@ -44,6 +46,7 @@
     prefillCash = false,
     hotkey = false,
     receiptChoice = false,
+    couponSource = null,
   }: {
     bill: SnapshotBill;
     locale: SnapshotLocale;
@@ -53,8 +56,14 @@
     /**
      * `receipt` is the choice on the bar, present only when `receiptChoice` is set; `business`
      * is the buyer of a business invoice, present only when staff chose one (Story 5.20).
+     * `coupon` is the applied coupon code, present only when staff applied one (Story 5.21).
      */
-    onsettle: (payments: PaymentRow[], receipt?: ReceiptChoice, business?: BusinessBuyer) => void;
+    onsettle: (
+      payments: PaymentRow[],
+      receipt?: ReceiptChoice,
+      business?: BusinessBuyer,
+      coupon?: string,
+    ) => void;
     title?: MessageKey;
     extra?: Snippet;
     /** Starts with one Cash row for the whole total (only while cash can be taken). */
@@ -63,6 +72,8 @@
     hotkey?: boolean;
     /** Offers the receipt choice Print · None (a sale; a top-up or a collection has none). */
     receiptChoice?: boolean;
+    /** The bill a coupon is priced on; when set the bar offers a coupon field (Story 5.21). */
+    couponSource?: CouponSource | null;
   } = $props();
 
   let root: HTMLElement | undefined = $state();
@@ -115,9 +126,61 @@
     };
   });
 
+  // A coupon applied to the bill (Story 5.21): the Hub prices it and the bar shows its line and
+  // the new total. It is priced again whenever the bill changes, and dropped with the Hub's reason
+  // when it no longer applies.
+  let couponText = $state("");
+  let applied = $state(null as CouponPreview | null);
+  let couponProblem = $state(null as string | null);
+  let couponBusy = $state(false);
+  let couponOpen = $state(false);
+  let couponRuns = 0;
+  const couponKey = $derived(JSON.stringify([couponSource, bill.remaining_minor]));
+
+  async function priceCoupon(code: string, source: CouponSource) {
+    const mine = ++couponRuns;
+    couponBusy = true;
+    const answer = await previewCoupon(code, source).finally(() => {
+      if (mine === couponRuns) couponBusy = false;
+    });
+    if (mine !== couponRuns) return;
+    if (answer.kind === "ok") {
+      applied = answer.preview;
+      couponProblem = null;
+    } else {
+      applied = null;
+      couponOpen = true;
+      couponProblem =
+        answer.kind === "refused" ? answer.message : t("hub.settle.coupon.unreachable");
+    }
+  }
+
+  function applyCoupon() {
+    const code = normaliseCode(couponText);
+    if (!couponSource || couponBusy || code.length === 0) return;
+    void priceCoupon(code, couponSource);
+  }
+
+  function removeCoupon() {
+    couponRuns += 1;
+    couponBusy = false;
+    applied = null;
+    couponProblem = null;
+    couponText = "";
+    couponOpen = false;
+  }
+
+  $effect(() => {
+    void couponKey;
+    untrack(() => {
+      const code = applied?.code;
+      if (code && couponSource) void priceCoupon(code, couponSource);
+    });
+  });
+
   const id = $props.id();
   const exponent = $derived(locale.exponent);
-  const total = $derived(bill.remaining_minor);
+  const total = $derived(applied ? applied.total_minor : bill.remaining_minor);
   const sums = $derived(tally(total, rows, exponent));
   const wallet = $derived(bill.wallet_minor ?? 0);
   // Cash needs an open shift; every other method settles without one.
@@ -209,7 +272,7 @@
   }
 
   export async function submit() {
-    if (busy || !closed || blockedReason || businessBlocked) return;
+    if (busy || couponBusy || !closed || blockedReason || businessBlocked) return;
     attempted = true;
     if (!rowsValid(rows, exponent, wallet)) {
       await tick();
@@ -220,6 +283,7 @@
       toPayments(rows, sums.change, exponent),
       receiptChoice ? receipt : undefined,
       toBuyer(businessOffered && businessOn, buyerGstin, buyerName),
+      applied?.code,
     );
   }
 </script>
@@ -234,8 +298,35 @@
   bind:this={root}
 >
   <h3 class="type-hub-title" id="{id}-title">{t(title)}</h3>
+  {#if applied}
+    <div class="coupon" data-testid="coupon">
+      <p class="type-hub-label coupon-line tabular-nums" data-testid="coupon-line">
+        <span>{t("hub.settle.coupon.line", { code: applied.code })}</span>
+        <span data-testid="coupon-amount"
+          >{t("hub.settle.coupon.amount", { amount: money(applied.discount_minor) })}</span
+        >
+      </p>
+      <button
+        type="button"
+        class="ui-interactive method type-hub-label"
+        data-testid="coupon-remove"
+        disabled={busy}
+        onclick={removeCoupon}>{t("hub.settle.coupon.remove", { code: applied.code })}</button
+      >
+    </div>
+  {/if}
+
   <p class="total">
     <span class="type-hub-label">{t("hub.settle.total")}</span>
+    {#if couponSource && !applied && !couponOpen}
+      <button
+        type="button"
+        class="ui-interactive method type-hub-label"
+        data-testid="coupon-toggle"
+        disabled={busy}
+        onclick={() => (couponOpen = true)}>{t("hub.settle.coupon.add")}</button
+      >
+    {/if}
     <span class="type-hub-numeric tabular-nums" data-testid="settle-total">{money(total)}</span>
   </p>
 
@@ -258,6 +349,26 @@
       >
     {/each}
   </div>
+  {#if couponSource && couponOpen && !applied}
+    <div class="coupon" data-testid="coupon">
+      <div class="row coupon-entry">
+        <TextField label="hub.settle.coupon" bind:value={couponText} autocomplete="off" />
+        <button
+          type="button"
+          class="ui-interactive method type-hub-label"
+          data-testid="coupon-apply"
+          disabled={busy || couponBusy || couponText.trim().length === 0}
+          onclick={applyCoupon}>{t("hub.settle.coupon.apply")}</button
+        >
+      </div>
+      {#if couponProblem}
+        <p class="type-hub-label coupon-problem" role="alert" data-testid="coupon-error">
+          <span aria-hidden="true">⚠</span>
+          {couponProblem}
+        </p>
+      {/if}
+    </div>
+  {/if}
 
   {#if noCash}
     <p class="type-hub-label shift-closed" data-testid="settle-shift-closed">
@@ -390,8 +501,8 @@
 
   <Button
     label="hub.settle.submit"
-    disabled={busy || !closed || !!blockedReason || businessBlocked}
-    disabledReason={busy
+    disabled={busy || couponBusy || !closed || !!blockedReason || businessBlocked}
+    disabledReason={busy || couponBusy
       ? "hub.sheet.waiting"
       : blockedReason
         ? blockedReason
@@ -466,6 +577,26 @@
   .receipt {
     display: grid;
     gap: var(--space-2);
+  }
+
+  .coupon {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .coupon-line {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .coupon-entry {
+    align-items: end;
+  }
+
+  .coupon-problem {
+    color: var(--text-field-error-text);
   }
 
   .shift-link {

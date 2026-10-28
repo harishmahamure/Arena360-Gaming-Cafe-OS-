@@ -400,6 +400,10 @@ pub struct SessionSettle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub business: Option<crate::BusinessBuyer>,
+    /// A coupon code to apply to the bill (Story 5.21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub coupon: Option<String>,
 }
 
 pub const UNDO_WINDOW_MS: i64 = 8_000;

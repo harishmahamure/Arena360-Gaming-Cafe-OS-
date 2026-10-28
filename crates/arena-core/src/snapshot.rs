@@ -1128,6 +1128,49 @@ impl SnapshotReader {
         })
     }
 
+    /// Every coupon with its targets, for Settings → Coupons and the audit of promotions.
+    pub fn coupons(&self) -> Result<Vec<arena_proto::CouponView>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            Ok(s.coupons()?
+                .into_iter()
+                .map(|(c, targets)| arena_proto::CouponView {
+                    id: c.coupon_id,
+                    code: c.code,
+                    percent_bp: c.percent_bp,
+                    amount_minor: c.amount_minor,
+                    valid_from: c.valid_from,
+                    valid_to: c.valid_to,
+                    usage_limit: c.usage_limit,
+                    used: c.used,
+                    min_bill_minor: c.min_bill_minor,
+                    targets: targets
+                        .into_iter()
+                        .map(|(kind, id)| arena_proto::CouponTarget { kind, id })
+                        .collect(),
+                    active: c.active,
+                    rev: c.rev,
+                })
+                .collect())
+        })
+    }
+
+    /// What a coupon code would do to a bill, by the pricing a settle uses (Story 5.21).
+    pub fn coupon_preview(
+        &self,
+        req: &arena_proto::CouponPreviewRequest,
+        now_ms: i64,
+    ) -> Result<arena_proto::CouponPreview, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| crate::apply::coupon_preview(conn, req, now_ms))
+    }
+
     /// The Settings → Staff list: the active and invited members with the `users` limit in
     /// effect (the licence's, else the Free default). Deactivated members are not listed.
     pub fn staff_list(&self) -> Result<arena_proto::StaffList, AppError> {

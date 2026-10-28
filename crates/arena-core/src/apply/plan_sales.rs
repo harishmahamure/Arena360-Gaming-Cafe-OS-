@@ -22,6 +22,7 @@ pub(crate) struct SellTarget {
     groups: Vec<String>,
     pass_active: bool,
     payer: SettleTarget,
+    coupon: Option<super::coupon::CouponBill>,
 }
 
 pub(super) fn load_sell(
@@ -35,7 +36,18 @@ pub(super) fn load_sell(
         Some(p) => list_plan_groups(tx, &p.plan_id)?,
         None => Vec::new(),
     };
+    let coupon = match (&s.coupon, &plan) {
+        (Some(code), Some(p)) => Some(super::coupon::load_plan_bill(
+            tx,
+            code,
+            &p.plan_id,
+            p.price_minor,
+            now_ms,
+        )?),
+        _ => None,
+    };
     Ok(SellTarget {
+        coupon,
         pass_active: player
             && plan.as_ref().is_some_and(|p| p.kind == "pass")
             && has_unexpired_pass(tx, &s.player_id, now_ms)?,
@@ -85,13 +97,22 @@ pub(super) fn validate_sell(intent: &Intent, s: &PlanSell, t: &SellTarget) -> Re
             "This player already has an active pass.",
         ));
     }
-    validate_payments(
-        &s.payments,
-        s.credit_override,
-        &t.payer,
-        true,
-        plan.price_minor,
-    )
+    let total = net_price(t, plan.price_minor)?.0;
+    validate_payments(&s.payments, s.credit_override, &t.payer, true, total)
+}
+
+/// The plan's price after the coupon, with the coupon's discount when there is one.
+fn net_price(
+    t: &SellTarget,
+    price_minor: i64,
+) -> Result<(i64, Option<super::coupon::Quote>), AppError> {
+    match &t.coupon {
+        Some(bill) => {
+            let q = bill.quote(price_minor)?;
+            Ok((price_minor - q.discount_minor, Some(q)))
+        }
+        None => Ok((price_minor, None)),
+    }
 }
 
 pub(super) fn mutate_sell(
@@ -110,6 +131,7 @@ pub(super) fn mutate_sell(
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
         AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
     })?;
+    let (total_minor, quote) = net_price(t, plan.price_minor)?;
     let order_id = ulid::Ulid::generate().to_string();
     insert_topup_order(
         tx,
@@ -117,7 +139,7 @@ pub(super) fn mutate_sell(
             kind: "plan_sale",
             id: &order_id,
             player_id: &s.player_id,
-            total_minor: plan.price_minor,
+            total_minor,
             settled_at: now_ms,
             settled_by: &intent.actor.id,
             business_day: &business_day,
@@ -149,6 +171,9 @@ pub(super) fn mutate_sell(
         op: ChangeOp::Insert,
         before: None,
     });
+    if let Some(q) = &quote {
+        super::coupon::redeem(tx, q, &order_id, false, &mut written)?;
+    }
     let stamp = Stamp {
         staff_id: &intent.actor.id,
         order_id: &order_id,
@@ -313,6 +338,7 @@ pub(super) fn mutate_sell_reverted(
         &mut written,
     )?;
     super::receipt_notify::skip_on_revert(tx, &o.id, &mut written)?;
+    super::coupon::release_on_revert(tx, &o.id, false, &mut written)?;
     if let Some(pack) = &t.pack {
         let key = RowKey::PlayerPacks {
             id: pack.id.clone(),

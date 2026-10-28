@@ -35,6 +35,7 @@ async fn sale(f: &Fixture, by: &Actor, product: &str) -> String {
         by.clone(),
         IntentPayload::PosSale(PosSale {
             business: None,
+            coupon: None,
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,

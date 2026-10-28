@@ -58,6 +58,7 @@ pub(crate) struct SaleTarget {
     basket: Basket,
     player: bool,
     payer: SettleTarget,
+    coupon: Option<super::coupon::CouponCtx>,
 }
 
 pub(super) fn internal(message: &str) -> AppError {
@@ -65,7 +66,7 @@ pub(super) fn internal(message: &str) -> AppError {
 }
 
 pub(super) fn load_held(
-    tx: &StoreTx<'_>,
+    tx: &arena_store::DbConn,
     product_id: &str,
     today: Option<&str>,
 ) -> Result<Held, AppError> {
@@ -86,7 +87,7 @@ pub(super) fn load_held(
 }
 
 pub(super) fn load_basket(
-    tx: &StoreTx<'_>,
+    tx: &arena_store::DbConn,
     lines: &[PosSaleLine],
     now_ms: i64,
 ) -> Result<Basket, AppError> {
@@ -138,10 +139,16 @@ pub(super) fn load_sale(
         None => false,
     };
     let payer = load_payer(tx, player_id.filter(|_| player), &s.payments, now_ms)?;
+    let coupon = s
+        .coupon
+        .as_deref()
+        .map(|code| super::coupon::load_ctx(tx, code, now_ms))
+        .transpose()?;
     Ok(SaleTarget {
         basket,
         player,
         payer,
+        coupon,
     })
 }
 
@@ -182,6 +189,32 @@ pub(super) struct Priced {
 }
 
 pub(super) fn price(sale: &[PosSaleLine], t: &Basket) -> Result<Priced, AppError> {
+    price_net(sale, t, None)
+}
+
+/// The sale priced with the coupon in `ctx` (when there is one): the net bill and the discount. A
+/// coupon the bill cannot take is `COUPON_INVALID`.
+pub(super) fn price_with_coupon(
+    sale: &[PosSaleLine],
+    t: &Basket,
+    ctx: Option<&super::coupon::CouponCtx>,
+) -> Result<(Priced, Option<super::coupon::Quote>), AppError> {
+    let gross = price(sale, t)?;
+    let Some(ctx) = ctx else {
+        return Ok((gross, None));
+    };
+    let lines = super::coupon::sale_lines(sale, &gross.lines);
+    let quote = super::coupon::quote(ctx, &lines, gross.bill.total_minor, false)?;
+    Ok((price_net(sale, t, Some(&quote))?, Some(quote)))
+}
+
+/// [`price`] with a coupon's discount taken off the eligible lines before tax: each rate's share
+/// reduces that rate's taxable amount, and tax is computed once per rate on what is left.
+fn price_net(
+    sale: &[PosSaleLine],
+    t: &Basket,
+    coupon: Option<&super::coupon::Quote>,
+) -> Result<Priced, AppError> {
     let gst = t.tax.tax_mode() == TaxMode::GstIn;
     let mut lines = Vec::with_capacity(sale.len());
     let mut taxed = Vec::with_capacity(sale.len());
@@ -203,6 +236,12 @@ pub(super) fn price(sale: &[PosSaleLine], t: &Basket) -> Result<Priced, AppError
         taxed.push(Line {
             rate_bp,
             amount_minor: amount,
+        });
+    }
+    for (rate_bp, share) in coupon.map_or(&[][..], |q| q.shares.as_slice()) {
+        taxed.push(Line {
+            rate_bp: *rate_bp,
+            amount_minor: -share,
         });
     }
     let bill = compute(&taxed, t.tax.inclusive, gst)
@@ -345,7 +384,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
             "no such player",
         ));
     }
-    let priced = price(&s.lines, &t.basket)?;
+    let (priced, _) = price_with_coupon(&s.lines, &t.basket, t.coupon.as_ref())?;
     validate_payments(
         &s.payments,
         s.credit_override,
@@ -366,7 +405,7 @@ pub(super) fn mutate_sale(
 ) -> Result<Vec<Written>, AppError> {
     let (business_day, fy) = crate::locale::stamp(tx, now_ms)?
         .ok_or_else(|| internal("the branch has not been bootstrapped"))?;
-    let priced = price(&s.lines, &t.basket)?;
+    let (priced, quote) = price_with_coupon(&s.lines, &t.basket, t.coupon.as_ref())?;
     let plan = plan_stock(&s.lines, &t.basket, s.stock_override == Some(true), &[])?;
     let breakup = serde_json::to_string(&priced.bill.breakup)
         .map_err(|_| internal("the tax breakup cannot be written"))?;
@@ -427,6 +466,9 @@ pub(super) fn mutate_sale(
             op: ChangeOp::Insert,
             before: None,
         });
+    }
+    if let Some(q) = &quote {
+        super::coupon::redeem(tx, q, &order_id, false, &mut written)?;
     }
     let stamp = Stamp {
         staff_id: &intent.actor.id,
@@ -633,6 +675,7 @@ pub(super) fn mutate_sale_reverted(
             now_ms,
         )?);
     }
+    super::coupon::release_on_revert(tx, &o.id, false, &mut written)?;
     super::plan_sales::delete_sale_rows(tx, &o.id, &t.payments, &t.txns, &t.lines, &mut written)?;
     Ok(written)
 }

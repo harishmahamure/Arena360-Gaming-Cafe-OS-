@@ -54,6 +54,10 @@ pub struct PosSale {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub business: Option<crate::BusinessBuyer>,
+    /// A coupon code to apply to the bill (Story 5.21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub coupon: Option<String>,
 }
 
 /// The payload of `pos.sale.reverted`: Undo of a counter sale within its window.

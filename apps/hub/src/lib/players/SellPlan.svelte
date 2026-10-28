@@ -39,6 +39,7 @@
     CREDIT_LIMIT: "hub.settle.credit_limit",
     CREDIT_PAUSED: "hub.plans.sell.credit_paused",
     REFERENCE_REQUIRED: "hub.settle.reference",
+    COUPON_INVALID: "hub.settle.coupon.refused",
   };
 
   const locale = $derived(branchLocale.current);
@@ -84,16 +85,30 @@
     })();
   });
 
-  async function settle(payments: PaymentRow[], receipt?: ReceiptChoice, business?: BusinessBuyer) {
+  async function settle(
+    payments: PaymentRow[],
+    receipt?: ReceiptChoice,
+    business?: BusinessBuyer,
+    coupon?: string,
+  ) {
     if (busy || !chosen) return;
     busy = true;
     error = null;
     const same =
-      attempt && JSON.stringify(attempt.payments) === JSON.stringify([payments, receipt, business]);
+      attempt &&
+      JSON.stringify(attempt.payments) === JSON.stringify([payments, receipt, business, coupon]);
     const key = same && attempt ? attempt.key : newIdempotencyKey();
-    attempt = { key, payments: [payments, receipt, business] };
+    attempt = { key, payments: [payments, receipt, business, coupon] };
     const outcome = await submitIntent(
-      { kind: "plan.sell", player_id: playerId, plan_id: chosen.id, payments, receipt, business },
+      {
+        kind: "plan.sell",
+        player_id: playerId,
+        plan_id: chosen.id,
+        payments,
+        receipt,
+        business,
+        coupon,
+      },
       key,
     ).finally(() => (busy = false));
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
@@ -152,9 +167,10 @@
       {bill}
       {locale}
       {busy}
-      onsettle={(p, receipt, business) => void settle(p, receipt, business)}
+      onsettle={(p, receipt, business, coupon) => void settle(p, receipt, business, coupon)}
       title="hub.plans.sell.title"
       receiptChoice
+      couponSource={{ plan_id: chosen.id }}
     >
       {#snippet extra()}
         <p class="type-hub-body" data-testid="sell-line">

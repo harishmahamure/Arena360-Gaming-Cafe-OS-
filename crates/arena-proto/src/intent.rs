@@ -113,6 +113,9 @@ pub enum IntentKind {
     PlanUpsert,
     #[serde(rename = "rule.upsert")]
     RuleUpsert,
+    /// A promotion: a coupon code with a percent or fixed discount (Story 5.21).
+    #[serde(rename = "coupon.upsert")]
+    CouponUpsert,
     #[serde(rename = "plan.sell")]
     PlanSell,
     #[serde(rename = "plan.sell.reverted")]
@@ -273,7 +276,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 88] = [
+    pub const ALL: [IntentKind; 89] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -302,6 +305,7 @@ impl IntentKind {
         Self::ProductDelete,
         Self::PlanUpsert,
         Self::RuleUpsert,
+        Self::CouponUpsert,
         Self::PlanSell,
         Self::PlanSellReverted,
         Self::PosSale,
@@ -395,6 +399,7 @@ impl IntentKind {
             Self::ProductDelete => "product.delete",
             Self::PlanUpsert => "plan.upsert",
             Self::RuleUpsert => "rule.upsert",
+            Self::CouponUpsert => "coupon.upsert",
             Self::PlanSell => "plan.sell",
             Self::PlanSellReverted => "plan.sell.reverted",
             Self::PosSale => "pos.sale",
@@ -502,6 +507,7 @@ impl IntentKind {
             | Self::ProductDelete
             | Self::PlanUpsert
             | Self::RuleUpsert
+            | Self::CouponUpsert
             | Self::StockIn
             | Self::StockInReverted
             | Self::StockWaste
@@ -605,6 +611,7 @@ impl IntentKind {
             | Self::ProductDelete
             | Self::PlanUpsert
             | Self::RuleUpsert
+            | Self::CouponUpsert
             | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
             Self::ShiftOpen => Requirement::Perm(Permission::ShiftOpen),
             Self::StockIn | Self::StockInReverted => Requirement::Perm(Permission::StockIn),
@@ -707,6 +714,7 @@ impl IntentKind {
             | Self::ProductDelete
             | Self::PlanUpsert
             | Self::RuleUpsert
+            | Self::CouponUpsert
             | Self::PlanSell
             | Self::PlanSellReverted
             | Self::PosSale
@@ -1231,6 +1239,8 @@ pub enum IntentPayload {
     PlanUpsert(crate::PlanUpsert),
     #[serde(rename = "rule.upsert")]
     RuleUpsert(crate::RuleUpsert),
+    #[serde(rename = "coupon.upsert")]
+    CouponUpsert(crate::CouponUpsert),
     #[serde(rename = "plan.sell")]
     PlanSell(crate::PlanSell),
     #[serde(rename = "plan.sell.reverted")]
@@ -1384,6 +1394,7 @@ impl IntentPayload {
             Self::ProductDelete(_) => IntentKind::ProductDelete,
             Self::PlanUpsert(_) => IntentKind::PlanUpsert,
             Self::RuleUpsert(_) => IntentKind::RuleUpsert,
+            Self::CouponUpsert(_) => IntentKind::CouponUpsert,
             Self::PlanSell(_) => IntentKind::PlanSell,
             Self::PlanSellReverted(_) => IntentKind::PlanSellReverted,
             Self::PosSale(_) => IntentKind::PosSale,
@@ -1688,7 +1699,7 @@ mod tests {
                 }
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
-                | "stock.threshold" => Requirement::Perm(Permission::CatalogEdit),
+                | "coupon.upsert" | "stock.threshold" => Requirement::Perm(Permission::CatalogEdit),
                 "shift.open" => Requirement::Perm(Permission::ShiftOpen),
                 "stock.in" | "stock.in.reverted" => Requirement::Perm(Permission::StockIn),
                 "stock.waste" | "stock.waste.reverted" | "stock.write_off" => {

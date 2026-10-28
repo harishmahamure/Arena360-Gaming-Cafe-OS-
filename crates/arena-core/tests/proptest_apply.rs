@@ -117,6 +117,17 @@ enum Op {
         stale: bool,
         who: Index,
     },
+    /// `coupon.upsert` of a percent or fixed coupon (valid or not) by a staff member of a built-in
+    /// role; when it saves, a cash counter sale applies its code (or an unknown one), then maybe the
+    /// sale's Undo. A coupon's `used` always equals the settled orders that took it.
+    Coupon {
+        percent: i64,
+        fixed: bool,
+        once: bool,
+        unknown: bool,
+        undo: bool,
+        who: Index,
+    },
     /// `stock.in` of a quantity and cost (valid or not) into the first tracked product, then
     /// maybe `stock.in.reverted` straight after.
     Stock {
@@ -475,6 +486,22 @@ fn op() -> impl Strategy<Value = Op> {
                 percent,
                 edit,
                 stale,
+                who,
+            }),
+        2 => (
+            prop_oneof![5 => 1..=10_000i64, 1 => 0..=0i64, 1 => 10_001..=10_002i64],
+            any::<bool>(),
+            any::<bool>(),
+            prop::bool::weighted(0.2),
+            any::<bool>(),
+            any::<Index>(),
+        )
+            .prop_map(|(percent, fixed, once, unknown, undo, who)| Op::Coupon {
+                percent,
+                fixed,
+                once,
+                unknown,
+                undo,
                 who,
             }),
         3 => (
@@ -1766,6 +1793,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 hub.intent(
                     IntentPayload::PosSale(arena_proto::PosSale {
                         business: None,
+                        coupon: None,
                         lines: lines
                             .iter()
                             .map(|(p, q)| arena_proto::PosSaleLine {
@@ -1895,6 +1923,202 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         prop_assert_eq!(state, "skipped", "an undone sale is never messaged");
                     }
                 }
+            }
+        }
+        Op::Coupon {
+            percent,
+            fixed,
+            once,
+            unknown,
+            undo,
+            who,
+        } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let coupon_code = format!("CPN{}", hub.change_count());
+            let upsert = arena_proto::CouponUpsert {
+                id: None,
+                code: coupon_code.to_lowercase(),
+                percent_bp: (!fixed).then_some(*percent),
+                amount_minor: fixed.then_some(percent * 5),
+                valid_from: None,
+                valid_to: None,
+                usage_limit: once.then_some(1),
+                min_bill_minor: 0,
+                targets: Vec::new(),
+                active: true,
+            };
+            let mut intent = hub.intent(IntentPayload::CouponUpsert(upsert), None);
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len()) {
+                    Some(id) => Actor {
+                        kind: ActorKind::Staff,
+                        id: id.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let valid = if *fixed {
+                *percent >= 1
+            } else {
+                (1..=arena_proto::COUPON_MAX_PERCENT_BP).contains(percent)
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            if !valid {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            prop_assert!(out.is_ok(), "{:?}", out);
+            prop_assert_eq!(hub.change_count(), before + 1);
+            let upper = coupon_code.to_uppercase();
+            let untracked = |hub: &Hub| {
+                hub.reader
+                    .products()
+                    .unwrap()
+                    .into_iter()
+                    .find(|p| p.active && !p.track_stock && !p.bundle && p.price_minor > 0)
+            };
+            if untracked(hub).is_none() {
+                let made = hub.submit_new(hub.intent(
+                    IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                        id: None,
+                        name: format!("Coupon item {}", hub.change_count()),
+                        category: String::new(),
+                        price_minor: 5_000,
+                        tax_rate_bp: Some(500),
+                        hsn: "210690".into(),
+                        track_stock: false,
+                        image: String::new(),
+                        barcode: String::new(),
+                        kitchen: false,
+                        favourite: false,
+                        active: true,
+                        bundle: false,
+                        components: Vec::new(),
+                    }),
+                    None,
+                ));
+                if made.is_err() {
+                    return Ok(());
+                }
+            }
+            let Some(product) = untracked(hub) else {
+                return Ok(());
+            };
+            let lines = vec![arena_proto::PosSaleLine {
+                product_id: product.product_id.clone(),
+                qty: 1,
+            }];
+            let applied = if *unknown { "NOSUCH" } else { upper.as_str() };
+            let request = arena_proto::CouponPreviewRequest {
+                code: applied.to_owned(),
+                order_id: None,
+                lines: Some(lines.clone()),
+                plan_id: None,
+            };
+            let now = hub.clock.now_ms();
+            let preview = hub
+                .reader
+                .read_with(|conn| arena_core::coupon_preview(conn, &request, now));
+            let sale = |payments: Vec<arena_proto::PaymentRow>| {
+                IntentPayload::PosSale(arena_proto::PosSale {
+                    business: None,
+                    coupon: Some(applied.to_owned()),
+                    lines: lines.clone(),
+                    payments,
+                    player_id: None,
+                    credit_override: None,
+                    stock_override: None,
+                    receipt: None,
+                })
+            };
+            let used_of = |hub: &Hub| {
+                hub.reader
+                    .coupons()
+                    .unwrap()
+                    .into_iter()
+                    .find(|(c, _)| c.code == upper)
+                    .map_or(0, |(c, _)| c.used)
+            };
+            let used_before = used_of(hub);
+            let preview = match preview {
+                Ok(p) => p,
+                Err(e) if e.code == ErrorCode::CouponInvalid => {
+                    let before = hub.change_count();
+                    let out = hub.submit_new(hub.intent(sale(Vec::new()), None));
+                    prop_assert_eq!(code(&out), Some((ErrorCode::CouponInvalid, Some("coupon"))));
+                    prop_assert_eq!(hub.change_count(), before);
+                    return Ok(());
+                }
+                Err(_) => return Ok(()),
+            };
+            prop_assert!(!*unknown, "an unknown code priced a bill");
+            let payments = if preview.total_minor > 0 {
+                vec![arena_proto::PaymentRow {
+                    method: arena_proto::PaymentMethod::Cash,
+                    amount_minor: preview.total_minor,
+                    reference: None,
+                }]
+            } else {
+                Vec::new()
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(sale(payments), None));
+            if let Err(e) = &out {
+                prop_assert!(
+                    matches!(
+                        e.code,
+                        ErrorCode::OutOfStock
+                            | ErrorCode::BundleShort
+                            | ErrorCode::ValidationFailed
+                            | ErrorCode::ShiftNotOpen
+                    ),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(used_of(hub), used_before);
+                return Ok(());
+            }
+            let order = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .rfind(|o| text(o, "kind") == "pos_sale")
+                .unwrap();
+            prop_assert_eq!(text(&order, "coupon_code"), upper.clone());
+            prop_assert_eq!(int(&order, "coupon_minor"), preview.discount_minor);
+            prop_assert_eq!(int(&order, "total_minor"), preview.total_minor);
+            prop_assert_eq!(used_of(hub), used_before + 1);
+            if *undo {
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::PosSaleReverted(arena_proto::PosSaleReverted {
+                        order_id: text(&order, "id"),
+                    }),
+                    Some(int(&order, "rev")),
+                ));
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(used_of(hub), used_before);
             }
         }
         Op::OrderPlace {
@@ -2719,6 +2943,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .count();
             let payload = IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 business: None,
+                coupon: None,
                 order_id: id.clone(),
                 credit_override: None,
                 payments,
@@ -2865,6 +3090,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::PlanSell(arena_proto::PlanSell {
                     business: None,
+                    coupon: None,
                     player_id: player_id.clone(),
                     plan_id: chosen.plan_id.clone(),
                     credit_override: None,
@@ -2983,6 +3209,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionSettle(arena_proto::SessionSettle {
                     business: None,
+                    coupon: None,
                     order_id: id,
                     credit_override: None,
                     payments,
@@ -3645,6 +3872,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionSettle(arena_proto::SessionSettle {
                     business: None,
+                    coupon: None,
                     order_id: id,
                     credit_override: over_ride.then_some(true),
                     payments: vec![arena_proto::PaymentRow {
@@ -3869,6 +4097,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 let out = hub.submit_new(hub.intent(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         business: None,
+                        coupon: None,
                         order_id: id.clone(),
                         credit_override: None,
                         payments: vec![arena_proto::PaymentRow {
@@ -4287,6 +4516,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_stock_holds(&hub)?;
                 assert_holds_hold(&hub)?;
                 assert_invoices_hold(&hub)?;
+                assert_coupons_hold(&hub)?;
                 assert_prints_hold(&hub)?;
                 assert_drawers_hold(&hub)?;
                 assert_notifications_hold(&hub)?;
@@ -4363,5 +4593,34 @@ fn assert_invoices_hold(hub: &Hub) -> Result<(), TestCaseError> {
         .map(|s| int(s, "next") - 1)
         .sum();
     prop_assert_eq!(sequences, numbers.len() as i64);
+    Ok(())
+}
+
+/// A coupon's `used` is the number of settled orders that took it, never above its limit, and an
+/// order's coupon code and amount are set together.
+fn assert_coupons_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let orders = hub.reader.rows(Table::Orders).unwrap();
+    for o in &orders {
+        let (code, minor) = (&o["coupon_code"], &o["coupon_minor"]);
+        prop_assert_eq!(
+            matches!(code, RowValue::Text(_)),
+            matches!(minor, RowValue::Integer(_)),
+            "an order's coupon code and amount are set together"
+        );
+        if matches!(minor, RowValue::Integer(_)) {
+            prop_assert!(int(o, "coupon_minor") > 0);
+            prop_assert_eq!(text(o, "status"), "settled");
+        }
+    }
+    for (coupon, _) in hub.reader.coupons().unwrap() {
+        let took = orders
+            .iter()
+            .filter(|o| o["coupon_code"] == RowValue::Text(coupon.code.clone()))
+            .count() as i64;
+        prop_assert_eq!(coupon.used, took, "{} used", coupon.code);
+        if let Some(limit) = coupon.usage_limit {
+            prop_assert!(coupon.used <= limit, "{} is over its limit", coupon.code);
+        }
+    }
     Ok(())
 }

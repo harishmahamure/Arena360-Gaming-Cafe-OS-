@@ -20,4 +20,8 @@ export type PlanSell = {
    * The business the invoice is made out to (Story 5.20); a GST branch only.
    */
   business?: BusinessBuyer;
+  /**
+   * A coupon code to apply to the bill (Story 5.21).
+   */
+  coupon?: string;
 };

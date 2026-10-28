@@ -124,6 +124,13 @@ pub struct Buyer {
     pub gstin: String,
 }
 
+/// The coupon a sale took (Story 5.21).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Coupon {
+    pub code: String,
+    pub amount_minor: i64,
+}
+
 /// A settled sale: "Tax Invoice" on a GST branch, "Invoice" otherwise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaleReceipt {
@@ -143,6 +150,8 @@ pub struct SaleReceipt {
     pub player: Option<String>,
     pub sessions: Vec<SessionLine>,
     pub items: Vec<ItemLine>,
+    /// Printed after the items and before the tax lines.
+    pub coupon: Option<Coupon>,
     pub subtotal_minor: i64,
     pub tax: Vec<RateTax>,
     pub total_minor: i64,
@@ -575,6 +584,13 @@ fn sale_rows_for(s: &ReceiptSettings, r: &SaleReceipt, reprint: bool) -> Vec<Row
     l.sessions(s, r);
     l.items(s, r);
     l.rule();
+    if let Some(c) = &r.coupon {
+        l.pair(
+            Style::Plain,
+            &format!("Coupon {}", c.code),
+            &format!("-{}", s.money.number(c.amount_minor)),
+        );
+    }
     l.tax(s, r);
     l.pair(Style::Total, "TOTAL", &s.money.with_symbol(r.total_minor));
     l.rule();
@@ -708,6 +724,7 @@ mod tests {
             tax_label: "Tax".into(),
             invoice_no: Some("KOR/26-27/E1k/000142".into()),
             buyer: None,
+            coupon: None,
             at_ms: MS_2026_10_28_0835_UTC,
             staff: "Meera".into(),
             player: Some("shadowfox".into()),
@@ -772,6 +789,7 @@ mod tests {
             tax_label: "VAT".into(),
             invoice_no: Some("DUB/26/E2a/000007".into()),
             buyer: None,
+            coupon: None,
             at_ms: MS_2026_10_28_0835_UTC,
             staff: String::new(),
             player: None,
@@ -812,6 +830,7 @@ mod tests {
         SaleReceipt {
             invoice_no: Some("TKY/26/E1b/000031".into()),
             buyer: None,
+            coupon: None,
             sessions: vec![SessionLine {
                 device: "VR Rig".into(),
                 minutes: 45,
@@ -911,6 +930,17 @@ mod tests {
             let jpy = settings(paper, "JPY");
             let sales = [
                 ("gst_multi_rate", &inr, gst_sale()),
+                (
+                    "gst_coupon",
+                    &inr,
+                    SaleReceipt {
+                        coupon: Some(Coupon {
+                            code: "DIWALI-10".into(),
+                            amount_minor: 5_000,
+                        }),
+                        ..gst_sale()
+                    },
+                ),
                 ("simple_tax", &inr, simple_sale()),
                 ("zero_exponent", &jpy, jpy_sale()),
             ];
@@ -1002,6 +1032,28 @@ mod tests {
                 .all(|r| !r.contains("Tata") && !r.contains("GSTIN")),
             "a branch that is not on GST prints no buyer"
         );
+    }
+
+    #[test]
+    fn a_coupon_prints_after_the_items_and_before_the_tax_lines() {
+        let sale = SaleReceipt {
+            coupon: Some(Coupon {
+                code: "DIWALI-10".into(),
+                amount_minor: 12_345,
+            }),
+            ..gst_sale()
+        };
+        for paper in [PaperWidth::Mm80, PaperWidth::Mm58] {
+            let rows = text(sale_rows(&settings(paper, "INR"), &sale));
+            let line = rows.iter().position(|r| r.starts_with("Coupon")).unwrap();
+            assert!(rows[line].starts_with("Coupon DIWALI-10"), "{rows:?}");
+            assert!(rows[line].ends_with("-123.45"), "{rows:?}");
+            let subtotal = rows.iter().position(|r| r.starts_with("Subtotal")).unwrap();
+            let last_item = rows.iter().rposition(|r| r.contains("HSN")).unwrap();
+            assert!(last_item < line && line < subtotal, "{rows:?}");
+        }
+        let none = text(sale_rows(&settings(PaperWidth::Mm80, "INR"), &gst_sale()));
+        assert!(none.iter().all(|r| !r.contains("Coupon")));
     }
 
     #[test]

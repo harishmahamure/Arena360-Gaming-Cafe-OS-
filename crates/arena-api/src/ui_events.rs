@@ -1440,6 +1440,7 @@ mod tests {
         submit(
             IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 business: None,
+                coupon: None,
                 order_id: order.clone(),
                 credit_override: None,
                 payments: vec![arena_proto::PaymentRow {

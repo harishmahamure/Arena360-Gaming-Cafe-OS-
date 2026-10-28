@@ -24,6 +24,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::HsnRequired
         | ErrorCode::ReferenceRequired
         | ErrorCode::ConsentRequired
+        | ErrorCode::CouponInvalid
         | ErrorCode::PasswordTooShort
         | ErrorCode::PasswordCommon => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::AuthFailed | ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => {

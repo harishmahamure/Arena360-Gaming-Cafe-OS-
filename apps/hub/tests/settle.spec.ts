@@ -26,6 +26,7 @@ type Sent = {
     payments?: PaymentRow[];
     receipt?: string;
     business?: { gstin: string; legal_name: string };
+    coupon?: string;
   };
   rev?: number;
 };
@@ -38,6 +39,10 @@ type Hub = {
   printer?: PrinterReady;
   /** The `player_id` the settle bar last asked `/ui/printer/ready` about (Story 5.19). */
   readyFor?: string | null;
+  /** What `/ui/coupons/preview` answers per upper-case code: a discount, or the refusal text. */
+  coupons?: Record<string, number | string>;
+  /** The bodies the bar sent to `/ui/coupons/preview` (Story 5.21). */
+  previews?: { code: string; order_id?: string }[];
 };
 
 const FREE = device(1, { status: "online" });
@@ -70,6 +75,28 @@ async function open(page: Page, over: Partial<Hub> = {}): Promise<Hub> {
         return json(route, SELLER);
       case "/ui/settings":
         return json(route, []);
+      case "/ui/coupons/preview": {
+        const body = req.postDataJSON() as { code: string; order_id?: string };
+        (hub.previews ??= []).push(body);
+        const answer = hub.coupons?.[body.code.toUpperCase()];
+        if (typeof answer === "number") {
+          return json(route, {
+            code: body.code.toUpperCase(),
+            discount_minor: answer,
+            total_minor: BILL.remaining_minor - answer,
+          });
+        }
+        return route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          headers: CORS,
+          body: JSON.stringify({
+            code: "COUPON_INVALID",
+            message: answer ?? "this coupon code does not exist",
+            field: "coupon",
+          }),
+        });
+      }
       case "/ui/printer/ready":
         hub.readyFor = new URL(req.url()).searchParams.get("player_id");
         return hub.printer
@@ -444,4 +471,86 @@ test("turning Business invoice off clears the block and sends no buyer", async (
   await settleButton(page).click();
   await expect(page.getByTestId("settle-done")).toBeVisible();
   expect(hub.sent[0].payload.business).toBeUndefined();
+});
+
+// Story 5.21: coupons applied at settle.
+const apply = async (page: Page, code: string) => {
+  const toggle = page.getByTestId("coupon-toggle");
+  if (await toggle.isVisible()) await toggle.click();
+  await field(page, "hub.settle.coupon").fill(code);
+  await bar(page).getByRole("button", { name: en["hub.settle.coupon.apply"] }).click();
+};
+
+test("a coupon shows its line and the new total, and the settle sends the code", async ({
+  page,
+}) => {
+  const hub = await open(page, { coupons: { SAVE10: 750 } });
+  await apply(page, " save10 ");
+  await expect(page.getByTestId("coupon-line")).toContainText("Coupon SAVE10");
+  await expect(page.getByTestId("coupon-amount")).toHaveText("−₹7.50");
+  await expect(page.getByTestId("settle-total")).toHaveText("₹67.50");
+  expect(hub.previews).toEqual([{ code: "SAVE10", order_id: "O1" }]);
+
+  await method(page, "cash").click();
+  await expect(field(page, "hub.settle.amount.cash")).toHaveValue("67.50");
+  await expect(page.getByTestId("settle-remainder")).toContainText("Paid in full");
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({
+    kind: "session.settle",
+    payments: [{ method: "cash", amount_minor: 6750 }],
+    coupon: "SAVE10",
+  });
+});
+
+test("a refused coupon shows its reason in place and leaves the bill unchanged", async ({
+  page,
+}) => {
+  const hub = await open(page, { coupons: { OLD: "this coupon has expired" } });
+  await apply(page, "old");
+  await expect(page.getByTestId("coupon-error")).toContainText("this coupon has expired");
+  await expect(page.getByTestId("settle-total")).toHaveText("₹75.00");
+  await expect(page.getByTestId("coupon-line")).toHaveCount(0);
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload.coupon).toBeUndefined();
+});
+
+test("removing the coupon brings the total back and sends no code", async ({ page }) => {
+  const hub = await open(page, { coupons: { SAVE10: 750 } });
+  await apply(page, "SAVE10");
+  await expect(page.getByTestId("settle-total")).toHaveText("₹67.50");
+  await page.getByTestId("coupon-remove").click();
+  await expect(page.getByTestId("settle-total")).toHaveText("₹75.00");
+  await expect(page.getByTestId("coupon-line")).toHaveCount(0);
+  await method(page, "cash").click();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload.coupon).toBeUndefined();
+});
+
+test("a coupon that takes the whole bill settles with no payment", async ({ page }) => {
+  const hub = await open(page, { coupons: { FREE100: 7500 } });
+  await apply(page, "free100");
+  await expect(page.getByTestId("settle-total")).toHaveText("₹0.00");
+  await expect(page.getByTestId("settle-remainder")).toContainText("Paid in full");
+  await expect(settleButton(page)).toBeEnabled();
+  await settleButton(page).click();
+  await expect(page.getByTestId("settle-done")).toBeVisible();
+  expect(hub.sent[0].payload).toMatchObject({
+    kind: "session.settle",
+    payments: [],
+    coupon: "FREE100",
+  });
+});
+
+test("the coupon sits in the total row and opens its field on demand", async ({ page }) => {
+  await open(page);
+  await expect(page.getByTestId("coupon-toggle")).toHaveText(en["hub.settle.coupon.add"]);
+  await expect(bar(page).getByLabel(en["hub.settle.coupon"], { exact: true })).toHaveCount(0);
+  await expect(bar(page).locator("p.total").getByTestId("coupon-toggle")).toBeVisible();
+  await page.getByTestId("coupon-toggle").click();
+  await expect(field(page, "hub.settle.coupon")).toBeVisible();
+  await expect(page.getByTestId("coupon-toggle")).toHaveCount(0);
 });

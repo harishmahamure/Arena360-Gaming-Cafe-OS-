@@ -11,7 +11,8 @@ use arena_store::{ReceiptLineRow, ReceiptSource};
 
 use super::PaperWidth;
 use super::receipt::{
-    Buyer, ItemLine, ReceiptMoney, ReceiptSettings, SaleReceipt, SessionLine, render_sale_copy,
+    Buyer, Coupon, ItemLine, ReceiptMoney, ReceiptSettings, SaleReceipt, SessionLine,
+    render_sale_copy,
 };
 use crate::invoice::tax::RateTax;
 
@@ -134,6 +135,10 @@ pub fn sale_receipt(
             .filter(|l| is_item(l))
             .map(item)
             .collect(),
+        coupon: head.coupon.as_ref().map(|(code, amount_minor)| Coupon {
+            code: code.clone(),
+            amount_minor: *amount_minor,
+        }),
         subtotal_minor: head.subtotal_minor,
         tax: head
             .tax_breakup
@@ -214,6 +219,7 @@ mod tests {
                 player: Some("rohan".into()),
                 invoice_no: Some("DEV01/26-27/E1k/000007".into()),
                 buyer: None,
+                coupon: None,
             },
             lines: vec![
                 line(None, None, Some("PC 4")),

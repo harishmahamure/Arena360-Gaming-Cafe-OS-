@@ -52,6 +52,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "plan.sell": "hub.audit.intent.plan.sell",
   "plan.sell.reverted": "hub.audit.intent.plan.sell.reverted",
   "rule.upsert": "hub.audit.intent.rule.upsert",
+  "coupon.upsert": "hub.audit.intent.coupon.upsert",
   "credit.collect": "hub.audit.intent.credit.collect",
   "credit.collect.reverted": "hub.audit.intent.credit.collect.reverted",
   "credit.auto_pause": "hub.audit.intent.credit.auto_pause",

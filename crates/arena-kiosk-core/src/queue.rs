@@ -75,6 +75,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PaymentShort
         | ErrorCode::ReferenceRequired
         | ErrorCode::ConsentRequired
+        | ErrorCode::CouponInvalid
         | ErrorCode::UndoNotAllowed
         | ErrorCode::InsufficientBalance
         | ErrorCode::CreditLimit

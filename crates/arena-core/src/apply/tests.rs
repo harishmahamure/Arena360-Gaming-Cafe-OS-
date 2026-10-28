@@ -22,6 +22,7 @@ mod ad_metrics;
 mod alert;
 mod commands;
 mod console;
+mod coupon;
 mod extend;
 mod force_end;
 mod group_bill;

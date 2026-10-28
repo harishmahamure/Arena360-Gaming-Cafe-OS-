@@ -41,6 +41,7 @@ async fn sale_with(
         by.clone(),
         IntentPayload::PosSale(PosSale {
             business: None,
+            coupon: None,
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
@@ -509,6 +510,7 @@ async fn the_drawer_off_or_no_cash_row_sends_no_kick() {
         by.clone(),
         IntentPayload::PosSale(PosSale {
             business: None,
+            coupon: None,
             lines: vec![PosSaleLine {
                 product_id: id.clone(),
                 qty: 1,
@@ -678,6 +680,7 @@ async fn whatsapp_sale(
         by.clone(),
         IntentPayload::PosSale(PosSale {
             business: None,
+            coupon: None,
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
@@ -950,6 +953,7 @@ async fn business_sale(
         by.clone(),
         IntentPayload::PosSale(PosSale {
             business,
+            coupon: None,
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,

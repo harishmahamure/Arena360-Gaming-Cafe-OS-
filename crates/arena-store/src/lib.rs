@@ -11,6 +11,7 @@ mod branch;
 mod commands;
 #[cfg(feature = "control")]
 pub mod control;
+mod coupons;
 mod credit;
 mod dedupe;
 mod devices;
@@ -63,6 +64,12 @@ pub use branch::{
 pub use commands::{
     AppliedCommand, find_applied_command, insert_applied_command, mark_command_reported,
     max_applied_command_id, unreported_commands,
+};
+pub use coupons::{
+    CouponLineRow, CouponRow, CouponWithTargets, clear_order_coupon, find_coupon,
+    find_coupon_by_code, give_coupon_use, insert_coupon, insert_coupon_target, list_coupon_lines,
+    list_coupon_targets, list_coupons, order_coupon, set_order_coupon, take_coupon_use,
+    update_coupon,
 };
 pub use credit::{
     CreditRow, adjust_outstanding, civil_day_number, credit_aging, credit_aging_with,
@@ -129,8 +136,8 @@ pub use products::{
     insert_product, list_components, list_products, live_bundles_with, set_product_deleted,
     update_product,
 };
-/// The transaction a write job runs in (always `BEGIN IMMEDIATE`).
-pub use rusqlite::Transaction;
+/// The transaction a write job runs in (always `BEGIN IMMEDIATE`), and the connection it derefs to.
+pub use rusqlite::{Connection as DbConn, Transaction};
 pub use sessions::{
     Ending, ForcedEnd, LiveSession, NewExtensionOrder, NewOrder, NewOrderLine, NewPayment,
     NewPosOrder, NewProductLine, NewSession, OpenOrder, OrderLineRow, OrderRow, SegmentRow,
@@ -1131,6 +1138,29 @@ impl Store {
             list_ended_group_sessions(&self.conn)?,
             list_ended_group_segments(&self.conn)?,
         ))
+    }
+
+    /// Runs `f` with the read connection inside one read snapshot, for reads that go through the
+    /// shared `apply()` query functions (a coupon preview).
+    pub fn read_with<R>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<R, AppError>,
+    ) -> Result<R, AppError> {
+        self.read_consistent(|s| f(&s.conn))
+    }
+
+    /// Every coupon with its targets (empty before migration 54).
+    pub fn coupons(&self) -> Result<Vec<CouponWithTargets>, AppError> {
+        if !self.table_exists("coupons")? {
+            return Ok(Vec::new());
+        }
+        list_coupons(&self.conn)?
+            .into_iter()
+            .map(|c| {
+                let targets = list_coupon_targets(&self.conn, &c.coupon_id)?;
+                Ok((c, targets))
+            })
+            .collect()
     }
 
     pub fn pricing_rules(&self) -> Result<Vec<PricingRuleRow>, AppError> {

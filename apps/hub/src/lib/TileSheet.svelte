@@ -392,9 +392,14 @@
   // A session bill settles once every placed line is served or cancelled.
   const unserved = $derived((unpaid?.items ?? []).some((i) => !i.served));
 
-  function settle(payments: PaymentRow[], receipt?: ReceiptChoice, business?: BusinessBuyer) {
+  function settle(
+    payments: PaymentRow[],
+    receipt?: ReceiptChoice,
+    business?: BusinessBuyer,
+    coupon?: string,
+  ) {
     if (unpaid?.order_id && unpaid.order_rev != null) {
-      void go(settleJob(unpaid.order_id, payments, unpaid.order_rev, receipt, business));
+      void go(settleJob(unpaid.order_id, payments, unpaid.order_rev, receipt, business, coupon));
     }
   }
 
@@ -594,6 +599,9 @@
         blockedReason={unserved ? "hub.order.unserved_note" : undefined}
         onsettle={settle}
         receiptChoice
+        couponSource={unpaid.order_id && !unpaid.group_bill_id
+          ? { order_id: unpaid.order_id }
+          : null}
       >
         {#snippet extra()}
           {#if unpaid.guest && unpaid.session_rev != null && !unpaid.group_bill_id}

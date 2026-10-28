@@ -345,6 +345,27 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            writer
+                .submit_intent(submit(
+                    IntentPayload::CouponUpsert(arena_proto::CouponUpsert {
+                        id: None,
+                        code: "save10".into(),
+                        percent_bp: Some(1_000),
+                        amount_minor: None,
+                        valid_from: None,
+                        valid_to: None,
+                        usage_limit: Some(5),
+                        min_bill_minor: 0,
+                        targets: vec![arena_proto::CouponTarget {
+                            kind: "group".into(),
+                            id: group.clone(),
+                        }],
+                        active: true,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
             let pack_plan = writer
                 .submit_intent(submit(
                     IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
@@ -677,6 +698,7 @@ mod tests {
                 submit(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         business: None,
+                        coupon: None,
                         order_id: order_id.clone(),
                         credit_override: None,
                         payments: vec![
@@ -798,6 +820,7 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::SessionSettle(arena_proto::SessionSettle {
                         business: None,
+                        coupon: None,
                         order_id: guest_order,
                         credit_override: None,
                         payments: vec![arena_proto::PaymentRow {
@@ -847,6 +870,7 @@ mod tests {
                 submit(
                     IntentPayload::PlanSell(arena_proto::PlanSell {
                         business: None,
+                        coupon: None,
                         player_id: player_id.clone(),
                         plan_id: pack_plan.clone(),
                         credit_override: None,
@@ -922,6 +946,7 @@ mod tests {
                 submit(
                     IntentPayload::PosSale(arena_proto::PosSale {
                         business: None,
+                        coupon: None,
                         lines: vec![arena_proto::PosSaleLine {
                             product_id: cola.clone(),
                             qty: 2,
@@ -942,6 +967,35 @@ mod tests {
             let kept_sale = writer.submit_intent(pos()).await.unwrap().changes[0]
                 .row_id
                 .clone();
+            // A coupon sale replays too: the use count, the order's coupon columns and the net
+            // total all come back from the change log.
+            writer
+                .submit_intent(submit(
+                    IntentPayload::CouponUpsert(arena_proto::CouponUpsert {
+                        id: None,
+                        code: "COLA10".into(),
+                        percent_bp: Some(1_000),
+                        amount_minor: None,
+                        valid_from: None,
+                        valid_to: None,
+                        usage_limit: None,
+                        min_bill_minor: 0,
+                        targets: vec![arena_proto::CouponTarget {
+                            kind: "product".into(),
+                            id: cola.clone(),
+                        }],
+                        active: true,
+                    }),
+                    None,
+                ))
+                .await
+                .unwrap();
+            let mut with_coupon = pos();
+            if let IntentPayload::PosSale(sale) = &mut with_coupon.payload {
+                sale.coupon = Some("cola10".into());
+                sale.payments[0].amount_minor = 7_200;
+            }
+            writer.submit_intent(with_coupon).await.unwrap();
             let undone = writer.submit_intent(pos()).await.unwrap();
             writer
                 .submit_intent(submit(

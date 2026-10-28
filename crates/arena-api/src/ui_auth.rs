@@ -877,7 +877,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::Expired
         | ErrorCode::HsnRequired
         | ErrorCode::ReferenceRequired
-        | ErrorCode::ConsentRequired => StatusCode::UNPROCESSABLE_ENTITY,
+        | ErrorCode::ConsentRequired
+        | ErrorCode::CouponInvalid => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Stale
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked
@@ -3197,6 +3198,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/stock/low", get(stock_low))
         .route("/ui/plans", get(plans))
         .route("/ui/rules", get(rules))
+        .route("/ui/coupons", get(crate::ui_coupons::list))
+        .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/health", get(crate::ui_printer::health))
         .route("/ui/printer/ready", get(crate::ui_printer::ready))
@@ -4658,6 +4661,7 @@ pub(crate) mod tests {
             },
             IntentPayload::SessionSettle(arena_proto::SessionSettle {
                 business: None,
+                coupon: None,
                 order_id: order_id.into(),
                 credit_override: None,
                 payments: Vec::new(),
@@ -5381,6 +5385,147 @@ pub(crate) mod tests {
         assert!(p.get("window_start_min").is_none());
     }
 
+    /// Story 5.21: Settings → Coupons lists coupons for catalogue editors, and the settle bar
+    /// prices a code on a cart for anyone who can sell.
+    #[tokio::test]
+    async fn coupons_are_listed_to_catalog_editors_and_priced_for_sellers() {
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/coupons", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, denied) = call(&hub, "GET", "/ui/coupons", Some(&counter), None).await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let (status, listed) = call(&hub, "GET", "/ui/coupons", Some(&manager), None).await;
+        assert_eq!((status, listed), (StatusCode::OK, json!([])));
+
+        let save = json!({ "intent": intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::CouponUpsert(arena_proto::CouponUpsert {
+                id: None,
+                code: "save10".into(),
+                percent_bp: Some(1_000),
+                amount_minor: None,
+                valid_from: None,
+                valid_to: None,
+                usage_limit: Some(3),
+                min_bill_minor: 0,
+                targets: Vec::new(),
+                active: true,
+            }),
+            None,
+        ) });
+        let (status, denied) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&counter),
+            Some(save.clone()),
+        )
+        .await;
+        assert_eq!(
+            (status, denied["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+        );
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&manager), Some(save)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let (_, listed) = call(&hub, "GET", "/ui/coupons", Some(&manager), None).await;
+        let coupon = &listed.as_array().unwrap()[0];
+        assert_eq!(
+            (
+                coupon["code"].as_str(),
+                coupon["percent_bp"].as_i64(),
+                coupon["usage_limit"].as_i64(),
+                coupon["used"].as_i64(),
+                coupon["active"].as_bool(),
+            ),
+            (Some("SAVE10"), Some(1_000), Some(3), Some(0), Some(true))
+        );
+
+        let product = hub
+            .writer
+            .submit_intent(intent_as(
+                Actor {
+                    kind: ActorKind::Owner,
+                    id: "o".into(),
+                },
+                IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                    id: None,
+                    name: "Cola".into(),
+                    category: String::new(),
+                    price_minor: 4_000,
+                    tax_rate_bp: None,
+                    hsn: String::new(),
+                    track_stock: false,
+                    image: String::new(),
+                    barcode: String::new(),
+                    kitchen: false,
+                    favourite: false,
+                    active: true,
+                    bundle: false,
+                    components: Vec::new(),
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let preview =
+            |code: &str| json!({"code": code, "lines": [{"product_id": product, "qty": 2}]});
+        let (status, priced) = call(
+            &hub,
+            "POST",
+            "/ui/coupons/preview",
+            Some(&counter),
+            Some(preview("Save10")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{priced}");
+        assert_eq!(
+            priced,
+            json!({"code": "SAVE10", "discount_minor": 800, "total_minor": 7_200})
+        );
+        let (status, refused) = call(
+            &hub,
+            "POST",
+            "/ui/coupons/preview",
+            Some(&counter),
+            Some(preview("NOSUCH")),
+        )
+        .await;
+        assert_eq!(
+            (status, refused["code"].as_str(), refused["field"].as_str()),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Some("COUPON_INVALID"),
+                Some("coupon")
+            )
+        );
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/coupons/preview",
+            None,
+            Some(preview("SAVE10")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = call(
+            &hub,
+            "POST",
+            "/ui/coupons/preview",
+            Some(&counter),
+            Some(json!({"nope": 1})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn rules_are_listed_with_their_conflicts_and_written_with_catalog_edit() {
         let hub = hub().await;
@@ -5705,6 +5850,7 @@ pub(crate) mod tests {
         let sale = |lines: &[(&str, i64)], total: i64, over: bool| {
             IntentPayload::PosSale(PosSale {
                 business: None,
+                coupon: None,
                 lines: lines
                     .iter()
                     .map(|(id, qty)| PosSaleLine {

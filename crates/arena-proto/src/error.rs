@@ -126,6 +126,10 @@ pub enum ErrorCode {
     CouponInvalid,
     /// A void of an order that is already settled; settled orders are refunded (Story 5.23).
     OrderSettled,
+    /// A refund names an invoice number the branch never issued (Story 5.24).
+    InvoiceNotFound,
+    /// A refund above what was paid on the invoice less earlier refunds (Story 5.24).
+    RefundExceedsPaid,
     /// An Undo that is late, from other staff, or blocked by an irreversible effect or a changed
     /// state.
     UndoNotAllowed,
@@ -242,6 +246,8 @@ impl ErrorCode {
             Self::ConsentRequired => "CONSENT_REQUIRED",
             Self::CouponInvalid => "COUPON_INVALID",
             Self::OrderSettled => "ORDER_SETTLED",
+            Self::InvoiceNotFound => "INVOICE_NOT_FOUND",
+            Self::RefundExceedsPaid => "REFUND_EXCEEDS_PAID",
             Self::UndoNotAllowed => "UNDO_NOT_ALLOWED",
             Self::InsufficientBalance => "INSUFFICIENT_BALANCE",
             Self::CreditLimit => "CREDIT_LIMIT",
@@ -400,6 +406,8 @@ mod tests {
             (ErrorCode::ConsentRequired, "CONSENT_REQUIRED"),
             (ErrorCode::CouponInvalid, "COUPON_INVALID"),
             (ErrorCode::OrderSettled, "ORDER_SETTLED"),
+            (ErrorCode::InvoiceNotFound, "INVOICE_NOT_FOUND"),
+            (ErrorCode::RefundExceedsPaid, "REFUND_EXCEEDS_PAID"),
             (ErrorCode::UndoNotAllowed, "UNDO_NOT_ALLOWED"),
             (ErrorCode::InsufficientBalance, "INSUFFICIENT_BALANCE"),
             (ErrorCode::CreditLimit, "CREDIT_LIMIT"),

@@ -63,6 +63,7 @@ mod rates;
 mod read_grants;
 mod receipt_notify;
 mod receipt_print;
+mod refund;
 mod rules;
 pub(crate) mod seed_defaults;
 mod session;
@@ -99,6 +100,7 @@ pub use frame::{is_ulid, validate_frame};
 pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE};
 pub(crate) use licence::pending as licence_pending;
 pub use mutate::Written;
+pub use refund::CreditNoteLine;
 pub use settings_set::MAX_SETTING_VALUE_CHARS;
 pub use stock::decrement;
 pub(crate) use ttl_dedupe::record_rejection;
@@ -209,6 +211,7 @@ pub(crate) enum Target {
     OrderLineServed(Box<order_line::LineTarget>),
     OrderLineCancel(Box<order_line::LineTarget>),
     OrderVoid(Box<order_void::VoidTarget>),
+    Refund(Box<refund::RefundTarget>),
     CreditSetLimit(Box<credit::LimitTarget>),
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
@@ -313,6 +316,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::OrderLineCancel(Box::new(order_line::load_line(tx, &c.line_id, now)?))
         }
         P::OrderVoid(v) => Target::OrderVoid(Box::new(order_void::load_void(tx, v, now)?)),
+        P::RefundCreate(r) => Target::Refund(Box::new(refund::load(tx, r)?)),
         P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),
         P::CreditCollect(c) => {
             Target::CreditCollect(Box::new(credit_collect::load_collect(tx, c)?))

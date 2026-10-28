@@ -968,7 +968,7 @@ mod tests {
                     None,
                 )
             };
-            let kept_sale = writer.submit_intent(pos()).await.unwrap().changes[0]
+            let kept_sale_id = writer.submit_intent(pos()).await.unwrap().changes[0]
                 .row_id
                 .clone();
             // A coupon sale replays too: the use count, the order's coupon columns and the net
@@ -1366,7 +1366,7 @@ mod tests {
             // The counter sale kept above is long past its Undo window: the system numbers it.
             let mut number = submit(
                 IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
-                    order_id: kept_sale,
+                    order_id: kept_sale_id.clone(),
                 }),
                 None,
             );
@@ -1376,6 +1376,46 @@ mod tests {
             };
             number.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
             writer.submit_intent(number).await.unwrap();
+            // A refund of one cola against that invoice: a credit note, a negative payment, a
+            // cash event and the line's refunded counters all replay too.
+            let numbered = Store::open(&path, T0).unwrap();
+            let sale_row = numbered
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .find(|o| o["id"] == RowValue::Text(kept_sale_id.clone()))
+                .unwrap();
+            let RowValue::Text(invoice_no) = sale_row["invoice_no"].clone() else {
+                panic!("the sale was numbered");
+            };
+            let line_id = match numbered
+                .rows(Table::OrderLines)
+                .unwrap()
+                .into_iter()
+                .find(|l| l["order_id"] == RowValue::Text(kept_sale_id.clone()))
+                .map(|l| l["id"].clone())
+            {
+                Some(RowValue::Text(id)) => id,
+                other => panic!("the sale has a line: {other:?}"),
+            };
+            let mut refund = submit(
+                IntentPayload::RefundCreate(arena_proto::RefundCreate {
+                    invoice_no,
+                    lines: vec![arena_proto::RefundLineReq {
+                        line_id,
+                        qty: 1,
+                        return_to_stock: Some(true),
+                    }],
+                    method: Some(arena_proto::PaymentMethod::Cash),
+                    reference: None,
+                    note: None,
+                    receipt: None,
+                }),
+                None,
+            );
+            refund.reason = Some(arena_proto::ReasonCode::Mistake);
+            refund.issued_at = T0 + 16 * 24 * 60 * 60 * 1000;
+            writer.submit_intent(refund).await.unwrap();
         }
         writer.close().await;
         let store = Store::open(&path, T0).unwrap();
@@ -1401,7 +1441,7 @@ mod tests {
         assert_eq!(n, changes.len());
         for table in Table::ALL {
             let want = source.rows(table).unwrap();
-            assert!(!want.is_empty());
+            assert!(!want.is_empty(), "{} has no row", table.name());
             assert_eq!(dest.rows(table).unwrap(), want, "{}", table.name());
         }
         assert!(

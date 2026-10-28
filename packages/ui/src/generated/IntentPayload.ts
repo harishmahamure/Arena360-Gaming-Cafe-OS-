@@ -55,6 +55,7 @@ import type { RateUpsert } from "./RateUpsert";
 import type { ReceiptPrintFailed } from "./ReceiptPrintFailed";
 import type { ReceiptPrinted } from "./ReceiptPrinted";
 import type { ReceiptReprint } from "./ReceiptReprint";
+import type { RefundCreate } from "./RefundCreate";
 import type { RoleUpsert } from "./RoleUpsert";
 import type { RuleUpsert } from "./RuleUpsert";
 import type { SessionAssignPlayer } from "./SessionAssignPlayer";
@@ -130,6 +131,7 @@ export type IntentPayload =
   | ({ kind: "order.line_served" } & OrderLineServed)
   | ({ kind: "order.line_cancel" } & OrderLineCancel)
   | ({ kind: "order.void" } & OrderVoid)
+  | ({ kind: "refund.create" } & RefundCreate)
   | ({ kind: "staff.set_credentials" } & StaffSetCredentials)
   | ({ kind: "staff.deactivate" } & StaffDeactivate)
   | ({ kind: "stock.in" } & StockIn)

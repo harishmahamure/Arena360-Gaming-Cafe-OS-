@@ -33,6 +33,7 @@
   import { isTextEntry } from "../../lib/nav";
   import { sessionStaff, snapshotOf } from "../../lib/operating";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
+  import RefundPanel from "../../lib/RefundPanel.svelte";
   import {
     ALL,
     DEFAULT_TAX,
@@ -89,7 +90,7 @@
   let attempt: { key: string; body: string } | null = null;
 
   // Recent sales.
-  let view: "grid" | "recent" = $state("grid");
+  let view: "grid" | "recent" | "refund" = $state("grid");
   let sales: PosSaleView[] = $state([]);
   let salesState: "loading" | "ok" | "failed" = $state("loading");
   let openSale: string | null = $state(null);
@@ -947,10 +948,22 @@
             if (view === "recent") void loadSales();
           }}>{view === "recent" ? t("hub.pos.recent.back") : t("hub.pos.recent.toggle")}</button
         >
+        <button
+          type="button"
+          class="ui-interactive link type-hub-label"
+          data-testid="refund-toggle"
+          aria-pressed={view === "refund"}
+          onclick={() => (view = view === "refund" ? "grid" : "refund")}
+          >{view === "refund" ? t("hub.pos.recent.back") : t("hub.refund.toggle")}</button
+        >
       </div>
 
       {#if view === "recent"}
         <div class="results">{@render recentSales()}</div>
+      {:else if view === "refund"}
+        <div class="results">
+          <RefundPanel {staff} {money} ontimeout={() => void invalidate(SESSION_DEPENDENCY)} />
+        </div>
       {:else}
         <div
           class="strip"

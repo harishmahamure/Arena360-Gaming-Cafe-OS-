@@ -12,6 +12,9 @@ pub const CASH_SALE: &str = "sale";
 pub const CASH_DRAWER_OPEN: &str = "drawer_open";
 /// `cash_events.kind`: the compensating row an Undo writes for a `sale`.
 pub const CASH_SALE_REVERTED: &str = "sale_reverted";
+/// `cash_events.kind`: cash handed back for a refund (a negative amount; `order_id` names the
+/// invoice refunded, Story 5.24).
+pub const CASH_REFUND: &str = "refund";
 
 /// The payload of `shift.open`: the float counted into the drawer. The carried amount (the
 /// last shift's opening float) is read on the Hub and recorded beside it, so the audit shows

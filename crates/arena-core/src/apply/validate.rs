@@ -286,6 +286,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::OrderLineCancel(t) => super::order_line::validate_cancel(intent, c, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::RefundCreate(r) => match target {
+            Target::Refund(t) => super::refund::validate(intent, r, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::OrderVoid(v) => match target {
             Target::OrderVoid(t) => super::order_void::validate_void(intent, v, t),
             _ => Err(internal_target()),

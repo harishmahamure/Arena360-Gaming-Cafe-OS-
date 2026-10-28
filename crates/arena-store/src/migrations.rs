@@ -232,6 +232,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 56,
         sql: include_str!("../migrations/0056_order_void.sql"),
     },
+    Migration {
+        version: 57,
+        sql: include_str!("../migrations/0057_refunds.sql"),
+    },
 ];
 
 /// The schema version this binary writes.
@@ -693,6 +697,77 @@ mod tests {
             conn.execute_batch("UPDATE orders SET void_reason = 'because' WHERE id = 'O1'")
                 .is_err(),
             "the reason is one of the three"
+        );
+    }
+
+    /// Migration 57 lets `payments` hold a refund's negative rows (never a zero one), keeps the
+    /// rows it had, and gives each order line its refunded counters at zero.
+    #[test]
+    fn the_refund_migration_rebuilds_payments_for_negative_rows_and_counts_refunds_per_line() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 57) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                 created_at, updated_at, kind)
+             VALUES ('O1', 'settled', 5, 5, 'd', 'f', 0, 0, 0, 'session');
+             INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position,
+                                   business_day, fy, rev, created_at, updated_at)
+             VALUES ('P1', 'O1', 'cash', 5, 'S', 0, 'd', 'f', 0, 0, 0);",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATIONS[56].sql).unwrap();
+        let kept: (i64, Option<String>) = conn
+            .query_row(
+                "SELECT amount_minor, refund_id FROM payments WHERE id = 'P1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, (5, None), "an existing payment is kept as it was");
+        let insert = |id: &str, amount: i64| {
+            conn.execute_batch(&format!(
+                "INSERT INTO payments (id, order_id, method, amount_minor, staff_id, position,
+                                       business_day, fy, rev, created_at, updated_at, refund_id)
+                 VALUES ('{id}', 'O1', 'cash', {amount}, 'S', 1, 'd', 'f', 0, 0, 0, 'R1')"
+            ))
+        };
+        assert!(
+            insert("P2", -3).is_ok(),
+            "a refund pays back with a negative row"
+        );
+        assert!(
+            insert("P3", 0).is_err(),
+            "a payment of nothing is not a payment"
+        );
+        conn.execute_batch(
+            "INSERT INTO refunds (id, order_id, credit_note_no, reason, amount_minor, lines,
+                                  staff_id, approved_by, business_day, fy, rev, created_at,
+                                  updated_at)
+             VALUES ('R1', 'O1', 'CN/1', 'mistake', 3, '[]', 'S', 'S', 'd', 'f', 0, 0, 0)",
+        )
+        .unwrap();
+        let again = |id: &str, no: &str, reason: &str, amount: i64| {
+            conn.execute_batch(&format!(
+                "INSERT INTO refunds (id, order_id, credit_note_no, reason, amount_minor, lines,
+                                      staff_id, approved_by, business_day, fy, rev, created_at,
+                                      updated_at)
+                 VALUES ('{id}', 'O1', '{no}', '{reason}', {amount}, '[]', 'S', 'S', 'd', 'f', 0,
+                         0, 0)"
+            ))
+        };
+        assert!(
+            again("R2", "CN/1", "mistake", 1).is_err(),
+            "a credit note number is unique"
+        );
+        assert!(
+            again("R3", "CN/2", "because", 1).is_err(),
+            "the reason is one of the four"
+        );
+        assert!(
+            again("R4", "CN/3", "mistake", 0).is_err(),
+            "a refund pays back something"
         );
     }
 }

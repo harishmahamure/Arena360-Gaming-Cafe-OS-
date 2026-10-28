@@ -274,6 +274,17 @@ enum Op {
         note: u8,
         who: Index,
     },
+    /// `refund.create` of one line of a numbered invoice by the owner or a staff member, with a good
+    /// or bad reason, method and reference. Only the owner and managers may refund; a refusal writes
+    /// nothing.
+    Refund {
+        pick: u8,
+        line: u8,
+        qty: u8,
+        method: u8,
+        reason: u8,
+        who: Index,
+    },
     /// A cash top-up for a player, then maybe its Undo (late or in time).
     WalletTopup {
         player: u8,
@@ -611,6 +622,9 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         2 => (any::<u8>(), any::<bool>(), any::<bool>()).prop_map(
             |(pick, cancel, made)| Op::OrderLine { pick, cancel, made }
+        ),
+        2 => (any::<u8>(), any::<u8>(), any::<u8>(), 0..7u8, 0..5u8, any::<Index>()).prop_map(
+            |(pick, line, qty, method, reason, who)| Op::Refund { pick, line, qty, method, reason, who }
         ),
         2 => (any::<u8>(), 0..5u8, 0..3u8, any::<Index>()).prop_map(
             |(pick, reason, note, who)| Op::Void { pick, reason, note, who }
@@ -2472,6 +2486,130 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
             }
         }
+        Op::Refund {
+            pick,
+            line,
+            qty,
+            method,
+            reason,
+            who,
+        } => {
+            let orders: Vec<_> = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .filter(|o| text(o, "status") == "settled")
+                .filter(|o| matches!(o["invoice_no"], RowValue::Text(_)))
+                .collect();
+            let Some(o) = orders.get(usize::from(*pick) % orders.len().max(1)) else {
+                return Ok(());
+            };
+            let order_id = text(o, "id");
+            let lines: Vec<_> = hub
+                .reader
+                .rows(Table::OrderLines)
+                .unwrap()
+                .into_iter()
+                .filter(|l| text(l, "order_id") == order_id)
+                .collect();
+            let Some(l) = lines.get(usize::from(*line) % lines.len().max(1)) else {
+                return Ok(());
+            };
+            let sold = match &l["qty"] {
+                RowValue::Integer(q) => *q,
+                _ => 1,
+            };
+            let left = sold - int(l, "refunded_qty");
+            let wanted = if left > 0 {
+                1 + i64::from(*qty) % left
+            } else {
+                1
+            };
+            let (method, reference) = match method {
+                0 => (Some(arena_proto::PaymentMethod::Cash), None),
+                1 => (Some(arena_proto::PaymentMethod::Upi), Some("1234")),
+                2 => (Some(arena_proto::PaymentMethod::Upi), Some("12")),
+                3 => (Some(arena_proto::PaymentMethod::Card), None),
+                4 => (Some(arena_proto::PaymentMethod::Wallet), None),
+                5 => (Some(arena_proto::PaymentMethod::Credit), None),
+                _ => (None, None),
+            };
+            let reason_code = match reason {
+                0 => Some(arena_proto::ReasonCode::Mistake),
+                1 => Some(arena_proto::ReasonCode::ChangedMind),
+                2 => Some(arena_proto::ReasonCode::Other),
+                3 => None,
+                _ => Some(arena_proto::ReasonCode::Lost),
+            };
+            let mut intent = hub.intent(
+                IntentPayload::RefundCreate(arena_proto::RefundCreate {
+                    invoice_no: text(o, "invoice_no"),
+                    lines: vec![arena_proto::RefundLineReq {
+                        line_id: text(l, "id"),
+                        qty: wanted,
+                        return_to_stock: Some(true),
+                    }],
+                    method,
+                    reference: reference.map(str::to_owned),
+                    note: None,
+                    receipt: None,
+                }),
+                None,
+            );
+            intent.reason = reason_code;
+            let pick = who.index(STAFF_ROLES.len() + 1);
+            if pick > 0 || hub.staff.is_empty() {
+                intent.actor = match hub.staff.get(pick).filter(|_| pick < STAFF_ROLES.len()) {
+                    Some(staff) => Actor {
+                        kind: ActorKind::Staff,
+                        id: staff.clone(),
+                    },
+                    None => Actor {
+                        kind: ActorKind::Admin,
+                        id: "admin".into(),
+                    },
+                };
+            }
+            // Only the owner and managers hold refund.issue.
+            let allowed = intent.actor.kind == ActorKind::Owner
+                || (intent.actor.kind == ActorKind::Staff && pick == 1);
+            let (refunds_before, before) = (
+                hub.reader.rows(Table::Refunds).unwrap().len(),
+                hub.change_count(),
+            );
+            let out = hub.submit_new(intent);
+            if !allowed {
+                prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
+                prop_assert_eq!(hub.change_count(), before);
+                return Ok(());
+            }
+            if matches!(reason, 3 | 4) || matches!(method, Some(arena_proto::PaymentMethod::Credit))
+            {
+                prop_assert!(out.is_err(), "{:?}", out);
+            }
+            let refunds_after = hub.reader.rows(Table::Refunds).unwrap().len();
+            match out {
+                Ok(_) => prop_assert_eq!(refunds_after, refunds_before + 1),
+                Err(e) => {
+                    // A refusal writes nothing.
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::ReasonRequired
+                                | ErrorCode::ValidationFailed
+                                | ErrorCode::ReferenceRequired
+                                | ErrorCode::RefundExceedsPaid
+                                | ErrorCode::ShiftNotOpen
+                        ),
+                        "{:?}",
+                        e
+                    );
+                    prop_assert_eq!(refunds_after, refunds_before);
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+            }
+        }
         Op::Void {
             pick,
             reason,
@@ -3280,7 +3418,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     .rows(Table::Payments)
                     .unwrap()
                     .iter()
-                    .filter(|p| text(p, "order_id") == text(&o, "id"))
+                    .filter(|p| text(p, "order_id") == text(&o, "id") && int(p, "amount_minor") > 0)
                     .map(|p| int(p, "amount_minor"))
                     .sum();
                 prop_assert_eq!(paid, int(&o, "total_minor"));
@@ -4510,11 +4648,23 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     );
                 } else {
                     prop_assert_eq!(hub.change_count(), after_forward + 5);
-                    prop_assert!(
-                        orders
+                    // Undo of End removes the time lines; an order that still holds placed
+                    // products (Story 5.12) stays on its session, and holds no time.
+                    let all_lines = hub.reader.rows(Table::OrderLines).unwrap();
+                    for o in orders
+                        .iter()
+                        .filter(|o| o["session_id"] == RowValue::Text(target.clone()))
+                    {
+                        let own: Vec<_> = all_lines
                             .iter()
-                            .all(|o| o["session_id"] != RowValue::Text(target.clone()))
-                    );
+                            .filter(|l| l["order_id"] == o["id"])
+                            .collect();
+                        prop_assert!(
+                            !own.is_empty()
+                                && own.iter().all(|l| l["product_id"] != RowValue::Null),
+                            "an order left on the session holds only placed products"
+                        );
+                    }
                     let s = hub
                         .reader
                         .rows(Table::Sessions)
@@ -4726,7 +4876,7 @@ fn assert_cash_holds(hub: &Hub) -> Result<(), TestCaseError> {
         .filter(|p| text(p, "method") == "cash")
         .map(|p| int(p, "amount_minor"))
         .sum();
-    prop_assert_eq!(net("sale") + net("sale_reverted"), cash);
+    prop_assert_eq!(net("sale") + net("sale_reverted") + net("refund"), cash);
     let shifts = hub.reader.rows(Table::Shifts).unwrap();
     prop_assert_eq!(
         net("float_in"),
@@ -4831,6 +4981,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_coupons_hold(&hub)?;
                 assert_discounts_hold(&hub)?;
                 assert_voids_hold(&hub)?;
+                assert_refunds_hold(&hub)?;
                 assert_prints_hold(&hub)?;
                 assert_drawers_hold(&hub)?;
                 assert_notifications_hold(&hub)?;
@@ -4887,6 +5038,16 @@ fn assert_invoices_hold(hub: &Hub) -> Result<(), TestCaseError> {
         prop_assert!(numbers.insert(no.clone()), "{no} issued twice");
         prop_assert_eq!(text(o, "status"), "settled");
         prop_assert!(int(o, "total_minor") > 0);
+        let (prefix, seq) = no.rsplit_once('/').unwrap();
+        per_segment
+            .entry(prefix.to_owned())
+            .or_default()
+            .push(seq.parse().unwrap());
+    }
+    // A credit note takes its number from the same counter (Story 5.24).
+    for r in hub.reader.rows(Table::Refunds).unwrap() {
+        let no = text(&r, "credit_note_no");
+        prop_assert!(numbers.insert(no.clone()), "{no} issued twice");
         let (prefix, seq) = no.rsplit_once('/').unwrap();
         per_segment
             .entry(prefix.to_owned())
@@ -4983,6 +5144,66 @@ fn assert_coupons_hold(hub: &Hub) -> Result<(), TestCaseError> {
         if let Some(limit) = coupon.usage_limit {
             prop_assert!(coupon.used <= limit, "{} is over its limit", coupon.code);
         }
+    }
+    Ok(())
+}
+
+/// Refunds (Story 5.24): what an order's credit notes came to is what its negative payment rows
+/// came to and never more than was taken, a line is never refunded past what was sold, and a
+/// credit note is a number of the invoice series no invoice holds.
+fn assert_refunds_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let orders = hub.reader.rows(Table::Orders).unwrap();
+    let refunds = hub.reader.rows(Table::Refunds).unwrap();
+    let payments = hub.reader.rows(Table::Payments).unwrap();
+    let lines = hub.reader.rows(Table::OrderLines).unwrap();
+    for o in &orders {
+        let id = text(o, "id");
+        let credited: i64 = refunds
+            .iter()
+            .filter(|r| text(r, "order_id") == id)
+            .map(|r| int(r, "amount_minor"))
+            .sum();
+        let own = |p: &&Row| text(p, "order_id") == id;
+        let taken: i64 = payments
+            .iter()
+            .filter(own)
+            .map(|p| int(p, "amount_minor"))
+            .filter(|a| *a > 0)
+            .sum();
+        let paid_back: i64 = payments
+            .iter()
+            .filter(own)
+            .map(|p| int(p, "amount_minor"))
+            .filter(|a| *a < 0)
+            .sum();
+        prop_assert_eq!(credited, -paid_back, "order {} credit notes", id);
+        prop_assert!(
+            credited <= taken,
+            "order {} refunded past what was paid",
+            id
+        );
+        if credited > 0 {
+            prop_assert_eq!(text(o, "status"), "settled");
+            prop_assert!(matches!(o["invoice_no"], RowValue::Text(_)));
+        }
+    }
+    for l in &lines {
+        let sold = match &l["qty"] {
+            RowValue::Integer(q) => *q,
+            _ => 1,
+        };
+        prop_assert!(int(l, "refunded_qty") <= sold, "line {:?} over-refunded", l);
+        prop_assert!(int(l, "refunded_minor") <= int(l, "amount_minor"));
+    }
+    let invoices: std::collections::BTreeSet<String> = orders
+        .iter()
+        .filter_map(|o| match &o["invoice_no"] {
+            RowValue::Text(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect();
+    for r in &refunds {
+        prop_assert!(!invoices.contains(&text(r, "credit_note_no")));
     }
     Ok(())
 }

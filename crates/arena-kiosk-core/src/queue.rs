@@ -44,6 +44,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PinRejected
         | ErrorCode::ReasonRequired
         | ErrorCode::NotFound
+        | ErrorCode::InvoiceNotFound
         | ErrorCode::BadRequest
         | ErrorCode::OtpInvalid
         | ErrorCode::OtpExpired
@@ -77,6 +78,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::ConsentRequired
         | ErrorCode::CouponInvalid
         | ErrorCode::OrderSettled
+        | ErrorCode::RefundExceedsPaid
         | ErrorCode::UndoNotAllowed
         | ErrorCode::InsufficientBalance
         | ErrorCode::CreditLimit

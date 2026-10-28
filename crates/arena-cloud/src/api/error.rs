@@ -13,7 +13,7 @@ pub const INTERNAL_MESSAGE: &str = "Something went wrong. Try again in a moment.
 /// The HTTP status for an error code on the cloud API.
 pub fn status_of(code: ErrorCode) -> StatusCode {
     match code {
-        ErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ErrorCode::NotFound | ErrorCode::InvoiceNotFound => StatusCode::NOT_FOUND,
         // A wrong method is 405 through [`ApiError::method_not_allowed`] only.
         ErrorCode::Unsupported | ErrorCode::BadRequest | ErrorCode::BadFrame => {
             StatusCode::BAD_REQUEST
@@ -43,6 +43,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::SessionLocked => StatusCode::LOCKED,
         ErrorCode::Stale
         | ErrorCode::OrderSettled
+        | ErrorCode::RefundExceedsPaid
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked
         | ErrorCode::IdempotencyConflict

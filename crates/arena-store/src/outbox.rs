@@ -235,7 +235,7 @@ pub fn load_receipt_source(
     let mut payments = conn
         .prepare(
             "SELECT method, amount_minor, reference FROM payments
-             WHERE order_id = ?1 ORDER BY position, id",
+             WHERE order_id = ?1 AND amount_minor > 0 ORDER BY position, id",
         )
         .map_err(db_error)?;
     let payments = payments

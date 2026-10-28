@@ -38,6 +38,7 @@ mod pricing;
 mod printer;
 mod process;
 mod receipt;
+mod refund;
 mod scope;
 mod session;
 mod setup_devices;
@@ -232,6 +233,10 @@ pub use receipt::{
     RECEIPT_PHONE_MAX_LINES, ReceiptChoice, ReceiptPrintFailed, ReceiptPrinted, ReceiptReprint,
     WhatsappRefusal, notify_gate, tier_is_paid, valid_receipt_lines, whatsapp_refusal,
 };
+pub use refund::{
+    MAX_REFUND_LINES, REFUND_NOTE_MAX_CHARS, RefundCreate, RefundInvoice, RefundLineReq,
+    RefundLineView, RefundSummary,
+};
 pub use scope::{ClientClass, PAIRED_SETTINGS_PREFIX, class_scope, in_scope, may_read_setting};
 pub use session::{
     BillItem, BillLine, BillRevertedEvent, BillSettledEvent, CARD_REFERENCE_MAX, CREDIT_DAY_MAX,
@@ -252,8 +257,8 @@ pub use setup_devices::{
     SetupDevicesView, SetupGroup,
 };
 pub use shift::{
-    CASH_DRAWER_OPEN, CASH_FLOAT_IN, CASH_SALE, CASH_SALE_REVERTED, MAX_FLOAT_MINOR, ShiftOpen,
-    ShiftState, SnapshotShift,
+    CASH_DRAWER_OPEN, CASH_FLOAT_IN, CASH_REFUND, CASH_SALE, CASH_SALE_REVERTED, MAX_FLOAT_MINOR,
+    ShiftOpen, ShiftState, SnapshotShift,
 };
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,

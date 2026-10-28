@@ -148,7 +148,7 @@ development_status:
   5-21-coupons-applied-at-settle: done
   5-22-manual-discount-with-manager-pin-and-reason: done
   5-23-void-an-unsettled-order-with-manager-pin: done
-  5-24-refund-a-settled-order-with-a-credit-note: backlog
+  5-24-refund-a-settled-order-with-a-credit-note: review
   5-25-cash-deposits-and-expenses: backlog
   5-26-close-a-shift-with-a-blind-count-and-a-signed-variance: backlog
   5-27-reports-screen-with-daily-sales-and-sessions: backlog

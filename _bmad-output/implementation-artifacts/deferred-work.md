@@ -498,3 +498,12 @@
 - Drawer kick has apply-level tests through `pos.sale` only; `session.settle` and `plan.sell` share `queue_on_settle` but lack a drawer test.
 - `drawer.kicked` applied after the sale's shift is closed appends a `drawer_open` event to that closed shift; Story 5.26 must ignore zero-amount `drawer_open` rows in variance and decide whether late kicks are allowed.
 - A failed kick leaves the sale non-undoable and there is no retry or manual "open drawer" action.
+
+## Deferred from: Story 5.24
+
+- The last partial refund of a tax-exclusive counter sale recomputes tax once per rate per refund, so the credit notes of one order may differ from the original tax by a minor unit; a final refund that clears every line can then be refused `REFUND_EXCEEDS_PAID` by that unit.
+- A refund of a session order that carried play time cannot give the minutes back to a wallet or pack; play-time lines are refunded as money only.
+- Refund approvals above a threshold (Epic 14) and large-refund owner alerts (Epic 8) are not wired; the credit note has no WhatsApp channel.
+- `drawer.kicked` is not queued for a cash refund; the drawer opens only for sales.
+- The Sessions screen has no Refund entry; a refund starts from POS.
+- Credit not yet collected is cut using the player's current outstanding; a refund of a sale whose credit was partly collected through other orders cuts only what is still owed.

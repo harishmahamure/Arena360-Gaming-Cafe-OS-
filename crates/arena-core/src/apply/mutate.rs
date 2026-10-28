@@ -419,6 +419,10 @@ pub(super) fn mutate(
             }
             _ => Err(mismatch()),
         },
+        IntentPayload::RefundCreate(r) => match target {
+            Target::Refund(t) => super::refund::mutate(tx, intent, r, t, epoch, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::OrderVoid(v) => match target {
             Target::OrderVoid(t) => super::order_void::mutate_void(tx, intent, v, t, now_ms),
             _ => Err(mismatch()),

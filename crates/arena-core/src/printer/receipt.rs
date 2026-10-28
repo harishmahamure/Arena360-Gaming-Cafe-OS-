@@ -609,6 +609,53 @@ fn sale_rows(s: &ReceiptSettings, r: &SaleReceipt) -> Vec<Row> {
     sale_rows_for(s, r, false)
 }
 
+/// The numbers a credit note carries besides the refunded lines (Story 5.24).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreditHead {
+    pub credit_note_no: String,
+    /// The invoice the refund is against, and when it was issued.
+    pub invoice_no: String,
+    pub invoice_at_ms: i64,
+}
+
+/// A credit note: the Story 5.16 sale layout under the title "Credit Note", with its own number,
+/// the original invoice's number and date, and every amount negative. `sale.items`, `tax`,
+/// `total_minor` and `payments` hold the negative amounts; `invoice_no` is not printed.
+fn credit_rows(s: &ReceiptSettings, r: &SaleReceipt, h: &CreditHead) -> Vec<Row> {
+    let mut l = Layout::new(s.paper);
+    l.header(s, r.gstin.as_deref().filter(|_| r.gst));
+    l.centred(Style::Bold, "Credit Note");
+    if let Some(buyer) = r.buyer.as_ref().filter(|_| r.gst) {
+        l.lines(Style::Plain, &buyer.legal_name);
+        l.lines(Style::Plain, &format!("GSTIN {}", buyer.gstin));
+    }
+    l.pair(Style::Plain, "Credit note no.", &h.credit_note_no);
+    l.pair(Style::Plain, "Invoice no.", &h.invoice_no);
+    l.pair(
+        Style::Plain,
+        "Invoice date",
+        &receipt_time(h.invoice_at_ms, &s.tz),
+    );
+    l.meta(s, r.at_ms, &r.staff, r.player.as_deref().unwrap_or("Guest"));
+    l.items(s, r);
+    l.rule();
+    l.tax(s, r);
+    l.pair(Style::Total, "REFUND", &s.money.with_symbol(r.total_minor));
+    l.rule();
+    l.payments(s, &r.payments);
+    l.footer(s);
+    l.rows
+}
+
+/// A credit note as ESC/POS bytes.
+pub fn render_credit_note(
+    settings: &ReceiptSettings,
+    sale: &SaleReceipt,
+    head: &CreditHead,
+) -> Vec<u8> {
+    encode(&credit_rows(settings, sale, head))
+}
+
 fn payment_rows(s: &ReceiptSettings, r: &PaymentReceipt) -> Vec<Row> {
     let mut l = Layout::new(s.paper);
     l.header(s, None);

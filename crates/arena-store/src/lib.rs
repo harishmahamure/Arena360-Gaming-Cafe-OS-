@@ -26,6 +26,7 @@ mod player_packs;
 mod players;
 mod pricing_rules;
 mod products;
+mod refunds;
 mod sessions;
 mod shifts;
 mod staff;
@@ -135,6 +136,12 @@ pub use products::{
     ProductRow, barcode_holder, count_active_products, find_product, insert_component,
     insert_product, list_components, list_products, live_bundles_with, set_product_deleted,
     update_product,
+};
+pub use refunds::{
+    CreditNoteSource, NewRefund, NewRefundPayment, RefundLineRow, RefundOrder, RefundRow,
+    add_line_refunded, deactivate_pack, find_order_by_invoice, find_refund, insert_refund,
+    insert_refund_payment, list_refund_lines, list_refunds, load_credit_note_source,
+    load_refund_invoice, pack_ever_used, paid_by_method, plan_refusal, sum_refunded,
 };
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`), and the connection it derefs to.
 pub use rusqlite::{Connection as DbConn, Transaction};
@@ -849,6 +856,28 @@ impl Store {
             return Ok(Vec::new());
         }
         list_pos_sales(&self.conn, business_day)
+    }
+
+    /// What the credit note `refund_id` is printed from (`None`: no such refund).
+    pub fn credit_note_source(
+        &self,
+        refund_id: &str,
+    ) -> Result<Option<CreditNoteSource>, AppError> {
+        if !self.table_exists("refunds")? {
+            return Ok(None);
+        }
+        load_credit_note_source(&self.conn, refund_id)
+    }
+
+    /// The invoice numbered `invoice_no`, for the Refund screen (`None`: no such settled invoice).
+    pub fn refund_invoice(
+        &self,
+        invoice_no: &str,
+    ) -> Result<Option<arena_proto::RefundInvoice>, AppError> {
+        if !self.table_exists("refunds")? {
+            return Ok(None);
+        }
+        load_refund_invoice(&self.conn, invoice_no)
     }
 
     /// How many items each session has had placed on its bill (sessions with none are absent).

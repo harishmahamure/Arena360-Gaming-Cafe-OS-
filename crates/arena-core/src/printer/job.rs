@@ -7,13 +7,14 @@ use arena_proto::{
     NumberFormat, PaymentMethod, PaymentRow, SettingEntry, SnapshotLocale, SymbolPosition,
     TaxSettings,
 };
-use arena_store::{ReceiptLineRow, ReceiptSource};
+use arena_store::{CreditNoteSource, ReceiptLineRow, ReceiptSource};
 
 use super::PaperWidth;
 use super::receipt::{
-    Buyer, Coupon, ItemLine, ReceiptMoney, ReceiptSettings, SaleReceipt, SessionLine,
-    render_sale_copy,
+    Buyer, Coupon, CreditHead, ItemLine, ReceiptMoney, ReceiptSettings, SaleReceipt, SessionLine,
+    render_credit_note, render_sale_copy,
 };
+use crate::apply::CreditNoteLine;
 use crate::invoice::tax::RateTax;
 
 fn setting<'a>(settings: &'a [SettingEntry], key: &str) -> &'a str {
@@ -174,6 +175,102 @@ pub fn render_order(
         &receipt_settings(settings, branch_name, locale),
         &sale,
         reprint,
+    )
+}
+
+/// The credit note `source` describes: the refunded lines, the tax of those lines, the refund
+/// total and how it went back, all negative.
+pub fn credit_note_receipt(
+    settings: &[SettingEntry],
+    source: &CreditNoteSource,
+) -> (SaleReceipt, CreditHead) {
+    let tax = TaxSettings::parse(setting(settings, KEY_TAX));
+    let gst = tax
+        .as_ref()
+        .is_some_and(|t| t.tax_mode() == arena_proto::TaxMode::GstIn);
+    let refund = &source.refund;
+    let lines: Vec<CreditNoteLine> = serde_json::from_str(&refund.lines).unwrap_or_default();
+    let breakup: Vec<RateTax> = refund
+        .tax_breakup
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+    let mut payments = Vec::new();
+    if refund.credit_minor > 0 {
+        payments.push(PaymentRow {
+            method: PaymentMethod::Credit,
+            amount_minor: -refund.credit_minor,
+            reference: None,
+        });
+    }
+    if let Some(m) = refund.method.as_deref().and_then(method) {
+        payments.push(PaymentRow {
+            method: m,
+            amount_minor: -(refund.amount_minor - refund.credit_minor),
+            reference: refund.reference.clone(),
+        });
+    }
+    let sale = SaleReceipt {
+        gst,
+        gstin: tax
+            .as_ref()
+            .map(|t| t.gstin.clone())
+            .filter(|g| gst && !g.is_empty()),
+        tax_label: tax
+            .as_ref()
+            .map(|t| t.label.clone())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| "Tax".to_owned()),
+        invoice_no: None,
+        buyer: source
+            .buyer
+            .as_ref()
+            .filter(|_| gst)
+            .map(|(gstin, name)| Buyer {
+                legal_name: name.clone(),
+                gstin: gstin.clone(),
+            }),
+        at_ms: refund.created_at,
+        staff: source.staff.clone(),
+        player: source.player.clone(),
+        sessions: Vec::new(),
+        items: lines
+            .iter()
+            .map(|l| ItemLine {
+                name: l.label.clone(),
+                qty: l.qty,
+                rate_minor: -(l.amount_minor / l.qty.max(1)),
+                amount_minor: -l.amount_minor,
+                hsn: l.hsn.clone().filter(|h| gst && !h.is_empty()),
+            })
+            .collect(),
+        coupon: None,
+        discount_minor: None,
+        subtotal_minor: breakup.iter().map(|t| t.taxable_minor).sum(),
+        tax: breakup,
+        total_minor: -refund.amount_minor,
+        payments,
+    };
+    let head = CreditHead {
+        credit_note_no: refund.credit_note_no.clone(),
+        invoice_no: source.invoice_no.clone(),
+        invoice_at_ms: source.invoice_at,
+    };
+    (sale, head)
+}
+
+/// The ESC/POS bytes of the credit note `source` describes.
+pub fn render_credit_note_order(
+    settings: &[SettingEntry],
+    branch_name: &str,
+    locale: Option<&SnapshotLocale>,
+    source: &CreditNoteSource,
+) -> Vec<u8> {
+    let (sale, head) = credit_note_receipt(settings, source);
+    render_credit_note(
+        &receipt_settings(settings, branch_name, locale),
+        &sale,
+        &head,
     )
 }
 

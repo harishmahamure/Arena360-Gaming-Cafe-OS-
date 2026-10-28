@@ -733,6 +733,34 @@ impl SnapshotReader {
         )))
     }
 
+    /// The ESC/POS bytes of a credit note at the saved paper width; `None` when there is no such
+    /// refund.
+    pub fn credit_note_bytes(
+        &self,
+        refund_id: &str,
+        now_ms: i64,
+    ) -> Result<Option<Vec<u8>>, AppError> {
+        let source = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+            store.credit_note_source(refund_id)?
+        };
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        let settings = self.settings()?;
+        let snapshot = self.snapshot(now_ms)?;
+        let name = snapshot.branch.as_ref().map_or("", |b| b.name.as_str());
+        Ok(Some(crate::printer::job::render_credit_note_order(
+            &settings,
+            name,
+            snapshot.locale.as_ref(),
+            &source,
+        )))
+    }
+
     pub fn settlement(&self, order_id: &str) -> Result<Option<arena_store::Settlement>, AppError> {
         let store = self
             .reader
@@ -921,6 +949,22 @@ impl SnapshotReader {
         Ok(arena_proto::PosSalesView {
             business_day,
             sales,
+        })
+    }
+
+    /// The invoice numbered `invoice_no` for the Refund screen: `INVOICE_NOT_FOUND` when no settled
+    /// order carries that number.
+    pub fn refund_invoice(&self, invoice_no: &str) -> Result<arena_proto::RefundInvoice, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.refund_invoice(invoice_no)?.ok_or_else(|| {
+            AppError::with_field(
+                ErrorCode::InvoiceNotFound,
+                "no",
+                "There is no such invoice.",
+            )
         })
     }
 

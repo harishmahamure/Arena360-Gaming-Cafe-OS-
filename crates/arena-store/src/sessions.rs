@@ -1508,7 +1508,8 @@ pub fn list_pos_sales(
         .map_err(db_error)?;
     let mut payments = conn
         .prepare(
-            "SELECT method, amount_minor FROM payments WHERE order_id = ?1 ORDER BY position, id",
+            "SELECT method, amount_minor FROM payments
+             WHERE order_id = ?1 AND amount_minor > 0 ORDER BY position, id",
         )
         .map_err(db_error)?;
     heads

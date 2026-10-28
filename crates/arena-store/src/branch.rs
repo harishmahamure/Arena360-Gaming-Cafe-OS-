@@ -68,11 +68,12 @@ pub enum Table {
     NotifyOutbox,
     Coupons,
     CouponTargets,
+    Refunds,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 41] = [
+    pub const ALL: [Table; 42] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -114,6 +115,7 @@ impl Table {
         Table::NotifyOutbox,
         Table::Coupons,
         Table::CouponTargets,
+        Table::Refunds,
     ];
 
     /// The SQL table name.
@@ -160,6 +162,7 @@ impl Table {
             Self::NotifyOutbox => "notify_outbox",
             Self::Coupons => "coupons",
             Self::CouponTargets => "coupon_targets",
+            Self::Refunds => "refunds",
         }
     }
 
@@ -192,7 +195,8 @@ impl Table {
             | Self::Shifts
             | Self::CashEvents
             | Self::StockHolds
-            | Self::NotifyOutbox => &["id"],
+            | Self::NotifyOutbox
+            | Self::Refunds => &["id"],
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
             Self::Coupons => &["coupon_id"],
@@ -247,6 +251,7 @@ impl Table {
             | Self::InvoiceSequences
             | Self::NotifyOutbox
             | Self::Coupons
+            | Self::Refunds
             | Self::Plans => true,
             Self::Settings
             | Self::RolePerms
@@ -396,6 +401,9 @@ pub enum RowKey {
     NotifyOutbox {
         id: String,
     },
+    Refunds {
+        id: String,
+    },
     Coupons {
         coupon_id: String,
     },
@@ -438,6 +446,7 @@ impl RowKey {
             Self::CashEvents { .. } => Table::CashEvents,
             Self::InvoiceSequences { .. } => Table::InvoiceSequences,
             Self::NotifyOutbox { .. } => Table::NotifyOutbox,
+            Self::Refunds { .. } => Table::Refunds,
             Self::Coupons { .. } => Table::Coupons,
             Self::CouponTargets { .. } => Table::CouponTargets,
             Self::Players { .. } => Table::Players,
@@ -504,6 +513,7 @@ impl RowKey {
             | Self::CashEvents { id }
             | Self::StockHolds { id }
             | Self::NotifyOutbox { id }
+            | Self::Refunds { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => id.clone(),
         }
@@ -601,6 +611,7 @@ impl RowKey {
             },
             Table::StockHolds => Self::StockHolds { id: text("id")? },
             Table::NotifyOutbox => Self::NotifyOutbox { id: text("id")? },
+            Table::Refunds => Self::Refunds { id: text("id")? },
             Table::Coupons => Self::Coupons {
                 coupon_id: text("coupon_id")?,
             },
@@ -674,6 +685,7 @@ impl RowKey {
             | Self::CashEvents { id }
             | Self::StockHolds { id }
             | Self::NotifyOutbox { id }
+            | Self::Refunds { id }
             | Self::Payments { id }
             | Self::WalletTxns { id } => vec![id],
         }

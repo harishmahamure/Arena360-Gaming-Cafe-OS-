@@ -872,7 +872,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::BadFrame | ErrorCode::Unsupported | ErrorCode::BadRequest => {
             StatusCode::BAD_REQUEST
         }
-        ErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ErrorCode::NotFound | ErrorCode::InvoiceNotFound => StatusCode::NOT_FOUND,
         ErrorCode::ValidationFailed
         | ErrorCode::Expired
         | ErrorCode::HsnRequired
@@ -881,6 +881,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::CouponInvalid => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::Stale
         | ErrorCode::OrderSettled
+        | ErrorCode::RefundExceedsPaid
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked
         | ErrorCode::IdempotencyConflict
@@ -3221,6 +3222,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/plans", get(plans))
         .route("/ui/rules", get(rules))
         .route("/ui/coupons", get(crate::ui_coupons::list))
+        .route("/ui/refund/invoice", get(crate::ui_refund::invoice))
         .route("/ui/coupons/preview", post(crate::ui_coupons::preview))
         .route(
             "/ui/discount/preview",
@@ -6006,6 +6008,69 @@ pub(crate) mod tests {
         assert_eq!(view["expiring"], json!([]));
         assert_eq!(view["expired"], json!([]));
         assert_eq!(view["today"].as_str().map(str::len), Some(10));
+    }
+
+    #[tokio::test]
+    async fn the_refund_lookup_and_a_refund_of_an_unknown_invoice_are_refused_cleanly() {
+        use arena_proto::{ReasonCode, RefundCreate, RefundLineReq};
+        let hub = hub().await;
+        let (status, _) = call(&hub, "GET", "/ui/refund/invoice?no=X", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let manager = token_for(&hub, "manager", "m-pass").await;
+        let counter = token_for(&hub, "counter", "c-pass").await;
+        let (status, reply) = call(
+            &hub,
+            "GET",
+            "/ui/refund/invoice?no=DEV01%2F26-27%2FE1a%2F000001",
+            Some(&counter),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{reply}");
+        assert_eq!(reply["code"], "INVOICE_NOT_FOUND");
+
+        let who = Actor {
+            kind: ActorKind::Staff,
+            id: "x".into(),
+        };
+        let refund = |token: String, reason: Option<ReasonCode>| {
+            let hub = &hub;
+            let who = who.clone();
+            async move {
+                let mut intent = intent_as(
+                    who,
+                    IntentPayload::RefundCreate(RefundCreate {
+                        invoice_no: "DEV01/26-27/E1a/000001".into(),
+                        lines: vec![RefundLineReq {
+                            line_id: "L".into(),
+                            qty: 1,
+                            return_to_stock: None,
+                        }],
+                        method: None,
+                        reference: None,
+                        note: None,
+                        receipt: None,
+                    }),
+                    None,
+                );
+                intent.reason = reason;
+                call(
+                    hub,
+                    "POST",
+                    "/ui/intent",
+                    Some(&token),
+                    Some(json!({ "intent": intent })),
+                )
+                .await
+            }
+        };
+        // A counter holds no `refund.issue`.
+        let (status, reply) = refund(counter, Some(ReasonCode::Mistake)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        assert_eq!(reply["code"], "PERMISSION_DENIED");
+        let (status, reply) = refund(manager, Some(ReasonCode::Mistake)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{reply}");
+        assert_eq!(reply["code"], "INVOICE_NOT_FOUND");
     }
 
     #[tokio::test]

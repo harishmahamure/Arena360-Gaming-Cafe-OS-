@@ -38,6 +38,7 @@ mod prepaid;
 mod rate_flip;
 mod rates;
 mod receipt;
+mod refund;
 mod rule_pricing;
 mod rules;
 mod session;

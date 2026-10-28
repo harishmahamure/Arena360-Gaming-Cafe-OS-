@@ -93,6 +93,16 @@ fn result_intent(row: &OutboxRow, outcome: &Outcome, now: i64) -> Intent {
     }
 }
 
+/// The refund whose credit note a `print` row carries (Story 5.24), when it is one.
+fn credit_note(row: &OutboxRow) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(&row.payload)
+        .ok()
+        .and_then(|v| {
+            v.get("credit_note")
+                .and_then(|c| c.as_str().map(str::to_owned))
+        })
+}
+
 fn reprint(row: &OutboxRow) -> bool {
     serde_json::from_str::<serde_json::Value>(&row.payload)
         .ok()
@@ -144,6 +154,7 @@ impl ReceiptPrintTask {
     /// Builds the receipt and sends it; the outcome is what the result intent records.
     async fn send(&self, row: &OutboxRow) -> Outcome {
         let reprint = reprint(row);
+        let credit_note = credit_note(row);
         let drawer = row.kind == KIND_DRAWER;
         let order_id = row.ref_id.clone();
         let now = self.clock.now_ms();
@@ -155,7 +166,9 @@ impl ReceiptPrintTask {
                     .find(|s| s.key == KEY_PRINTER_SELECTED)
                     .map(|s| s.value)
                     .unwrap_or_default();
-                let bytes = if drawer {
+                let bytes = if let Some(refund_id) = &credit_note {
+                    r.credit_note_bytes(refund_id, now)?
+                } else if drawer {
                     Some(drawer_kick())
                 } else {
                     r.receipt_bytes(&order_id, reprint, now)?

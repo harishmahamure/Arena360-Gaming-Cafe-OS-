@@ -121,6 +121,7 @@ jobs:
       - run: pnpm run check:contrast
       - run: pnpm run check:tokens-used
       - run: pnpm run check:hex
+      - run: pnpm run check:no-blur
       - run: pnpm run check:ads
       - run: pnpm run check:secrets
       - run: pnpm run check:deploy

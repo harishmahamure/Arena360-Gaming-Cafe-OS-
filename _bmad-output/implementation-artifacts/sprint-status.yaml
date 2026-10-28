@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 14:00
+last_updated: 10-29-2026 15:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -172,7 +172,7 @@ development_status:
   6-3-the-branch-game-and-app-library-at-the-hub-applied-to-every: done
   6-4-kiosks-scan-for-installed-games-and-launchers-and-report-the: done
   6-5-the-hub-matches-scanned-games-to-the-catalogue-and-the-manag: done
-  6-6-game-media-on-the-kiosk-falls-back-from-video-to-cover-to-so: backlog
+  6-6-game-media-on-the-kiosk-falls-back-from-video-to-cover-to-so: review
   6-7-the-attract-screen-shows-branding-rates-and-the-active-rule: backlog
   6-8-a-player-logs-in-at-the-kiosk-with-username-and-password: backlog
   6-9-the-plan-picker-starts-a-prepaid-session-from-the-kiosk: backlog

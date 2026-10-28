@@ -2015,6 +2015,8 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   `pnpm check:no-remote [app ...]` fails on remote URLs, fonts or CDN hosts in the Hub, Kiosk and
   Kitchen output, and on a build without a bundled `sora-*.woff2` or a CSS file declaring
   `--color-bg` (CI runs it in each of those build jobs; it is not part of `pnpm check`).
+  `pnpm check:no-blur` fails on `backdrop-filter` in the Hub, Kiosk and Kitchen sources and the
+  shared UI package (exempt a line with `blur-ignore`).
 
 `pnpm-workspace.yaml` also carries two pnpm install-policy settings:
 

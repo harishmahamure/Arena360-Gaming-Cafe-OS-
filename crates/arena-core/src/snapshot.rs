@@ -1641,6 +1641,66 @@ impl SnapshotReader {
         })
     }
 
+    /// The stored scan of one device: when it was made and its executables (Story 6.5). `None`
+    /// when the device was never scanned.
+    pub fn device_scan(
+        &self,
+        device_id: &str,
+    ) -> Result<Option<(i64, Vec<arena_proto::ScanEntry>)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            Ok(s.kiosk_scans_full()?
+                .into_iter()
+                .find(|r| r.device_id == device_id)
+                .map(|r| {
+                    (
+                        r.scanned_at,
+                        serde_json::from_str(&r.entries).unwrap_or_default(),
+                    )
+                }))
+        })
+    }
+
+    /// What "Found on PCs" is built from, read in one snapshot (Story 6.5): every live paired PC
+    /// with its stored scan and catalogue matches, the library with its installs, and the
+    /// dismissed proposal keys.
+    pub fn proposal_inputs(&self) -> Result<crate::game_proposals::ProposalInputs, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_consistent(|s| {
+            let scans = s.kiosk_scans_full()?;
+            let matches = s.game_matches()?;
+            let devices = s
+                .kiosk_scan_summaries()?
+                .into_iter()
+                .filter_map(|d| {
+                    let scan = scans.iter().find(|r| r.device_id == d.device_id)?;
+                    Some(crate::game_proposals::ScannedDevice {
+                        entries: serde_json::from_str(&scan.entries).unwrap_or_default(),
+                        // Matches made from an older scan do not describe this one.
+                        matches: matches
+                            .iter()
+                            .find(|m| m.device_id == d.device_id && m.scanned_at == scan.scanned_at)
+                            .map(|m| serde_json::from_str(&m.matches).unwrap_or_default())
+                            .unwrap_or_default(),
+                        device_id: d.device_id,
+                        label: d.label,
+                    })
+                })
+                .collect();
+            Ok(crate::game_proposals::ProposalInputs {
+                devices,
+                library: library_views(s)?,
+                dismissed: s.library_dismissals()?,
+            })
+        })
+    }
+
     /// Every live entry of the branch game and app library, enabled or not, ordered by name
     /// (Story 6.3). The name, launcher and age rating of a linked entry are as stored; the API
     /// layer shows the catalogue's.
@@ -1649,26 +1709,7 @@ impl SnapshotReader {
             .reader
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
-        store.read_consistent(|s| {
-            Ok(s.library_entries()?
-                .into_iter()
-                .map(|e| arena_proto::LibraryEntryView {
-                    id: e.id,
-                    kind: e.kind,
-                    name: e.name,
-                    launcher: e.launcher,
-                    executable_path: e.executable_path,
-                    launch_uri: e.launch_uri,
-                    launch_args: e.launch_args,
-                    category: e.category,
-                    tags: e.tags,
-                    age_rating: e.age_rating,
-                    enabled: e.enabled,
-                    catalog_id: e.catalog_id,
-                    rev: e.rev,
-                })
-                .collect())
-        })
+        store.read_consistent(library_views)
     }
 
     /// What a coupon code would do to a bill, by the pricing a settle uses (Story 5.21).
@@ -1820,6 +1861,37 @@ impl SnapshotReader {
     }
 }
 
+/// The live library entries with their install paths (Story 6.3, 6.5).
+fn library_views(s: &Store) -> Result<Vec<arena_proto::LibraryEntryView>, AppError> {
+    let installs = s.library_installs()?;
+    Ok(s.library_entries()?
+        .into_iter()
+        .map(|e| arena_proto::LibraryEntryView {
+            installs: installs
+                .iter()
+                .filter(|i| i.entry_id == e.id)
+                .map(|i| arena_proto::LibraryInstall {
+                    device_id: i.device_id.clone(),
+                    path: i.path.clone(),
+                    match_key: i.match_key.clone(),
+                })
+                .collect(),
+            id: e.id,
+            kind: e.kind,
+            name: e.name,
+            launcher: e.launcher,
+            executable_path: e.executable_path,
+            launch_uri: e.launch_uri,
+            launch_args: e.launch_args,
+            category: e.category,
+            tags: e.tags,
+            age_rating: e.age_rating,
+            enabled: e.enabled,
+            catalog_id: e.catalog_id,
+            rev: e.rev,
+        })
+        .collect())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

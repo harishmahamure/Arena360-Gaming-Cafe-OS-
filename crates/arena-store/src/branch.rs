@@ -71,11 +71,14 @@ pub enum Table {
     Refunds,
     LibraryEntries,
     KioskScans,
+    GameMatches,
+    LibraryInstalls,
+    LibraryDismissals,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 44] = [
+    pub const ALL: [Table; 47] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -120,6 +123,9 @@ impl Table {
         Table::Refunds,
         Table::LibraryEntries,
         Table::KioskScans,
+        Table::GameMatches,
+        Table::LibraryInstalls,
+        Table::LibraryDismissals,
     ];
 
     /// The SQL table name.
@@ -169,6 +175,9 @@ impl Table {
             Self::Refunds => "refunds",
             Self::LibraryEntries => "library_entries",
             Self::KioskScans => "kiosk_scans",
+            Self::GameMatches => "game_matches",
+            Self::LibraryInstalls => "library_installs",
+            Self::LibraryDismissals => "library_dismissals",
         }
     }
 
@@ -184,7 +193,9 @@ impl Table {
             Self::ReadGrants => &["grant_id"],
             Self::DeviceEvents => &["event_id"],
             Self::DeviceAdminExits => &["exit_id"],
-            Self::DevicesMeta | Self::KioskScans => &["device_id"],
+            Self::DevicesMeta | Self::KioskScans | Self::GameMatches => &["device_id"],
+            Self::LibraryInstalls => &["entry_id", "device_id"],
+            Self::LibraryDismissals => &["key"],
             Self::DeviceGroups => &["group_id"],
             Self::FloorZones => &["zone_id"],
             Self::Products => &["product_id"],
@@ -261,6 +272,9 @@ impl Table {
             | Self::Refunds
             | Self::LibraryEntries
             | Self::KioskScans
+            | Self::GameMatches
+            | Self::LibraryInstalls
+            | Self::LibraryDismissals
             | Self::Plans => true,
             Self::Settings
             | Self::RolePerms
@@ -419,6 +433,16 @@ pub enum RowKey {
     KioskScans {
         device_id: String,
     },
+    GameMatches {
+        device_id: String,
+    },
+    LibraryInstalls {
+        entry_id: String,
+        device_id: String,
+    },
+    LibraryDismissals {
+        key: String,
+    },
     Coupons {
         coupon_id: String,
     },
@@ -464,6 +488,9 @@ impl RowKey {
             Self::Refunds { .. } => Table::Refunds,
             Self::LibraryEntries { .. } => Table::LibraryEntries,
             Self::KioskScans { .. } => Table::KioskScans,
+            Self::GameMatches { .. } => Table::GameMatches,
+            Self::LibraryInstalls { .. } => Table::LibraryInstalls,
+            Self::LibraryDismissals { .. } => Table::LibraryDismissals,
             Self::Coupons { .. } => Table::Coupons,
             Self::CouponTargets { .. } => Table::CouponTargets,
             Self::Players { .. } => Table::Players,
@@ -494,7 +521,14 @@ impl RowKey {
             Self::ReadGrants { grant_id } => grant_id.clone(),
             Self::DeviceEvents { event_id } => event_id.clone(),
             Self::DeviceAdminExits { exit_id } => exit_id.clone(),
-            Self::DevicesMeta { device_id } | Self::KioskScans { device_id } => device_id.clone(),
+            Self::DevicesMeta { device_id }
+            | Self::KioskScans { device_id }
+            | Self::GameMatches { device_id } => device_id.clone(),
+            Self::LibraryInstalls {
+                entry_id,
+                device_id,
+            } => format!("{entry_id}/{device_id}"),
+            Self::LibraryDismissals { key } => key.clone(),
             Self::DeviceGroups { group_id } => group_id.clone(),
             Self::FloorZones { zone_id } => zone_id.clone(),
             Self::Products { product_id } => product_id.clone(),
@@ -634,6 +668,14 @@ impl RowKey {
             Table::KioskScans => Self::KioskScans {
                 device_id: text("device_id")?,
             },
+            Table::GameMatches => Self::GameMatches {
+                device_id: text("device_id")?,
+            },
+            Table::LibraryInstalls => Self::LibraryInstalls {
+                entry_id: text("entry_id")?,
+                device_id: text("device_id")?,
+            },
+            Table::LibraryDismissals => Self::LibraryDismissals { key: text("key")? },
             Table::Coupons => Self::Coupons {
                 coupon_id: text("coupon_id")?,
             },
@@ -671,7 +713,14 @@ impl RowKey {
             Self::ReadGrants { grant_id } => vec![grant_id],
             Self::DeviceEvents { event_id } => vec![event_id],
             Self::DeviceAdminExits { exit_id } => vec![exit_id],
-            Self::DevicesMeta { device_id } | Self::KioskScans { device_id } => vec![device_id],
+            Self::DevicesMeta { device_id }
+            | Self::KioskScans { device_id }
+            | Self::GameMatches { device_id } => vec![device_id],
+            Self::LibraryInstalls {
+                entry_id,
+                device_id,
+            } => vec![entry_id, device_id],
+            Self::LibraryDismissals { key } => vec![key],
             Self::DeviceGroups { group_id } => vec![group_id],
             Self::FloorZones { zone_id } => vec![zone_id],
             Self::Products { product_id } => vec![product_id],

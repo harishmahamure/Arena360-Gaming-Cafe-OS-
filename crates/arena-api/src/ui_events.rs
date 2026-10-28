@@ -515,7 +515,16 @@ impl HubTask {
                         if applied
                             .changes
                             .iter()
-                            .any(|c| c.tbl == "library_entries" || c.tbl == "kiosk_scans")
+                            .any(|c| {
+                                matches!(
+                                    c.tbl.as_str(),
+                                    "library_entries"
+                                        | "kiosk_scans"
+                                        | "library_installs"
+                                        | "game_matches"
+                                        | "library_dismissals"
+                                )
+                            })
                         {
                             self.send("library.changed", "{}".into(), false);
                         }
@@ -1596,6 +1605,7 @@ mod tests {
             age_rating: String::new(),
             enabled: true,
             catalog_id: None,
+            installs: Vec::new(),
         });
         let owner = Actor {
             kind: ActorKind::Owner,

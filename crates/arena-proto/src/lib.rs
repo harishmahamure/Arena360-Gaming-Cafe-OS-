@@ -31,6 +31,7 @@ mod kiosk_pairing;
 mod kitchen;
 mod library;
 pub mod licence;
+mod matching;
 mod operating;
 pub mod pairing;
 mod pc_command;
@@ -183,15 +184,20 @@ pub use kitchen::{
     TierGate, has_flag, kitchen_gate,
 };
 pub use library::{
-    DEFAULT_KIOSK_LIBRARY, KEY_KIOSK_LIBRARY, KioskLibraryEntry, LIBRARY_AGE_RATING_MAX,
-    LIBRARY_ARGS_MAX, LIBRARY_CATALOG_ID_MAX, LIBRARY_CATEGORY_MAX, LIBRARY_KINDS,
-    LIBRARY_LAUNCHERS, LIBRARY_NAME_MAX, LIBRARY_PATH_MAX, LIBRARY_TAG_MAX, LIBRARY_TAGS_MAX,
-    LIBRARY_URI_MAX, LibraryDelete, LibraryEntryView, LibraryUpsert, LibraryView,
-    MAX_LIBRARY_ENTRIES, MAX_LIBRARY_VALUE_CHARS, is_launch_uri, is_library_path,
-    launcher_from_catalogue, launcher_install_globs, library_rules, parse_kiosk_library,
-    tags_from_json, tags_to_json,
+    DEFAULT_KIOSK_LIBRARY, KEY_KIOSK_LIBRARY, KioskInstall, KioskLibraryEntry,
+    LIBRARY_AGE_RATING_MAX, LIBRARY_ARGS_MAX, LIBRARY_CATALOG_ID_MAX, LIBRARY_CATEGORY_MAX,
+    LIBRARY_KINDS, LIBRARY_LAUNCHERS, LIBRARY_NAME_MAX, LIBRARY_PATH_MAX, LIBRARY_TAG_MAX,
+    LIBRARY_TAGS_MAX, LIBRARY_URI_MAX, LibraryDelete, LibraryEntryView, LibraryInstall,
+    LibraryUpsert, LibraryView, MAX_LIBRARY_ENTRIES, MAX_LIBRARY_INSTALLS, MAX_LIBRARY_VALUE_CHARS,
+    is_launch_uri, is_library_path, launcher_from_catalogue, launcher_install_globs, library_rules,
+    library_rules_with_installs, parse_kiosk_library, tags_from_json, tags_to_json,
 };
 pub use licence::{LicenceClaims, LicenceError, VerifyKey};
+pub use matching::{
+    GameMatch, GameMatched, LibraryDismiss, LibraryDismissClear, MAX_DISMISS_KEYS, MAX_DISMISSED,
+    MAX_MATCHES, MAX_PROPOSAL_KEY_CHARS, ProposalDevice, ProposalView, ProposalsView,
+    is_proposal_key, proposal_key,
+};
 pub use operating::{
     ADS_POLICY_VERSION, ADS_RATINGS, AdConsentState, AdRating, AdsConsent, AdsConsentSet,
     BACKUP_PROBE_PREFIX, BackupDirProblem, DAYS_PER_WEEK, DEFAULT_ADS_CONSENT, DEFAULT_ADS_RATING,

@@ -116,6 +116,15 @@ pub enum IntentKind {
     /// Soft-deletes a library entry.
     #[serde(rename = "library.delete")]
     LibraryDelete,
+    /// The Hub records the catalogue matches found in a device's scan (system actor).
+    #[serde(rename = "game.matched")]
+    GameMatched,
+    /// Hides proposals from "Found on PCs" (`games.manage`).
+    #[serde(rename = "library.dismiss")]
+    LibraryDismiss,
+    /// Forgets every dismissed proposal.
+    #[serde(rename = "library.dismiss_clear")]
+    LibraryDismissClear,
     #[serde(rename = "product.upsert")]
     ProductUpsert,
     #[serde(rename = "product.delete")]
@@ -320,7 +329,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 102] = [
+    pub const ALL: [IntentKind; 105] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -348,6 +357,9 @@ impl IntentKind {
         Self::DevicePlace,
         Self::LibraryUpsert,
         Self::LibraryDelete,
+        Self::GameMatched,
+        Self::LibraryDismiss,
+        Self::LibraryDismissClear,
         Self::ProductUpsert,
         Self::ProductDelete,
         Self::PlanUpsert,
@@ -455,6 +467,9 @@ impl IntentKind {
             Self::DevicePlace => "device.place",
             Self::LibraryUpsert => "library.upsert",
             Self::LibraryDelete => "library.delete",
+            Self::GameMatched => "game.matched",
+            Self::LibraryDismiss => "library.dismiss",
+            Self::LibraryDismissClear => "library.dismiss_clear",
             Self::ProductUpsert => "product.upsert",
             Self::ProductDelete => "product.delete",
             Self::PlanUpsert => "plan.upsert",
@@ -548,6 +563,9 @@ impl IntentKind {
             | Self::LicenceApply
             | Self::LibraryUpsert
             | Self::LibraryDelete
+            | Self::GameMatched
+            | Self::LibraryDismiss
+            | Self::LibraryDismissClear
             | Self::AdImpressionRecorded
             | Self::AdRequestRecorded => IntentCategory::Settings,
             Self::DeviceRegister
@@ -653,7 +671,10 @@ impl IntentKind {
             Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => {
                 Requirement::Perm(Permission::SettingsEdit)
             }
-            Self::LibraryUpsert | Self::LibraryDelete => Requirement::Perm(Permission::GamesManage),
+            Self::LibraryUpsert
+            | Self::LibraryDelete
+            | Self::LibraryDismiss
+            | Self::LibraryDismissClear => Requirement::Perm(Permission::GamesManage),
             Self::DeviceRegister
             | Self::GroupUpsert
             | Self::GroupDelete
@@ -679,6 +700,7 @@ impl IntentKind {
             | Self::ReceiptPrintFailed
             | Self::DrawerKicked
             | Self::DrawerKickFailed
+            | Self::GameMatched
             | Self::SessionRateFlip => Requirement::System,
             Self::StaffUpsert | Self::RoleUpsert | Self::StaffDeactivate => {
                 Requirement::Perm(Permission::UserManage)
@@ -810,6 +832,9 @@ impl IntentKind {
             | Self::DevicePlace
             | Self::LibraryUpsert
             | Self::LibraryDelete
+            | Self::GameMatched
+            | Self::LibraryDismiss
+            | Self::LibraryDismissClear
             | Self::ProductUpsert
             | Self::ProductDelete
             | Self::PlanUpsert
@@ -1356,6 +1381,12 @@ pub enum IntentPayload {
     LibraryUpsert(crate::LibraryUpsert),
     #[serde(rename = "library.delete")]
     LibraryDelete(crate::LibraryDelete),
+    #[serde(rename = "game.matched")]
+    GameMatched(crate::GameMatched),
+    #[serde(rename = "library.dismiss")]
+    LibraryDismiss(crate::LibraryDismiss),
+    #[serde(rename = "library.dismiss_clear")]
+    LibraryDismissClear(crate::LibraryDismissClear),
     #[serde(rename = "product.upsert")]
     ProductUpsert(crate::ProductUpsert),
     #[serde(rename = "product.delete")]
@@ -1538,6 +1569,9 @@ impl IntentPayload {
             Self::DevicePlace(_) => IntentKind::DevicePlace,
             Self::LibraryUpsert(_) => IntentKind::LibraryUpsert,
             Self::LibraryDelete(_) => IntentKind::LibraryDelete,
+            Self::GameMatched(_) => IntentKind::GameMatched,
+            Self::LibraryDismiss(_) => IntentKind::LibraryDismiss,
+            Self::LibraryDismissClear(_) => IntentKind::LibraryDismissClear,
             Self::ProductUpsert(_) => IntentKind::ProductUpsert,
             Self::ProductDelete(_) => IntentKind::ProductDelete,
             Self::PlanUpsert(_) => IntentKind::PlanUpsert,
@@ -1768,6 +1802,7 @@ mod tests {
             age_rating: "18+".into(),
             enabled: true,
             catalog_id: None,
+            installs: vec![],
         });
         let json = serde_json::to_value(&up).unwrap();
         assert_eq!(json["kind"], "library.upsert");
@@ -1793,6 +1828,34 @@ mod tests {
             IntentKind::LibraryDelete.requirement(),
             Requirement::Perm(Permission::GamesManage)
         );
+    }
+
+    #[test]
+    fn matching_payloads_round_trip() {
+        let m: IntentPayload = serde_json::from_value(serde_json::json!({
+            "kind": "game.matched", "device_id": "D", "scanned_at": 5,
+            "matches": [{"catalog_id": "G1", "path": "C:/Games/a.exe"}]
+        }))
+        .unwrap();
+        assert_eq!(m.kind(), IntentKind::GameMatched);
+        assert_eq!(IntentKind::GameMatched.as_str(), "game.matched");
+        assert_eq!(IntentKind::GameMatched.requirement(), Requirement::System);
+        assert!(!in_scope_paired(IntentKind::GameMatched));
+        let d: IntentPayload = serde_json::from_value(
+            serde_json::json!({"kind": "library.dismiss", "keys": ["game:G1"]}),
+        )
+        .unwrap();
+        assert_eq!(d.kind(), IntentKind::LibraryDismiss);
+        let c: IntentPayload =
+            serde_json::from_value(serde_json::json!({"kind": "library.dismiss_clear"})).unwrap();
+        assert_eq!(c.kind(), IntentKind::LibraryDismissClear);
+        for k in [IntentKind::LibraryDismiss, IntentKind::LibraryDismissClear] {
+            assert_eq!(k.requirement(), Requirement::Perm(Permission::GamesManage));
+        }
+    }
+
+    fn in_scope_paired(kind: IntentKind) -> bool {
+        crate::in_scope(crate::ClientClass::Paired, kind)
     }
 
     #[test]
@@ -1896,6 +1959,7 @@ mod tests {
                 | "alert.raise"
                 | "session.expire"
                 | "session.rate_flip"
+                | "game.matched"
                 | "invoice.issue"
                 | "receipt.printed"
                 | "receipt.print_failed"
@@ -1919,7 +1983,10 @@ mod tests {
                     Requirement::Perm(Permission::DeviceRemote)
                 }
                 "device.screen" => Requirement::Perm(Permission::DeviceScreen),
-                "library.upsert" | "library.delete" => Requirement::Perm(Permission::GamesManage),
+                "library.upsert"
+                | "library.delete"
+                | "library.dismiss"
+                | "library.dismiss_clear" => Requirement::Perm(Permission::GamesManage),
                 "device.admin_exit" | "device.admin_relock" => Requirement::Device,
                 "staff.upsert" | "role.upsert" | "staff.deactivate" => {
                     Requirement::Perm(Permission::UserManage)

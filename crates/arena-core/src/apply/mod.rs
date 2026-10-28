@@ -39,6 +39,7 @@ mod discount;
 mod extend;
 mod force_end;
 mod frame;
+mod game_match;
 mod group_bill;
 pub(crate) mod groups;
 mod guards;
@@ -50,6 +51,7 @@ mod invoice_issue;
 mod kiosk_log;
 mod kiosk_scan;
 mod library;
+mod library_dismiss;
 mod licence;
 mod maintenance;
 mod mutate;
@@ -183,6 +185,10 @@ pub(crate) enum Target {
     AdminUnlock(Box<admin_exit::UnlockTarget>),
     Group(Box<groups::GroupTarget>),
     Zone(Box<zones::ZoneTarget>),
+    /// `game.matched`: the library, the device's scan and its stored matches.
+    GameMatch(Box<game_match::MatchTarget>),
+    /// `library.dismiss`, `library.dismiss_clear`: the dismissed proposal keys.
+    Dismissals(std::collections::HashSet<String>),
     /// `library.upsert`, `library.delete`: the entry, the live library and the derived settings.
     Library(Box<library::LibraryTarget>),
     Product(Box<products::ProductTarget>),
@@ -279,6 +285,8 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::ZoneUpsert(_) | P::ZoneDelete(_) | P::DevicePlace(_) => {
             Target::Zone(Box::new(zones::load(tx, &intent.payload)?))
         }
+        P::GameMatched(p) => game_match::load(tx, p)?,
+        P::LibraryDismiss(_) | P::LibraryDismissClear(_) => library_dismiss::load(tx)?,
         P::LibraryUpsert(_) | P::LibraryDelete(_) => {
             Target::Library(Box::new(library::load(tx, &intent.payload)?))
         }

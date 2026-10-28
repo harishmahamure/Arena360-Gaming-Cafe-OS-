@@ -137,6 +137,18 @@ pub fn list_kiosk_scan_summaries(conn: &Connection) -> Result<Vec<KioskScanSumma
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
+/// Every device's stored scan, ordered by device id.
+pub fn list_kiosk_scans(conn: &Connection) -> Result<Vec<KioskScanRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT device_id, scanned_at, entries, launchers, skipped, rev
+             FROM kiosk_scans ORDER BY device_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], from).map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

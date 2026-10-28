@@ -15,21 +15,27 @@
 //!   removed, and a rule another enabled entry still needs stays. A library rule the allow-list
 //!   refuses (an unsigned path under a user-writable root) refuses the entry. A setting is
 //!   rewritten, and a change row emitted, only when its value changes.
+//! - Story 6.5: `library.upsert` may carry per-device `installs` (`library_installs`, one row
+//!   per entry and device): listed devices get that path, the others keep theirs. An install
+//!   path is an unsigned allow rule of its entry and goes to the kiosks inside `kiosk.library`,
+//!   so the same game works at a different path on each PC.
 
 use std::collections::HashSet;
 
 use arena_proto::{
     ActorKind, AppError, ErrorCode, Intent, IntentPayload, KEY_KIOSK_LIBRARY, KEY_PROCESS_ALLOW,
-    KioskLibraryEntry, LIBRARY_AGE_RATING_MAX, LIBRARY_ARGS_MAX, LIBRARY_CATALOG_ID_MAX,
-    LIBRARY_CATEGORY_MAX, LIBRARY_KINDS, LIBRARY_LAUNCHERS, LIBRARY_NAME_MAX, LIBRARY_PATH_MAX,
-    LIBRARY_TAG_MAX, LIBRARY_TAGS_MAX, LIBRARY_URI_MAX, LibraryDelete, LibraryUpsert,
-    MAX_LIBRARY_ENTRIES, MAX_LIBRARY_VALUE_CHARS, ProcessList, ProcessRule, is_launch_uri,
-    is_library_path, library_rules, parse_process_rules,
+    KioskInstall, KioskLibraryEntry, LIBRARY_AGE_RATING_MAX, LIBRARY_ARGS_MAX,
+    LIBRARY_CATALOG_ID_MAX, LIBRARY_CATEGORY_MAX, LIBRARY_KINDS, LIBRARY_LAUNCHERS,
+    LIBRARY_NAME_MAX, LIBRARY_PATH_MAX, LIBRARY_TAG_MAX, LIBRARY_TAGS_MAX, LIBRARY_URI_MAX,
+    LibraryDelete, LibraryInstall, LibraryUpsert, MAX_LIBRARY_ENTRIES, MAX_LIBRARY_INSTALLS,
+    MAX_LIBRARY_VALUE_CHARS, ProcessList, ProcessRule, is_launch_uri, is_library_path,
+    is_proposal_key, library_rules_with_installs, parse_process_rules,
 };
 use arena_store::{
-    ChangeOp, LibraryRow, LibraryWrite, RowKey, SettingRef, StoreTx, current_branch_id,
-    find_library_entry, find_setting, insert_library_entry, insert_setting, list_library_entries,
-    set_library_entry_deleted, update_library_entry, update_setting,
+    ChangeOp, InstallRow, LibraryRow, LibraryWrite, RowKey, SettingRef, StoreTx, current_branch_id,
+    find_library_entry, find_setting, insert_library_entry, insert_library_install, insert_setting,
+    list_kiosk_scan_summaries, list_library_entries, list_library_installs,
+    set_library_entry_deleted, update_library_entry, update_library_install, update_setting,
 };
 
 use super::mutate::Written;
@@ -37,12 +43,16 @@ use super::mutate::Written;
 #[derive(Default)]
 pub(crate) struct LibraryTarget {
     /// The live entry the intent edits or deletes.
-    entry: Option<LibraryRow>,
+    pub(super) entry: Option<LibraryRow>,
     /// Every live entry before the write.
-    live: Vec<LibraryRow>,
-    branch_id: Option<String>,
-    library: Option<SettingRef>,
-    allow: Option<SettingRef>,
+    pub(super) live: Vec<LibraryRow>,
+    /// The install paths of the live entries before the write.
+    pub(super) installs: Vec<InstallRow>,
+    /// The live paired devices (an install names one of them).
+    devices: HashSet<String>,
+    pub(super) branch_id: Option<String>,
+    pub(super) library: Option<SettingRef>,
+    pub(super) allow: Option<SettingRef>,
 }
 
 fn invalid(field: &str, message: &str) -> AppError {
@@ -59,9 +69,23 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<LibraryTarget,
         Some(id) => find_library_entry(tx, id)?.filter(|e| e.deleted_at.is_none()),
         None => None,
     };
+    load_with(tx, entry)
+}
+
+/// The live library, its installs, the live paired devices and the derived settings, around
+/// `entry` (the one the intent edits, if any).
+pub(super) fn load_with(
+    tx: &StoreTx<'_>,
+    entry: Option<LibraryRow>,
+) -> Result<LibraryTarget, AppError> {
     Ok(LibraryTarget {
         entry,
         live: list_library_entries(tx)?,
+        installs: list_library_installs(tx)?,
+        devices: list_kiosk_scan_summaries(tx)?
+            .into_iter()
+            .map(|d| d.device_id)
+            .collect(),
         branch_id: current_branch_id(tx)?,
         library: find_setting(tx, KEY_KIOSK_LIBRARY)?,
         allow: find_setting(tx, KEY_PROCESS_ALLOW)?,
@@ -234,12 +258,23 @@ fn rule_key(r: &ProcessRule) -> RuleKey {
     (r.path_glob.to_ascii_lowercase(), r.signer.clone())
 }
 
-/// `derived(set)`: the de-duplicated union of the rules of the enabled entries.
-fn derived(entries: &[LibraryRow]) -> Vec<ProcessRule> {
+/// The install paths of entry `id` among `installs`.
+fn paths_of<'a>(installs: &'a [InstallRow], id: &str) -> Vec<&'a str> {
+    installs
+        .iter()
+        .filter(|i| i.entry_id == id)
+        .map(|i| i.path.as_str())
+        .collect()
+}
+
+/// `derived(set)`: the de-duplicated union of the rules of the enabled entries, each with the
+/// install paths it has on its devices.
+fn derived(entries: &[LibraryRow], installs: &[InstallRow]) -> Vec<ProcessRule> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for e in entries.iter().filter(|e| e.enabled) {
-        for rule in library_rules(&e.executable_path, &e.launcher) {
+        let paths = paths_of(installs, &e.id);
+        for rule in library_rules_with_installs(&e.executable_path, &e.launcher, &paths) {
             if seen.insert(rule_key(&rule)) {
                 out.push(rule);
             }
@@ -249,12 +284,15 @@ fn derived(entries: &[LibraryRow]) -> Vec<ProcessRule> {
 }
 
 /// The new values of the two derived settings (`None`: unchanged).
-struct Plan {
-    allow: Option<String>,
-    library: Option<String>,
+pub(super) struct Plan {
+    pub(super) allow: Option<String>,
+    pub(super) library: Option<String>,
 }
 
-fn kiosk_library_json(entries: &[LibraryRow]) -> Result<String, AppError> {
+pub(super) fn kiosk_library_json(
+    entries: &[LibraryRow],
+    installs: &[InstallRow],
+) -> Result<String, AppError> {
     let mut list: Vec<&LibraryRow> = entries.iter().filter(|e| e.enabled).collect();
     list.sort_by(|a, b| {
         a.name
@@ -276,6 +314,14 @@ fn kiosk_library_json(entries: &[LibraryRow]) -> Result<String, AppError> {
             tags: e.tags.clone(),
             age_rating: e.age_rating.clone(),
             catalog_id: e.catalog_id.clone(),
+            installs: installs
+                .iter()
+                .filter(|i| i.entry_id == e.id)
+                .map(|i| KioskInstall {
+                    device_id: i.device_id.clone(),
+                    path: i.path.clone(),
+                })
+                .collect(),
         })
         .collect();
     serde_json::to_string(&list)
@@ -283,8 +329,12 @@ fn kiosk_library_json(entries: &[LibraryRow]) -> Result<String, AppError> {
 }
 
 /// Works out the derived settings for the live entries `after` the write.
-fn plan(t: &LibraryTarget, after: &[LibraryRow]) -> Result<Plan, AppError> {
-    let library = kiosk_library_json(after)?;
+pub(super) fn plan(
+    t: &LibraryTarget,
+    after: &[LibraryRow],
+    after_installs: &[InstallRow],
+) -> Result<Plan, AppError> {
+    let library = kiosk_library_json(after, after_installs)?;
     let current_library = t.library.as_ref().map_or("[]", |s| s.value.as_str());
     let allow = match &t.allow {
         None => None,
@@ -295,8 +345,8 @@ fn plan(t: &LibraryTarget, after: &[LibraryRow]) -> Result<Plan, AppError> {
                     format!("kiosk.process_allow is not a rule list: {e}"),
                 )
             })?;
-            let before = derived(&t.live);
-            let after_rules = derived(after);
+            let before = derived(&t.live, &t.installs);
+            let after_rules = derived(after, after_installs);
             let keep: HashSet<RuleKey> = after_rules.iter().map(rule_key).collect();
             let removed: HashSet<RuleKey> = before
                 .iter()
@@ -331,6 +381,91 @@ fn plan(t: &LibraryTarget, after: &[LibraryRow]) -> Result<Plan, AppError> {
 
 fn refused_rules(e: AppError) -> AppError {
     invalid("executable_path", &e.message)
+}
+
+fn bad_install(i: usize, field: &str, message: &str) -> AppError {
+    invalid(&format!("installs[{i}].{field}"), message)
+}
+
+/// Checks the payload's per-device installs: at most [`MAX_LIBRARY_INSTALLS`], each on a live
+/// paired PC (once), with a full Windows path and an empty or well-formed proposal key.
+fn check_installs(u: &LibraryUpsert, t: &LibraryTarget) -> Result<(), AppError> {
+    if u.installs.len() > MAX_LIBRARY_INSTALLS {
+        return Err(invalid("installs", "too many install paths"));
+    }
+    for (i, inst) in u.installs.iter().enumerate() {
+        if !t.devices.contains(&inst.device_id) {
+            return Err(bad_install(i, "device_id", "this is not a paired PC"));
+        }
+        if u.installs[..i]
+            .iter()
+            .any(|o| o.device_id == inst.device_id)
+        {
+            return Err(bad_install(i, "device_id", "this PC is listed twice"));
+        }
+        let path = inst.path.trim();
+        if path.chars().count() > LIBRARY_PATH_MAX || !is_library_path(path) {
+            return Err(bad_install(
+                i,
+                "path",
+                r"the install path must be a full Windows path (C:\…) with no * ? { or }",
+            ));
+        }
+        if !inst.match_key.is_empty() && !is_proposal_key(&inst.match_key) {
+            return Err(bad_install(i, "match_key", "not a proposal key"));
+        }
+    }
+    Ok(())
+}
+
+/// The path and key an install ends with: the new path, and the new key (the stored one when
+/// the payload has none).
+fn merged(old: Option<&InstallRow>, n: &LibraryInstall) -> (String, String) {
+    let key = if n.match_key.is_empty() {
+        old.map(|o| o.match_key.clone()).unwrap_or_default()
+    } else {
+        n.match_key.clone()
+    };
+    (n.path.trim().to_owned(), key)
+}
+
+/// The installs of the live entries after `new` are recorded for entry `id`: listed devices get
+/// the new path, the others keep theirs.
+fn after_installs(t: &LibraryTarget, id: &str, new: &[LibraryInstall]) -> Vec<InstallRow> {
+    let mut out: Vec<InstallRow> = Vec::with_capacity(t.installs.len() + new.len());
+    for old in &t.installs {
+        match new
+            .iter()
+            .find(|n| old.entry_id == id && n.device_id == old.device_id)
+        {
+            Some(n) => {
+                let (path, match_key) = merged(Some(old), n);
+                out.push(InstallRow {
+                    path,
+                    match_key,
+                    ..old.clone()
+                });
+            }
+            None => out.push(old.clone()),
+        }
+    }
+    for n in new {
+        if !t
+            .installs
+            .iter()
+            .any(|o| o.entry_id == id && o.device_id == n.device_id)
+        {
+            let (path, match_key) = merged(None, n);
+            out.push(InstallRow {
+                entry_id: id.to_owned(),
+                device_id: n.device_id.clone(),
+                path,
+                match_key,
+                rev: 0,
+            });
+        }
+    }
+    out
 }
 
 pub(super) fn validate_upsert(u: &LibraryUpsert, t: &LibraryTarget) -> Result<(), AppError> {
@@ -371,14 +506,22 @@ pub(super) fn validate_upsert(u: &LibraryUpsert, t: &LibraryTarget) -> Result<()
     if t.entry.is_none() && t.live.len() >= MAX_LIBRARY_ENTRIES {
         return Err(invalid("name", "the library is full"));
     }
+    let placeholder = "00000000000000000000000000";
+    let entry_id = own_id.unwrap_or(placeholder);
+    check_installs(u, t)?;
+    let after_inst = after_installs(t, entry_id, &u.installs);
     // The entry's own rules must pass the allow-list's checks whether or not it is enabled, so
     // enabling it later cannot fail.
-    let own = serde_json::to_string(&library_rules(&n.executable_path, &n.launcher))
-        .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
+    let own = serde_json::to_string(&library_rules_with_installs(
+        &n.executable_path,
+        &n.launcher,
+        &paths_of(&after_inst, entry_id),
+    ))
+    .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
     parse_process_rules(ProcessList::Allow, &own).map_err(refused_rules)?;
     // An edit replaces the entry's current row; a new entry has no row to replace.
-    let after = after_upsert(t, &n, own_id.unwrap_or("00000000000000000000000000"));
-    let plan = plan(t, &after)?;
+    let after = after_upsert(t, &n, entry_id);
+    let plan = plan(t, &after, &after_inst)?;
     if let Some(allow) = &plan.allow {
         parse_process_rules(ProcessList::Allow, allow).map_err(refused_rules)?;
     }
@@ -410,7 +553,7 @@ fn written(key: RowKey, op: ChangeOp) -> Written {
 }
 
 /// Writes the settings of `plan` that changed.
-fn write_derived(
+pub(super) fn write_derived(
     tx: &StoreTx<'_>,
     t: &LibraryTarget,
     plan: Plan,
@@ -480,9 +623,50 @@ pub(super) fn mutate_upsert(
         }
     };
     let after = after_upsert(t, &n, &id);
-    let mut out = vec![written(RowKey::LibraryEntries { id }, op)];
-    write_derived(tx, t, plan(t, &after)?, &mut out)?;
+    let after_inst = after_installs(t, &id, &u.installs);
+    let mut out = vec![written(RowKey::LibraryEntries { id: id.clone() }, op)];
+    for inst in &u.installs {
+        let old = t
+            .installs
+            .iter()
+            .find(|o| o.entry_id == id && o.device_id == inst.device_id);
+        let (path, key) = merged(old, inst);
+        if let Some(w) = write_install(tx, old, &id, &inst.device_id, &path, &key)? {
+            out.push(w);
+        }
+    }
+    write_derived(tx, t, plan(t, &after, &after_inst)?, &mut out)?;
     Ok(out)
+}
+
+/// Records one install: inserts it, rewrites it when its path or key differ, or does nothing
+/// (`None`) when it is as stored.
+pub(super) fn write_install(
+    tx: &StoreTx<'_>,
+    old: Option<&InstallRow>,
+    entry_id: &str,
+    device_id: &str,
+    path: &str,
+    key: &str,
+) -> Result<Option<Written>, AppError> {
+    let op = match old {
+        Some(o) if o.path == path && o.match_key == key => return Ok(None),
+        Some(_) => {
+            update_library_install(tx, entry_id, device_id, path, key)?;
+            ChangeOp::Update
+        }
+        None => {
+            insert_library_install(tx, entry_id, device_id, path, key)?;
+            ChangeOp::Insert
+        }
+    };
+    Ok(Some(written(
+        RowKey::LibraryInstalls {
+            entry_id: entry_id.to_owned(),
+            device_id: device_id.to_owned(),
+        },
+        op,
+    )))
 }
 
 pub(super) fn mutate_delete(
@@ -497,6 +681,13 @@ pub(super) fn mutate_delete(
         RowKey::LibraryEntries { id: d.id.clone() },
         ChangeOp::Update,
     )];
-    write_derived(tx, t, plan(t, &after)?, &mut out)?;
+    write_derived(tx, t, plan(t, &after, &t.installs)?, &mut out)?;
     Ok(out)
+}
+
+impl LibraryTarget {
+    /// Whether `device_id` is a live paired device.
+    pub(super) fn has_device(&self, device_id: &str) -> bool {
+        self.devices.contains(device_id)
+    }
 }

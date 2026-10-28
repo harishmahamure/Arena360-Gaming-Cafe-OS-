@@ -873,18 +873,26 @@ impl Ctx<'_> {
             Ok(p) => p,
             Err(e) => return self.reply(Frame::error(rid, e)).await,
         };
+        // A stored scan is matched to the catalogue once it is applied (Story 6.5).
+        let scan = super::scan_match::StoredScan::of(&intent);
+        let hub = Arc::clone(self.hub);
         let writer: Option<WriterHandle> = self.hub.writer.clone();
         let out = self.out.clone();
         tasks.spawn(async move {
             let _permit = permit;
             let reply = match writer {
                 Some(w) => match w.submit_intent(intent).await {
-                    Ok(applied) => Frame::new(
-                        rid,
-                        FrameBody::IntentResult(IntentResult {
-                            applied: summary(&applied),
-                        }),
-                    ),
+                    Ok(applied) => {
+                        if let Some(scan) = scan {
+                            super::scan_match::spawn(&hub, scan);
+                        }
+                        Frame::new(
+                            rid,
+                            FrameBody::IntentResult(IntentResult {
+                                applied: summary(&applied),
+                            }),
+                        )
+                    }
                     Err(e) => Frame::error(rid, e),
                 },
                 None => Frame::error(

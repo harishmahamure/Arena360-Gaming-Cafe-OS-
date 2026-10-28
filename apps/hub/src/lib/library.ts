@@ -5,9 +5,12 @@
 
 import type {
   DeviceScanView,
+  IntentPayload,
   LibraryEntryView,
   LibraryScansView,
   LibraryView,
+  ProposalView,
+  ProposalsView,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { authHeaders, getToken, setToken } from "./auth";
@@ -166,4 +169,91 @@ export function checkForm(form: EntryForm, linked: boolean): Record<string, Mess
   if (!plain(form.catalogId.trim(), CATALOG_ID_MAX))
     bad.catalog_id = "hub.games.invalid.catalog_id";
   return bad;
+}
+
+// ---- Found on PCs (Story 6.5) ----
+
+/** Games and programs the PCs reported that are not in the library or dismissed. */
+export const PROPOSALS_URL = "http://127.0.0.1:7409/ui/library/proposals";
+/** A cached catalogue cover: `${COVER_URL}/<sha256>`. */
+export const COVER_URL = "http://127.0.0.1:7409/ui/library/cover";
+/** Most intents one manager PIN approves (`MAX_TICKET_USES`). */
+export const TICKET_USES = 10;
+/** Most proposals one `library.dismiss` names. */
+export const DISMISS_CHUNK = 500;
+
+export type ProposalsOutcome =
+  | { kind: "ok"; proposals: ProposalView[]; dismissed: number }
+  | { kind: "signed_out" }
+  | { kind: "unreachable" };
+
+export async function loadProposals(): Promise<ProposalsOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  try {
+    const res = await fetch(PROPOSALS_URL, {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(5000),
+      cache: "no-store",
+    });
+    if (res.status === 401) {
+      setToken(null);
+      return { kind: "signed_out" };
+    }
+    const body: unknown = res.ok ? await res.json() : null;
+    const view = body as ProposalsView | null;
+    return view && Array.isArray(view.proposals)
+      ? { kind: "ok", proposals: view.proposals, dismissed: view.dismissed ?? 0 }
+      : { kind: "unreachable" };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/** A cover as an object URL for an `<img>` (the Hub wants the sign-in header), or `null`. */
+export async function loadCover(sha256: string): Promise<string | null> {
+  const token = getToken();
+  if (!token || !/^[0-9a-f]{64}$/.test(sha256)) return null;
+  try {
+    const res = await fetch([COVER_URL, sha256].join("/"), {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return blob.type.startsWith("image/") ? URL.createObjectURL(blob) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The `library.upsert` that approves a proposal: a new enabled game named as the proposal,
+ * linked to its catalogue game when it has one (the Hub then takes the catalogue's name,
+ * launcher and age rating), with the path found on each PC.
+ */
+export function approvePayload(p: ProposalView): IntentPayload {
+  const launcher = (LAUNCHERS as readonly string[]).includes(p.launcher) ? p.launcher : "none";
+  return {
+    kind: "library.upsert",
+    entry_kind: "game",
+    name: p.name.trim().slice(0, NAME_MAX),
+    launcher,
+    executable_path: p.devices[0]?.path ?? "",
+    launch_uri: "",
+    launch_args: "",
+    category: p.category.slice(0, CATEGORY_MAX),
+    tags: [],
+    age_rating: p.age_rating.slice(0, AGE_MAX),
+    enabled: true,
+    catalog_id: p.catalog_id ?? undefined,
+    installs: p.devices.map((d) => ({ device_id: d.device_id, path: d.path, match_key: p.key })),
+  };
+}
+
+/** `items` in groups of at most `size`. */
+export function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }

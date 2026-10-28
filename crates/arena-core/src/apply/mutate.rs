@@ -238,6 +238,18 @@ pub(super) fn mutate(
             Target::Library(t) => super::library::mutate_upsert(tx, u, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::GameMatched(p) => match target {
+            Target::GameMatch(t) => super::game_match::mutate(tx, p, t),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::LibraryDismiss(p) => match target {
+            Target::Dismissals(c) => super::library_dismiss::mutate_dismiss(tx, p, c),
+            _ => Err(mismatch()),
+        },
+        IntentPayload::LibraryDismissClear(_) => match target {
+            Target::Dismissals(c) => super::library_dismiss::mutate_clear(tx, c),
+            _ => Err(mismatch()),
+        },
         IntentPayload::LibraryDelete(d) => match target {
             Target::Library(t) => super::library::mutate_delete(tx, d, t, now_ms),
             _ => Err(mismatch()),

@@ -4,11 +4,16 @@ import type {
   DeviceScanView,
   HubSnapshot,
   LibraryEntryView,
+  LibraryInstall,
+  ProposalView,
   SessionStaff,
 } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
+// Node's Buffer, without the node typings this project does not load.
+const nodeBuffer = (globalThis as unknown as { Buffer: { from(s: string, e: string): Uint8Array } })
+  .Buffer;
 const HUB = "http://127.0.0.1:7409";
 const CORS = {
   "access-control-allow-origin": ORIGIN,
@@ -37,6 +42,15 @@ type Hub = {
   scans: DeviceScanView[];
   /** The scan list answers 500 while set. */
   scansDown?: boolean;
+  /** What "Found on PCs" lists (Story 6.5), and how many are dismissed. */
+  proposals: ProposalView[];
+  dismissed: number;
+  /** The proposals list answers 500 while set. */
+  proposalsDown?: boolean;
+  /** A `library.upsert` carrying this catalogue id is refused on its path. */
+  refuseCatalog?: string;
+  /** Stored covers by hash, served at `/ui/library/cover/<hash>`. */
+  covers: Record<string, string>;
   intents: { payload: Payload; base_rev?: number; ticket?: string }[];
   elevations: { items: { intent_kind: string }[]; pin: string }[];
   /** The field a save is refused on (`VALIDATION_FAILED`), if any. */
@@ -49,6 +63,9 @@ type Hub = {
 const newHub = (): Hub => ({
   entries: [],
   scans: [],
+  proposals: [],
+  dismissed: 0,
+  covers: {},
   intents: [],
   elevations: [],
   stale: false,
@@ -68,6 +85,7 @@ const entry = (over: Partial<LibraryEntryView> = {}): LibraryEntryView => ({
   age_rating: "18+",
   enabled: true,
   catalog_id: null,
+  installs: [],
   rev: 3,
   ...over,
 });
@@ -119,6 +137,10 @@ async function open(page: Page, hub: Hub, token = "manager-token") {
         return hub.scansDown
           ? json(route, 500, { code: "INTERNAL", message: "no" })
           : json(route, 200, { devices: hub.scans });
+      case "/ui/library/proposals":
+        return hub.proposalsDown
+          ? json(route, 500, { code: "INTERNAL", message: "no" })
+          : json(route, 200, { proposals: hub.proposals, dismissed: hub.dismissed });
       case "/ui/events": {
         const pushed = hub.push.splice(0).map((e) => `event: ${e}\ndata: {}\n\n`);
         return route.fulfill({
@@ -155,6 +177,31 @@ async function open(page: Page, hub: Hub, token = "manager-token") {
         if (hub.stale) {
           return json(route, 409, { code: "STALE", message: "changed", field: "base_rev" });
         }
+        if (payload.kind === "library.dismiss") {
+          const keys = payload.keys as string[];
+          hub.proposals = hub.proposals.filter((p) => !keys.includes(p.key));
+          hub.dismissed += keys.length;
+          return json(route, 200, { applied: { intent_id: "I", changes: [] } });
+        }
+        if (payload.kind === "library.dismiss_clear") {
+          hub.dismissed = 0;
+          return json(route, 200, { applied: { intent_id: "I", changes: [] } });
+        }
+        if (
+          payload.kind === "library.upsert" &&
+          hub.refuseCatalog !== undefined &&
+          payload.catalog_id === hub.refuseCatalog
+        ) {
+          return json(route, 422, {
+            code: "VALIDATION_FAILED",
+            message: "no",
+            field: "executable_path",
+          });
+        }
+        if (payload.kind === "library.upsert" && Array.isArray(payload.installs)) {
+          const installs = payload.installs as { match_key: string }[];
+          hub.proposals = hub.proposals.filter((p) => !installs.some((i) => i.match_key === p.key));
+        }
         if (payload.kind === "library.delete") {
           hub.entries = hub.entries.filter((e) => e.id !== payload.id);
         } else {
@@ -172,6 +219,8 @@ async function open(page: Page, hub: Hub, token = "manager-token") {
             age_rating: payload.age_rating as string,
             enabled: payload.enabled as boolean,
             catalog_id: (payload.catalog_id as string | undefined) ?? null,
+            installs:
+              (payload.installs as LibraryInstall[] | undefined) ?? existing?.installs ?? [],
             rev: (existing?.rev ?? 0) + 1,
           };
           if (existing) Object.assign(existing, next);
@@ -179,8 +228,18 @@ async function open(page: Page, hub: Hub, token = "manager-token") {
         }
         return json(route, 200, { applied: { intent_id: "I", changes: [] } });
       }
-      default:
+      default: {
+        const cover = /^\/ui\/library\/cover\/([0-9a-f]{64})$/.exec(new URL(req.url()).pathname);
+        if (cover && hub.covers[cover[1]]) {
+          return route.fulfill({
+            status: 200,
+            contentType: "image/png",
+            headers: CORS,
+            body: nodeBuffer.from(hub.covers[cover[1]], "base64") as never,
+          });
+        }
         return route.fulfill({ status: 404, headers: CORS });
+      }
     }
   });
   await page.goto("/settings/games");
@@ -516,4 +575,222 @@ test("no paired PCs, and a scan list that cannot be loaded, say so", async ({ pa
   await page.unrouteAll();
   await open(page, down);
   await expect(page.getByText(en["hub.games.scans.load_failed"])).toBeVisible();
+});
+
+// ---- Story 6.5: Found on PCs ----
+
+const SHA = "ab".repeat(32);
+/** A 1×1 PNG. */
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+const proposal = (over: Partial<ProposalView> = {}): ProposalView => ({
+  key: "game:G1",
+  name: "Great Game",
+  file_name: "g.exe",
+  product_name: "Great",
+  publisher: "Maker",
+  catalog_id: "G1",
+  cover_sha256: null,
+  launcher: "steam",
+  category: "Shooter",
+  age_rating: "16+",
+  pc_count: 2,
+  devices: [
+    { device_id: "D1", label: "PC-1", path: "C:\\Games\\g.exe" },
+    { device_id: "D2", label: "PC-2", path: "D:\\Stuff\\g.exe" },
+  ],
+  ...over,
+});
+
+const unmatched = (n: number): ProposalView =>
+  proposal({
+    key: `exe:tool${n}.exe|tool ${n}|maker`,
+    name: `Tool ${n}`,
+    file_name: `tool${n}.exe`,
+    product_name: `Tool ${n}`,
+    catalog_id: null,
+    launcher: "none",
+    category: "",
+    age_rating: "",
+    pc_count: 1,
+    devices: [{ device_id: "D1", label: "PC-1", path: `C:\\Tools\\tool${n}.exe` }],
+  });
+
+const rowOf = (page: Page, name: string) => page.getByTestId("found-row").filter({ hasText: name });
+
+test("Found on PCs lists matched games with cover and unmatched ones by file name", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.covers[SHA] = PNG;
+  hub.proposals = [proposal({ cover_sha256: SHA }), unmatched(1)];
+  await open(page, hub);
+  await expect(page.getByTestId("found-row")).toHaveCount(2);
+
+  const great = rowOf(page, "Great Game");
+  await expect(great.getByTestId("found-launcher")).toHaveText(en["hub.games.launcher.steam"]);
+  await expect(great.getByTestId("found-category")).toHaveText("Shooter");
+  await expect(great.getByTestId("found-match")).toHaveText(en["hub.games.found.catalog"]);
+  await expect(great.getByTestId("found-pcs")).toHaveText(
+    en["hub.games.found.pcs"].replace("{count}", "2"),
+  );
+  await expect(great.getByTestId("found-where")).toHaveText(
+    en["hub.games.found.where"].replace("{names}", "PC-1, PC-2"),
+  );
+  const cover = great.getByTestId("found-cover");
+  await expect(cover).toBeVisible();
+  await expect(cover).toHaveAttribute(
+    "alt",
+    en["hub.games.found.cover_alt"].replace("{name}", "Great Game"),
+  );
+
+  const tool = rowOf(page, "Tool 1");
+  await expect(tool.getByTestId("found-match")).toHaveText(en["hub.games.found.unmatched"]);
+  await expect(tool.getByTestId("found-file")).toHaveText("tool1.exe");
+  await expect(tool.getByTestId("found-cover")).toHaveCount(0);
+  await expectNoSeriousAxe(page);
+});
+
+test("a manager approves several proposals with one library.upsert each", async ({ page }) => {
+  const hub = newHub();
+  hub.proposals = [proposal(), unmatched(1), unmatched(2)];
+  await open(page, hub);
+  const approve = page.getByTestId("found-approve");
+  await expect(approve).toBeDisabled();
+
+  await rowOf(page, "Great Game").getByTestId("found-select").check();
+  await rowOf(page, "Tool 2").getByTestId("found-select").check();
+  await expect(approve).toHaveText(en["hub.games.found.approve"].replace("{count}", "2"));
+  await approve.click();
+  await expect(page.getByTestId("found-status")).toHaveText(
+    en["hub.games.found.approved"].replace("{count}", "2"),
+  );
+
+  expect(hub.intents.map((i) => i.payload.kind)).toEqual(["library.upsert", "library.upsert"]);
+  expect(hub.intents[0].payload).toMatchObject({
+    entry_kind: "game",
+    name: "Great Game",
+    launcher: "steam",
+    executable_path: "C:\\Games\\g.exe",
+    category: "Shooter",
+    age_rating: "16+",
+    enabled: true,
+    catalog_id: "G1",
+    installs: [
+      { device_id: "D1", path: "C:\\Games\\g.exe", match_key: "game:G1" },
+      { device_id: "D2", path: "D:\\Stuff\\g.exe", match_key: "game:G1" },
+    ],
+  });
+  expect(hub.intents[1].payload).toMatchObject({
+    name: "Tool 2",
+    launcher: "none",
+    executable_path: "C:\\Tools\\tool2.exe",
+    installs: [
+      { device_id: "D1", path: "C:\\Tools\\tool2.exe", match_key: "exe:tool2.exe|tool 2|maker" },
+    ],
+  });
+  expect(hub.intents[1].payload.catalog_id).toBeUndefined();
+  expect(hub.elevations).toHaveLength(0);
+  // The approved ones leave the list; the library shows the new entries.
+  await expect(page.getByTestId("found-row")).toHaveCount(1);
+  await expect(rowOf(page, "Tool 1")).toBeVisible();
+});
+
+test("select all, then dismiss sends library.dismiss with the keys and counts them", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.proposals = [proposal(), unmatched(1)];
+  await open(page, hub);
+  await page.getByTestId("found-select-all").check();
+  await page.getByTestId("found-dismiss").click();
+  await expect(page.getByTestId("found-status")).toHaveText(en["hub.games.found.dismissed_done"]);
+  expect(hub.intents[0].payload).toEqual({
+    kind: "library.dismiss",
+    keys: ["game:G1", "exe:tool1.exe|tool 1|maker"],
+  });
+  await expect(page.getByTestId("found-empty")).toHaveText(en["hub.games.found.empty"]);
+  await expect(page.getByTestId("found-dismissed")).toHaveText(
+    en["hub.games.found.dismissed"].replace("{count}", "2"),
+  );
+
+  await page.getByTestId("found-clear").click();
+  await expect(page.getByTestId("found-status")).toHaveText(en["hub.games.found.cleared"]);
+  expect(hub.intents[1].payload).toEqual({ kind: "library.dismiss_clear" });
+  await expect(page.getByTestId("found-dismissed")).toHaveCount(0);
+});
+
+test("a Counter's approval asks a manager's PIN, and again after every ten", async ({ page }) => {
+  const hub = newHub();
+  hub.proposals = Array.from({ length: 12 }, (_, i) => unmatched(i + 1));
+  await open(page, hub, "counter-token");
+  await page.getByTestId("found-select-all").check();
+  await page.getByTestId("found-approve").click();
+  await expect(page.getByTestId("found-approval")).toBeVisible();
+  expect(hub.intents).toHaveLength(0);
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+
+  // Ten went through on the first PIN; the other two ask again.
+  await expect(page.getByTestId("found-status")).toHaveText(
+    en["hub.games.found.more"].replace("{count}", "2"),
+  );
+  expect(hub.elevations[0].items).toEqual(Array(10).fill({ intent_kind: "library.upsert" }));
+  expect(hub.intents).toHaveLength(10);
+  expect(hub.intents.every((i) => i.ticket === "T1")).toBe(true);
+  await expect(page.getByTestId("found-approval")).toBeVisible();
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("found-status")).toHaveText(
+    en["hub.games.found.approved"].replace("{count}", "12"),
+  );
+  expect(hub.elevations[1].items).toEqual(Array(2).fill({ intent_kind: "library.upsert" }));
+  expect(hub.intents).toHaveLength(12);
+  await expect(page.getByTestId("found-empty")).toBeVisible();
+});
+
+test("a Counter's dismissal needs a PIN too", async ({ page }) => {
+  const hub = newHub();
+  hub.proposals = [unmatched(1)];
+  await open(page, hub, "counter-token");
+  await rowOf(page, "Tool 1").getByTestId("found-select").check();
+  await page.getByTestId("found-dismiss").click();
+  await expect(page.getByTestId("found-approval")).toBeVisible();
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("found-status")).toHaveText(en["hub.games.found.dismissed_done"]);
+  expect(hub.elevations.at(-1)?.items).toEqual([{ intent_kind: "library.dismiss" }]);
+  expect(hub.intents[0].ticket).toBe("T1");
+});
+
+test("a proposal the Hub refuses is reported and the others still go through", async ({ page }) => {
+  const hub = newHub();
+  hub.refuseCatalog = "G1";
+  hub.proposals = [proposal(), unmatched(1)];
+  await open(page, hub);
+  await page.getByTestId("found-select-all").check();
+  await page.getByTestId("found-approve").click();
+  await expect(page.getByTestId("found-status")).toContainText(
+    en["hub.games.found.partial"].replace("{done}", "1").replace("{failed}", "1"),
+  );
+  expect(hub.intents).toHaveLength(2);
+  await expect(page.getByTestId("found-row")).toHaveCount(1);
+  await expect(rowOf(page, "Great Game")).toBeVisible();
+});
+
+test("the found list reloads when the Hub pushes library.changed", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  await expect(page.getByTestId("found-empty")).toBeVisible();
+  hub.proposals = [unmatched(1)];
+  hub.push.push("library.changed");
+  await expect(page.getByTestId("found-row")).toHaveCount(1, { timeout: 10_000 });
+});
+
+test("a found list that cannot be loaded says so", async ({ page }) => {
+  const hub = newHub();
+  hub.proposalsDown = true;
+  await open(page, hub);
+  await expect(page.getByText(en["hub.games.found.load_failed"])).toBeVisible();
 });

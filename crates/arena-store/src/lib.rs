@@ -21,6 +21,7 @@ mod identity;
 mod invoices;
 mod kiosk_scans;
 mod library;
+mod library_installs;
 mod migrations;
 mod notify;
 mod outbox;
@@ -117,11 +118,16 @@ pub use invoices::{
 };
 pub use kiosk_scans::{
     KioskScanRow, KioskScanSummary, KioskScanWrite, find_kiosk_scan, insert_kiosk_scan,
-    list_kiosk_scan_summaries, replace_kiosk_scan,
+    list_kiosk_scan_summaries, list_kiosk_scans, replace_kiosk_scan,
 };
 pub use library::{
     LibraryRow, LibraryWrite, find_library_entry, insert_library_entry, list_library_entries,
     set_library_entry_deleted, update_library_entry,
+};
+pub use library_installs::{
+    GameMatchesRow, InstallRow, find_game_matches, insert_game_matches, insert_library_dismissal,
+    insert_library_install, list_game_matches, list_library_dismissals, list_library_installs,
+    replace_game_matches, update_library_install,
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{
@@ -154,7 +160,9 @@ pub use products::{
     insert_product, list_components, list_products, live_bundles_with, set_product_deleted,
     update_product,
 };
-pub use reference::{FileKind, FileState, RefFile, RefGame, ReferenceDb, is_sha256_hex};
+pub use reference::{
+    FileKind, FileState, RefFile, RefGame, RefSignature, ReferenceDb, is_sha256_hex,
+};
 pub use refunds::{
     CreditNoteSource, NewRefund, NewRefundPayment, RefundLineRow, RefundOrder, RefundRow,
     add_line_refunded, deactivate_pack, find_order_by_invoice, find_refund, insert_refund,
@@ -1482,6 +1490,38 @@ impl Store {
             return Ok(Vec::new());
         }
         list_kiosk_scan_summaries(&self.conn)
+    }
+
+    /// Every device's stored scan, ordered by device id (empty before migration 63).
+    pub fn kiosk_scans_full(&self) -> Result<Vec<KioskScanRow>, AppError> {
+        if !self.table_exists("kiosk_scans")? {
+            return Ok(Vec::new());
+        }
+        list_kiosk_scans(&self.conn)
+    }
+
+    /// Every device's catalogue matches (empty before migration 64).
+    pub fn game_matches(&self) -> Result<Vec<GameMatchesRow>, AppError> {
+        if !self.table_exists("game_matches")? {
+            return Ok(Vec::new());
+        }
+        list_game_matches(&self.conn)
+    }
+
+    /// The install paths of live library entries (empty before migration 64).
+    pub fn library_installs(&self) -> Result<Vec<InstallRow>, AppError> {
+        if !self.table_exists("library_installs")? {
+            return Ok(Vec::new());
+        }
+        list_library_installs(&self.conn)
+    }
+
+    /// The dismissed proposal keys (empty before migration 64).
+    pub fn library_dismissals(&self) -> Result<Vec<String>, AppError> {
+        if !self.table_exists("library_dismissals")? {
+            return Ok(Vec::new());
+        }
+        list_library_dismissals(&self.conn)
     }
 
     /// Every live library entry, ordered by name (empty before migration 62).

@@ -140,6 +140,18 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Library(t) => super::library::validate_upsert(u, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::GameMatched(p) => match target {
+            Target::GameMatch(t) => super::game_match::validate(intent, p, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::LibraryDismiss(p) => match target {
+            Target::Dismissals(c) => super::library_dismiss::validate_dismiss(intent, p, c),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::LibraryDismissClear(_) => match target {
+            Target::Dismissals(c) => super::library_dismiss::validate_clear(intent, c),
+            _ => Err(internal_target()),
+        },
         IntentPayload::LibraryDelete(_) => match target {
             Target::Library(t) => super::library::validate_delete(t),
             _ => Err(internal_target()),

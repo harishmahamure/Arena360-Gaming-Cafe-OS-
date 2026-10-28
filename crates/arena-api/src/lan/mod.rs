@@ -14,6 +14,7 @@ pub mod listener;
 mod media;
 mod pair;
 pub(crate) mod registry;
+mod scan_match;
 mod session;
 mod throttle;
 pub mod tls;

@@ -13,6 +13,7 @@
     submitIntent,
   } from "../../../lib/auth";
   import { library } from "../../../lib/catalog.svelte";
+  import FoundOnPcs from "../../../lib/FoundOnPcs.svelte";
   import { branchLocale } from "../../../lib/locale.svelte";
   import {
     KINDS,
@@ -395,6 +396,8 @@
       {/each}
     </ul>
   {/if}
+
+  <FoundOnPcs {needsApproval} />
 
   <h2 class="type-hub-title">{t("hub.games.scans.title")}</h2>
   <p class="intro type-hub-body">{t("hub.games.scans.intro")}</p>

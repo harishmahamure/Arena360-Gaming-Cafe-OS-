@@ -227,6 +227,16 @@ impl MediaCache {
         self.db()?.game(id)
     }
 
+    /// Every game's executable signatures (Story 6.5: the Hub matches scans against them).
+    pub fn signatures(&self) -> Result<Vec<arena_store::RefSignature>, AppError> {
+        self.db()?.signatures()
+    }
+
+    /// The SHA-256 of the game's stored cover, if the cache holds one (Story 6.5).
+    pub fn cover_sha256(&self, game_id: &str) -> Result<Option<String>, AppError> {
+        self.db()?.cover_sha256(game_id)
+    }
+
     /// Stores a manifest and deletes the files nothing references any more.
     pub fn apply_manifest(&self, manifest: &CatalogManifest) -> Result<Applied, AppError> {
         let orphans = self.db()?.apply_manifest(manifest)?;

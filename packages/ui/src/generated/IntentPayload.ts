@@ -30,6 +30,7 @@ import type { DeviceVersionReported } from "./DeviceVersionReported";
 import type { DrawerKickFailed } from "./DrawerKickFailed";
 import type { DrawerKicked } from "./DrawerKicked";
 import type { ExpenseCreate } from "./ExpenseCreate";
+import type { GameMatched } from "./GameMatched";
 import type { GroupDelete } from "./GroupDelete";
 import type { GroupPayer } from "./GroupPayer";
 import type { GroupUpsert } from "./GroupUpsert";
@@ -42,6 +43,8 @@ import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { KioskScanReported } from "./KioskScanReported";
 import type { LibraryDelete } from "./LibraryDelete";
+import type { LibraryDismiss } from "./LibraryDismiss";
+import type { LibraryDismissClear } from "./LibraryDismissClear";
 import type { LibraryUpsert } from "./LibraryUpsert";
 import type { LicenceApply } from "./LicenceApply";
 import type { OrderLineCancel } from "./OrderLineCancel";
@@ -131,6 +134,9 @@ export type IntentPayload =
   | ({ kind: "device.place" } & DevicePlace)
   | ({ kind: "library.upsert" } & LibraryUpsert)
   | ({ kind: "library.delete" } & LibraryDelete)
+  | ({ kind: "game.matched" } & GameMatched)
+  | ({ kind: "library.dismiss" } & LibraryDismiss)
+  | ({ kind: "library.dismiss_clear" } & LibraryDismissClear)
   | ({ kind: "product.upsert" } & ProductUpsert)
   | ({ kind: "product.delete" } & ProductDelete)
   | ({ kind: "plan.upsert" } & PlanUpsert)

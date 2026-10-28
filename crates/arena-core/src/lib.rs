@@ -10,6 +10,7 @@ mod clock;
 mod commands;
 pub mod devices;
 pub mod entitlement;
+pub mod game_proposals;
 pub mod gst;
 mod import_csv;
 mod import_file;

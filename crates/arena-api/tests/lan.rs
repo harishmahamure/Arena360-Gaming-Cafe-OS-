@@ -133,6 +133,15 @@ async fn register(w: &WriterHandle, class: ClientClass, label: &str) -> (String,
 /// A seeded hub (one paired and one kds device) serving the LAN on loopback. `version` is the
 /// hub's own version; a follower serves without a writer.
 async fn start(version: &str, primary: bool) -> TestHub {
+    start_with(version, primary, None).await
+}
+
+/// [`start`] with the game media cache the Hub matches scans against (Story 6.5).
+async fn start_with(
+    version: &str,
+    primary: bool,
+    media: Option<Arc<arena_core::media_cache::MediaCache>>,
+) -> TestHub {
     logs();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("branch.db");
@@ -179,23 +188,25 @@ async fn start(version: &str, primary: bool) -> TestHub {
 
     let cert = HubCert::generate(None).unwrap();
     status_tx.send_modify(|s| s.tls_fingerprint = Some(cert.fingerprint.clone()));
-    let hub = Arc::new(
-        LanHub::new(
-            writer.clone(),
-            status_rx,
-            clock,
-            Arc::new(DeviceDirectory::open(&path).unwrap()),
-            cert.server_config().unwrap(),
-            version,
-        )
-        .with_staff(Arc::new(arena_core::StaffDirectory::open(&path).unwrap()))
-        .with_info(HubInfoSource {
-            reader: Arc::new(arena_core::SnapshotReader::open(&path).unwrap()),
-            hub_name: "test-hub".into(),
-            lan_port: 7400,
-            web_port: 7401,
-        }),
-    );
+    let mut lan_hub = LanHub::new(
+        writer.clone(),
+        status_rx,
+        clock,
+        Arc::new(DeviceDirectory::open(&path).unwrap()),
+        cert.server_config().unwrap(),
+        version,
+    )
+    .with_staff(Arc::new(arena_core::StaffDirectory::open(&path).unwrap()))
+    .with_info(HubInfoSource {
+        reader: Arc::new(arena_core::SnapshotReader::open(&path).unwrap()),
+        hub_name: "test-hub".into(),
+        lan_port: 7400,
+        web_port: 7401,
+    });
+    if let Some(cache) = media {
+        lan_hub = lan_hub.with_media(cache);
+    }
+    let hub = Arc::new(lan_hub);
     let presence = hub.presence();
     let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
         .await
@@ -968,11 +979,13 @@ async fn a_paired_session_reports_scans_as_itself_and_the_device_rate_limit_does
         assert_eq!(r.applied.changes[0].tbl, "kiosk_scans");
         assert_eq!(r.applied.changes[0].row_id, hub.paired_id);
     }
+    // (The Hub matches each scan in the background, so the newest change may be its match.)
     let change = Store::open_reader(&hub.path)
         .unwrap()
         .changes()
         .unwrap()
-        .pop()
+        .into_iter()
+        .rfind(|c| c.intent_kind == "kiosk.scan_reported")
         .unwrap();
     assert_eq!(
         (change.actor_kind.as_str(), change.actor_id.as_str()),
@@ -989,6 +1002,157 @@ async fn a_paired_session_reports_scans_as_itself_and_the_device_rate_limit_does
         .request("intent.submit", kiosk_log_body(owner()))
         .await
         .unwrap();
+}
+
+// ---- Story 6.5: the Hub matches a stored scan to the catalogue ----
+
+/// Waits up to five seconds for `game_matches` to hold a row for `device` made from `scanned_at`.
+async fn matches_of(hub: &TestHub, device: &str, scanned_at: i64) -> Vec<arena_proto::GameMatch> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let rows = Store::open_reader(&hub.path)
+            .unwrap()
+            .rows(arena_store::Table::GameMatches)
+            .unwrap();
+        let found = rows.into_iter().find(|r| {
+            r.get("device_id") == Some(&arena_store::RowValue::Text(device.into()))
+                && r.get("scanned_at") == Some(&arena_store::RowValue::Integer(scanned_at))
+        });
+        if let Some(row) = found {
+            let Some(arena_store::RowValue::Text(json)) = row.get("matches") else {
+                panic!("{row:?}")
+            };
+            return serde_json::from_str(json).unwrap();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no matches recorded for {device}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn scan_with(at: i64, entries: Vec<arena_proto::ScanEntry>) -> serde_json::Value {
+    serde_json::to_value(IntentSubmit {
+        intent: intent(
+            owner(),
+            IntentPayload::KioskScanReported(arena_proto::KioskScanReported {
+                scanned_at: at,
+                entries,
+                launchers: Vec::new(),
+                skipped: 0,
+            }),
+            None,
+        ),
+    })
+    .unwrap()
+}
+
+fn exe(path: &str, product: &str) -> arena_proto::ScanEntry {
+    arena_proto::ScanEntry {
+        path: path.into(),
+        file_name: path.rsplit('\\').next().unwrap().into(),
+        product_name: product.into(),
+        publisher: "Maker".into(),
+        launcher: "none".into(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stored_scan_is_matched_against_the_catalogue_and_recorded_as_the_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Arc::new(
+        arena_core::media_cache::MediaCache::open(
+            dir.path().join("reference"),
+            Arc::new(|| 1 << 30),
+        )
+        .unwrap(),
+    );
+    cache
+        .apply_manifest(&arena_proto::CatalogManifest {
+            catalog_version: 1,
+            games: vec![arena_proto::CatalogGame {
+                id: "01JCATALOG".into(),
+                rev: 1,
+                deleted: false,
+                name: Some("Great Game".into()),
+                launcher: None,
+                category: None,
+                age_rating: None,
+                signatures: vec![arena_proto::CatalogSignature {
+                    exe_name: "g.exe".into(),
+                    product_name: "Great".into(),
+                    publisher: String::new(),
+                    sha256: None,
+                }],
+                media: vec![],
+            }],
+        })
+        .unwrap();
+    let hub = start_with("0.1.0", true, Some(cache)).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let at = T0 - 10_000;
+    client
+        .request(
+            "intent.submit",
+            scan_with(
+                at,
+                vec![
+                    exe(r"C:\Games\G.EXE", "great"),
+                    exe(r"C:\Tools\other.exe", "Other"),
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+    let matches = matches_of(&hub, &hub.paired_id, at).await;
+    assert_eq!(
+        matches,
+        [arena_proto::GameMatch {
+            catalog_id: "01JCATALOG".into(),
+            path: r"C:\Games\G.EXE".into()
+        }]
+    );
+    let change = Store::open_reader(&hub.path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .into_iter()
+        .rfind(|c| c.intent_kind == "game.matched")
+        .unwrap();
+    assert_eq!(
+        (change.actor_kind.as_str(), change.actor_id.as_str()),
+        ("system", "hub-lan")
+    );
+
+    // A newer scan replaces the matches; with no catalogue hit it records none.
+    client
+        .request(
+            "intent.submit",
+            scan_with(at + 1, vec![exe(r"C:\x\y.exe", "Y")]),
+        )
+        .await
+        .unwrap();
+    assert!(matches_of(&hub, &hub.paired_id, at + 1).await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_a_catalogue_cache_a_scan_still_records_empty_matches() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let at = T0 - 10_000;
+    client
+        .request(
+            "intent.submit",
+            scan_with(at, vec![exe(r"C:\Games\g.exe", "G")]),
+        )
+        .await
+        .unwrap();
+    assert!(matches_of(&hub, &hub.paired_id, at).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1220,6 +1384,7 @@ async fn a_library_change_reaches_paired_kiosks_within_two_seconds() {
                 age_rating: String::new(),
                 enabled: true,
                 catalog_id: None,
+                installs: Vec::new(),
             }),
             None,
         ))

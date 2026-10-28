@@ -32,6 +32,37 @@ pub fn load(queue: &QueueDb) -> Vec<KioskLibraryEntry> {
     }
 }
 
+/// Whether `path` exists on this PC.
+pub fn path_exists(path: &str) -> bool {
+    !path.is_empty() && std::path::Path::new(path).exists()
+}
+
+/// The entries this PC lists (Story 6.5): one with an install path recorded for `device_id`, or
+/// whose configured executable path `exists` here. An entry with install paths on other PCs but
+/// none here, and whose own path is missing, is left out. An entry that starts by link only (no
+/// executable path, no install anywhere) has no path to look for and is listed.
+pub fn visible(
+    entries: Vec<KioskLibraryEntry>,
+    device_id: &str,
+    exists: impl Fn(&str) -> bool,
+) -> Vec<KioskLibraryEntry> {
+    entries
+        .into_iter()
+        .filter(|e| {
+            e.installs
+                .iter()
+                .any(|i| i.device_id == device_id && !i.path.is_empty())
+                || (!e.executable_path.is_empty() && exists(&e.executable_path))
+                || (e.executable_path.is_empty() && e.installs.is_empty())
+        })
+        .collect()
+}
+
+/// [`load`], limited to what this PC has ([`visible`]).
+pub fn load_visible(queue: &QueueDb, device_id: &str) -> Vec<KioskLibraryEntry> {
+    visible(load(queue), device_id, path_exists)
+}
+
 /// Seeds the applied revision from the cache.
 pub fn seed(queue: &QueueDb, revs: &mut AppliedRevs) {
     for key in KEYS {
@@ -85,6 +116,61 @@ mod tests {
         assert_eq!(load(&q)[0].executable_path, r"C:\Games\cs2.exe");
     }
 
+    fn entry(id: &str, exe: &str, installs: &[(&str, &str)]) -> KioskLibraryEntry {
+        KioskLibraryEntry {
+            id: id.into(),
+            kind: "game".into(),
+            name: id.into(),
+            launcher: "none".into(),
+            executable_path: exe.into(),
+            launch_uri: String::new(),
+            launch_args: String::new(),
+            category: String::new(),
+            tags: vec![],
+            age_rating: String::new(),
+            catalog_id: None,
+            installs: installs
+                .iter()
+                .map(|(d, p)| arena_proto::KioskInstall {
+                    device_id: (*d).into(),
+                    path: (*p).into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn an_entry_is_listed_only_where_an_install_is_known_or_its_path_exists() {
+        let list = vec![
+            entry("here", r"C:\Games\a.exe", &[("ME", r"D:\a.exe")]),
+            entry("elsewhere", r"C:\Games\b.exe", &[("OTHER", r"D:\b.exe")]),
+            entry("path-exists", r"C:\Games\c.exe", &[("OTHER", r"D:\c.exe")]),
+            entry("manual-missing", r"C:\Games\d.exe", &[]),
+            entry("link-only", "", &[]),
+            entry("link-only-elsewhere", "", &[("OTHER", r"D:\e.exe")]),
+        ];
+        let exists = |p: &str| p == r"C:\Games\c.exe";
+        let names: Vec<_> = visible(list, "ME", exists)
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(names, ["here", "path-exists", "link-only"]);
+    }
+
+    #[test]
+    fn the_cached_library_is_filtered_by_this_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = QueueDb::open(&dir.path().join("queue.db")).unwrap();
+        let json = serde_json::to_string(&vec![
+            entry("mine", r"Z:\nowhere\a.exe", &[("ME", r"D:\a.exe")]),
+            entry("theirs", r"Z:\nowhere\b.exe", &[("OTHER", r"D:\b.exe")]),
+        ])
+        .unwrap();
+        q.kv_set(KEY_KIOSK_LIBRARY, &json, 1).unwrap();
+        let ids: Vec<_> = load_visible(&q, "ME").into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, ["mine"]);
+        assert!(!path_exists("") && path_exists(dir.path().to_str().unwrap()));
+    }
     #[test]
     fn an_unparsable_cache_is_empty() {
         let dir = tempfile::tempdir().unwrap();

@@ -37,6 +37,8 @@ pub const LIBRARY_TAGS_MAX: usize = 10;
 pub const LIBRARY_TAG_MAX: usize = 32;
 /// Longest age rating, in characters.
 pub const LIBRARY_AGE_RATING_MAX: usize = 16;
+/// Most install paths one entry records (one per device).
+pub const MAX_LIBRARY_INSTALLS: usize = 200;
 /// Longest catalogue id, in characters.
 pub const LIBRARY_CATALOG_ID_MAX: usize = 64;
 /// Most live entries a branch's library holds: `kiosk.library` must fit one Hub frame.
@@ -62,12 +64,30 @@ pub fn launcher_install_globs(launcher: &str) -> &'static [&'static str] {
 /// `rules(entry)`: the entry's own executable path (when it has one) as an unsigned allow rule,
 /// then its launcher's install rules.
 pub fn library_rules(executable_path: &str, launcher: &str) -> Vec<ProcessRule> {
+    library_rules_with_installs(executable_path, launcher, &[])
+}
+
+/// [`library_rules`] plus one unsigned allow rule for each per-device install path that is not
+/// the executable path already (Story 6.5: the same game may sit at a different path on each PC).
+pub fn library_rules_with_installs(
+    executable_path: &str,
+    launcher: &str,
+    install_paths: &[&str],
+) -> Vec<ProcessRule> {
     let mut rules = Vec::new();
     if !executable_path.is_empty() {
         rules.push(ProcessRule {
             path_glob: executable_path.to_owned(),
             signer: None,
         });
+    }
+    for path in install_paths {
+        if !path.is_empty() && !rules.iter().any(|r| r.path_glob.eq_ignore_ascii_case(path)) {
+            rules.push(ProcessRule {
+                path_glob: (*path).to_owned(),
+                signer: None,
+            });
+        }
     }
     rules.extend(
         launcher_install_globs(launcher)
@@ -125,6 +145,26 @@ pub fn is_launch_uri(uri: &str) -> bool {
         && !uri.chars().any(char::is_control)
 }
 
+/// Where one device keeps an entry (Story 6.5): its full executable path on that PC, and the
+/// key of the proposal it was found as (see `proposal_key`; empty when added by hand), which is
+/// how a later scan that finds the same game at a new path updates the path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct LibraryInstall {
+    pub device_id: String,
+    pub path: String,
+    #[serde(default)]
+    pub match_key: String,
+}
+
+/// Where a kiosk finds an entry: the install path on one device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KioskInstall {
+    pub device_id: String,
+    pub path: String,
+}
+
 /// The payload of `library.upsert`. Without `id` it adds an entry (the writer mints the id);
 /// with one it edits that entry (the intent carries `base_rev`).
 ///
@@ -159,6 +199,10 @@ pub struct LibraryUpsert {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub catalog_id: Option<String>,
+    /// Per-device install paths to record with the entry (Story 6.5, approving proposals).
+    /// Listed devices get this path; devices not listed keep theirs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub installs: Vec<LibraryInstall>,
 }
 
 /// The payload of `library.delete` (a soft delete).
@@ -185,6 +229,8 @@ pub struct LibraryEntryView {
     pub age_rating: String,
     pub enabled: bool,
     pub catalog_id: Option<String>,
+    /// The PCs where an install path is known (Story 6.5).
+    pub installs: Vec<LibraryInstall>,
     #[ts(type = "number")]
     pub rev: i64,
 }
@@ -213,6 +259,10 @@ pub struct KioskLibraryEntry {
     pub age_rating: String,
     #[serde(default)]
     pub catalog_id: Option<String>,
+    /// Where each device keeps it (Story 6.5). A kiosk lists the entry only when its own device
+    /// is here or its `executable_path` exists on it.
+    #[serde(default)]
+    pub installs: Vec<KioskInstall>,
 }
 
 /// A tag list as the JSON array its column holds.

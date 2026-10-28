@@ -3263,6 +3263,8 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/media-cache", get(media_cache))
         .route("/ui/library", get(crate::ui_library::list))
         .route("/ui/library/scans", get(crate::ui_library::scans))
+        .route("/ui/library/proposals", get(crate::ui_library::proposals))
+        .route("/ui/library/cover/{sha256}", get(crate::ui_library::cover))
         .route("/ui/staff", get(staff_list))
         .route("/ui/staff/deactivate", post(staff_deactivate))
         .route("/ui/products", get(products))

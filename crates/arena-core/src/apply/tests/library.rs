@@ -26,6 +26,7 @@ fn entry(name: &str, path: &str) -> LibraryUpsert {
         age_rating: String::new(),
         enabled: true,
         catalog_id: None,
+        installs: Vec::new(),
     }
 }
 

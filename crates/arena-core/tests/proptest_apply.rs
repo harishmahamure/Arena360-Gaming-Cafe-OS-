@@ -139,6 +139,21 @@ enum Op {
         entries: u8,
         back_ms: i64,
     },
+    /// `game.matched` (Story 6.5) by the system for a scanned device, after an optional
+    /// `library.upsert` of a catalogue-linked entry: matches of some of the scan's executables,
+    /// of a path the scan did not find, or made from another scan. Good matches are stored (or
+    /// refused only as already recorded), the others are refused, and a refusal writes nothing.
+    GameMatch {
+        slot: u8,
+        kind: u8,
+        link: bool,
+    },
+    /// `library.dismiss` and `library.dismiss_clear` (Story 6.5) of well-formed or malformed keys.
+    /// Dismissed keys are stored once; clearing deletes them all.
+    Dismiss {
+        kind: u8,
+        n: u8,
+    },
     /// `coupon.upsert` of a percent or fixed coupon (valid or not) by a staff member of a built-in
     /// role; when it saves, a cash counter sale applies its code (or an unknown one), then maybe the
     /// sale's Undo. A coupon's `used` always equals the settled orders that took it.
@@ -604,6 +619,9 @@ fn op() -> impl Strategy<Value = Op> {
                 entries,
                 back_ms,
             }),
+        2 => (0..3u8, 0..4u8, any::<bool>())
+            .prop_map(|(slot, kind, link)| Op::GameMatch { slot, kind, link }),
+        1 => (0..4u8, 0..4u8).prop_map(|(kind, n)| Op::Dismiss { kind, n }),
         2 => (
             prop_oneof![5 => 1..=10_000i64, 1 => 0..=0i64, 1 => 10_001..=10_002i64],
             any::<bool>(),
@@ -2198,6 +2216,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     age_rating: String::new(),
                     enabled: *enabled,
                     catalog_id: None,
+                    installs: Vec::new(),
                 })
             };
             let target = if deleting {
@@ -2330,6 +2349,142 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 );
                 prop_assert_eq!(hub.change_count(), before);
                 prop_assert_eq!(after, stored, "a refused report leaves the stored scan");
+            }
+        }
+        Op::GameMatch { slot, kind, link } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let scans = hub.reader.rows(Table::KioskScans).unwrap();
+            let Some(scan) = scans.get(usize::from(*slot) % scans.len().max(1)) else {
+                return Ok(());
+            };
+            let device = text(scan, "device_id");
+            let scanned_at = int(scan, "scanned_at");
+            let entries: Vec<arena_proto::ScanEntry> =
+                serde_json::from_str(&text(scan, "entries")).unwrap();
+            if *link
+                && let Some(first) = entries.first()
+                && hub
+                    .reader
+                    .library_entries()
+                    .unwrap()
+                    .iter()
+                    .all(|e| e.catalog_id.is_none())
+            {
+                // A catalogue-linked entry for G0 (it may be refused as a duplicate path).
+                let _ = hub.submit_new(hub.intent(
+                    IntentPayload::LibraryUpsert(arena_proto::LibraryUpsert {
+                        id: None,
+                        entry_kind: "game".into(),
+                        name: "Linked".into(),
+                        launcher: "none".into(),
+                        executable_path: first.path.clone(),
+                        launch_uri: String::new(),
+                        launch_args: String::new(),
+                        category: String::new(),
+                        tags: Vec::new(),
+                        age_rating: String::new(),
+                        enabled: true,
+                        catalog_id: Some("G0".into()),
+                        installs: Vec::new(),
+                    }),
+                    None,
+                ));
+            }
+            let (at, matches, good) = match kind {
+                1 => (
+                    scanned_at,
+                    vec![arena_proto::GameMatch {
+                        catalog_id: "G0".into(),
+                        path: r"C:\Nowhere\none.exe".into(),
+                    }],
+                    false,
+                ),
+                2 => (scanned_at + 1, Vec::new(), false),
+                3 => (scanned_at, Vec::new(), true),
+                _ => (
+                    scanned_at,
+                    entries
+                        .iter()
+                        .step_by(2)
+                        .map(|e| arena_proto::GameMatch {
+                            catalog_id: "G0".into(),
+                            path: e.path.clone(),
+                        })
+                        .collect(),
+                    true,
+                ),
+            };
+            let mut intent = hub.intent(
+                IntentPayload::GameMatched(arena_proto::GameMatched {
+                    device_id: device,
+                    scanned_at: at,
+                    matches,
+                }),
+                None,
+            );
+            intent.actor = Actor {
+                kind: ActorKind::System,
+                id: "hub-lan".into(),
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            if good && out.is_ok() {
+                prop_assert!(hub.change_count() > before);
+            } else {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            }
+        }
+        Op::Dismiss { kind, n } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let stored = |hub: &Hub| hub.reader.rows(Table::LibraryDismissals).unwrap().len();
+            let before_rows = stored(hub);
+            let (payload, valid) = match kind {
+                0 | 1 => (
+                    IntentPayload::LibraryDismiss(arena_proto::LibraryDismiss {
+                        keys: (0..=*n).map(|i| format!("game:G{i}")).collect(),
+                    }),
+                    true,
+                ),
+                2 => (
+                    IntentPayload::LibraryDismiss(arena_proto::LibraryDismiss {
+                        keys: vec!["junk".into()],
+                    }),
+                    false,
+                ),
+                _ => (
+                    IntentPayload::LibraryDismissClear(arena_proto::LibraryDismissClear {}),
+                    before_rows > 0,
+                ),
+            };
+            let clear = *kind == 3;
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(payload, None));
+            if valid && out.is_ok() {
+                prop_assert!(hub.change_count() > before);
+                if clear {
+                    prop_assert_eq!(stored(hub), 0);
+                } else {
+                    prop_assert!(stored(hub) > before_rows);
+                }
+            } else {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(stored(hub), before_rows);
             }
         }
         Op::Coupon {
@@ -5838,6 +5993,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_coupons_hold(&hub)?;
                 assert_library_holds(&hub)?;
                 assert_scans_hold(&hub)?;
+                assert_matches_hold(&hub)?;
                 assert_discounts_hold(&hub)?;
                 assert_voids_hold(&hub)?;
                 assert_refunds_hold(&hub)?;
@@ -5871,6 +6027,62 @@ fn assert_scans_hold(hub: &Hub) -> Result<(), TestCaseError> {
         let entries: Vec<arena_proto::ScanEntry> =
             serde_json::from_str(&text(&row, "entries")).unwrap();
         prop_assert!(entries.len() <= arena_proto::MAX_SCAN_ENTRIES);
+    }
+    Ok(())
+}
+
+/// The match and install invariants (Story 6.5): matches belong to a registered device; every
+/// install belongs to a live library entry and a registered device with a full path; and
+/// `kiosk.library` lists exactly the stored installs of its entries; dismissed keys are
+/// well-formed and unique.
+fn assert_matches_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let devices: Vec<String> = hub
+        .reader
+        .rows(Table::Devices)
+        .unwrap()
+        .iter()
+        .map(|r| text(r, "device_id"))
+        .collect();
+    for row in hub.reader.rows(Table::GameMatches).unwrap() {
+        prop_assert!(devices.contains(&text(&row, "device_id")));
+        prop_assert!(int(&row, "scanned_at") > 0 && int(&row, "rev") >= 1);
+        let m: Vec<arena_proto::GameMatch> = serde_json::from_str(&text(&row, "matches")).unwrap();
+        prop_assert!(m.len() <= arena_proto::MAX_MATCHES);
+    }
+    let live = hub.reader.library_entries().unwrap();
+    for row in hub.reader.rows(Table::LibraryInstalls).unwrap() {
+        prop_assert!(devices.contains(&text(&row, "device_id")));
+        prop_assert!(arena_proto::is_library_path(&text(&row, "path")));
+    }
+    let live_installs = hub.reader.library_installs().unwrap();
+    prop_assert!(
+        live_installs
+            .iter()
+            .all(|i| live.iter().any(|e| e.id == i.entry_id))
+    );
+    if let Some(lib) = hub.setting("kiosk.library") {
+        let got: Vec<arena_proto::KioskLibraryEntry> =
+            serde_json::from_str(&text(&lib, "value")).unwrap();
+        for e in &got {
+            let mut want: Vec<(String, String)> = live_installs
+                .iter()
+                .filter(|i| i.entry_id == e.id)
+                .map(|i| (i.device_id.clone(), i.path.clone()))
+                .collect();
+            want.sort();
+            let mut have: Vec<(String, String)> = e
+                .installs
+                .iter()
+                .map(|i| (i.device_id.clone(), i.path.clone()))
+                .collect();
+            have.sort();
+            prop_assert_eq!(have, want, "installs of {} in kiosk.library", e.id);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for k in hub.reader.rows(Table::LibraryDismissals).unwrap() {
+        prop_assert!(seen.insert(text(&k, "key")));
+        prop_assert!(arena_proto::is_proposal_key(&text(&k, "key")));
     }
     Ok(())
 }

@@ -138,6 +138,16 @@ pub struct RefGame {
     pub age_rating: Option<String>,
 }
 
+/// One executable signature of a catalogue game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefSignature {
+    pub game_id: String,
+    pub exe_name: String,
+    pub product_name: String,
+    pub publisher: String,
+    pub sha256: Option<String>,
+}
+
 /// An open reference database.
 pub struct ReferenceDb {
     conn: Connection,
@@ -341,6 +351,44 @@ impl ReferenceDb {
                         age_rating: r.get(5)?,
                     })
                 },
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
+    /// Every game's executable signatures, ordered by game id then file name (Story 6.5).
+    pub fn signatures(&self) -> Result<Vec<RefSignature>, AppError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT game_id, exe_name, product_name, publisher, sha256
+                 FROM ref_signatures ORDER BY game_id, exe_name, product_name, publisher",
+            )
+            .map_err(db_error)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(RefSignature {
+                    game_id: r.get(0)?,
+                    exe_name: r.get(1)?,
+                    product_name: r.get(2)?,
+                    publisher: r.get(3)?,
+                    sha256: r.get(4)?,
+                })
+            })
+            .map_err(db_error)?;
+        rows.collect::<Result<_, _>>().map_err(db_error)
+    }
+
+    /// The SHA-256 of the game's cover when the cache holds that file (stored and verified).
+    pub fn cover_sha256(&self, game_id: &str) -> Result<Option<String>, AppError> {
+        self.conn
+            .query_row(
+                "SELECT m.sha256 FROM ref_media m
+                 JOIN ref_files f ON f.sha256 = m.sha256
+                 WHERE m.game_id = ?1 AND m.kind = 'cover' AND f.state = 'stored'
+                 ORDER BY m.sha256 LIMIT 1",
+                [game_id],
+                |r| r.get(0),
             )
             .optional()
             .map_err(db_error)

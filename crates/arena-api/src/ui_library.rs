@@ -5,13 +5,15 @@
 
 use std::sync::Arc;
 
+use arena_core::game_proposals::{CatalogueGame, build_proposals};
+
 use arena_proto::{
     AppError, ErrorCode, LIBRARY_AGE_RATING_MAX, LIBRARY_NAME_MAX, LibraryUpsert, LibraryView,
-    launcher_from_catalogue,
+    ProposalsView, launcher_from_catalogue,
 };
 use axum::Json;
-use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::ui_auth::{UiAuth, auth_failed, bearer, fail, internal, ui_error};
@@ -128,4 +130,83 @@ pub(crate) async fn link_catalogue(
         LIBRARY_AGE_RATING_MAX,
     );
     Ok(())
+}
+
+/// `GET /ui/library/proposals` (same access as `GET /ui/library`): "Found on PCs" (Story 6.5).
+/// Every executable the PCs' scans found that is not in the library and not dismissed, grouped
+/// by catalogue game (or by file name, product name and publisher when unmatched) with the
+/// matched name, cover, launcher and category and the PCs it was found on.
+pub(crate) async fn proposals(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    if let Err(e) = auth.acting_session(&token).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(auth.reader());
+    let media = auth.media().cloned();
+    let read = tokio::task::spawn_blocking(move || -> Result<ProposalsView, AppError> {
+        let inputs = reader.proposal_inputs()?;
+        // A catalogue read that fails shows the game by its file name rather than hiding it.
+        let lookup = |id: &str| -> Option<CatalogueGame> {
+            let cache = media.as_ref()?;
+            let game = cache.game(id).ok().flatten()?;
+            Some(CatalogueGame {
+                cover_sha256: cache.cover_sha256(id).ok().flatten(),
+                name: game.name,
+                launcher: game.launcher,
+                category: game.category,
+                age_rating: game.age_rating,
+            })
+        };
+        Ok(build_proposals(&inputs, &lookup))
+    })
+    .await;
+    match read {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// The largest cover this endpoint sends.
+const COVER_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// `GET /ui/library/cover/{sha256}`: a cached catalogue cover for the Hub UI (Story 6.5). Only
+/// images the cache holds are sent; anything else is 404.
+pub(crate) async fn cover(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    Path(sha256): Path<String>,
+) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    if let Err(e) = auth.acting_session(&token).await {
+        return fail(e);
+    }
+    let not_found = || StatusCode::NOT_FOUND.into_response();
+    let Some(cache) = auth.media().cloned() else {
+        return not_found();
+    };
+    let now = auth.clock().now_ms();
+    let found = tokio::task::spawn_blocking(move || cache.serve_lookup(&sha256, now)).await;
+    let file = match found {
+        Ok(Ok(Some(f))) if f.content_type.starts_with("image/") && f.bytes <= COVER_MAX_BYTES => f,
+        Ok(Ok(_)) => return not_found(),
+        Ok(Err(e)) => return fail(ui_error(e)),
+        Err(_) => return fail(internal()),
+    };
+    match tokio::fs::read(&file.path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, file.content_type),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => not_found(),
+    }
 }

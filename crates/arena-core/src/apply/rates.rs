@@ -38,6 +38,11 @@ pub(super) fn validate(r: &RateUpsert, t: &RateTarget) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Whether `price` is a rate a group can take (Story 5.36).
+pub(crate) fn price_ok(price: i64) -> bool {
+    (1..=RATE_MAX_MINOR).contains(&price)
+}
+
 pub(super) fn mutate(
     tx: &StoreTx<'_>,
     r: &RateUpsert,

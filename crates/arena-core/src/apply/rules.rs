@@ -135,6 +135,15 @@ pub(super) fn validate(u: &RuleUpsert, t: &RuleTarget) -> Result<(), AppError> {
     }
 }
 
+/// The `rule.upsert` rules for a new rule of a setup file (Story 5.36), whose group is `group`.
+pub(crate) fn check_import(u: &RuleUpsert, group: &GroupRow) -> Result<(), AppError> {
+    let target = RuleTarget {
+        rule: None,
+        group: Some(group.clone()),
+    };
+    validate(u, &target)
+}
+
 pub(super) fn mutate(
     tx: &StoreTx<'_>,
     u: &RuleUpsert,

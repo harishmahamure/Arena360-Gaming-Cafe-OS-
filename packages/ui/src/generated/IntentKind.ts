@@ -55,6 +55,7 @@ export type IntentKind =
   | "import.products"
   | "import.players"
   | "import.plans"
+  | "import.setup"
   | "shift.open"
   | "shift.close"
   | "shift.reprint_z"

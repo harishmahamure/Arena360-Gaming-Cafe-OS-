@@ -3277,6 +3277,18 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
             "/ui/import/templates/commit",
             post(crate::ui_import::starter_commit),
         )
+        .route(
+            "/ui/import/setup/export",
+            post(crate::ui_import::setup_export),
+        )
+        .route(
+            "/ui/import/setup/preview",
+            post(crate::ui_import::setup_preview).layer(IMPORT_BODY_LIMIT),
+        )
+        .route(
+            "/ui/import/setup/commit",
+            post(crate::ui_import::setup_commit).layer(IMPORT_BODY_LIMIT),
+        )
         .route("/ui/shift/count", get(crate::ui_shift::count))
         .route(
             "/ui/reports/daily-sales",
@@ -7447,6 +7459,347 @@ pub(crate) mod tests {
             )
         );
         assert_eq!(text.lines().count(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_branch_setup_file_is_exported_and_added_once_at_another_hub() {
+        let from = hub().await;
+        let to = hub().await;
+        let manager = token_for(&to, "manager", "m-pass").await;
+        let counter = token_for(&to, "counter", "c-pass").await;
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "o".into(),
+        };
+        let send = |hub: &Hub, payload: IntentPayload| {
+            let intent = intent_as(owner(), payload, None);
+            let writer = hub.writer.clone();
+            async move { writer.submit_intent(intent).await.unwrap() }
+        };
+        let product = |name: &str, hsn: &str, barcode: &str| {
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: name.into(),
+                category: "Drinks".into(),
+                price_minor: 4_000,
+                tax_rate_bp: None,
+                hsn: hsn.into(),
+                track_stock: true,
+                image: String::new(),
+                barcode: barcode.into(),
+                kitchen: false,
+                favourite: true,
+                active: true,
+                bundle: false,
+                components: Vec::new(),
+            })
+        };
+
+        // The source Hub: a group with a rate, products, a bundle, a plan, a rule and a coupon.
+        let mut pc = String::new();
+        for (name, kind) in [("PC", "pc"), ("PS5", "console")] {
+            let done = send(
+                &from,
+                IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                    id: None,
+                    name: name.into(),
+                    group_kind: kind.into(),
+                    colour: "teal".into(),
+                    sort_order: 1,
+                }),
+            )
+            .await;
+            if name == "PC" {
+                pc = done.changes[0].row_id.clone();
+            }
+        }
+        send(
+            &from,
+            IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                group_id: pc.clone(),
+                price_per_hour_minor: 6_000,
+            }),
+        )
+        .await;
+        send(&from, product("Cola", "2202", "890123")).await;
+        send(&from, product("Chips", "2005", "")).await;
+        let ids: Vec<(String, String)> = from
+            .auth
+            .reader()
+            .products(T0)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.name, p.id))
+            .collect();
+        let id_of = |n: &str| ids.iter().find(|(name, _)| name == n).unwrap().1.clone();
+        send(
+            &from,
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: "Combo".into(),
+                category: "Combos".into(),
+                price_minor: 5_000,
+                tax_rate_bp: None,
+                hsn: "2106".into(),
+                track_stock: false,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+                bundle: true,
+                components: vec![
+                    arena_proto::BundleComponent {
+                        product_id: id_of("Cola"),
+                        qty: 2,
+                    },
+                    arena_proto::BundleComponent {
+                        product_id: id_of("Chips"),
+                        qty: 1,
+                    },
+                ],
+            }),
+        )
+        .await;
+        send(
+            &from,
+            IntentPayload::PlanUpsert(arena_proto::PlanUpsert {
+                id: None,
+                plan_kind: "pack".into(),
+                name: "2 hour pack".into(),
+                price_minor: 10_000,
+                minutes: Some(120),
+                validity_days: Some(30),
+                window_start_min: None,
+                window_end_min: None,
+                group_ids: vec![pc.clone()],
+                active: true,
+            }),
+        )
+        .await;
+        send(
+            &from,
+            IntentPayload::RuleUpsert(arena_proto::RuleUpsert {
+                id: None,
+                name: "Happy hour".into(),
+                group_id: pc.clone(),
+                rule_kind: "weekly".into(),
+                days_mask: Some(0b001_1111),
+                start_min: Some(16 * 60),
+                end_min: Some(18 * 60),
+                date_from: None,
+                date_to: None,
+                adjust_kind: "percent_bp".into(),
+                adjust_value: -2_000,
+                priority: 0,
+                active: true,
+            }),
+        )
+        .await;
+        let plan_id = from.auth.reader().plans().unwrap()[0].id.clone();
+        send(
+            &from,
+            IntentPayload::CouponUpsert(arena_proto::CouponUpsert {
+                id: None,
+                code: "save10".into(),
+                percent_bp: Some(1_000),
+                amount_minor: None,
+                valid_from: None,
+                valid_to: None,
+                usage_limit: Some(3),
+                min_bill_minor: 0,
+                targets: vec![arena_proto::CouponTarget {
+                    kind: "plan".into(),
+                    id: plan_id,
+                }],
+                active: true,
+            }),
+        )
+        .await;
+
+        // Export it: no permission for a counter, a file for a manager.
+        let dir = tempfile::tempdir().unwrap();
+        let folder = json!({ "folder": dir.path().to_string_lossy() });
+        let source_manager = token_for(&from, "manager", "m-pass").await;
+        let (status, _) = call(
+            &from,
+            "POST",
+            "/ui/import/setup/export",
+            None,
+            Some(folder.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, reply) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/export",
+            Some(&counter),
+            Some(folder.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        let (status, saved) = call(
+            &from,
+            "POST",
+            "/ui/import/setup/export",
+            Some(&source_manager),
+            Some(folder.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let text =
+            std::fs::read_to_string(dir.path().join(saved["file_name"].as_str().unwrap())).unwrap();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            (&file["format"], &file["version"]),
+            (&json!("arena360-setup"), &json!(1))
+        );
+        for left_out in ["players", "devices", "payments", "image"] {
+            assert!(!text.contains(left_out), "{left_out} is not exported");
+        }
+        assert_eq!(file["groups"].as_array().unwrap().len(), 2);
+        assert_eq!(file["groups"][0]["rate_minor"], 6_000);
+        assert_eq!(file["bundles"][0]["components"][1]["product"], "Cola");
+        assert_eq!(file["bundles"][0]["components"][1]["qty"], 2);
+        assert_eq!(file["plans"][0]["groups"], json!(["PC"]));
+        assert_eq!(file["coupons"][0]["targets"][0]["name"], "2 hour pack");
+
+        // A counter cannot import it; the dry-run writes nothing.
+        let ask = json!({ "json": text });
+        let (status, reply) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/preview",
+            Some(&counter),
+            Some(ask.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+        let (status, preview) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/preview",
+            Some(&manager),
+            Some(ask.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(
+            (&preview["added"], &preview["skipped"]),
+            (&json!(9), &json!(0)),
+            "{preview}"
+        );
+        assert_eq!(preview["can_commit"], true);
+        assert_eq!(to.auth.reader().products(T0).unwrap().len(), 0);
+        assert!(to.auth.reader().plans().unwrap().is_empty());
+
+        // Commit creates all of it; the target then exports the same file.
+        let commit = json!({ "json": text, "import_id": ulid::Ulid::generate().to_string() });
+        let (status, done) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/commit",
+            Some(&manager),
+            Some(commit.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!((&done["added"], &done["skipped"]), (&json!(9), &json!(0)));
+        let copy_dir = dir.path().join("to");
+        std::fs::create_dir(&copy_dir).unwrap();
+        let (status, saved) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/export",
+            Some(&manager),
+            Some(json!({ "folder": copy_dir.to_string_lossy() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let copy = std::fs::read_to_string(saved["path"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&copy).unwrap(),
+            file,
+            "the copy matches the original"
+        );
+
+        // Again, even the same attempt: nothing is added twice.
+        for body in [
+            commit,
+            json!({ "json": text, "import_id": ulid::Ulid::generate().to_string() }),
+        ] {
+            let (status, reply) = call(
+                &to,
+                "POST",
+                "/ui/import/setup/commit",
+                Some(&manager),
+                Some(body),
+            )
+            .await;
+            assert_eq!(
+                (status, &reply["field"]),
+                (StatusCode::UNPROCESSABLE_ENTITY, &json!("file")),
+                "{reply}"
+            );
+        }
+        let (_, preview) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/preview",
+            Some(&manager),
+            Some(ask),
+        )
+        .await;
+        assert_eq!(
+            (&preview["added"], &preview["skipped"]),
+            (&json!(0), &json!(9)),
+            "{preview}"
+        );
+        assert_eq!(preview["items"][0]["reason"], "exists");
+
+        // A newer format is refused; so is a file in another currency or one that is not ours.
+        let mut newer = file.clone();
+        newer["version"] = json!(2);
+        let (status, reply) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/preview",
+            Some(&manager),
+            Some(json!({ "json": newer.to_string() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
+        assert_eq!(reply["code"], "UNSUPPORTED");
+        assert_eq!(reply["message"], "Update this Hub to import this file.");
+        let mut dollars = file.clone();
+        dollars["currency"] = json!("USD");
+        let (status, reply) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/preview",
+            Some(&manager),
+            Some(json!({ "json": dollars.to_string() })),
+        )
+        .await;
+        assert_eq!(
+            (status, &reply["field"]),
+            (StatusCode::UNPROCESSABLE_ENTITY, &json!("currency")),
+            "{reply}"
+        );
+        let (status, reply) = call(
+            &to,
+            "POST",
+            "/ui/import/setup/preview",
+            Some(&manager),
+            Some(json!({ "json": "{}" })),
+        )
+        .await;
+        assert_eq!(
+            (status, &reply["field"]),
+            (StatusCode::UNPROCESSABLE_ENTITY, &json!("file")),
+            "{reply}"
+        );
     }
 
     #[tokio::test]

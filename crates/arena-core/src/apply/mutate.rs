@@ -249,6 +249,10 @@ pub(super) fn mutate(
             Target::ImportPlans(t) => super::import_plans::mutate(tx, p, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::ImportSetup(p) => match target {
+            Target::ImportSetup(t) => super::import_setup::mutate(tx, intent, &p.file, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::PlanUpsert(u) => match target {
             Target::Plan(t) => plans::mutate(tx, u, t),
             _ => Err(mismatch()),

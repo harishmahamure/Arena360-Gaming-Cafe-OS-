@@ -1506,6 +1506,37 @@ impl SnapshotReader {
         })
     }
 
+    /// The branch's setup file (Story 5.36): groups with rates, products, bundles, plans, pricing
+    /// rules and coupons, as the text an export saves. Blocking (SQLite).
+    pub fn setup_export(&self, now_ms: i64) -> Result<String, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let file = store.read_with(|conn| crate::setup_file::export(conn, now_ms))?;
+        crate::setup_file::to_text(&file)
+    }
+
+    /// A dry-run of a setup file (Story 5.36): what it would create and what is skipped, read
+    /// against the Hub now. A file from a newer format is `UNSUPPORTED`. Writes nothing.
+    /// Blocking (SQLite).
+    pub fn setup_import(
+        &self,
+        json: &str,
+        now_ms: i64,
+    ) -> Result<(arena_proto::SetupPreview, arena_proto::SetupFile), AppError> {
+        let file = crate::setup_file::parse(json)?;
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let analysis = store.read_with(|conn| {
+            let ctx = crate::setup_file::Context::load(conn, now_ms)?;
+            crate::setup_file::analyse(&file, &ctx)
+        })?;
+        Ok((analysis.preview, file))
+    }
+
     /// The Inventory → Expiring and Expired lists as of `now_ms`. Blocking (SQLite).
     pub fn expiry(&self, now_ms: i64) -> Result<arena_proto::ExpiryView, AppError> {
         let store = self

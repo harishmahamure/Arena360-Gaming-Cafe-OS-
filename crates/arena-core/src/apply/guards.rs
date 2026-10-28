@@ -49,7 +49,28 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
     manual_discount(tx, intent)?;
     overriding_stock(tx, intent)?;
     importing_stock(tx, intent)?;
+    importing_setup(tx, intent)?;
     importing_players(tx, intent)
+}
+
+/// A setup file that creates device groups needs `device.manage` on top of `catalog.edit`: the
+/// actor's own, or the elevating manager's.
+fn importing_setup(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    let IntentPayload::ImportSetup(i) = &intent.payload else {
+        return Ok(());
+    };
+    if i.file.groups.is_empty() || intent.actor.kind == ActorKind::Owner {
+        return Ok(());
+    }
+    let holder = intent
+        .elevated_by
+        .as_ref()
+        .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
+    if rbac::staff_allows(tx, holder, arena_proto::Permission::DeviceManage)? {
+        Ok(())
+    } else {
+        Err(rbac::denied())
+    }
 }
 
 /// A product import that books opening stock needs `stock.in` on top of `catalog.edit`: the
@@ -256,6 +277,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::Import(_)
             | Target::ImportPlayers(_)
             | Target::ImportPlans(_)
+            | Target::ImportSetup(_)
             | Target::Credentials(_)
             | Target::Stock(_)
             | Target::Maintenance(_)
@@ -399,7 +421,10 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::Group(t) => groups::base_rev(intent, t),
         Target::Zone(t) => zones::base_rev(intent, t),
         Target::Product(t) => products::base_rev(intent, t),
-        Target::Import(_) | Target::ImportPlayers(_) | Target::ImportPlans(_) => Ok(()),
+        Target::Import(_)
+        | Target::ImportPlayers(_)
+        | Target::ImportPlans(_)
+        | Target::ImportSetup(_) => Ok(()),
         Target::Plan(t) => plans::base_rev(intent, t),
         Target::Rule(t) => rules::base_rev(intent, t),
         Target::Coupon(t) => coupon::base_rev(intent, t),

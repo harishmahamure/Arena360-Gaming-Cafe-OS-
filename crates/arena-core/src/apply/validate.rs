@@ -190,6 +190,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::ImportPlans(t) => super::import_plans::validate(p, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::ImportSetup(_) => match target {
+            Target::ImportSetup(t) => super::import_setup::validate(t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::ProductDelete(_) => match target {
             Target::Product(t) => products::validate_delete(t),
             _ => Err(internal_target()),

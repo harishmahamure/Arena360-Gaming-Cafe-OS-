@@ -106,6 +106,12 @@ pub(super) fn validate_upsert(g: &GroupUpsert, t: &GroupTarget) -> Result<(), Ap
     }
 }
 
+/// The `group.upsert` rules for a new group of a setup file (Story 5.36); the caller has already
+/// checked that no live group has its name.
+pub(crate) fn check_import(g: &GroupUpsert) -> Result<(), AppError> {
+    validate_upsert(g, &GroupTarget::default())
+}
+
 pub(super) fn validate_delete(t: &GroupTarget) -> Result<(), AppError> {
     if t.group.is_none() {
         return Err(invalid("id", "no such group"));

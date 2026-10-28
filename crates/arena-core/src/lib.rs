@@ -31,6 +31,7 @@ mod session_screen;
 mod session_timer;
 mod settings_defaults;
 pub mod setup;
+pub mod setup_file;
 mod snapshot;
 pub mod staff;
 mod status;

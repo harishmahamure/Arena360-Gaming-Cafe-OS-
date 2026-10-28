@@ -171,6 +171,10 @@ pub enum IntentKind {
     /// A chunk of a plan CSV import: creates or updates plans and their groups (Story 5.34).
     #[serde(rename = "import.plans")]
     ImportPlans,
+    /// A branch setup file: groups, rates, products, bundles, plans, pricing rules and coupons
+    /// the branch does not have yet, created together (Story 5.36).
+    #[serde(rename = "import.setup")]
+    ImportSetup,
     /// Opens the branch's shift with a confirmed cash float.
     #[serde(rename = "shift.open")]
     ShiftOpen,
@@ -305,7 +309,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 98] = [
+    pub const ALL: [IntentKind; 99] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -357,6 +361,7 @@ impl IntentKind {
         Self::ImportProducts,
         Self::ImportPlayers,
         Self::ImportPlans,
+        Self::ImportSetup,
         Self::ShiftOpen,
         Self::ShiftClose,
         Self::ShiftReprintZ,
@@ -460,6 +465,7 @@ impl IntentKind {
             Self::ImportProducts => "import.products",
             Self::ImportPlayers => "import.players",
             Self::ImportPlans => "import.plans",
+            Self::ImportSetup => "import.setup",
             Self::ShiftOpen => "shift.open",
             Self::ShiftClose => "shift.close",
             Self::ShiftReprintZ => "shift.reprint_z",
@@ -563,7 +569,8 @@ impl IntentKind {
             | Self::StockExpiryCheck
             | Self::StockThreshold
             | Self::ImportProducts
-            | Self::ImportPlans => IntentCategory::Catalog,
+            | Self::ImportPlans
+            | Self::ImportSetup => IntentCategory::Catalog,
             Self::ShiftOpen
             | Self::ShiftClose
             | Self::ShiftReprintZ
@@ -670,6 +677,7 @@ impl IntentKind {
             | Self::CouponUpsert
             | Self::ImportProducts
             | Self::ImportPlans
+            | Self::ImportSetup
             | Self::StockThreshold => Requirement::Perm(Permission::CatalogEdit),
             Self::ShiftOpen => Requirement::Perm(Permission::ShiftOpen),
             Self::ShiftClose => Requirement::Perm(Permission::ShiftClose),
@@ -811,6 +819,7 @@ impl IntentKind {
             | Self::PlayerCreate
             | Self::ImportPlayers
             | Self::ImportPlans
+            | Self::ImportSetup
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
             | Self::SessionStart
@@ -1369,6 +1378,8 @@ pub enum IntentPayload {
     ImportPlayers(crate::ImportPlayers),
     #[serde(rename = "import.plans")]
     ImportPlans(crate::ImportPlans),
+    #[serde(rename = "import.setup")]
+    ImportSetup(crate::ImportSetup),
     #[serde(rename = "shift.open")]
     ShiftOpen(crate::ShiftOpen),
     #[serde(rename = "shift.close")]
@@ -1519,6 +1530,7 @@ impl IntentPayload {
             Self::ImportProducts(_) => IntentKind::ImportProducts,
             Self::ImportPlayers(_) => IntentKind::ImportPlayers,
             Self::ImportPlans(_) => IntentKind::ImportPlans,
+            Self::ImportSetup(_) => IntentKind::ImportSetup,
             Self::ShiftOpen(_) => IntentKind::ShiftOpen,
             Self::ShiftClose(_) => IntentKind::ShiftClose,
             Self::ShiftReprintZ(_) => IntentKind::ShiftReprintZ,
@@ -1806,9 +1818,8 @@ mod tests {
                 }
                 "staff.set_credentials" => Requirement::System,
                 "product.upsert" | "product.delete" | "plan.upsert" | "rule.upsert"
-                | "coupon.upsert" | "stock.threshold" | "import.products" | "import.plans" => {
-                    Requirement::Perm(Permission::CatalogEdit)
-                }
+                | "coupon.upsert" | "stock.threshold" | "import.products" | "import.plans"
+                | "import.setup" => Requirement::Perm(Permission::CatalogEdit),
                 "shift.open" => Requirement::Perm(Permission::ShiftOpen),
                 "shift.close" => Requirement::Perm(Permission::ShiftClose),
                 "shift.reprint_z" => Requirement::Perm(Permission::ReportView),

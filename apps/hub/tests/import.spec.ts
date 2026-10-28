@@ -9,6 +9,8 @@ import type {
   ProductImportPreview,
   ProductImportResult,
   SessionStaff,
+  SetupPreview,
+  SetupFileResult,
   StarterPreview,
   StarterResult,
   StarterTemplateInfo,
@@ -158,6 +160,23 @@ const STARTER_DONE: StarterResult = {
   chunks: 1,
 };
 
+const SETUP_PREVIEW: SetupPreview = {
+  counts: [
+    { kind: "group", added: 1, skipped: 1 },
+    { kind: "plan", added: 1, skipped: 1 },
+  ],
+  items: [
+    { kind: "group", name: "PC", add: false, reason: "exists" },
+    { kind: "group", name: "PS5", add: true },
+    { kind: "plan", name: "2 hour pack", add: true },
+    { kind: "plan", name: "Ghost pack", add: false, reason: "no_group" },
+  ],
+  added: 2,
+  skipped: 2,
+  can_commit: true,
+};
+const SETUP_DONE: SetupFileResult = { counts: SETUP_PREVIEW.counts, added: 2, skipped: 2 };
+
 type Posted = { path: string; body: Record<string, unknown> };
 
 async function open(
@@ -167,6 +186,7 @@ async function open(
   const posts: Posted[] = [];
   let refuseFolder = opts.folderRefused ?? false;
   let starterApplied = false;
+  let setupRefused = false;
   await page.addInitScript(
     (t) => sessionStorage.setItem("arena.hub.token", t),
     opts.token ?? "manager-token",
@@ -227,6 +247,26 @@ async function open(
         posts.push({ path: "templates/commit", body: req.postDataJSON() });
         starterApplied = true;
         return json(route, 200, STARTER_DONE);
+      case "/ui/import/setup/export":
+        posts.push({ path: "setup/export", body: req.postDataJSON() });
+        return json(route, 200, {
+          file_name: "arena360-branch-setup.json",
+          path: "/usb/arena360-branch-setup.json",
+        });
+      case "/ui/import/setup/preview":
+        posts.push({ path: "setup/preview", body: req.postDataJSON() });
+        if (!setupRefused && String(req.postDataJSON().json).includes('"version":2')) {
+          setupRefused = true;
+          return json(route, 400, {
+            code: "UNSUPPORTED",
+            field: "file",
+            message: "Update this Hub to import this file.",
+          });
+        }
+        return json(route, 200, SETUP_PREVIEW);
+      case "/ui/import/setup/commit":
+        posts.push({ path: "setup/commit", body: req.postDataJSON() });
+        return json(route, 200, SETUP_DONE);
       case "/ui/import/products/template":
         posts.push({ path: "template", body: req.postDataJSON() });
         if (refuseFolder) {
@@ -442,4 +482,57 @@ test("the Templates tab needs permission to edit the catalogue", async ({ page }
   await open(page, { token: "counter-token" });
   await page.getByRole("tab", { name: en["hub.import.tab_templates"] }).click();
   await expect(page.getByTestId("import-no-access")).toHaveText(en["hub.import.starter_no_access"]);
+});
+
+test("the Branch setup tab exports to a folder, previews a file and adds it once", async ({
+  page,
+}) => {
+  const posts = await open(page);
+  await page.getByRole("tab", { name: en["hub.import.tab_setup"] }).click();
+  await page.getByTestId("setup-folder").fill("/usb");
+  await page.getByRole("button", { name: en["hub.import.setup_export_button"] }).click();
+  await expect(page.getByTestId("setup-export-status-text")).toContainText(
+    "/usb/arena360-branch-setup.json",
+  );
+  await page.getByTestId("setup-file").setInputFiles({
+    name: "arena360-branch-setup.json",
+    mimeType: "application/json",
+    buffer: Buf.from('{"format":"arena360-setup","version":1}'),
+  });
+  await expect(page.getByTestId("import-summary")).toContainText(
+    "2 will be created; 2 are skipped.",
+  );
+  const items = page.getByTestId("setup-item");
+  await expect(items).toHaveCount(4);
+  await expect(items.nth(0)).toContainText(en["hub.import.starter_skip_exists"]);
+  await expect(items.nth(1)).toContainText(en["hub.import.starter_will_add"]);
+  await expect(items.nth(3)).toContainText(en["hub.import.setup_skip_no_group"]);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
+  ).toEqual([]);
+  await page.getByRole("button", { name: en["hub.import.setup_add"] }).click();
+  await expect(page.getByTestId("import-done")).toContainText("Created 2 items. 2 were skipped.");
+  expect(posts.map((p) => p.path)).toEqual(["setup/export", "setup/preview", "setup/commit"]);
+  expect(posts[0].body.folder).toBe("/usb");
+  expect(String(posts[2].body.import_id)).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+});
+
+test("the Branch setup tab says when a file is from a newer Hub", async ({ page }) => {
+  await open(page);
+  await page.getByRole("tab", { name: en["hub.import.tab_setup"] }).click();
+  await page.getByTestId("setup-file").setInputFiles({
+    name: "arena360-branch-setup.json",
+    mimeType: "application/json",
+    buffer: Buf.from('{"format":"arena360-setup","version":2}'),
+  });
+  await expect(page.getByTestId("import-problem")).toContainText(
+    "Update this Hub to import this file.",
+  );
+});
+
+test("the Branch setup tab needs permission to edit the catalogue", async ({ page }) => {
+  await open(page, { token: "counter-token" });
+  await page.getByRole("tab", { name: en["hub.import.tab_setup"] }).click();
+  await expect(page.getByTestId("import-no-access")).toHaveText(en["hub.import.setup_no_access"]);
 });

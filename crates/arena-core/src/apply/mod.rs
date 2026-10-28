@@ -30,7 +30,7 @@ mod branch_code;
 mod business_invoice;
 mod changes;
 mod controller_check;
-mod coupon;
+pub(crate) mod coupon;
 mod credit;
 mod credit_collect;
 pub(crate) mod credit_pause;
@@ -40,11 +40,12 @@ mod extend;
 mod force_end;
 mod frame;
 mod group_bill;
-mod groups;
+pub(crate) mod groups;
 mod guards;
 mod import;
 mod import_plans;
 mod import_players;
+mod import_setup;
 mod invoice_issue;
 mod kiosk_log;
 mod licence;
@@ -62,12 +63,12 @@ mod prepaid;
 mod printer_status;
 pub(crate) mod products;
 pub(crate) mod rate_flip;
-mod rates;
+pub(crate) mod rates;
 mod read_grants;
 mod receipt_notify;
 mod receipt_print;
 mod refund;
-mod rules;
+pub(crate) mod rules;
 pub(crate) mod seed_defaults;
 mod session;
 pub(crate) mod session_expire;
@@ -185,6 +186,8 @@ pub(crate) enum Target {
     ImportPlayers(Box<import_players::PlayersTarget>),
     /// `import.plans`: the plans and groups the chunk is checked against.
     ImportPlans(Box<import_plans::PlansTarget>),
+    /// `import.setup`: the setup file read against the Hub.
+    ImportSetup(Box<import_setup::SetupTarget>),
     Credentials(Option<arena_store::StaffRow>),
     Stock(Box<stock::StockTarget>),
     Maintenance(Box<maintenance::MaintenanceTarget>),
@@ -282,6 +285,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::ImportProducts(_) => Target::Import(Box::new(import::load(tx)?)),
         P::ImportPlayers(p) => Target::ImportPlayers(Box::new(import_players::load(tx, p)?)),
         P::ImportPlans(_) => Target::ImportPlans(Box::new(import_plans::load(tx)?)),
+        P::ImportSetup(s) => Target::ImportSetup(Box::new(import_setup::load(tx, &s.file, now)?)),
         P::PlayerCreate(_) | P::PlayerUpdate(_) | P::PlayerPasswordReset(_) => {
             Target::Player(Box::new(players::load(tx, &intent.payload)?))
         }

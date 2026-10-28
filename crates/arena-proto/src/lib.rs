@@ -46,6 +46,7 @@ mod report_export;
 mod scope;
 mod session;
 mod setup_devices;
+mod setup_file;
 mod shift;
 mod signin;
 mod signup;
@@ -286,6 +287,12 @@ pub use session::{
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,
     SetupDevicesView, SetupGroup,
+};
+pub use setup_file::{
+    ImportSetup, SETUP_FILE_NAME, SETUP_FORMAT, SETUP_MAX_BYTES, SETUP_MAX_ENTRIES,
+    SETUP_UPDATE_HUB, SETUP_VERSION, SetupBundle, SetupCommitRequest, SetupComponent, SetupCoupon,
+    SetupCouponTarget, SetupFile, SetupFileGroup, SetupFileResult, SetupItem, SetupKindCount,
+    SetupPlan, SetupPreview, SetupPreviewRequest, SetupProduct, SetupRule,
 };
 pub use shift::{
     CASH_DEPOSIT, CASH_DRAWER_OPEN, CASH_EXPENSE, CASH_FLOAT_IN, CASH_REFUND, CASH_SALE,

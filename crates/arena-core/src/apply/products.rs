@@ -353,6 +353,22 @@ pub(crate) fn check_import_row(
     validate_upsert(&upsert_from_import(row, old), &t)
 }
 
+/// The `product.upsert` rules for a new bundle of a setup file (Story 5.36): `parts` are the
+/// products its components name (`None` for one that does not exist), `holder` the active
+/// product that holds its barcode now.
+pub(crate) fn check_bundle(
+    u: &ProductUpsert,
+    parts: Vec<Option<ProductRow>>,
+    holder: Option<&str>,
+    tax: Option<&TaxSettings>,
+) -> Result<(), AppError> {
+    let target = ProductTarget {
+        parts,
+        ..import_target(None, holder, tax)
+    };
+    validate_upsert(u, &target)
+}
+
 pub(crate) fn import_target(
     old: Option<&ProductRow>,
     holder: Option<&str>,

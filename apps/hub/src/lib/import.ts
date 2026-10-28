@@ -6,6 +6,8 @@ import type {
   PlayerImportResult,
   ProductImportPreview,
   ProductImportResult,
+  SetupPreview,
+  SetupFileResult,
   StarterPreview,
   StarterResult,
   StarterTemplateInfo,
@@ -24,7 +26,7 @@ export type ImportOutcome<T> =
   | { kind: "signed_out" }
   | { kind: "unreachable" };
 
-/** Posts `body` to the import API: the view on 200, the refused field and message on 422. */
+/** Posts `body` to the import API: the view on 200, the refused field and message on 422 (or 400). */
 async function post<T>(
   path: string,
   body: unknown,
@@ -48,7 +50,11 @@ async function post<T>(
     }
     if (res.status === 403) return { kind: "denied" };
     const answer: unknown = await res.json().catch(() => null);
-    if (res.status === 422 && typeof answer === "object" && answer !== null) {
+    if (
+      (res.status === 422 || res.status === 400) &&
+      typeof answer === "object" &&
+      answer !== null
+    ) {
       const e = answer as { field?: unknown; message?: unknown };
       return {
         kind: "invalid",
@@ -65,7 +71,10 @@ async function post<T>(
 const hasNumber = (b: unknown, key: string) =>
   typeof b === "object" && b !== null && typeof (b as Record<string, unknown>)[key] === "number";
 
-export type ImportKind = "products" | "players" | "plans" | "templates";
+export type ImportKind = "products" | "players" | "plans" | "templates" | "setup";
+
+/** The largest branch setup file the Hub reads (it refuses more). */
+export const MAX_SETUP_BYTES = 1_048_576;
 
 /** `POST /ui/import/<kind>/preview`: a dry-run of `csv`. Nothing is written. */
 const preview =
@@ -150,5 +159,36 @@ export const commitStarter = (templateId: string, importId: string) =>
     "templates/commit", // i18n-ignore (a URL)
     { template_id: templateId, import_id: importId },
     (b) => hasNumber(b, "chunks"),
+    120_000,
+  );
+
+/** `POST /ui/import/setup/export`: saves the branch's setup file into `folder` on the Hub. */
+export const exportSetup = (folder: string) =>
+  post<ImportTemplateSaved>(
+    "setup/export", // i18n-ignore (a URL)
+    { folder },
+    (b) =>
+      typeof b === "object" && b !== null && typeof (b as ImportTemplateSaved).path === "string",
+    30_000,
+  );
+
+/** `POST /ui/import/setup/preview`: a dry-run of a setup file. Nothing is written. */
+export const previewSetup = (json: string) =>
+  post<SetupPreview>(
+    "setup/preview", // i18n-ignore (a URL)
+    { json },
+    (b) => hasNumber(b, "added"),
+    30_000,
+  );
+
+/**
+ * `POST /ui/import/setup/commit`: creates what the dry-run lists, all of it or none. `importId`
+ * names this attempt; asking again with the same id never adds anything twice.
+ */
+export const commitSetup = (json: string, importId: string) =>
+  post<SetupFileResult>(
+    "setup/commit", // i18n-ignore (a URL)
+    { json, import_id: importId },
+    (b) => hasNumber(b, "added"),
     120_000,
   );

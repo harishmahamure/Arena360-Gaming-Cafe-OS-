@@ -2,7 +2,8 @@
 //! preview` reads a file against what the Hub holds and writes nothing; `.../commit` applies the
 //! rows that passed as `import.*` intents of 500 rows, each with its own idempotency key derived
 //! from the client's `import_id`, so a retry never duplicates; `.../template` saves the template.
-//! Starter templates (Story 5.35) go through the same product and plan intents. Products, plans and
+//! Starter templates (Story 5.35) go through the same product and plan intents; a branch setup file
+//! (Story 5.36) is exported and imported under `/ui/import/setup`. Products, plans and
 //! templates need `catalog.edit` (opening stock also needs `stock.in`, which `apply()` checks);
 //! players need `player.manage` (balances also `wallet.topup`, limits `credit.manage`).
 
@@ -681,6 +682,117 @@ pub(crate) async fn starter_commit(
         skipped_plans: preview.skipped_plans,
         skipped_products: preview.skipped_products,
         chunks: i64::try_from(applied.len()).unwrap_or(i64::MAX),
+    })
+    .into_response()
+}
+
+// ----------------------------------------------------------------------------------------------
+// Branch setup file (Story 5.36)
+// ----------------------------------------------------------------------------------------------
+
+const SETUP_PREVIEW_SHAPE: &str = "the body must be {\"json\": string}";
+const SETUP_COMMIT_SHAPE: &str = "the body must be {\"json\": string, \"import_id\": ULID}";
+
+/// `POST /ui/import/setup/export {folder}`: saves the branch's setup file (`catalog.edit`). It
+/// holds groups, rates, products, bundles, plans, pricing rules and coupons, and no players,
+/// devices, money, stock or images.
+pub(crate) async fn setup_export(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(denied) = gate_for(&auth, &headers, Permission::CatalogEdit, "a setup file").await {
+        return denied;
+    }
+    let Ok(req) = serde_json::from_slice::<ImportTemplateRequest>(&body) else {
+        return fail(bad_frame(TEMPLATE_SHAPE));
+    };
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    let job = tokio::task::spawn_blocking(move || {
+        let text = reader.setup_export(now)?;
+        let path = write_export(&req.folder, arena_proto::SETUP_FILE_NAME, text.as_bytes())?;
+        Ok::<_, AppError>(ImportTemplateSaved {
+            file_name: arena_proto::SETUP_FILE_NAME.to_owned(),
+            path: path.to_string_lossy().into_owned(),
+        })
+    })
+    .await;
+    match job {
+        Ok(Ok(saved)) => Json(saved).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `POST /ui/import/setup/preview {json}`: the dry-run of a setup file. A file from a newer
+/// format is refused `UNSUPPORTED` ("Update this Hub to import this file.").
+pub(crate) async fn setup_preview(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(denied) = gate_for(&auth, &headers, Permission::CatalogEdit, "a setup file").await {
+        return denied;
+    }
+    let Ok(req) = serde_json::from_slice::<arena_proto::SetupPreviewRequest>(&body) else {
+        return fail(bad_frame(SETUP_PREVIEW_SHAPE));
+    };
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    match tokio::task::spawn_blocking(move || reader.setup_import(&req.json, now)).await {
+        Ok(Ok((preview, _))) => Json(preview).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `POST /ui/import/setup/commit {json, import_id}`: creates what the dry-run lists as one
+/// `import.setup` intent (all of it or none). The file is read again against the Hub now, so
+/// importing it twice adds nothing.
+pub(crate) async fn setup_commit(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let me = match gate_for(&auth, &headers, Permission::CatalogEdit, "a setup file").await {
+        Ok(me) => me,
+        Err(denied) => return denied,
+    };
+    let Ok(req) = serde_json::from_slice::<arena_proto::SetupCommitRequest>(&body) else {
+        return fail(bad_frame(SETUP_COMMIT_SHAPE));
+    };
+    if !is_ulid(&req.import_id) {
+        return fail(ui_error(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "import_id",
+            "import_id must be a ULID",
+        )));
+    }
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    let json = req.json.clone();
+    let read = tokio::task::spawn_blocking(move || reader.setup_import(&json, now)).await;
+    let (preview, file) = match read {
+        Ok(Ok(found)) => found,
+        Ok(Err(e)) => return fail(ui_error(e)),
+        Err(_) => return fail(internal()),
+    };
+    if !preview.can_commit {
+        return fail(ui_error(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "file",
+            "everything in this file is already set up, or cannot be added here",
+        )));
+    }
+    let payload = IntentPayload::ImportSetup(arena_proto::ImportSetup { file });
+    if let Err(r) = submit_chunks(&auth, &me, &req.import_id, now, vec![(0, payload)]).await {
+        return r;
+    }
+    Json(arena_proto::SetupFileResult {
+        counts: preview.counts,
+        added: preview.added,
+        skipped: preview.skipped,
     })
     .into_response()
 }

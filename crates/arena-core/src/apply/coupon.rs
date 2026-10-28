@@ -178,6 +178,16 @@ pub(super) fn validate(u: &CouponUpsert, t: &EditTarget) -> Result<(), AppError>
     Ok(())
 }
 
+/// The `coupon.upsert` rules for a new coupon of a setup file (Story 5.36), all of whose targets
+/// exist and whose code is free.
+pub(crate) fn check_import(u: &CouponUpsert) -> Result<(), AppError> {
+    let target = EditTarget {
+        found: vec![true; u.targets.len()],
+        ..EditTarget::default()
+    };
+    validate(u, &target)
+}
+
 fn target_write(
     coupon_id: &str,
     kind: &str,

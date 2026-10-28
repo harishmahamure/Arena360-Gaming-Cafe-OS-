@@ -160,7 +160,7 @@ development_status:
   5-33-csv-import-with-dry-run-starting-with-products: done
   5-34-import-players-and-plans-by-csv: done
   5-35-seed-plans-and-products-from-a-starter-template: done
-  5-36-export-and-import-a-branch-setup-file: backlog
+  5-36-export-and-import-a-branch-setup-file: review
   5-37-paid-hubs-keep-their-setup-template-in-the-cloud: backlog
   5-38-a-second-branch-starts-from-the-tenant-s-existing-setup: backlog
   5-39-pos-and-money-proven-under-load-offline-and-on-real-hardware: backlog

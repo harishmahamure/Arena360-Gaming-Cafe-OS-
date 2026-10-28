@@ -761,6 +761,18 @@ pub fn count_product_lines(conn: &Connection, order_id: &str) -> Result<i64, App
     .map_err(db_error)
 }
 
+/// The position the next product line of an order takes: after every line already placed, so
+/// an Undone placement in the middle leaves no tie.
+pub fn next_product_position(conn: &Connection, order_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(MAX(position) + 1, ?2) FROM order_lines
+         WHERE order_id = ?1 AND product_id IS NOT NULL AND position >= ?2",
+        params![order_id, PRODUCT_LINE_BASE],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
 /// Raises (or, negative, lowers) an open bill's subtotal and total by `delta_minor`.
 pub fn add_order_amount(
     conn: &Connection,

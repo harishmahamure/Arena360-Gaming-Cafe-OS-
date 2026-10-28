@@ -129,7 +129,8 @@ pub use sessions::{
 };
 pub use sessions::{
     PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines, find_placed_order,
-    list_ordered_counts, list_placement_lines, list_segment_line_ids, sum_segment_amounts,
+    list_ordered_counts, list_placement_lines, list_segment_line_ids, next_product_position,
+    sum_segment_amounts,
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
@@ -913,6 +914,14 @@ impl Store {
             .first()
             .and_then(|l| l.placed_at)
             .map(|at| (order.rev, order.total_minor, at)))
+    }
+
+    /// The session an order is billed to (`None` for a counter sale or an unknown order).
+    pub fn order_session(&self, order_id: &str) -> Result<Option<String>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        Ok(find_order(&self.conn, order_id)?.and_then(|o| o.session_id))
     }
 
     /// The session and order a placement put products on (`None` when it left no lines).

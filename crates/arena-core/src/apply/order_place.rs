@@ -16,10 +16,10 @@ use arena_proto::{
 };
 use arena_store::{
     ChangeOp, LiveSession, LotRow, MoveRow, NewOrder, NewProductLine, OrderRow, PRODUCT_LINE_BASE,
-    PlacedLine, RowKey, StockRow, StoreTx, Table, add_order_amount, count_product_lines,
-    delete_row, effect_recorded, find_order, find_order_for_session, find_session, find_stock,
-    insert_order, insert_product_line, list_lots, list_order_line_ids, list_placement_lines,
-    list_placement_moves, read_row,
+    PlacedLine, RowKey, StockRow, StoreTx, Table, add_order_amount, delete_row, effect_recorded,
+    find_order, find_order_for_session, find_session, find_stock, insert_order,
+    insert_product_line, list_lots, list_order_line_ids, list_placement_lines,
+    list_placement_moves, next_product_position, read_row,
 };
 
 use super::mutate::Written;
@@ -32,8 +32,8 @@ pub(crate) struct PlaceTarget {
     session: Option<LiveSession>,
     order: Option<OrderRow>,
     basket: Basket,
-    /// How many product lines the order already holds.
-    product_lines: i64,
+    /// Where the order's next product line goes.
+    next_position: i64,
 }
 
 pub(super) fn load_place(
@@ -46,15 +46,15 @@ pub(super) fn load_place(
         Some(s) => find_order_for_session(tx, &s.id)?,
         None => None,
     };
-    let product_lines = match &order {
-        Some(o) => count_product_lines(tx, &o.id)?,
-        None => 0,
+    let next_position = match &order {
+        Some(o) => next_product_position(tx, &o.id)?,
+        None => PRODUCT_LINE_BASE,
     };
     Ok(PlaceTarget {
         session,
         order,
         basket: load_basket(tx, &p.lines, now_ms)?,
-        product_lines,
+        next_position,
     })
 }
 
@@ -175,7 +175,7 @@ pub(super) fn mutate_place(
                 unit_price_minor: product.price_minor,
                 tax_rate_bp: i64::from(*rate_bp),
                 amount_minor: *line_amount,
-                position: PRODUCT_LINE_BASE + t.product_lines + i as i64,
+                position: t.next_position + i as i64,
                 at: now_ms,
                 placement: Some((placement_id, &intent.actor.id)),
             },

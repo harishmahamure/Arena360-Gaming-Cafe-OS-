@@ -146,6 +146,7 @@
   "hub.undo.ordered": "Added to the session bill · bill now {amount}",
   "hub.undo.done.order": "Order undone. The cart is back.",
   "player.session.ordered": "Ordered: {count} items",
+  "player.session.ordered_one": "Ordered: 1 item",
   "hub.pos.recent.toggle": "Recent sales",
   "hub.pos.recent.back": "Back to products",
   "hub.pos.recent.title": "Recent counter sales",

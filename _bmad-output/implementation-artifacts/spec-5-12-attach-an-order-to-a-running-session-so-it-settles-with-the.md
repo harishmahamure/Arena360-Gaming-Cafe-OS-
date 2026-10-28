@@ -2,7 +2,7 @@
 title: 'Story 5.12: Attach an order to a running session so it settles with the bill'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: 'c9011e0ac4df89f8d1ebcf8d73b48000692f8169'
 baseline_revision: 'c9011e0ac4df89f8d1ebcf8d73b48000692f8169'
 review_loop_iteration: 0
@@ -92,6 +92,14 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+Code review (4 layers) — fixed:
+- Product-line `position` after a partial Undo could tie with / precede a later placement's line; now `MAX(position)+1` (`next_product_position`), with a regression test.
+- Undo of a placement now re-pushes the kiosk "Ordered: n items" screen (not paused sessions).
+- Kiosk copy reads "Ordered: 1 item" for one item.
+- Core test `…a_paused_session_takes_an_order` now actually pauses the session.
+- Proptest model: `SessionUndo{settle}` no longer settles an open order of a still-running session (a legal state since 5.12).
+
+Deferred / accepted (not blocking): tax is not applied on session orders ("no tax in this story"); Order button shown for a block session whose bill is already settled (server refuses with a clear error); `?session=` deep link to an ended session falls back to the walk-up cart; extra test coverage suggestions (grace placement, `order.placed` SSE frame, kiosk-svc non-zero `ordered_items`, ended-bill items render, host-with-order group refusal). Pre-existing proptest flakes (plan Stale vs GroupKindMismatch, etc.) reproduce on the baseline commit and are unrelated.
 
 ## Design Notes
 

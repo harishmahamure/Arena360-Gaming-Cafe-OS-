@@ -2134,9 +2134,34 @@ async fn run_intent(
         arena_proto::IntentPayload::OrderPlace(p) => Some(p.session_id.clone()),
         _ => None,
     };
+    // An Undo of a placement changes what the kiosk lists as ordered, too.
+    let unplacing = match &intent.payload {
+        arena_proto::IntentPayload::OrderPlaceReverted(r) => Some(r.order_id.clone()),
+        _ => None,
+    };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
+            if let Some(order_id) = unplacing {
+                let reader = Arc::clone(&auth.reader);
+                let session = tokio::task::spawn_blocking(move || reader.order_session(&order_id))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .flatten();
+                if let Some(session_id) = session {
+                    let reader = Arc::clone(&auth.reader);
+                    let id = session_id.clone();
+                    let paused = tokio::task::spawn_blocking(move || reader.session_paused(&id))
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .unwrap_or(true);
+                    if !paused {
+                        push_pause_state(auth, &session_id, false, &cmd_id).await;
+                    }
+                }
+            }
             if let Some((session_id, paused)) = pausing {
                 push_pause_state(auth, &session_id, paused, &cmd_id).await;
             }

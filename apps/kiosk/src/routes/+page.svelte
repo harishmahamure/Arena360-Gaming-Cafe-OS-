@@ -114,7 +114,9 @@
     {/if}
     {#if session.ordered > 0}
       <p class="ordered type-kiosk-body" data-testid="ordered">
-        {t("player.session.ordered", { count: session.ordered })}
+        {session.ordered === 1
+          ? t("player.session.ordered_one")
+          : t("player.session.ordered", { count: session.ordered })}
       </p>
     {/if}
   </main>

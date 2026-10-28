@@ -688,6 +688,15 @@ impl SnapshotReader {
         store.placement(order_id, placement_id)
     }
 
+    /// The session an order is billed to.
+    pub fn order_session(&self, order_id: &str) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.order_session(order_id)
+    }
+
     /// The session and order a placement put products on.
     pub fn placed_order(&self, placement_id: &str) -> Result<Option<(String, String)>, AppError> {
         let store = self

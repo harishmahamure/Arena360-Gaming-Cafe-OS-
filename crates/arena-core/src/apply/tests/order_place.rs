@@ -251,11 +251,51 @@ async fn an_untracked_product_moves_no_stock_and_a_paused_session_takes_an_order
     let f = bootstrapped().await;
     let id = make(&f, priced("Noodles", 6_000, false)).await;
     let (session, _) = running(&f).await;
+    let rev = int(sessions(&f).last().unwrap(), "rev");
+    let mut pause = intent(
+        owner(),
+        IntentPayload::SessionPause(arena_proto::SessionPause {
+            session_id: session.clone(),
+            reason: arena_proto::PauseReason::PlayerSteppedAway,
+            note: None,
+        }),
+    );
+    pause.base_rev = Some(rev);
+    f.writer.submit_intent(pause).await.unwrap();
+    assert_eq!(text(sessions(&f).last().unwrap(), "state"), "paused");
     let a = place(&f, owner(), place_of(&session, &[(&id, 3)]))
         .await
         .unwrap();
     assert!(a.changes.iter().all(|c| !c.tbl.starts_with("stock")));
     assert_eq!(int(&orders_of(&f, &session)[0], "total_minor"), 18_000);
+}
+
+#[tokio::test]
+async fn a_placement_after_an_undone_one_sorts_after_every_line_left() {
+    let f = bootstrapped().await;
+    let id = cola(&f, 20).await;
+    let (session, _) = running(&f).await;
+    let first = place(&f, owner(), place_of(&session, &[(&id, 1)]))
+        .await
+        .unwrap();
+    place(&f, owner(), place_of(&session, &[(&id, 1)]))
+        .await
+        .unwrap();
+    let order = text(&orders_of(&f, &session)[0], "id");
+    f.clock.advance(1_000);
+    unplace(&f, owner(), &order, &first.intent_id)
+        .await
+        .unwrap();
+    place(&f, owner(), place_of(&session, &[(&id, 1)]))
+        .await
+        .unwrap();
+    let mut positions: Vec<i64> = lines_of(&f, &order)
+        .iter()
+        .map(|l| int(l, "position"))
+        .collect();
+    positions.sort_unstable();
+    positions.dedup();
+    assert_eq!(positions.len(), 2, "no two lines share a position");
 }
 
 #[tokio::test]

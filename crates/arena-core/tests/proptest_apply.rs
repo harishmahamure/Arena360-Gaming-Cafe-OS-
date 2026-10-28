@@ -3533,12 +3533,26 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
         } => {
             let before = hub.change_count();
             let (forward, target, kind): (IntentPayload, String, &str) = if *settle {
+                // A session's bill settles once the session ended; a running one holds an open
+                // order from its first placement.
+                let running: Vec<String> = hub
+                    .reader
+                    .rows(Table::Sessions)
+                    .unwrap()
+                    .iter()
+                    .filter(|x| matches!(text(x, "state").as_str(), "active" | "paused" | "grace"))
+                    .map(|x| text(x, "id"))
+                    .collect();
                 let open: Vec<_> = hub
                     .reader
                     .rows(Table::Orders)
                     .unwrap()
                     .into_iter()
                     .filter(|o| text(o, "status") == "open")
+                    .filter(|o| match &o["session_id"] {
+                        RowValue::Text(id) => !running.contains(id),
+                        _ => true,
+                    })
                     .collect();
                 let Some(order) = open.get(usize::from(*slot) % open.len().max(1)) else {
                     return Ok(());

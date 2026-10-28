@@ -138,7 +138,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.95.0
       - name: 5/s for 10 min with 50/s bursts, then the kill-during-burst check
-        run: cargo test --locked --release -p arena-core --test floor_load -- --nocapture
+        run: cargo test --locked --release -p arena-core --test floor_load -- --skip counter --skip sale_burst --nocapture
 
   flow-timing:
     name: counter flow timings (reference i3)

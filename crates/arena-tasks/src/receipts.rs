@@ -804,6 +804,10 @@ mod tests {
         let mut failed = Vec::new();
         for p in &printers {
             let text = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
+            assert!(
+                matches!(text("paper").as_str(), "58" | "80"),
+                "paper must be the string \"58\" or \"80\": {p}"
+            );
             let selected = serde_json::json!({
                 "kind": text("kind"),
                 "id_or_addr": text("id_or_addr"),

@@ -2,7 +2,7 @@
 title: 'Story 5.39: POS and Money Proven Under Load, Offline and on Real Hardware'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_revision: '50aeccd'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'
@@ -62,3 +62,18 @@ deferred:
 - Local counter run (6 s, debug build): 120 intents, apply p95 7.8 ms, slowest update 10 ms. Not run on reference hardware.
 
 </intent-contract>
+
+### Review Findings
+
+- [x] [Review][Patch] Failed scanner step left no `scanner.json`, so the publish step crashed and no printer result reached the list — the step now writes `ok:false`, and `hardware-compat.mjs` tolerates a missing scanner file and reports a missing printer file [hardware-bench.yml, hardware-compat.mjs]
+- [x] [Review][Patch] PR step: same-day reruns collided on the branch name and native exit codes were unchecked — time-stamped branch, exit-code checks [hardware-bench.yml]
+- [x] [Review][Patch] `main()` exit codes and the scanner row were not tested — test added [hardware-compat.test.mjs]
+- [x] [Review][Patch] Crash drill passed vacuously on empty Print/pending lists, and the second-issue check accepted any error — non-empty asserts and `Stale` code check [floor_load.rs]
+- [x] [Review][Patch] `assert_tax_holds` treated a missing `branch.tax` as exclusive, the product default is inclusive [proptest_apply.rs]
+- [x] [Review][Patch] Bench `paper` was not validated — asserted to be "58" or "80" [receipts.rs]
+- [x] [Review][Patch] `floor-load` release job re-ran the counter tests that `counter-load` runs — skipped there [release-bench.yml]
+- [x] [Review][Defer] Offline flow compares states with each other only (no golden figures); kill drill and print-once halves are not joined end to end; at-least-once print window — disclosed in the spec's deferred list or low value.
+
+#### Rejected
+
+- Widened `expected_refusal`, negative-payment filter, `|` in printer names, scanner timing realism, no failure alerts for the self-hosted runner, SQL interpolation of a validated paper value: test-only or hardware-bench ergonomics with no demonstrated harm.

@@ -937,6 +937,7 @@ async fn crash_drill(mix: Mix, test: &'static str) {
     if mix == Mix::Counter {
         assert_books(&store);
         let queued = store.queued_prints(100_000).unwrap();
+        assert!(!acked.printed.is_empty(), "no Print sale was acknowledged");
         for order in &acked.printed {
             let rows = queued.iter().filter(|r| &r.ref_id == order).count();
             assert_eq!(rows, 1, "the Print sale {order} has {rows} queued receipts");
@@ -1026,13 +1027,15 @@ async fn issue_pending_invoices(db: &std::path::Path) {
         i.actor.kind = ActorKind::System;
         i
     };
+    assert!(!pending.is_empty(), "no sale was left waiting for a number");
     for order in &pending {
         writer
             .submit_intent(issue(order))
             .await
             .expect("a pending invoice is issued after the restart");
         let again = writer.submit_intent(issue(order)).await;
-        assert!(again.is_err(), "{order} was numbered twice");
+        let refused = again.expect_err(&format!("{order} was numbered twice"));
+        assert_eq!(refused.code, ErrorCode::Stale, "{order}: {refused:?}");
     }
     assert_books(&reader);
     assert!(

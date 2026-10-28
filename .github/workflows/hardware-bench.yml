@@ -59,7 +59,11 @@ jobs:
           $log = Join-Path $PWD "target/hardware-bench/scanner.log"
           pnpm --filter @arena/hub bench:scanner 2>&1 | Tee-Object -FilePath $log
           $line = Select-String -Path $log -Pattern '^\s*HW_SCANNER (.*)$' | Select-Object -Last 1
-          if (-not $line) { throw "the scanner check printed no result" }
+          if (-not $line) {
+            $name = if ($env:ARENA_HW_SCANNER) { $env:ARENA_HW_SCANNER } else { "scanner" }
+            (@{ name = $name; ok = $false } | ConvertTo-Json -Compress) | Set-Content -Encoding utf8 target/hardware-bench/scanner.json
+            throw "the scanner check printed no result"
+          }
           $line.Matches[0].Groups[1].Value | Set-Content -Encoding utf8 target/hardware-bench/scanner.json
       - name: Publish to the compatibility list
         id: publish
@@ -80,14 +84,18 @@ jobs:
         run: |
           git diff --quiet docs/compat/hardware.md
           if ($LASTEXITCODE -eq 0) { Write-Host "the list is unchanged"; exit 0 }
-          $branch = "hardware-bench/" + (Get-Date -Format "yyyy-MM-dd")
+          $branch = "hardware-bench/" + (Get-Date -Format "yyyy-MM-dd-HHmmss")
           git config user.name "arena-hardware-bench"
           git config user.email "hardware-bench@users.noreply.github.com"
           git switch -c $branch
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           git add docs/compat/hardware.md
           git commit -m "docs(compat): hardware bench results"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           git push origin $branch
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           gh pr create --title "Hardware bench results" --body "Written by the monthly hardware job." --base master
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Fail the run if any step failed
         if: steps.printers.outcome == 'failure' || steps.scanner.outcome == 'failure' || steps.publish.outcome == 'failure'
         shell: pwsh

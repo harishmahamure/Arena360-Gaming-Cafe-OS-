@@ -5478,7 +5478,7 @@ fn assert_tax_holds(hub: &Hub) -> Result<(), TestCaseError> {
         .into_iter()
         .find(|s| s.key == "branch.tax")
         .and_then(|s| arena_proto::TaxSettings::parse(&s.value))
-        .map(|t| t.inclusive);
+        .is_none_or(|t| t.inclusive);
     let lines = hub.reader.rows(Table::OrderLines).unwrap();
     for o in hub.reader.rows(Table::Orders).unwrap() {
         let RowValue::Text(breakup) = &o["tax_breakup"] else {
@@ -5509,7 +5509,7 @@ fn assert_tax_holds(hub: &Hub) -> Result<(), TestCaseError> {
             _ => 0,
         };
         let net = gross - off("coupon_minor") - off("discount_minor");
-        let want = if inclusive == Some(true) {
+        let want = if inclusive {
             int(&o, "total_minor")
         } else {
             int(&o, "subtotal_minor")

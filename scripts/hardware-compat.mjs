@@ -89,18 +89,23 @@ export function failures(printers, scanner) {
   return out;
 }
 
-function main(argv) {
+export function main(argv) {
   const files = argv.filter((a, i) => !a.startsWith("--") && !argv[i - 1]?.startsWith("--"));
   const flag = (name, fallback) => {
     const i = argv.indexOf(name);
-    return i >= 0 ? argv[i + 1] : fallback;
+    return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : fallback;
   };
   if (!files[0]) {
     console.error("usage: hardware-compat.mjs <printers.json> [<scanner.json>] [--out file]");
     return 2;
   }
+  if (!existsSync(files[0])) {
+    console.error(`hardware bench failed: no printer results at ${files[0]}`);
+    return 1;
+  }
   const printers = JSON.parse(readFileSync(files[0], "utf8"));
-  const scanner = files[1] ? JSON.parse(readFileSync(files[1], "utf8")) : null;
+  const scanner =
+    files[1] && existsSync(files[1]) ? JSON.parse(readFileSync(files[1], "utf8")) : null;
   const out = flag("--out", OUT);
   const date = flag("--date", new Date().toISOString().slice(0, 10));
   const existing = existsSync(out) ? readFileSync(out, "utf8") : "";

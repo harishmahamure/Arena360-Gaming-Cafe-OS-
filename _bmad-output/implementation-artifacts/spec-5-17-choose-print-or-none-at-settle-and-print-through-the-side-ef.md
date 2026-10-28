@@ -2,7 +2,7 @@
 title: 'Story 5.17: Choose print or none at settle, and print through the side-effect outbox'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: 'd2169b7'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-5-context.md'

@@ -1,4 +1,5 @@
 mod escpos;
+pub mod receipt;
 
 use std::future::Future;
 use std::net::SocketAddrV4;

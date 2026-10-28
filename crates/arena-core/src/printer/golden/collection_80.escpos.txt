@@ -1,0 +1,23 @@
+{ESC}@{ESC}t{00}{ESC}M{00}{ESC}E{01}{GS}!{11} Arena 360 Koramangala
+{ESC}E{00}{GS}!{00}      12, 5th Cross, Koramangala 4th Block
+                Bengaluru 560034
+                +91 98450 12345
+------------------------------------------------
+{ESC}E{01}{GS}!{00}                Payment Receipt
+{ESC}E{00}{GS}!{00}Date                           28 Oct 2026 14:05
+Staff                                      Meera
+Customer                               shadowfox
+------------------------------------------------
+Credit collection
+{ESC}E{01}{GS}!{01}AMOUNT                                  Rs900.00
+{ESC}E{00}{GS}!{00}UPI ****7890                              900.00
+------------------------------------------------
+Bills cleared
+KOR/26-27/E1k/000120                      600.00
+12 Oct 2026                               300.00
+------------------------------------------------
+{ESC}E{01}{GS}!{00}Outstanding                             Rs450.50
+{ESC}E{00}{GS}!{00}------------------------------------------------
+             Thank you for playing!
+      Goods once sold are not returnable.
+{ESC}d{04}{GS}VB{00}

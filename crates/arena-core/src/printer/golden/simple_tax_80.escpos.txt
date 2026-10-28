@@ -1,0 +1,27 @@
+{ESC}@{ESC}t{00}{ESC}M{00}{ESC}E{01}{GS}!{11} Arena 360 Koramangala
+{ESC}E{00}{GS}!{00}      12, 5th Cross, Koramangala 4th Block
+                Bengaluru 560034
+                +91 98450 12345
+------------------------------------------------
+{ESC}E{01}{GS}!{00}                    Invoice
+{ESC}E{00}{GS}!{00}Invoice no.                    DUB/26/E2a/000007
+Date                           28 Oct 2026 14:05
+Customer                                   Guest
+------------------------------------------------
+Simulator 2
+60 min x 25.00/h                           25.00
+Item                             Qty Rate Amount
+Water                              3 1.50   4.50
+Supercalifragilisticexpialidocio   1 9.00   9.00
+us-Milkshake
+------------------------------------------------
+Subtotal                                   35.71
+VAT 5%                                      1.79
+{ESC}E{01}{GS}!{01}TOTAL                                    Rs37.50
+{ESC}E{00}{GS}!{00}------------------------------------------------
+Wallet                                     10.00
+On credit                                  27.50
+------------------------------------------------
+             Thank you for playing!
+      Goods once sold are not returnable.
+{ESC}d{04}{GS}VB{00}

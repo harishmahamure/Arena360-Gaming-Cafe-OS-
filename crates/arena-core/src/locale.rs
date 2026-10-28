@@ -353,14 +353,10 @@ pub fn format_money(tx: &StoreTx<'_>, now_ms: i64, minor: i64) -> Result<String,
     ))
 }
 
-fn format_minor(
-    minor: i64,
-    exponent: usize,
-    symbol: &str,
-    position: SymbolPosition,
-    format: NumberFormat,
-) -> String {
-    let digits = format!("{:0>width$}", minor.unsigned_abs(), width = exponent + 1);
+/// `minor` units (an absolute value) as a grouped number with the currency's decimals and no
+/// symbol or sign: `1,23,456.78`, or `123,456` for a zero exponent.
+pub(crate) fn format_number(minor: u64, exponent: usize, format: NumberFormat) -> String {
+    let digits = format!("{:0>width$}", minor, width = exponent + 1);
     let (whole, fraction) = digits.split_at(digits.len() - exponent);
     let size = match format {
         NumberFormat::Indian => 2,
@@ -379,11 +375,21 @@ fn format_minor(
         groups.reverse();
         format!("{},{tail}", groups.join(","))
     };
-    let number = if exponent > 0 {
+    if exponent > 0 {
         format!("{grouped}.{fraction}")
     } else {
         grouped
-    };
+    }
+}
+
+fn format_minor(
+    minor: i64,
+    exponent: usize,
+    symbol: &str,
+    position: SymbolPosition,
+    format: NumberFormat,
+) -> String {
+    let number = format_number(minor.unsigned_abs(), exponent, format);
     let amount = match position {
         SymbolPosition::After => format!("{number} {symbol}"),
         SymbolPosition::Before => format!("{symbol}{number}"),

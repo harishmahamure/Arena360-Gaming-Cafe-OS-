@@ -394,6 +394,52 @@ async fn the_manifest_serves_published_changes_and_keeps_unscreened_videos_out()
 }
 
 #[tokio::test]
+async fn republishing_and_reviving_a_game_bring_it_back_for_hubs_past_the_tombstone() {
+    let h = Harness::new().await;
+    let store = TemplateStore::memory();
+    let media = media_dir();
+    h.import(&store, "g.json", &list(true, true), media.path())
+        .await;
+    h.import(&store, "g.json", &list(false, true), media.path())
+        .await;
+    let r = h
+        .import(&store, "g.json", &list(true, true), media.path())
+        .await;
+    assert_eq!((r.updated, r.version), (1, 3));
+    let m = h.manifest(2).await;
+    assert_eq!(m.status, 200);
+    assert!(
+        m.body["games"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["name"] == "Dota 2" && g.get("deleted").is_none()),
+        "{}",
+        m.body
+    );
+
+    h.sql("UPDATE catalog_games SET deleted_at = 1 WHERE name = 'Valorant'");
+    let r = h
+        .import(&store, "g.json", &list(true, true), media.path())
+        .await;
+    assert_eq!((r.updated, r.version), (1, 4));
+    let m = h.manifest(3).await;
+    assert_eq!(m.body["games"][0]["name"], "Valorant");
+}
+
+#[tokio::test]
+async fn a_bad_since_is_a_json_error_after_auth() {
+    let h = Harness::new().await;
+    let anon = h.get("/v1/catalog/manifest?since=abc", None, None).await;
+    assert_eq!(anon.status, 401);
+    let bad = h
+        .get("/v1/catalog/manifest?since=abc", Some(&token()), None)
+        .await;
+    assert_eq!(bad.status, 400, "{}", bad.body);
+    assert!(bad.body["code"].is_string());
+}
+
+#[tokio::test]
 async fn a_changed_game_with_nothing_published_does_not_move_the_version() {
     let h = Harness::new().await;
     let store = TemplateStore::memory();

@@ -2,7 +2,7 @@
 title: 'Story 6.1: The control plane publishes the global game catalogue to Hubs'
 type: 'feature'
 created: '2026-10-28'
-status: 'review'
+status: 'done'
 baseline_commit: 'd0e59dc'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -69,3 +69,18 @@ deferred:
 - `cargo fmt --check`, `cargo clippy -p arena-cloud -p arena-store -p arena-proto --all-targets -- -D warnings`, `cargo test -p arena-cloud -p arena-store -p arena-proto`.
 
 </intent-contract>
+
+## Code review (2026-10-29)
+
+Four reviewers (blind, edge-case, verification-gap, acceptance). Fixed:
+
+- Signature order/dedup used Unicode lower-casing while the store uses SQLite's ASCII `lower()`: a non-ASCII exe name made every re-import look changed and bump the version. Now ASCII-only.
+- A malformed `since` was rejected by axum before auth with a plain-text 400; it is now a JSON `bad_request` after auth.
+- The missing-CDN 503 is answered before the rate reservation, so it no longer burns tenant quota.
+- `ARENA_CATALOG_CDN_URL` must be an http(s) URL (trimmed); anything else counts as unset.
+- A JSON import file with a UTF-8 BOM is accepted.
+- Tests added: republish and revive of a game, malformed `since`.
+
+Deferred (spec-conformant or out of scope): `since` ahead of the version answers 304 per the spec; a re-import cannot remove media or tombstone absent games; an identical re-import still appends its audit row; the plan is read outside the write transaction; CSV edge cases and `catalog_cdn_from_env` have thin tests; media bytes are not sniffed.
+
+Pre-existing flaky tests unrelated to this story (fail on the untouched tree): `backup::a_hung_run_times_out_with_its_own_code`, `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token`.

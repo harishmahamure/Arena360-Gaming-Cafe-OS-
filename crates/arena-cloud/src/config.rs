@@ -70,9 +70,9 @@ pub const CATALOG_CDN_ENV: &str = "ARENA_CATALOG_CDN_URL";
 /// The CDN base from the environment (`--dev`: a local default), without a trailing slash.
 pub fn catalog_cdn_from_env(dev: bool, env: &impl Fn(&str) -> Option<OsString>) -> Option<String> {
     get_env(env, CATALOG_CDN_ENV)
-        .filter(|v| !v.is_empty())
+        .map(|v| v.trim().trim_end_matches('/').to_owned())
+        .filter(|v| v.starts_with("https://") || v.starts_with("http://"))
         .or_else(|| dev.then(|| "http://127.0.0.1:9000".to_owned()))
-        .map(|v| v.trim_end_matches('/').to_owned())
 }
 
 /// The `gz_control` URL.

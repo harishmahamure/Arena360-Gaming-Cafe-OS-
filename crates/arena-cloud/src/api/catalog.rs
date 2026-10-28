@@ -9,6 +9,7 @@ use arena_proto::{CATALOG_MANIFEST_PATH, CATALOG_MANIFEST_PER_MIN, ErrorCode};
 use arena_store::control::RateRule;
 use axum::Json;
 use axum::Router;
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::http::header::{CACHE_CONTROL, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -36,7 +37,7 @@ fn etag(since: i64, version: i64) -> String {
 async fn manifest(
     State(st): State<Arc<AuthState>>,
     headers: HeaderMap,
-    Query(q): Query<ManifestQuery>,
+    query: Result<Query<ManifestQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
     let now = st.now();
     let hub = match authenticate(&st, &headers, now).await {
@@ -53,6 +54,12 @@ async fn manifest(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::internal("hub without its branch"))?;
+    let Query(q) = query.map_err(|_| {
+        ApiError::bad_request("since must be a version number.", Some("since".to_owned()))
+    })?;
+    let Some(cdn) = st.catalog_cdn.get() else {
+        return Err(ApiError::unavailable("no CDN base URL for catalogue media"));
+    };
     let key = format!("{RATE_PREFIX}{}", branch.tenant_id);
     let rule = RateRule {
         key: &key,
@@ -69,9 +76,6 @@ async fn manifest(
     {
         return Err(ApiError::rate_limited(ceil_s(wait_ms)));
     }
-    let Some(cdn) = st.catalog_cdn.get() else {
-        return Err(ApiError::unavailable("no CDN base URL for catalogue media"));
-    };
     let since = i64::try_from(q.since.unwrap_or(0)).unwrap_or(i64::MAX);
     let version = st.db.catalog_version().await.map_err(ApiError::internal)?;
     let tag = etag(since.min(version), version);

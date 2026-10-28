@@ -232,7 +232,9 @@ fn parse_csv(text: &str) -> Result<Vec<GameIn>, String> {
 pub fn parse_import(file_name: &str, text: &str) -> Result<Vec<GameIn>, String> {
     let lower = file_name.to_ascii_lowercase();
     let games = if lower.ends_with(".json") {
-        match serde_json::from_str::<FileIn>(text).map_err(|e| e.to_string())? {
+        match serde_json::from_str::<FileIn>(text.trim_start_matches('\u{feff}'))
+            .map_err(|e| e.to_string())?
+        {
             FileIn::Games(g) | FileIn::Wrapped { games: g } => g,
         }
     } else if lower.ends_with(".csv") {
@@ -392,8 +394,9 @@ fn sig_rows(sigs: &[SignatureIn]) -> Vec<CatalogSignatureRow> {
             sha256: s.sha256.clone().unwrap_or_default(),
         })
         .collect();
-    rows.sort_by_key(|s| (s.exe_name.to_lowercase(), s.sha256.clone()));
-    rows.dedup_by_key(|s| (s.exe_name.to_lowercase(), s.sha256.clone()));
+    // ASCII case only: the store orders and de-duplicates with SQLite's ASCII-only `lower()`.
+    rows.sort_by_key(|s| (s.exe_name.to_ascii_lowercase(), s.sha256.clone()));
+    rows.dedup_by_key(|s| (s.exe_name.to_ascii_lowercase(), s.sha256.clone()));
     rows
 }
 

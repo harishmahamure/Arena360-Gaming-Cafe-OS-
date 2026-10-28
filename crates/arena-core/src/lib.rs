@@ -3,6 +3,7 @@
 
 mod ad_metrics;
 mod apply;
+pub mod attract;
 pub mod audit;
 pub mod billing;
 mod catalog;

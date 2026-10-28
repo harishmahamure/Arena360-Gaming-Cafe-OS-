@@ -22,7 +22,7 @@ pub use client::{
     PING_INTERVAL, REQUEST_TIMEOUT, capture_fingerprint, connect_ws, hex_lower, parse_fingerprint,
     pinned_config,
 };
-pub use ipc::{IpcError, IpcMsg, read_msg, write_msg};
+pub use ipc::{IpcError, IpcMsg, MAX_APP_LINE_BYTES, read_msg, read_msg_limited, write_msg};
 pub use pair::{PAIR_TIMEOUT, PairError, pair};
 pub use queue::{QUEUE_TTL_MS, ReplayStep};
 pub use watchdog::{Watchdog, WatchdogAction};

@@ -8,6 +8,7 @@ mod actor;
 mod ad_metrics;
 mod admin;
 mod alert;
+mod attract;
 mod audit;
 mod billing;
 mod catalog;
@@ -82,6 +83,11 @@ pub use admin::{
     validate_exit_id,
 };
 pub use alert::{AlertAck, AlertKind, AlertRaise, SnapshotAlert};
+pub use attract::{
+    AttractMedia, AttractState, AttractView, DEFAULT_KIOSK_LOGO, KEY_KIOSK_LOGO, LOGO_PNG_PREFIX,
+    LOGO_SVG_PREFIX, MAX_ATTRACT_MEDIA, MAX_LOGO_BYTES, MAX_LOGO_PX, MAX_LOGO_VALUE_CHARS,
+    logo_problem,
+};
 pub use audit::{
     AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditAdminExit, AuditDetail,
     AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,

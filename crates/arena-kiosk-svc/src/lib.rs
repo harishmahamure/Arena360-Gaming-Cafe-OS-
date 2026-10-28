@@ -12,6 +12,7 @@
 
 pub mod admin_exit;
 pub mod app;
+pub mod attract;
 pub mod cli;
 pub mod clock;
 pub mod config;

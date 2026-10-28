@@ -2,11 +2,17 @@
 // The webview has no Hub socket and no token; it hears the Hub link state as the `hub-status`
 // event and reports its own restorable state, which comes back as `restore-state` after a
 // restart. Toasts the service raises (a blocked app was closed) arrive as `toast`, and the
-// high-contrast setting a manager chose for this kiosk as `theme`. Outside Tauri (a plain browser in dev) every call is a no-op.
+// high-contrast setting a manager chose for this kiosk as `theme`, and the idle screen's view and
+// logo as `attract`. Outside Tauri (a plain browser in dev) every call is a no-op.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { DiscoveredHub, KioskHubState, KioskHubStatus } from "@arena/ui/generated";
+import type {
+  AttractView,
+  DiscoveredHub,
+  KioskHubState,
+  KioskHubStatus,
+} from "@arena/ui/generated";
 // The event and command names, shared with the Rust shell (its tests read the same file).
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 
@@ -17,6 +23,7 @@ export const ADMIN_EXIT_EVENT = names.events.adminExit;
 export const ADMIN_EXIT_ENDED_EVENT = names.events.adminExitEnded;
 export const THEME_EVENT = names.events.theme;
 export const PC_SCREEN_EVENT = names.events.pcScreen;
+export const ATTRACT_EVENT = names.events.attract;
 export const TEST_SESSION_EVENT = names.events.testSession;
 export const TEST_SESSION_ENDED_EVENT = names.events.testSessionEnded;
 export const DISCOVERY_FOUND_EVENT = names.events.discoveryFound;
@@ -281,6 +288,58 @@ export async function onPcScreen(cb: (s: PcScreen) => void): Promise<() => void>
   if (!inTauri()) return () => {};
   return listen<unknown>(PC_SCREEN_EVENT, (e) => {
     const s = screenOf(e.payload);
+    if (s) cb(s);
+  });
+}
+
+/** What the idle screen shows: the last attract view and the branch logo (a `data:` URI). */
+export type AttractShown = { view: AttractView | null; logo: string | null };
+
+const ATTRACT_STATES = ["ready", "ask_counter"];
+
+const isAttractView = (v: unknown): v is AttractView => {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.branch_name === "string" &&
+    typeof o.state === "string" &&
+    ATTRACT_STATES.includes(o.state) &&
+    typeof o.locale === "object" &&
+    o.locale !== null &&
+    Array.isArray(o.media) &&
+    o.media.every(
+      (m) =>
+        typeof m === "object" && m !== null && typeof (m as { video?: unknown }).video === "string",
+    )
+  );
+};
+
+export const attractOf = (v: unknown): AttractShown | null => {
+  if (typeof v !== "object" || v === null) return null;
+  const { view, logo } = v as Record<string, unknown>;
+  if (view != null && !isAttractView(view)) return null;
+  if (logo != null && typeof logo !== "string") return null;
+  return {
+    view: (view as AttractView | null | undefined) ?? null,
+    logo: (logo as string | null | undefined) ?? null,
+  };
+};
+
+/** The attract view and logo the shell already knows (it keeps the latest, from the cache). */
+export async function currentAttract(): Promise<AttractShown | null> {
+  if (!inTauri()) return null;
+  try {
+    return attractOf(await invoke(CMD.attract));
+  } catch {
+    return null;
+  }
+}
+
+/** Calls `cb` with the attract view and logo whenever either changes. */
+export async function onAttract(cb: (s: AttractShown) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(ATTRACT_EVENT, (e) => {
+    const s = attractOf(e.payload);
     if (s) cb(s);
   });
 }

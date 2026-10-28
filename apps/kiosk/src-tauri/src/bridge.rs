@@ -18,6 +18,11 @@
 //! - **Theme (Story 1.21).** The service's `theme{hc}` (on every connection and every change)
 //!   is kept as the latest value: [`Bridge::wait_theme`] lets `main.rs` decide the first paint,
 //!   and a change becomes the `theme` event (`main.rs` also saves it to `theme.json`).
+//! - **Attract screen (Story 6.7).** The service's `attract{view?, logo?}` carries only what
+//!   changed (the cached screen first on every connection); the shell keeps the merge, an empty
+//!   logo clearing it, and a change becomes the `attract` event. The `attract` command answers
+//!   the latest merge on a cold start, like `pc_screen`. The service may send lines up to
+//!   [`MAX_APP_LINE_BYTES`] (the logo); the app still sends at most 64 KiB.
 //! - **Windows:** the pipe's server must run as SYSTEM, or the connection is refused.
 
 use std::collections::HashMap;
@@ -26,7 +31,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use arena_kiosk_core::ipc::{IpcMsg, read_msg, write_msg};
+use arena_kiosk_core::ipc::{IpcMsg, MAX_APP_LINE_BYTES, read_msg_limited, write_msg};
 use arena_proto::{DiscoveredHub, KioskHubState, KioskHubStatus};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
@@ -47,6 +52,8 @@ pub const THEME_EVENT: &str = "theme";
 pub const TEST_SESSION_EVENT: &str = "test-session";
 pub const TEST_SESSION_ENDED_EVENT: &str = "test-session-ended";
 pub const PC_SCREEN_EVENT: &str = "pc-screen";
+/// The Tauri event carrying the attract screen (`{view, logo}`, Story 6.7).
+pub const ATTRACT_EVENT: &str = "attract";
 pub const DISCOVERY_FOUND_EVENT: &str = "discovery-found";
 pub const DISCOVERY_DONE_EVENT: &str = "discovery-done";
 /// How long the shell waits for the service's answer to a PIN.
@@ -54,7 +61,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 15] = [
+const COMMANDS: [&str; 16] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -70,6 +77,7 @@ const COMMANDS: [&str; 15] = [
     "pair_info",
     "pc_screen",
     "pc_dismiss",
+    "attract",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -94,6 +102,16 @@ pub enum Emit {
     TestSession(u64),
     TestSessionEnded,
     PcScreen(PcScreen),
+    /// The attract view and logo as they stand now.
+    Attract(Box<Attract>),
+}
+
+/// What the idle screen shows: the last attract view and the logo (a `data:` URI), each `None`
+/// until the service says. The service sends only what changed; the shell keeps the merge.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Attract {
+    pub view: Option<arena_proto::AttractView>,
+    pub logo: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -137,6 +155,8 @@ pub struct Bridge {
     theme: watch::Sender<Option<bool>>,
     test_deadline: Mutex<Option<Instant>>,
     screen: Mutex<(PcScreen, Instant)>,
+    /// The latest attract view and logo (answered by the `attract` command on a cold start).
+    attract: Mutex<Attract>,
 }
 
 impl Default for Bridge {
@@ -155,6 +175,7 @@ impl Default for Bridge {
             theme: watch::channel(None).0,
             test_deadline: Mutex::default(),
             screen: Mutex::new((PcScreen::default(), Instant::now())),
+            attract: Mutex::default(),
         }
     }
 }
@@ -264,6 +285,11 @@ impl Bridge {
         screen
     }
 
+    /// The attract view and logo the service last sent.
+    pub fn attract(&self) -> Attract {
+        lock(&self.attract).clone()
+    }
+
     pub fn test_remaining_ms(&self) -> Option<u64> {
         let deadline = (*lock(&self.test_deadline))?;
         Some(
@@ -351,6 +377,19 @@ impl Bridge {
                 *lock(&self.screen) = (screen.clone(), now);
                 (None, Some(Emit::PcScreen(screen)))
             }
+            IpcMsg::Attract { view, logo } => {
+                let mut shown = lock(&self.attract);
+                let before = shown.clone();
+                if let Some(view) = view {
+                    shown.view = Some(*view);
+                }
+                // An empty logo clears it.
+                if let Some(logo) = logo {
+                    shown.logo = (!logo.is_empty()).then_some(logo);
+                }
+                let now = shown.clone();
+                (None, (now != before).then(|| Emit::Attract(Box::new(now))))
+            }
             IpcMsg::DiscoveryFound { search, hubs } => {
                 (None, Some(Emit::DiscoveryFound(search, hubs)))
             }
@@ -429,7 +468,7 @@ impl Bridge {
         });
         let mut reader = BufReader::new(reader);
         loop {
-            match read_msg(&mut reader).await {
+            match read_msg_limited(&mut reader, MAX_APP_LINE_BYTES).await {
                 Ok(msg) => {
                     let (reply, event) = self.on_message(msg);
                     if let Some(r) = reply {
@@ -560,6 +599,7 @@ async fn connect() -> std::io::Result<Halves> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arena_kiosk_core::ipc::read_msg;
     use std::sync::Arc;
 
     #[test]
@@ -575,6 +615,7 @@ mod tests {
             TEST_SESSION_ENDED_EVENT
         );
         assert_eq!(names["events"]["pcScreen"], PC_SCREEN_EVENT);
+        assert_eq!(names["events"]["attract"], ATTRACT_EVENT);
         assert_eq!(names["events"]["discoveryFound"], DISCOVERY_FOUND_EVENT);
         assert_eq!(names["events"]["discoveryDone"], DISCOVERY_DONE_EVENT);
         let mut listed: Vec<&str> = names["commands"]
@@ -771,6 +812,84 @@ mod tests {
             (None, Some(Emit::PcScreen(shown.clone())))
         );
         assert_eq!(b.pc_screen(), shown);
+    }
+
+    #[test]
+    fn the_attract_screen_is_merged_kept_and_forwarded_only_when_it_changes() {
+        let b = Bridge::default();
+        assert_eq!(b.attract(), Attract::default());
+        // Nothing known, nothing to say.
+        assert_eq!(
+            b.on_message(IpcMsg::Attract {
+                view: None,
+                logo: None
+            }),
+            (None, None)
+        );
+        let logo = "data:image/svg+xml;base64,PHN2Zy8+".to_owned();
+        let (_, event) = b.on_message(IpcMsg::Attract {
+            view: None,
+            logo: Some(logo.clone()),
+        });
+        let want = Attract {
+            view: None,
+            logo: Some(logo.clone()),
+        };
+        assert_eq!(event, Some(Emit::Attract(Box::new(want.clone()))));
+        assert_eq!(b.attract(), want);
+        // The same again changes nothing.
+        assert_eq!(
+            b.on_message(IpcMsg::Attract {
+                view: None,
+                logo: Some(logo.clone())
+            }),
+            (None, None)
+        );
+        // A view arrives alone and keeps the logo.
+        let view = sample_view();
+        let (_, event) = b.on_message(IpcMsg::Attract {
+            view: Some(Box::new(view.clone())),
+            logo: None,
+        });
+        let both = Attract {
+            view: Some(view.clone()),
+            logo: Some(logo),
+        };
+        assert_eq!(event, Some(Emit::Attract(Box::new(both.clone()))));
+        assert_eq!(b.attract(), both);
+        // An empty logo clears only the logo.
+        let (_, event) = b.on_message(IpcMsg::Attract {
+            view: None,
+            logo: Some(String::new()),
+        });
+        let cleared = Attract {
+            view: Some(view),
+            logo: None,
+        };
+        assert_eq!(event, Some(Emit::Attract(Box::new(cleared.clone()))));
+        assert_eq!(b.attract(), cleared);
+    }
+
+    fn sample_view() -> arena_proto::AttractView {
+        arena_proto::AttractView {
+            branch_name: "Level Up".into(),
+            state: arena_proto::AttractState::Ready,
+            rate_minor: Some(12_000),
+            group_name: Some("PC".into()),
+            rule: None,
+            locale: arena_proto::SnapshotLocale {
+                currency: "INR".into(),
+                exponent: 2,
+                symbol: "x".into(),
+                symbol_position: arena_proto::SymbolPosition::Before,
+                number_format: arena_proto::NumberFormat::Indian,
+                tz: "Asia/Kolkata".into(),
+                day_start_min: 360,
+                fy_start_month: 4,
+                pending: None,
+            },
+            media: vec![],
+        }
     }
 
     #[test]

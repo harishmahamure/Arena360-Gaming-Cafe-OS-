@@ -166,7 +166,7 @@ test("a wrong code clears the cells with one plain line, and the right one pairs
   await expect(page.getByTestId("paired-heading")).toBeVisible();
   await emit(page, names.events.hubStatus, { state: "connected" });
   await expect(page.getByTestId("discovery")).toHaveCount(0);
-  await expect(page.getByTestId("locked")).toBeVisible();
+  await expect(page.getByTestId("attract")).toBeVisible();
 });
 
 test("a full branch and too many tries each get one plain line", async ({ page }) => {

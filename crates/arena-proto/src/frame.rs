@@ -268,6 +268,11 @@ pub enum HubEvent {
         #[ts(type = "number")]
         lock_after_ms: u64,
     },
+    /// What this device's idle screen shows: branch, this PC's rate and the pricing rule in
+    /// effect, and the library's curated videos (Story 6.7). Pushed to one device on every
+    /// fan-out tick (rules start and end by the clock, not by an intent).
+    #[serde(rename = "attract")]
+    Attract(Box<crate::AttractView>),
 }
 
 /// The body of an `event` frame.

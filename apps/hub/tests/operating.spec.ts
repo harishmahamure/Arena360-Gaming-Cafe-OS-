@@ -277,6 +277,7 @@ test("Hours lists the seven days closed, saves a week with a past-midnight day, 
     en["hub.settings.branch.nav.service"],
     en["hub.settings.branch.nav.billing"],
     en["hub.settings.branch.nav.tax"],
+    en["hub.settings.branch.nav.logo"],
     en["hub.settings.branch.nav.ads"],
   ]);
   await expect(

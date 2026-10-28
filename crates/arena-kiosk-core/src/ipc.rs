@@ -2,18 +2,25 @@
 //! app (`arena-kiosk-ui`, the unprivileged player session): one JSON object per line.
 //!
 //! The service sends `ping`, `hub_status`, `restore_state`, `toast`, `admin_exit_started`,
-//! `admin_exit_ended`, `test_session_started`, `test_session_ended`, `pc_screen` and `reply`; the app sends `pong`, `app_state`, `request` and
-//! `admin_exit` (a manager PIN, answered with `reply`; the [`SecretPin`] never prints). The app never talks to the Hub: everything it needs from the Hub
-//! goes through a `request` the service answers. A line longer than [`MAX_LINE_BYTES`] or that
-//! does not parse is an error the reader skips (the connection stays up).
+//! `admin_exit_ended`, `test_session_started`, `test_session_ended`, `pc_screen`, `attract` and
+//! `reply`; the app sends `pong`, `app_state`, `request` and `admin_exit` (a manager PIN,
+//! answered with `reply`; the [`SecretPin`] never prints). The app never talks to the Hub:
+//! everything it needs from the Hub goes through a `request` the service answers. A line longer
+//! than the reader's limit ([`MAX_LINE_BYTES`] for the service, [`MAX_APP_LINE_BYTES`] for the
+//! app) or that does not parse is an error the reader skips (the connection stays up).
 
 use arena_proto::{AppError, DiscoveredHub, KioskHubState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-/// The longest line either side accepts, newline included.
+/// The longest line the service accepts from the app, newline included (and the default for
+/// [`read_msg`]).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
+/// The longest line the app accepts from the service, newline included: an `attract` message
+/// carries the branch logo (up to 200 KB, base64), so this direction is larger. The app to
+/// service direction stays at [`MAX_LINE_BYTES`].
+pub const MAX_APP_LINE_BYTES: usize = 512 * 1024;
 
 /// The Windows named pipe the service listens on (the name is the same on every branch).
 pub const PIPE_NAME: &str = r"\\.\pipe\arena-kiosk-v1";
@@ -125,6 +132,16 @@ pub enum IpcMsg {
     AppState {
         json: Value,
     },
+    /// Service → app: what the idle screen shows (Story 6.7): the last attract view the Hub pushed
+    /// for this PC and the branch logo (a `data:` URI), each only when known. Sent first on every
+    /// connection (from the service's cache, so the screen paints with no network wait) and
+    /// whenever either changes.
+    Attract {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<Box<arena_proto::AttractView>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logo: Option<String>,
+    },
     /// Service → app, on connect: the last `app_state` the service saw, to restore after a
     /// restart.
     RestoreState {
@@ -194,7 +211,7 @@ pub enum IpcMsg {
 pub enum IpcError {
     /// The peer closed the connection (or an I/O error ended it).
     Closed,
-    /// A line over [`MAX_LINE_BYTES`] (the rest of it was discarded).
+    /// A line over the reader's limit (the rest of it was discarded).
     TooLong,
     /// The line is not one [`IpcMsg`].
     Bad(String),
@@ -204,7 +221,7 @@ impl std::fmt::Display for IpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Closed => f.write_str("the ipc connection is closed"),
-            Self::TooLong => write!(f, "an ipc line is longer than {MAX_LINE_BYTES} bytes"),
+            Self::TooLong => write!(f, "an ipc line is too long"),
             Self::Bad(m) => write!(f, "a bad ipc line: {m}"),
         }
     }
@@ -230,6 +247,14 @@ impl IpcMsg {
 /// Reads the next message. An over-long or malformed line is an error that leaves the stream
 /// positioned at the next line, so the caller may skip it and read on.
 pub async fn read_msg<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<IpcMsg, IpcError> {
+    read_msg_limited(reader, MAX_LINE_BYTES).await
+}
+
+/// [`read_msg`] with a line limit of `max` bytes (newline included).
+pub async fn read_msg_limited<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> Result<IpcMsg, IpcError> {
     let mut buf = Vec::new();
     let mut too_long = false;
     loop {
@@ -242,7 +267,7 @@ pub async fn read_msg<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<IpcMsg,
             None => (chunk.len(), false),
         };
         if !too_long {
-            if buf.len() + take > MAX_LINE_BYTES {
+            if buf.len() + take > max {
                 too_long = true;
                 buf.clear();
             } else {
@@ -319,6 +344,35 @@ mod tests {
         assert_eq!(
             IpcMsg::parse("{\"type\":\"theme\",\"hc\":false}").unwrap(),
             IpcMsg::Theme { hc: false }
+        );
+    }
+
+    #[test]
+    fn the_attract_message_carries_the_view_and_the_logo_when_known() {
+        assert_eq!(
+            IpcMsg::Attract {
+                view: None,
+                logo: None
+            }
+            .to_line(),
+            "{\"type\":\"attract\"}\n"
+        );
+        let logo = "data:image/svg+xml;base64,PHN2Zy8+".to_owned();
+        let only_logo = IpcMsg::Attract {
+            view: None,
+            logo: Some(logo.clone()),
+        };
+        assert_eq!(
+            only_logo.to_line(),
+            format!("{{\"type\":\"attract\",\"logo\":\"{logo}\"}}\n")
+        );
+        assert_eq!(IpcMsg::parse(&only_logo.to_line()).unwrap(), only_logo);
+        assert_eq!(
+            IpcMsg::parse("{\"type\":\"attract\"}").unwrap(),
+            IpcMsg::Attract {
+                view: None,
+                logo: None
+            }
         );
     }
 
@@ -432,6 +486,35 @@ mod tests {
         assert!(matches!(read_msg(&mut r).await, Err(IpcError::TooLong)));
         assert_eq!(read_msg(&mut r).await.unwrap(), IpcMsg::Pong { n: 2 });
         assert!(matches!(read_msg(&mut r).await, Err(IpcError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn the_app_reads_a_logo_sized_line_the_service_would_refuse() {
+        // A 200 KB logo is about 273 KB of base64: over the 64 KiB the service reads from the
+        // app, inside the 512 KiB the app reads from the service.
+        let logo = format!("data:image/png;base64,{}", "A".repeat(280_000));
+        let msg = IpcMsg::Attract {
+            view: None,
+            logo: Some(logo),
+        };
+        let line = msg.to_line();
+        assert!(line.len() > MAX_LINE_BYTES && line.len() < MAX_APP_LINE_BYTES);
+        let mut r = BufReader::with_capacity(4096, line.as_bytes());
+        assert_eq!(
+            read_msg_limited(&mut r, MAX_APP_LINE_BYTES).await.unwrap(),
+            msg
+        );
+        let mut r = BufReader::with_capacity(4096, line.as_bytes());
+        assert!(matches!(read_msg(&mut r).await, Err(IpcError::TooLong)));
+        let over = format!(
+            "{{\"type\":\"attract\",\"logo\":\"{}\"}}\n",
+            "A".repeat(MAX_APP_LINE_BYTES)
+        );
+        let mut r = BufReader::with_capacity(4096, over.as_bytes());
+        assert!(matches!(
+            read_msg_limited(&mut r, MAX_APP_LINE_BYTES).await,
+            Err(IpcError::TooLong)
+        ));
     }
 
     #[tokio::test]

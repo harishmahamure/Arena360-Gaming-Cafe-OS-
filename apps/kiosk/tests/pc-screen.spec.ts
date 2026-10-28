@@ -31,6 +31,8 @@ async function openWithShell(page: Page, screen: unknown = null) {
               return null;
             case commands.pcScreen:
               return initial;
+            case commands.attract:
+              return null;
             case commands.pcDismiss:
               (w.__dismissed as number)++;
               return null;
@@ -82,7 +84,7 @@ const serious = async (page: Page) =>
 
 test("the lock covers the screen with Locked by staff and unlock removes it", async ({ page }) => {
   await openWithShell(page);
-  await expect(page.getByTestId("locked")).toBeVisible();
+  await expect(page.getByTestId("attract")).toBeVisible();
   await expect(page.getByTestId("pc-locked")).toHaveCount(0);
   await emit(page, { locked: true, message: null });
   const cover = page.getByTestId("pc-locked");
@@ -129,18 +131,18 @@ test("a started session replaces the idle screen with the device name and a tick
   page,
 }) => {
   await openWithShell(page);
-  await expect(page.getByTestId("locked")).toBeVisible();
+  await expect(page.getByTestId("attract")).toBeVisible();
   await emit(page, shown({ session: { device_name: "PC 7", elapsed_ms: 3_725_000 } }));
   await expect(page.getByTestId("session")).toBeVisible();
   await expect(page.getByTestId("session-device")).toHaveText("PC 7");
   await expect(page.getByTestId("session-clock")).toHaveText(/^1:02:(0[5-9]|1\d)$/);
-  await expect(page.getByTestId("locked")).toHaveCount(0);
+  await expect(page.getByTestId("attract")).toHaveCount(0);
   expect(await serious(page)).toEqual([]);
   await emit(page, shown({ session: { device_name: "PC 7", elapsed_ms: 5_000 } }));
   await expect(page.getByTestId("session-clock")).toHaveText(/^0:00:0[5-9]$/);
   await emit(page, shown({ locked: true, reason: "times_up" }));
   await expect(page.getByTestId("session")).toHaveCount(0);
-  await expect(page.getByTestId("locked")).toBeVisible();
+  await expect(page.getByTestId("attract")).toBeVisible();
 });
 
 test("a session already running when the page opened is shown at once", async ({ page }) => {

@@ -71,7 +71,7 @@ const emit = (page: Page, event: string, payload: unknown) =>
 
 test("a test session shows its title and counts down to the locked screen", async ({ page }) => {
   await openWithShell(page);
-  await expect(page.getByTestId("locked")).toBeVisible();
+  await expect(page.getByTestId("attract")).toBeVisible();
   await emit(page, names.events.testSession, { remaining_ms: 2500 });
   await expect(page.getByRole("heading", { name: en["player.test_session.title"] })).toBeVisible();
   const clock = page.getByTestId("test-session-clock");
@@ -85,7 +85,7 @@ test("a test session shows its title and counts down to the locked screen", asyn
   ).toEqual([]);
   await expect(clock).toHaveText("0:00", { timeout: 5000 });
   await emit(page, names.events.testSessionEnded, null);
-  await expect(page.getByTestId("locked")).toBeVisible();
+  await expect(page.getByTestId("attract")).toBeVisible();
   await expect(page.getByTestId("test-session")).toHaveCount(0);
 });
 

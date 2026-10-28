@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arena_kiosk_core::ipc::{IpcMsg, SecretPin, read_msg, write_msg};
+use arena_kiosk_core::ipc::{IpcMsg, MAX_APP_LINE_BYTES, SecretPin, read_msg_limited, write_msg};
 use arena_proto::AppError;
 use serde_json::Value;
 use tokio::io::BufReader;
@@ -57,7 +57,7 @@ impl Kiosk {
         tokio::spawn(async move {
             let mut reader = BufReader::new(r);
             loop {
-                match read_msg(&mut reader).await {
+                match read_msg_limited(&mut reader, MAX_APP_LINE_BYTES).await {
                     Ok(IpcMsg::Ping { n }) => {
                         let _ = pong_tx.send(n).await;
                     }

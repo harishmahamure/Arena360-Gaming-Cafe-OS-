@@ -49,6 +49,8 @@ async function openWithShell(page: Page, shell: Shell) {
               return null;
             case commands.theme:
               return s.hc;
+            case commands.attract:
+              return null;
             case commands.hubStatus:
             case commands.takeRestoreState:
             case commands.reportAppState:

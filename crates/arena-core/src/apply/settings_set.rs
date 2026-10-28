@@ -94,6 +94,9 @@ pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), 
                 arena_proto::BackupDirProblem::NotFound.as_str(),
             ));
         }
+        SettingRule::KioskLogo => {
+            return arena_proto::logo_problem(&s.value).map_or(Ok(()), |m| Err(invalid(field, m)));
+        }
         SettingRule::Tax => {
             let tax = TaxSettings::parse(&s.value)
                 .ok_or_else(|| invalid(field, "tax settings are malformed"))?;

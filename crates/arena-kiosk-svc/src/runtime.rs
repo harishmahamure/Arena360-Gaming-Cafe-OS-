@@ -76,6 +76,9 @@ pub struct Ctx {
     /// Whether this kiosk is high contrast (`display.hc.<device_id>`, cached in `queue.db`,
     /// updated by the Hub link; the supervisor sends it to the app as IPC `theme`).
     pub theme: watch::Sender<bool>,
+    /// The attract view the Hub last pushed and the branch logo (cached in `queue.db`; the
+    /// supervisor sends them to the app as IPC `attract`, Story 6.7).
+    pub attract: watch::Sender<crate::attract::Shown>,
     /// Toast catalogue keys for the app (the supervisor forwards them as IPC `toast`).
     pub toasts: broadcast::Sender<String>,
     /// Restarts the app; starts and stops the admin exit's desktop.
@@ -194,6 +197,7 @@ impl Runtime {
             .flatten()
             .map(|c| c.device_id);
         let (theme, _) = watch::channel(crate::theme::load(&queue, device_id.as_deref()));
+        let (attract, _) = watch::channel(crate::attract::load(&queue));
         let pc = crate::pc::PcState::load(&queue);
         let (toasts, _) = broadcast::channel(16);
         let (hub_state, _) = watch::channel(KioskHubState::Reconnecting);
@@ -208,6 +212,7 @@ impl Runtime {
             app_state: Mutex::new(None),
             lists,
             theme,
+            attract,
             toasts,
             admin: crate::admin_exit::AdminState::load(crate::secret::platform_store(
                 data_verifier,

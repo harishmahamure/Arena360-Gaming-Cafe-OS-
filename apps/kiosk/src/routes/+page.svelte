@@ -2,14 +2,20 @@
   import { t } from "@arena/ui";
   import { onMount } from "svelte";
   import {
+    currentAttract,
     currentPcScreen,
     currentTestSession,
+    onAttract,
     onPcScreen,
     onTestSession,
     onTestSessionEnded,
+    type AttractShown,
     type PcScreen,
   } from "../lib/bridge";
+  import Attract from "../lib/Attract.svelte";
 
+  /** The idle screen: the last attract view and logo (from the service cache at first). */
+  let attract: AttractShown = $state({ view: null, logo: null });
   let endsAt: number | null = $state(null);
   let now = $state(performance.now());
   const left = $derived(endsAt === null ? 0 : Math.max(0, Math.ceil((endsAt - now) / 1000)));
@@ -70,6 +76,17 @@
     let gone = false;
     void (async () => {
       const add = (stop: () => void) => (gone ? stop() : stops.push(stop));
+      // First: the idle screen paints from the service's cache before anything else is asked.
+      // An `attract` event is newer than the reply to the `attract` command asked below.
+      let attracted = false;
+      add(
+        await onAttract((s) => {
+          attracted = true;
+          attract = s;
+        }),
+      );
+      const shown = await currentAttract();
+      if (shown && !attracted) attract = shown;
       add(await onTestSession(start));
       add(await onTestSessionEnded(() => (endsAt = null)));
       add(await onPcScreen(follow));
@@ -121,12 +138,8 @@
     {/if}
   </main>
 {:else}
-  <!-- No session yet: the locked placeholder (login comes with the session stories). -->
-  <main class="locked" data-testid="locked">
-    <p class="brand type-kiosk-eyebrow">{t("app.name")}</p>
-    <h1 class="type-kiosk-headline">{t("player.locked.ready")}</h1>
-    <p class="hint type-kiosk-body">{t("player.locked.hint")}</p>
-  </main>
+  <!-- No session yet: the attract screen (Story 6.7), painted from the cache at once. -->
+  <Attract view={attract.view} logo={attract.logo} />
 {/if}
 
 <style>

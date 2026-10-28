@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use arena_proto::KioskHubStatus;
 use bridge::{
-    ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, Answer, Bridge, DISCOVERY_DONE_EVENT,
-    DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, PC_SCREEN_EVENT, PcScreen, RESTORE_STATE_EVENT,
-    TEST_SESSION_ENDED_EVENT, TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
+    ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, ATTRACT_EVENT, Answer, Attract, Bridge,
+    DISCOVERY_DONE_EVENT, DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, PC_SCREEN_EVENT, PcScreen,
+    RESTORE_STATE_EVENT, TEST_SESSION_ENDED_EVENT, TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
 };
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -66,6 +66,12 @@ fn take_restore_state(bridge: tauri::State<'_, Arc<Bridge>>) -> Option<serde_jso
 #[tauri::command]
 fn pc_screen(bridge: tauri::State<'_, Arc<Bridge>>) -> PcScreen {
     bridge.pc_screen()
+}
+
+/// The attract view and logo the service last sent (a cold start asks, then follows the event).
+#[tauri::command]
+fn attract(bridge: tauri::State<'_, Arc<Bridge>>) -> Attract {
+    bridge.attract()
 }
 
 #[tauri::command]
@@ -247,7 +253,8 @@ fn main() {
             pair,
             pair_info,
             pc_screen,
-            pc_dismiss
+            pc_dismiss,
+            attract
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).
@@ -281,6 +288,7 @@ fn main() {
                         ),
                         Emit::TestSessionEnded => handle.emit(TEST_SESSION_ENDED_EVENT, ()),
                         Emit::PcScreen(screen) => handle.emit(PC_SCREEN_EVENT, screen),
+                        Emit::Attract(shown) => handle.emit(ATTRACT_EVENT, shown),
                         Emit::Theme(hc) => {
                             if let Some(path) = theme_file(&handle)
                                 && let Err(e) = theme::write(&path, hc)

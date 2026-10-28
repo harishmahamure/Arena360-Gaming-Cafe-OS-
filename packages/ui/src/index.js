@@ -14,6 +14,7 @@ export { default as InlinePin } from "./components/InlinePin.svelte";
 export { default as ReasonPicker } from "./components/ReasonPicker.svelte";
 export { default as UndoToast } from "./components/UndoToast.svelte";
 export { default as GameMedia } from "./components/GameMedia.svelte";
+export { default as BrandMark } from "./components/BrandMark.svelte";
 export { HUB_MEDIA_PORT, isHubMediaUrl, mediaStage } from "./game-media.ts";
 export { openAdExclusions, registerAdExclusion } from "./ad-exclusion.ts";
 export { focusFirstInvalid } from "./forms.js";

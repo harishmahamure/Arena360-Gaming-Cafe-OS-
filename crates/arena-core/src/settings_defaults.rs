@@ -3,11 +3,12 @@
 use arena_proto::{
     ADS_RATINGS, BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, BranchBootstrap,
     DEFAULT_ADS_CONSENT, DEFAULT_ADS_RATING, DEFAULT_BACKUP_DIR, DEFAULT_FULFILMENT,
-    DEFAULT_KIOSK_LIBRARY, DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS, DEFAULT_OPENING_HOURS_SET,
-    DEFAULT_PROCESS_ALLOW, DEFAULT_PROCESS_BLOCK, FULFILMENT_MODES, HC_DEFAULT, KEY_ADS_CONSENT,
-    KEY_ADS_RATING, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_HC_HUB, KEY_KIOSK_LIBRARY,
-    KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS, KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW,
-    KEY_PROCESS_BLOCK, KEY_PROCESS_MODE, KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
+    DEFAULT_KIOSK_LIBRARY, DEFAULT_KIOSK_LOGO, DEFAULT_KIOSK_VOLUME, DEFAULT_OPENING_HOURS,
+    DEFAULT_OPENING_HOURS_SET, DEFAULT_PROCESS_ALLOW, DEFAULT_PROCESS_BLOCK, FULFILMENT_MODES,
+    HC_DEFAULT, KEY_ADS_CONSENT, KEY_ADS_RATING, KEY_BACKUP_DIR, KEY_FULFILMENT, KEY_HC_HUB,
+    KEY_KIOSK_LIBRARY, KEY_KIOSK_LOGO, KEY_KIOSK_VOLUME_DEFAULT, KEY_OPENING_HOURS,
+    KEY_OPENING_HOURS_SET, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK, KEY_PROCESS_MODE,
+    KIOSK_VOLUME_MAX, ProcessList, ProcessMode, parse_hc_key,
 };
 use arena_proto::{
     BILLING_GRACE_RANGE, BILLING_MINIMUM_RANGE, BILLING_ROUNDING_RANGE,
@@ -113,6 +114,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE),
     // Story 6.3: the enabled library entries, derived by `library.upsert` / `library.delete`.
     (KEY_KIOSK_LIBRARY, DEFAULT_KIOSK_LIBRARY),
+    // Story 6.7: the branch logo (a PNG or SVG data URI), empty until a manager sets one.
+    (KEY_KIOSK_LOGO, DEFAULT_KIOSK_LOGO),
     // Story 1.21: high contrast for the Hub UI. Each paired device's `display.hc.<id>` row is
     // created by `device.register` (and backfilled by `branch.seed_defaults`).
     (KEY_HC_HUB, HC_DEFAULT),
@@ -160,7 +163,8 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 29] = [
+pub const KEYED_FIELD_KEYS: [&str; 30] = [
+    KEY_KIOSK_LOGO,
     KEY_MEDIA_CAP_GB,
     KEY_RECEIPT_ADDRESS,
     KEY_RECEIPT_PHONE,
@@ -227,6 +231,8 @@ pub enum SettingRule {
     ProcessRules(ProcessList),
     /// The derived `kiosk.library`: a JSON array of `KioskLibraryEntry`.
     KioskLibrary,
+    /// `kiosk.logo`: empty, or a PNG / SVG data URI that passes `arena_proto::logo_problem`.
+    KioskLogo,
     /// `"true"` or `"false"`.
     Bool,
     OpeningHours,
@@ -304,6 +310,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     ),
     (KEY_PROCESS_MODE, SettingRule::OneOf(ProcessMode::VALUES)),
     (KEY_KIOSK_LIBRARY, SettingRule::KioskLibrary),
+    (KEY_KIOSK_LOGO, SettingRule::KioskLogo),
     (KEY_OPENING_HOURS, SettingRule::OpeningHours),
     (KEY_OPENING_HOURS_SET, SettingRule::Bool),
     (KEY_FULFILMENT, SettingRule::OneOf(FULFILMENT_MODES)),
@@ -426,6 +433,7 @@ impl SettingRule {
             Self::OneOf(words) => words.contains(&value),
             Self::ProcessRules(list) => arena_proto::parse_process_rules(list, value).is_ok(),
             Self::KioskLibrary => arena_proto::parse_kiosk_library(value).is_some(),
+            Self::KioskLogo => arena_proto::logo_problem(value).is_none(),
             Self::Bool => matches!(value, "true" | "false"),
             Self::OpeningHours => arena_proto::parse_opening_hours(value).is_ok(),
             Self::Path => {
@@ -455,6 +463,7 @@ impl SettingRule {
         match self {
             Self::ProcessRules(_) => arena_proto::MAX_PROCESS_RULES_CHARS,
             Self::KioskLibrary => arena_proto::MAX_LIBRARY_VALUE_CHARS,
+            Self::KioskLogo => arena_proto::MAX_LOGO_VALUE_CHARS,
             _ => crate::apply::MAX_SETTING_VALUE_CHARS,
         }
     }

@@ -133,13 +133,13 @@ test("a granted exit shows only the countdown badge until it ends", async ({ pag
   await expect(badge).toBeVisible();
   await expect(badge).toContainText(/Admin exit: 1[45]:\d\d left/);
   await expect(page.getByTestId("admin-exit-panel")).toHaveCount(0);
-  await expect(page.getByTestId("locked")).toBeHidden();
+  await expect(page.getByTestId("attract")).toBeHidden();
   // The combination does nothing while an exit runs.
   await combo(page);
   await expect(page.getByTestId("admin-exit-panel")).toHaveCount(0);
   await emit(page, names.events.adminExitEnded, null);
   await expect(badge).toHaveCount(0);
-  await expect(page.getByTestId("locked")).toBeVisible();
+  await expect(page.getByTestId("attract")).toBeVisible();
 });
 
 test("a remote unlock pushed by the service shows the badge", async ({ page }) => {

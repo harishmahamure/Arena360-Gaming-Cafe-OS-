@@ -9,6 +9,7 @@
     "testSessionEnded": "test-session-ended",
     "theme": "theme",
     "pcScreen": "pc-screen",
+    "attract": "attract",
     "discoveryFound": "discovery-found",
     "discoveryDone": "discovery-done"
   },
@@ -27,6 +28,7 @@
     "pair": "pair",
     "pairInfo": "pair_info",
     "pcScreen": "pc_screen",
-    "pcDismiss": "pc_dismiss"
+    "pcDismiss": "pc_dismiss",
+    "attract": "attract"
   }
 }

@@ -146,7 +146,7 @@ test("an unpaired kiosk searches and lists the Hubs it finds", async ({ page }) 
   const status = page.getByTestId("discovery-status");
   await expect(status).toHaveAttribute("aria-live", "polite");
   await expect(status).toHaveText(en["player.discovery.searching"]);
-  await expect(page.getByTestId("locked")).toHaveCount(0);
+  await expect(page.getByTestId("attract")).toHaveCount(0);
 
   await emit(page, names.events.discoveryFound, { search: await searchId(page), hubs: [desk] });
   await expect(page.getByRole("button", { name: option(desk) })).toBeEnabled();

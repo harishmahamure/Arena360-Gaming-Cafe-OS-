@@ -2,7 +2,8 @@
 //! state, answers its requests, and runs the watchdog.
 //!
 //! - One app connection at a time: the newest wins and the older one is closed.
-//! - On every connection the app gets `hub_status`, then `theme{hc}` (this kiosk's high
+//! - On every connection the app first gets `attract{view?, logo?}` (the cached attract view and
+//!   logo, when there are any, Story 6.7; then only what changes), then `hub_status`, then `theme{hc}` (this kiosk's high
 //!   contrast, sent again on every change), then `restore_state` with the last `app_state` it
 //!   reported (when there is one).
 //! - Every 2 s the app is pinged; after 3 misses in a row it is killed and relaunched through
@@ -123,6 +124,9 @@ pub(crate) async fn run<S: IpcServer>(
     let mut exits = ctx.admin.active.subscribe();
     let mut tests = ctx.test_session.subscribe();
     let mut theme = ctx.theme.subscribe();
+    let mut attract = ctx.attract.subscribe();
+    // What the current connection was last told, so an update carries only what changed.
+    let mut told = crate::attract::Shown::default();
     let mut screen = ctx.pc.screen.subscribe();
     let mut current: Option<Current> = None;
     let mut held = false;
@@ -136,6 +140,11 @@ pub(crate) async fn run<S: IpcServer>(
                         if let Some(old) = current.take() {
                             tracing::info!(old = old.id, new = id, "a newer app connection replaces the older one");
                             let _ = old.kill.send(());
+                        }
+                        // The cached screen first: the app paints it with no network wait.
+                        told = crate::attract::Shown::default();
+                        if let Some(msg) = attract_message(&attract.borrow_and_update(), &mut told) {
+                            let _ = out.try_send(msg);
                         }
                         let _ = out.try_send(IpcMsg::HubStatus { state: *hub_state.borrow_and_update() });
                         let _ = out.try_send(IpcMsg::Theme { hc: *theme.borrow_and_update() });
@@ -227,6 +236,14 @@ pub(crate) async fn run<S: IpcServer>(
                     let _ = c.out.try_send(IpcMsg::Theme { hc });
                 }
             }
+            changed = attract.changed() => {
+                if changed.is_err() { break; }
+                if let Some(c) = &current
+                    && let Some(msg) = attract_message(&attract.borrow_and_update(), &mut told)
+                {
+                    let _ = c.out.try_send(msg);
+                }
+            }
             changed = exits.changed() => {
                 if changed.is_err() { break; }
                 let msg = match exits.borrow_and_update().as_ref() {
@@ -267,6 +284,20 @@ pub(crate) async fn run<S: IpcServer>(
         let _ = c.kill.send(());
     }
     acceptor.abort();
+}
+
+/// The `attract` message carrying what differs from `told` (updated to match), or `None` when
+/// the app already has it all. A cleared logo goes as an empty string.
+fn attract_message(
+    shown: &crate::attract::Shown,
+    told: &mut crate::attract::Shown,
+) -> Option<IpcMsg> {
+    let view = (shown.view != told.view)
+        .then(|| shown.view.clone().map(Box::new))
+        .flatten();
+    let logo = (shown.logo != told.logo).then(|| shown.logo.clone().unwrap_or_default());
+    *told = shown.clone();
+    (view.is_some() || logo.is_some()).then_some(IpcMsg::Attract { view, logo })
 }
 
 fn screen_message(s: crate::pc::Screen) -> IpcMsg {
@@ -564,4 +595,57 @@ async fn serve(
     }
     writer_task.abort();
     let _ = events.send(Event::Closed { id }).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attract::{Shown, tests::view};
+
+    #[test]
+    fn a_connection_gets_everything_known_then_only_what_changed() {
+        let mut told = Shown::default();
+        // Nothing known: nothing to say.
+        assert_eq!(attract_message(&Shown::default(), &mut told), None);
+        let mut shown = Shown {
+            view: Some(view(12_000)),
+            logo: Some("data:image/svg+xml;base64,PHN2Zy8+".into()),
+        };
+        assert_eq!(
+            attract_message(&shown, &mut told),
+            Some(IpcMsg::Attract {
+                view: Some(Box::new(view(12_000))),
+                logo: shown.logo.clone(),
+            })
+        );
+        // Nothing changed: silence.
+        assert_eq!(attract_message(&shown, &mut told), None);
+        // A new rate goes alone: the logo is not sent again.
+        shown.view = Some(view(9_600));
+        assert_eq!(
+            attract_message(&shown, &mut told),
+            Some(IpcMsg::Attract {
+                view: Some(Box::new(view(9_600))),
+                logo: None,
+            })
+        );
+        // A cleared logo is an empty string.
+        shown.logo = None;
+        assert_eq!(
+            attract_message(&shown, &mut told),
+            Some(IpcMsg::Attract {
+                view: None,
+                logo: Some(String::new()),
+            })
+        );
+        // A new connection starts from nothing told.
+        let mut fresh = Shown::default();
+        assert_eq!(
+            attract_message(&shown, &mut fresh),
+            Some(IpcMsg::Attract {
+                view: Some(Box::new(view(9_600))),
+                logo: None,
+            })
+        );
+    }
 }

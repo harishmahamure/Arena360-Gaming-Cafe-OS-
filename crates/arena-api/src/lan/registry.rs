@@ -11,6 +11,11 @@
 //! lags behind the writer broadcast, events were lost, so every session is dropped (clients
 //! reconnect and resync) after revoked devices got their `TOKEN_REVOKED`.
 //!
+//! **Attract screen (Story 6.7).** On every fan-out tick each connected paired device gets its own
+//! `event{kind:"attract"}`: the branch name, its group's rate with the pricing rule in effect
+//! (rules start and end by the clock, so the tick is the trigger) and the library's curated
+//! videos. Browser classes never get it.
+//!
 //! **Admin exit (Story 1.20).** After an intent that wrote staff or roles, the manager verifier
 //! is re-read and, when its version changed, pushed as `event{kind:"verifier"}` to every
 //! `paired` session (each session also gets it right after its hello). A `remote` row inserted
@@ -379,6 +384,44 @@ impl Registry {
             }
             Ok(Err(e)) => tracing::warn!(code = e.code.as_str(), "session tick read failed"),
             Err(e) => tracing::warn!(error = %e, "session tick read panicked"),
+        }
+    }
+
+    /// Pushes each connected device its attract view (Story 6.7). Rule starts and ends are by
+    /// the clock, so a tick (not an intent) is the trigger.
+    async fn tick_attract(
+        &self,
+        devices: &Arc<DeviceDirectory>,
+        media: &Option<Arc<arena_core::media_cache::MediaCache>>,
+    ) {
+        let ids = self.device_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let dir = Arc::clone(devices);
+        let cache = media.clone();
+        let read = tokio::task::spawn_blocking(move || {
+            let lookup = |game: &str| {
+                cache
+                    .as_ref()
+                    .map(|c| arena_core::attract::GameMediaHashes {
+                        video: c.video_sha256(game).ok().flatten(),
+                        cover: c.cover_sha256(game).ok().flatten(),
+                    })
+                    .unwrap_or_default()
+            };
+            dir.attract_views(&ids, epoch_ms(), &lookup)
+        })
+        .await;
+        match read {
+            Ok(Ok(views)) => {
+                for (device_id, view) in views {
+                    let msg = event_frame(self.next_rid(), HubEvent::Attract(Box::new(view)));
+                    self.push_paired(&msg, Some(&device_id));
+                }
+            }
+            Ok(Err(e)) => tracing::warn!(code = e.code.as_str(), "attract tick read failed"),
+            Err(e) => tracing::warn!(error = %e, "attract tick read panicked"),
         }
     }
 
@@ -792,6 +835,7 @@ impl Registry {
         self: Arc<Self>,
         mut events: broadcast::Receiver<Applied>,
         devices: Arc<DeviceDirectory>,
+        media: Option<Arc<arena_core::media_cache::MediaCache>>,
     ) {
         let mut tick = tokio::time::interval(SESSION_TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -800,6 +844,7 @@ impl Registry {
                 e = events.recv() => e,
                 _ = tick.tick() => {
                     self.tick_sessions(&devices).await;
+                    self.tick_attract(&devices, &media).await;
                     continue;
                 }
             };
@@ -1391,7 +1436,7 @@ mod tests {
         drop(events_tx);
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Arc::clone(&reg).fan_out(events_rx, devices),
+            Arc::clone(&reg).fan_out(events_rx, devices, None),
         )
         .await
         .unwrap();
@@ -1409,6 +1454,40 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_tick_pushes_each_paired_device_its_own_attract_view() {
+        let (_dir, devices) = directory();
+        let reg = Arc::new(Registry::default());
+        let (tx, mut one) = mpsc::channel(8);
+        let _l = reg.register(ClientClass::Paired, Some("L".into()), tx);
+        let (tx, mut other) = mpsc::channel(8);
+        let _m = reg.register(ClientClass::Paired, Some("M".into()), tx);
+        let (tx, mut phone) = mpsc::channel(8);
+        let _p = reg.register(ClientClass::Phone, None, tx);
+        let (_events_tx, events_rx) = broadcast::channel(4);
+        let job = tokio::spawn(Arc::clone(&reg).fan_out(events_rx, devices, None));
+        for rx in [&mut one, &mut other] {
+            let Some(Message::Text(t)) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                    .await
+                    .unwrap()
+            else {
+                panic!("text")
+            };
+            let FrameBody::Event(EventFrame {
+                event: HubEvent::Attract(view),
+            }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+            else {
+                panic!("attract")
+            };
+            // Neither device is placed in a group: the counter handles it.
+            assert_eq!(view.branch_name, "N");
+            assert_eq!(view.state, arena_proto::AttractState::AskCounter);
+            assert_eq!((view.rate_minor, view.rule), (None, None));
+        }
+        job.abort();
+        assert!(phone.try_recv().is_err(), "a browser class never gets it");
+    }
     #[tokio::test]
     async fn the_fan_out_pushes_catalog_changed_after_applied() {
         let (_dir, devices) = directory();
@@ -1431,7 +1510,7 @@ mod tests {
         drop(events_tx);
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            Arc::clone(&reg).fan_out(events_rx, devices),
+            Arc::clone(&reg).fan_out(events_rx, devices, None),
         )
         .await
         .unwrap();
@@ -1443,6 +1522,8 @@ mod tests {
                 panic!("event")
             };
             kinds.push(match event {
+                // The tick may fire between the events.
+                HubEvent::Attract(_) => continue,
                 HubEvent::Applied(_) => "applied".to_owned(),
                 HubEvent::CatalogChanged { products } => {
                     format!(

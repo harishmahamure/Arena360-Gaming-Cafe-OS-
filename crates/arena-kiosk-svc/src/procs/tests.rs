@@ -58,6 +58,7 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         app_state: Mutex::new(None),
         lists,
         theme: watch::channel(false).0,
+        attract: watch::channel(crate::attract::Shown::default()).0,
         toasts,
         launcher: Arc::new(crate::launcher::NoopLauncher),
         admin: crate::admin_exit::AdminState::load(Box::new(NoSecret)),
@@ -727,4 +728,104 @@ fn high_contrast_applies_once_per_newer_rev_and_ignores_other_devices() {
     q.kv_set(&key, "true", 4).unwrap();
     assert!(crate::theme::load(&q, Some(ME)));
     assert!(!crate::theme::load(&q, None), "unprovisioned");
+}
+
+#[test]
+fn a_pushed_attract_view_is_cached_and_published_only_when_it_changes_and_never_when_invalid() {
+    use crate::attract::{KEY_VIEW, tests::view};
+    let t = setup(enforcing());
+    let mut changes = t.ctx.attract.subscribe();
+    let kv = || t.ctx.queue.lock().unwrap().kv_get(KEY_VIEW).unwrap();
+    assert_eq!(kv(), None);
+    crate::attract::push(&t.ctx, view(12_000));
+    assert!(changes.has_changed().unwrap());
+    changes.mark_unchanged();
+    assert_eq!(t.ctx.attract.borrow().view, Some(view(12_000)));
+    let cached = kv().unwrap().0;
+    assert_eq!(
+        serde_json::from_str::<arena_proto::AttractView>(&cached).unwrap(),
+        view(12_000)
+    );
+    // The same view again (every 5 s) is dropped: no publish, no cache write.
+    crate::attract::push(&t.ctx, view(12_000));
+    assert!(!changes.has_changed().unwrap());
+    // A changed rate is published and cached.
+    crate::attract::push(&t.ctx, view(9_600));
+    assert!(changes.has_changed().unwrap());
+    changes.mark_unchanged();
+    assert_eq!(t.ctx.attract.borrow().view, Some(view(9_600)));
+    // A view with a bad media hash is refused: the previous one stays.
+    let mut bad = view(1);
+    bad.media[0].video = "nope".into();
+    crate::attract::push(&t.ctx, bad);
+    assert!(!changes.has_changed().unwrap());
+    assert_eq!(t.ctx.attract.borrow().view, Some(view(9_600)));
+    // A restart starts from the cache.
+    assert_eq!(
+        crate::attract::load(&t.ctx.queue.lock().unwrap()).view,
+        Some(view(9_600))
+    );
+}
+
+#[test]
+fn the_logo_applies_once_per_newer_rev_and_an_invalid_or_older_one_is_kept_out() {
+    use crate::attract::KEY_VIEW;
+    const SVG: &str = "data:image/svg+xml;base64,PHN2Zy8+";
+    let t = setup(enforcing());
+    let key = arena_proto::KEY_KIOSK_LOGO;
+    let entry = |value: &str, rev: i64| SettingEntry {
+        key: key.into(),
+        value: value.into(),
+        rev,
+    };
+    let mut changes = t.ctx.attract.subscribe();
+    let mut revs = AppliedRevs::default();
+    let kv = || t.ctx.queue.lock().unwrap().kv_get(key).unwrap();
+    crate::attract::apply(&t.ctx, &[entry(SVG, 2)], &mut revs);
+    assert_eq!(t.ctx.attract.borrow().logo.as_deref(), Some(SVG));
+    assert!(changes.has_changed().unwrap());
+    changes.mark_unchanged();
+    assert_eq!(kv(), Some((SVG.to_owned(), 2)));
+    // Older, scripted or oversized: nothing changes.
+    let scripted = "data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4=";
+    crate::attract::apply(
+        &t.ctx,
+        &[
+            entry("", 1),
+            entry(scripted, 3),
+            entry("data:image/png;base64,AAAA", 4),
+        ],
+        &mut revs,
+    );
+    assert_eq!(t.ctx.attract.borrow().logo.as_deref(), Some(SVG));
+    assert!(!changes.has_changed().unwrap());
+    assert_eq!(kv(), Some((SVG.to_owned(), 2)));
+    // Another setting is not ours.
+    crate::attract::apply(
+        &t.ctx,
+        &[SettingEntry {
+            key: "kiosk.library".into(),
+            value: "[]".into(),
+            rev: 9,
+        }],
+        &mut revs,
+    );
+    assert!(!changes.has_changed().unwrap());
+    // The next connection's revs start from the cache.
+    let mut next = AppliedRevs::default();
+    crate::attract::seed(&t.ctx.queue.lock().unwrap(), &mut next);
+    assert_eq!(next.get(key), Some(2));
+    // The same logo at a newer rev is stored but is not a change to tell the app about.
+    crate::attract::apply(&t.ctx, &[entry(SVG, 5)], &mut next);
+    assert!(!changes.has_changed().unwrap());
+    assert_eq!(kv(), Some((SVG.to_owned(), 5)));
+    // An empty logo removes it.
+    crate::attract::apply(&t.ctx, &[entry("", 6)], &mut next);
+    assert_eq!(t.ctx.attract.borrow().logo, None);
+    assert!(changes.has_changed().unwrap());
+    assert_eq!(
+        crate::attract::load(&t.ctx.queue.lock().unwrap()).logo,
+        None
+    );
+    assert_eq!(t.ctx.queue.lock().unwrap().kv_get(KEY_VIEW).unwrap(), None);
 }

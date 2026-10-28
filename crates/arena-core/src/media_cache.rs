@@ -237,6 +237,11 @@ impl MediaCache {
         self.db()?.cover_sha256(game_id)
     }
 
+    /// The SHA-256 of the game's stored video, if the cache holds one (Story 6.7).
+    pub fn video_sha256(&self, game_id: &str) -> Result<Option<String>, AppError> {
+        self.db()?.video_sha256(game_id)
+    }
+
     /// Stores a manifest and deletes the files nothing references any more.
     pub fn apply_manifest(&self, manifest: &CatalogManifest) -> Result<Applied, AppError> {
         let orphans = self.db()?.apply_manifest(manifest)?;

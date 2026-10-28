@@ -200,6 +200,21 @@ impl DeviceDirectory {
         crate::session_screen::session_screens(&store, now_ms)
     }
 
+    /// The attract view of each of `device_ids` (Story 6.7), read in one snapshot. `lookup`
+    /// finds a catalogue game's stored video and cover.
+    pub fn attract_views(
+        &self,
+        device_ids: &[String],
+        now_ms: i64,
+        lookup: crate::attract::MediaLookup<'_>,
+    ) -> Result<Vec<(String, arena_proto::AttractView)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::attract::attract_views(&store, device_ids, now_ms, lookup)
+    }
+
     /// The branch settings among `keys` that exist, with their `rev`, in `keys` order (what a
     /// paired device may read: the caller checks the keys against the class scope first).
     pub fn catalog(

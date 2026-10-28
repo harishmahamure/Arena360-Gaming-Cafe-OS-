@@ -74,7 +74,11 @@ pub async fn serve_lan(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) {
     let fan_out = hub.writer.as_ref().map(|w| {
-        tokio::spawn(Arc::clone(&hub.registry).fan_out(w.subscribe(), Arc::clone(&hub.devices)))
+        tokio::spawn(Arc::clone(&hub.registry).fan_out(
+            w.subscribe(),
+            Arc::clone(&hub.devices),
+            hub.media.clone(),
+        ))
     });
     let acceptor = TlsAcceptor::from(Arc::clone(&hub.tls));
     let LanListeners { lan, web } = listeners;

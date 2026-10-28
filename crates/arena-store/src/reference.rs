@@ -381,13 +381,23 @@ impl ReferenceDb {
 
     /// The SHA-256 of the game's cover when the cache holds that file (stored and verified).
     pub fn cover_sha256(&self, game_id: &str) -> Result<Option<String>, AppError> {
+        self.stored_media_sha256(game_id, "cover")
+    }
+
+    /// The SHA-256 of the game's video when the cache holds that file (stored and verified; an
+    /// evicted or still pending video is not one).
+    pub fn video_sha256(&self, game_id: &str) -> Result<Option<String>, AppError> {
+        self.stored_media_sha256(game_id, "video")
+    }
+
+    fn stored_media_sha256(&self, game_id: &str, kind: &str) -> Result<Option<String>, AppError> {
         self.conn
             .query_row(
                 "SELECT m.sha256 FROM ref_media m
                  JOIN ref_files f ON f.sha256 = m.sha256
-                 WHERE m.game_id = ?1 AND m.kind = 'cover' AND f.state = 'stored'
+                 WHERE m.game_id = ?1 AND m.kind = ?2 AND f.state = 'stored'
                  ORDER BY m.sha256 LIMIT 1",
-                [game_id],
+                params![game_id, kind],
                 |r| r.get(0),
             )
             .optional()
@@ -608,6 +618,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_game_reports_its_stored_cover_and_video_only() {
+        let mut db = ReferenceDb::open_in_memory().unwrap();
+        db.apply_manifest(&manifest(
+            1,
+            vec![game(
+                "A",
+                vec![media("cover", 'a', 10), media("video", 'b', 100)],
+            )],
+        ))
+        .unwrap();
+        // Nothing is stored yet: nothing is reported.
+        assert_eq!(db.cover_sha256("A").unwrap(), None);
+        assert_eq!(db.video_sha256("A").unwrap(), None);
+        db.mark_stored(&sha('b'), 5).unwrap();
+        assert_eq!(db.video_sha256("A").unwrap(), Some(sha('b')));
+        assert_eq!(
+            db.cover_sha256("A").unwrap(),
+            None,
+            "the cover is not stored"
+        );
+        db.mark_stored(&sha('a'), 6).unwrap();
+        assert_eq!(db.cover_sha256("A").unwrap(), Some(sha('a')));
+        // An evicted video is not served.
+        db.mark_unstored(&sha('b'), FileState::Evicted).unwrap();
+        assert_eq!(db.video_sha256("A").unwrap(), None);
+        assert_eq!(db.video_sha256("nope").unwrap(), None);
+    }
     #[test]
     fn a_live_game_replaces_its_rows_and_a_tombstone_removes_them() {
         let mut db = ReferenceDb::open_in_memory().unwrap();

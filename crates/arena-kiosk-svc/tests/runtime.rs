@@ -17,7 +17,9 @@ use arena_core::devices::{format_token, hash_token_secret, new_token_secret};
 use arena_core::{
     DeviceDirectory, HubStatus, LeaseInfo, Role, SystemClock, Writer, WriterHandle, status_channel,
 };
-use arena_kiosk_core::ipc::{IpcError, IpcMsg, read_msg, write_msg};
+use arena_kiosk_core::ipc::{
+    IpcError, IpcMsg, MAX_APP_LINE_BYTES, read_msg, read_msg_limited, write_msg,
+};
 use arena_kiosk_svc::config::KioskConfig;
 use arena_kiosk_svc::ipc::UnixIpcServer;
 use arena_kiosk_svc::launcher::AppLauncher;
@@ -457,9 +459,12 @@ struct App {
 
 impl App {
     async fn recv(&mut self) -> Result<IpcMsg, IpcError> {
-        tokio::time::timeout(Duration::from_secs(10), read_msg(&mut self.reader))
-            .await
-            .expect("an ipc message in time")
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            read_msg_limited(&mut self.reader, MAX_APP_LINE_BYTES),
+        )
+        .await
+        .expect("an ipc message in time")
     }
 
     async fn send(&mut self, msg: &IpcMsg) {
@@ -2311,4 +2316,184 @@ async fn an_unpaired_link_connects_as_soon_as_it_is_provisioned() {
     .expect("connected without waiting for the slow retry")
     .unwrap();
     runtime.shutdown().await;
+}
+
+// ---- Story 6.7: the attract screen ----
+
+impl Hub {
+    /// Puts the device in a new group with `rate` an hour.
+    async fn assign_with_rate(&self, rate: i64) -> String {
+        let group = self
+            .writer
+            .submit_intent(intent(
+                owner(),
+                IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                    id: None,
+                    name: "Gaming PCs".into(),
+                    group_kind: "pc".into(),
+                    colour: "teal".into(),
+                    sort_order: 1,
+                }),
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        self.writer
+            .submit_intent(intent(
+                owner(),
+                IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                    group_id: group.clone(),
+                    price_per_hour_minor: rate,
+                }),
+            ))
+            .await
+            .unwrap();
+        self.writer
+            .submit_intent(intent(
+                owner(),
+                IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                    device_id: self.device_id.clone(),
+                    group_id: Some(group.clone()),
+                }),
+            ))
+            .await
+            .unwrap();
+        group
+    }
+
+    /// A rule that applies all day, today and the days around it (in the branch zone).
+    async fn all_day_rule(&self, group: &str, percent_bp: i64) {
+        let today = chrono::Utc::now()
+            .with_timezone(&chrono_tz::Asia::Kolkata)
+            .date_naive();
+        let day = |n: i64| (today + chrono::Duration::days(n)).to_string();
+        self.writer
+            .submit_intent(intent(
+                owner(),
+                IntentPayload::RuleUpsert(arena_proto::RuleUpsert {
+                    id: None,
+                    name: "Happy hour".into(),
+                    group_id: group.into(),
+                    rule_kind: "date".into(),
+                    days_mask: None,
+                    start_min: None,
+                    end_min: None,
+                    date_from: Some(day(-1)),
+                    date_to: Some(day(1)),
+                    adjust_kind: "percent_bp".into(),
+                    adjust_value: percent_bp,
+                    priority: 0,
+                    active: true,
+                }),
+            ))
+            .await
+            .unwrap();
+    }
+}
+
+fn attract_of(msg: &IpcMsg) -> Option<&arena_proto::AttractView> {
+    match msg {
+        IpcMsg::Attract { view, .. } => view.as_deref(),
+        _ => None,
+    }
+}
+
+const SVG_LOGO: &str =
+    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_idle_kiosk_gets_its_rate_a_rule_change_and_the_logo_live_and_caches_them() {
+    let mut hub = Hub::seeded().await;
+    let group = hub.assign_with_rate(12_000).await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    let mut app = kiosk.app().await;
+
+    // The Hub tick pushes this device's own view.
+    let first = app.until(|m| attract_of(m).is_some()).await;
+    let view = attract_of(&first).unwrap();
+    assert_eq!(view.branch_name, "Dev Branch");
+    assert_eq!(view.state, arena_proto::AttractState::Ready);
+    assert_eq!((view.rate_minor, view.rule.as_ref()), (Some(12_000), None));
+    assert_eq!(view.group_name.as_deref(), Some("Gaming PCs"));
+    assert_eq!(view.locale.currency, "INR");
+
+    // A rule starting is on the screen within the next tick, without a reload.
+    let started = Instant::now();
+    hub.all_day_rule(&group, -2000).await;
+    let ruled = app
+        .until(|m| attract_of(m).is_some_and(|v| v.rule.is_some()))
+        .await;
+    assert!(started.elapsed() < Duration::from_secs(8), "within a tick");
+    let view = attract_of(&ruled).unwrap();
+    assert_eq!(view.rate_minor, Some(9_600));
+    assert_eq!(view.rule.as_ref().unwrap().name, "Happy hour");
+
+    // The logo arrives with the settings and goes to the app alone.
+    hub.set_setting("kiosk.logo", SVG_LOGO).await;
+    app.until(|m| matches!(m, IpcMsg::Attract { logo: Some(l), .. } if l == SVG_LOGO))
+        .await;
+    let ctx = Arc::clone(kiosk.rt().ctx());
+    let cached = |key: &str| ctx.queue.lock().unwrap().kv_get(key).unwrap();
+    assert_eq!(cached("kiosk.logo").unwrap().0, SVG_LOGO);
+    assert!(cached("attract.view").is_some());
+
+    // The Hub goes away and the kiosk restarts: the cached screen comes first, before any
+    // Hub status and with no network.
+    hub.down().await;
+    drop(app);
+    kiosk.runtime.take().unwrap().shutdown().await;
+    kiosk.start();
+    let mut app = kiosk.app().await;
+    let IpcMsg::Attract { view, logo } = app.recv().await.unwrap() else {
+        panic!("the cached attract message comes first")
+    };
+    let view = view.unwrap();
+    assert_eq!(view.rate_minor, Some(9_600));
+    assert_eq!(view.rule.unwrap().name, "Happy hour");
+    assert_eq!(logo.as_deref(), Some(SVG_LOGO));
+
+    // Clearing the logo reaches a connected app as an empty string.
+    hub.up().await;
+    kiosk.wait_state(KioskHubState::Connected).await;
+    hub.set_setting("kiosk.logo", "").await;
+    app.until(|m| matches!(m, IpcMsg::Attract { logo: Some(l), .. } if l.is_empty()))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unassigned_kiosk_is_told_to_ask_at_the_counter() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    let mut app = kiosk.app().await;
+    let msg = app.until(|m| attract_of(m).is_some()).await;
+    let view = attract_of(&msg).unwrap();
+    assert_eq!(view.state, arena_proto::AttractState::AskCounter);
+    assert_eq!((view.rate_minor, view.rule.as_ref()), (None, None));
+    assert_eq!(view.branch_name, "Dev Branch");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_damaged_attract_or_logo_cache_shows_nothing() {
+    let hub = Hub::seeded().await;
+    let mut kiosk = Kiosk::new(&hub);
+    std::fs::create_dir_all(kiosk.data.root()).unwrap();
+    let q = arena_kiosk_svc::queue::QueueDb::open(&kiosk.data.queue()).unwrap();
+    q.kv_set("attract.view", "{not json", 1).unwrap();
+    q.kv_set("kiosk.logo", "data:image/png;base64,AAAA", 1)
+        .unwrap();
+    drop(q);
+    kiosk.start();
+    let mut app = kiosk.app().await;
+    assert!(matches!(
+        app.recv().await.unwrap(),
+        IpcMsg::HubStatus {
+            state: KioskHubState::Reconnecting
+        }
+    ));
 }

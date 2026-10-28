@@ -20,6 +20,7 @@ use crate::writer::{Writer, WriterHandle};
 
 mod ad_metrics;
 mod alert;
+mod attract;
 mod cash_moves;
 mod commands;
 mod console;
@@ -4202,12 +4203,13 @@ mod process_lists {
         let applied = f.writer.seed_defaults().await.unwrap().unwrap();
         let mut ids: Vec<&str> = applied.changes.iter().map(|c| c.row_id.as_str()).collect();
         ids.sort_unstable();
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), 6);
         assert!(ids[0].ends_with("/kiosk.library"), "{ids:?}");
-        assert!(ids[1].ends_with("/kiosk.process_allow"), "{ids:?}");
-        assert!(ids[2].ends_with("/kiosk.process_block"), "{ids:?}");
-        assert!(ids[3].ends_with("/kiosk.process_mode"), "{ids:?}");
-        assert!(ids[4].ends_with("/kiosk.volume_default"), "{ids:?}");
+        assert!(ids[1].ends_with("/kiosk.logo"), "{ids:?}");
+        assert!(ids[2].ends_with("/kiosk.process_allow"), "{ids:?}");
+        assert!(ids[3].ends_with("/kiosk.process_block"), "{ids:?}");
+        assert!(ids[4].ends_with("/kiosk.process_mode"), "{ids:?}");
+        assert!(ids[5].ends_with("/kiosk.volume_default"), "{ids:?}");
         assert_eq!(
             setting(&reopen(&f), "kiosk.process_block")["value"],
             RowValue::Text(DEFAULT_PROCESS_BLOCK.into())
@@ -4226,6 +4228,70 @@ mod process_lists {
         assert_eq!(f.writer.seed_defaults().await.unwrap(), None);
     }
 
+    #[tokio::test]
+    async fn settings_set_takes_a_logo_and_names_the_field_of_a_bad_one() {
+        use base64::Engine as _;
+        let f = bootstrapped().await;
+        let uri = |prefix: &str, bytes: &[u8]| {
+            format!(
+                "{prefix}{}",
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            )
+        };
+        let svg = uri(
+            arena_proto::LOGO_SVG_PREFIX,
+            br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>"##,
+        );
+        assert_eq!(
+            setting(&reopen(&f), "kiosk.logo")["value"],
+            RowValue::Text(String::new())
+        );
+        let mut edit = set("kiosk.logo", &svg, Some(1));
+        edit.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(edit).await.unwrap();
+        assert_eq!(
+            setting(&reopen(&f), "kiosk.logo")["value"],
+            RowValue::Text(svg)
+        );
+        let mut wide = arena_proto_png(600, 100);
+        let mut scripted = b"<svg><script>1</script></svg>".to_vec();
+        for bad in [
+            uri(arena_proto::LOGO_PNG_PREFIX, &wide),
+            uri(arena_proto::LOGO_SVG_PREFIX, &scripted),
+            uri(
+                arena_proto::LOGO_PNG_PREFIX,
+                &vec![0; arena_proto::MAX_LOGO_BYTES + 1],
+            ),
+            "data:image/gif;base64,AAAA".to_owned(),
+        ] {
+            let mut edit = set("kiosk.logo", &bad, Some(2));
+            edit.issued_at = f.clock.now_ms();
+            let err = expect_err(&f, edit).await;
+            assert_eq!(
+                (err.code, err.field.as_deref()),
+                (ErrorCode::ValidationFailed, Some("kiosk.logo"))
+            );
+        }
+        wide.clear();
+        scripted.clear();
+        // Cleared again: no logo.
+        let mut edit = set("kiosk.logo", "", Some(2));
+        edit.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(edit).await.unwrap();
+        assert_eq!(
+            setting(&reopen(&f), "kiosk.logo")["value"],
+            RowValue::Text(String::new())
+        );
+    }
+
+    fn arena_proto_png(w: u32, h: u32) -> Vec<u8> {
+        let mut b = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+        b.extend(b"IHDR");
+        b.extend(w.to_be_bytes());
+        b.extend(h.to_be_bytes());
+        b.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        b
+    }
     #[tokio::test]
     async fn settings_set_takes_a_valid_list_and_names_the_bad_rule() {
         let f = bootstrapped().await;

@@ -133,7 +133,7 @@ development_status:
   5-6-record-waste-with-a-reason: done
   5-7-expiry-alerts-and-expired-stock-held-from-sale-until-written: done
   5-8-low-stock-thresholds-and-alerts: done
-  5-9-pos-screen-product-grid-search-or-scan-and-cart: backlog
+  5-9-pos-screen-product-grid-search-or-scan-and-cart: review
   5-10-open-a-shift-with-a-confirmed-float-and-cash-needs-an-open-s: backlog
   5-11-sell-at-the-counter-a-walk-up-sale-settles-and-takes-stock: backlog
   5-12-attach-an-order-to-a-running-session-so-it-settles-with-the: backlog

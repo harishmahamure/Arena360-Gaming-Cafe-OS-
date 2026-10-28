@@ -218,7 +218,10 @@
     if (isSearchKey(event, document.activeElement)) {
       event.preventDefault();
       moreOpen = false;
-      const field = document.querySelector<HTMLInputElement>("[data-player-lookup]");
+      // On the POS the shortcut finds a product; elsewhere it finds a player.
+      const field = document.querySelector<HTMLInputElement>(
+        "[data-pos-search], [data-player-lookup]",
+      );
       if (field) field.focus();
       else void goto("/players?lookup");
       return;

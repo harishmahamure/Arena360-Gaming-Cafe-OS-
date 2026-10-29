@@ -52,6 +52,8 @@ pub struct AuthState {
     pub gap_metrics: crate::gaps::GapMetrics,
     /// Rollup days the cloud cannot read, and the missing-day count per branch (Story 8.7).
     pub rollup_metrics: crate::rollups::RollupMetrics,
+    /// The branch summaries and rollup months the owner read API serves from memory (Story 8.9).
+    pub read_cache: crate::owner_read::ReadCache,
 }
 
 impl AuthState {
@@ -75,6 +77,7 @@ impl AuthState {
             put_metrics: crate::presign::PutMetrics::default(),
             gap_metrics: crate::gaps::GapMetrics::default(),
             rollup_metrics: crate::rollups::RollupMetrics::default(),
+            read_cache: crate::owner_read::ReadCache::default(),
         }
     }
 

@@ -35,6 +35,7 @@ mod library;
 pub mod licence;
 mod matching;
 mod operating;
+mod owner_read;
 pub mod pairing;
 mod pc_command;
 mod pc_settings;
@@ -244,6 +245,12 @@ pub use operating::{
     KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, LAST_MINUTE, MEDIA_CAP_GB_RANGE, MediaCacheStatus,
     OpeningDay, OpeningHoursError, SetupStatus, TestSessionState, has_open_day, is_absolute_path,
     is_backup_location, is_backup_tree_uri, opening_hours_json, parse_opening_hours,
+};
+pub use owner_read::{
+    BRANCH_ONLINE_WINDOW_MS, GroupBy, OWNER_ALL_BRANCHES, OWNER_API_LIMIT_PER_MIN,
+    OWNER_RANGE_MAX_DAYS, OWNER_READ_CACHE_MS, OwnerLive, OwnerLiveAll, OwnerLiveTotal, OwnerRange,
+    OwnerRangeAll, OwnerRangeCurrency, OwnerRangeRow, OwnerRangeTotals, date_from_days,
+    dates_between, days_from_date,
 };
 pub use pairing::{
     ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,

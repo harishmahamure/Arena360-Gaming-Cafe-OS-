@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use aws_sdk_s3::config::{
@@ -57,6 +58,23 @@ pub trait ObjectStore: Send + Sync {
 #[derive(Debug, Default)]
 pub struct MemoryStore {
     objects: Mutex<BTreeMap<String, Vec<u8>>>,
+    heads: AtomicU64,
+    reads: AtomicU64,
+    lists: AtomicU64,
+}
+
+/// What a store answered, counted (tests of the owner read cache).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StoreCalls {
+    pub heads: u64,
+    pub reads: u64,
+    pub lists: u64,
+}
+
+/// The ETag of `body` in the in-memory store: the SHA-256 of the bytes, quoted like S3's.
+fn memory_etag(body: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("\"{}\"", crate::auth::hex(&Sha256::digest(body)[..16]))
 }
 
 impl MemoryStore {
@@ -73,6 +91,37 @@ impl MemoryStore {
     /// Every key, sorted.
     pub fn keys(&self) -> Vec<String> {
         self.lock().keys().cloned().collect()
+    }
+
+    /// How many head, read and etag-list calls the owner read path made.
+    pub fn calls(&self) -> StoreCalls {
+        StoreCalls {
+            heads: self.heads.load(Ordering::SeqCst),
+            reads: self.reads.load(Ordering::SeqCst),
+            lists: self.lists.load(Ordering::SeqCst),
+        }
+    }
+
+    /// The ETag of `key`, or none when it is not there.
+    pub fn head(&self, key: &str) -> Option<String> {
+        self.heads.fetch_add(1, Ordering::SeqCst);
+        self.lock().get(key).map(|b| memory_etag(b))
+    }
+
+    /// `key`'s bytes and ETag, or none when it is not there.
+    pub fn read(&self, key: &str) -> Option<(Vec<u8>, String)> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.lock().get(key).map(|b| (b.clone(), memory_etag(b)))
+    }
+
+    /// Every key under `prefix` with its ETag.
+    pub fn list_etags(&self, prefix: &str) -> Vec<(String, String)> {
+        self.lists.fetch_add(1, Ordering::SeqCst);
+        self.lock()
+            .iter()
+            .filter(|(k, _)| k.starts_with(prefix))
+            .map(|(k, b)| (k.clone(), memory_etag(b)))
+            .collect()
     }
 }
 
@@ -253,6 +302,76 @@ impl S3Store {
                 Ok(())
             }
             Err(e) => Err(self.err("create bucket", &self.bucket, e)),
+        }
+    }
+}
+
+impl S3Store {
+    /// The ETag of `key`, or none when it is not there.
+    pub async fn head(&self, key: &str) -> Result<Option<String>, StoreError> {
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(out) => Ok(out.e_tag().map(str::to_owned)),
+            Err(e) if e.as_service_error().is_some_and(|s| s.is_not_found()) => Ok(None),
+            Err(e) => Err(self.err("head", key, e)),
+        }
+    }
+
+    /// `key`'s bytes and ETag, or none when it is not there.
+    pub async fn read(&self, key: &str) -> Result<Option<(Vec<u8>, String)>, StoreError> {
+        let out = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(out) => out,
+            Err(e) if e.as_service_error().is_some_and(|s| s.is_no_such_key()) => {
+                return Ok(None);
+            }
+            Err(e) => return Err(self.err("get", key, e)),
+        };
+        let etag = out.e_tag().unwrap_or_default().to_owned();
+        let body = out
+            .body
+            .collect()
+            .await
+            .map_err(|e| self.err("read", key, e))?;
+        Ok(Some((body.into_bytes().to_vec(), etag)))
+    }
+
+    /// Every key under `prefix` with its ETag.
+    pub async fn list_etags(&self, prefix: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let mut keys = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let out = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix)
+                .set_continuation_token(token.take())
+                .send()
+                .await
+                .map_err(|e| self.err("list", prefix, e))?;
+            keys.extend(out.contents().iter().filter_map(|o| {
+                Some((
+                    o.key()?.to_owned(),
+                    o.e_tag().unwrap_or_default().to_owned(),
+                ))
+            }));
+            match out.next_continuation_token() {
+                Some(t) if out.is_truncated() == Some(true) => token = Some(t.to_owned()),
+                _ => return Ok(keys),
+            }
         }
     }
 }

@@ -28,6 +28,7 @@ pub mod health;
 pub mod licence;
 pub mod messaging;
 pub mod ops;
+pub mod owner_read;
 pub mod pairing_code;
 pub mod passwords;
 pub mod presign;

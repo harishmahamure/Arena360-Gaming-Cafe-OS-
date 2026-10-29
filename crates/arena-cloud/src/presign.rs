@@ -181,6 +181,34 @@ impl Presigner {
         .map_err(|e| e.to_string())
     }
 
+    /// The ETag of `key` in the data bucket, or none when it is not there (Story 8.9).
+    pub async fn head(&self, key: &str) -> Result<Option<String>, String> {
+        match &self.listing {
+            Some(mem) => Ok(mem.head(key)),
+            None => self.lister.head(key).await.map_err(|e| e.to_string()),
+        }
+    }
+
+    /// `key`'s bytes and ETag from the data bucket, or none when it is not there (Story 8.9).
+    pub async fn read(&self, key: &str) -> Result<Option<(Vec<u8>, String)>, String> {
+        match &self.listing {
+            Some(mem) => Ok(mem.read(key)),
+            None => self.lister.read(key).await.map_err(|e| e.to_string()),
+        }
+    }
+
+    /// Every key under `prefix` in the data bucket with its ETag (Story 8.9).
+    pub async fn list_etags(&self, prefix: &str) -> Result<Vec<(String, String)>, String> {
+        match &self.listing {
+            Some(mem) => Ok(mem.list_etags(prefix)),
+            None => self
+                .lister
+                .list_etags(prefix)
+                .await
+                .map_err(|e| e.to_string()),
+        }
+    }
+
     /// The presigner for the `ARENA_DATA_S3_*` bucket. With none of the four variables set,
     /// `--dev` uses the dev MinIO and anything else has no presigner (`None`: the route
     /// answers 503). A half-set or wrong configuration is an error naming the variable.

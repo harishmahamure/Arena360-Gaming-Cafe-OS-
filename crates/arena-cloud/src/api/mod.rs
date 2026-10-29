@@ -25,6 +25,7 @@ mod json;
 mod meta;
 pub mod mfa;
 pub mod owned;
+mod owner_read;
 mod pair;
 mod panic;
 pub mod presign;
@@ -77,6 +78,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(wizard_devices::router(Arc::clone(st)))
             .merge(wizard_golive::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
+            .merge(owner_read::router(Arc::clone(st)))
             .merge(catalog::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))

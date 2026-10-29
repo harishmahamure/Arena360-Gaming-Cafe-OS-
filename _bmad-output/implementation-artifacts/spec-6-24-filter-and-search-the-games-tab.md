@@ -2,7 +2,7 @@
 title: 'Story 6.24: Filter and search the Games tab'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '22f9178'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

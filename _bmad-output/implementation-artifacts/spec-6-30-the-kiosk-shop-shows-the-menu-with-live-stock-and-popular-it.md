@@ -2,7 +2,7 @@
 title: 'Story 6.30: The kiosk Shop shows the menu with live stock and popular items'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '7832e9b9f47cb2dbd1a5d9af7585bceaaea7a587'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -87,8 +87,12 @@ Only active, non-deleted products are listed; one that becomes inactive leaves t
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 - **Summary:** Paired kiosks ask the Hub for `shop.menu` (licence flag, active products and bundles with live availability, top-3 sellers of 7 days) and `shop.image` (one photo at a time). The kiosk shows a Shop pill after Apps only when enabled, with a category rail, search, cards, POPULAR badge and the closed-kitchen line; it re-asks every second while Shop is open. A device `order.place` without `kiosk_orders` is refused `FEATURE_NOT_IN_TIER` before the permission check.
 - **Verification:** proto, store, core (5 new shop tests) and api (3 new lan tests) pass; kiosk-svc shop test passes; fmt and clippy clean; kiosk `check` 0 errors; Playwright `shop`, `home`, `shell` 44 pass; strings, hex, blur, protocol, layers, pins and prettier pass. `theme.spec.ts` fails as before this story (Windows path); `check:generated` only reports the new uncommitted types.
 - **Residual risks:** Add is a no-op until Story 6.31; photos are not re-fetched if changed mid-session; the menu read is uncached at 1 s per open Shop tab; the real Tauri shell and real Hub photos were not exercised; Story 6.31's kiosk order tests need `kiosk_orders` set; no review pass has run yet.
+
+## Code Review Result
+
+Reviewed the implementation commit (proto, store, core, Hub LAN, kiosk service, kiosk app). No blocking findings. Checks: shop tests (proto/store/core/api/kiosk-svc) pass, clippy `-D warnings` clean on non-test targets, `svelte-check` 0 errors, prettier clean. Pre-existing clippy `clone_on_copy` lints in `arena-kiosk-svc/src/launchers/tests.rs` (untouched by this story) remain.

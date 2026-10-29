@@ -4823,3 +4823,149 @@ async fn session_sync_is_for_paired_sessions_only() {
     let frame = recv(&mut ws).await.unwrap();
     assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
 }
+
+// ---- Story 6.38: Journey 3 over the LAN, timed ----
+
+/// A budget in milliseconds: the story's number unless `var` overrides it.
+fn budget_ms(var: &str, default: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Waits for the next `session.started` pushed to the PC and returns how long it took.
+async fn session_screen_within(
+    events: &mut arena_kiosk_core::EventStream,
+    since: Instant,
+    limit: Duration,
+) -> Duration {
+    loop {
+        let ev = tokio::time::timeout(limit, events.next_event())
+            .await
+            .expect("a session screen reached the PC in time")
+            .unwrap();
+        if matches!(ev, HubEvent::SessionStarted { .. }) {
+            return since.elapsed();
+        }
+    }
+}
+
+/// The Hub's half of the scripted Journey 3 (login, approval, Extend, a seat order on the tile),
+/// timed over the real LAN protocol and checked against the story's budgets. With
+/// `ARENA_JOURNEY_OUT` set, the timings are written there for `scripts/journey-report.mjs`, which
+/// adds the kiosk UI's own legs and fails the release on a miss. Budgets come from
+/// `JOURNEY_LOGIN_MS`, `JOURNEY_APPROVE_MS`, `JOURNEY_EXTEND_MS` and `JOURNEY_ORDER_MS`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hub_side_of_journey_3_meets_its_timings() {
+    use arena_proto::{PlayerAuthResult, PlayerChoice, PlayerExtendResult, PlayerStartResult};
+    let hub = start("0.1.0", true).await;
+    basic_branch(&hub).await;
+    let group = rated_pc(&hub, 6_000).await;
+    let player = add_player(&hub, "asha", "right-password", "Asha").await;
+    top_up(&hub, &player, 4_000).await;
+    let pack = own_pack(&hub, &player, &group).await;
+    let cola = tracked_cola(&hub, 5).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    let limit = Duration::from_secs(10);
+
+    // Login.
+    let at = Instant::now();
+    let result = login(&client, "asha", "right-password").await;
+    let login_ms = at.elapsed();
+    assert!(matches!(result, PlayerAuthResult::Ok { .. }));
+
+    // The plan picker, then approval: the Hub accepts the start and the PC is told.
+    let plans = plans(&client).await.unwrap();
+    assert!(plans.options.iter().any(|o| o.choice
+        == PlayerChoice::Pack {
+            pack_id: pack.clone()
+        }));
+    let at = Instant::now();
+    assert_eq!(
+        start_choice(
+            &client,
+            serde_json::json!({"mode": "pack", "pack_id": pack})
+        )
+        .await
+        .unwrap(),
+        PlayerStartResult::Ok
+    );
+    let approve_ms = session_screen_within(&mut events, at, limit).await;
+
+    // Extend: the answer is back and the PC has the new end.
+    let before = Store::open_reader(&hub.path)
+        .unwrap()
+        .live_sessions()
+        .unwrap()[0]
+        .ends_at
+        .unwrap();
+    let at = Instant::now();
+    assert_eq!(
+        extend_frame(
+            &client,
+            serde_json::json!({"minutes": 30, "source": "wallet"})
+        )
+        .await
+        .unwrap(),
+        PlayerExtendResult::Ok
+    );
+    let extend_ms = session_screen_within(&mut events, at, limit).await;
+    let after = Store::open_reader(&hub.path)
+        .unwrap()
+        .live_sessions()
+        .unwrap()[0]
+        .ends_at
+        .unwrap();
+    assert_eq!(after - before, 30 * 60_000);
+
+    // An order from the seat is on the Hub tile (its open alert) once the Hub has answered.
+    let at = Instant::now();
+    assert_eq!(
+        place_pay_frame(&client, &[(&cola, 1)], "counter")
+            .await
+            .unwrap(),
+        arena_proto::ShopPlaceResult::Ok
+    );
+    while kiosk_order_alerts(&hub).is_empty() {
+        assert!(at.elapsed() < limit, "the order never reached the tile");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let order_ms = at.elapsed();
+
+    let ms = |d: Duration| d.as_millis() as u64;
+    let timings = serde_json::json!({
+        "source": "hub",
+        "login_ms": ms(login_ms),
+        "approve_ms": ms(approve_ms),
+        "extend_ms": ms(extend_ms),
+        "order_ms": ms(order_ms),
+    });
+    println!("journey hub timings: {timings}");
+    if let Ok(out) = std::env::var("ARENA_JOURNEY_OUT") {
+        let out = std::path::PathBuf::from(out);
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(out, serde_json::to_string_pretty(&timings).unwrap()).unwrap();
+    }
+    for (what, took, var, default) in [
+        ("login", login_ms, "JOURNEY_LOGIN_MS", 3_000),
+        (
+            "approval to the PC",
+            approve_ms,
+            "JOURNEY_APPROVE_MS",
+            2_000,
+        ),
+        ("Extend to the floor", extend_ms, "JOURNEY_EXTEND_MS", 2_000),
+        ("order on the tile", order_ms, "JOURNEY_ORDER_MS", 3_000),
+    ] {
+        let allowed = budget_ms(var, default);
+        assert!(
+            ms(took) <= allowed,
+            "{what} took {} ms, the budget is {allowed} ms",
+            ms(took)
+        );
+    }
+}

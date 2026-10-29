@@ -9,6 +9,12 @@ name: Release benchmark
 # `counter-load` and `pos-timing` (Story 5.39) do the same for the counter: sale apply p95 and the
 # books after a 10-minute mix, a Hub killed during a sale burst, and a scanned sale and a
 # within-threshold shift close under 10 s each.
+# `journey-*`, `launcher-logout` and `journey-report` (Story 6.38) time the player journey: the
+# Hub's legs over the LAN, the kiosk UI's legs, the kiosk's memory idle on attract and in the
+# shell, the 30-minute real-clock Hub outage and 20 sessions of real launcher logins per Windows
+# version. The report job merges them (scripts/journey-report.mjs) and fails the release on a
+# missed budget or a missing result. The rig and its repository variables are described in
+# docs/runbooks/journey-bench.md.
 # The `soak` input adds the 8-hour WAN-down soak (Story 1.22).
 
 on:
@@ -242,8 +248,29 @@ jobs:
         shell: pwsh
         run: |
           $ui = Join-Path $env:ProgramFiles "Arena 360 Kiosk\arena-kiosk-ui.exe"
-          & scripts/bench/kiosk-idle.ps1 -UiExe $ui
+          & scripts/bench/kiosk-idle.ps1 -UiExe $ui -Phase attract -OutJson (Join-Path $env:RUNNER_TEMP "journey-idle\idle-attract.json")
           exit $LASTEXITCODE
+      # The rig starts a session on this PC (a Hub on the LAN starts one for the paired kiosk)
+      # and the shell is measured as it is.
+      - name: Idle budgets in the shell
+        if: ${{ vars.JOURNEY_START_SESSION_CMD != '' }}
+        shell: pwsh
+        env:
+          JOURNEY_START_SESSION_CMD: ${{ vars.JOURNEY_START_SESSION_CMD }}
+        run: |
+          Invoke-Expression $env:JOURNEY_START_SESSION_CMD
+          if ($LASTEXITCODE) { throw "starting the session exited $LASTEXITCODE" }
+          Start-Sleep -Seconds 10
+          $ui = Join-Path $env:ProgramFiles "Arena 360 Kiosk\arena-kiosk-ui.exe"
+          & scripts/bench/kiosk-idle.ps1 -UiExe $ui -Phase shell -OutJson (Join-Path $env:RUNNER_TEMP "journey-idle\idle-shell.json")
+          exit $LASTEXITCODE
+      - name: Upload the memory results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journey-idle
+          path: ${{ runner.temp }}/journey-idle/*.json
+          if-no-files-found: ignore
       - name: Uninstall the Kiosk
         if: always()
         shell: pwsh
@@ -256,6 +283,135 @@ jobs:
           } else {
             Write-Host "nothing to uninstall ($uninstall not found)"
           }
+
+  journey-hub:
+    name: journey, the Hub's legs over the LAN (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Login, approval, Extend and an order on the tile against their budgets
+        env:
+          ARENA_JOURNEY_OUT: ${{ github.workspace }}/target/journey-out/hub.json
+        run: cargo test --locked --release -p arena-api --test lan the_hub_side_of_journey_3 -- --nocapture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: journey-hub
+          path: target/journey-out/hub.json
+          if-no-files-found: ignore
+
+  journey-ui:
+    name: journey, the kiosk UI's legs (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/kiosk exec playwright install chromium
+      - name: Attract to attract, each leg timed
+        env:
+          ARENA_JOURNEY_UI_OUT: ${{ github.workspace }}/target/journey-out/ui.json
+        run: pnpm --filter @arena/kiosk exec playwright test journey.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: journey-ui
+          path: target/journey-out/ui.json
+          if-no-files-found: ignore
+
+  journey-hub-down:
+    name: journey, the Hub stopped for 30 minutes (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: 30 real minutes without the Hub, then the lock at zero and the Hub's word
+        env:
+          ARENA_HUBDOWN_OUT: ${{ github.workspace }}/target/journey-out/hub-down.json
+        run: cargo test --locked --release -p arena-kiosk-svc --lib a_real_thirty_minute_hub_outage -- --ignored --nocapture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: journey-hub-down
+          path: target/journey-out/hub-down.json
+          if-no-files-found: ignore
+
+  launcher-logout:
+    name: launcher logout, 20 sessions (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: Windows 10
+            label: lab-win10
+            file: residue-win10.json
+          - os: Windows 11
+            label: lab-win11
+            file: residue-win11.json
+    runs-on: [self-hosted, windows, "${{ matrix.label }}"]
+    timeout-minutes: 180
+    env:
+      LAUNCHER_LOGIN_CMD: ${{ vars.LAUNCHER_LOGIN_CMD }}
+      LAUNCHER_END_CMDS: ${{ vars.LAUNCHER_END_CMDS }}
+      LAUNCHER_PROFILE: ${{ vars.LAUNCHER_PROFILE }}
+      LAUNCHER_STEAM_DIR: ${{ vars.LAUNCHER_STEAM_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # LAUNCHER_LOGIN_CMD signs Steam, Epic, Riot, Discord, Chrome and Edge in with the lab's real
+      # accounts; LAUNCHER_END_CMDS is a JSON array of commands, one per way a session ends.
+      - name: 20 sessions, each scanned for what the last player left
+        shell: pwsh
+        run: |
+          $ends = $env:LAUNCHER_END_CMDS | ConvertFrom-Json
+          if (-not $ends -or -not $env:LAUNCHER_LOGIN_CMD) { throw "LAUNCHER_LOGIN_CMD and LAUNCHER_END_CMDS must be set for the lab" }
+          $launch = @("scripts/launcher-residue.mjs", "--os", "${{ matrix.os }}", "--sessions", "20",
+            "--profile", $env:LAUNCHER_PROFILE, "--steam", $env:LAUNCHER_STEAM_DIR,
+            "--login-cmd", $env:LAUNCHER_LOGIN_CMD,
+            "--out", "target/journey-out/${{ matrix.file }}")
+          foreach ($e in $ends) { $launch += @("--end-cmd", $e) }
+          node @launch
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: journey-${{ matrix.label }}
+          path: target/journey-out/${{ matrix.file }}
+          if-no-files-found: ignore
+
+  journey-report:
+    name: journey release report
+    needs: [kiosk-idle, journey-hub, journey-ui, journey-hub-down, launcher-logout]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: journey-*
+          merge-multiple: true
+          path: target/journey
+      - name: Check every budget; a missing result fails
+        run: node scripts/journey-report.mjs --dir target/journey
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: journey-report
+          path: target/journey/report.md
+          if-no-files-found: ignore
 
   soak:
     name: wan-down soak (8 h)

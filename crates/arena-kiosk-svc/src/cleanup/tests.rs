@@ -1581,3 +1581,72 @@ async fn the_hubs_word_changes_nothing_on_a_pc_with_no_session() {
     crate::session::reconcile(&ctx, hub_record(Some(player_screen()), None));
     assert!(ctx.pc.screen.borrow().session.is_none());
 }
+
+// ---- Story 6.38: the Hub stopped for 30 minutes, on the real clock ----
+
+/// The release-bench run of the Hub outage: the same scenario as the virtual-time test above, on
+/// the real monotonic clock for `ARENA_HUB_DOWN_SECS` (30 minutes unless overridden). The session
+/// has 3 s left when the outage ends, so the lock is due 3 s after the last mark. Writes its
+/// result to `ARENA_HUBDOWN_OUT` for `scripts/journey-report.mjs`.
+#[tokio::test]
+#[ignore = "runs for 30 real minutes; the release-bench job runs it"]
+async fn a_real_thirty_minute_hub_outage_never_locks_early_and_the_lock_lands_on_time() {
+    let down: u64 = std::env::var("ARENA_HUB_DOWN_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30 * 60);
+    let (_dir, ctx) = bare_ctx();
+    let mut s = player_screen();
+    let total = Duration::from_secs(down + 3);
+    s.remaining_ms = Some(total.as_millis() as u64);
+    s.lock_after_ms = total.as_millis() as u64;
+    let started = tokio::time::Instant::now();
+    crate::session::sync(&ctx, s, true);
+    let before = queued(&ctx);
+    let (stop, stop_rx) = watch::channel(false);
+    let worker = tokio::spawn(crate::session::run(Arc::clone(&ctx), stop_rx));
+
+    // The Hub is gone: the player is never locked out before the lock time.
+    tokio::time::sleep(Duration::from_secs(down)).await;
+    {
+        let v = ctx.pc.screen.borrow();
+        assert!(!v.locked, "locked out before lock_after_ms");
+        assert!(v.session.is_some());
+    }
+    // The lock lands within 1 s of zero.
+    let due = started + total;
+    let mut locked_at = None;
+    while tokio::time::Instant::now() < due + Duration::from_secs(5) {
+        if ctx.pc.screen.borrow().locked {
+            locked_at = Some(tokio::time::Instant::now());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let locked_at = locked_at.expect("the kiosk never locked at zero");
+    assert!(locked_at >= due, "locked before zero");
+    let late = locked_at - due;
+    assert!(late <= Duration::from_secs(1), "locked {late:?} after zero");
+    assert_eq!(ctx.pc.screen.borrow().reason, Some(LockReason::TimesUp));
+    assert_eq!(queued(&ctx), before, "the kiosk wrote no session state");
+
+    // The Hub is back and says the same: the kiosk and the Hub agree.
+    crate::session::reconcile(&ctx, hub_record(None, Some(LockReason::TimesUp)));
+    assert!(ctx.pc.screen.borrow().locked);
+    assert_eq!(ctx.pc.screen.borrow().reason, Some(LockReason::TimesUp));
+
+    let result = serde_json::json!({
+        "source": "hub-down",
+        "down_secs": down,
+        "locked_late_ms": late.as_millis() as u64,
+        "locked_early": false,
+    });
+    println!("journey hub-down result: {result}");
+    if let Ok(out) = std::env::var("ARENA_HUBDOWN_OUT") {
+        let out = std::path::PathBuf::from(out);
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(out, serde_json::to_string_pretty(&result).unwrap()).unwrap();
+    }
+    let _ = stop.send(true);
+    let _ = worker.await;
+}

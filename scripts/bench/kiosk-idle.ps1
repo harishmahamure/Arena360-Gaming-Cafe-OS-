@@ -15,6 +15,11 @@
     together they must stay under -LimitMB (80 MB).
   - Reads the "GPU Engine" utilisation counters and fails if any kiosk process uses the GPU
     above 0 %.
+  -Phase attract (default) measures the kiosk idle on the attract screen. -Phase shell measures it
+  idle in the player shell (Story 6.38): the caller has started a session on this PC (for
+  example the 2-minute test session of the setup wizard, or a Hub-side start) and the app is
+  left running as it is, so the shell stays open. -OutJson writes {phase, mb} for
+  scripts/journey-report.mjs.
   Exits 0 when every budget holds and 1 otherwise. The service and its app are left running
   (the uninstall step removes them).
 
@@ -27,7 +32,9 @@ param(
   [int] $ConnectSeconds = 180,
   [int] $IdleSeconds = 300,
   [int] $LimitMB = 80,
-  [int] $GpuSamples = 10
+  [int] $GpuSamples = 10,
+  [ValidateSet("attract", "shell")] [string] $Phase = "attract",
+  [string] $OutJson = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,19 +85,22 @@ $svc = Get-Service -Name $SvcName -ErrorAction Stop
 if ($svc.Status -ne "Running") { Start-Service -Name $SvcName }
 
 $since = (Get-Date).ToUniversalTime()
-# The service's watchdog relaunches it in the player's session.
-Get-Process -Name $UiName -ErrorAction SilentlyContinue | Stop-Process -Force
+# The service's watchdog relaunches it in the player's session. In the shell phase the app is
+# left alone: restarting it would drop the player's session screen.
+if ($Phase -eq "attract") {
+  Get-Process -Name $UiName -ErrorAction SilentlyContinue | Stop-Process -Force
+}
 
 $failures = New-Object System.Collections.Generic.List[string]
 & {
   $deadline = (Get-Date).AddSeconds($ConnectSeconds)
-  while ($null -eq (Find-AppConnected $since)) {
+  while ($Phase -eq "attract" -and $null -eq (Find-AppConnected $since)) {
     if ((Get-Date) -gt $deadline) {
       throw "the service never logged 'app connected' (is the console signed in as the player?)"
     }
     Start-Sleep -Seconds 1
   }
-  Write-Host "Kiosk app is connected to the service; idling for $IdleSeconds s"
+  Write-Host "Kiosk app is up ($Phase); idling for $IdleSeconds s"
   Start-Sleep -Seconds $IdleSeconds
 
   $svcProc = @(Get-Process -Name $SvcName -ErrorAction SilentlyContinue)
@@ -103,6 +113,11 @@ $failures = New-Object System.Collections.Generic.List[string]
   $mb = Get-WorkingSetMB $tree
   Write-Host ("service + app + WebView2 ({0} processes): {1} MB (limit {2} MB)" -f $tree.Count, $mb, $LimitMB)
   if ($mb -ge $LimitMB) { $failures.Add("the kiosk uses $mb MB (limit $LimitMB MB)") }
+  if ($OutJson) {
+    $dir = Split-Path -Parent $OutJson
+    if ($dir) { New-Item -ItemType Directory -Force $dir | Out-Null }
+    (@{ phase = $Phase; mb = $mb } | ConvertTo-Json -Compress) | Set-Content -Path $OutJson -Encoding ascii
+  }
 
   $samples = $null
   try {

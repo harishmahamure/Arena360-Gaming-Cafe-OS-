@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 23:59
+last_updated: 10-30-2026 00:30
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -204,7 +204,7 @@ development_status:
   6-35-pc-settings-saved-to-the-player-s-profile: done
   6-36-the-kiosk-keeps-the-session-running-while-the-hub-is-unreach: done
   6-37-kiosk-screens-reflow-at-every-supported-width-by-keyboard-an: done
-  6-38-the-player-journey-proven-on-reference-hardware: backlog
+  6-38-the-player-journey-proven-on-reference-hardware: review
   epic-6-retrospective: optional
 
   epic-7: in-progress

@@ -11,4 +11,8 @@ export type SummaryShift = {
    * Known only once a shift is counted; absent while it is open.
    */
   variance_minor?: number;
+  /**
+   * When a counted shift closed (Hub clock, ms); absent while it is open (Story 8.13).
+   */
+  closed_at?: number;
 };

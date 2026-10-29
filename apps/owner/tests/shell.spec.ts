@@ -113,13 +113,24 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
     await page.goto(k === "today" ? "/" : `/${k}`);
     const paid = page.getByRole("listitem").filter({ hasText: PAID[0].name });
     const free = page.getByRole("listitem").filter({ hasText: PAID[1].name });
-    await expect(paid.getByText(t("owner.section.soon"))).toBeVisible();
+    // Today shows the paid branch's figures; the other sections still hold their placeholder.
+    await expect(
+      paid.getByText(k === "today" ? t("owner.today.revenue") : t("owner.section.soon")),
+    ).toBeVisible();
     await expect(paid.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
     await expect(free.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toBeVisible();
     await expect(free.getByText(t("owner.section.soon"))).toHaveCount(0);
+    await expect(free.getByText(t("owner.today.revenue"))).toHaveCount(0);
     await expect(page.getByRole("link", { name: /upgrade/i })).toHaveCount(0);
   }
-  expect([...new Set(calls)].sort()).toEqual(["GET /v1/branches", "GET /v1/session"]);
+  // Only the paid branch is ever read: the Free branch makes no owner read call.
+  await expect.poll(() => calls.some((c) => c.endsWith("/b1/data-age"))).toBe(true);
+  expect([...new Set(calls)].sort()).toEqual([
+    "GET /v1/branches",
+    "GET /v1/branches/b1/live",
+    "GET /v1/session",
+    "POST /v1/branches/b1/data-age",
+  ]);
 });
 
 test("on Free, pairing and Support stay usable", async ({ page }) => {
@@ -141,6 +152,8 @@ test("a Free branch that upgrades unlocks on the next open without signing out",
   await page.reload();
   await expect(page.getByText(t("owner.section.soon"))).toBeVisible();
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
+  await page.goto("/");
+  await expect(page.getByText(t("owner.today.revenue"))).toBeVisible();
 });
 
 test("a refused session goes to sign-in and clears the cache", async ({ page }) => {

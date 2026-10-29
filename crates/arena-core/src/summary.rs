@@ -43,13 +43,14 @@ pub fn build_summary(store: &Store, now_ms: i64) -> Result<Option<BranchSummary>
         Some(s) => store.shift_cash_minor(&s.id)?,
         None => 0,
     };
-    let shifts: Vec<SummaryShift> = shift
+    let mut shifts: Vec<SummaryShift> = shift
         .iter()
         .map(|s| SummaryShift {
             shift_id: s.id.clone(),
             staff_name: s.staff_name.clone(),
             opened_at: s.opened_at,
             variance_minor: None,
+            closed_at: None,
         })
         .collect();
     let staff_on_shift = shift.iter().map(|s| s.staff_name.clone()).collect();
@@ -58,6 +59,15 @@ pub fn build_summary(store: &Store, now_ms: i64) -> Result<Option<BranchSummary>
     let mut attention = Vec::new();
     let threshold = store.shift_variance_threshold()?;
     for v in store.recent_shift_variances(now_ms.saturating_sub(RECENT_SHIFT_MS))? {
+        // Counted shifts follow the open one, newest first, so the owner sees each shift's signed
+        // variance beside the drawer (Story 8.13).
+        shifts.push(SummaryShift {
+            shift_id: v.shift_id.clone(),
+            staff_name: v.staff_name.clone(),
+            opened_at: v.opened_at,
+            variance_minor: Some(v.variance_minor),
+            closed_at: Some(v.closed_at),
+        });
         if v.variance_minor.abs() > threshold {
             attention.push(SummaryAttention {
                 kind: ATTENTION_SHIFT_VARIANCE.into(),

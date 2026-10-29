@@ -300,6 +300,17 @@ pub fn dates_between(from: &str, to: &str) -> Vec<String> {
     }
 }
 
+/// `POST /v1/branches/{id}/data-age` (Story 8.13): how old a branch's figures were when the owner
+/// opened Today. The branch is the path and the tier is the cloud's own, so this is all the
+/// app sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct DataAgeReport {
+    /// Seconds between the summary's `as_of` and the open.
+    #[ts(type = "number")]
+    pub age_s: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

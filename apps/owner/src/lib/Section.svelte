@@ -4,7 +4,12 @@
   import type { Snippet } from "svelte";
   import { isFree, refresh, shell } from "./shell.svelte";
 
-  let { title, children }: { title: MessageKey; children?: Snippet } = $props();
+  /** `all`: the section draws its own per-branch entries (Today), so paid tenants get `children` once. */
+  let {
+    title,
+    scope = "branch",
+    children,
+  }: { title: MessageKey; scope?: "branch" | "all"; children?: Snippet } = $props();
   const mixed = $derived(shell.branches?.some((b) => b.tier === "free"));
 </script>
 
@@ -25,7 +30,7 @@
   <Button label="common.retry" variant="secondary" onclick={refresh} />
 {:else if isFree()}
   <TierLock tier="Basic" />
-{:else if mixed}
+{:else if mixed && scope === "branch"}
   <ul class="branches">
     {#each shell.branches as b (b.id)}
       <li>

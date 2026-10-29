@@ -14,21 +14,23 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, BRANCH_ONLINE_WINDOW_MS, ErrorCode, GroupBy, OWNER_ALL_BRANCHES,
+    AppError, BRANCH_ONLINE_WINDOW_MS, DataAgeReport, ErrorCode, GroupBy, OWNER_ALL_BRANCHES,
     OWNER_API_LIMIT_PER_MIN, OWNER_RANGE_MAX_DAYS, OwnerLive, OwnerLiveAll, OwnerRange,
     OwnerRangeAll, OwnerRangeRow, OwnerRangeTotals, Tier, dates_between, is_rollup_date,
 };
 use arena_store::control::{Branch, RateRule};
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::branches::tier_of;
 use super::error::ApiError;
 use super::gate::RequireSetupComplete;
+use super::json::ApiJson;
 use super::signup::ceil_s;
 use crate::auth::AuthState;
 use crate::presign::{Presigner, has_path_chars};
@@ -291,9 +293,36 @@ async fn summary(
     })
 }
 
+/// Seconds a figure's age may be before the report is refused as nonsense (a year).
+const DATA_AGE_MAX_S: u64 = 365 * 24 * 60 * 60;
+
+/// `POST /v1/branches/{id}/data-age`: the app reports how old a branch's figures were when Today
+/// opened. Only the branch, the age and the tier (the cloud's own) are kept.
+async fn data_age(
+    State(st): State<Arc<AuthState>>,
+    RequireSetupComplete(signed): RequireSetupComplete,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<DataAgeReport>,
+) -> Result<StatusCode, ApiError> {
+    if id == OWNER_ALL_BRANCHES {
+        return Err(ApiError::not_found());
+    }
+    if body.age_s > DATA_AGE_MAX_S {
+        return Err(ApiError::validation("age_s", "That age is too large."));
+    }
+    let branches = branches_for(&st, &signed.owner.id, &id, st.now()).await?;
+    let b = branches
+        .first()
+        .ok_or_else(|| ApiError::internal("no branch after the tenant check"))?;
+    let tier = tier_of(&st, &b.id).await?;
+    st.data_age.record(&b.tenant_id, &b.id, tier, body.age_s);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/branches/{id}/live", get(live))
         .route("/branches/{id}/summary", get(summary))
+        .route("/branches/{id}/data-age", post(data_age))
         .with_state(st)
 }

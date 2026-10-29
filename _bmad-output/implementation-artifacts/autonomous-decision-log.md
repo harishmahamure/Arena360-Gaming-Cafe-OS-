@@ -913,3 +913,11 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Audio gate.** `navigator.getAutoplayPolicy("mediaelement")` where it exists, plus any `NotAllowedError` from a real play, raises the "Tap to turn on the chime" bar; the first pointer or key press anywhere plays the chime at volume 0 to unlock it. A muted tablet never shows the bar.
 - **Tab order.** The mute toggle is in the top bar, so it is the first Tab stop; the existing keyboard specs focus it first.
 - **Verification.** See the spec's Verification section.
+
+## Story 8.13: Today shows every branch with its figures, cash variance and data age
+
+- **Variance source.** The Hub summary now lists counted shifts (last 24 h) after the open one with `variance_minor` and `closed_at`; over threshold is read from the summary's `shift_variance` attention items, so the app holds no threshold.
+- **Opening hours.** Not in the summary, so the 30-minute age warning applies only while the summary says `open`.
+- **Attention order.** No timestamps exist, so branches are ordered by most recent summary, then the Hub's order.
+- **Setup mode.** Every paid branch gets a card; setup mode stays Story 8.14.
+- **Data age report.** `POST /v1/branches/{id}/data-age {age_s}` (204), counted per branch with a p99 over the last 200 opens, in process and logged; Grafana export and Lighthouse CI are deferred.

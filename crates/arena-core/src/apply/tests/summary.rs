@@ -202,3 +202,49 @@ async fn a_branch_with_nothing_bootstrapped_has_no_summary() {
     let reader = SnapshotReader::open(&f.path).unwrap();
     assert!(reader.branch_summary(T0).unwrap().is_none());
 }
+
+#[tokio::test]
+async fn a_counted_shift_follows_the_open_one_with_its_signed_variance() {
+    use arena_proto::{ATTENTION_SHIFT_VARIANCE, ShiftClose, VarianceReason};
+
+    let f = booted().await;
+    let before = SnapshotReader::open(&f.path)
+        .unwrap()
+        .branch_summary(T0)
+        .unwrap()
+        .unwrap();
+    assert!(before.shifts.iter().all(|s| s.closed_at.is_none()));
+
+    f.writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ShiftClose(ShiftClose {
+                counted_minor: 5_000_000,
+                deposit: None,
+                reason: Some(VarianceReason::CountingError),
+                note: None,
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let s = SnapshotReader::open(&f.path)
+        .unwrap()
+        .branch_summary(T0)
+        .unwrap()
+        .unwrap();
+    assert!(s.staff_on_shift.is_empty());
+    let counted = s
+        .shifts
+        .iter()
+        .find(|c| c.shift_id == "SHIFT0")
+        .expect("the counted shift is listed");
+    let variance = counted.variance_minor.expect("a counted shift has one");
+    assert!(variance > 0, "an over count is positive: {variance}");
+    assert!(counted.closed_at.is_some());
+    assert!(
+        s.attention
+            .iter()
+            .any(|a| a.kind == ATTENTION_SHIFT_VARIANCE && a.reference == "SHIFT0")
+    );
+}

@@ -104,6 +104,7 @@ export type { CreditDebtor } from "./CreditDebtor";
 export type { CreditSetLimit } from "./CreditSetLimit";
 export type { CreditView } from "./CreditView";
 export type { DailySales } from "./DailySales";
+export type { DataAgeReport } from "./DataAgeReport";
 export type { DeviceAdminExit } from "./DeviceAdminExit";
 export type { DeviceAdminRelock } from "./DeviceAdminRelock";
 export type { DeviceAdminUnlock } from "./DeviceAdminUnlock";

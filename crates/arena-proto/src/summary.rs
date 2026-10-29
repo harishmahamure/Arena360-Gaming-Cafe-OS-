@@ -42,6 +42,10 @@ pub struct SummaryShift {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub variance_minor: Option<i64>,
+    /// When a counted shift closed (Hub clock, ms); absent while it is open (Story 8.13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub closed_at: Option<i64>,
 }
 
 /// Something that needs the owner's eyes, by id and display parameters.
@@ -179,6 +183,7 @@ mod tests {
             staff_name: "Asha".into(),
             opened_at: 5,
             variance_minor: None,
+            closed_at: None,
         };
         assert!(
             serde_json::to_value(&s)

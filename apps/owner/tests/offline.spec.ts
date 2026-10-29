@@ -53,6 +53,6 @@ test("Today with nothing cached offers Retry, and Retry recovers", async ({ page
   await expect(page.getByText(t("owner.unavailable"))).toBeVisible();
   down = false;
   await page.getByRole("button", { name: t("common.retry") }).click();
-  await expect(page.getByText(t("owner.section.soon"))).toBeVisible();
+  await expect(page.getByText(t("owner.today.revenue"))).toBeVisible();
   await expect(page.getByText(t("owner.offline"), { exact: true })).toHaveCount(0);
 });

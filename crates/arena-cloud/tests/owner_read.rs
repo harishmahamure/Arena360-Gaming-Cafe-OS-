@@ -810,3 +810,60 @@ async fn without_a_data_bucket_the_read_is_unavailable() {
     let r = h.get(&a, &live(&a)).await;
     assert_eq!(r.status, 503, "{}", r.body);
 }
+
+fn data_age(c: &Cafe) -> String {
+    format!("/v1/branches/{}/data-age", c.branch)
+}
+
+#[tokio::test]
+async fn an_open_of_today_reports_the_age_of_a_branchs_figures_and_nothing_else() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let r = h
+        .call("POST", &data_age(&a), Some(json!({"age_s": 90})), &a.access)
+        .await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    h.call("POST", &data_age(&a), Some(json!({"age_s": 30})), &a.access)
+        .await;
+    let s = h.st.data_age.stats(&a.tenant, &a.branch);
+    assert_eq!((s.opens, s.last_s, s.p99_s), (2, 30, 90));
+    assert_eq!(h.calls().reads, 0, "no bucket call for a report");
+
+    // A negative, fractional or absurd age is refused and not kept.
+    for body in [
+        json!({"age_s": -1}),
+        json!({"age_s": 1.5}),
+        json!({"age_s": 99_999_999_999u64}),
+    ] {
+        let r = h
+            .call("POST", &data_age(&a), Some(body.clone()), &a.access)
+            .await;
+        assert!(
+            r.status == 400 || r.status == 422,
+            "{body}: {} {}",
+            r.status,
+            r.body
+        );
+    }
+    assert_eq!(h.st.data_age.stats(&a.tenant, &a.branch).opens, 2);
+}
+
+#[tokio::test]
+async fn a_report_for_another_cafe_a_free_branch_or_nobody_is_refused() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let b = h.cafe(PHONE_B, "Other Arena", "198.51.100.5").await;
+    let body = || Some(json!({"age_s": 5}));
+    let r = h.call("POST", &data_age(&b), body(), &a.access).await;
+    assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+    let r = h
+        .call("POST", "/v1/branches/all/data-age", body(), &a.access)
+        .await;
+    assert_eq!(r.status, 404);
+    let r = h.call("POST", &data_age(&b), body(), &b.access).await;
+    assert_eq!((r.status, r.code()), (403, "FEATURE_NOT_ENTITLED"));
+    let r = h.call("POST", &data_age(&a), body(), "").await;
+    assert_eq!(r.status, 401);
+    assert_eq!(h.st.data_age.stats(&a.tenant, &a.branch).opens, 0);
+    assert_eq!(h.st.data_age.stats(&b.tenant, &b.branch).opens, 0);
+}

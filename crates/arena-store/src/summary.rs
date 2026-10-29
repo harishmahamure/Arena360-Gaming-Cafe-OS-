@@ -36,6 +36,7 @@ pub struct RollupLogRow {
 pub struct ClosedShiftVariance {
     pub shift_id: String,
     pub staff_name: String,
+    pub opened_at: i64,
     pub closed_at: i64,
     pub variance_minor: i64,
 }
@@ -108,7 +109,8 @@ pub fn closed_shift_variances(
 ) -> Result<Vec<ClosedShiftVariance>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT s.id, COALESCE(st.display_name, s.staff_id), s.closed_at, s.variance_minor
+            "SELECT s.id, COALESCE(st.display_name, s.staff_id), s.closed_at, s.variance_minor,
+                    s.opened_at
              FROM shifts s LEFT JOIN staff st ON st.staff_id = s.staff_id
              WHERE s.state = 'closed' AND s.closed_at >= ?1 AND s.variance_minor IS NOT NULL
              ORDER BY s.closed_at DESC, s.id LIMIT ?2",
@@ -118,6 +120,7 @@ pub fn closed_shift_variances(
         Ok(ClosedShiftVariance {
             shift_id: r.get(0)?,
             staff_name: r.get(1)?,
+            opened_at: r.get(4)?,
             closed_at: r.get(2)?,
             variance_minor: r.get(3)?,
         })

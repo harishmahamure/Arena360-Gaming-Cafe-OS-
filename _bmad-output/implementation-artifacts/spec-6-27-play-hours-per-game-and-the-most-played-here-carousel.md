@@ -2,7 +2,7 @@
 title: 'Story 6.27: Play hours per game and the "Most played here" carousel'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '60834d2e49b804567e8bc365a1ade1f3c5563899'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -139,3 +139,6 @@ Status: review
 - **Review:** 4 patches applied, 4 deferred, the rest rejected with reasons in the triage log. Follow-up review recommended: false.
 - **Verification:** `cargo fmt --check` clean; clippy `-D warnings` clean on proto, store, core, api and kiosk-svc libs; proto 242, store 90, core `game_play` 8, kiosk-svc `games` 27 and `cleanup` 46 pass, api `lan` games test passes; `pnpm --filter @arena/kiosk check` 0 errors; `most-played.spec.ts` 9 pass (full kiosk suite 271 pass before the patches; 4 `theme.spec.ts` tests fail as before). `arena-replay` `replaying_the_seeded_log…` fails at `library_entries has no row` (a table from 6.3, not touched here).
 - **Residual risks:** the real Tauri shell, a Hub-to-kiosk round trip and real Windows process exit were not exercised; see `deferred`.
+
+### 2026-10-29 — Final review pass
+- No blocking findings. fmt, clippy `-D warnings` (libs), proto/store/core/proptest/kiosk-svc games+cleanup/api lan tests, `@arena/kiosk check`, prettier and `most-played.spec.ts` (9) all pass. Pre-existing clippy `clone_on_copy` in `arena-kiosk-svc` test code (`launchers/tests.rs`) is untouched by this story.

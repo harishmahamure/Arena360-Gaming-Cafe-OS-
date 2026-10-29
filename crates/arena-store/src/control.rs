@@ -26,6 +26,7 @@ mod hubs;
 mod mfa;
 mod otp;
 mod owner;
+mod owner_commands;
 mod pairing;
 mod rate_limit;
 mod session;
@@ -52,6 +53,7 @@ pub use otp::{
     SignupOutcome,
 };
 pub use owner::{NewOwner, Owner};
+pub use owner_commands::{OwnerCommandFilter, OwnerCommandRow};
 pub use pairing::{
     IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
 };
@@ -158,6 +160,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 18,
         sql: include_str!("../control-migrations/0018_hub_upload_view.sql"),
+    },
+    ControlMigration {
+        version: 19,
+        sql: include_str!("../control-migrations/0019_owner_commands.sql"),
     },
 ];
 

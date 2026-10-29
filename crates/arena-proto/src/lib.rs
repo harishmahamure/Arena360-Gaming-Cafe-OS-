@@ -35,6 +35,7 @@ mod library;
 pub mod licence;
 mod matching;
 mod operating;
+mod owner_commands;
 mod owner_export;
 mod owner_read;
 pub mod pairing;
@@ -246,6 +247,11 @@ pub use operating::{
     KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, LAST_MINUTE, MEDIA_CAP_GB_RANGE, MediaCacheStatus,
     OpeningDay, OpeningHoursError, SetupStatus, TestSessionState, has_open_day, is_absolute_path,
     is_backup_location, is_backup_tree_uri, opening_hours_json, parse_opening_hours,
+};
+pub use owner_commands::{
+    OWNER_COMMAND_KINDS, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
+    OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandSkip,
+    OwnerCommandView, accepted_owner_kind, owner_command_kind, validate_owner_payload,
 };
 pub use owner_export::{ExportReport, major, owner_csv, utc_minute};
 pub use owner_read::{

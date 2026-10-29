@@ -42,4 +42,9 @@ export type HeartbeatRequest = {
    * The same for ad requests, with their own cursor.
    */
   ad_requests?: AdCounts;
+  /**
+   * The newest owner-command `schema_version` this Hub runs (Story 8.18); an older Hub omits
+   * it and counts as version 1.
+   */
+  command_schema?: number;
 };

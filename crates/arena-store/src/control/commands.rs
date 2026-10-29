@@ -12,6 +12,8 @@ pub struct NewCommand<'a> {
     pub schema_version: u32,
     pub payload: &'a str,
     pub issued_by: &'a str,
+    /// The owner's key shared by every row of an "all branches" post (Story 8.18).
+    pub group_id: Option<&'a str>,
     pub now: i64,
 }
 
@@ -66,7 +68,8 @@ pub(super) fn command_from(row: &[SqlValue]) -> Result<CommandRow, ControlError>
 pub(super) fn insert_command(c: &NewCommand<'_>) -> Stmt {
     Stmt::new(
         "INSERT INTO commands (branch_id, idempotency_key, kind, schema_version, \
-         payload, issued_by, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) \
+         payload, issued_by, status, created_at, group_id) \
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?) \
          ON CONFLICT (branch_id, idempotency_key) DO NOTHING",
         vec![
             text(c.branch_id),
@@ -76,6 +79,7 @@ pub(super) fn insert_command(c: &NewCommand<'_>) -> Stmt {
             text(c.payload),
             text(c.issued_by),
             SqlValue::Integer(c.now),
+            c.group_id.map_or(SqlValue::Null, text),
         ],
     )
 }

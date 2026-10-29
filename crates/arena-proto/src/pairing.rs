@@ -322,6 +322,11 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ad_requests: Option<crate::AdCounts>,
+    /// The newest owner-command `schema_version` this Hub runs (Story 8.18); an older Hub omits
+    /// it and counts as version 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command_schema: Option<u32>,
 }
 
 /// A run of change-log `seq`s of the heartbeat's epoch, both ends included.

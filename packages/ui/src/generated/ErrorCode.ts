@@ -96,4 +96,5 @@ export type ErrorCode =
   | "BUNDLE_SHORT"
   | "PAYLOAD_TOO_LARGE"
   | "FENCED"
-  | "ROLLUP_SCHEMA_OLD";
+  | "ROLLUP_SCHEMA_OLD"
+  | "BRANCH_UPDATE_REQUIRED";

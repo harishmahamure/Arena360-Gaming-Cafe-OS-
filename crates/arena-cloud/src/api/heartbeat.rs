@@ -124,6 +124,11 @@ async fn heartbeat(
             "This Hub is no longer paired.",
         ));
     };
+    if let Some(schema) = body.command_schema
+        && let Err(e) = st.db.record_command_schema(&hub.id, schema).await
+    {
+        tracing::warn!(error = %e, "heartbeat: command schema not recorded");
+    }
     let mut changed = hub.last_seen_at.is_none();
     if changed {
         tracing::info!(hub_id = %hub.id, branch_id = %hub.branch_id, "first hub heartbeat");

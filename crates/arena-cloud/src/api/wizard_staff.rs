@@ -138,6 +138,7 @@ fn command<'a>(branch_id: &'a str, i: &'a Issued, owner_id: &'a str, now: i64) -
         schema_version: COMMAND_SCHEMA_VERSION,
         payload: &i.payload,
         issued_by: owner_id,
+        group_id: None,
         now,
     }
 }

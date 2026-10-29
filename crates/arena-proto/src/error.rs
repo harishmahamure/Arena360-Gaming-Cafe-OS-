@@ -180,6 +180,8 @@ pub enum ErrorCode {
     /// A rollup file's `schema` is neither the cloud's current one nor the one before it; the day
     /// counts as missing until the Hub regenerates it (Story 8.7).
     RollupSchemaOld,
+    /// The branch's Hub reports a command schema below the one the command needs (Story 8.18).
+    BranchUpdateRequired,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -290,6 +292,7 @@ impl ErrorCode {
             Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
             Self::Fenced => "FENCED",
             Self::RollupSchemaOld => "ROLLUP_SCHEMA_OLD",
+            Self::BranchUpdateRequired => "BRANCH_UPDATE_REQUIRED",
         }
     }
 }
@@ -461,6 +464,7 @@ mod tests {
             (ErrorCode::PayloadTooLarge, "PAYLOAD_TOO_LARGE"),
             (ErrorCode::Fenced, "FENCED"),
             (ErrorCode::RollupSchemaOld, "ROLLUP_SCHEMA_OLD"),
+            (ErrorCode::BranchUpdateRequired, "BRANCH_UPDATE_REQUIRED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

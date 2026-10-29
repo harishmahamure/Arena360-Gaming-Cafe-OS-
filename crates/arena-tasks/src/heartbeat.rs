@@ -244,6 +244,7 @@ impl HeartbeatTask {
             setup,
             ad_impressions: ads.impressions,
             ad_requests: ads.requests,
+            command_schema: Some(arena_proto::COMMAND_SCHEMA_VERSION),
         };
         let sent = Instant::now();
         match self.cloud.heartbeat(&token, &req).await {

@@ -102,6 +102,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PayloadTooLarge
         | ErrorCode::Fenced
         | ErrorCode::RollupSchemaOld
+        | ErrorCode::BranchUpdateRequired
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame

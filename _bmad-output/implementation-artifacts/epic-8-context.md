@@ -59,3 +59,12 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **PDF.** No server PDF: Export PDF shows the report tab and calls `window.print()`. Print media hides the header/nav and the controls, switches to the light tokens and shows `.print-header` (report, branches, range, generated time, data age).
 - **Exports tab.** Lists Revenue, Cash reconciliation and Stock with CSV and PDF for the current range and pick.
 - **NFR10.** `thirty_days_of_rollups_sum_to_the_thirty_z_reports` (arena-core) runs 30 business days (sales, undone sale, refunds, shorts, closes) and compares the summed rollups to the summed Z-reports. It does not go through MinIO.
+
+## Story 8.18: The cloud accepts owner command kinds, checks them, and fans "all branches" out
+
+- **Catalogue.** `arena_proto::OWNER_COMMAND_KINDS`: `rate.upsert`, `plan.upsert`, `rule.upsert`, `coupon.upsert`, `product.upsert`, `backup.now` (handled, Basic, not sensitive) and `hub.revoke`, `backup.restore` (reserved, sensitive, no handler, so `UNSUPPORTED`). Payloads are validated by parsing the matching intent payload struct; `base_rev` rides in the payload object. Later stories add their kinds to this list with their Hub handlers.
+- **Post.** `POST /v1/commands {branch_id|"all", idempotency_key, kind, payload, base_rev?}` (owner session) answers `{commands, skipped}`. `all` writes a row per passing branch with `group_id` = the user's key and a ULID key derived from key + branch; skipped branches carry a code (`FEATURE_NOT_ENTITLED`, `BRANCH_UPDATE_REQUIRED`). When nothing passes, the first skip's error is returned instead.
+- **Schema range.** The heartbeat carries `command_schema` (the newest command `schema_version` the Hub runs); the cloud stores it on `hubs.command_schema_max`. No value counts as 1. A branch below the kind's version is `BRANCH_UPDATE_REQUIRED` (new `ErrorCode`, 409).
+- **List.** `GET /v1/commands?status=&branch=&group=&before=&limit=` with an owner session returns `{commands, next_before}` newest first with `status`, `error`, `queued_at`, `done_at`. A request with `Authorization` or an `epoch` query is the Hub's mailbox fetch, unchanged.
+- **Limit.** 60 posts a minute per tenant (`RATE_LIMITED`).
+- **Until 8.19** a Hub that fetches one of the new kinds records it `rejected` `UNSUPPORTED`.

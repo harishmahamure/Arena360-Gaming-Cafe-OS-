@@ -949,7 +949,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::SERVICE_UNAVAILABLE
         }
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-        ErrorCode::Fenced | ErrorCode::RollupSchemaOld => StatusCode::CONFLICT,
+        ErrorCode::Fenced | ErrorCode::RollupSchemaOld | ErrorCode::BranchUpdateRequired => {
+            StatusCode::CONFLICT
+        }
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,

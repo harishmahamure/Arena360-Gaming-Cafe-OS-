@@ -2,7 +2,7 @@
 title: 'Story 6.18: "I''m done" ends a postpaid session from the HUD'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '8bb3b2abe4fc4402fe41e11990cef9e598567b31'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -69,6 +69,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review (iteration 1): no blocking findings. HUD window is covered by the default capability; `player_end` and `hub_status` are service-bridged. Checks and the hud/account-menu Playwright suites pass (46 tests).
+
 ## Verification
 
 **Commands:**
@@ -78,7 +80,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Verified: strings, hex, no-blur, format and kiosk svelte-check pass; the kiosk Playwright suite passes (including 10 new "I'm done" tests) apart from the 4 `theme.spec.ts` tests. No Rust changed.
 

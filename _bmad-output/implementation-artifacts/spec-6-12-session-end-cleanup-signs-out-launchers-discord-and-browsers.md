@@ -2,7 +2,7 @@
 title: 'Story 6.12: Session-end cleanup signs out launchers, Discord and browsers'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '4c1a738'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -45,3 +45,9 @@ context:
 - `cargo clippy -p arena-kiosk-svc --lib --bins -- -D warnings` and `cargo fmt --check` clean. `tests/discovery.rs` does not build on Windows (as before).
 - Not run here: `tests/runtime.rs` (unix only; its cleanup call list was updated), the Windows registry/Credential Manager code against real Steam, Epic, Riot, Discord, Chrome and Edge logins on Windows 10/11 images (the AC's image test needs real images).
 - Registry paths and file locations for each launcher were taken from the known layouts, not verified against a live install on this host.
+
+## Review Triage Log (code review, 2026-10-29)
+
+Fixed: none needed. Checked: removals refuse a link on the way and remove a link leaf as a link only; a target's files are removed only after its programs are gone; `msedgewebview2.exe` is not in Edge's image list; the registry and Credential Manager helpers treat "nothing there" as success and free the system list; step names fit the Hub's rules.
+
+Deferred (not blocking): the Windows registry/Credential Manager/launcher paths still need a run on real Windows 10/11 images with live logins (as listed under Verification).

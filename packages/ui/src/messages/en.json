@@ -246,7 +246,7 @@
   "hub.audit.intent.refund.create": "Refund issued",
   "hub.sheet.done.served": "Marked served.",
   "hub.sheet.done.ready": "Marked ready.",
-  "hub.sheet.done.kot_reprint": "KOT sent to the printer.",
+  "hub.sheet.done.kot_reprint": "KOT queued for the printer.",
   "hub.sheet.done.line_cancelled": "Item cancelled.",
   "hub.sheet.done.order_voided": "Order voided.",
   "hub.undo.ordered": "Added to the session bill · bill now {amount}",

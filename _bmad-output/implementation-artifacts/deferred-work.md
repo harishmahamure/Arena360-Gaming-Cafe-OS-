@@ -583,3 +583,5 @@
 - The 3 s commit-to-printer bound is by design (500 ms tick plus an event wake-up) but is not measured on reference hardware; Story 7.11 owns that proof.
 - A kitchen display (Story 7.6 onwards) does not read `KitchenTicketView.kot`; only the Hub shows "KOT not printed".
 - Reprint KOT is offered on every open ticket even when KOT mode is None; the Hub shows the refusal ("No KOT printer is set up") rather than hiding the button.
+- (Review) A KOT row queued before KOT mode is switched to None fails with a Printer offline alert instead of being dropped quietly; `kot_job` also builds a full snapshot just to read the timezone; the Printer offline alert is raised for every failure kind, not only printer faults.
+- (Review) `kot.reprint` has no duplicate guard (double tap while offline queues several slips); the Counter strip maps every non-validation refusal to "ticket changed".

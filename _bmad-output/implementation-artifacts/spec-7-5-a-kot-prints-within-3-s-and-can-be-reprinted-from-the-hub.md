@@ -2,7 +2,7 @@
 title: 'Story 7.5: A KOT prints within 3 s and can be reprinted from the Hub'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '0d93db8'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -95,3 +95,7 @@ Self-review while building (no separate reviewer run in the unattended loop):
 - The result of a first print writes nothing, so it cannot stale a kitchen display's `kitchen.advance` or block the Undo of the placement; only a failure or a reprint's success touches the ticket row.
 - The `×` in "qty × name" prints as `x`: PC437 has no multiplication sign.
 - A reprint touches the ticket, not the order, so it cannot stale `order.place.reverted`.
+
+### Code review (2026-10-29)
+
+Three-layer review (blind, acceptance, build checks). No blocking findings; tests, clippy, fmt, svelte-check, strings and prettier green. Fixed: the reprint toast said "sent to the printer" when the slip is only queued. Remaining non-blocking items recorded in deferred-work.md.

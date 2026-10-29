@@ -217,7 +217,7 @@ development_status:
   7-7-the-kitchen-board-shows-open-tickets-in-four-columns: done
   7-8-one-tap-advances-a-ticket-with-undo: done
   7-9-new-tickets-chime-and-hold-a-new-badge-with-a-mute-toggle: done
-  7-10-the-board-keeps-working-through-lan-loss-and-syncs-on-reconn: review
+  7-10-the-board-keeps-working-through-lan-loss-and-syncs-on-reconn: done
   7-11-the-kitchen-flow-proven-on-reference-hardware: backlog
   epic-7-retrospective: optional
 

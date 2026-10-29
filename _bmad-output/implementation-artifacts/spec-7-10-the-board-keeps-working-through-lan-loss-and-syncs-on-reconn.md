@@ -2,7 +2,7 @@
 title: 'Story 7.10: The board keeps working through LAN loss and syncs on reconnect'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: 'bc7b674'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-7-context.md'

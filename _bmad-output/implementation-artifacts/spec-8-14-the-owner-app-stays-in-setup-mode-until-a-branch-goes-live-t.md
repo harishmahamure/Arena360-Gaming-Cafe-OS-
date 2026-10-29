@@ -2,7 +2,7 @@
 title: 'Story 8.14: The Owner app stays in setup mode until a branch goes live, then opens its dashboard'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '1ac325d2d3589a090dd261b4d83448293f6ed128'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -69,6 +69,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-30): no blocking findings. Noted, not fixed: `liveBranches()` has no consumer until Story 8.15; a pre-upgrade offline cache lacking `live_at` would read as live until the next online fetch.
 
 ## Design Notes
 

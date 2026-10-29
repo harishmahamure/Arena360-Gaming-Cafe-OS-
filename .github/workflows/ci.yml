@@ -356,6 +356,8 @@ jobs:
       - run: pnpm --filter @arena/hub check
       - run: pnpm --filter @arena/hub build
       - run: pnpm --filter @arena/hub test:shell
+      - run: pnpm --filter @arena/kitchen check
+      - run: pnpm --filter @arena/hub test:kitchen
       - run: pnpm --filter @arena/kiosk check
       - run: pnpm --filter @arena/kiosk test:ui
       - run: pnpm --filter @arena/onboarding check

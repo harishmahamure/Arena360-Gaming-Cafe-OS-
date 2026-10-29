@@ -5591,6 +5591,9 @@ async fn a_display_reads_the_board_and_is_pushed_it_after_a_ticket_changes() {
     )
     .await;
 
+    let mut phone = hub.plain().await;
+    hello_ok(&mut phone, hub.hello(ClientClass::Phone, "", "0.1.0")).await;
+
     let reply = kitchen_board(&mut ws, "b1").await;
     let FrameBody::KitchenBoardResult(board) = reply.body else {
         panic!("{reply:?}")
@@ -5641,6 +5644,17 @@ async fn a_display_reads_the_board_and_is_pushed_it_after_a_ticket_changes() {
     let t1 = pushed.tickets.iter().find(|t| t.id == "T1").unwrap();
     assert_eq!(t1.stage, "preparing");
     assert!(t1.stage_at >= t1.placed_at);
+
+    // Only a display is pushed the board: a phone on the same fan-out never gets it.
+    while let Ok(Some(Ok(Message::Text(text)))) =
+        tokio::time::timeout(Duration::from_millis(300), phone.next()).await
+    {
+        let frame = parse_frame(text.as_str()).unwrap();
+        assert!(
+            !matches!(&frame.body, FrameBody::Event(e) if matches!(e.event, HubEvent::KitchenBoard(_))),
+            "a phone was pushed the kitchen board"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

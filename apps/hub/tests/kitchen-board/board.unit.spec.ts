@@ -49,10 +49,10 @@ test("tickets are newest first", () => {
 });
 
 test("open tickets always stay; served ones leave after 30 minutes and cancelled ones after 60 s", () => {
-  const served = ticket(1, "served", { stage_at: NOW - SERVED_KEEP_MS + 1 });
-  const goneServed = ticket(2, "served", { stage_at: NOW - SERVED_KEEP_MS });
-  const cancelled = ticket(3, "cancelled", { stage_at: NOW - CANCELLED_KEEP_MS + 1 });
-  const goneCancelled = ticket(4, "cancelled", { stage_at: NOW - CANCELLED_KEEP_MS });
+  const served = ticket(1, "served", { stage_at: NOW - SERVED_KEEP_MS });
+  const goneServed = ticket(2, "served", { stage_at: NOW - SERVED_KEEP_MS - 1 });
+  const cancelled = ticket(3, "cancelled", { stage_at: NOW - CANCELLED_KEEP_MS });
+  const goneCancelled = ticket(4, "cancelled", { stage_at: NOW - CANCELLED_KEEP_MS - 1 });
   const old = ticket(5, "preparing", { placed_at: NOW - 5 * 60 * MIN });
   const shown = visibleTickets([served, goneServed, cancelled, goneCancelled, old], NOW);
   expect(shown.map((t) => t.number).sort()).toEqual([1, 3, 5]);

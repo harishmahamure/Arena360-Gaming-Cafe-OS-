@@ -94,6 +94,7 @@
       onRevoked: () => {
         stop = null;
         feed = null;
+        lastColumn = new Map();
         announcement = "";
         clearToken();
         setTheme(false);

@@ -53,8 +53,8 @@ export function hubNow(board: KitchenBoard, receivedAt: number, at: number): num
 export function onBoard(ticket: KitchenBoardTicket, now: number): boolean {
   if (isOpen(ticket)) return true;
   const age = now - ticket.stage_at;
-  if (ticket.stage === "served") return age < SERVED_KEEP_MS;
-  if (ticket.stage === "cancelled") return age < CANCELLED_KEEP_MS;
+  if (ticket.stage === "served") return age <= SERVED_KEEP_MS;
+  if (ticket.stage === "cancelled") return age <= CANCELLED_KEEP_MS;
   return false;
 }
 

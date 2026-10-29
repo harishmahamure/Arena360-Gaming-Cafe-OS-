@@ -2,7 +2,7 @@
 title: 'Story 7.7: The kitchen board shows open tickets in four columns'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '966d5be19b030aa475809357c74f33d474845c77'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -106,3 +106,7 @@ Status: in-review (implementation and verification complete; the multi-reviewer 
 - **Change.** A `kds` session reads the kitchen board with `kitchen.board` and is pushed the whole board after any ticket change. The Kitchen app shows the top bar and four columns (New, Preparing, Ready, Served) with Hub-time elapsed, Ready and Cancelled cues, Served and Cancelled ageing, high contrast, keyboard focus and a polite live region.
 - **Verification.** `cargo fmt --check`, `cargo clippy -D warnings` (proto, store, core, api, hub) clean; `cargo test` on those crates: every test binary passed, 0 failed (arena-core 1250 lib tests including 2 new board tests; arena-api lan 99 including 3 new). Kitchen svelte-check 0 errors and 0 warnings; Kitchen build ok; `pnpm --filter @arena/hub test:kitchen` 21 passed (8 unit, 13 browser including axe); `check:strings`, `check:layers`, `check:protocol`, `check:hex`, `format:check` ok. `check:tokens-used` reports the pre-existing `--ad-reserved`; `check:generated` compares against git, so it passes once the new generated files are committed.
 - **Residual risks.** The built-in `/kitchen` fallback page shows no board (the build must be served from `ARENA_KITCHEN_DIR`); a real cancelled ticket has no lines to strike through; the browser spec stubs the Hub's socket, so no run drove a real Hub end to end.
+
+## Review Result
+
+Code review (blind, edge-case, verification-gap, acceptance layers) found no blocking defects. Patched: the page and Hub now agree on the Served/Cancelled ageing edge (`<=`), the display forgets remembered columns when its token is revoked, the Kitchen and `test:kitchen` checks run in the CI `a11y` job, and a test shows a phone is never pushed the board. Left as designed or deferred: cancelled tickets carry no lines and fall back to New when unseen (spec Design Notes), elapsed time keeps counting on Served and Cancelled cards, per-ticket line queries, unused `kitchen.board.columns` and `kitchen.ticket.number` strings, the push's `epoch_ms()` matches the other registry pushes.

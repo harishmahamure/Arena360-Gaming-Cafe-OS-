@@ -37,6 +37,9 @@
     "playerLogout": "player_logout",
     "playerSignup": "player_signup",
     "hudLayout": "hud_layout",
-    "hudCollapse": "hud_collapse"
+    "hudCollapse": "hud_collapse",
+    "volumeGet": "volume_get",
+    "volumeSet": "volume_set",
+    "callStaff": "call_staff"
   }
 }

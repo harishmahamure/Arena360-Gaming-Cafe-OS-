@@ -633,6 +633,10 @@ impl Ctx<'_> {
                 };
                 self.reply(reply).await;
             }
+            "device.call_staff" => match self.paired_device("device.call_staff") {
+                Ok(device) => self.spawn_call_staff(rid, device, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "kiosk.pc_ack" => {
                 let reply = match self.check_pc_ack(value) {
                     Ok(()) => Frame::new(rid, FrameBody::Ack),
@@ -868,6 +872,28 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::player_session::plans(&hub, &device, conn).await {
                 Ok(result) => Frame::new(rid, FrameBody::PlayerPlansResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_call_staff(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::call_staff::call_staff(&hub, &device).await {
+                Ok(()) => Frame::new(rid, FrameBody::Ack),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

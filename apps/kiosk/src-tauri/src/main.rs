@@ -182,6 +182,33 @@ async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Opti
         .await)
 }
 
+/// The volume slider's level (Story 6.15): the service's `volume` request answers `{percent}`.
+#[tauri::command]
+async fn volume_get(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "volume", serde_json::Value::Null).await)
+}
+
+/// Sets the system volume (0 to 100) through the service; the answer is `{percent}`.
+#[tauri::command]
+async fn volume_set(
+    percent: u8,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "volume", serde_json::json!({ "percent": percent })).await)
+}
+
+/// Call staff (Story 6.15): the service sends `device.call_staff` to the Hub. The HUD toast says
+/// "Staff notified." when the Hub took it and that the counter is reconnecting when it did not.
+#[tauri::command]
+async fn call_staff<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let answer = service_request(&bridge, "call_staff", serde_json::Value::Null).await;
+    let _ = app.emit(TOAST_EVENT, bridge::call_staff_toast(answer.as_ref()));
+    Ok(answer)
+}
+
 /// The HUD page's content size in logical px (`0 × 0`: nothing to draw): the shell places,
 /// shows or hides the HUD window for it (Story 6.14).
 #[tauri::command]
@@ -356,7 +383,10 @@ fn main() {
             player_logout,
             player_signup,
             hud_layout,
-            hud_collapse
+            hud_collapse,
+            volume_get,
+            volume_set,
+            call_staff
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

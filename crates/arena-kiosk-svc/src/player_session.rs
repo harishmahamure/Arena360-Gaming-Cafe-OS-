@@ -86,6 +86,17 @@ pub async fn logout(ctx: &Ctx) -> Result<Value, AppError> {
     }
 }
 
+/// Tells the Hub the player at this PC wants staff (Story 6.15): `device.call_staff`. Nothing is
+/// queued; with no live connection the app gets `HUB_SLOW` and tells the player the counter is
+/// reconnecting.
+pub async fn call_staff(ctx: &Ctx) -> Result<Value, AppError> {
+    let client = client(ctx)?;
+    match client.request("device.call_staff", Value::Null).await {
+        Ok(_) => Ok(Value::Null),
+        Err(e) => Err(failed("device.call_staff", e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

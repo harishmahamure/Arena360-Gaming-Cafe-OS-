@@ -294,7 +294,11 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                         pc_command(ctx, client, cmd_id, action, text, reason).await;
                     }
                     Some(HubEvent::SessionStarted { cmd_id, session }) => {
+                        let fresh = ctx.pc.screen.borrow().session.is_none();
                         crate::session::sync(ctx, session, true);
+                        if fresh {
+                            crate::volume::reset_for_session(ctx);
+                        }
                         ack(client, &cmd_id).await;
                     }
                     Some(HubEvent::SessionTick(session)) => {

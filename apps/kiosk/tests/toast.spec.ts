@@ -129,3 +129,21 @@ test("the toast is the 640px solid hud-toast with an amber border and no blur", 
   expect(await style("border-top-width")).toBe("2px");
   expect(await style("backdrop-filter")).toBe("none");
 });
+
+test("Call staff shows an info toast that goes by itself, and so does the reconnecting line", async ({
+  page,
+}) => {
+  await openWithShell(page);
+  await emit(page, names.events.toast, "player.call_staff.sent");
+  const toast = page.getByTestId("toast");
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toHaveAttribute("data-kind", "info");
+  await expect(toast).toContainText(en["player.call_staff.sent"]);
+  // The same text again replaces the one showing.
+  await emit(page, names.events.toast, "player.call_staff.sent");
+  await expect(toast).toHaveCount(1);
+  await emit(page, names.events.toast, "player.hub.reconnecting_retry");
+  await expect(toast).toHaveCount(2);
+  await expect(toast.last()).toContainText(en["player.hub.reconnecting_retry"]);
+  await expect(toast.last()).toHaveAttribute("data-kind", "info");
+});

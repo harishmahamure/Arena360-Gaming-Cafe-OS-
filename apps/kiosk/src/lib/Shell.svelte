@@ -1,6 +1,9 @@
 <script lang="ts">
   import { BrandMark, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
+  import { callStaff } from "./bridge";
+  import { INFO_TOAST_MS } from "./hud";
+  import VolumeControl from "./VolumeControl.svelte";
   import {
     chipText,
     initialOf,
@@ -44,6 +47,25 @@
   const low = $derived(isLow(session, seconds));
   const time = $derived(chipText(seconds));
   const showLogo = $derived(logo !== null && logo !== brokenLogo);
+
+  /** Call staff was taken by the Hub; the button says so for as long as an info toast stays. */
+  let notified = $state(false);
+  let calling = false;
+  let notifiedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function call() {
+    if (calling) return;
+    calling = true;
+    try {
+      if (await callStaff()) {
+        notified = true;
+        clearTimeout(notifiedTimer);
+        notifiedTimer = setTimeout(() => (notified = false), INFO_TOAST_MS);
+      }
+    } finally {
+      calling = false;
+    }
+  }
 
   function onkeydown(event: KeyboardEvent, index: number) {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
@@ -100,6 +122,20 @@
     </nav>
 
     <div class="right">
+      <VolumeControl />
+      <span class="bell-slot" data-testid="messages-bell-slot"></span>
+      <button
+        type="button"
+        class="call-staff type-kiosk-label"
+        aria-live="polite"
+        data-testid="call-staff-button"
+        onclick={call}
+      >
+        <span class="mark" aria-hidden="true">?</span>
+        <span data-testid="call-staff-label">
+          {t(notified ? "player.call_staff.notified" : "player.call_staff.label")}
+        </span>
+      </button>
       <p
         class="time-chip"
         class:low
@@ -208,6 +244,41 @@
 
   .right > p {
     margin: 0;
+  }
+
+  /* Kept free for the messages bell (Story 6.16), left of Call staff. */
+  .bell-slot {
+    display: contents;
+  }
+
+  .call-staff {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-4);
+    border: var(--call-staff-button-border);
+    border-radius: var(--radius-full);
+    background-color: var(--call-staff-button-background);
+    color: var(--call-staff-button-foreground);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .call-staff:focus-visible,
+  .call-staff:focus {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .mark {
+    display: inline-grid;
+    place-content: center;
+    width: 24px;
+    height: 24px;
+    border: 2px solid currentColor;
+    border-radius: var(--radius-full);
+    line-height: 1;
   }
 
   .time-chip {

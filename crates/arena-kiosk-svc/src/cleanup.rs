@@ -219,6 +219,8 @@ pub struct CleanupState {
     /// Serialises the state changes (trigger, cancel, retry, checked, finish).
     guard: std::sync::Mutex<()>,
     wake: Notify,
+    /// The volume slider (Story 6.15): the host it sets through and the level it last set.
+    pub(crate) volume: crate::volume::VolumeState,
 }
 
 impl CleanupState {
@@ -230,6 +232,7 @@ impl CleanupState {
             epoch: AtomicU64::new(0),
             guard: std::sync::Mutex::new(()),
             wake: Notify::new(),
+            volume: Default::default(),
         }
     }
 

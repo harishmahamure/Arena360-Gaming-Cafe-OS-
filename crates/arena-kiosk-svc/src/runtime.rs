@@ -280,6 +280,7 @@ impl Runtime {
         pipeline: crate::cleanup::Pipeline,
     ) {
         crate::cleanup::enable(&self.ctx);
+        self.ctx.cleanup.volume.attach(Arc::clone(&host));
         self.tasks.push(tokio::spawn(crate::cleanup::run(
             Arc::clone(&self.ctx),
             host,

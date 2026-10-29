@@ -28,6 +28,8 @@
 //! - `player_plans`, `player_start{choice}` and `player_logout` (the plan picker, Story 6.9) are
 //!   forwarded by [`crate::player_session`] the same way. The app never names a player: the Hub
 //!   remembers who logged in on this PC.
+//! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
+//!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
 
 use std::sync::Arc;
 
@@ -609,6 +611,22 @@ async fn serve(
                             error: Some(e),
                         },
                     };
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "call_staff" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::call_staff(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "volume" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::volume::request(&ctx, body).await);
                     let _ = out.send(reply).await;
                 });
             }

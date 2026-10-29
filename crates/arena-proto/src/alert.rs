@@ -31,11 +31,14 @@ pub enum AlertKind {
     /// 6.11). A device alert, one open per device: the tile shows `check-pc` and the kiosk holds a
     /// locked screen until staff pick "Retry cleanup" or "Checked".
     CheckPc,
+    /// A player pressed "Call staff" at a kiosk (raised by the Hub on `device.call_staff`; Story
+    /// 6.15). A device alert, one open per device: the tile shows `call`.
+    CallStaff,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 8] = [
+    pub const ALL: [AlertKind; 9] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
@@ -44,6 +47,7 @@ impl AlertKind {
         Self::StockLow,
         Self::LoginLockout,
         Self::CheckPc,
+        Self::CallStaff,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -57,6 +61,7 @@ impl AlertKind {
             Self::StockLow => "stock_low",
             Self::LoginLockout => "login_lockout",
             Self::CheckPc => "check_pc",
+            Self::CallStaff => "call_staff",
         }
     }
 
@@ -76,6 +81,7 @@ impl AlertKind {
             Self::StockLow => "low-stock",
             Self::LoginLockout => "locked-out",
             Self::CheckPc => "check-pc",
+            Self::CallStaff => "call",
         }
     }
 }
@@ -184,5 +190,7 @@ mod tests {
         assert_eq!(AlertKind::LoginLockout.tag(), "locked-out");
         assert_eq!(AlertKind::CheckPc.as_str(), "check_pc");
         assert_eq!(AlertKind::CheckPc.tag(), "check-pc");
+        assert_eq!(AlertKind::CallStaff.as_str(), "call_staff");
+        assert_eq!(AlertKind::CallStaff.tag(), "call");
     }
 }

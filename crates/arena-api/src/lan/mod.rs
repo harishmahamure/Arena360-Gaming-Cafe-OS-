@@ -10,6 +10,7 @@
 //! Only a primary Hub serves intents; a follower answers `hello` and refuses every intent with
 //! `NOT_PRIMARY`. Committed intents are pushed to every session ([`registry`]).
 
+mod call_staff;
 pub mod listener;
 mod media;
 mod pair;

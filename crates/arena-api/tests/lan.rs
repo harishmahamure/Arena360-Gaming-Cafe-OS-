@@ -2968,6 +2968,73 @@ async fn a_follower_answers_the_picker_frames_with_an_error() {
     }
 }
 
+// ---- Story 6.15: Call staff ----
+
+fn call_alerts(hub: &TestHub) -> Vec<arena_store::AlertRow> {
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .alerts()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == "call_staff")
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn call_staff_raises_one_alert_for_the_device_and_answers_ack_each_time() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let ack = client
+        .request("device.call_staff", serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(ack.body, FrameBody::Ack);
+    let alerts = call_alerts(&hub);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].device_id.as_deref(), Some(hub.paired_id.as_str()));
+    assert!(alerts[0].acked_at.is_none());
+    // A call already open for this PC: no second alert, same answer.
+    let again = client
+        .request("device.call_staff", serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(again.body, FrameBody::Ack);
+    assert_eq!(call_alerts(&hub).len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn call_staff_is_for_paired_sessions_and_a_follower_refuses_it() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    send(&mut ws, r#"{"v":1,"kind":"device.call_staff","rid":"a"}"#).await;
+    let frame = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
+    assert!(call_alerts(&hub).is_empty());
+
+    let follower = start("0.1.0", false).await;
+    let client = HubClient::connect(&follower.url(), &follower.fingerprint, follower.paired())
+        .await
+        .unwrap();
+    match client
+        .request("device.call_staff", serde_json::Value::Null)
+        .await
+    {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::NotPrimary),
+        other => panic!("{other:?}"),
+    }
+}
+
 // ---- Story 6.10: sign-up at the kiosk ----
 
 fn signup_body(

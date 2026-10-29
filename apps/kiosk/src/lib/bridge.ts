@@ -80,12 +80,18 @@ export async function onRestoreState(cb: (state: unknown) => void): Promise<() =
 }
 
 /** The toasts the service may raise (catalogue keys); anything else is ignored. */
-export const TOAST_KEYS = ["player.app.blocked"] as const;
+export const TOAST_KEYS = [
+  "player.app.blocked",
+  "player.call_staff.sent",
+  "player.hub.reconnecting_retry",
+] as const;
 export type ToastKey = (typeof TOAST_KEYS)[number];
 
 /** How each toast behaves on the HUD (Story 6.14): an info toast goes after 8 s, a warning stays. */
 export const TOAST_KINDS: Record<ToastKey, "info" | "warning"> = {
   "player.app.blocked": "warning",
+  "player.call_staff.sent": "info",
+  "player.hub.reconnecting_retry": "info",
 };
 
 export function isToastKey(v: unknown): v is ToastKey {
@@ -486,6 +492,43 @@ export async function playerStart(choice: PlayerChoice): Promise<StartOutcome> {
 export function playerLogout(): void {
   if (!inTauri()) return;
   void invoke(CMD.playerLogout).catch(() => {});
+}
+
+/** The volume the slider shows, 0 to 100: the last level the service set (`null`: it did not say). */
+export async function volumeLevel(): Promise<number | null> {
+  if (!inTauri()) return null;
+  try {
+    const answer: unknown = await invoke(CMD.volumeGet);
+    if (!isAnswer(answer) || !answer.ok) return null;
+    return field(answer.body, "percent");
+  } catch {
+    return null;
+  }
+}
+
+/** Sets the system volume through the service, right away (Story 6.15). `true`: it was set. */
+export async function setVolume(percent: number): Promise<boolean> {
+  if (!inTauri()) return false;
+  try {
+    const answer: unknown = await invoke(CMD.volumeSet, { percent });
+    return isAnswer(answer) && answer.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Call staff (Story 6.15). The shell raises the HUD toast itself ("Staff notified." or the
+ * reconnecting line); `true` means the Hub took the call.
+ */
+export async function callStaff(): Promise<boolean> {
+  if (!inTauri()) return false;
+  try {
+    const answer: unknown = await invoke(CMD.callStaff);
+    return isAnswer(answer) && answer.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function dismissPcMessage(): void {

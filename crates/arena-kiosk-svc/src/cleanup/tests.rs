@@ -925,3 +925,89 @@ async fn a_browser_is_reset_to_the_branch_template_when_there_is_one() {
     );
     t.stop();
 }
+
+// ---- Story 6.15: the volume slider ----
+
+fn bare_ctx() -> (tempfile::TempDir, Arc<Ctx>) {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = ctx_in(dir.path(), Duration::from_millis(5));
+    (dir, ctx)
+}
+
+#[tokio::test]
+async fn the_volume_request_reads_the_default_then_sets_and_remembers_the_level() {
+    let (_dir, ctx) = bare_ctx();
+    let host = Arc::new(FakeHost::default());
+    ctx.cleanup.volume.attach(host.clone());
+    let read = crate::volume::request(&ctx, serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(read, serde_json::json!({ "percent": DEFAULT_VOLUME }));
+    assert_eq!(host.volume(), None, "reading changes nothing");
+    ctx.queue
+        .lock()
+        .unwrap()
+        .kv_set(KEY_KIOSK_VOLUME_DEFAULT, "30", 4)
+        .unwrap();
+    assert_eq!(crate::volume::level(&ctx), 30);
+    let set = crate::volume::request(&ctx, serde_json::json!({ "percent": 65 }))
+        .await
+        .unwrap();
+    assert_eq!(set, serde_json::json!({ "percent": 65 }));
+    assert_eq!(host.volume(), Some(65));
+    assert_eq!(crate::volume::level(&ctx), 65);
+}
+
+#[tokio::test]
+async fn the_volume_request_refuses_an_out_of_range_level_and_a_pc_with_no_control() {
+    let (_dir, ctx) = bare_ctx();
+    let none = crate::volume::request(&ctx, serde_json::json!({ "percent": 40 }))
+        .await
+        .unwrap_err();
+    assert_eq!(none.code, arena_proto::ErrorCode::Unsupported);
+    let host = Arc::new(FakeHost::default());
+    ctx.cleanup.volume.attach(host.clone());
+    let high = crate::volume::request(&ctx, serde_json::json!({ "percent": 101 }))
+        .await
+        .unwrap_err();
+    assert_eq!(high.code, arena_proto::ErrorCode::ValidationFailed);
+    let bad = crate::volume::request(&ctx, serde_json::json!({ "percent": "loud" }))
+        .await
+        .unwrap_err();
+    assert_eq!(bad.code, arena_proto::ErrorCode::BadFrame);
+    assert_eq!(host.volume(), None);
+}
+
+#[tokio::test]
+async fn a_failed_volume_change_is_an_error_and_keeps_the_old_level() {
+    let (_dir, ctx) = bare_ctx();
+    let host = Arc::new(FakeHost::default());
+    ctx.cleanup.volume.attach(host.clone());
+    crate::volume::set(&ctx, 20).await.unwrap();
+    host.fail(STEP_VOLUME, 1);
+    let e = crate::volume::set(&ctx, 80).await.unwrap_err();
+    assert_eq!(e.code, arena_proto::ErrorCode::Internal);
+    assert_eq!(crate::volume::level(&ctx), 20);
+}
+
+#[tokio::test]
+async fn a_new_session_starts_at_the_branch_default_whatever_the_last_player_set() {
+    let (_dir, ctx) = bare_ctx();
+    let host = Arc::new(FakeHost::default());
+    ctx.cleanup.volume.attach(host.clone());
+    ctx.queue
+        .lock()
+        .unwrap()
+        .kv_set(KEY_KIOSK_VOLUME_DEFAULT, "35", 4)
+        .unwrap();
+    crate::volume::set(&ctx, 90).await.unwrap();
+    crate::volume::reset_for_session(&ctx);
+    for _ in 0..200 {
+        if host.volume() == Some(35) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(host.volume(), Some(35));
+    assert_eq!(crate::volume::level(&ctx), 35);
+}

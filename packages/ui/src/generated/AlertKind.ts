@@ -12,4 +12,5 @@ export type AlertKind =
   | "stock_expiring"
   | "stock_low"
   | "login_lockout"
-  | "check_pc";
+  | "check_pc"
+  | "call_staff";

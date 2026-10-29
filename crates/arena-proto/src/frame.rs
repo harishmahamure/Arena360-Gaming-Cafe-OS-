@@ -103,13 +103,17 @@ pub enum FrameBody {
     /// The Hub's typed answer to `player.signup`.
     #[serde(rename = "player.signup_result")]
     PlayerSignupResult(PlayerSignupResult),
+    /// A player at the kiosk asks for staff (paired sessions only; Story 6.15). The Hub raises a
+    /// `call_staff` alert for the device; one already open is as good, and both answer `ack`.
+    #[serde(rename = "device.call_staff")]
+    CallStaff,
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 24] = [
+pub const FRAME_KINDS: [&str; 25] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -133,6 +137,7 @@ pub const FRAME_KINDS: [&str; 24] = [
     "player.logout",
     "player.signup",
     "player.signup_result",
+    "device.call_staff",
     "ack",
 ];
 
@@ -163,6 +168,7 @@ impl FrameBody {
             Self::PlayerLogout => "player.logout",
             Self::PlayerSignup(_) => "player.signup",
             Self::PlayerSignupResult(_) => "player.signup_result",
+            Self::CallStaff => "device.call_staff",
             Self::Ack => "ack",
         }
     }

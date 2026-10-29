@@ -48,6 +48,7 @@ pub mod service;
 pub mod session;
 pub mod test_session;
 pub mod theme;
+pub mod volume;
 #[cfg(windows)]
 pub mod winsec;
 

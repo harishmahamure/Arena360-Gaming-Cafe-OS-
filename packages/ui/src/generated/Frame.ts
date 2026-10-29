@@ -55,5 +55,6 @@ export type Frame = {
   | { kind: "player.logout" }
   | ({ kind: "player.signup" } & PlayerSignup)
   | ({ kind: "player.signup_result" } & PlayerSignupResult)
+  | { kind: "device.call_staff" }
   | { kind: "ack" }
 );

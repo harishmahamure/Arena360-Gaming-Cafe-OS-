@@ -67,7 +67,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 23] = [
+const COMMANDS: [&str; 26] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -91,6 +91,9 @@ const COMMANDS: [&str; 23] = [
     "player_signup",
     "hud_layout",
     "hud_collapse",
+    "volume_get",
+    "volume_set",
+    "call_staff",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -143,6 +146,19 @@ pub struct Answer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub body: Value,
+}
+
+/// The info toast after a Call staff the Hub took (Story 6.15).
+pub const CALL_STAFF_SENT_TOAST: &str = "player.call_staff.sent";
+/// The info toast when a Hub-dependent action finds the counter unreachable.
+pub const RECONNECTING_TOAST: &str = "player.hub.reconnecting_retry";
+
+/// The HUD toast for the service's answer to a Call staff (`None`: no answer in time).
+pub fn call_staff_toast(answer: Option<&Answer>) -> &'static str {
+    match answer {
+        Some(a) if a.ok => CALL_STAFF_SENT_TOAST,
+        _ => RECONNECTING_TOAST,
+    }
 }
 
 /// The shell's view of the channel, shared with the Tauri commands.
@@ -643,6 +659,26 @@ mod tests {
         let mut ours = COMMANDS.to_vec();
         ours.sort_unstable();
         assert_eq!(listed, ours);
+    }
+
+    #[test]
+    fn call_staff_toasts_say_notified_or_reconnecting() {
+        let ok = Answer {
+            ok: true,
+            code: None,
+            body: Value::Null,
+        };
+        let refused = Answer {
+            ok: false,
+            code: Some("HUB_SLOW".into()),
+            body: Value::Null,
+        };
+        assert_eq!(call_staff_toast(Some(&ok)), "player.call_staff.sent");
+        assert_eq!(
+            call_staff_toast(Some(&refused)),
+            "player.hub.reconnecting_retry"
+        );
+        assert_eq!(call_staff_toast(None), "player.hub.reconnecting_retry");
     }
 
     #[test]

@@ -103,8 +103,7 @@ impl CleanupStep for Programs {
             .unwrap_or_else(|p| p.into_inner())
             .clone();
         let Some(closer) = closer else {
-            tracing::warn!("no process control on this host; the player's programs are not ended");
-            return Ok(());
+            return Err("process control is not running".into());
         };
         let report = closer().map_err(|e| format!("could not list the programs: {e}"))?;
         tracing::info!(
@@ -345,7 +344,7 @@ pub(crate) fn checked(ctx: &Ctx) {
         return;
     }
     let _guard = state.lock();
-    let Some(after) = kv_get(ctx, AFTER_KEY) else {
+    let Some(after) = kv_get(ctx, AFTER_KEY).filter(|_| holding(ctx)) else {
         tracing::info!("cleanup checked: nothing is held");
         return;
     };
@@ -453,6 +452,10 @@ async fn run_pipeline(
             return;
         }
         if let Err(detail) = run_step(ctx, host, step).await {
+            if ctx.cleanup.epoch.load(Ordering::SeqCst) != epoch {
+                tracing::info!("the cleanup was cancelled; its failure is dropped");
+                return;
+            }
             failed += 1;
             report_failure(ctx, step.name(), &detail);
         }
@@ -532,6 +535,16 @@ pub(crate) fn enable(ctx: &Ctx) {
 /// removed, never followed. A missing `dir` is fine. Items that cannot be removed (a locked
 /// file) are counted: the error names only how many, never a file name.
 pub fn clear_dir_contents(dir: &std::path::Path) -> Result<(), String> {
+    // The player owns their profile and may swap the folder itself for a link; the service
+    // must not empty whatever it points at.
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            return Err("the temp folder is a link, not a folder".into());
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("the temp folder cannot be read: {e}")),
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),

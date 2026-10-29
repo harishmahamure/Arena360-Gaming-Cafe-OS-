@@ -2,7 +2,7 @@
 title: 'Story 6.11: Session-end cleanup ends the player''s programs and clears the clipboard, temp files and volume'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'c441b6d95774cd7bd32c5c70060e656427770e16'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -110,3 +110,13 @@ The epic puts cleanup "in the service" but clipboard and volume belong to the pl
 - Verified on this host: `cargo test` for arena-proto, arena-core, arena-api, arena-kiosk-core and the 16 new `cleanup` tests in arena-kiosk-svc; `cargo fmt --check`; clippy on the touched crates; `pnpm check:strings|hex|no-blur`, `format:check`; svelte-check (kiosk, hub) 0 errors; Hub `cleanup-alert.spec.ts`.
 - Not run here: the new `tests/runtime.rs` cases (the file is `cfg(unix)`), and the Windows helper, clipboard-history and volume code on real Windows 10/11 images. `arena-e2e` and `tests/discovery.rs` do not build on Windows (as before); 4 kiosk `theme.spec.ts` tests fail on a mangled fixture path (as before).
 - The tile-sheet buttons use the existing `device.screen` permission (same as Lock), not a separate `device.remote` check.
+
+## Review Triage Log (code review, 2026-10-29)
+
+Fixed:
+- `clear_dir_contents` followed a link at the temp folder itself (SYSTEM delete through a player-made junction): the folder is now refused when it is a link.
+- `cleanup_checked` acted on a running (not held) cleanup: it now requires the hold.
+- `programs` step passed when no process control was registered: it now fails the step.
+- A cancelled run could still report a stale `cleanup_failed`: the failure is dropped when the run was cancelled.
+
+Deferred (not blocking): staff Unlock during a hold drops the hold (deliberate staff action); a test session's own end does not trigger cleanup (next session-end lock does); clipboard/volume skip when no player console session; extra tests for `pickAlert` and `test_session::begin`.

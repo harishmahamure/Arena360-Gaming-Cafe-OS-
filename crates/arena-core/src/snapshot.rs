@@ -1747,8 +1747,6 @@ impl SnapshotReader {
         store.read_with(|conn| arena_store::read_pending_batch(conn, limit))
     }
 
-    /// How many change rows are not yet in an accepted batch, and when the cloud last accepted
-    /// one (Story 8.2). Blocking (SQLite).
     /// The branch summary as of `now_ms` (Story 8.4); `None` before the branch exists. Blocking
     /// (SQLite), on the reader's own connection.
     pub fn branch_summary(
@@ -1762,6 +1760,22 @@ impl SnapshotReader {
         crate::summary::build_summary(&store, now_ms)
     }
 
+    /// The daily rollup of `business_day` as of `now_ms` (Story 8.5); `None` before the branch
+    /// exists. Blocking (SQLite), on the reader's own connection; writes nothing.
+    pub fn daily_rollup(
+        &self,
+        business_day: &str,
+        now_ms: i64,
+    ) -> Result<Option<arena_proto::RollupV1>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::rollup::build_rollup(&store, business_day, now_ms)
+    }
+
+    /// How many change rows are not yet in an accepted batch, and when the cloud last accepted
+    /// one (Story 8.2). Blocking (SQLite).
     pub fn upload_progress(&self) -> Result<crate::UploadStatus, AppError> {
         let store = self
             .reader

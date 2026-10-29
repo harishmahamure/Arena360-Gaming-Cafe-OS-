@@ -407,6 +407,25 @@ pub fn list_closed_shifts(conn: &Connection, limit: i64) -> Result<Vec<ShiftDeta
         .map_err(db_error)
 }
 
+/// Closed shifts whose `closed_at` is from `from_ms` to `to_ms` inclusive, oldest first.
+pub fn closed_shifts_between(
+    conn: &Connection,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<ShiftDetail>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {DETAIL_COLUMNS} {DETAIL_JOINS}
+             WHERE s.state = 'closed' AND s.closed_at BETWEEN ?1 AND ?2
+             ORDER BY s.closed_at, s.id"
+        ))
+        .map_err(db_error)?;
+    stmt.query_map(params![from_ms, to_ms], detail)
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)
+}
+
 /// The display name of a staff member, or the id when there is none.
 pub fn staff_display_name(conn: &Connection, staff_id: &str) -> Result<String, AppError> {
     Ok(conn

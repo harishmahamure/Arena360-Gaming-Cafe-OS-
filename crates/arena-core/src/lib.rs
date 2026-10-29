@@ -35,6 +35,7 @@ pub mod printer;
 pub mod rbac;
 pub mod report_export;
 mod reports;
+pub mod rollup;
 mod session_screen;
 mod session_timer;
 mod settings_defaults;

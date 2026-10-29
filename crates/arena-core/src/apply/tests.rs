@@ -64,6 +64,7 @@ mod rate_flip;
 mod rates;
 mod receipt;
 mod refund;
+mod rollup;
 mod rule_pricing;
 mod rules;
 mod session;

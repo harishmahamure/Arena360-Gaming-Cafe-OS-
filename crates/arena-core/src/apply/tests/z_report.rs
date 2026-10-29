@@ -20,7 +20,7 @@ fn open(float_minor: i64) -> IntentPayload {
     IntentPayload::ShiftOpen(ShiftOpen { float_minor })
 }
 
-fn close(counted_minor: i64) -> ShiftClose {
+pub(super) fn close(counted_minor: i64) -> ShiftClose {
     ShiftClose {
         counted_minor,
         deposit: None,
@@ -107,13 +107,13 @@ fn order_row(f: &Fixture, id: &str) -> Row {
         .unwrap()
 }
 
-fn only_shift(f: &Fixture) -> Row {
+pub(super) fn only_shift(f: &Fixture) -> Row {
     let mut all = table(f, Table::Shifts);
     assert_eq!(all.len(), 1);
     all.remove(0)
 }
 
-fn z_of(f: &Fixture) -> ZReport {
+pub(super) fn z_of(f: &Fixture) -> ZReport {
     let shift = only_shift(f);
     reopen_reader(f)
         .z_report(&text(&shift, "id"), f.clock.now_ms())
@@ -151,7 +151,7 @@ fn amount(list: &[arena_proto::ReportAmount], key: &str) -> (i64, i64) {
         .map_or((0, 0), |a| (a.amount_minor, a.count))
 }
 
-fn cash_sum(f: &Fixture, kinds: &[&str]) -> i64 {
+pub(super) fn cash_sum(f: &Fixture, kinds: &[&str]) -> i64 {
     table(f, Table::CashEvents)
         .iter()
         .filter(|e| kinds.contains(&text(e, "kind").as_str()))
@@ -161,12 +161,12 @@ fn cash_sum(f: &Fixture, kinds: &[&str]) -> i64 {
 
 /// The fixture shift of the story: cash, UPI and card sales, an undone sale, a cash refund, an
 /// expense, a deposit, waste and a voided order. Returns the ids the checks need.
-struct Fixture28 {
+pub(super) struct Fixture28 {
     refunded_invoice: String,
     upi_invoice: String,
 }
 
-async fn fixture_shift(f: &Fixture) -> Fixture28 {
+pub(super) async fn fixture_shift(f: &Fixture) -> Fixture28 {
     submit(f, owner(), open(100_000)).await.unwrap();
     let cola = product(f, "Cola", 4_000, 30).await;
     let cash = sell(f, &cola, 3, vec![pay(Cash, 12_000, None)]).await;

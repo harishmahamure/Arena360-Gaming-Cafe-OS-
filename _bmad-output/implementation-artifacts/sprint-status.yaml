@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-30-2026 01:30
+last_updated: 10-30-2026 04:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -226,7 +226,7 @@ development_status:
   8-2-the-hub-uploads-gap-free-change-log-batches-at-its-tier-cade: done
   8-3-the-heartbeat-detects-upload-gaps-and-the-hub-resends-them: done
   8-4-the-hub-publishes-a-branch-summary-every-cadence: done
-  8-5-rollup-schema-v1-and-the-daily-rollup-at-close: backlog
+  8-5-rollup-schema-v1-and-the-daily-rollup-at-close: review
   8-6-the-daily-rollup-publishes-at-close-and-catches-up-missed-da: backlog
   8-7-rollups-regenerate-after-a-schema-bump-and-the-cloud-accepts: backlog
   8-8-the-hub-uploads-a-daily-snapshot-after-close: backlog

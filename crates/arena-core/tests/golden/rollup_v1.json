@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "branch_id": "B1",
+  "business_day": "2026-03-10",
+  "currency": "INR",
+  "revenue": {
+    "total": 24900,
+    "by_type": { "play": 10000, "products": 5000, "plans": 10000, "other": -100 },
+    "by_method": { "cash": 13000, "upi": 5900, "card": 4000, "wallet": 5000, "credit": 0 }
+  },
+  "refunds": { "count": 1, "amount": 2000 },
+  "discounts": { "count": 1, "amount": 1000 },
+  "voids": { "count": 1, "amount": 700 },
+  "sessions": { "count": 3, "minutes": 61 },
+  "shifts": [
+    {
+      "shift_id": "S1",
+      "staff_name": "Asha",
+      "opened_at": 100,
+      "closed_at": 500,
+      "float": 100000,
+      "expected": 121000,
+      "counted": 120000,
+      "variance": -1000,
+      "reason": "short",
+      "approver_name": "Ravi"
+    }
+  ],
+  "stock": {
+    "levels": [
+      { "product_id": "P2", "name": "Chips", "qty": 3 },
+      { "product_id": "P1", "name": "Cola", "qty": 12, "low_qty": 5 }
+    ],
+    "waste": [
+      { "product_id": "P2", "qty": 3, "value": 30, "reason": "expired" },
+      { "product_id": "P1", "qty": 1, "value": 20, "reason": "spoiled" }
+    ],
+    "expiring": [{ "product_id": "P1", "lot": "L1", "qty": 4, "expires_on": "2026-03-12" }]
+  },
+  "credit": {
+    "outstanding": 10000,
+    "aged": { "d0_7": 4000, "d8_14": 2000, "d15p": 4000 },
+    "players": [
+      {
+        "player_id": "PL1",
+        "username": "asha01",
+        "outstanding": 7000,
+        "oldest_unpaid_on": "2026-02-20",
+        "consent": true
+      },
+      {
+        "player_id": "PL2",
+        "username": "ravi",
+        "outstanding": 3000,
+        "oldest_unpaid_on": "2026-03-08",
+        "consent": false
+      }
+    ]
+  },
+  "play_hours": [
+    { "game_id": "G1", "minutes": 150 },
+    { "game_id": "G2", "minutes": 50 }
+  ]
+}

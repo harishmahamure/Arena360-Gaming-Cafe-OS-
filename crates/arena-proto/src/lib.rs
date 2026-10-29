@@ -53,6 +53,7 @@ mod receipt;
 mod refund;
 mod report;
 mod report_export;
+mod rollup;
 mod scan;
 mod scope;
 mod session;
@@ -357,6 +358,11 @@ pub use report::{
     ZVoid, ZWaste,
 };
 pub use report_export::{EXPORT_REPORTS, ExportFormat, ReportExportRequest, ReportExported};
+pub use rollup::{
+    ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod, RollupByType,
+    RollupCredit, RollupCreditPlayer, RollupExpiring, RollupPlayHours, RollupRevenue,
+    RollupSessions, RollupShift, RollupStock, RollupStockLevel, RollupV1, RollupWaste,
+};
 pub use scan::{
     DeviceScanView, KEY_BRANCH_TZ, KioskScanReported, LibraryScansView, MAX_SCAN_ENTRIES,
     MAX_SCAN_FILE_NAME_CHARS, MAX_SCAN_PATH_CHARS, MAX_SCAN_TEXT_CHARS, SCAN_ENTRY_LAUNCHERS,

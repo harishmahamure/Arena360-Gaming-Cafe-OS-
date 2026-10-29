@@ -37,6 +37,7 @@ mod products;
 mod reference;
 mod refunds;
 mod reports;
+mod rollup;
 mod sessions;
 mod shifts;
 mod staff;
@@ -197,6 +198,10 @@ pub use refunds::{
 pub use reports::{
     DebtorRow, GuestSalesRow, PlayerSalesRow, ReceivedRow, ReportDevice, SalesLineRow,
     SalesOrderRow, SegmentSpan, SessionReportRow, StaffCountRow, StaffShiftRow,
+};
+pub use rollup::{
+    RollupDebtorRow, RollupLotRow, RollupPaymentRow, RollupPlayRow, RollupRows, RollupVoidRow,
+    load_rollup_rows,
 };
 pub use rusqlite::{Connection as DbConn, Transaction};
 pub use sessions::{
@@ -1613,6 +1618,22 @@ impl Store {
                 )?,
                 staff: reports::staff_names(&s.conn)?,
             })
+        })
+    }
+
+    /// The rows the daily rollup of `day` is folded from (Story 8.5), read in one snapshot.
+    /// `from_ms..=to_ms` is a UTC window around the business day; `expiry_until` the last expiry
+    /// date listed.
+    pub fn rollup_rows(
+        &self,
+        day: &str,
+        from_ms: i64,
+        to_ms: i64,
+        expiry_until: &str,
+        now_ms: i64,
+    ) -> Result<RollupRows, AppError> {
+        self.read_consistent(|s| {
+            load_rollup_rows(&s.conn, day, from_ms, to_ms, expiry_until, now_ms)
         })
     }
 

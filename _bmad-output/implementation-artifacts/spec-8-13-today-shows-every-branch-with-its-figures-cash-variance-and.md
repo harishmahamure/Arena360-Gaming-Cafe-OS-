@@ -2,7 +2,7 @@
 title: 'Story 8.13: Today shows every branch with its figures, cash variance and data age'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '5a3abef'
 review_loop_iteration: 0
 context:
@@ -84,3 +84,7 @@ Status: review (implemented and verified).
 - Decisions: (1) The summary had no per-shift variance except as an over-threshold attention item, so the Hub now lists counted shifts (last 24 h, newest first) after the open shift; `staff_on_shift` is unchanged. (2) Over threshold = an `attention` item `shift_variance` whose ref is that shift, so the app needs no threshold. (3) The summary has no opening hours; "during opening hours" is approximated by the summary's own `open` flag (a shift is open or a session is running), so a closed, quiet branch never shows a late warning. (4) Attention items have no timestamp, so they are ordered by the branch heard from most recently (summary `as_of`), then the Hub's order. (5) Every paid branch gets a card regardless of `live`; setup mode is Story 8.14. (6) Figure age is measured from the summary's `as_of` (Hub clock) against the device clock, so a skewed Hub clock skews the age.
 - Verification: fmt and clippy clean; arena-proto, arena-store, arena-cloud (incl. 14 owner_read tests) and arena-core summary tests pass except `arena-cloud` `tests/binary.rs` `unreachable_at_start_retries_then_exits_1_without_logging_the_token` and `tests/backup.rs` hung-run test, which fail on a clean checkout (noted in Story 8.9); owner app `check` 0 errors, Playwright 170 passed (desktop and phone, includes axe in light/dark/HC on Today); `check:strings`, `check:layers`, `check:protocol`, `check:no-manifest`, `format:check` ok. `test:scripts` fails on `missing pin row: zstd (Cargo.toml =0.13.1)`, unrelated and untouched.
 - Residual risks: Lighthouse and Grafana not done (above); the p99 is per process; the 30 s tick means a re-fetch lands up to 30 s after the cadence.
+
+## Code Review Result
+
+Reviewed 2026-10-30 against the diff of 95a2043: no blocking findings. fmt, clippy, owner_read and summary tests, owner `check`, Playwright (170), `check:strings` and `format:check` pass. Non-blocking notes: the data-age p99 is per process; reports share the owner read rate bucket.

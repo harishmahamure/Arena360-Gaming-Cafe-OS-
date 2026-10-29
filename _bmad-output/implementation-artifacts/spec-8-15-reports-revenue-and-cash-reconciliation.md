@@ -2,7 +2,7 @@
 title: 'Story 8.15: Reports — revenue and cash reconciliation'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'e1284006ed5d985a7ca2ad7827671d592b9bd487'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -70,7 +70,7 @@ deferred: []
 
 ## Review Triage Log
 
-Not reviewed yet.
+Reviewed (code review, 1 pass). Over-threshold comparison matches shift-close semantics; no blocking findings. Fixed: Reports board could leave the loading status stuck when a run was superseded by an invalid range or empty pick.
 
 ## Design Notes
 
@@ -83,7 +83,7 @@ See the Story 8.15 entry in `epic-8-context.md`.
 
 ## Auto Run Result
 
-Status: review (implemented and verified).
+Status: done (reviewed).
 
 - Summary: Reports → Revenue and Cash reconciliation on the Owner app, with the cloud range answer carrying shifts and the Hub flagging shifts over the threshold in each rollup.
 - Verification: fmt and clippy clean; arena-proto/store/core tests pass (1280 in core); cloud `owner_read` (15) and `branches` pass; owner app `check` 0 errors and Playwright 310 passed (15 new in `reports.spec.ts`, axe on both tabs in all themes); `check:strings`, `check:layers`, `check:protocol`, `check:no-manifest`, `format:check` ok; `check:generated` lists the new generated files until they are committed.

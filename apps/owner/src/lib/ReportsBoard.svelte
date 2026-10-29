@@ -64,7 +64,10 @@
 
   async function run() {
     const mine = ++ticket;
-    if (!picked.length || problem || !range.from || !range.to) return;
+    if (!picked.length || problem || !range.from || !range.to) {
+      loading = false;
+      return;
+    }
     now = Date.now();
     loading = true;
     failed = false;

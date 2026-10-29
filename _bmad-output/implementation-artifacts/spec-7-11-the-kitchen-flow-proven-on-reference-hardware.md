@@ -2,7 +2,7 @@
 title: 'Story 7.11: The kitchen flow proven on reference hardware'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '75fa607'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

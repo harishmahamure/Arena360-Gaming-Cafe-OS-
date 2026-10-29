@@ -2,7 +2,7 @@
 title: 'Story 8.19: The Hub applies owner commands exactly once, and the owner''s change wins'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '389fb68539f7c69d407de94b59293e0b858858aa'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -87,6 +87,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (4 layers) found no blocking defects. Patched: a `backup.now` cycle with no hub token now reports `TOKEN_INVALID` (was generic `INTERNAL`); the owner-command proptest now accepts a refused product only for `HSN_REQUIRED`. Accepted as intended by the spec: `backup.now` tolerates a `base_rev` field (as 8.18 does), transient `backup.now` failures are a permanent rejection (no Hub retry). Deferred (non-blocking): task-level redelivery test for `backup.now`, summary-publish assertion, `groups.changed` `by_owner` assertion for rate/rule, toast timer pause and queueing, other-locale catalogues.
 
 ## Design Notes
 

@@ -533,6 +533,10 @@ impl UploadTask {
             Ok(Ok(Some(t))) => String::from_utf8_lossy(&t).into_owned(),
             other => {
                 tracing::warn!(ok = other.is_ok(), "upload: no hub token");
+                self.outcome = Some(AppError::new(
+                    ErrorCode::TokenInvalid,
+                    "this hub has no token to upload with",
+                ));
                 return Next::idle(TIER_RECHECK);
             }
         };

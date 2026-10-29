@@ -240,7 +240,7 @@ development_status:
   8-16-reports-stock: done
   8-17-owner-reports-export-to-csv-and-pdf-and-match-the-hub-s-z-re: done
   8-18-the-cloud-accepts-owner-command-kinds-checks-them-and-fans-a: done
-  8-19-the-hub-applies-owner-commands-exactly-once-and-the-owner-s: review
+  8-19-the-hub-applies-owner-commands-exactly-once-and-the-owner-s: done
   8-20-commands-are-swept-expire-after-7-days-and-are-fenced-by-epo: backlog
   8-21-preview-the-target-branches-and-follow-each-command-row-to-a: backlog
   8-22-commands-queue-on-the-owner-s-device-while-it-is-offline: backlog

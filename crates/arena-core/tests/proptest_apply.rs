@@ -6831,7 +6831,11 @@ fn owner_command(
         );
         prop_assert_eq!(hub.change_count(), changes_before);
         prop_assert!(row.applied_seq.is_none());
-        prop_assert!(kind == 1, "a valid {name} command was refused: {error:?}");
+        // A product with no HSN is refused while GST is on; nothing else may refuse a valid command.
+        prop_assert!(
+            kind == 1 && error.code == ErrorCode::HsnRequired,
+            "a valid {name} command was refused: {error:?}"
+        );
         return Ok(());
     }
     prop_assert!(row.applied && row.applied_seq.is_some());

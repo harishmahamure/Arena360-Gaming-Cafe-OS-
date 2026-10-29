@@ -2,7 +2,7 @@
 title: 'Story 6.34: The kiosk Account page — details, wallet and packs, order history, change password'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '08f47ea'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -78,6 +78,8 @@ deferred: []
 
 ## Review Triage Log
 
+Review pass (2026-10-29): no blocking findings. Cargo fmt, clippy -D warnings and tests (proto, store, core, api, kiosk-core), kiosk svelte-check, strings, protocol and prettier checks are green.
+
 ## Verification
 
 **Commands:**
@@ -86,7 +88,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 - **Summary:** `player.account_page` and `player.password_change` frames (paired only) back a new kiosk Account page. The Hub opens the player's sealed name and phone (masking the phone), lists every pack and pass (expired ones with unused time) and the newest 50 product orders with invoice numbers. The password form is checked under the lock screen's throttle, hashed at the Hub and stored by a new `player.password_change` intent that a device may apply only for the profiled player on its own live session.
 - **Verification:** see Verification; kiosk Playwright (all but the four pre-existing Windows-path `theme` failures), arena-core (incl. proptest with the new `PasswordChange` op), arena-api `lan` account/password tests pass; strings, hex, no-blur, protocol, layers, pins, prettier pass.

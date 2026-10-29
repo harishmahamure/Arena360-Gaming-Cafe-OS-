@@ -109,6 +109,18 @@
     </p>
   {:else if lines.length === 0}
     <p class="empty type-kiosk-body" data-testid="cart-empty">{t("player.cart.empty")}</p>
+    <!-- A first Add that was refused or unanswered has no line to carry its reason. -->
+    {#each Object.values(problems) as problem, index (index)}
+      <p class="status type-kiosk-label" role="alert" data-testid="cart-empty-problem">
+        <span aria-hidden="true">⚠</span>
+        {words(problem)}
+      </p>
+    {/each}
+    {#if reconnecting}
+      <p class="status type-kiosk-label" role="status" data-testid="cart-reconnecting">
+        {t("player.cart.reconnecting")}
+      </p>
+    {/if}
   {:else}
     <ul class="lines" aria-label={t("player.cart.lines_label")} data-testid="cart-lines">
       {#each lines as line (line.item.id)}

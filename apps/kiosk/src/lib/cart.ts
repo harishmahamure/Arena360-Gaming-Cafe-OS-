@@ -11,6 +11,9 @@ import type { ShopItem } from "@arena/ui/generated";
 /** The most of one product a line may hold (the same bound the Hub accepts). */
 export const MAX_LINE_QTY = 99;
 
+/** The most distinct products one order may hold (the same bound the Hub accepts). */
+export const MAX_CART_LINES = 50;
+
 /** One line of the cart: the item as the Hub last priced it and how many. */
 export type CartLine = { item: ShopItem; qty: number };
 
@@ -62,6 +65,8 @@ export function stepCart(
       problem: null,
     };
   }
+  // The Hub takes at most MAX_CART_LINES distinct products in one order.
+  if (at < 0 && lines.length >= MAX_CART_LINES) return { lines, problem: { kind: "limit" } };
   const problem = stockProblem(fresh, qty + 1);
   if (problem !== null || fresh === undefined) return { lines, problem };
   return {
@@ -91,7 +96,9 @@ export const placeLines = (lines: CartLine[]): { product_id: string; qty: number
 export function refreshLines(lines: CartLine[], menu: ShopItem[]): CartLine[] {
   return lines.map((l) => {
     const live = menu.find((i) => i.id === l.item.id);
-    return live ? { ...l, item: live } : l;
+    return live
+      ? { ...l, item: live }
+      : { ...l, item: { ...l.item, available: false, max_qty: 0 } };
   });
 }
 

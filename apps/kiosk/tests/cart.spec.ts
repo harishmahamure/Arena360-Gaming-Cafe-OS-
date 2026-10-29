@@ -7,6 +7,7 @@ import {
   cartTotal,
   placeOf,
   refreshLines,
+  stockProblem,
   stepCart,
   type CartLine,
 } from "../src/lib/cart";
@@ -427,7 +428,19 @@ test("the cart's count, total and refresh follow the Hub's latest listing", () =
   expect(cartTotal(lines)).toBe(2 * 4000 + 3 * 1500);
   const fresh = refreshLines(lines, [{ ...cola, price_minor: 5000, max_qty: 1 }]);
   expect(fresh[0].item.price_minor).toBe(5000);
-  expect(fresh[1]).toBe(lines[1]);
+  // A product that left the menu is marked unavailable, so its line shows out of stock.
+  expect(fresh[1].item.available).toBe(false);
+  expect(stockProblem(fresh[1].item, fresh[1].qty)).toEqual({ kind: "out_of_stock" });
+});
+
+test("a 51st distinct product is refused with the limit", () => {
+  const lines: CartLine[] = Array.from({ length: 50 }, (_, i) => ({
+    item: item(`X${i}`, `Item ${i}`),
+    qty: 1,
+  }));
+  const next = item("X50", "One more");
+  expect(stepCart(lines, "X50", 1, next)).toEqual({ lines, problem: { kind: "limit" } });
+  expect(stepCart(lines, "X3", 1, item("X3", "Item 3")).lines[3].qty).toBe(2);
 });
 
 test("placeOf reads the Hub's typed answer and treats anything else as unreachable", () => {

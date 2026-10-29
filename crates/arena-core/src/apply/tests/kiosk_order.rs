@@ -1,7 +1,7 @@
 //! Story 6.31: a player's order from the kiosk joins the running session's bill, and the
 //! `kiosk_order` alert it raises closes once the kitchen has served every line.
 
-use super::order_line::serve;
+use super::order_line::{cancel, serve};
 use super::prepaid::sql;
 use super::session::{int, pc, refusal, sessions, start, submit, table, text};
 use super::stock::{make, owner, stock_in, up};
@@ -192,4 +192,62 @@ async fn the_menu_says_how_many_can_be_sold_now() {
     assert_eq!(max(&untracked), None);
     assert_eq!(max(&empty), Some(0));
     assert_eq!(max(&combo), Some(2));
+}
+
+fn open_alerts(f: &Fixture) -> usize {
+    reopen(f)
+        .rows(Table::Alerts)
+        .unwrap()
+        .into_iter()
+        .filter(|a| matches!(&a["acked_at"], RowValue::Null))
+        .count()
+}
+
+async fn raise(f: &Fixture, d: &str) {
+    submit(
+        f,
+        system(),
+        IntentPayload::AlertRaise(AlertRaise::new(AlertKind::KioskOrder, Some(d.into()))),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_kiosk_order_alert_closes_when_the_last_unserved_line_is_cancelled() {
+    let f = bootstrapped().await;
+    sql(&f, licence()).await;
+    let id = cola(&f, 5, true).await;
+    let (session, d) = running(&f).await;
+    submit(&f, device(&d), order(&session, &id, 1, None))
+        .await
+        .unwrap();
+    raise(&f, &d).await;
+    assert_eq!(open_alerts(&f), 1);
+
+    let line = text(&table(&f, Table::OrderLines)[0], "id");
+    cancel(&f, owner(), &line, false).await.unwrap();
+    assert_eq!(open_alerts(&f), 0);
+}
+
+#[tokio::test]
+async fn the_kiosk_order_alert_stays_open_while_a_line_is_unserved() {
+    let f = bootstrapped().await;
+    sql(&f, licence()).await;
+    let id = cola(&f, 5, true).await;
+    let (session, d) = running(&f).await;
+    submit(&f, device(&d), order(&session, &id, 1, None))
+        .await
+        .unwrap();
+    submit(&f, device(&d), order(&session, &id, 1, None))
+        .await
+        .unwrap();
+    raise(&f, &d).await;
+
+    let lines = table(&f, Table::OrderLines);
+    assert_eq!(lines.len(), 2);
+    serve(&f, owner(), &text(&lines[0], "id")).await.unwrap();
+    assert_eq!(open_alerts(&f), 1);
+    serve(&f, owner(), &text(&lines[1], "id")).await.unwrap();
+    assert_eq!(open_alerts(&f), 0);
 }

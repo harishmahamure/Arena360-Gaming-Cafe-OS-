@@ -2,10 +2,10 @@
 title: 'Story 6.31: Build a cart and add the order to the session bill from the seat'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '097d490'
-review_loop_iteration: 0
-followup_review_recommended: true
+review_loop_iteration: 1
+followup_review_recommended: false
 warnings: []
 deferred: []
 context:
@@ -90,3 +90,10 @@ Status: review
 - **Summary:** Add builds a cart panel; Place order sends `shop.place`; the Hub applies a device `order.place` on the PC's own session (postpaid or block), raises a `kiosk_order` alert (ORDER tile tag, sound, list row) and closes it when the bill has no unserved line.
 - **Verification:** proto, core (7 new), api (3 new lan), kiosk-svc cart test and `arena-kiosk-ui` pass; kiosk Playwright `cart` (14), `shop`, `shell`, `home` (58) and hub `alerts` (24) pass; fmt, clippy (touched crates), svelte-check, strings/hex/blur/protocol/layers/pins/prettier pass.
 - **Residual risks:** a prepaid (pack/wallet) session is refused `VALIDATION_FAILED` and the cart says "ask at the counter" until Story 6.32; `arena-kiosk-svc` has 14 environmental test failures (file-ownership checks need admin) and 3 older `clone_on_copy` clippy lints in `launchers/tests.rs`, all unchanged by this story; `check:tokens-used` fails on hub-only tokens as before; `check:generated` only reports the new uncommitted types; the real Tauri shell and a real Hub were not exercised; no review pass has run.
+
+## Code Review Result
+
+Status: done (4 reviewers: blind, edge cases, verification gaps, acceptance).
+
+- **Fixed:** Place order stayed disabled after an unanswered placement (a successful menu poll now clears it); steps during an in-flight placement were wiped with the cart (steps are ignored while busy); a refused or unanswered first Add left a mute empty cart (reason and "reconnecting" now show there); a product dropped from the menu showed no mark (refresh marks it unavailable); a 51st distinct product is refused with the limit; tests added for cancel-closes-alert, partial-serve-keeps-alert, the 50-line cap and the dropped product.
+- **Deferred (accepted risk, not blocking):** no idempotency key on `shop.place` (a retry after a lost reply can double an order); the alert is raised in a second intent after `order.place`; non-kitchen-only orders keep their alert until staff acknowledge it (by design, see Design Notes); `order.unplace` does not close the alert; per-cart (not per-line) stock sums when a bundle and its component share stock; the Hub does not check `shop.place` product ids against the menu (order.place still validates them); cart-reset-on-session-end and poll-refresh have no page-level Playwright test.

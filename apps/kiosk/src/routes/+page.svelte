@@ -116,6 +116,8 @@
    * says why on the line. The Hub not answering says the counter is reconnecting.
    */
   async function stepLine(id: string, delta: 1 | -1) {
+    // A placement in flight owns the cart: a step now would be cleared with the placed lines.
+    if (cartBusy) return;
     cartPlaced = false;
     const rest = { ...cartProblems };
     delete rest[id];
@@ -282,6 +284,8 @@
       if (view !== null) {
         shop = view;
         cart = refreshLines(cart, view.items);
+        // The Hub answered again: Place order is usable without the player having to tap a step.
+        if (cartError === "reconnecting") cartError = null;
       }
       timer = setTimeout(() => void refresh(), period);
     };

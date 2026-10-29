@@ -52,7 +52,12 @@ fn cancel_intent(actor: Actor, line: &str, made: bool, reason: Option<ReasonCode
     i
 }
 
-async fn cancel(f: &Fixture, actor: Actor, line: &str, made: bool) -> Result<Applied, AppError> {
+pub(super) async fn cancel(
+    f: &Fixture,
+    actor: Actor,
+    line: &str,
+    made: bool,
+) -> Result<Applied, AppError> {
     let mut i = cancel_intent(actor, line, made, Some(ReasonCode::ChangedMind));
     i.issued_at = f.clock.now_ms();
     f.writer.submit_intent(i).await

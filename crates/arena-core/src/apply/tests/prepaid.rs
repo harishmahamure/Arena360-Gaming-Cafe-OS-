@@ -235,6 +235,40 @@ async fn a_wallet_session_ends_where_the_postpaid_bill_reaches_the_balance() {
 }
 
 #[tokio::test]
+async fn a_wallet_session_screen_reports_what_is_left_of_the_wallet() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    topped_up(&f, &p, 10_000).await;
+    begin(&f, &d, Some(&p), SessionMode::Wallet, None)
+        .await
+        .unwrap();
+    let left = |at: i64| {
+        let screens = crate::session_screens(&reopen(&f), at).unwrap();
+        screens[0].1.wallet_left_minor
+    };
+    // 1 000 free, and 9 000 set aside for 90 minutes that is used up evenly.
+    assert_eq!(left(T0), Some(10_000));
+    assert_eq!(left(T0 + 45 * MIN), Some(5_500));
+    assert_eq!(left(T0 + 81 * MIN), Some(1_900));
+    assert_eq!(left(T0 + 90 * MIN), Some(1_000));
+    assert_eq!(left(T0 + 120 * MIN), Some(1_000));
+}
+
+#[tokio::test]
+async fn only_a_wallet_session_has_a_wallet_left() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", None).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    let pack = owned_pack(&f, &p, &[group_of(&f, &d)], 90).await;
+    begin(&f, &d, Some(&p), SessionMode::Pack, Some(&pack))
+        .await
+        .unwrap();
+    let screens = crate::session_screens(&reopen(&f), T0).unwrap();
+    assert_eq!(screens[0].1.wallet_left_minor, None);
+}
+
+#[tokio::test]
 async fn a_wallet_below_the_minimum_bill_is_refused_with_the_balance() {
     let f = bootstrapped().await;
     let d = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;

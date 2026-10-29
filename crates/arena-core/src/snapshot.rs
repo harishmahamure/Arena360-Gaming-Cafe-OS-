@@ -667,6 +667,21 @@ impl SnapshotReader {
         crate::session_screen::timed_sessions(&store, now_ms)
     }
 
+    /// The minutes-left marks the branch warns its players at, longest first (Story 6.20).
+    pub fn warn_marks(&self) -> Result<Vec<u8>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let settings = store.settings()?;
+        Ok(arena_proto::warn_marks_from(
+            settings
+                .iter()
+                .find(|r| r.key == arena_proto::KEY_BILLING_WARN_MARKS)
+                .map(|r| r.value.as_str()),
+        ))
+    }
+
     /// The rate changes due on running sessions at `now_ms`, and when to look again.
     pub fn rate_flips(&self, now_ms: i64) -> Result<RateFlips, AppError> {
         let store = self

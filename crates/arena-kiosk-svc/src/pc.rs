@@ -36,6 +36,9 @@ pub struct ScreenSession {
     /// The wallet balance (minor units) and plan name the overlay HUD shows.
     pub balance_minor: Option<i64>,
     pub plan_name: Option<String>,
+    /// What is left of the wallet when a wallet-paid session is at or below the branch's
+    /// low-balance amount (minor units), else `None` (Story 6.20).
+    pub low_balance_minor: Option<i64>,
     /// The branch's time-up mode is "Staff handles".
     pub hold: bool,
 }

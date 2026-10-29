@@ -413,6 +413,7 @@ fn start_session(kiosk: &Kiosk) {
             ends_at: None,
             balance_minor: None,
             plan_name: None,
+            low_balance_minor: None,
             hold: false,
         });
     });

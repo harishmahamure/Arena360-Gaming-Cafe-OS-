@@ -31,6 +31,11 @@ export type SessionScreen = {
    */
   balance_minor?: number;
   /**
+   * What is left of the wallet for a session paid from it, after the share the session has
+   * used so far (minor units); `None` for any other session. The kiosk warns on it (Story 6.20).
+   */
+  wallet_left_minor?: number;
+  /**
    * The plan (pack or pass) the session runs on; `None` for wallet time or pay-as-you-go.
    */
   plan_name?: string;

@@ -13,7 +13,17 @@
     newIdempotencyKey,
     submitIntent,
   } from "../../../../lib/auth";
-  import { FIELDS, KEYS, MODES, SWITCH, validField, type Field } from "../../../../lib/billing";
+  import {
+    FIELDS,
+    KEYS,
+    MODES,
+    SWITCH,
+    formText,
+    parseMarks,
+    storedValue,
+    validField,
+    type Field,
+  } from "../../../../lib/billing";
   import { branchLocale } from "../../../../lib/locale.svelte";
   import { sessionStaff } from "../../../../lib/operating";
 
@@ -23,7 +33,14 @@
     grace: "hub.settings.billing.invalid.grace",
     mode: "hub.settings.billing.invalid.mode",
     credit_pause: "hub.settings.billing.invalid.credit_pause",
+    marks: "hub.settings.billing.invalid.marks",
+    low_balance: "hub.settings.billing.invalid.low_balance",
   };
+  const MARKS_INVALID = {
+    shape: "hub.settings.billing.invalid.marks",
+    range: "hub.settings.billing.invalid.marks_range",
+    duplicate: "hub.settings.billing.invalid.marks_duplicate",
+  } as const satisfies Record<string, MessageKey>;
   const NUMBERS = [
     [
       "rounding",
@@ -44,6 +61,20 @@
       "hub.settings.billing.grace_help",
     ],
   ] as const satisfies readonly (readonly [Field, MessageKey, MessageKey, MessageKey])[];
+  const WARNINGS = [
+    [
+      "marks",
+      "hub.settings.billing.marks",
+      "hub.settings.billing.marks_hint",
+      "hub.settings.billing.marks_help",
+    ],
+    [
+      "low_balance",
+      "hub.settings.billing.low_balance",
+      "hub.settings.billing.low_balance_hint",
+      "hub.settings.billing.low_balance_help",
+    ],
+  ] as const satisfies readonly (readonly [Field, MessageKey, MessageKey, MessageKey])[];
   const SWITCH_LABELS: Record<(typeof SWITCH)[number], MessageKey> = {
     true: "hub.settings.billing.credit_pause_on",
     false: "hub.settings.billing.credit_pause_off",
@@ -60,6 +91,8 @@
     grace: "2",
     mode: "clean_up",
     credit_pause: "true",
+    marks: "10, 5, 1",
+    low_balance: "50.00",
   });
   let errors: Partial<Record<Field, MessageKey>> = $state({});
   let loading = $state(true);
@@ -75,11 +108,14 @@
 
   const staff = $derived(sessionStaff(page.data));
   const canEdit = $derived(staff !== null);
+  const exponent = $derived(branchLocale.current?.exponent ?? 2);
   const needsApproval = $derived(!hasPermission(staff, "settings.edit"));
   const locked = $derived(saving || approving);
   const saveButton = $derived(saveWrap?.querySelector("button") ?? null);
   const changed = $derived(
-    FIELDS.filter((f) => server[f] !== undefined && form[f] !== server[f]?.value),
+    FIELDS.filter(
+      (f) => server[f] !== undefined && storedValue(f, form[f], exponent) !== server[f]?.value,
+    ),
   );
 
   async function load(keep: readonly Field[] = []) {
@@ -102,10 +138,18 @@
       }
       loadFailed = false;
       server = next;
-      for (const f of FIELDS) if (!keep.includes(f)) form[f] = next[f]!.value;
+      for (const f of FIELDS)
+        if (!keep.includes(f)) form[f] = formText(f, next[f]!.value, exponent);
     } finally {
       if (seq === loadSeq) loading = false;
     }
+  }
+
+  /** What is wrong with the form's `f`: the marks say which way they are wrong. */
+  function invalidMessage(f: Field): MessageKey {
+    if (f !== "marks") return INVALID[f];
+    const r = parseMarks(form.marks);
+    return "problem" in r ? MARKS_INVALID[r.problem] : INVALID.marks;
   }
 
   async function approve(pin: string) {
@@ -136,9 +180,9 @@
       if (ticket) void dropElevation(ticket);
       return;
     }
-    const bad = changed.filter((f) => !validField(f, form[f]));
+    const bad = changed.filter((f) => !validField(f, form[f], exponent));
     if (bad.length) {
-      errors = Object.fromEntries(bad.map((f) => [f, INVALID[f]]));
+      errors = Object.fromEntries(bad.map((f) => [f, invalidMessage(f)]));
       status = null;
       if (ticket) void dropElevation(ticket);
       await tick();
@@ -158,7 +202,7 @@
     let stale = false;
     try {
       for (const f of edits) {
-        const value = form[f];
+        const value = storedValue(f, form[f], exponent);
         let idem = pendingKeys.get(f);
         if (idem?.value !== value) {
           idem = { value, key: newIdempotencyKey() };
@@ -179,7 +223,7 @@
         const code = outcome.kind === "error" ? outcome.error.code : null;
         if (code === "VALIDATION_FAILED") {
           pendingKeys.delete(f);
-          errors = { [f]: INVALID[f] };
+          errors = { [f]: invalidMessage(f) };
         } else if (code === "STALE") {
           pendingKeys.delete(f);
           stale = true;
@@ -274,6 +318,27 @@
             class:invalid={!!errors[f]}
             type="text"
             inputmode="numeric"
+            autocomplete="off"
+            bind:value={form[f]}
+            disabled={!canEdit || locked}
+            aria-invalid={errors[f] ? "true" : undefined}
+            aria-describedby={describedBy(f, "billing-" + f + "-hint", "billing-" + f + "-help")}
+          />
+          <p class="hint type-hub-label" id={"billing-" + f + "-hint"}>{t(hint)}</p>
+          <p class="hint type-hub-label" id={"billing-" + f + "-help"}>{t(help)}</p>
+          {@render fieldError(f)}
+        </div>
+      {/each}
+
+      {#each WARNINGS as [f, label, hint, help] (f)}
+        <div class="field">
+          <label class="label type-hub-label" for={"billing-" + f}>{t(label)}</label>
+          <input
+            id={"billing-" + f}
+            class="control ui-interactive tabular-nums"
+            class:invalid={!!errors[f]}
+            type="text"
+            inputmode={f === "marks" ? "numeric" : "decimal"}
             autocomplete="off"
             bind:value={form[f]}
             disabled={!canEdit || locked}

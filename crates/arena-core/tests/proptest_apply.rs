@@ -521,6 +521,9 @@ fn valid_setting() -> impl Strategy<Value = (&'static str, String)> {
         (0..=10i64).prop_map(|n| ("billing.grace_min", n.to_string())),
         prop::sample::select(vec!["clean_up", "staff_handles"])
             .prop_map(|v| ("billing.time_up_mode", v.to_owned())),
+        prop::sample::select(vec!["10,5,1", "30", "20, 3", "7,2"])
+            .prop_map(|v| ("billing.warn_marks", v.to_owned())),
+        (0..=100_000_000i64).prop_map(|n| ("billing.low_balance_minor", n.to_string())),
     ]
 }
 
@@ -558,6 +561,9 @@ fn invalid_setting() -> impl Strategy<Value = (&'static str, String)> {
         Just(("billing.minimum_min", "241".to_owned())),
         Just(("billing.grace_min", "11".to_owned())),
         Just(("billing.time_up_mode", "Clean up".to_owned())),
+        prop::sample::select(vec!["", "0", "31", "5,5", "1,2,3,4", "x"])
+            .prop_map(|v| ("billing.warn_marks", v.to_owned())),
+        Just(("billing.low_balance_minor", "-1".to_owned())),
     ]
 }
 

@@ -93,7 +93,7 @@ pub fn session_screens(
         let sessions = s.live_sessions()?;
         // What the overlay HUD shows beside the clock: the profiled player's wallet balance and
         // the name of the pack or pass the session runs on.
-        let mut hud: HashMap<String, (i64, Option<String>)> = HashMap::new();
+        let mut hud: HashMap<String, (i64, Option<String>, Option<i64>)> = HashMap::new();
         for session in &sessions {
             let Some(player) = &session.player_id else {
                 continue;
@@ -106,7 +106,13 @@ pub fn session_screens(
                     .map(|p| p.name),
                 None => None,
             };
-            hud.insert(session.id.clone(), (s.wallet_balance(player)?, plan));
+            let balance = s.wallet_balance(player)?;
+            let left = if session.mode == "wallet" {
+                Some((balance - s.reserved_minor(player)?).max(0))
+            } else {
+                None
+            };
+            hud.insert(session.id.clone(), (balance, plan, left));
         }
         Ok((
             sessions,
@@ -142,15 +148,32 @@ pub fn session_screens(
             let remaining_ms = s
                 .ends_at
                 .map(|at| u64::try_from(at - s.paused_at.unwrap_or(now_ms)).unwrap_or(0));
-            let (balance_minor, plan_name) = match hud.get(&s.id) {
-                Some((balance, plan)) => (Some(*balance), plan.clone()),
-                None => (None, None),
+            let (balance_minor, plan_name, free) = match hud.get(&s.id) {
+                Some((balance, plan, free)) => (Some(*balance), plan.clone(), *free),
+                None => (None, None, None),
             };
+            // A wallet session sets its whole share aside up front and uses it up as time runs
+            // out, so what is left is the free wallet plus the unused part of that share.
+            let wallet_left_minor = free.map(|free| {
+                let span = s
+                    .ends_at
+                    .map_or(0, |at| (at - s.started_at - s.paused_total_ms).max(0));
+                let unused = match (span, remaining_ms) {
+                    (0, _) | (_, None) => 0,
+                    (span, Some(rem)) => {
+                        let rem = i128::from(rem).min(i128::from(span));
+                        i64::try_from(i128::from(s.reserved_minor) * rem / i128::from(span))
+                            .unwrap_or(0)
+                    }
+                };
+                free.saturating_add(unused)
+            });
             let screen = SessionScreen {
                 username: s.username,
                 guest_no: s.guest_no,
                 remaining_ms,
                 balance_minor,
+                wallet_left_minor,
                 plan_name,
                 ordered_items: ordered
                     .get(&s.id)

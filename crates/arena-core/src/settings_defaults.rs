@@ -18,6 +18,10 @@ use arena_proto::{
     KEY_BILLING_TIME_UP_MODE, TIME_UP_MODES,
 };
 use arena_proto::{
+    BILLING_LOW_BALANCE_MAX_MINOR, DEFAULT_BILLING_LOW_BALANCE, DEFAULT_BILLING_WARN_MARKS,
+    KEY_BILLING_LOW_BALANCE, KEY_BILLING_WARN_MARKS,
+};
+use arena_proto::{
     DEFAULT_INVENTORY_TAKE_STOCK_AT, DEFAULT_STOCK_EXPIRY_WARN_DAYS, KEY_INVENTORY_TAKE_STOCK_AT,
     KEY_STOCK_EXPIRY_WARN_DAYS, STOCK_EXPIRY_WARN_RANGE, TAKE_STOCK_AT_MODES,
 };
@@ -140,6 +144,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_BILLING_MINIMUM_MIN, DEFAULT_BILLING_MINIMUM_MIN),
     (KEY_BILLING_GRACE_MIN, DEFAULT_BILLING_GRACE_MIN),
     (KEY_BILLING_TIME_UP_MODE, DEFAULT_BILLING_TIME_UP_MODE),
+    (KEY_BILLING_WARN_MARKS, DEFAULT_BILLING_WARN_MARKS),
+    (KEY_BILLING_LOW_BALANCE, DEFAULT_BILLING_LOW_BALANCE),
     (
         KEY_BILLING_CREDIT_AUTO_PAUSE,
         DEFAULT_BILLING_CREDIT_AUTO_PAUSE,
@@ -163,7 +169,7 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 30] = [
+pub const KEYED_FIELD_KEYS: [&str; 32] = [
     KEY_KIOSK_LOGO,
     KEY_MEDIA_CAP_GB,
     KEY_RECEIPT_ADDRESS,
@@ -191,6 +197,8 @@ pub const KEYED_FIELD_KEYS: [&str; 30] = [
     KEY_BILLING_MINIMUM_MIN,
     KEY_BILLING_GRACE_MIN,
     KEY_BILLING_TIME_UP_MODE,
+    KEY_BILLING_WARN_MARKS,
+    KEY_BILLING_LOW_BALANCE,
     KEY_BILLING_CREDIT_AUTO_PAUSE,
     KEY_STOCK_EXPIRY_WARN_DAYS,
     KEY_INVENTORY_TAKE_STOCK_AT,
@@ -244,6 +252,8 @@ pub enum SettingRule {
     Tax,
     BranchCode,
     BranchName,
+    /// `billing.warn_marks`: one to three distinct minutes (`arena_proto::parse_warn_marks`).
+    WarnMarks,
     /// Up to `max_lines` receipt text lines (`arena_proto::valid_receipt_lines`).
     ReceiptLines {
         max_lines: usize,
@@ -362,6 +372,14 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
         },
     ),
     (KEY_BILLING_TIME_UP_MODE, SettingRule::OneOf(TIME_UP_MODES)),
+    (KEY_BILLING_WARN_MARKS, SettingRule::WarnMarks),
+    (
+        KEY_BILLING_LOW_BALANCE,
+        SettingRule::Integer {
+            min: 0,
+            max: BILLING_LOW_BALANCE_MAX_MINOR,
+        },
+    ),
     (KEY_BILLING_CREDIT_AUTO_PAUSE, SettingRule::Bool),
     (
         KEY_STOCK_EXPIRY_WARN_DAYS,
@@ -448,6 +466,7 @@ impl SettingRule {
             Self::TestSession => arena_proto::TestSessionStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
             Self::ReceiptLines { max_lines } => valid_receipt_lines(value, max_lines),
+            Self::WarnMarks => arena_proto::parse_warn_marks(value).is_ok(),
             Self::BranchCode => arena_proto::valid_branch_code(value),
             Self::BranchName => {
                 let n = value.chars().count();

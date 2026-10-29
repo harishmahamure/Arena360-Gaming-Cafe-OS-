@@ -1576,6 +1576,7 @@ async fn staff_messages_reach_the_app_stay_for_the_session_and_go_with_it() {
         guest_no: None,
         remaining_ms: None,
         balance_minor: None,
+        wallet_left_minor: None,
         plan_name: None,
     };
     assert_eq!(
@@ -1690,6 +1691,7 @@ async fn a_started_session_unlocks_ticks_and_locks_at_its_lock_time() {
         guest_no: None,
         remaining_ms: None,
         balance_minor: None,
+        wallet_left_minor: None,
         plan_name: None,
     };
     assert_eq!(
@@ -1769,6 +1771,7 @@ async fn a_paused_session_covers_the_screen_keeps_its_session_and_resumes_on_a_s
         guest_no: None,
         remaining_ms: None,
         balance_minor: None,
+        wallet_left_minor: None,
         plan_name: None,
     };
     presence.push_session_started(&hub.device_id, "S1", screen(1_500));
@@ -2855,6 +2858,7 @@ fn session_screen(lock_after_ms: u64) -> arena_proto::SessionScreen {
         guest_no: None,
         remaining_ms: None,
         balance_minor: None,
+        wallet_left_minor: None,
         plan_name: None,
     }
 }

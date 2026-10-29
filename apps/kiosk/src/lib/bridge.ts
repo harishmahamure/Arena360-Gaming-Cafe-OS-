@@ -269,6 +269,8 @@ export type PcScreen = {
     balance_minor: number | null;
     /** The pack or pass the session runs on, for the HUD. */
     plan_name: string | null;
+    /** What is left of the wallet while it is at or below the branch's low-balance amount. */
+    low_balance_minor: number | null;
   } | null;
 };
 
@@ -289,6 +291,7 @@ const screenOf = (v: unknown): PcScreen | null => {
         remaining_ms?: unknown;
         balance_minor?: unknown;
         plan_name?: unknown;
+        low_balance_minor?: unknown;
       }
     | null
     | undefined;
@@ -306,6 +309,7 @@ const screenOf = (v: unknown): PcScreen | null => {
           remaining_ms: typeof s.remaining_ms === "number" ? s.remaining_ms : null,
           balance_minor: typeof s.balance_minor === "number" ? s.balance_minor : null,
           plan_name: typeof s.plan_name === "string" ? s.plan_name : null,
+          low_balance_minor: typeof s.low_balance_minor === "number" ? s.low_balance_minor : null,
         }
       : null;
   return {

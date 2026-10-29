@@ -4,6 +4,7 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 import names from "../src-tauri/ipc-names.json" with { type: "json" };
 import {
   INFO_TOAST_MS,
+  LOW_BALANCE_KEY,
   WARNING_KEY,
   clock,
   dropWarning,
@@ -602,4 +603,120 @@ test("grace is said in whole minutes, a part of a minute counting as one", () =>
   expect(graceMinutes(0)).toBe(0);
   expect(graceMinutes(120_000)).toBe(2);
   expect(graceMinutes(90_000)).toBe(2);
+});
+
+// ---- Story 6.20: the low-balance warning ----
+
+const wallet = (low_balance_minor: number | null, over: Record<string, unknown> = {}) =>
+  shown({
+    username: "asha",
+    balance_minor: 10_000,
+    remaining_ms: 40 * 60_000,
+    grace_ms: 120_000,
+    low_balance_minor,
+    ...over,
+  });
+
+test("the first fall to the branch amount raises a low-balance toast with the actual amount", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, wallet(null));
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, wallet(4_000));
+  const toast = page.getByTestId("toast");
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toHaveAttribute("data-kind", "warning");
+  await expect(page.getByTestId("toast-text")).toHaveText("Balance running low — ₹40.00 left.");
+  await expect(page.getByTestId("toast-detail")).toHaveText("Top up at the counter.");
+  await expect(page.getByTestId("toast-keys")).toHaveAccessibleName(
+    en["player.low_balance.hotkey"],
+  );
+  await expect(page.getByTestId("toast-keys").locator("kbd")).toHaveText(["Ctrl", "Shift", "E"]);
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+});
+
+test("the toast is raised once per crossing and stays until dismissed", async ({ page }) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, wallet(4_900));
+  await expect(page.getByTestId("toast-text")).toHaveText("Balance running low — ₹49.00 left.");
+  // The balance keeps falling: the same toast stays, its words as at the crossing.
+  await emit(page, names.events.pcScreen, wallet(3_900));
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await expect(page.getByTestId("toast-text")).toHaveText("Balance running low — ₹49.00 left.");
+  await page.getByRole("button", { name: en["common.dismiss"] }).click();
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, wallet(2_900));
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+});
+
+test("a top-up above the amount lets the warning fire again on the next fall", async ({ page }) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, wallet(4_000));
+  await page.getByRole("button", { name: en["common.dismiss"] }).click();
+  await emit(page, names.events.pcScreen, wallet(null));
+  await emit(page, names.events.pcScreen, wallet(3_000));
+  await expect(page.getByTestId("toast-text")).toHaveText("Balance running low — ₹30.00 left.");
+});
+
+test("a dismissed low-balance warning leaves nothing behind when the session ends", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, wallet(4_000));
+  await page.getByRole("button", { name: en["common.dismiss"] }).click();
+  await emit(page, names.events.pcScreen, shown(null));
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+});
+
+test("a time warning and the low-balance warning show together, each replacing only its own", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, wallet(4_000, { warning_min: 10 }));
+  await expect(page.getByTestId("toast")).toHaveCount(2);
+  await emit(page, names.events.pcScreen, wallet(3_000, { warning_min: 5 }));
+  await expect(page.getByTestId("toast")).toHaveCount(2);
+  await expect(page.getByTestId("toast-text")).toHaveText([
+    "Balance running low — ₹40.00 left.",
+    "5 min left. Extend?",
+  ]);
+});
+
+test("a lock or the end of the session takes the low-balance warning away", async ({ page }) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, wallet(4_000));
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await emit(page, names.events.pcScreen, { ...wallet(4_000), locked: true, reason: "times_up" });
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+});
+
+test("the low-balance toast passes axe in the high-contrast theme", async ({ page }) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.theme, { hc: true });
+  await emit(page, names.events.pcScreen, wallet(4_000));
+  await expect(page.getByTestId("toast")).toBeVisible();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("each warning kind is dropped by its own key", () => {
+  const both = raiseWarning(
+    raiseWarning([], "10 min left. Extend?", null, 1),
+    "Balance running low — ₹40.00 left.",
+    "Top up at the counter.",
+    2,
+    LOW_BALANCE_KEY,
+    "player.low_balance.hotkey",
+  );
+  expect(both.map((x) => x.key)).toEqual([WARNING_KEY, LOW_BALANCE_KEY]);
+  expect(both[1]).toMatchObject({ hotkey: true, hotkeyLabel: "player.low_balance.hotkey" });
+  expect(dropWarning(both).map((x) => x.id)).toEqual([2]);
+  expect(dropWarning(both, LOW_BALANCE_KEY).map((x) => x.id)).toEqual([1]);
 });

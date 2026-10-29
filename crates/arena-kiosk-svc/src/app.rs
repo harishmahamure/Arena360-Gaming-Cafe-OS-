@@ -366,6 +366,7 @@ fn screen_message(s: crate::pc::Screen) -> IpcMsg {
             guest_no: v.guest_no,
             balance_minor: v.balance_minor,
             plan_name: v.plan_name,
+            low_balance_minor: v.low_balance_minor,
             remaining_ms: v.ends_at.map(|at| {
                 at.saturating_duration_since(tokio::time::Instant::now())
                     .as_millis() as u64

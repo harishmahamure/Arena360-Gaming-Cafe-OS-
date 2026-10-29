@@ -1,7 +1,8 @@
 use arena_proto::{
-    BILLING_GRACE_RANGE, FULFILMENT_MODES, KEY_BILLING_GRACE_MIN, KEY_BILLING_TIME_UP_MODE,
-    KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT, KIOSK_BILLING_KEYS, KIOSK_OPERATING_KEYS,
-    KIOSK_VOLUME_MAX, SettingEntry, TimeUpMode,
+    BILLING_GRACE_RANGE, FULFILMENT_MODES, KEY_BILLING_GRACE_MIN, KEY_BILLING_LOW_BALANCE,
+    KEY_BILLING_TIME_UP_MODE, KEY_BILLING_WARN_MARKS, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT,
+    KIOSK_BILLING_KEYS, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, SESSION_WARNING_MARKS_MIN,
+    SettingEntry, TimeUpMode, low_balance_from, parse_low_balance, parse_warn_marks,
 };
 
 use crate::procs::AppliedRevs;
@@ -14,19 +15,42 @@ pub enum Fulfilment {
     Counter,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KioskOperating {
     pub volume_default: Option<u8>,
     pub fulfilment: Option<Fulfilment>,
     pub grace_min: Option<u8>,
     pub time_up_mode: Option<TimeUpMode>,
+    /// The minutes-left marks players are warned at, longest first (Story 6.20).
+    pub warn_marks: Option<Vec<u8>>,
+    /// The wallet amount (minor units) the low-balance warning fires at; `Some(0)` is off.
+    pub low_balance_minor: Option<i64>,
 }
 
-pub const KEYS: [&str; 4] = [
+impl KioskOperating {
+    /// The marks to warn at: the branch's, or 10, 5 and 1 before the Hub ever sent them.
+    pub fn marks(&self) -> Vec<u8> {
+        self.warn_marks
+            .clone()
+            .unwrap_or_else(|| SESSION_WARNING_MARKS_MIN.to_vec())
+    }
+
+    /// The wallet amount the low-balance warning fires at; `None` when it is off.
+    pub fn low_balance(&self) -> Option<i64> {
+        match self.low_balance_minor {
+            Some(minor) => Some(minor).filter(|m| *m > 0),
+            None => low_balance_from(None),
+        }
+    }
+}
+
+pub const KEYS: [&str; 6] = [
     KIOSK_OPERATING_KEYS[0],
     KIOSK_OPERATING_KEYS[1],
     KIOSK_BILLING_KEYS[0],
     KIOSK_BILLING_KEYS[1],
+    KIOSK_BILLING_KEYS[2],
+    KIOSK_BILLING_KEYS[3],
 ];
 
 fn valid(key: &str, value: &str) -> bool {
@@ -35,6 +59,8 @@ fn valid(key: &str, value: &str) -> bool {
         KEY_FULFILMENT => FULFILMENT_MODES.contains(&value),
         KEY_BILLING_GRACE_MIN => parse_grace(value).is_some(),
         KEY_BILLING_TIME_UP_MODE => TimeUpMode::parse(value).is_some(),
+        KEY_BILLING_WARN_MARKS => parse_warn_marks(value).is_ok(),
+        KEY_BILLING_LOW_BALANCE => parse_low_balance(value).is_some(),
         _ => false,
     }
 }
@@ -75,6 +101,8 @@ pub fn load(queue: &QueueDb) -> KioskOperating {
         fulfilment: read(KEY_FULFILMENT).and_then(|v| parse_fulfilment(&v)),
         grace_min: read(KEY_BILLING_GRACE_MIN).and_then(|v| parse_grace(&v)),
         time_up_mode: read(KEY_BILLING_TIME_UP_MODE).and_then(|v| TimeUpMode::parse(&v)),
+        warn_marks: read(KEY_BILLING_WARN_MARKS).and_then(|v| parse_warn_marks(&v).ok()),
+        low_balance_minor: read(KEY_BILLING_LOW_BALANCE).and_then(|v| parse_low_balance(&v)),
     }
 }
 
@@ -160,5 +188,33 @@ mod tests {
         );
         q.kv_set(KEY_BILLING_GRACE_MIN, "99", 6).unwrap();
         assert_eq!(load(&q).grace_min, None);
+    }
+
+    #[test]
+    fn marks_and_low_balance_default_until_the_hub_sends_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = QueueDb::open(&dir.path().join("queue.db")).unwrap();
+        let cold = load(&q);
+        assert_eq!(
+            (cold.marks(), cold.low_balance()),
+            (vec![10, 5, 1], Some(5000))
+        );
+        q.kv_set(KEY_BILLING_WARN_MARKS, "3,20", 7).unwrap();
+        q.kv_set(KEY_BILLING_LOW_BALANCE, "12000", 7).unwrap();
+        let l = load(&q);
+        assert_eq!((l.marks(), l.low_balance()), (vec![20, 3], Some(12000)));
+        q.kv_set(KEY_BILLING_LOW_BALANCE, "0", 8).unwrap();
+        assert_eq!(load(&q).low_balance(), None);
+        q.kv_set(KEY_BILLING_WARN_MARKS, "5,5", 8).unwrap();
+        q.kv_set(KEY_BILLING_LOW_BALANCE, "-1", 9).unwrap();
+        let bad = load(&q);
+        assert_eq!(
+            (bad.marks(), bad.low_balance()),
+            (vec![10, 5, 1], Some(5000))
+        );
+        assert!(valid(KEY_BILLING_WARN_MARKS, "10, 5"));
+        assert!(!valid(KEY_BILLING_WARN_MARKS, "10,10"));
+        assert!(valid(KEY_BILLING_LOW_BALANCE, "0"));
+        assert!(!valid(KEY_BILLING_LOW_BALANCE, "-1"));
     }
 }

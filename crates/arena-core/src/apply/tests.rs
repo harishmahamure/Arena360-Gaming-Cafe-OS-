@@ -7050,7 +7050,7 @@ mod billing {
         assert_eq!(read(&f).await, BillingRules::defaults());
         while f.events.try_recv().is_ok() {}
         let applied = f.writer.seed_defaults().await.unwrap().unwrap();
-        assert_eq!(applied.changes.len(), 5);
+        assert_eq!(applied.changes.len(), 7);
         for (key, value) in KEYS.into_iter().zip(["15", "30", "2", "clean_up"]) {
             assert_eq!(
                 setting(&reopen(&f), key)["value"],
@@ -7093,6 +7093,49 @@ mod billing {
             ("billing.grace_min", "+5"),
             ("billing.time_up_mode", "Clean up"),
             ("billing.time_up_mode", ""),
+        ] {
+            let e = save(&f, key, bad).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed, "{key}={bad:?}");
+            assert_eq!(e.field.as_deref(), Some(key), "{key}={bad:?}");
+        }
+        assert_eq!(snapshot(&f), before);
+    }
+
+    #[tokio::test]
+    async fn warning_marks_and_the_low_balance_amount_are_seeded_and_validated() {
+        let f = bootstrapped().await;
+        for (key, value) in [
+            (arena_proto::KEY_BILLING_WARN_MARKS, "10,5,1"),
+            (arena_proto::KEY_BILLING_LOW_BALANCE, "5000"),
+        ] {
+            assert_eq!(
+                setting(&reopen(&f), key)["value"],
+                RowValue::Text(value.into()),
+                "{key}"
+            );
+        }
+        for ok in ["30", "1", "20,3", "15, 10, 5", "3,2,1"] {
+            save(&f, "billing.warn_marks", ok).await.unwrap();
+        }
+        for ok in ["0", "1", "12000", "100000000"] {
+            save(&f, "billing.low_balance_minor", ok).await.unwrap();
+        }
+        let before = snapshot(&f);
+        for (key, bad) in [
+            ("billing.warn_marks", ""),
+            ("billing.warn_marks", "0"),
+            ("billing.warn_marks", "31"),
+            ("billing.warn_marks", "10,10"),
+            ("billing.warn_marks", "10,5,5"),
+            ("billing.warn_marks", "4,3,2,1"),
+            ("billing.warn_marks", "10,,5"),
+            ("billing.warn_marks", "abc"),
+            ("billing.warn_marks", "-5"),
+            ("billing.low_balance_minor", ""),
+            ("billing.low_balance_minor", "-1"),
+            ("billing.low_balance_minor", "100000001"),
+            ("billing.low_balance_minor", "50.5"),
+            ("billing.low_balance_minor", "+5"),
         ] {
             let e = save(&f, key, bad).await.unwrap_err();
             assert_eq!(e.code, ErrorCode::ValidationFailed, "{key}={bad:?}");

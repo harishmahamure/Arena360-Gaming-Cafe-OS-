@@ -57,18 +57,30 @@ struct Entry {
     next_mark: usize,
 }
 
-fn first_unpassed(ends_at: i64, now_ms: i64) -> usize {
+fn first_unpassed(marks: &[u8], ends_at: i64, now_ms: i64) -> usize {
     let left = ends_at - now_ms;
-    SESSION_WARNING_MARKS_MIN
+    marks
         .iter()
         .position(|m| left > i64::from(*m) * MINUTE_MS)
-        .unwrap_or(SESSION_WARNING_MARKS_MIN.len())
+        .unwrap_or(marks.len())
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TimerEngine {
     heap: BinaryHeap<Reverse<(i64, String)>>,
     entries: HashMap<String, Entry>,
+    /// The minutes-left marks sessions are warned at, longest first.
+    marks: Vec<u8>,
+}
+
+impl Default for TimerEngine {
+    fn default() -> Self {
+        Self {
+            heap: BinaryHeap::new(),
+            entries: HashMap::new(),
+            marks: SESSION_WARNING_MARKS_MIN.to_vec(),
+        }
+    }
 }
 
 impl TimerEngine {
@@ -105,7 +117,8 @@ impl TimerEngine {
                     ends_at: s.ends_at,
                     due_at: s.due_at,
                     expires: s.expires,
-                    next_mark: kept.unwrap_or_else(|| first_unpassed(s.ends_at, now_ms)),
+                    next_mark: kept
+                        .unwrap_or_else(|| first_unpassed(&self.marks, s.ends_at, now_ms)),
                 },
             );
         }
@@ -119,6 +132,19 @@ impl TimerEngine {
         }
     }
 
+    /// Changes the marks sessions are warned at (longest first; the branch's setting). Every
+    /// session carries on from the first new mark still ahead of it, so a mark it has already
+    /// passed is not raised late and one it has already been warned at is not raised again.
+    pub fn set_marks(&mut self, marks: &[u8], now_ms: i64) {
+        if self.marks == marks {
+            return;
+        }
+        self.marks = marks.to_vec();
+        for e in self.entries.values_mut() {
+            e.next_mark = first_unpassed(&self.marks, e.ends_at, now_ms);
+        }
+    }
+
     /// Puts back a session whose expiry could not be recorded, so the next tick retries it.
     pub fn requeue(&mut self, s: &TimedSession, now_ms: i64) {
         self.heap.push(Reverse((s.due_at, s.session_id.clone())));
@@ -129,7 +155,7 @@ impl TimerEngine {
                 ends_at: s.ends_at,
                 due_at: s.due_at,
                 expires: s.expires,
-                next_mark: first_unpassed(s.ends_at, now_ms),
+                next_mark: first_unpassed(&self.marks, s.ends_at, now_ms),
             },
         );
     }
@@ -157,10 +183,11 @@ impl TimerEngine {
             }
         }
         let mut warnings = Vec::new();
+        let marks = &self.marks;
         for (id, e) in &mut self.entries {
             let left = e.ends_at - now_ms;
             let mut due = None;
-            while let Some(mark) = SESSION_WARNING_MARKS_MIN.get(e.next_mark) {
+            while let Some(mark) = marks.get(e.next_mark) {
                 if left > i64::from(*mark) * MINUTE_MS {
                     break;
                 }
@@ -241,6 +268,35 @@ mod tests {
         assert!(e.tick(end - 9 * MINUTE_MS).is_empty());
         assert_eq!(marks(&e.tick(end - 5 * MINUTE_MS)), [5]);
         assert_eq!(marks(&e.tick(end - MINUTE_MS)), [1]);
+        assert!(e.tick(end - 30_000).is_empty());
+    }
+
+    #[test]
+    fn configured_marks_replace_the_defaults_from_the_next_tick() {
+        let mut e = TimerEngine::new();
+        let end = T0 + 40 * MINUTE_MS;
+        e.sync([timed("A", end)], T0);
+        e.set_marks(&[20, 3], T0);
+        assert!(e.tick(end - 20 * MINUTE_MS - 1).is_empty());
+        assert_eq!(marks(&e.tick(end - 20 * MINUTE_MS)), [20]);
+        assert!(e.tick(end - 10 * MINUTE_MS).is_empty());
+        assert_eq!(marks(&e.tick(end - 3 * MINUTE_MS)), [3]);
+        assert!(e.tick(end - MINUTE_MS).is_empty());
+    }
+
+    #[test]
+    fn changing_the_marks_mid_session_skips_marks_already_passed() {
+        let mut e = TimerEngine::new();
+        let end = T0 + 30 * MINUTE_MS;
+        e.sync([timed("A", end)], T0);
+        // 12 minutes left: the 10-minute mark is still ahead and the new 15 has gone by.
+        let now = end - 12 * MINUTE_MS;
+        e.set_marks(&[15, 10, 2], now);
+        assert!(e.tick(now).is_empty());
+        assert_eq!(marks(&e.tick(end - 10 * MINUTE_MS)), [10]);
+        assert_eq!(marks(&e.tick(end - 2 * MINUTE_MS)), [2]);
+        // The same marks again change nothing, even after the session moved on.
+        e.set_marks(&[15, 10, 2], end - MINUTE_MS);
         assert!(e.tick(end - 30_000).is_empty());
     }
 

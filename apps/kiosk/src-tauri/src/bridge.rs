@@ -1254,6 +1254,7 @@ mod tests {
                     remaining_ms: None,
                     balance_minor: None,
                     plan_name: None,
+                    low_balance_minor: None,
                 }),
             },
             at,

@@ -102,6 +102,26 @@ pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), 
                 .ok_or_else(|| invalid(field, "tax settings are malformed"))?;
             return tax.check().map_err(|(f, m)| invalid(f, m));
         }
+        SettingRule::WarnMarks => {
+            return arena_proto::parse_warn_marks(&s.value)
+                .map(|_| ())
+                .map_err(|p| {
+                    invalid(
+                        field,
+                        match p {
+                            arena_proto::WarnMarksProblem::Shape => {
+                                "give one to three whole minutes separated by commas"
+                            }
+                            arena_proto::WarnMarksProblem::Range => {
+                                "each mark must be from 1 to 30 minutes"
+                            }
+                            arena_proto::WarnMarksProblem::Duplicate => {
+                                "each mark must be different"
+                            }
+                        },
+                    )
+                });
+        }
         SettingRule::PrinterSelected => {
             return PrinterSelected::parse(&s.value)
                 .map(|_| ())

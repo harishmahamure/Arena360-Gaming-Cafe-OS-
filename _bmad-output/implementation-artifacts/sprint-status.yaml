@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 22:00
+last_updated: 10-29-2026 23:30
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -186,7 +186,7 @@ development_status:
   6-17-the-account-menu-with-lock-and-log-out: done
   6-18-i-m-done-ends-a-postpaid-session-from-the-hud: done
   6-19-time-warnings-as-hud-toasts-a-chip-warning-and-a-taskbar-fla: done
-  6-20-per-branch-warning-marks-and-the-low-balance-warning: backlog
+  6-20-per-branch-warning-marks-and-the-low-balance-warning: review
   6-21-extend-from-the-kiosk-with-live-prices: backlog
   6-22-the-grace-lock-with-extend-then-the-branch-time-up-mode-at-t: backlog
   6-23-the-games-tab-shows-the-library-and-launches-a-game-in-one-c: backlog

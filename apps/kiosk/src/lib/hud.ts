@@ -21,8 +21,10 @@ export type HudToast = {
   until: number | null;
   /** A second line under the text (a time warning's end time and grace). */
   detail?: string;
-  /** The toast shows the Extend hotkey's key caps (a time warning, Story 6.19). */
+  /** The toast shows the Ctrl+Shift+E key caps (a time or low-balance warning). */
   hotkey?: boolean;
+  /** The catalogue key of what the key caps do, when it is not "Extend" (Story 6.20). */
+  hotkeyLabel?: string;
 };
 
 /** How long a toast of this kind stays, in ms (`null`: until dismissed). */
@@ -58,33 +60,42 @@ export function raise(
 /** The key every time warning shares, so a newer one replaces the older (Story 6.19). */
 export const WARNING_KEY = "time-warning"; // i18n-ignore (a toast key)
 
+/** The key the low-balance warning has, so it is raised once per crossing (Story 6.20). */
+export const LOW_BALANCE_KEY = "low-balance"; // i18n-ignore (a toast key)
+
 /** The key caps shown beside the Extend hotkey, one per cap. */
 export const EXTEND_KEYS = ["Ctrl", "Shift", "E"] as const; // i18n-ignore (key caps)
 
-/** A warning that stays until dismissed or time-up; it replaces any warning already showing. */
+/**
+ * A warning that stays until dismissed or time-up; it replaces any warning of the same `key`
+ * already showing (a time warning by default, or the low-balance warning).
+ */
 export function raiseWarning(
   toasts: readonly HudToast[],
   text: string,
   detail: string | null,
   id: number,
+  key: string = WARNING_KEY,
+  hotkeyLabel?: string,
 ): HudToast[] {
   return [
-    ...toasts.filter((x) => x.key !== WARNING_KEY),
+    ...toasts.filter((x) => x.key !== key),
     {
       id,
-      key: WARNING_KEY,
+      key,
       text,
       ...(detail === null ? {} : { detail }),
       kind: "warning",
       until: null,
       hotkey: true,
+      ...(hotkeyLabel === undefined ? {} : { hotkeyLabel }),
     },
   ];
 }
 
-/** The toasts without the time warning (time-up, the session ending, or an extension). */
-export function dropWarning(toasts: readonly HudToast[]): HudToast[] {
-  return toasts.filter((x) => x.key !== WARNING_KEY);
+/** The toasts without the warning under `key` (time-up, the session ending, an extension). */
+export function dropWarning(toasts: readonly HudToast[], key: string = WARNING_KEY): HudToast[] {
+  return toasts.filter((x) => x.key !== key);
 }
 
 /** Whole minutes of grace to say aloud: a part of a minute counts as a minute. */

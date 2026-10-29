@@ -134,6 +134,10 @@ pub struct PcSession {
     pub balance_minor: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_name: Option<String>,
+    /// What is left of the wallet while a wallet-paid session is at or below the branch's
+    /// low-balance amount (minor units); the HUD raises its low-balance toast on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_balance_minor: Option<i64>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -610,6 +614,7 @@ mod tests {
                 remaining_ms: None,
                 balance_minor: None,
                 plan_name: None,
+                low_balance_minor: Some(4000),
             }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);

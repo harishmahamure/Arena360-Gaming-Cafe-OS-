@@ -823,6 +823,11 @@ pub struct SessionScreen {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub balance_minor: Option<i64>,
+    /// What is left of the wallet for a session paid from it, after the share the session has
+    /// used so far (minor units); `None` for any other session. The kiosk warns on it (Story 6.20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub wallet_left_minor: Option<i64>,
     /// The plan (pack or pass) the session runs on; `None` for wallet time or pay-as-you-go.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

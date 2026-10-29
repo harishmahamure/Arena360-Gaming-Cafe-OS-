@@ -1179,6 +1179,8 @@ mod tests {
                 change("settings", "B/kiosk.volume_default"),
                 change("settings", "B/billing.grace_min"),
                 change("settings", "B/billing.time_up_mode"),
+                change("settings", "B/billing.warn_marks"),
+                change("settings", "B/billing.low_balance_minor"),
                 change("settings", "B/billing.rounding_min"),
                 change("settings", "B/branch.opening_hours"),
                 change("settings", "B/system.backup_dir"),
@@ -1188,7 +1190,9 @@ mod tests {
             paired_setting_keys(&applied),
             [
                 "billing.grace_min",
+                "billing.low_balance_minor",
                 "billing.time_up_mode",
+                "billing.warn_marks",
                 "branch.fulfilment",
                 "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
                 "kiosk.process_allow",

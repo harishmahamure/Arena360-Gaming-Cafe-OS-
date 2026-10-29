@@ -30,6 +30,7 @@
     graceMinutes,
     hasContent,
     live,
+    LOW_BALANCE_KEY,
     raise,
     raiseWarning,
     staffToastKey,
@@ -65,6 +66,8 @@
   let nextId = 1;
   /** The warning mark (minutes) last seen on this session, so each is raised once (Story 6.19). */
   let lastWarning: number | null = null;
+  /** The low-balance warning is in effect: it is raised once per crossing (Story 6.20). */
+  let lowBalance = false;
   let root: HTMLDivElement | undefined = $state();
   let panel: HTMLDivElement | undefined = $state();
 
@@ -111,7 +114,37 @@
     // non-focusable again and hand the focus back, or the next Ctrl+Shift+E would not.
     if ((session === null || locked) && expanded) collapse();
     followWarning(s, fresh);
+    followLowBalance(s, fresh);
   };
+
+  /**
+   * The low-balance warning (Story 6.20): raised when a wallet-paid session first falls to the
+   * branch's amount, kept until dismissed, and raised again only after the balance has risen above
+   * the amount and fallen back. It says the amount at the crossing, not the falling figure.
+   */
+  function followLowBalance(s: PcScreen, fresh: boolean) {
+    const left = s.locked ? null : (s.session?.low_balance_minor ?? null);
+    if (left === null) {
+      lowBalance = false;
+      toasts = dropWarning(toasts, LOW_BALANCE_KEY);
+      return;
+    }
+    if (lowBalance) return;
+    // A snapshot read at start only records it; with the money format not here yet the next
+    // tick tries again.
+    if (!fresh) lowBalance = true;
+    if (!fresh || locale === null) return;
+    lowBalance = true;
+    toasts = raiseWarning(
+      toasts,
+      t("player.low_balance.title", { amount: formatMoney(left, locale) }),
+      t("player.low_balance.detail"),
+      nextId++,
+      LOW_BALANCE_KEY,
+      "player.low_balance.hotkey",
+    );
+    chime("warning");
+  }
 
   /**
    * A time warning (Story 6.19): raised when the service reports a new mark, kept until it is
@@ -317,7 +350,7 @@
             <p
               class="keys"
               role="img"
-              aria-label={t("player.warning.hotkey")}
+              aria-label={t((toast.hotkeyLabel ?? "player.warning.hotkey") as MessageKey)}
               data-testid="toast-keys"
             >
               {#each EXTEND_KEYS as key, i (key)}

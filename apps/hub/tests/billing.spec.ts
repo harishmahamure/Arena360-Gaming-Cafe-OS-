@@ -29,6 +29,8 @@ const MINIMUM = "billing.minimum_min";
 const GRACE = "billing.grace_min";
 const MODE = "billing.time_up_mode";
 const CREDIT_PAUSE = "billing.credit_auto_pause";
+const MARKS = "billing.warn_marks";
+const LOW_BALANCE = "billing.low_balance_minor";
 
 type Row = { value: string; rev: number };
 type Hub = {
@@ -46,6 +48,8 @@ function newHub(): Hub {
       [GRACE, { value: "2", rev: 1 }],
       [MODE, { value: "clean_up", rev: 1 }],
       [CREDIT_PAUSE, { value: "true", rev: 1 }],
+      [MARKS, { value: "10,5,1", rev: 1 }],
+      [LOW_BALANCE, { value: "5000", rev: 1 }],
     ]),
     intents: [],
     elevations: [],
@@ -168,6 +172,9 @@ const save = (page: Page) => page.getByRole("button", { name: en["hub.settings.s
 const rounding = (page: Page) => page.getByLabel(en["hub.settings.billing.rounding"]);
 const minimum = (page: Page) => page.getByLabel(en["hub.settings.billing.minimum"]);
 const grace = (page: Page) => page.getByLabel(en["hub.settings.billing.grace"]);
+const marks = (page: Page) => page.getByLabel(en["hub.settings.billing.marks"], { exact: true });
+const lowBalance = (page: Page) =>
+  page.getByLabel(en["hub.settings.billing.low_balance"], { exact: true });
 const status = (page: Page) => page.getByTestId("billing-status");
 
 async function axe(page: Page) {
@@ -341,5 +348,89 @@ test("axe passes in high contrast, including the error state", async ({ page }) 
   await rounding(page).fill("0");
   await save(page).click();
   await expect(rounding(page)).toHaveAttribute("aria-invalid", "true");
+  await axe(page);
+});
+
+// ---- Story 6.20: warning marks and the low-balance warning ----
+
+test("the warning marks and the low-balance amount show their defaults, hints and help", async ({
+  page,
+}) => {
+  await open(page);
+  await expect(marks(page)).toHaveValue("10, 5, 1");
+  await expect(lowBalance(page)).toHaveValue("50.00");
+  for (const k of ["marks_hint", "marks_help", "low_balance_hint", "low_balance_help"] as const) {
+    await expect(page.getByText(en[`hub.settings.billing.${k}`])).toBeVisible();
+  }
+  await axe(page);
+});
+
+test("saved marks are stored longest first and the amount in minor units", async ({ page }) => {
+  const hub = await open(page);
+  await marks(page).fill("2, 20 ,7");
+  await lowBalance(page).fill("120.5");
+  await save(page).click();
+  await expect(status(page)).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents).toEqual([
+    { key: MARKS, value: "20,7,2", base_rev: 1 },
+    { key: LOW_BALANCE, value: "12050", base_rev: 1 },
+  ]);
+  await expect(marks(page)).toHaveValue("20, 7, 2");
+  await expect(lowBalance(page)).toHaveValue("120.50");
+});
+
+test("one mark, the 30-minute bound and a zero amount (off) are accepted", async ({ page }) => {
+  const hub = await open(page);
+  await marks(page).fill("30");
+  await lowBalance(page).fill("0");
+  await save(page).click();
+  await expect(status(page)).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents.map((i) => i.value)).toEqual(["30", "0"]);
+  await expect(lowBalance(page)).toHaveValue("0.00");
+});
+
+test("retyping the marks with spaces is not a change", async ({ page }) => {
+  await open(page);
+  await marks(page).fill("10,5,   1");
+  await expect(save(page)).toHaveAttribute("aria-disabled", "true");
+});
+
+for (const [bad, message] of [
+  ["", "invalid.marks"],
+  ["abc", "invalid.marks"],
+  ["1,2,3,4", "invalid.marks"],
+  ["0", "invalid.marks_range"],
+  ["31", "invalid.marks_range"],
+  ["10, 0", "invalid.marks_range"],
+  ["5, 10, 5", "invalid.marks_duplicate"],
+] as const) {
+  test(`marks ${JSON.stringify(bad)} show a field error and write nothing`, async ({ page }) => {
+    const hub = await open(page);
+    await marks(page).fill(bad);
+    await save(page).click();
+    await expect(marks(page)).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText(en[`hub.settings.billing.${message}`])).toBeVisible();
+    expect(hub.intents).toEqual([]);
+  });
+}
+
+for (const bad of ["", "abc", "-1", "5.555", "1e3", "999999999"]) {
+  test(`low balance ${JSON.stringify(bad)} shows a field error and writes nothing`, async ({
+    page,
+  }) => {
+    const hub = await open(page);
+    await lowBalance(page).fill(bad);
+    await save(page).click();
+    await expect(lowBalance(page)).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText(en["hub.settings.billing.invalid.low_balance"])).toBeVisible();
+    expect(hub.intents).toEqual([]);
+  });
+}
+
+test("the marks error passes axe", async ({ page }) => {
+  await open(page);
+  await marks(page).fill("5, 5");
+  await save(page).click();
+  await expect(page.getByText(en["hub.settings.billing.invalid.marks_duplicate"])).toBeVisible();
   await axe(page);
 });

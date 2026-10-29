@@ -173,6 +173,7 @@ mod tests {
         assert!(paired("branch.tz"));
         assert!(!paired("branch.day_start_min") && !paired("branch.tz2"));
         assert!(paired("billing.grace_min") && paired("billing.time_up_mode"));
+        assert!(paired("billing.warn_marks") && paired("billing.low_balance_minor"));
         assert!(!paired("billing.rounding_min") && !paired("billing.minimum_min"));
         assert!(!paired("branch.opening_hours"));
         assert!(!paired("system.backup_dir"));

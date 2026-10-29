@@ -72,11 +72,11 @@ pub fn window_visible(content: (f64, f64), exclusive_fullscreen: bool) -> bool {
     content.0 > 0.0 && content.1 > 0.0 && !exclusive_fullscreen
 }
 
-/// Whether a time warning must flash the taskbar instead of drawing (Story 6.19): the 5- and
-/// 1-minute marks, newly reached, while a fullscreen-exclusive game hides the HUD. The 10-minute
-/// mark is the chip's warning border only.
+/// Whether a time warning must flash the taskbar instead of drawing (Story 6.19): a mark of 5
+/// minutes or less (the default 5 and 1; a branch's own marks follow, Story 6.20), newly reached,
+/// while a fullscreen-exclusive game hides the HUD. Longer marks are the chip's warning border only.
 pub fn warning_flash(previous: Option<u8>, now: Option<u8>, exclusive_fullscreen: bool) -> bool {
-    exclusive_fullscreen && previous != now && matches!(now, Some(5 | 1))
+    exclusive_fullscreen && previous != now && matches!(now, Some(1..=5))
 }
 
 /// The HUD window's rectangle in physical px: `content` (logical px, clamped to the monitor and
@@ -114,6 +114,10 @@ mod tests {
     fn only_a_new_5_or_1_minute_mark_over_an_exclusive_game_flashes() {
         assert!(warning_flash(Some(10), Some(5), true));
         assert!(warning_flash(None, Some(1), true));
+        assert!(
+            warning_flash(None, Some(3), true),
+            "a branch's own short mark"
+        );
         assert!(
             !warning_flash(Some(5), Some(5), true),
             "not again for the same mark"

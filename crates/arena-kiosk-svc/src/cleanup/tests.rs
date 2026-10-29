@@ -189,6 +189,7 @@ impl T {
                 guest_no: None,
                 remaining_ms: None,
                 balance_minor: None,
+                wallet_left_minor: None,
                 plan_name: None,
             },
             true,
@@ -1027,6 +1028,7 @@ fn session_screen() -> SessionScreen {
         guest_no: None,
         remaining_ms: None,
         balance_minor: None,
+        wallet_left_minor: None,
         plan_name: None,
     }
 }
@@ -1190,4 +1192,82 @@ async fn a_warning_mark_passes_on_the_kiosk_clock_with_no_hub() {
     assert_eq!(mark(), Some(1));
     let _ = stop.send(true);
     let _ = worker.await;
+}
+
+fn cache_setting(ctx: &Ctx, key: &str, value: &str, rev: i64) {
+    ctx.queue
+        .lock()
+        .unwrap()
+        .kv_set(key, value, rev)
+        .expect("the setting is cached");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_branch_marks_replace_ten_five_and_one_on_the_kiosk_clock() {
+    let (_dir, ctx) = bare_ctx();
+    cache_setting(&ctx, "billing.warn_marks", "20,3", 1);
+    let mut s = session_screen();
+    s.remaining_ms = Some(25 * 60_000);
+    s.lock_after_ms = 25 * 60_000;
+    crate::session::sync(&ctx, s, true);
+    let (stop, stop_rx) = watch::channel(false);
+    let worker = tokio::spawn(crate::session::run(Arc::clone(&ctx), stop_rx));
+    let mark = || {
+        ctx.pc
+            .screen
+            .borrow()
+            .session
+            .as_ref()
+            .and_then(|v| v.warning_min)
+    };
+    tokio::time::sleep(Duration::from_secs(4 * 60)).await;
+    assert_eq!(mark(), None, "21 min left: the 20-min mark is ahead");
+    tokio::time::sleep(Duration::from_secs(2 * 60)).await;
+    assert_eq!(mark(), Some(20));
+    // No 10 or 5 on this branch: the next mark is 3.
+    tokio::time::sleep(Duration::from_secs(15 * 60)).await;
+    assert_eq!(mark(), Some(20), "4 min left");
+    tokio::time::sleep(Duration::from_secs(90)).await;
+    assert_eq!(mark(), Some(3));
+    let _ = stop.send(true);
+    let _ = worker.await;
+}
+
+#[tokio::test]
+async fn a_wallet_session_at_or_below_the_branch_amount_reports_what_is_left() {
+    let (_dir, ctx) = bare_ctx();
+    let low = || {
+        ctx.pc
+            .screen
+            .borrow()
+            .session
+            .as_ref()
+            .and_then(|v| v.low_balance_minor)
+    };
+    let tick = |left: Option<i64>| {
+        let mut s = session_screen();
+        s.wallet_left_minor = left;
+        crate::session::sync(&ctx, s, false);
+    };
+    crate::session::sync(&ctx, session_screen(), true);
+    // The default amount is 50.00 (5000 minor units).
+    tick(Some(5_001));
+    assert_eq!(low(), None);
+    tick(Some(5_000));
+    assert_eq!(low(), Some(5_000));
+    tick(Some(4_000));
+    assert_eq!(low(), Some(4_000));
+    // A top-up lifts it above the amount again.
+    tick(Some(9_000));
+    assert_eq!(low(), None);
+    // Not a wallet session: nothing to warn about.
+    tick(None);
+    assert_eq!(low(), None);
+    // The branch's own amount; and 0 turns the warning off.
+    cache_setting(&ctx, "billing.low_balance_minor", "10000", 1);
+    tick(Some(9_000));
+    assert_eq!(low(), Some(9_000));
+    cache_setting(&ctx, "billing.low_balance_minor", "0", 2);
+    tick(Some(100));
+    assert_eq!(low(), None);
 }

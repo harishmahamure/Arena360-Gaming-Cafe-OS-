@@ -676,6 +676,7 @@ mod tests {
             guest_no: None,
             remaining_ms: None,
             balance_minor: None,
+            wallet_left_minor: Some(4000),
             plan_name: None,
         };
         let tick = serde_json::to_value(HubEvent::SessionTick(screen.clone())).unwrap();
@@ -688,6 +689,7 @@ mod tests {
         let v = serde_json::to_value(&started).unwrap();
         assert_eq!(v["kind"], "session.started");
         assert_eq!(v["session"]["device_name"], "PC 1");
+        assert_eq!(v["session"]["wallet_left_minor"], 4000);
         assert_eq!(serde_json::from_value::<HubEvent>(v).unwrap(), started);
         let lock = HubEvent::PcCommand {
             cmd_id: "C".into(),

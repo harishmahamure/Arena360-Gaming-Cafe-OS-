@@ -6,7 +6,8 @@ use arena_core::{
     WriterHandle,
 };
 use arena_proto::{
-    Actor, ActorKind, ErrorCode, Intent, IntentKind, IntentPayload, SessionExpire, SessionRateFlip,
+    Actor, ActorKind, ErrorCode, Intent, IntentKind, IntentPayload, KEY_BILLING_WARN_MARKS,
+    SessionExpire, SessionRateFlip,
 };
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
@@ -26,7 +27,9 @@ pub struct SessionTimerTask {
 }
 
 fn touches(applied: &Applied) -> bool {
-    applied.changes.iter().any(|c| c.tbl == "sessions")
+    applied.changes.iter().any(|c| {
+        c.tbl == "sessions" || (c.tbl == "settings" && c.row_id.ends_with(KEY_BILLING_WARN_MARKS))
+    })
 }
 
 /// Whether a write may change what a running session should be priced at.
@@ -102,6 +105,12 @@ impl SessionTimerTask {
     }
 
     async fn sync(&self, engine: &mut TimerEngine) {
+        let reader = Arc::clone(&self.reader);
+        match tokio::task::spawn_blocking(move || reader.warn_marks()).await {
+            Ok(Ok(marks)) => engine.set_marks(&marks, self.clock.now_ms()),
+            Ok(Err(e)) => tracing::warn!(code = e.code.as_str(), "warning marks not read"),
+            Err(e) => tracing::warn!(error = %e, "warning marks read panicked"),
+        }
         if let Some(rows) = self.running().await {
             engine.sync(rows, self.clock.now_ms());
         }
@@ -599,6 +608,74 @@ mod tests {
         assert_eq!(marks, [10, 5, 1]);
         assert!(matches!(seen.last(), Some(TimerEvent::Expired { .. })));
         assert_eq!(session_state(&f), None);
+        job.abort();
+    }
+
+    async fn set_marks(f: &Fixture, value: &str) {
+        let rev = SnapshotReader::open(&f.path)
+            .unwrap()
+            .settings()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.key == "billing.warn_marks")
+            .map(|r| r.rev)
+            .unwrap();
+        let mut i = intent(
+            who(ActorKind::Owner, "o"),
+            IntentPayload::SettingsSet(arena_proto::SettingsSet {
+                key: "billing.warn_marks".into(),
+                value: value.into(),
+            }),
+        );
+        i.base_rev = Some(rev);
+        i.issued_at = f.clock.now_ms();
+        f.writer.submit_intent(i).await.unwrap();
+    }
+
+    async fn warnings_over(
+        f: &Fixture,
+        rx: &mut broadcast::Receiver<TimerEvent>,
+        minutes: u64,
+    ) -> Vec<u8> {
+        let mut marks = Vec::new();
+        for _ in 0..(minutes * 60) {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            f.clock.advance(1_000);
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            while let Ok(ev) = rx.try_recv() {
+                if let TimerEvent::Warning { minutes_left, .. } = ev {
+                    marks.push(minutes_left);
+                }
+            }
+        }
+        marks
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_branch_marks_decide_the_warnings() {
+        let f = fixture().await;
+        set_marks(&f, "7, 2").await;
+        live_session(&f, T0 + 11 * 60_000).await;
+        let (tx, mut rx) = broadcast::channel(8);
+        let job = tokio::spawn(task(&f, tx).run());
+        tokio::task::yield_now().await;
+        assert_eq!(warnings_over(&f, &mut rx, 10).await, [7, 2]);
+        job.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn changing_the_marks_applies_from_the_next_tick_to_a_running_session() {
+        let f = fixture().await;
+        live_session(&f, T0 + 40 * 60_000).await;
+        let (tx, mut rx) = broadcast::channel(8);
+        let job = tokio::spawn(task(&f, tx).run());
+        tokio::task::yield_now().await;
+        assert!(warnings_over(&f, &mut rx, 5).await.is_empty());
+        // 35 minutes left; the new marks take over for the rest of the session.
+        set_marks(&f, "20,4").await;
+        assert_eq!(warnings_over(&f, &mut rx, 33).await, [20, 4]);
         job.abort();
     }
 

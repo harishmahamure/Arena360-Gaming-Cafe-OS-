@@ -100,6 +100,9 @@ pub enum ErrorCode {
     /// Another device already holds that cell.
     CellTaken,
     TierLocked,
+    /// The branch's licence lacks the feature the intent needs (Story 6.30: a kiosk order on a
+    /// branch without `kiosk_orders`).
+    FeatureNotInTier,
     /// The branch's device cap is reached.
     DeviceLimit,
     HsnRequired,
@@ -236,6 +239,7 @@ impl ErrorCode {
             Self::ZoneNotEmpty => "ZONE_NOT_EMPTY",
             Self::CellTaken => "CELL_TAKEN",
             Self::TierLocked => "TIER_LOCKED",
+            Self::FeatureNotInTier => "FEATURE_NOT_IN_TIER",
             Self::DeviceLimit => "DEVICE_LIMIT",
             Self::HsnRequired => "HSN_REQUIRED",
             Self::BarcodeTaken => "BARCODE_TAKEN",
@@ -399,6 +403,7 @@ mod tests {
             (ErrorCode::ZoneNotEmpty, "ZONE_NOT_EMPTY"),
             (ErrorCode::CellTaken, "CELL_TAKEN"),
             (ErrorCode::TierLocked, "TIER_LOCKED"),
+            (ErrorCode::FeatureNotInTier, "FEATURE_NOT_IN_TIER"),
             (ErrorCode::DeviceLimit, "DEVICE_LIMIT"),
             (ErrorCode::HsnRequired, "HSN_REQUIRED"),
             (ErrorCode::BarcodeTaken, "BARCODE_TAKEN"),

@@ -25,6 +25,9 @@ import type { PlayerUnlock } from "./PlayerUnlock";
 import type { PlayerUnlockResult } from "./PlayerUnlockResult";
 import type { SettingsGet } from "./SettingsGet";
 import type { SettingsValues } from "./SettingsValues";
+import type { ShopImageRequest } from "./ShopImageRequest";
+import type { ShopImageResult } from "./ShopImageResult";
+import type { ShopMenu } from "./ShopMenu";
 import type { VerifyAdminPin } from "./VerifyAdminPin";
 
 /**
@@ -66,5 +69,9 @@ export type FrameBody =
   | ({ kind: "player.extend" } & PlayerExtend)
   | { kind: "games.most_played" }
   | ({ kind: "games.most_played_result" } & MostPlayed)
+  | { kind: "shop.menu" }
+  | ({ kind: "shop.menu_result" } & ShopMenu)
+  | ({ kind: "shop.image" } & ShopImageRequest)
+  | ({ kind: "shop.image_result" } & ShopImageResult)
   | ({ kind: "player.extend_result" } & PlayerExtendResult)
   | { kind: "ack" };

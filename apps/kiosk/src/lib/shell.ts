@@ -3,9 +3,12 @@
 
 import { t } from "@arena/ui";
 
-/** The pill nav items, in order. Shop joins them with Story 6.30. */
-export const TABS = ["home", "games", "apps"] as const;
+/** The pill nav items, in order. Shop (Story 6.30) is shown only when the Hub says orders are on. */
+export const TABS = ["home", "games", "apps", "shop"] as const;
 export type Tab = (typeof TABS)[number];
+
+/** The items the pill nav shows: Shop after Apps on a branch with the kiosk-orders feature only. */
+export const tabsFor = (shop: boolean): Tab[] => TABS.filter((id) => shop || id !== "shop");
 
 /** At or under this many seconds left the chip shows its warning border. */
 export const LOW_SECONDS = 10 * 60;

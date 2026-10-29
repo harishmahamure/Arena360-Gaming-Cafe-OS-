@@ -68,6 +68,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::ZoneNotEmpty
         | ErrorCode::CellTaken
         | ErrorCode::TierLocked
+        | ErrorCode::FeatureNotInTier
         | ErrorCode::DeviceLimit
         | ErrorCode::UserLimit
         | ErrorCode::PcBusy

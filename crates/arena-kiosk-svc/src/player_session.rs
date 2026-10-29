@@ -16,6 +16,10 @@
 //! games of the last 7 days and the live player's last-played times, which the Games tab's
 //! carousel shows.
 //!
+//! The Shop (Story 6.30) adds `shop_menu` and `shop_image{id}`, forwarded as `shop.menu` and
+//! `shop.image`: the menu with live availability and one product's photo. Both are reads; the
+//! Hub says whether orders are enabled and the service only relays.
+//!
 //! The service decides nothing and keeps no player context: the Hub remembers who logged in on this
 //! PC and builds the session itself, so the app never names a player. Nothing is queued: with no
 //! live connection (or no answer in time) the app gets `HUB_SLOW` and shows "Counter is
@@ -28,6 +32,7 @@ use arena_kiosk_core::ipc::SecretPin;
 use arena_kiosk_core::{ClientError, HubClient};
 use arena_proto::{
     AppError, ErrorCode, FrameBody, LockReason, PlayerChoice, PlayerExtend, PlayerUnlockResult,
+    ShopImageRequest,
 };
 use serde_json::Value;
 
@@ -161,6 +166,48 @@ pub async fn most_played(ctx: &Ctx) -> Result<Value, AppError> {
     }
 }
 
+/// Asks the Hub for the Shop menu (Story 6.30): the `shop.menu_result` as the reply body
+/// (`enabled`, `items`). Nothing is queued: with no live link the app gets `HUB_SLOW` and keeps
+/// the last menu it had.
+pub async fn shop_menu(ctx: &Ctx) -> Result<Value, AppError> {
+    let client = client(ctx)?;
+    match client.request("shop.menu", Value::Null).await {
+        Ok(frame) => match frame.body {
+            FrameBody::ShopMenuResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("shop.menu", other)),
+        },
+        Err(e) => Err(failed("shop.menu", e)),
+    }
+}
+
+/// The photo request the app made, as long as it names a product by a sane id.
+fn shop_image_request(body: &Value) -> Result<ShopImageRequest, AppError> {
+    let request: ShopImageRequest = serde_json::from_value(body.clone())
+        .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "malformed photo request"))?;
+    request
+        .validate()
+        .map_err(|e| AppError::new(ErrorCode::ValidationFailed, e.message))?;
+    Ok(request)
+}
+
+/// Asks the Hub for one product's photo (Story 6.30): the `shop.image_result` as the reply body
+/// (`{id, image}`, `image` a data URL or `null`). Photos come only from the Hub.
+pub async fn shop_image(ctx: &Ctx, body: &Value) -> Result<Value, AppError> {
+    let request = shop_image_request(body)?;
+    let client = client(ctx)?;
+    let body = serde_json::to_value(&request)
+        .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
+    match client.request("shop.image", body).await {
+        Ok(frame) => match frame.body {
+            FrameBody::ShopImageResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("shop.image", other)),
+        },
+        Err(e) => Err(failed("shop.image", e)),
+    }
+}
+
 /// The extend the app asked for, as long as it is one the Hub offers (a step of 30 min, 1 h or
 /// 2 h, a pack named only for a pack source). Anything else never leaves the PC.
 fn extend_request(body: &Value) -> Result<PlayerExtend, AppError> {
@@ -285,6 +332,25 @@ mod tests {
         ] {
             assert_eq!(
                 extend_request(&bad).unwrap_err().code,
+                ErrorCode::ValidationFailed,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shop_photo_request_names_a_product_by_a_sane_id_or_never_leaves_the_pc() {
+        use serde_json::json;
+        assert_eq!(shop_image_request(&json!({"id": "P1"})).unwrap().id, "P1");
+        for bad in [
+            json!({"id": ""}),
+            json!({"id": "x".repeat(arena_proto::MAX_SHOP_ID_LEN + 1)}),
+            json!({"id": 5}),
+            json!({}),
+            Value::Null,
+        ] {
+            assert_eq!(
+                shop_image_request(&bad).unwrap_err().code,
                 ErrorCode::ValidationFailed,
                 "{bad}"
             );

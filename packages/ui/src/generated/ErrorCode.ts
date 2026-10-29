@@ -54,6 +54,7 @@ export type ErrorCode =
   | "ZONE_NOT_EMPTY"
   | "CELL_TAKEN"
   | "TIER_LOCKED"
+  | "FEATURE_NOT_IN_TIER"
   | "DEVICE_LIMIT"
   | "HSN_REQUIRED"
   | "BARCODE_TAKEN"

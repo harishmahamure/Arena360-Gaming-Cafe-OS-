@@ -57,6 +57,7 @@ mod session;
 mod setup_devices;
 mod setup_file;
 mod shift;
+mod shop;
 mod signin;
 mod signup;
 mod snapshot;
@@ -370,6 +371,10 @@ pub use shift::{
     ExpensePaidFrom, KEY_SHIFT_VARIANCE_THRESHOLD, MAX_CASH_MOVE_MINOR, MAX_FLOAT_MINOR,
     ShiftBreakdown, ShiftClose, ShiftCount, ShiftOpen, ShiftState, SnapshotShift,
     VARIANCE_NOTE_MAX_CHARS, VarianceReason, receipt_photo_problem,
+};
+pub use shop::{
+    FLAG_KIOSK_ORDERS, MAX_SHOP_ID_LEN, POPULAR_DAYS, POPULAR_LIMIT, ShopComponent,
+    ShopImageRequest, ShopImageResult, ShopItem, ShopMenu, kiosk_order_gate,
 };
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,

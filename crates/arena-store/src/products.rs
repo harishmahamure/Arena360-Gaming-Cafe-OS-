@@ -76,6 +76,53 @@ pub fn list_products(conn: &Connection) -> Result<Vec<ProductRow>, AppError> {
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
+/// The listed (active, not deleted) products and bundles by units sold on orders that are not void
+/// and were placed at or after `since` (Story 6.30): at most `limit`, most units first and ties by
+/// product id. A line counts from when it was placed (a session order's lines are placed one
+/// by one), else from the order's creation.
+pub fn units_sold(
+    conn: &Connection,
+    since: i64,
+    limit: usize,
+) -> Result<Vec<(String, i64)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT l.product_id, SUM(COALESCE(l.qty, 1)) AS units
+             FROM order_lines l
+             JOIN orders o ON o.id = l.order_id
+             JOIN products p ON p.product_id = l.product_id
+             WHERE o.status <> 'void' AND p.active = 1 AND p.deleted_at IS NULL
+               AND COALESCE(l.placed_at, o.created_at) >= ?1
+             GROUP BY l.product_id HAVING units > 0
+             ORDER BY units DESC, l.product_id ASC LIMIT ?2",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?;
+    rows.collect::<Result<_, _>>().map_err(db_error)
+}
+
+/// The products and bundles the kiosk Shop lists (Story 6.30): active and not deleted, ordered
+/// like [`list_products`], each with whether it has a photo. The photo itself (up to 200 KB per
+/// product) is left in the table, so the menu is cheap to read once a second per kiosk; the
+/// returned rows have an empty `image`.
+pub fn list_menu_products(conn: &Connection) -> Result<Vec<(ProductRow, bool)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT product_id, name, category, price_minor, tax_rate_bp, hsn, track_stock,
+                    '' AS image, barcode, kitchen, favourite, active, bundle, rev, deleted_at,
+                    image <> '' AS has_image
+             FROM products WHERE active = 1 AND deleted_at IS NULL
+             ORDER BY category COLLATE NOCASE, name COLLATE NOCASE, product_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| Ok((from(r)?, r.get(15)?)))
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 pub fn count_active_products(conn: &Connection) -> Result<i64, AppError> {
     conn.query_row(
         "SELECT COUNT(*) FROM products WHERE active = 1 AND deleted_at IS NULL",
@@ -220,6 +267,117 @@ mod tests {
             rev: 0,
             deleted_at: None,
         }
+    }
+
+    fn sell(
+        conn: &Connection,
+        order: &str,
+        status: &str,
+        created: i64,
+        lines: &[(&str, i64, Option<i64>)],
+    ) {
+        conn.execute(
+            "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                 created_at, updated_at, kind)
+             VALUES (?1, ?2, 0, 0, '2026-10-29', '2026-27', 0, ?3, ?3, 'pos_sale')",
+            params![order, status, created],
+        )
+        .unwrap();
+        for (i, (product, qty, placed)) in lines.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO order_lines (id, order_id, from_at, to_at, minutes,
+                                          rate_minor_per_hour, amount_minor, position, rev,
+                                          created_at, updated_at, product_id, qty, placed_at)
+                 VALUES (?1, ?2, 0, 0, 0, 0, 0, ?3, 0, 0, 0, ?4, ?5, ?6)",
+                params![
+                    format!("{order}-{i}"),
+                    order,
+                    i as i64,
+                    product,
+                    qty,
+                    placed
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_menu_lists_active_live_products_without_their_photos() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("b.db"), 0).unwrap();
+        store
+            .write_tx(|tx| {
+                let mut with_photo = row("A", None, true);
+                with_photo.image = "data:image/jpeg;base64,AAAA".into();
+                insert_product(tx, &with_photo)?;
+                insert_product(tx, &row("B", None, true))?;
+                insert_product(tx, &row("C", None, false))?;
+                insert_product(tx, &row("D", None, true))?;
+                set_product_deleted(tx, "D", 1)?;
+                let menu = list_menu_products(tx)?;
+                let seen: Vec<_> = menu
+                    .iter()
+                    .map(|(p, photo)| (p.product_id.as_str(), p.image.as_str(), *photo))
+                    .collect();
+                assert_eq!(seen, [("A", "", true), ("B", "", false)]);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn units_sold_counts_listed_products_on_live_orders_in_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("b.db"), 0).unwrap();
+        store
+            .write_tx(|tx| {
+                for (id, active) in [("A", true), ("B", true), ("C", true), ("D", false)] {
+                    insert_product(tx, &row(id, None, active))?;
+                }
+                insert_product(tx, &row("E", None, true))?;
+                set_product_deleted(tx, "E", 1)?;
+                // Settled and open orders count, a void one does not.
+                sell(
+                    tx,
+                    "O1",
+                    "settled",
+                    1_000,
+                    &[("A", 3, None), ("B", 2, None)],
+                );
+                sell(
+                    tx,
+                    "O2",
+                    "open",
+                    1_000,
+                    &[("B", 2, Some(1_500)), ("C", 4, None)],
+                );
+                sell(tx, "O3", "void", 1_000, &[("C", 50, None)]);
+                // Before the window: the line's placement wins over the order's creation.
+                sell(tx, "O4", "settled", 5_000, &[("A", 10, Some(400))]);
+                sell(tx, "O5", "settled", 100, &[("A", 10, None)]);
+                // Inactive and deleted products are never listed.
+                sell(
+                    tx,
+                    "O6",
+                    "settled",
+                    1_000,
+                    &[("D", 9, None), ("E", 9, None)],
+                );
+                let top = units_sold(tx, 1_000, 3)?;
+                assert_eq!(
+                    top,
+                    [
+                        ("B".to_owned(), 4),
+                        ("C".to_owned(), 4),
+                        ("A".to_owned(), 3)
+                    ]
+                );
+                assert_eq!(units_sold(tx, 1_000, 1)?.len(), 1);
+                assert!(units_sold(tx, 9_999, 3)?.is_empty());
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

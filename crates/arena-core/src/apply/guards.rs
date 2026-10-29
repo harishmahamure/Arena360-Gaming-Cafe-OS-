@@ -19,6 +19,23 @@ fn refused(message: &str) -> AppError {
     AppError::new(ErrorCode::PermissionDenied, message)
 }
 
+/// **kiosk orders** (Story 6.30). Runs before the permission step: an order-capable intent
+/// ([`arena_proto::kiosk_order_gate`]) sent by a kiosk device on a branch whose licence lacks
+/// `kiosk_orders` is refused `FEATURE_NOT_IN_TIER`, whoever the device is. Staff and owner orders
+/// at the counter are not gated.
+pub(super) fn kiosk_orders(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
+    if intent.actor.kind != ActorKind::Device
+        || !arena_proto::kiosk_order_gate(&intent.payload)
+        || crate::entitlement::has_flag(tx, arena_proto::FLAG_KIOSK_ORDERS)?
+    {
+        return Ok(());
+    }
+    Err(AppError::new(
+        ErrorCode::FeatureNotInTier,
+        "ordering from the kiosk is available on Basic and above",
+    ))
+}
+
 /// **permission.** Runs first, before any write: the actor must have an id, a device actor's
 /// row must exist and not be revoked, and then the kind's requirement must hold — against the
 /// actor, or, when the intent is elevated, against the elevating staff member

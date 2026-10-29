@@ -4035,3 +4035,188 @@ async fn a_guest_or_postpaid_session_or_an_empty_pc_cannot_extend() {
     };
     assert_eq!(e.code, ErrorCode::BadFrame);
 }
+
+// ---- Story 6.30: shop.menu and shop.image ----
+
+/// A JPEG header the Hub accepts as a product photo (64 x 64, not a decodable picture).
+const SHOP_PHOTO: &str = "data:image/jpeg;base64,/9j/4AAEAAD/wAALCABAAEABAREA";
+
+async fn shop_menu_frame(client: &HubClient) -> Result<arena_proto::ShopMenu, ClientError> {
+    match client
+        .request("shop.menu", serde_json::Value::Null)
+        .await?
+        .body
+    {
+        FrameBody::ShopMenuResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn shop_image_frame(
+    client: &HubClient,
+    id: &str,
+) -> Result<arena_proto::ShopImageResult, ClientError> {
+    match client
+        .request("shop.image", serde_json::json!({ "id": id }))
+        .await?
+        .body
+    {
+        FrameBody::ShopImageResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn shop_product(hub: &TestHub, name: &str, photo: &str, active: bool) -> String {
+    let applied = hub
+        .writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: name.into(),
+                category: "Drinks".into(),
+                price_minor: 4_000,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: false,
+                image: photo.into(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active,
+                bundle: false,
+                components: Vec::new(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    applied.changes[0].row_id.clone()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_free_branch_answers_the_shop_with_no_menu_and_no_photos() {
+    let hub = start("0.1.0", true).await;
+    let cola = shop_product(&hub, "Cola", SHOP_PHOTO, true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let menu = shop_menu_frame(&client).await.unwrap();
+    assert!(!menu.enabled);
+    assert!(menu.items.is_empty());
+    assert_eq!(shop_image_frame(&client, &cola).await.unwrap().image, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_basic_branch_serves_the_shop_menu_and_one_photo_at_a_time_and_a_change_shows_on_the_next_ask()
+ {
+    let hub = start("0.1.0", true).await;
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            system(),
+            IntentPayload::LicenceApply(arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier: arena_proto::Tier::Basic,
+                flags: "kitchen,kiosk_orders".into(),
+                device_cap: 10,
+                user_cap: 10,
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let cola = shop_product(&hub, "Cola", SHOP_PHOTO, true).await;
+    let plain = shop_product(&hub, "Water", "", true).await;
+    let retired = shop_product(&hub, "Retired", SHOP_PHOTO, false).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+
+    let menu = shop_menu_frame(&client).await.unwrap();
+    assert!(menu.enabled);
+    let seen: Vec<_> = menu
+        .items
+        .iter()
+        .map(|i| (i.name.as_str(), i.available, i.has_image))
+        .collect();
+    assert_eq!(seen, [("Cola", true, true), ("Water", true, false)]);
+    // The menu frame carries no photo.
+    assert!(!serde_json::to_string(&menu).unwrap().contains("base64"));
+    assert_eq!(
+        shop_image_frame(&client, &cola).await.unwrap().image,
+        Some(SHOP_PHOTO.to_owned())
+    );
+    assert_eq!(shop_image_frame(&client, &plain).await.unwrap().image, None);
+    assert_eq!(
+        shop_image_frame(&client, &retired).await.unwrap().image,
+        None
+    );
+
+    // The Hub deactivates the cola: the next ask no longer lists it.
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: Some(cola.clone()),
+                name: "Cola".into(),
+                category: "Drinks".into(),
+                price_minor: 4_000,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: false,
+                image: SHOP_PHOTO.into(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: false,
+                bundle: false,
+                components: Vec::new(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let menu = shop_menu_frame(&client).await.unwrap();
+    assert_eq!(menu.items.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_shop_frames_are_for_paired_sessions_and_a_bad_image_ask_is_refused() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    for line in [
+        r#"{"v":1,"kind":"shop.menu","rid":"a"}"#,
+        r#"{"v":1,"kind":"shop.image","rid":"b","id":"P1"}"#,
+    ] {
+        send(&mut ws, line).await;
+        let frame = recv(&mut ws).await.unwrap();
+        assert_eq!(error_of(&frame).1, ErrorCode::Forbidden, "{line}");
+    }
+
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    match client
+        .request("shop.image", serde_json::json!({ "id": "" }))
+        .await
+    {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::BadFrame),
+        other => panic!("{other:?}"),
+    }
+}

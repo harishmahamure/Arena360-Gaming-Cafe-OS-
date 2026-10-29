@@ -162,8 +162,8 @@ pub use pricing_rules::{
 };
 pub use products::{
     ProductRow, barcode_holder, count_active_products, find_product, insert_component,
-    insert_product, list_components, list_products, live_bundles_with, set_product_deleted,
-    update_product,
+    insert_product, list_components, list_menu_products, list_products, live_bundles_with,
+    set_product_deleted, units_sold, update_product,
 };
 pub use reference::{
     FileKind, FileState, RefFile, RefGame, RefSignature, ReferenceDb, is_sha256_hex,
@@ -1612,6 +1612,24 @@ impl Store {
                 Ok((p, groups))
             })
             .collect()
+    }
+
+    /// The listed products by units sold since `since` (empty before orders exist): see
+    /// [`units_sold`].
+    pub fn units_sold(&self, since: i64, limit: usize) -> Result<Vec<(String, i64)>, AppError> {
+        if !self.table_exists("order_lines")? || !self.table_exists("products")? {
+            return Ok(Vec::new());
+        }
+        units_sold(&self.conn, since, limit)
+    }
+
+    /// The Shop menu's products without their photos (empty before the table exists): see
+    /// [`list_menu_products`].
+    pub fn menu_products(&self) -> Result<Vec<(ProductRow, bool)>, AppError> {
+        if !self.table_exists("products")? {
+            return Ok(Vec::new());
+        }
+        list_menu_products(&self.conn)
     }
 
     pub fn products(&self) -> Result<Vec<ProductRow>, AppError> {

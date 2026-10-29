@@ -5,12 +5,12 @@ use arena_proto::{
 };
 use arena_store::{ProductRow, Store, ThresholdRow};
 
-struct Status {
-    quantity: i64,
-    avg_cost_minor: i64,
-    available: bool,
-    reason: Option<&'static str>,
-    components: Vec<ComponentView>,
+pub(crate) struct Status {
+    pub(crate) quantity: i64,
+    pub(crate) avg_cost_minor: i64,
+    pub(crate) available: bool,
+    pub(crate) reason: Option<&'static str>,
+    pub(crate) components: Vec<ComponentView>,
 }
 
 /// The units of a tracked product that may be sold: its stock less what sits in lots past their
@@ -30,7 +30,11 @@ fn sellable(
     Ok(((qty - expired - held).max(0), expired > 0))
 }
 
-fn status(store: &Store, p: &ProductRow, today: Option<&str>) -> Result<Status, AppError> {
+pub(crate) fn status(
+    store: &Store,
+    p: &ProductRow,
+    today: Option<&str>,
+) -> Result<Status, AppError> {
     let deleted = p.deleted_at.is_some();
     if !p.bundle {
         let stock = store.stock(&p.product_id)?;

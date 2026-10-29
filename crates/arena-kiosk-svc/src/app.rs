@@ -38,6 +38,8 @@
 //! - `apps` lists the Apps tab and `app_launch{id}` starts an app ([`crate::games`], Story 6.28).
 //! - `most_played` asks the Hub for the branch's top games of the last 7 days and the player's
 //!   last-played times ([`crate::player_session::most_played`], Story 6.27).
+//! - `shop_menu` and `shop_image{id}` ask the Hub for the Shop menu with live availability and
+//!   one product's photo ([`crate::player_session::shop_menu`], Story 6.30).
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
 //!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
 
@@ -712,6 +714,22 @@ async fn serve(
                 let out = out_tx.clone();
                 tokio::spawn(async move {
                     let reply = reply_of(rid, crate::player_session::most_played(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "shop_menu" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::shop_menu(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "shop_image" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::shop_image(&ctx, &body).await);
                     let _ = out.send(reply).await;
                 });
             }

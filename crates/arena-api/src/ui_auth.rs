@@ -872,6 +872,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         }
         ErrorCode::FeatureNotEntitled
         | ErrorCode::TierLocked
+        | ErrorCode::FeatureNotInTier
         | ErrorCode::DeviceLimit
         | ErrorCode::UserLimit => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,

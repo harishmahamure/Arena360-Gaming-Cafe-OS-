@@ -3,12 +3,15 @@
   import type { SnapshotLocale } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import AccountMenu from "./AccountMenu.svelte";
+  import type { ShopItem } from "@arena/ui/generated";
   import { callStaff } from "./bridge";
   import Games from "./Games.svelte";
   import type { GameCard, LauncherCardData, MostPlayedView, RankedGame } from "./games";
   import Home from "./Home.svelte";
   import { INFO_TOAST_MS } from "./hud";
   import MessagesBell from "./MessagesBell.svelte";
+  import Shop from "./Shop.svelte";
+  import { shopEnabled, type ShopView } from "./shop";
   import VolumeControl from "./VolumeControl.svelte";
   import {
     chipText,
@@ -16,7 +19,7 @@
     isLow,
     playerName,
     type ShellSession,
-    TABS,
+    tabsFor,
     type Tab,
   } from "./shell";
 
@@ -35,10 +38,13 @@
     launchers = [],
     mostPlayed = [],
     mostPlayedView = null,
+    shop = null,
+    shopImages = {},
     branch = "",
     onlaunch = () => {},
     onlaunchapp = () => {},
     onopenlauncher = () => {},
+    onshopadd = () => {},
   }: {
     session: ShellSession;
     /** The branch logo (a `data:` URI), or `null` for the Arena 360 mark. */
@@ -67,6 +73,13 @@
     mostPlayed?: RankedGame[];
     /** The Hub's most-played answer: Home's featured game, its media and last-played times (Story 6.29). */
     mostPlayedView?: MostPlayedView | null;
+    /**
+     * The Hub's Shop menu (Story 6.30); `null` until it has answered. The Shop item appears after
+     * Apps only when it says orders are enabled.
+     */
+    shop?: ShopView | null;
+    /** The Shop photos fetched so far, by product id (a JPEG data URL, or `null` for none). */
+    shopImages?: Record<string, string | null>;
     /** The branch's name, for the carousel's caption and Home's eyebrow. */
     branch?: string;
     /** A game tile was activated. */
@@ -75,13 +88,21 @@
     onlaunchapp?: (app: GameCard) => void;
     /** A launcher card was activated. */
     onopenlauncher?: (launcher: LauncherCardData) => void;
+    /** A Shop card's Add was activated (the cart arrives with Story 6.31). */
+    onshopadd?: (item: ShopItem) => void;
   } = $props();
 
   const LABELS: Record<Tab, MessageKey> = {
     home: "player.shell.tab.home",
     games: "player.shell.tab.games",
     apps: "player.shell.tab.apps",
+    shop: "player.shell.tab.shop",
   };
+
+  /** The items the nav shows: Shop only on a branch whose Hub says orders are enabled. */
+  const tabs = $derived(tabsFor(shopEnabled(shop)));
+  /** The active item; a Shop tab left over from before the Hub turned orders off is Home. */
+  const shown: Tab = $derived(tab === "shop" && !shopEnabled(shop) ? "home" : tab);
 
   let brokenLogo: string | null = $state(null);
   /** The account menu is open (the time chip or the account chip opens it). */
@@ -92,6 +113,8 @@
   let items: HTMLButtonElement[] = $state([]);
   /** The item with the roving focus; Enter or a click makes it the active one. */
   let focused: Tab = $state("home");
+  /** The item that takes Tab: the roving one, or the active one if the roving one left the nav. */
+  const roving = $derived(tabs.includes(focused) ? focused : shown);
   /** The Home hero video was paused: it holds its frame for the rest of the session (Story 6.29). */
   let heroPaused = $state(false);
 
@@ -131,7 +154,7 @@
 
   function onkeydown(event: KeyboardEvent, index: number) {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
-    const last = TABS.length - 1;
+    const last = tabs.length - 1;
     const next =
       event.key === "ArrowRight"
         ? index === last
@@ -144,7 +167,7 @@
           : -1;
     if (next === -1) return;
     event.preventDefault();
-    focused = TABS[next];
+    focused = tabs[next];
     items[next]?.focus();
   }
 </script>
@@ -165,14 +188,14 @@
     </div>
 
     <nav class="pill-nav" aria-label={t("player.shell.nav_label")} data-testid="pill-nav">
-      {#each TABS as id, index (id)}
+      {#each tabs as id, index (id)}
         <button
           bind:this={items[index]}
           type="button"
           class="item type-kiosk-label"
-          class:active={tab === id}
-          aria-current={tab === id ? "page" : undefined}
-          tabindex={focused === id ? 0 : -1}
+          class:active={shown === id}
+          aria-current={shown === id ? "page" : undefined}
+          tabindex={roving === id ? 0 : -1}
           data-testid={"tab-" + id}
           onfocus={() => (focused = id)}
           onclick={() => (tab = id)}
@@ -247,13 +270,15 @@
     {/if}
   </header>
 
-  <main class="content" class:on-home={tab === "home"} aria-label={t(LABELS[tab])}>
+  <main class="content" class:on-home={shown === "home"} aria-label={t(LABELS[shown])}>
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.device}</h1>
     {@render status?.()}
-    {#if tab === "games"}
+    {#if shown === "games"}
       <Games {games} {gameRunning} {launchers} {mostPlayed} {branch} {onlaunch} {onopenlauncher} />
-    {:else if tab === "apps"}
+    {:else if shown === "apps"}
       <Games kind="apps" games={apps} {gameRunning} onlaunch={onlaunchapp} />
+    {:else if shown === "shop"}
+      <Shop {shop} images={shopImages} {locale} onadd={onshopadd} />
     {:else}
       <Home
         {games}

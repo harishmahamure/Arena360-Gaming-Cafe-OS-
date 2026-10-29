@@ -58,6 +58,8 @@
     "appLaunch": "app_launch",
     "launchers": "launchers",
     "launcherOpen": "launcher_open",
-    "mostPlayed": "most_played"
+    "mostPlayed": "most_played",
+    "shopMenu": "shop_menu",
+    "shopImage": "shop_image"
   }
 }

@@ -39,6 +39,7 @@ import {
   type MostPlayedView,
 } from "./games";
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
+import { shopImageOf, shopMenuOf, type ShopView } from "./shop";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
 import { SIGNUP_TIMEOUT_MS, signupOutcomeOf, type SignupOutcome } from "./signup";
 
@@ -646,6 +647,27 @@ export async function loadMostPlayed(): Promise<MostPlayedView | null> {
   if (!inTauri()) return null;
   const answer = await ask(CMD.mostPlayed);
   return isAnswer(answer) && answer.ok ? mostPlayedOf(answer.body) : null;
+}
+
+/**
+ * The Shop menu with live availability (Story 6.30), from the Hub: `enabled` says whether the Shop
+ * tab exists on this branch. `null` outside Tauri, when the Hub cannot be asked or the answer is
+ * not one (the caller keeps the last good menu).
+ */
+export async function loadShopMenu(): Promise<ShopView | null> {
+  if (!inTauri()) return null;
+  const answer = await ask(CMD.shopMenu);
+  return isAnswer(answer) && answer.ok ? shopMenuOf(answer.body) : null;
+}
+
+/**
+ * One product's photo (a JPEG data URL), from the Hub only. `null` when it has none; `undefined`
+ * when the Hub could not be asked (the caller asks again later).
+ */
+export async function loadShopImage(id: string): Promise<string | null | undefined> {
+  if (!inTauri()) return undefined;
+  const answer = await ask(CMD.shopImage, { id });
+  return isAnswer(answer) && answer.ok ? shopImageOf(answer.body, id) : undefined;
 }
 
 /** Calls `cb` with the game's name when a game would not start (the HUD words the toast). */

@@ -349,6 +349,24 @@ async fn most_played(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Ans
     Ok(service_request(&bridge, "most_played", serde_json::Value::Null).await)
 }
 
+/// The Shop tab (Story 6.30): IPC `shop_menu`, answered with the Hub's `shop.menu_result`
+/// (`{enabled, items}`). `None` when the service did not answer; an error answer (the Hub is
+/// unreachable) leaves the app's last menu in place.
+#[tauri::command]
+async fn shop_menu(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "shop_menu", serde_json::Value::Null).await)
+}
+
+/// One product's photo for a Shop card (Story 6.30): IPC `shop_image{id}`, answered with the
+/// Hub's `shop.image_result` (`{id, image}`, `image` a JPEG data URL or `null`).
+#[tauri::command]
+async fn shop_image(
+    id: String,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "shop_image", serde_json::json!({ "id": id })).await)
+}
+
 /// Opens Steam, Epic or Riot from its card (Story 6.26): IPC `launcher_open{id}`, answered like
 /// `game_launch`. A launcher that is already open has its window brought to the front here (this
 /// runs in the player's session); one that did not open raises the HUD's "Couldn't start <name>"
@@ -588,7 +606,9 @@ fn main() {
             app_launch,
             launchers,
             launcher_open,
-            most_played
+            most_played,
+            shop_menu,
+            shop_image
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

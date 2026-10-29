@@ -24,6 +24,7 @@ use crate::player_session::{
 use crate::player_signup::{PlayerSignup, PlayerSignupResult};
 use crate::scope::ClientClass;
 use crate::session::SessionScreen;
+use crate::shop::{ShopImageRequest, ShopImageResult, ShopMenu};
 use crate::ui_auth::SettingEntry;
 
 /// The only protocol version.
@@ -147,6 +148,18 @@ pub enum FrameBody {
     /// The branch top games over the last 7 days and the live player's last-played times.
     #[serde(rename = "games.most_played_result")]
     GamesMostPlayedResult(MostPlayed),
+    /// A paired kiosk asks for the Shop menu (Story 6.30).
+    #[serde(rename = "shop.menu")]
+    ShopMenu,
+    /// Whether orders are enabled on this branch and the menu with live availability.
+    #[serde(rename = "shop.menu_result")]
+    ShopMenuResult(ShopMenu),
+    /// A paired kiosk asks for one product's photo (Story 6.30).
+    #[serde(rename = "shop.image")]
+    ShopImage(ShopImageRequest),
+    /// The product's photo as a data URL, or none.
+    #[serde(rename = "shop.image_result")]
+    ShopImageResult(ShopImageResult),
     /// Whether the Hub added the time, or why it refused.
     #[serde(rename = "player.extend_result")]
     PlayerExtendResult(PlayerExtendResult),
@@ -156,7 +169,7 @@ pub enum FrameBody {
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 37] = [
+pub const FRAME_KINDS: [&str; 41] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -193,6 +206,10 @@ pub const FRAME_KINDS: [&str; 37] = [
     "player.extend_result",
     "games.most_played",
     "games.most_played_result",
+    "shop.menu",
+    "shop.menu_result",
+    "shop.image",
+    "shop.image_result",
     "ack",
 ];
 
@@ -236,6 +253,10 @@ impl FrameBody {
             Self::PlayerExtendResult(_) => "player.extend_result",
             Self::GamesMostPlayed => "games.most_played",
             Self::GamesMostPlayedResult(_) => "games.most_played_result",
+            Self::ShopMenu => "shop.menu",
+            Self::ShopMenuResult(_) => "shop.menu_result",
+            Self::ShopImage(_) => "shop.image",
+            Self::ShopImageResult(_) => "shop.image_result",
             Self::Ack => "ack",
         }
     }

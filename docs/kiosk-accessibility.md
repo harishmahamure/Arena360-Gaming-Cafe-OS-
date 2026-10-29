@@ -134,3 +134,26 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   from the click.
 - The eyebrow reads "Most played at <branch> this week" only when the hero is the branch's most played
   game; with no plays it reads "Featured at <branch>".
+
+## The Shop tab (Story 6.30)
+
+- Shop is the fourth pill after Apps and exists only when the Hub says orders are enabled on the
+  branch (the `kiosk_orders` licence flag). On a Free branch the item is not in the nav at all, so
+  it is not in the Tab or arrow-key order; a Shop tab left open when the Hub turns orders off is
+  replaced by Home. The nav's roving focus follows the items that exist.
+- The tab is a labelled region ("Food and drinks") with the same filter rail, search field and
+  keyboard movement as the Games tab: Up and Down in the rail, all four arrows across the Add buttons
+  in the grid (a disabled Add is skipped, as it is skipped by Tab). The search field is named
+  "Search food & drinks". "Nothing matches." comes with a "Clear filters" button that returns focus
+  to the search field.
+- A card is an article: photo (decorative, empty alt: the name is next to it), name as an `h3`, the
+  bundle's "2 × Cola" components as a list ("Includes"), the price in tabular figures, then Add,
+  whose accessible name is "Add <item>". The "POPULAR" badge sits on the photo's top-left and is read
+  with the card.
+- Out of stock dims the photo only. The name and the "Out of stock" tag stay in `text` ink (the tag
+  is also readable text, not colour alone, with a dashed edge) and Add is a disabled button, so
+  Tab and Enter skip it. A card flips state within 2 s of a change at the Hub; focus stays where it
+  is when a card turns unavailable.
+- With nothing available (or an empty menu) the region reads "Kitchen's closed right now." and the
+  rail and search are not shown.
+- Add does nothing yet: the cart is Story 6.31.

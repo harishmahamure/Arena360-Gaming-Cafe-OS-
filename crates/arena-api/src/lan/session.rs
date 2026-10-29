@@ -662,6 +662,14 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "shop.menu" => match self.paired_device("shop.menu") {
+                Ok(_) => self.spawn_shop_menu(rid, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "shop.image" => match self.check_shop_image(value) {
+                Ok(request) => self.spawn_shop_image(rid, request, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "player.extend" => match self.check_player_extend(value) {
                 Ok((device, request)) => {
                     self.spawn_player_extend(rid, device, request, permits, tasks)
@@ -962,6 +970,59 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::player_extend::options(&hub, &device).await {
                 Ok(result) => Frame::new(rid, FrameBody::PlayerExtendOptionsResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    fn check_shop_image(&self, value: Value) -> Result<arena_proto::ShopImageRequest, AppError> {
+        self.paired_device("shop.image")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::ShopImage(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed shop.image"));
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    async fn spawn_shop_menu(
+        &self,
+        rid: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::shop::menu(&hub).await {
+                Ok(result) => Frame::new(rid, FrameBody::ShopMenuResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_shop_image(
+        &self,
+        rid: String,
+        request: arena_proto::ShopImageRequest,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::shop::image(&hub, &request.id).await {
+                Ok(result) => Frame::new(rid, FrameBody::ShopImageResult(result)),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

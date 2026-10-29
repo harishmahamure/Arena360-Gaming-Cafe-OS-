@@ -40,6 +40,7 @@ mod session_timer;
 mod settings_defaults;
 pub mod setup;
 pub mod setup_file;
+pub mod shop;
 mod snapshot;
 pub mod staff;
 mod status;

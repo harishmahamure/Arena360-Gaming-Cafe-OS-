@@ -13,6 +13,8 @@
     loadGames,
     loadLaunchers,
     loadMostPlayed,
+    loadShopImage,
+    loadShopMenu,
     openLauncher,
     onAttract,
     onHubStatus,
@@ -33,6 +35,7 @@
     type MostPlayedView,
   } from "../lib/games";
   import { type Tab } from "../lib/shell";
+  import { SHOP_POLL_IDLE_MS, SHOP_POLL_OPEN_MS, type ShopView } from "../lib/shop";
 
   /** The idle screen: the last attract view and logo (from the service cache at first). */
   let attract: AttractShown = $state({ view: null, logo: null });
@@ -71,6 +74,14 @@
   /** The Hub's most-played list (Story 6.27); `null` until asked, or when the Hub is unreachable. */
   let mostPlayed: MostPlayedView | null = $state(null);
   const ranked = $derived(rankedGames(mostPlayed, games));
+  /** The Hub's Shop menu (Story 6.30); `null` until asked. The Shop item exists only when it says `enabled`. */
+  let shop: ShopView | null = $state(null);
+  /** The Shop photos fetched so far by product id; each is asked of the Hub once per session. */
+  let shopImages: Record<string, string | null> = $state({});
+  /** Product ids whose photo is asked for or held (not reactive: it only dedupes the asks). */
+  const photoAsked = new Set<string>();
+  /** Bumped when a session ends, so a photo that arrives late is not shown to the next player. */
+  let shopEpoch = 0;
 
   async function refreshGames() {
     const [view, cards] = await Promise.all([loadGames(), loadLaunchers()]);
@@ -163,6 +174,57 @@
       live = false;
       clearInterval(timer);
     };
+  });
+
+  // The Shop menu is asked of the Hub as soon as a session is on screen (the Shop item appears only
+  // when orders are enabled), every second while the Shop tab is open so a stock change shows
+  // within 2 s, and every 30 s otherwise. One ask at a time; a failed ask keeps the last good menu.
+  $effect(() => {
+    if (!inSession) {
+      shop = null;
+      shopImages = {};
+      photoAsked.clear();
+      shopEpoch++;
+      return;
+    }
+    const period = tab === "shop" ? SHOP_POLL_OPEN_MS : SHOP_POLL_IDLE_MS;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      const view = await loadShopMenu();
+      if (!live) return;
+      if (view !== null) shop = view;
+      timer = setTimeout(() => void refresh(), period);
+    };
+    void refresh();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  });
+
+  // A Shop tab left open when the Hub turns orders off is replaced by Home.
+  $effect(() => {
+    if (tab === "shop" && shop !== null && !shop.enabled) tab = "home";
+  });
+
+  // Photos come from the Hub one at a time, once per product for the session, while the Shop tab
+  // is open. A failed ask is forgotten so the next menu answer asks again.
+  async function fetchPhoto(id: string) {
+    const epoch = shopEpoch;
+    const image = await loadShopImage(id);
+    if (epoch !== shopEpoch) return;
+    if (image === undefined) photoAsked.delete(id);
+    else shopImages = { ...shopImages, [id]: image };
+  }
+
+  $effect(() => {
+    if (tab !== "shop" || shop === null) return;
+    for (const item of shop.items) {
+      if (!item.has_image || photoAsked.has(item.id)) continue;
+      photoAsked.add(item.id);
+      void fetchPhoto(item.id);
+    }
   });
 
   const graceLeft = $derived(
@@ -278,6 +340,8 @@
       {launchers}
       mostPlayed={ranked}
       mostPlayedView={mostPlayed}
+      {shop}
+      {shopImages}
       branch={attract.view?.branch_name ?? ""}
       onlaunch={launch}
       onlaunchapp={launchAppTile}

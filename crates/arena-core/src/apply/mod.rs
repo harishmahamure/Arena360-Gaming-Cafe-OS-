@@ -425,6 +425,7 @@ pub(crate) fn run(
     intent: &Intent,
 ) -> Result<Outcome, AppError> {
     let now = ctx.clock.now_ms();
+    guards::kiosk_orders(tx, intent)?;
     guards::permission(tx, intent)?;
     let epoch = guards::epoch(tx, ctx)?;
     if let Some(stored) = ttl_dedupe::ttl_dedupe(tx, intent, now)? {

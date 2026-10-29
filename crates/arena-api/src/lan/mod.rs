@@ -23,6 +23,7 @@ mod player_signup;
 pub(crate) mod registry;
 mod scan_match;
 mod session;
+mod shop;
 mod throttle;
 pub mod tls;
 

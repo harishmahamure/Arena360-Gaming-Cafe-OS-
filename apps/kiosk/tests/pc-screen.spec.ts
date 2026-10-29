@@ -15,7 +15,6 @@ async function openWithShell(page: Page, screen: unknown = null) {
           listeners[event] = (listeners[event] ?? []).filter((x) => x !== id);
         },
       };
-      w.__dismissed = 0;
       w.__TAURI_INTERNALS__ = {
         transformCallback: (cb: (e: unknown) => void) => {
           const id = next++;
@@ -33,9 +32,8 @@ async function openWithShell(page: Page, screen: unknown = null) {
               return initial;
             case commands.attract:
               return null;
-            case commands.pcDismiss:
-              (w.__dismissed as number)++;
-              return null;
+            case commands.staffMessages:
+              return [];
             case commands.hubStatus:
             case commands.takeRestoreState:
             case commands.reportAppState:
@@ -86,43 +84,35 @@ test("the lock covers the screen with Locked by staff and unlock removes it", as
   await openWithShell(page);
   await expect(page.getByTestId("attract")).toBeVisible();
   await expect(page.getByTestId("pc-locked")).toHaveCount(0);
-  await emit(page, { locked: true, message: null });
+  await emit(page, { locked: true });
   const cover = page.getByTestId("pc-locked");
   await expect(cover).toBeVisible();
   await expect(cover.getByRole("heading", { name: en["player.pc.locked"] })).toBeVisible();
   expect(await page.locator(".app").getAttribute("inert")).not.toBeNull();
   expect(await serious(page)).toEqual([]);
-  await emit(page, { locked: false, message: null });
+  await emit(page, { locked: false });
   await expect(cover).toHaveCount(0);
   expect(await page.locator(".app").getAttribute("inert")).toBeNull();
 });
 
-test("a message shows its text until the player dismisses it", async ({ page }) => {
+test("a staff message leaves no banner on the stage; it belongs to the HUD toast and the bell", async ({
+  page,
+}) => {
   await openWithShell(page);
   await emit(page, { locked: false, message: "Closing in 10 minutes" });
-  const banner = page.getByTestId("pc-message");
-  await expect(banner).toContainText("Closing in 10 minutes");
-  await expect(banner).toContainText(en["player.pc.message_title"]);
+  await expect(page.getByTestId("pc-message")).toHaveCount(0);
+  await expect(page.getByText("Closing in 10 minutes")).toHaveCount(0);
   expect(await serious(page)).toEqual([]);
-  await emit(page, { locked: false, message: "Closing in 10 minutes" });
-  await expect(banner).toHaveCount(1);
-  await banner.getByRole("button", { name: en["common.dismiss"] }).click();
-  await expect(banner).toHaveCount(0);
-  expect(
-    await page.evaluate(() => (window as unknown as { __dismissed: number }).__dismissed),
-  ).toBe(1);
 });
 
 test("a lock that was already on when the page opened covers it at once", async ({ page }) => {
-  await openWithShell(page, { locked: true, message: "Back soon" });
+  await openWithShell(page, { locked: true });
   await expect(page.getByTestId("pc-locked")).toBeVisible();
-  await expect(page.getByTestId("pc-message")).toContainText("Back soon");
 });
 
 const shown = (over: Record<string, unknown>) => ({
   locked: false,
   reason: null,
-  message: null,
   session: null,
   ...over,
 });

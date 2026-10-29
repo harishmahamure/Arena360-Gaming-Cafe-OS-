@@ -454,6 +454,16 @@ enum Op {
         ack: bool,
         bad_ack: bool,
     },
+    /// `device.message` (Story 6.16) to one PC or to all: a good text applies and writes only
+    /// device events (one per PC for a seat, one per PC with a live session for all); an empty,
+    /// 141-character or control-character text, or a scope with the wrong device, is refused with
+    /// nothing written.
+    Message {
+        slot: u8,
+        all: bool,
+        which: u8,
+        misnamed: bool,
+    },
     /// A Settle of an open bill wholly on credit, maybe with the manager override.
     CreditPay {
         slot: u8,
@@ -845,6 +855,14 @@ fn op() -> impl Strategy<Value = Op> {
                 ack,
                 bad_ack
             }),
+        2 => (0..4u8, any::<bool>(), 0..4u8, prop::bool::weighted(0.2)).prop_map(
+            |(slot, all, which, misnamed)| Op::Message {
+                slot,
+                all,
+                which,
+                misnamed
+            }
+        ),
         2 => (0..3u8, prop::bool::weighted(0.5)).prop_map(|(slot, over_ride)| Op::CreditPay {
             slot,
             over_ride
@@ -4853,6 +4871,69 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }
             }
         }
+        Op::Message {
+            slot,
+            all,
+            which,
+            misnamed,
+        } => {
+            let pcs: Vec<String> = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .into_iter()
+                .filter(|d| d["deleted_at"] == RowValue::Null && text_is(d, "kind", "pc"))
+                .map(|d| text(&d, "device_id"))
+                .collect();
+            if pcs.is_empty() {
+                return Ok(());
+            }
+            let device = pcs[usize::from(*slot) % pcs.len()].clone();
+            let body = match which {
+                0 => "Closing at 11".to_owned(),
+                1 => String::new(),
+                2 => "x".repeat(141),
+                _ => "a
+b"
+                .to_owned(),
+            };
+            let scope = if *all {
+                arena_proto::MessageScope::All
+            } else {
+                arena_proto::MessageScope::Seat
+            };
+            let named = if *all == *misnamed {
+                Some(device)
+            } else {
+                None
+            };
+            let good = *which == 0 && !*misnamed;
+            let before = hub.change_count();
+            let intent = hub.intent(
+                IntentPayload::DeviceMessage(arena_proto::DeviceMessage {
+                    scope,
+                    device_id: named,
+                    text: body,
+                }),
+                None,
+            );
+            let out = hub.submit_new(intent);
+            if good {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                let applied = out.unwrap();
+                prop_assert!(applied.changes.iter().all(|c| c.tbl == "device_events"));
+                prop_assert_eq!(hub.change_count(), before + applied.changes.len());
+                if !*all {
+                    prop_assert_eq!(applied.changes.len(), 1);
+                }
+            } else {
+                prop_assert_eq!(
+                    code(&out).map(|(c, _)| c),
+                    Some(ErrorCode::ValidationFailed)
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            }
+        }
         Op::Alert {
             slot,
             time_up,
@@ -5760,6 +5841,10 @@ fn group_of(hub: &mut Hub, kind: &str) -> Result<String, TestCaseError> {
     ));
     prop_assert!(out.is_ok(), "{:?}", out);
     Ok(out.unwrap().changes[0].row_id.clone())
+}
+
+fn text_is(row: &arena_store::Row, col: &str, want: &str) -> bool {
+    row[col] == RowValue::Text(want.into())
 }
 
 fn text(row: &arena_store::Row, col: &str) -> String {

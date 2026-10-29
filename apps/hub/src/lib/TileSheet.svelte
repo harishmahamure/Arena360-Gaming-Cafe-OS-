@@ -70,6 +70,8 @@
     permissionFor,
     powerJob,
     resumeJob,
+    messageJob,
+    messageValid,
     screenJob,
     send,
     servedJob,
@@ -305,13 +307,12 @@
 
   function sendMessage(event: SubmitEvent) {
     event.preventDefault();
-    const body = text.trim();
-    if (body.length < 1 || [...body].length > MESSAGE_MAX) {
+    if (!messageValid(text)) {
       textError = "hub.sheet.message_invalid";
       return;
     }
     textError = null;
-    void go(screenJob(device.device_id, "message", body));
+    void go(messageJob(device.device_id, text.trim()));
   }
 
   async function focusAssign() {

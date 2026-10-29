@@ -229,7 +229,8 @@ pub use pairing::{
     normalize_pairing_code, valid_pairing_code,
 };
 pub use pc_command::{
-    DevicePower, DeviceScreen, LockReason, PC_MESSAGE_MAX, PcAck, PcAckEvent, PcAction,
+    DeviceMessage, DevicePower, DeviceScreen, LockReason, MessageScope, PC_MESSAGE_MAX, PcAck,
+    PcAckEvent, PcAction, valid_message_text,
 };
 pub use permission::{Permission, Requirement};
 pub use plans::{

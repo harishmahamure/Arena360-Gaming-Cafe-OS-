@@ -27,6 +27,8 @@ export const ADMIN_EXIT_EVENT = names.events.adminExit;
 export const ADMIN_EXIT_ENDED_EVENT = names.events.adminExitEnded;
 export const THEME_EVENT = names.events.theme;
 export const PC_SCREEN_EVENT = names.events.pcScreen;
+export const STAFF_MESSAGE_EVENT = names.events.staffMessage;
+export const STAFF_MESSAGES_CLEARED_EVENT = names.events.staffMessagesCleared;
 export const ATTRACT_EVENT = names.events.attract;
 export const TEST_SESSION_EVENT = names.events.testSession;
 export const TEST_SESSION_ENDED_EVENT = names.events.testSessionEnded;
@@ -245,7 +247,6 @@ export async function onTestSessionEnded(cb: () => void): Promise<() => void> {
 export type PcScreen = {
   locked: boolean;
   reason: string | null;
-  message: string | null;
   session: {
     device_name: string;
     elapsed_ms: number;
@@ -265,9 +266,8 @@ export type PcScreen = {
 
 const screenOf = (v: unknown): PcScreen | null => {
   if (typeof v !== "object" || v === null) return null;
-  const { locked, reason, message, session } = v as Record<string, unknown>;
+  const { locked, reason, session } = v as Record<string, unknown>;
   if (typeof locked !== "boolean") return null;
-  if (message != null && typeof message !== "string") return null;
   const s = session as
     | {
         device_name?: unknown;
@@ -303,7 +303,6 @@ const screenOf = (v: unknown): PcScreen | null => {
   return {
     locked,
     reason: typeof reason === "string" ? reason : null,
-    message: message ?? null,
     session: live,
   };
 };
@@ -531,9 +530,60 @@ export async function callStaff(): Promise<boolean> {
   }
 }
 
-export function dismissPcMessage(): void {
+/** One staff message of the session on screen (Story 6.16). */
+export type StaffMessage = {
+  /** The service's own counter: a message already held is never added twice. */
+  id: number;
+  text: string;
+  /** When it arrived, UTC ms. */
+  at: number;
+  read: boolean;
+  /** Just arrived (the HUD shows it as a toast); a replay on a new connection is not. */
+  fresh: boolean;
+};
+
+const messageOf = (v: unknown): StaffMessage | null => {
+  if (typeof v !== "object" || v === null) return null;
+  const { id, text, at, read, fresh } = v as Record<string, unknown>;
+  if (typeof id !== "number" || typeof text !== "string" || typeof at !== "number") return null;
+  return { id, text, at, read: read === true, fresh: fresh === true };
+};
+
+/** The session's staff messages the shell already holds, newest first (a cold start asks). */
+export async function currentStaffMessages(): Promise<StaffMessage[]> {
+  if (!inTauri()) return [];
+  try {
+    const v: unknown = await invoke(CMD.staffMessages);
+    if (!Array.isArray(v)) return [];
+    return v.map(messageOf).filter((m): m is StaffMessage => m !== null);
+  } catch {
+    return [];
+  }
+}
+
+/** Calls `cb` with every staff message that comes in (and each one replayed on a reconnect). */
+export async function onStaffMessage(cb: (m: StaffMessage) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(STAFF_MESSAGE_EVENT, (e) => {
+    const m = messageOf(e.payload);
+    if (m) cb(m);
+  });
+}
+
+/** Calls `cb` when the shell dropped the messages it held (the service connection began anew). */
+export async function onStaffMessagesCleared(cb: () => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(STAFF_MESSAGES_CLEARED_EVENT, () => cb());
+}
+
+/** The player opened the bell: the service marks every message read. */
+export async function markMessagesRead(): Promise<void> {
   if (!inTauri()) return;
-  void invoke(CMD.pcDismiss).catch(() => {});
+  try {
+    await invoke(CMD.messagesRead);
+  } catch {
+    // The list is read on screen either way; the service marks it on the next open.
+  }
 }
 
 /** Whether `e` is the hidden admin-exit combination, Ctrl+Alt+Shift+A. */

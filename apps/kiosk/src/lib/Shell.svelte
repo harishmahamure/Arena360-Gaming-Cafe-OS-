@@ -3,6 +3,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { callStaff } from "./bridge";
   import { INFO_TOAST_MS } from "./hud";
+  import MessagesBell from "./MessagesBell.svelte";
   import VolumeControl from "./VolumeControl.svelte";
   import {
     chipText,
@@ -123,7 +124,7 @@
 
     <div class="right">
       <VolumeControl />
-      <span class="bell-slot" data-testid="messages-bell-slot"></span>
+      <MessagesBell />
       <button
         type="button"
         class="call-staff type-kiosk-label"
@@ -244,11 +245,6 @@
 
   .right > p {
     margin: 0;
-  }
-
-  /* Kept free for the messages bell (Story 6.16), left of Call staff. */
-  .bell-slot {
-    display: contents;
   }
 
   .call-staff {

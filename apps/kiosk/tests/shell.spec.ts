@@ -15,7 +15,6 @@ async function openWithShell(page: Page, screen: unknown = null) {
           listeners[event] = (listeners[event] ?? []).filter((x) => x !== id);
         },
       };
-      w.__dismissed = 0;
       w.__TAURI_INTERNALS__ = {
         transformCallback: (cb: (e: unknown) => void) => {
           const id = next++;
@@ -33,9 +32,8 @@ async function openWithShell(page: Page, screen: unknown = null) {
               return initial;
             case commands.attract:
               return null;
-            case commands.pcDismiss:
-              (w.__dismissed as number)++;
-              return null;
+            case commands.staffMessages:
+              return [];
             case commands.hubStatus:
             case commands.takeRestoreState:
             case commands.reportAppState:
@@ -85,7 +83,6 @@ const serious = async (page: Page) =>
 const shown = (session: Record<string, unknown> | null, over: Record<string, unknown> = {}) => ({
   locked: false,
   reason: null,
-  message: null,
   session: session && { device_name: "PC 7", elapsed_ms: 0, ...session },
   ...over,
 });

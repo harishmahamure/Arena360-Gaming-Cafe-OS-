@@ -164,7 +164,9 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Library(t) => super::library::validate_delete(t),
             _ => Err(internal_target()),
         },
-        IntentPayload::DeviceScreen(_) | IntentPayload::DevicePower(_) => match target {
+        IntentPayload::DeviceScreen(_)
+        | IntentPayload::DeviceMessage(_)
+        | IntentPayload::DevicePower(_) => match target {
             Target::Pc(t) => super::pc_command::validate(intent, t),
             _ => Err(internal_target()),
         },

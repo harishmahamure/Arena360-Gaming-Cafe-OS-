@@ -13,6 +13,7 @@
   import { ackDevice, ackable, openFor, sheetRequest, tagOf } from "../../lib/alerts.svelte";
   import { nextTile } from "../../lib/floor-nav";
   import { liveRate } from "../../lib/rules";
+  import MessageAll from "../../lib/MessageAll.svelte";
   import TileSheet from "../../lib/TileSheet.svelte";
   import { PAUSE_LABELS, cmds, moved } from "../../lib/tile-actions.svelte";
   import UndoDock from "../../lib/UndoDock.svelte";
@@ -407,6 +408,7 @@
 <div class="stage" class:open={active !== undefined} class:picking>
   <div class="floor" inert={full}>
     <h1 class="type-hub-numeric">{t("hub.nav.floor")}</h1>
+    <MessageAll {staff} />
 
     {#if snapshot && !snapshot.branch}
       <section class="note" data-testid="floor-not-set-up">

@@ -346,7 +346,9 @@ pub(super) fn mutate(
             Target::Stock(t) => stock::mutate_check(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
-        IntentPayload::DeviceScreen(_) | IntentPayload::DevicePower(_) => match target {
+        IntentPayload::DeviceScreen(_)
+        | IntentPayload::DeviceMessage(_)
+        | IntentPayload::DevicePower(_) => match target {
             Target::Pc(t) => super::pc_command::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },

@@ -1011,3 +1011,83 @@ async fn a_new_session_starts_at_the_branch_default_whatever_the_last_player_set
     assert_eq!(host.volume(), Some(35));
     assert_eq!(crate::volume::level(&ctx), 35);
 }
+
+// ---- Story 6.16: staff messages and the bell ----
+
+fn session_screen() -> SessionScreen {
+    SessionScreen {
+        session_id: "S1".into(),
+        device_name: "PC 1".into(),
+        elapsed_ms: 0,
+        lock_after_ms: 3_600_000,
+        time_up_mode: "clean_up".into(),
+        grace_ms: 0,
+        ordered_items: 0,
+        username: None,
+        guest_no: None,
+        remaining_ms: None,
+        balance_minor: None,
+        plan_name: None,
+    }
+}
+
+fn message(ctx: &Ctx, cmd: &str, text: &str) {
+    let step = crate::pc::apply(ctx, cmd, PcAction::Message, Some(text.into()), None);
+    assert_eq!(step, crate::pc::Step::Ack);
+}
+
+fn texts(ctx: &Ctx) -> Vec<String> {
+    ctx.pc.staff_notes().into_iter().map(|n| n.text).collect()
+}
+
+#[tokio::test]
+async fn a_message_with_no_session_on_screen_is_acknowledged_but_not_kept() {
+    let (_dir, ctx) = bare_ctx();
+    let mut live = ctx.pc.notes.subscribe();
+    message(&ctx, "M1", "Closing at 11");
+    assert!(texts(&ctx).is_empty());
+    assert!(live.try_recv().is_err(), "nothing is raised for it");
+}
+
+#[tokio::test]
+async fn a_message_in_a_session_is_kept_raised_once_and_read_on_request() {
+    let (_dir, ctx) = bare_ctx();
+    crate::session::sync(&ctx, session_screen(), true);
+    let mut live = ctx.pc.notes.subscribe();
+    message(&ctx, "M1", "  Closing at 11 ");
+    message(&ctx, "M1", "  Closing at 11 ");
+    message(&ctx, "M2", "Your order is ready");
+    assert_eq!(texts(&ctx), ["Closing at 11", "Your order is ready"]);
+    let first = live.try_recv().unwrap();
+    assert_eq!((first.text.as_str(), first.read), ("Closing at 11", false));
+    assert_eq!(live.try_recv().unwrap().text, "Your order is ready");
+    assert!(live.try_recv().is_err(), "a repeated cmd_id shows once");
+    let read = crate::app::handle_request(&ctx, "messages_read", serde_json::Value::Null);
+    assert!(read.is_ok());
+    assert!(ctx.pc.staff_notes().iter().all(|n| n.read));
+}
+
+#[tokio::test]
+async fn the_end_of_a_session_clears_its_messages_and_the_next_player_starts_empty() {
+    let (_dir, ctx) = bare_ctx();
+    crate::session::sync(&ctx, session_screen(), true);
+    message(&ctx, "M1", "one");
+    message(&ctx, "M2", "two");
+    message(&ctx, "M3", "three");
+    assert_eq!(ctx.pc.staff_notes().len(), 3);
+    crate::pc::set_locked(&ctx, true, Some(LockReason::PayAtCounter));
+    assert!(ctx.pc.staff_notes().is_empty());
+    crate::session::sync(&ctx, session_screen(), true);
+    assert!(ctx.pc.staff_notes().is_empty());
+    message(&ctx, "M4", "welcome");
+    assert_eq!(texts(&ctx), ["welcome"]);
+}
+
+#[tokio::test]
+async fn a_staff_lock_keeps_the_messages_of_the_session() {
+    let (_dir, ctx) = bare_ctx();
+    crate::session::sync(&ctx, session_screen(), true);
+    message(&ctx, "M1", "one");
+    crate::pc::set_locked(&ctx, true, Some(LockReason::LockedByStaff));
+    assert_eq!(texts(&ctx), ["one"]);
+}

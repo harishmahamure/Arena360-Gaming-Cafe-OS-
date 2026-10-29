@@ -139,6 +139,13 @@ impl Presence {
         })
     }
 
+    /// Pushes a staff message to each of `devices` that is online; returns how many PCs got it.
+    pub fn push_message_all(&self, devices: &[String], cmd_id: &str, text: &str) -> usize {
+        self.0
+            .as_ref()
+            .map_or(0, |r| r.push_message_all(devices, cmd_id, text))
+    }
+
     pub fn push_timer_event(&self, event: arena_core::TimerEvent) -> usize {
         self.0.as_ref().map_or(0, |r| r.push_timer_event(event))
     }

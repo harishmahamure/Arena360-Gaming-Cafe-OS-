@@ -181,6 +181,7 @@ async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise
         const kind = sent.payload.kind;
         const exit = kind === "device.admin_unlock";
         await json(route, {
+          delivered: kind === "device.message" ? 1 : undefined,
           applied: {
             intent_id: "I",
             changes: [
@@ -190,7 +191,10 @@ async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise
             ],
           },
         });
-        if (hub.ack && (kind === "device.screen" || kind === "device.power")) {
+        if (
+          hub.ack &&
+          (kind === "device.screen" || kind === "device.message" || kind === "device.power")
+        ) {
           await page.evaluate(
             ([key, id]) =>
               (window as unknown as { __emit: (n: string, d: unknown) => void }).__emit(
@@ -412,11 +416,48 @@ test("a message is 1 to 140 characters, in the sheet before it reaches the Hub",
   await act(page, "Message").click();
   await expect(status(page)).toHaveText(en["hub.sheet.done.message"]);
   expect(hub.sent[0].payload).toEqual({
-    kind: "device.screen",
+    kind: "device.message",
+    scope: "seat",
     device_id: ONLINE.device_id,
-    action: "message",
     text: "é".repeat(140),
   });
+  expect(hub.sent[0].ticket).toBeUndefined();
+});
+
+test("a message with a control character or only spaces is refused in the sheet", async ({
+  page,
+}) => {
+  const hub = await open(page, "counter-token");
+  await face(page, "PC 1").focus();
+  await page.keyboard.press("Enter");
+  const field = sheet(page).getByLabel(en["hub.sheet.message_label"]);
+  await field.fill("   ");
+  await act(page, "Message").click();
+  await expect(sheet(page)).toContainText(en["hub.sheet.message_invalid"]);
+  await field.fill("ab");
+  await act(page, "Message").click();
+  await expect(sheet(page)).toContainText(en["hub.sheet.message_invalid"]);
+  expect(hub.sent).toHaveLength(0);
+});
+
+test("a seat message with no ack in 5 s fails, and Retry resends it with the same key", async ({
+  page,
+}) => {
+  const hub = await open(page, "counter-token", { ack: false });
+  await face(page, "PC 1").focus();
+  await page.keyboard.press("Enter");
+  await sheet(page).getByLabel(en["hub.sheet.message_label"]).fill("Closing at 11");
+  await act(page, "Message").click();
+  await expect(tile(page, "PC 1").getByTestId("tile-failed")).toContainText(
+    en["hub.floor.remote_unlock_failed"],
+    { timeout: 8000 },
+  );
+  hub.ack = true;
+  await act(page, en["hub.sheet.retry"]).click();
+  await expect(status(page)).toHaveText(en["hub.sheet.done.message"]);
+  expect(hub.sent).toHaveLength(2);
+  expect(hub.sent[1].key).toBe(hub.sent[0].key);
+  expect(hub.sent[1].payload).toEqual(hub.sent[0].payload);
 });
 
 test("a Counter's restart opens the manager PIN in place; a wrong PIN clears it, the right one carries its ticket", async ({

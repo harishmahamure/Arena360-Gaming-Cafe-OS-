@@ -423,7 +423,6 @@ test("an accepted start leaves for the session screen the moment pc-screen bring
   await emit(page, "pc-screen", {
     locked: false,
     reason: null,
-    message: null,
     session: {
       device_name: "PC 7",
       elapsed_ms: 500,
@@ -589,7 +588,6 @@ test("a lock over the PC forgets the held player, here and at the Hub", async ({
   await emit(page, names.events.pcScreen, {
     locked: true,
     reason: "preparing_pc",
-    message: null,
     session: null,
   });
   await expect(picker(page)).toHaveCount(0);

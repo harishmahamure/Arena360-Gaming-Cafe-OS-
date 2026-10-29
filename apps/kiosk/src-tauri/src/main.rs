@@ -17,7 +17,8 @@ use arena_proto::KioskHubStatus;
 use bridge::{
     ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, ATTRACT_EVENT, Answer, Attract, Bridge,
     DISCOVERY_DONE_EVENT, DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, PC_SCREEN_EVENT, PcScreen,
-    RESTORE_STATE_EVENT, TEST_SESSION_ENDED_EVENT, TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
+    RESTORE_STATE_EVENT, STAFF_MESSAGE_EVENT, STAFF_MESSAGES_CLEARED_EVENT, StaffMessage,
+    TEST_SESSION_ENDED_EVENT, TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
 };
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -75,9 +76,20 @@ fn attract(bridge: tauri::State<'_, Arc<Bridge>>) -> Attract {
     bridge.attract()
 }
 
+/// The session's staff messages, newest first (a cold start asks, then follows the events).
 #[tauri::command]
-async fn pc_dismiss(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
-    Ok(service_request(&bridge, "pc_dismiss", serde_json::Value::Null).await)
+fn staff_messages(bridge: tauri::State<'_, Arc<Bridge>>) -> Vec<StaffMessage> {
+    bridge.staff_messages()
+}
+
+/// The player opened the messages bell: the service marks every message read.
+#[tauri::command]
+async fn messages_read(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    let answer = service_request(&bridge, "messages_read", serde_json::Value::Null).await;
+    if answer.as_ref().is_some_and(|a| a.ok) {
+        bridge.mark_messages_read();
+    }
+    Ok(answer)
 }
 
 #[tauri::command]
@@ -375,7 +387,8 @@ fn main() {
             pair,
             pair_info,
             pc_screen,
-            pc_dismiss,
+            staff_messages,
+            messages_read,
             attract,
             player_login,
             player_plans,
@@ -425,6 +438,8 @@ fn main() {
                                 .set_session(screen.session.is_some() && !screen.locked);
                             handle.emit(PC_SCREEN_EVENT, screen)
                         }
+                        Emit::StaffMessage(message) => handle.emit(STAFF_MESSAGE_EVENT, message),
+                        Emit::StaffMessagesCleared => handle.emit(STAFF_MESSAGES_CLEARED_EVENT, ()),
                         Emit::Attract(shown) => handle.emit(ATTRACT_EVENT, shown),
                         Emit::Theme(hc) => {
                             if let Some(path) = theme_file(&handle)

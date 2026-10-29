@@ -80,7 +80,7 @@ pub(crate) struct Registry {
     seen: Mutex<HashMap<String, (tokio::time::Instant, i64)>>,
     /// Remote unlocks a kiosk acknowledged (for the Hub UI).
     acks: broadcast::Sender<AdminUnlockAckEvent>,
-    pending_cmds: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    pending_cmds: Mutex<HashMap<(String, String), std::time::Instant>>,
     pc_acks: broadcast::Sender<PcAckEvent>,
     /// The manager-verifier version last pushed to every paired session (-1: none yet).
     verifier_pushed: AtomicI64,
@@ -281,10 +281,12 @@ impl Registry {
         let Ok(mut pending) = self.pending_cmds.lock() else {
             return false;
         };
-        if pending.get(cmd_id).is_none_or(|(d, _)| d != device_id) {
+        if pending
+            .remove(&(device_id.to_owned(), cmd_id.to_owned()))
+            .is_none()
+        {
             return false;
         }
-        pending.remove(cmd_id);
         let _ = self.pc_acks.send(PcAckEvent {
             cmd_id: cmd_id.to_owned(),
             device_id: device_id.to_owned(),
@@ -294,10 +296,10 @@ impl Registry {
 
     fn track(&self, device_id: &str, cmd_id: &str) {
         if let Ok(mut pending) = self.pending_cmds.lock() {
-            pending.retain(|_, (_, at)| at.elapsed() < PENDING_CMD_TTL);
+            pending.retain(|_, at| at.elapsed() < PENDING_CMD_TTL);
             pending.insert(
-                cmd_id.to_owned(),
-                (device_id.to_owned(), std::time::Instant::now()),
+                (device_id.to_owned(), cmd_id.to_owned()),
+                std::time::Instant::now(),
             );
         }
     }
@@ -321,6 +323,23 @@ impl Registry {
             },
         );
         self.push_paired(&msg, Some(device_id))
+    }
+
+    /// Pushes one staff message, under one `cmd_id`, to each of `devices` that is online, and
+    /// returns how many PCs it reached. Every kiosk acks under its own device id.
+    pub(crate) fn push_message_all(&self, devices: &[String], cmd_id: &str, text: &str) -> usize {
+        devices
+            .iter()
+            .filter(|device_id| {
+                self.push_pc_command(
+                    device_id,
+                    cmd_id,
+                    PcAction::Message,
+                    Some(text.to_owned()),
+                    None,
+                ) > 0
+            })
+            .count()
     }
 
     pub(crate) fn push_session_started(
@@ -1051,6 +1070,24 @@ mod tests {
         )
         .await;
         assert!(paired.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn one_message_key_reaches_every_online_pc_and_each_acks_under_its_own_device() {
+        let reg = Arc::new(Registry::default());
+        let (tx_a, mut rx_a) = mpsc::channel(8);
+        let _a = reg.register(ClientClass::Paired, Some("A".into()), tx_a);
+        let (tx_b, mut rx_b) = mpsc::channel(8);
+        let _b = reg.register(ClientClass::Paired, Some("B".into()), tx_b);
+        let both = ["A".to_owned(), "B".to_owned(), "OFFLINE".to_owned()];
+        assert_eq!(reg.push_message_all(&both, "K1", "hi"), 2);
+        assert!(rx_a.try_recv().is_ok() && rx_b.try_recv().is_ok());
+        let mut acks = reg.pc_acks();
+        assert!(reg.ack_pc("A", "K1"));
+        assert!(!reg.ack_pc("A", "K1"), "an ack is spent once");
+        assert!(reg.ack_pc("B", "K1"));
+        assert_eq!(acks.try_recv().unwrap().device_id, "A");
+        assert_eq!(acks.try_recv().unwrap().device_id, "B");
     }
 
     #[tokio::test]

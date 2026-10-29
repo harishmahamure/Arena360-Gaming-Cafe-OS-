@@ -19,6 +19,7 @@ import type { DeviceAdminRelock } from "./DeviceAdminRelock";
 import type { DeviceAdminUnlock } from "./DeviceAdminUnlock";
 import type { DeviceAssign } from "./DeviceAssign";
 import type { DeviceMaintenance } from "./DeviceMaintenance";
+import type { DeviceMessage } from "./DeviceMessage";
 import type { DevicePlace } from "./DevicePlace";
 import type { DevicePower } from "./DevicePower";
 import type { DeviceRegister } from "./DeviceRegister";
@@ -177,6 +178,7 @@ export type IntentPayload =
   | ({ kind: "device.test_session.start" } & DeviceTestSessionStart)
   | ({ kind: "device.test_session.completed" } & DeviceTestSessionCompleted)
   | ({ kind: "device.screen" } & DeviceScreen)
+  | ({ kind: "device.message" } & DeviceMessage)
   | ({ kind: "device.power" } & DevicePower)
   | ({ kind: "player.create" } & PlayerCreate)
   | ({ kind: "player.update" } & PlayerUpdate)

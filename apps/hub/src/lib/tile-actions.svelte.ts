@@ -132,8 +132,12 @@ const job = (payload: IntentPayload, rest: Partial<Job> & Pick<Job, "done">): Jo
   ...rest,
 });
 
-export const screenJob = (device_id: string, action: PcAction, text?: string) =>
-  job({ kind: "device.screen", device_id, action, text }, { done: DONE[action] });
+export const screenJob = (device_id: string, action: PcAction) =>
+  job({ kind: "device.screen", device_id, action }, { done: DONE[action] });
+
+/** A staff message to one PC (Story 6.16); the kiosk acks it like any PC command. */
+export const messageJob = (device_id: string, text: string) =>
+  job({ kind: "device.message", scope: "seat", device_id, text }, { done: DONE.message });
 
 export const powerJob = (device_id: string, action: PcAction) =>
   job({ kind: "device.power", device_id, action }, { done: DONE[action] });
@@ -315,6 +319,13 @@ export const PAUSE_LABELS: Record<PauseReason, MessageKey> = {
 
 export const MESSAGE_MAX = 140;
 
+/** Whether `text` is a staff message: 1 to 140 characters once trimmed, none a control character. */
+export const messageValid = (text: string): boolean => {
+  const body = text.trim();
+  const length = [...body].length;
+  return length >= 1 && length <= MESSAGE_MAX && !/\p{Cc}/u.test(body);
+};
+
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
   kind === "session.start" || kind === "session.end"
     ? kind
@@ -347,7 +358,7 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
                           ? "credit.collect"
                           : kind === "wallet.topup" || kind === "wallet.topup.reverted"
                             ? "wallet.topup"
-                            : kind === "device.screen"
+                            : kind === "device.screen" || kind === "device.message"
                               ? "device.screen"
                               : kind === "device.power" || kind === "device.admin_unlock"
                                 ? "device.remote"

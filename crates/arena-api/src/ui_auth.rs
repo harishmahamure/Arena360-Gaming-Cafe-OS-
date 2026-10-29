@@ -2061,6 +2061,11 @@ async fn run_intent(
         arena_proto::IntentPayload::DeviceTestSessionStart(s) => Some(&s.device_id),
         arena_proto::IntentPayload::DeviceScreen(s) => Some(&s.device_id),
         arena_proto::IntentPayload::DevicePower(p) => Some(&p.device_id),
+        arena_proto::IntentPayload::DeviceMessage(m)
+            if m.scope == arena_proto::MessageScope::Seat =>
+        {
+            m.device_id.as_ref()
+        }
         _ => None,
     };
     if target.is_some_and(|id| !auth.presence.online(id)) {
@@ -2123,12 +2128,27 @@ async fn run_intent(
         return fail(e);
     }
     let command = match &intent.payload {
-        arena_proto::IntentPayload::DeviceScreen(s) => Some((
-            s.device_id.clone(),
-            s.action,
-            s.text.as_deref().map(|t| t.trim().to_owned()),
-        )),
+        arena_proto::IntentPayload::DeviceScreen(s) => Some((s.device_id.clone(), s.action, None)),
         arena_proto::IntentPayload::DevicePower(p) => Some((p.device_id.clone(), p.action, None)),
+        arena_proto::IntentPayload::DeviceMessage(m)
+            if m.scope == arena_proto::MessageScope::Seat =>
+        {
+            m.device_id.clone().map(|id| {
+                (
+                    id,
+                    arena_proto::PcAction::Message,
+                    Some(m.text.trim().to_owned()),
+                )
+            })
+        }
+        _ => None,
+    };
+    let message_all = match &intent.payload {
+        arena_proto::IntentPayload::DeviceMessage(m)
+            if m.scope == arena_proto::MessageScope::All =>
+        {
+            Some(m.text.trim().to_owned())
+        }
         _ => None,
     };
     let started = match &intent.payload {
@@ -2279,6 +2299,29 @@ async fn run_intent(
                 )
                 .await;
             }
+            let mut delivered = None;
+            if let Some(text) = message_all {
+                let reader = Arc::clone(&auth.reader);
+                let now = auth.clock.now_ms();
+                let live = tokio::task::spawn_blocking(move || reader.session_screens(now)).await;
+                let devices: Vec<String> = match live {
+                    Ok(Ok(screens)) => screens
+                        .into_iter()
+                        .map(|(device_id, _)| device_id)
+                        .collect(),
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e, "could not read the live sessions for a message");
+                        Vec::new()
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "the live sessions read failed for a message");
+                        Vec::new()
+                    }
+                };
+                let reached = auth.presence.push_message_all(&devices, &cmd_id, &text);
+                tracing::info!(cmd_id = %cmd_id, live = devices.len(), reached, "message to all pushed");
+                delivered = Some(u32::try_from(reached).unwrap_or(u32::MAX));
+            }
             if let Some((device_id, action, text)) = command {
                 let sent = auth.presence.push_pc_command(
                     &device_id,
@@ -2289,6 +2332,9 @@ async fn run_intent(
                         .then_some(arena_proto::LockReason::LockedByStaff),
                 );
                 tracing::info!(device_id = %device_id, cmd_id = %cmd_id, action = action.as_str(), sessions = sent, "pc command pushed");
+                if action == arena_proto::PcAction::Message {
+                    delivered = Some(u32::from(sent > 0));
+                }
             }
             let settling = settling.or_else(|| {
                 topping_up
@@ -2330,6 +2376,7 @@ async fn run_intent(
                 settled,
                 ended,
                 placed,
+                delivered,
             })
             .into_response()
         }
@@ -3912,13 +3959,24 @@ pub(crate) mod tests {
             .clone()
     }
 
-    fn screen_body(device: &str, action: arena_proto::PcAction, text: Option<&str>) -> Value {
+    fn screen_body(device: &str, action: arena_proto::PcAction) -> Value {
         json!({"intent": serde_json::to_value(intent_as(
             Actor { kind: ActorKind::Staff, id: "x".into() },
             IntentPayload::DeviceScreen(arena_proto::DeviceScreen {
                 device_id: device.into(),
                 action,
-                text: text.map(Into::into),
+            }),
+            None,
+        )).unwrap()})
+    }
+
+    fn message_body(scope: arena_proto::MessageScope, device: Option<&str>, text: &str) -> Value {
+        json!({"intent": serde_json::to_value(intent_as(
+            Actor { kind: ActorKind::Staff, id: "x".into() },
+            IntentPayload::DeviceMessage(arena_proto::DeviceMessage {
+                scope,
+                device_id: device.map(Into::into),
+                text: text.into(),
             }),
             None,
         )).unwrap()})
@@ -3930,7 +3988,7 @@ pub(crate) mod tests {
         let hub = hub().await;
         let device = registered_pc(&hub).await;
         let token = token_for(&hub, "counter", "c-pass").await;
-        let lock = screen_body(&device, PcAction::Lock, None);
+        let lock = screen_body(&device, PcAction::Lock);
         let (status, reply) =
             call(&hub, "POST", "/ui/intent", Some(&token), Some(lock.clone())).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
@@ -3973,11 +4031,137 @@ pub(crate) mod tests {
             .filter(|c| c.intent_kind == "device.screen")
             .count();
         assert_eq!(events, 1, "the replay wrote nothing");
-        let long = screen_body(&device, PcAction::Message, Some(&"x".repeat(141)));
-        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(long)).await;
+    }
+
+    #[tokio::test]
+    async fn a_seat_message_is_refused_offline_pushed_on_every_accept_and_never_when_invalid() {
+        use arena_proto::{EventFrame, FrameBody, HubEvent, MessageScope::Seat, PcAction};
+        let hub = hub().await;
+        let device = registered_pc(&hub).await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let msg = message_body(Seat, Some(&device), "  Closing at 11 ");
+        let (status, reply) =
+            call(&hub, "POST", "/ui/intent", Some(&token), Some(msg.clone())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(reply["message"], "the device is offline");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let _session = hub
+            .lan
+            .register(arena_proto::ClientClass::Paired, Some(device.clone()), tx);
+        assert!(rx.try_recv().is_err(), "an offline refusal pushed nothing");
+        let key = msg["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for _ in 0..2 {
+            let (status, reply) =
+                call(&hub, "POST", "/ui/intent", Some(&token), Some(msg.clone())).await;
+            assert_eq!(status, StatusCode::OK, "{reply}");
+            assert_eq!(reply["delivered"], 1);
+            let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+                panic!("a pushed message")
+            };
+            assert_eq!(
+                arena_proto::parse_frame(t.as_str()).unwrap().body,
+                FrameBody::Event(EventFrame {
+                    event: HubEvent::PcCommand {
+                        cmd_id: key.clone(),
+                        action: PcAction::Message,
+                        text: Some("Closing at 11".into()),
+                        reason: None
+                    }
+                })
+            );
+        }
+        let store = Store::open_reader(&hub.path).unwrap();
+        let sent = store
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.intent_kind == "device.message")
+            .count();
+        assert_eq!(sent, 1, "the replay wrote nothing");
+        for bad in ["", "   ", &"x".repeat(141), "a\u{7}b"] {
+            let body = message_body(Seat, Some(&device), bad);
+            let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+            assert_eq!(reply["field"], "text");
+        }
+        assert!(rx.try_recv().is_err(), "a refused message is never pushed");
+    }
+
+    #[tokio::test]
+    async fn a_message_to_all_reaches_only_online_pcs_with_a_live_session_and_counts_them() {
+        use arena_proto::MessageScope::All;
+        let hub = hub().await;
+        let token = token_for(&hub, "counter", "c-pass").await;
+        let (status, reply) = call(
+            &hub,
+            "POST",
+            "/ui/intent",
+            Some(&token),
+            Some(message_body(All, None, "nobody home")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["delivered"], 0);
+        let live = rated_pc(&hub, arena_core::devices::hash_token_secret("a").unwrap()).await;
+        let gone = rated_pc(&hub, arena_core::devices::hash_token_secret("b").unwrap()).await;
+        let free = rated_pc(&hub, arena_core::devices::hash_token_secret("c").unwrap()).await;
+        let (tx_live, mut rx_live) = tokio::sync::mpsc::channel(8);
+        let _a = hub.lan.register(
+            arena_proto::ClientClass::Paired,
+            Some(live.clone()),
+            tx_live,
+        );
+        let (tx_free, mut rx_free) = tokio::sync::mpsc::channel(8);
+        let _c = hub.lan.register(
+            arena_proto::ClientClass::Paired,
+            Some(free.clone()),
+            tx_free,
+        );
+        let (tx_gone, _rx_gone) = tokio::sync::mpsc::channel(8);
+        let gone_session = hub.lan.register(
+            arena_proto::ClientClass::Paired,
+            Some(gone.clone()),
+            tx_gone,
+        );
+        for d in [&live, &gone] {
+            let (status, reply) = call(
+                &hub,
+                "POST",
+                "/ui/intent",
+                Some(&token),
+                Some(start_body(d)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{reply}");
+        }
+        drop(gone_session);
+        while rx_live.try_recv().is_ok() {}
+        let body = message_body(All, None, "Closing at 11");
+        let key = body["intent"]["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["delivered"], 1);
+        assert!(rx_live.try_recv().is_ok());
+        assert!(
+            rx_free.try_recv().is_err(),
+            "a PC with no session gets nothing"
+        );
+        assert!(
+            hub.lan.ack_pc(&live, &key),
+            "its ack is tracked under its own device"
+        );
+        assert!(!hub.lan.ack_pc(&free, &key));
+        let invalid = message_body(All, None, &"x".repeat(141));
+        let (status, reply) = call(&hub, "POST", "/ui/intent", Some(&token), Some(invalid)).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
         assert_eq!(reply["field"], "text");
-        assert!(rx.try_recv().is_err(), "a refused command is never pushed");
+        assert!(rx_live.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -4063,7 +4247,7 @@ pub(crate) mod tests {
                 owner(),
                 IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
                     id: None,
-                    name: "PCs".into(),
+                    name: format!("PCs {device}"),
                     group_kind: "pc".into(),
                     colour: "teal".into(),
                     sort_order: 1,

@@ -298,6 +298,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                         crate::session::sync(ctx, session, true);
                         if fresh {
                             crate::volume::reset_for_session(ctx);
+                            ctx.pc.clear_notes();
                         }
                         ack(client, &cmd_id).await;
                     }

@@ -14,7 +14,7 @@
 //! - A toast the process enforcer raises (`player.app.blocked`) is forwarded to the current app
 //!   as IPC `toast`; with no app connected it is dropped (the kill is still reported).
 //! - Requests: `log{level, code, detail}` queues a `kiosk.log`; `hub_status` answers the link
-//!   state; `theme` answers `{hc}`; `pc_dismiss` clears the staff message banner; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
+//!   state; `theme` answers `{hc}`; `messages_read` marks the session's staff messages read; `admin_exit_status` answers `{retry_after_s?, until?}` (a paused PIN prompt and a
 //!   running exit); `discover`, `probe_ip{ip}` and `select_hub{addr, fingerprint}` find and
 //!   choose the Hub ([`crate::discovery`]). Anything else is `UNSUPPORTED`. The app gets
 //!   nothing else: no Hub socket, no token.
@@ -28,6 +28,10 @@
 //! - `player_plans`, `player_start{choice}` and `player_logout` (the plan picker, Story 6.9) are
 //!   forwarded by [`crate::player_session`] the same way. The app never names a player: the Hub
 //!   remembers who logged in on this PC.
+//! - Staff messages (Story 6.16) are kept by the service for the session on screen (newest first,
+//!   with a read flag, [`crate::pc::PcState`]) and sent as IPC `staff_message`: fresh as they arrive,
+//!   replayed (not fresh) on every new connection. `messages_read` marks them read. The session end
+//!   and a new session clear them.
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
 //!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
 
@@ -136,6 +140,7 @@ pub(crate) async fn run<S: IpcServer>(
     // What the current connection was last told, so an update carries only what changed.
     let mut told = crate::attract::Shown::default();
     let mut screen = ctx.pc.screen.subscribe();
+    let mut notes = ctx.pc.notes.subscribe();
     let mut current: Option<Current> = None;
     let mut held = false;
     loop {
@@ -168,6 +173,9 @@ pub(crate) async fn run<S: IpcServer>(
                         let shown = screen.borrow_and_update().clone();
                         if shown != crate::pc::Screen::default() {
                             let _ = out.try_send(screen_message(shown));
+                        }
+                        for note in ctx.pc.staff_notes() {
+                            let _ = out.try_send(staff_message(note, false));
                         }
                         dog.on_connected(now_ms());
                         tracing::info!(conn = id, "app connected");
@@ -272,6 +280,15 @@ pub(crate) async fn run<S: IpcServer>(
                     let _ = c.out.try_send(msg);
                 }
             }
+            note = notes.recv() => match note {
+                Ok(note) => {
+                    if let Some(c) = &current {
+                        let _ = c.out.try_send(staff_message(note, true));
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            },
             toast = toasts.recv() => match toast {
                 Ok(key) => {
                     if let Some(c) = &current {
@@ -319,11 +336,20 @@ fn send_attract(
     }
 }
 
+fn staff_message(n: crate::pc::StaffNote, fresh: bool) -> IpcMsg {
+    IpcMsg::StaffMessage {
+        id: n.id,
+        text: n.text,
+        at: n.at,
+        read: n.read,
+        fresh,
+    }
+}
+
 fn screen_message(s: crate::pc::Screen) -> IpcMsg {
     IpcMsg::PcScreen {
         locked: s.locked,
         reason: s.reason,
-        message: s.message,
         session: s.session.map(|v| arena_kiosk_core::ipc::PcSession {
             device_name: v.device_name,
             elapsed_ms: v.started.elapsed().as_millis() as u64,
@@ -421,7 +447,7 @@ struct LogBody {
     detail: String,
 }
 
-fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError> {
+pub(crate) fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError> {
     match kind {
         "log" => {
             let b: LogBody = serde_json::from_value(body)
@@ -438,8 +464,8 @@ fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError>
             Ok(Value::Object(Default::default()))
         }
         "hub_status" => Ok(serde_json::json!({ "state": *ctx.hub_state.borrow() })),
-        "pc_dismiss" => {
-            crate::pc::dismiss(ctx);
+        "messages_read" => {
+            ctx.pc.read_all();
             Ok(Value::Object(Default::default()))
         }
         "theme" => Ok(serde_json::json!({ "hc": *ctx.theme.borrow() })),

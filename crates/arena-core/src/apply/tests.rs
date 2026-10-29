@@ -2840,11 +2840,22 @@ mod rbac_matrix {
         }
     }
 
-    fn screen(device: &str, action: arena_proto::PcAction, text: Option<&str>) -> IntentPayload {
+    fn screen(device: &str, action: arena_proto::PcAction) -> IntentPayload {
         IntentPayload::DeviceScreen(arena_proto::DeviceScreen {
             device_id: device.into(),
             action,
-            text: text.map(Into::into),
+        })
+    }
+
+    fn message(
+        scope: arena_proto::MessageScope,
+        device: Option<&str>,
+        text: &str,
+    ) -> IntentPayload {
+        IntentPayload::DeviceMessage(arena_proto::DeviceMessage {
+            scope,
+            device_id: device.map(Into::into),
+            text: text.into(),
         })
     }
 
@@ -2857,21 +2868,18 @@ mod rbac_matrix {
 
     #[tokio::test]
     async fn a_counter_locks_and_messages_a_pc_and_the_audit_row_names_the_command() {
-        use arena_proto::PcAction::{Lock, Message};
+        use arena_proto::MessageScope::Seat;
+        use arena_proto::PcAction::Lock;
         let c = crew().await;
         let d = pc(&c).await;
         let lock =
             c.f.writer
-                .submit_intent(pc_cmd(&c, screen(&d, Lock, None), None))
+                .submit_intent(pc_cmd(&c, screen(&d, Lock), None))
                 .await
                 .unwrap();
         assert_eq!(lock.changes[0].tbl, "device_events");
         c.f.writer
-            .submit_intent(pc_cmd(
-                &c,
-                screen(&d, Message, Some(&"é".repeat(140))),
-                None,
-            ))
+            .submit_intent(pc_cmd(&c, message(Seat, Some(&d), &"é".repeat(140)), None))
             .await
             .unwrap();
         let events = reopen(&c.f).rows(Table::DeviceEvents).unwrap();
@@ -2884,22 +2892,28 @@ mod rbac_matrix {
             ]
         );
         let change = reopen(&c.f).changes().unwrap().pop().unwrap();
-        assert_eq!(change.intent_kind, "device.screen");
+        assert_eq!(change.intent_kind, "device.message");
         assert_eq!(change.actor_id, c.counter);
     }
 
     #[tokio::test]
     async fn a_message_is_one_to_140_characters_and_a_pc_is_required() {
+        use arena_proto::MessageScope::{All, Seat};
         use arena_proto::PcAction::{Lock, Message, Restart};
         let c = crew().await;
         let d = pc(&c).await;
         for (body, field) in [
-            (screen(&d, Message, None), "text"),
-            (screen(&d, Message, Some("  ")), "text"),
-            (screen(&d, Message, Some(&"x".repeat(141))), "text"),
-            (screen(&d, Lock, Some("hi")), "text"),
-            (screen(&d, Restart, None), "action"),
-            (screen("nope", Lock, None), "device_id"),
+            (message(Seat, Some(&d), ""), "text"),
+            (message(Seat, Some(&d), "  "), "text"),
+            (message(Seat, Some(&d), &"x".repeat(141)), "text"),
+            (message(Seat, Some(&d), "ab"), "text"),
+            (message(Seat, None, "hi"), "device_id"),
+            (message(All, Some(&d), "hi"), "device_id"),
+            (message(All, None, ""), "text"),
+            (message(Seat, Some("nope"), "hi"), "device_id"),
+            (screen(&d, Message), "action"),
+            (screen(&d, Restart), "action"),
+            (screen("nope", Lock), "device_id"),
         ] {
             let e = expect_err(&c.f, pc_cmd(&c, body, None)).await;
             assert_eq!(
@@ -2907,11 +2921,21 @@ mod rbac_matrix {
                 (ErrorCode::ValidationFailed, Some(field))
             );
         }
-        let mut with_rev = pc_cmd(&c, screen(&d, Lock, None), None);
+        let mut with_rev = pc_cmd(&c, message(Seat, Some(&d), "hi"), None);
         with_rev.base_rev = Some(1);
         let e = expect_err(&c.f, with_rev).await;
         assert_eq!(e.field.as_deref(), Some("base_rev"));
         assert!(reopen(&c.f).rows(Table::DeviceEvents).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_message_needs_device_screen_so_the_kitchen_role_is_refused() {
+        use arena_proto::MessageScope::All;
+        let c = crew().await;
+        let _d = pc(&c).await;
+        let intent = as_actor(staff_actor(&c.kitchen), message(All, None, "hi"), None);
+        let e = expect_err(&c.f, intent).await;
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
     }
 
     #[tokio::test]

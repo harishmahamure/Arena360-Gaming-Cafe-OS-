@@ -13,13 +13,14 @@
     onAttract,
     onHudExpand,
     onPcScreen,
+    onStaffMessage,
     onTheme,
     onToast,
     TOAST_KINDS,
     type PcScreen,
     type ToastKey,
   } from "./bridge";
-  import { clock, hasContent, live, raise, type HudToast } from "./hud";
+  import { clock, hasContent, live, raise, staffToastKey, type HudToast } from "./hud";
 
   // The overlay HUD (Story 6.14). It is its own always-on-top window: solid, never translucent,
   // and it never takes keyboard focus except while the player has expanded it with Ctrl+Shift+E.
@@ -114,6 +115,12 @@
     chime(kind);
   }
 
+  /** A staff message: an info toast with its words (Story 6.16). A replay is not raised again. */
+  function raiseMessage(id: number, text: string) {
+    toasts = raise(toasts, staffToastKey(id), "info", performance.now(), nextId++, text);
+    chime("info");
+  }
+
   async function expand() {
     if (!shown) return;
     expanded = true;
@@ -178,6 +185,11 @@
         }),
       );
       add(await onToast(raiseToast));
+      add(
+        await onStaffMessage((m) => {
+          if (m.fresh) raiseMessage(m.id, m.text);
+        }),
+      );
       add(await onHudExpand(() => void expand()));
       add(
         await onAttract((s) => {
@@ -216,7 +228,9 @@
   <div class="toasts" aria-live="polite" data-testid="toasts">
     {#each toasts as toast (toast.id)}
       <div class="toast" data-kind={toast.kind} data-testid="toast">
-        <p class="type-kiosk-body">{t(toast.key as MessageKey)}</p>
+        <p class="type-kiosk-body" data-testid="toast-text">
+          {toast.text ?? t(toast.key as MessageKey)}
+        </p>
         <button
           type="button"
           class="dismiss type-kiosk-label"

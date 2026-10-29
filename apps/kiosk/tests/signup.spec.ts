@@ -555,7 +555,6 @@ test("a session starting leaves the plan picker for the session screen", async (
   await emit(page, "pc-screen", {
     locked: false,
     reason: null,
-    message: null,
     session: {
       device_name: "PC 7",
       elapsed_ms: 1000,

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use arena_proto::{LockReason, PcAction};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
 use crate::queue::QueueDb;
@@ -10,12 +10,13 @@ use crate::runtime::Ctx;
 
 const LOCKED_KEY: &str = "pc.locked";
 const SEEN_MAX: usize = 64;
+/// The most staff messages one session keeps; the oldest go first.
+pub const INBOX_MAX: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Screen {
     pub locked: bool,
     pub reason: Option<LockReason>,
-    pub message: Option<String>,
     pub session: Option<ScreenSession>,
 }
 
@@ -39,6 +40,24 @@ pub struct ScreenSession {
     pub hold: bool,
 }
 
+/// One staff message of the session on screen (Story 6.16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaffNote {
+    /// This service's own counter, so the app can tell a replay from a new message.
+    pub id: u64,
+    pub text: String,
+    /// When it arrived, UTC ms.
+    pub at: i64,
+    pub read: bool,
+}
+
+#[derive(Debug, Default)]
+struct Inbox {
+    last_id: u64,
+    /// Newest first.
+    notes: Vec<StaffNote>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Ack,
@@ -50,6 +69,9 @@ pub struct PcState {
     pub screen: watch::Sender<Screen>,
     pub deadline: watch::Sender<Option<Instant>>,
     seen: Mutex<VecDeque<String>>,
+    inbox: Mutex<Inbox>,
+    /// Each message as it arrives (the supervisor forwards it as a fresh `staff_message`).
+    pub notes: broadcast::Sender<StaffNote>,
 }
 
 impl PcState {
@@ -63,7 +85,50 @@ impl PcState {
             .0,
             deadline: watch::channel(None).0,
             seen: Mutex::default(),
+            inbox: Mutex::default(),
+            notes: broadcast::channel(16).0,
         }
+    }
+
+    fn inbox(&self) -> std::sync::MutexGuard<'_, Inbox> {
+        self.inbox.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Keeps a message at the front of the list and tells the supervisor.
+    fn keep(&self, text: String, at: i64) -> StaffNote {
+        let note = {
+            let mut inbox = self.inbox();
+            inbox.last_id += 1;
+            let note = StaffNote {
+                id: inbox.last_id,
+                text,
+                at,
+                read: false,
+            };
+            inbox.notes.insert(0, note.clone());
+            inbox.notes.truncate(INBOX_MAX);
+            note
+        };
+        let _ = self.notes.send(note.clone());
+        note
+    }
+
+    /// The session's messages, oldest first.
+    pub fn staff_notes(&self) -> Vec<StaffNote> {
+        self.inbox().notes.iter().rev().cloned().collect()
+    }
+
+    /// Marks every message read; whether any was unread.
+    pub fn read_all(&self) -> bool {
+        let mut inbox = self.inbox();
+        let unread = inbox.notes.iter().any(|n| !n.read);
+        inbox.notes.iter_mut().for_each(|n| n.read = true);
+        unread
+    }
+
+    /// Forgets the session's messages (it ended, or a new one begins).
+    pub fn clear_notes(&self) {
+        self.inbox().notes.clear();
     }
 
     fn first_time(&self, cmd_id: &str) -> bool {
@@ -120,6 +185,9 @@ fn apply_lock(ctx: &Ctx, locked: bool, asked: Option<LockReason>, shown: Option<
     if ends || (locked && asked == Some(LockReason::Paused)) {
         ctx.pc.deadline.send_replace(None);
     }
+    if ends {
+        ctx.pc.clear_notes();
+    }
     ctx.pc.screen.send_if_modified(|s| {
         let changed = s.locked != locked || s.reason != shown || (ends && s.session.is_some());
         s.locked = locked;
@@ -158,20 +226,20 @@ pub fn apply(
         PcAction::Lock => set_locked(ctx, true, reason),
         PcAction::Unlock => set_locked(ctx, false, None),
         PcAction::Message => {
-            let message = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
-            ctx.pc.screen.send_modify(|s| s.message = message);
+            let text = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+            let in_session = ctx.pc.screen.borrow().session.is_some();
+            match text {
+                Some(text) if in_session => {
+                    ctx.pc.keep(text, ctx.clock.now_ms());
+                }
+                _ => tracing::info!(cmd_id, "a staff message with no session on screen; dropped"),
+            }
         }
         PcAction::CleanupRetry => crate::cleanup::retry(ctx),
         PcAction::CleanupChecked => crate::cleanup::checked(ctx),
         PcAction::Restart | PcAction::Shutdown => return Step::AckThenPower(action),
     }
     Step::Ack
-}
-
-pub fn dismiss(ctx: &Ctx) {
-    ctx.pc
-        .screen
-        .send_if_modified(|s| s.message.take().is_some());
 }
 
 #[cfg(test)]
@@ -192,6 +260,41 @@ mod tests {
             assert!(s.first_time(&format!("n{i}")));
         }
         assert!(s.first_time("a"), "the oldest ids age out");
+    }
+
+    #[test]
+    fn messages_keep_newest_first_read_once_and_clear() {
+        let s = state();
+        let a = s.keep("one".into(), 10);
+        let b = s.keep("two".into(), 20);
+        assert_eq!((a.id, b.id), (1, 2));
+        let texts = |s: &PcState| {
+            s.staff_notes()
+                .into_iter()
+                .map(|n| n.text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&s), ["one", "two"], "replayed oldest first");
+        assert!(s.read_all());
+        assert!(!s.read_all(), "nothing left unread");
+        assert!(s.staff_notes().iter().all(|n| n.read));
+        let c = s.keep("three".into(), 30);
+        assert!(!c.read && c.id == 3);
+        s.clear_notes();
+        assert!(s.staff_notes().is_empty());
+        assert_eq!(s.keep("four".into(), 40).id, 4, "ids keep counting");
+    }
+
+    #[test]
+    fn the_inbox_keeps_only_the_newest_messages() {
+        let s = state();
+        for i in 0..INBOX_MAX + 5 {
+            s.keep(format!("m{i}"), i as i64);
+        }
+        let notes = s.staff_notes();
+        assert_eq!(notes.len(), INBOX_MAX);
+        assert_eq!(notes[0].text, "m5");
+        assert_eq!(notes[INBOX_MAX - 1].text, format!("m{}", INBOX_MAX + 4));
     }
 
     #[test]

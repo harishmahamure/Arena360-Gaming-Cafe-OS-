@@ -16,4 +16,8 @@ export type UiIntentResult = {
    * For `order.place`: the order the products went on, for the Undo toast.
    */
   placed?: PlaceOutcome;
+  /**
+   * For `device.message`: how many PCs the message was pushed to.
+   */
+  delivered?: number;
 };

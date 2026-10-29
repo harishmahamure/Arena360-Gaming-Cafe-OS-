@@ -138,6 +138,10 @@ pub struct UiIntentResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub placed: Option<crate::pos::PlaceOutcome>,
+    /// For `device.message`: how many PCs the message was pushed to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delivered: Option<u32>,
 }
 
 /// Most intents one elevation ticket may cover.

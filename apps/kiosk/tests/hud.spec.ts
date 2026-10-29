@@ -9,6 +9,7 @@ import {
   lifetime,
   live,
   raise,
+  staffToastKey,
   type HudToast,
 } from "../src/lib/hud";
 
@@ -110,7 +111,6 @@ const emit = (page: Page, event: string, payload: unknown = null) =>
 const shown = (session: Record<string, unknown> | null, over: Record<string, unknown> = {}) => ({
   locked: false,
   reason: null,
-  message: null,
   session: session && { device_name: "PC 7", elapsed_ms: 0, ...session },
   ...over,
 });
@@ -390,4 +390,14 @@ test("the clock reads H:MM:SS and never goes below zero", () => {
   expect(clock(3725)).toBe("1:02:05");
   expect(clock(59.9)).toBe("0:00:59");
   expect(clock(-5)).toBe("0:00:00");
+});
+
+test("a staff message toast carries its text under a key of its own, so two stack", () => {
+  const one = raise([], staffToastKey(1), "info", 0, 1, "Closing at 11");
+  const two = raise(one, staffToastKey(2), "info", 10, 2, "Closing at 11");
+  expect(two.map((x) => x.text)).toEqual(["Closing at 11", "Closing at 11"]);
+  expect(two.map((x) => x.key)).toEqual(["staff:1", "staff:2"]);
+  expect(two[0].until).toBe(INFO_TOAST_MS);
+  expect(live(two, INFO_TOAST_MS + 1).map((x) => x.id)).toEqual([2]);
+  expect("text" in raise([], "a", "info", 0, 1)).toBe(false);
 });

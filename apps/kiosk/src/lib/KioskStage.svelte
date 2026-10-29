@@ -10,7 +10,6 @@
     applyTheme,
     currentPcScreen,
     currentTheme,
-    dismissPcMessage,
     onPcScreen,
     onTheme,
     adminExitStatus,
@@ -50,7 +49,6 @@
    * only the countdown.
    */
   let locked = $state(false);
-  let message: string | null = $state(null);
   /** The branch logo for the lock screen's `logo-slot` (a `data:` URI; the mark when none). */
   let logo: string | null = $state(null);
   let brokenLogo: string | null = $state(null);
@@ -130,7 +128,6 @@
           screened = true;
           locked = s.locked;
           reason = s.reason;
-          message = s.message;
         }),
       );
       add(await onAttract((s) => (logo = s.logo)));
@@ -156,7 +153,6 @@
       if (screen && !screened) {
         locked = screen.locked;
         reason = screen.reason;
-        message = screen.message;
       }
       const hc = await currentTheme();
       if (hc !== null && !themed) applyTheme(hc);
@@ -225,31 +221,6 @@
     <span class="pill type-kiosk-label">{t("player.hub.reconnecting")}</span>
   {:else if hub === "token_rejected"}
     <span class="pill type-kiosk-label">{t("player.hub.token_rejected")}</span>
-  {/if}
-</div>
-
-<!--
-  Persistent, polite and never focus-stealing: announced through aria-live, focus stays where
-  it was, and only its button dismisses it. The region itself lets clicks through.
--->
-<div class="toasts" aria-live="polite" data-testid="toasts">
-  {#if message}
-    <div class="toast" data-testid="pc-message">
-      <div>
-        <p class="type-kiosk-label">{t("player.pc.message_title")}</p>
-        <p class="type-kiosk-body">{message}</p>
-      </div>
-      <button
-        type="button"
-        class="dismiss type-kiosk-label"
-        onclick={() => {
-          message = null;
-          dismissPcMessage();
-        }}
-      >
-        {t("common.dismiss")}
-      </button>
-    </div>
   {/if}
 </div>
 
@@ -328,63 +299,6 @@
     top: var(--space-kiosk-margin);
     right: var(--space-kiosk-margin);
     pointer-events: none;
-  }
-
-  .toasts {
-    position: fixed;
-    z-index: 15;
-    right: 0;
-    bottom: var(--space-kiosk-margin);
-    left: 0;
-    display: flex;
-    justify-content: center;
-    pointer-events: none;
-  }
-
-  .toast {
-    display: flex;
-    align-items: center;
-    gap: var(--space-5);
-    max-width: min(48rem, calc(100vw - 2 * var(--space-kiosk-margin)));
-    padding: var(--space-4) var(--space-5);
-    border: 2px solid var(--hud-toast-title);
-    border-radius: var(--radius-md);
-    background-color: var(--hud-toast-background);
-    box-shadow: var(--elevation-toast);
-    color: var(--hud-toast-foreground);
-    pointer-events: auto;
-  }
-
-  .toast p {
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .dismiss {
-    flex: none;
-    min-height: 48px;
-    padding: var(--space-2) var(--space-5);
-    border: 2px solid var(--hud-toast-title);
-    border-radius: var(--radius-full);
-    background: transparent;
-    color: var(--hud-toast-foreground);
-    cursor: pointer;
-  }
-
-  .dismiss:focus-visible {
-    outline: 3px solid var(--hud-toast-title);
-    outline-offset: 2px;
-  }
-
-  /* HC: the shared 4px focus ring and 2px white outline, never the toast's own colours. */
-  :global([data-theme="hc"]) .dismiss {
-    outline: 2px solid var(--text);
-    outline-offset: 0;
-  }
-
-  :global([data-theme="hc"]) .dismiss:focus-visible {
-    outline: 4px solid var(--focus-ring);
-    outline-offset: 2px;
   }
 
   .pill {

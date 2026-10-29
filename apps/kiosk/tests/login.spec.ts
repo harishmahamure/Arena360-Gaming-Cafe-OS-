@@ -524,7 +524,6 @@ test("a session starting leaves the plan picker for the session screen, forgetti
   await emit(page, "pc-screen", {
     locked: false,
     reason: null,
-    message: null,
     session: {
       device_name: "PC 7",
       elapsed_ms: 1000,
@@ -538,7 +537,7 @@ test("a session starting leaves the plan picker for the session screen, forgetti
   await expect(page.getByTestId("attract")).toHaveCount(0);
   await expect(page.getByTestId("plan-picker")).toHaveCount(0);
   // Back to idle: the player was forgotten with the screen.
-  await emit(page, "pc-screen", { locked: false, reason: null, message: null, session: null });
+  await emit(page, "pc-screen", { locked: false, reason: null, session: null });
   await expect(page.getByTestId("attract")).toBeVisible();
   await page.keyboard.press("x");
   await expect(page.getByTestId("login-form")).toBeVisible();

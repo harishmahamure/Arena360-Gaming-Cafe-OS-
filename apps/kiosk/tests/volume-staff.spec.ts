@@ -46,6 +46,8 @@ async function openWithShell(page: Page, options: Options = {}) {
               return opts.callOk === false
                 ? { ok: false, code: "HUB_SLOW", body: null }
                 : { ok: true, body: null };
+            case commands.staffMessages:
+              return [];
             case commands.pcScreen:
             case commands.attract:
             case commands.hubStatus:
@@ -83,7 +85,6 @@ async function openWithShell(page: Page, options: Options = {}) {
       {
         locked: false,
         reason: null,
-        message: null,
         session: { device_name: "PC 7", elapsed_ms: 0, username: "asha", remaining_ms: 3_600_000 },
       },
     ),
@@ -94,19 +95,22 @@ async function openWithShell(page: Page, options: Options = {}) {
 const calls = (page: Page) =>
   page.evaluate(() => (window as unknown as { __calls: unknown[] }).__calls);
 
-test("the right cluster reads volume, a bell slot, Call staff, the time chip, then the account", async ({
+test("the right cluster reads volume, the messages bell, Call staff, the time chip, then the account", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await openWithShell(page);
   const x = async (id: string) => (await page.getByTestId(id).boundingBox())!.x;
   const volume = await x("volume-control");
+  const bell = await x("messages-bell");
   const call = await x("call-staff-button");
-  expect(volume).toBeLessThan(call);
+  expect(volume).toBeLessThan(bell);
+  expect(bell).toBeLessThan(call);
   expect(call).toBeLessThan(await x("time-chip"));
   expect(await x("time-chip")).toBeLessThan(await x("account-chip"));
-  // The bell's place is kept free between the volume and Call staff.
-  await expect(page.getByTestId("messages-bell-slot")).toHaveCount(1);
+  expect((await page.getByTestId("messages-bell").boundingBox())!.height).toBeGreaterThanOrEqual(
+    44,
+  );
   const button = page.getByTestId("call-staff-button");
   await expect(button).toContainText(en["player.call_staff.label"]);
   expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);

@@ -3,8 +3,8 @@ use super::stock::{intent, owner, staff};
 use super::*;
 use crate::rbac::{ROLE_COUNTER, ROLE_KITCHEN};
 use arena_proto::{
-    ClientClass, DeviceAssign, DeviceKind, DeviceMaintenance, DevicePower, DeviceRegister,
-    GroupUpsert, PcAction, RateUpsert, SessionMode, SessionStart,
+    ClientClass, DeviceAssign, DeviceKind, DeviceMaintenance, DeviceMessage, DevicePower,
+    DeviceRegister, GroupUpsert, MessageScope, PcAction, RateUpsert, SessionMode, SessionStart,
 };
 
 pub(super) fn text(row: &Row, col: &str) -> String {
@@ -3766,4 +3766,46 @@ async fn a_ninety_day_report_over_a_busy_branch_builds_inside_two_seconds() {
         (43_001, 43_000 * 45 + 41)
     );
     assert!(took.as_secs_f64() < 2.0, "two reports took {took:?}");
+}
+
+fn message_all(text: &str) -> IntentPayload {
+    IntentPayload::DeviceMessage(DeviceMessage {
+        scope: MessageScope::All,
+        device_id: None,
+        text: text.into(),
+    })
+}
+
+#[tokio::test]
+async fn a_message_to_all_is_audited_once_for_each_pc_with_a_live_session() {
+    let f = bootstrapped().await;
+    let a = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;
+    let b = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;
+    let idle = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;
+    start(&f, &a, None).await.unwrap();
+    start(&f, &b, None).await.unwrap();
+    let sent = submit(&f, owner(), message_all("  Closing at 11 "))
+        .await
+        .unwrap();
+    assert_eq!(sent.changes.len(), 2);
+    let events = reopen(&f).rows(Table::DeviceEvents).unwrap();
+    let mut devices: Vec<String> = events.iter().map(|e| text(e, "device_id")).collect();
+    devices.sort();
+    let mut want = vec![a, b];
+    want.sort();
+    assert_eq!(devices, want);
+    assert!(!devices.contains(&idle));
+    for e in &events {
+        assert_eq!(text(e, "code"), "pc.message");
+        assert_eq!(text(e, "detail"), "Closing at 11");
+    }
+}
+
+#[tokio::test]
+async fn a_message_to_all_with_no_session_is_accepted_and_writes_nothing() {
+    let f = bootstrapped().await;
+    let _idle = pc(&f, DeviceKind::Pc, "pc", Some(100)).await;
+    let sent = submit(&f, owner(), message_all("hello")).await.unwrap();
+    assert!(sent.changes.is_empty());
+    assert!(reopen(&f).rows(Table::DeviceEvents).unwrap().is_empty());
 }

@@ -7,7 +7,7 @@ use crate::actor::{Actor, ElevatedBy};
 use crate::admin::{DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock};
 use crate::kiosk::KioskLog;
 use crate::operating::AdsConsentSet;
-use crate::pc_command::{DevicePower, DeviceScreen};
+use crate::pc_command::{DeviceMessage, DevicePower, DeviceScreen};
 use crate::permission::{Permission, Requirement};
 use crate::printer::PrinterStatusSet;
 use crate::process::{KioskCleanupFailed, KioskProcessBlocked};
@@ -224,6 +224,8 @@ pub enum IntentKind {
     DeviceTestSessionCompleted,
     #[serde(rename = "device.screen")]
     DeviceScreen,
+    #[serde(rename = "device.message")]
+    DeviceMessage,
     #[serde(rename = "device.power")]
     DevicePower,
     #[serde(rename = "player.create")]
@@ -333,7 +335,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 106] = [
+    pub const ALL: [IntentKind; 107] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -403,6 +405,7 @@ impl IntentKind {
         Self::DeviceTestSessionStart,
         Self::DeviceTestSessionCompleted,
         Self::DeviceScreen,
+        Self::DeviceMessage,
         Self::DevicePower,
         Self::PlayerCreate,
         Self::PlayerUpdate,
@@ -514,6 +517,7 @@ impl IntentKind {
             Self::DeviceTestSessionStart => "device.test_session.start",
             Self::DeviceTestSessionCompleted => "device.test_session.completed",
             Self::DeviceScreen => "device.screen",
+            Self::DeviceMessage => "device.message",
             Self::DevicePower => "device.power",
             Self::PlayerCreate => "player.create",
             Self::PlayerUpdate => "player.update",
@@ -590,6 +594,7 @@ impl IntentKind {
             | Self::DeviceTestSessionStart
             | Self::DeviceTestSessionCompleted
             | Self::DeviceScreen
+            | Self::DeviceMessage
             | Self::DevicePower
             | Self::RateUpsert => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
@@ -693,7 +698,7 @@ impl IntentKind {
             | Self::DeviceTestSessionStart
             | Self::RateUpsert => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke | Self::DevicePower => Requirement::Perm(Permission::DeviceRemote),
-            Self::DeviceScreen => Requirement::Perm(Permission::DeviceScreen),
+            Self::DeviceScreen | Self::DeviceMessage => Requirement::Perm(Permission::DeviceScreen),
             Self::DeviceVersionReported
             | Self::LicenceApply
             | Self::AdImpressionRecorded
@@ -875,6 +880,7 @@ impl IntentKind {
             | Self::DeviceTestSessionStart
             | Self::DeviceTestSessionCompleted
             | Self::DeviceScreen
+            | Self::DeviceMessage
             | Self::DevicePower
             | Self::PlayerCreate
             | Self::ImportPlayers
@@ -1474,6 +1480,8 @@ pub enum IntentPayload {
     DeviceTestSessionCompleted(DeviceTestSessionCompleted),
     #[serde(rename = "device.screen")]
     DeviceScreen(DeviceScreen),
+    #[serde(rename = "device.message")]
+    DeviceMessage(DeviceMessage),
     #[serde(rename = "device.power")]
     DevicePower(DevicePower),
     #[serde(rename = "player.create")]
@@ -1622,6 +1630,7 @@ impl IntentPayload {
             Self::DeviceTestSessionStart(_) => IntentKind::DeviceTestSessionStart,
             Self::DeviceTestSessionCompleted(_) => IntentKind::DeviceTestSessionCompleted,
             Self::DeviceScreen(_) => IntentKind::DeviceScreen,
+            Self::DeviceMessage(_) => IntentKind::DeviceMessage,
             Self::DevicePower(_) => IntentKind::DevicePower,
             Self::PlayerCreate(_) => IntentKind::PlayerCreate,
             Self::PlayerUpdate(_) => IntentKind::PlayerUpdate,
@@ -1994,7 +2003,7 @@ mod tests {
                 "device.revoke" | "device.admin_unlock" | "device.power" => {
                     Requirement::Perm(Permission::DeviceRemote)
                 }
-                "device.screen" => Requirement::Perm(Permission::DeviceScreen),
+                "device.screen" | "device.message" => Requirement::Perm(Permission::DeviceScreen),
                 "library.upsert"
                 | "library.delete"
                 | "library.dismiss"

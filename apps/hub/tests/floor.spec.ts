@@ -1,10 +1,15 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { HubSnapshot } from "@arena/ui/generated";
+import type { HubSnapshot, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { CORS, HUB, MANAGER, device, json, snapshot } from "./floor-fixture";
 
-async function open(page: Page, snap: () => HubSnapshot, gate?: () => boolean) {
+async function open(
+  page: Page,
+  snap: () => HubSnapshot,
+  gate?: () => boolean,
+  staff: SessionStaff = MANAGER,
+) {
   let streamed = false;
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "manager-token"));
   await page.route(`${HUB}/**`, async (route) => {
@@ -14,7 +19,7 @@ async function open(page: Page, snap: () => HubSnapshot, gate?: () => boolean) {
       case "/ui/snapshot":
         return json(route, snap());
       case "/ui/me":
-        return json(route, MANAGER);
+        return json(route, staff);
       case "/ui/settings":
         return json(route, []);
       case "/ui/events":
@@ -221,4 +226,103 @@ test("axe: a collapsed zone has no serious violations", async ({ page }) => {
   expect(
     results.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),
   ).toEqual([]);
+});
+
+const COUNTER: SessionStaff = {
+  staff_id: "01JCOUNTER0000000000000000",
+  display_name: "Counter",
+  role_name: "Counter",
+  permissions: ["device.screen", "session.start"],
+};
+
+type Sent = { payload: Record<string, unknown>; key: string };
+
+async function messaging(page: Page, staff: SessionStaff, replies: Array<number | "abort">) {
+  await open(page, () => snapshot([device(1, {}), device(2, {})]), undefined, staff);
+  const sent: Sent[] = [];
+  await page.route(`${HUB}/ui/intent`, async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
+    const body = req.postDataJSON() as {
+      intent: { payload: Record<string, unknown>; idempotency_key: string };
+    };
+    sent.push({ payload: body.intent.payload, key: body.intent.idempotency_key });
+    const reply = replies[Math.min(sent.length, replies.length) - 1];
+    if (reply === "abort") return route.abort();
+    return json(route, { applied: { intent_id: "I", changes: [] }, delivered: reply });
+  });
+  return sent;
+}
+
+test("Message all PCs sends one text to everyone in session and says how many got it", async ({
+  page,
+}) => {
+  const sent = await messaging(page, COUNTER, [3]);
+  await page.getByRole("button", { name: en["hub.floor.message_all"], exact: true }).click();
+  const form = page.getByTestId("message-all-form");
+  await form.getByLabel(en["hub.floor.message_all_label"]).fill("  Closing at 11  ");
+  await form.getByRole("button", { name: en["hub.floor.message_all_send"] }).click();
+  await expect(page.getByTestId("message-all-result")).toHaveText("Sent to 3 PCs");
+  expect(sent).toHaveLength(1);
+  expect(sent[0].payload).toEqual({ kind: "device.message", scope: "all", text: "Closing at 11" });
+  expect(
+    (await new AxeBuilder({ page }).analyze()).violations.filter(
+      (v) => v.impact === "serious" || v.impact === "critical",
+    ),
+  ).toEqual([]);
+});
+
+test("Message all PCs says so when one PC, or none, is in session", async ({ page }) => {
+  const sent = await messaging(page, COUNTER, [1, 0]);
+  await page.getByRole("button", { name: en["hub.floor.message_all"], exact: true }).click();
+  const field = page.getByTestId("message-all-form").getByLabel(en["hub.floor.message_all_label"]);
+  const send = page.getByRole("button", { name: en["hub.floor.message_all_send"] });
+  await field.fill("Hello");
+  await send.click();
+  await expect(page.getByTestId("message-all-result")).toHaveText(
+    en["hub.floor.message_all_sent_one"],
+  );
+  await field.fill("Anyone?");
+  await send.click();
+  await expect(page.getByTestId("message-all-result")).toHaveText(en["hub.floor.message_all_none"]);
+  expect(sent).toHaveLength(2);
+  expect(sent[1].key).not.toBe(sent[0].key);
+});
+
+test("Message all PCs checks the text before it reaches the Hub", async ({ page }) => {
+  const sent = await messaging(page, COUNTER, [3]);
+  await page.getByRole("button", { name: en["hub.floor.message_all"], exact: true }).click();
+  const form = page.getByTestId("message-all-form");
+  const field = form.getByLabel(en["hub.floor.message_all_label"]);
+  const send = form.getByRole("button", { name: en["hub.floor.message_all_send"] });
+  for (const bad of ["", "   ", "x".repeat(141), "ab"]) {
+    await field.fill(bad);
+    await send.click();
+    await expect(form).toContainText(en["hub.sheet.message_invalid"]);
+  }
+  expect(sent).toHaveLength(0);
+});
+
+test("a Message all PCs that could not be sent says so, and the retry keeps its key", async ({
+  page,
+}) => {
+  const sent = await messaging(page, COUNTER, ["abort", 2]);
+  await page.getByRole("button", { name: en["hub.floor.message_all"], exact: true }).click();
+  const form = page.getByTestId("message-all-form");
+  await form.getByLabel(en["hub.floor.message_all_label"]).fill("Closing at 11");
+  const send = form.getByRole("button", { name: en["hub.floor.message_all_send"] });
+  await send.click();
+  await expect(page.getByTestId("message-all-result")).toHaveText(
+    en["hub.floor.message_all_failed"],
+  );
+  await send.click();
+  await expect(page.getByTestId("message-all-result")).toHaveText("Sent to 2 PCs");
+  expect(sent).toHaveLength(2);
+  expect(sent[1].key).toBe(sent[0].key);
+});
+
+test("staff without the screen permission do not see Message all PCs", async ({ page }) => {
+  await open(page, () => snapshot([device(1, {})]));
+  await expect(page.getByRole("heading", { name: en["hub.nav.floor"] })).toBeVisible();
+  await expect(page.getByTestId("message-all")).toHaveCount(0);
 });

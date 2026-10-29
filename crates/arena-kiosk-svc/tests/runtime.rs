@@ -1525,45 +1525,6 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
     app.until(locked).await;
     send("M1", PcAction::Message, Some("  Closing in 10  "));
     acked("M1", &mut acks).await;
-    let shown = app
-        .until(|m| {
-            matches!(
-                m,
-                IpcMsg::PcScreen {
-                    message: Some(_),
-                    ..
-                }
-            )
-        })
-        .await;
-    assert_eq!(
-        shown,
-        IpcMsg::PcScreen {
-            locked: true,
-            reason: Some(arena_proto::LockReason::LockedByStaff),
-            message: Some("Closing in 10".into()),
-            session: None
-        }
-    );
-    app.send(&IpcMsg::Request {
-        rid: "d".into(),
-        kind: "pc_dismiss".into(),
-        body: serde_json::Value::Null,
-    })
-    .await;
-    app.until(|m| {
-        matches!(
-            m,
-            IpcMsg::PcScreen {
-                message: None,
-                locked: true,
-                ..
-            }
-        )
-    })
-    .await;
-    send("M1", PcAction::Message, Some("Closing in 10"));
-    acked("M1", &mut acks).await;
     let mut again = kiosk.app().await;
     let first = again.until(|m| matches!(m, IpcMsg::PcScreen { .. })).await;
     assert_eq!(
@@ -1571,10 +1532,16 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
         IpcMsg::PcScreen {
             locked: true,
             reason: Some(arena_proto::LockReason::LockedByStaff),
-            message: None,
             session: None
         },
-        "a repeated command is acknowledged but not shown again; the lock survives a new app"
+        "the lock survives a new app"
+    );
+    assert!(
+        !again
+            .skipped
+            .iter()
+            .any(|m| matches!(m, IpcMsg::StaffMessage { .. })),
+        "a message with no session on screen is acknowledged but not kept"
     );
     send("U1", PcAction::Unlock, None);
     acked("U1", &mut acks).await;
@@ -1587,6 +1554,121 @@ async fn pc_commands_cover_and_message_the_screen_once_per_command_and_are_ackno
             .await
             .is_err(),
         "a power command this OS cannot run is refused, not acknowledged"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn staff_messages_reach_the_app_stay_for_the_session_and_go_with_it() {
+    use arena_proto::PcAction;
+    let (hub, kiosk, _) = admin_setup().await;
+    let presence = hub.presence.as_ref().unwrap();
+    let mut acks = presence.pc_acks().unwrap();
+    let mut app = kiosk.app().await;
+    let screen = arena_proto::SessionScreen {
+        session_id: "S1".into(),
+        device_name: "PC 1".into(),
+        elapsed_ms: 0,
+        lock_after_ms: 3_600_000,
+        time_up_mode: "clean_up".into(),
+        grace_ms: 0,
+        ordered_items: 0,
+        username: None,
+        guest_no: None,
+        remaining_ms: None,
+        balance_minor: None,
+        plan_name: None,
+    };
+    assert_eq!(
+        presence.push_session_started(&hub.device_id, "S1", screen),
+        1
+    );
+    app.until(|m| {
+        matches!(
+            m,
+            IpcMsg::PcScreen {
+                session: Some(_),
+                ..
+            }
+        )
+    })
+    .await;
+    assert_eq!(
+        presence.push_pc_command(
+            &hub.device_id,
+            "M1",
+            PcAction::Message,
+            Some("  Closing at 11 ".into()),
+            None
+        ),
+        1
+    );
+    let got = app
+        .until(|m| matches!(m, IpcMsg::StaffMessage { .. }))
+        .await;
+    let IpcMsg::StaffMessage {
+        text, read, fresh, ..
+    } = got
+    else {
+        unreachable!()
+    };
+    assert_eq!(text, "Closing at 11");
+    assert!(!read && fresh);
+    loop {
+        let ack = tokio::time::timeout(Duration::from_secs(5), acks.recv())
+            .await
+            .expect("an ack within 5 s")
+            .unwrap();
+        if ack.cmd_id == "M1" {
+            break;
+        }
+    }
+    app.send(&IpcMsg::Request {
+        rid: "r".into(),
+        kind: "messages_read".into(),
+        body: serde_json::Value::Null,
+    })
+    .await;
+    app.until(|m| matches!(m, IpcMsg::Reply { rid, error: None, .. } if rid == "r"))
+        .await;
+    let mut again = kiosk.app().await;
+    let replay = again
+        .until(|m| matches!(m, IpcMsg::StaffMessage { .. }))
+        .await;
+    assert!(matches!(
+        replay,
+        IpcMsg::StaffMessage {
+            read: true,
+            fresh: false,
+            ..
+        }
+    ));
+    presence.push_pc_command(
+        &hub.device_id,
+        "E1",
+        PcAction::Lock,
+        None,
+        Some(arena_proto::LockReason::PayAtCounter),
+    );
+    again
+        .until(|m| {
+            matches!(
+                m,
+                IpcMsg::PcScreen {
+                    locked: true,
+                    session: None,
+                    ..
+                }
+            )
+        })
+        .await;
+    let mut next = kiosk.app().await;
+    next.until(|m| matches!(m, IpcMsg::PcScreen { .. })).await;
+    assert!(
+        !next
+            .skipped
+            .iter()
+            .any(|m| matches!(m, IpcMsg::StaffMessage { .. })),
+        "the next player sees no earlier message"
     );
 }
 
@@ -1665,7 +1747,6 @@ async fn a_started_session_unlocks_ticks_and_locks_at_its_lock_time() {
         IpcMsg::PcScreen {
             locked: true,
             reason: Some(arena_proto::LockReason::TimesUp),
-            message: None,
             session: None
         }
     );

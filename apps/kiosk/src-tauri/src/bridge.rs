@@ -27,6 +27,11 @@
 //!   `player_login` command: to the service as IPC `player_login` only (the password is a
 //!   `SecretPin`, never stored or logged) and the Hub's outcome comes back as the command's
 //!   result. The shell keeps no player context.
+//! - **Staff messages (Story 6.16).** The service's `staff_message` lines are kept (newest first)
+//!   for the session on screen and become the `staff-message` event; the HUD raises a fresh one
+//!   as a toast and the bell lists it. They are dropped when a `pc_screen` without a session
+//!   arrives and on every new service connection (the service replays its list). The
+//!   `staff_messages` command answers the list on a cold start; `messages_read` marks it read.
 //! - **Windows:** the pipe's server must run as SYSTEM, or the connection is refused.
 
 use std::collections::HashMap;
@@ -56,6 +61,11 @@ pub const THEME_EVENT: &str = "theme";
 pub const TEST_SESSION_EVENT: &str = "test-session";
 pub const TEST_SESSION_ENDED_EVENT: &str = "test-session-ended";
 pub const PC_SCREEN_EVENT: &str = "pc-screen";
+/// The Tauri event carrying one staff message (Story 6.16): the HUD raises it as a toast when it
+/// is fresh, the bell lists it.
+pub const STAFF_MESSAGE_EVENT: &str = "staff-message";
+/// The Tauri event of the bell's list being emptied (a new service connection dropped it).
+pub const STAFF_MESSAGES_CLEARED_EVENT: &str = "staff-messages-cleared";
 /// The Tauri event carrying the attract screen (`{view, logo}`, Story 6.7).
 pub const ATTRACT_EVENT: &str = "attract";
 pub const DISCOVERY_FOUND_EVENT: &str = "discovery-found";
@@ -67,7 +77,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 26] = [
+const COMMANDS: [&str; 27] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -82,7 +92,8 @@ const COMMANDS: [&str; 26] = [
     "pair",
     "pair_info",
     "pc_screen",
-    "pc_dismiss",
+    "staff_messages",
+    "messages_read",
     "attract",
     "player_login",
     "player_plans",
@@ -118,6 +129,10 @@ pub enum Emit {
     TestSession(u64),
     TestSessionEnded,
     PcScreen(PcScreen),
+    /// A staff message came in, or one the service had is replayed (`fresh: false`).
+    StaffMessage(StaffMessage),
+    /// The messages the shell kept were dropped.
+    StaffMessagesCleared,
     /// The attract view and logo as they stand now.
     Attract(Box<Attract>),
 }
@@ -134,8 +149,19 @@ pub struct Attract {
 pub struct PcScreen {
     pub locked: bool,
     pub reason: Option<arena_proto::LockReason>,
-    pub message: Option<String>,
     pub session: Option<arena_kiosk_core::ipc::PcSession>,
+}
+
+/// One staff message of the session on screen, as the service sent it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StaffMessage {
+    pub id: u64,
+    pub text: String,
+    /// When it arrived, UTC ms.
+    pub at: i64,
+    pub read: bool,
+    /// Just arrived: the HUD shows it as a toast. A replay on a new connection is not fresh.
+    pub fresh: bool,
 }
 
 /// What the service answered to a request: the body, or the error code (and the body that came
@@ -184,6 +210,9 @@ pub struct Bridge {
     theme: watch::Sender<Option<bool>>,
     test_deadline: Mutex<Option<Instant>>,
     screen: Mutex<(PcScreen, Instant)>,
+    /// The session's staff messages, newest first (answered by the `staff_messages` command on
+    /// a cold start).
+    messages: Mutex<Vec<StaffMessage>>,
     /// The latest attract view and logo (answered by the `attract` command on a cold start).
     attract: Mutex<Attract>,
 }
@@ -204,6 +233,7 @@ impl Default for Bridge {
             theme: watch::channel(None).0,
             test_deadline: Mutex::default(),
             screen: Mutex::new((PcScreen::default(), Instant::now())),
+            messages: Mutex::default(),
             attract: Mutex::default(),
         }
     }
@@ -315,6 +345,24 @@ impl Bridge {
         screen
     }
 
+    /// The session's staff messages, newest first.
+    pub fn staff_messages(&self) -> Vec<StaffMessage> {
+        lock(&self.messages).clone()
+    }
+
+    /// The player opened the bell and the service marked the messages read.
+    pub fn mark_messages_read(&self) {
+        lock(&self.messages).iter_mut().for_each(|m| m.read = true);
+    }
+
+    /// Drops the kept messages; whether there were any.
+    fn drop_messages(&self) -> bool {
+        let mut kept = lock(&self.messages);
+        let had = !kept.is_empty();
+        kept.clear();
+        had
+    }
+
     /// The attract view and logo the service last sent.
     pub fn attract(&self) -> Attract {
         lock(&self.attract).clone()
@@ -392,16 +440,38 @@ impl Bridge {
                 let ran = lock(&self.test_deadline).take().is_some();
                 (None, ran.then_some(Emit::TestSessionEnded))
             }
+            IpcMsg::StaffMessage {
+                id,
+                text,
+                at,
+                read,
+                fresh,
+            } => {
+                let message = StaffMessage {
+                    id,
+                    text,
+                    at,
+                    read,
+                    fresh,
+                };
+                let mut kept = lock(&self.messages);
+                if kept.iter().any(|m| m.id == id) {
+                    return (None, None);
+                }
+                kept.insert(0, message.clone());
+                (None, Some(Emit::StaffMessage(message)))
+            }
             IpcMsg::PcScreen {
                 locked,
                 reason,
-                message,
                 session,
             } => {
+                if session.is_none() {
+                    self.drop_messages();
+                }
                 let screen = PcScreen {
                     locked,
                     reason,
-                    message,
                     session,
                 };
                 *lock(&self.screen) = (screen.clone(), now);
@@ -458,6 +528,11 @@ impl Bridge {
     {
         let (tx, mut rx) = mpsc::channel::<IpcMsg>(64);
         *lock(&self.outbox) = Some(tx.clone());
+        // A new connection gets the service's messages again (it replays them), so what the
+        // last one left is dropped first.
+        if self.drop_messages() {
+            emit(Emit::StaffMessagesCleared);
+        }
         // The latest state goes out on every (re)connect: a restarted service lost it.
         let mut state = self.state.subscribe();
         state.mark_changed();
@@ -645,6 +720,11 @@ mod tests {
             TEST_SESSION_ENDED_EVENT
         );
         assert_eq!(names["events"]["pcScreen"], PC_SCREEN_EVENT);
+        assert_eq!(names["events"]["staffMessage"], STAFF_MESSAGE_EVENT);
+        assert_eq!(
+            names["events"]["staffMessagesCleared"],
+            STAFF_MESSAGES_CLEARED_EVENT
+        );
         assert_eq!(names["events"]["attract"], ATTRACT_EVENT);
         assert_eq!(names["events"]["discoveryFound"], DISCOVERY_FOUND_EVENT);
         assert_eq!(names["events"]["discoveryDone"], DISCOVERY_DONE_EVENT);
@@ -1051,20 +1131,18 @@ mod tests {
     }
 
     #[test]
-    fn the_staff_lock_and_message_are_kept_and_forwarded() {
+    fn the_staff_lock_is_kept_and_forwarded() {
         let b = Bridge::default();
         assert_eq!(b.pc_screen(), PcScreen::default());
         let shown = PcScreen {
             locked: true,
             reason: Some(arena_proto::LockReason::PayAtCounter),
-            message: Some("hi".into()),
             session: None,
         };
         assert_eq!(
             b.on_message(IpcMsg::PcScreen {
                 locked: true,
                 reason: Some(arena_proto::LockReason::PayAtCounter),
-                message: Some("hi".into()),
                 session: None,
             }),
             (None, Some(Emit::PcScreen(shown.clone())))
@@ -1160,7 +1238,6 @@ mod tests {
             IpcMsg::PcScreen {
                 locked: false,
                 reason: None,
-                message: None,
                 session: Some(arena_kiosk_core::ipc::PcSession {
                     device_name: "PC 1".into(),
                     elapsed_ms: 1_000,
@@ -1180,6 +1257,63 @@ mod tests {
         let session = b.pc_screen().session.unwrap();
         assert_eq!(session.device_name, "PC 1");
         assert!(session.elapsed_ms >= 1_000);
+    }
+
+    fn staff(id: u64, text: &str, read: bool, fresh: bool) -> IpcMsg {
+        IpcMsg::StaffMessage {
+            id,
+            text: text.into(),
+            at: 1_800_000_000_000 + id as i64,
+            read,
+            fresh,
+        }
+    }
+
+    #[test]
+    fn staff_messages_are_kept_newest_first_forwarded_once_and_end_with_the_session() {
+        let b = Bridge::default();
+        let (none, first) = b.on_message(staff(1, "Closing at 11", false, true));
+        assert_eq!(none, None);
+        assert!(matches!(
+            first,
+            Some(Emit::StaffMessage(StaffMessage {
+                id: 1,
+                fresh: true,
+                ..
+            }))
+        ));
+        assert!(
+            b.on_message(staff(2, "Order ready", false, true))
+                .1
+                .is_some()
+        );
+        assert_eq!(
+            b.on_message(staff(2, "Order ready", false, true)),
+            (None, None),
+            "a message already kept is not raised again"
+        );
+        let texts: Vec<_> = b.staff_messages().into_iter().map(|m| m.text).collect();
+        assert_eq!(texts, ["Order ready", "Closing at 11"]);
+        b.mark_messages_read();
+        assert!(b.staff_messages().iter().all(|m| m.read));
+        b.on_message(IpcMsg::PcScreen {
+            locked: true,
+            reason: Some(arena_proto::LockReason::PayAtCounter),
+            session: None,
+        });
+        assert!(b.staff_messages().is_empty(), "the session ended");
+    }
+
+    #[test]
+    fn a_replay_arrives_oldest_first_and_is_not_fresh() {
+        let b = Bridge::default();
+        b.on_message(staff(1, "one", true, false));
+        b.on_message(staff(2, "two", false, false));
+        let kept = b.staff_messages();
+        assert_eq!((kept[0].id, kept[1].id), (2, 1));
+        assert!(kept.iter().all(|m| !m.fresh));
+        assert!(b.drop_messages());
+        assert!(!b.drop_messages());
     }
 
     #[test]

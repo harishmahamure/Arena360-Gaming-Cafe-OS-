@@ -2,8 +2,8 @@
 //! app (`arena-kiosk-ui`, the unprivileged player session): one JSON object per line.
 //!
 //! The service sends `ping`, `hub_status`, `restore_state`, `toast`, `admin_exit_started`,
-//! `admin_exit_ended`, `test_session_started`, `test_session_ended`, `pc_screen`, `attract` and
-//! `reply`; the app sends `pong`, `app_state`, `request` and `admin_exit` (a manager PIN,
+//! `admin_exit_ended`, `test_session_started`, `test_session_ended`, `pc_screen`, `staff_message`, `attract`
+//! and `reply`; the app sends `pong`, `app_state`, `request` and `admin_exit` (a manager PIN,
 //! answered with `reply`; the [`SecretPin`] never prints) and `player_login` (a player's
 //! username and password, answered with `reply`; the password is a [`SecretPin`] too) and, for the
 //! plan picker, `player_plans`, `player_start` and `player_logout` (answered with `reply`). The app
@@ -249,9 +249,18 @@ pub enum IpcMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<arena_proto::LockReason>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        message: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<PcSession>,
+    },
+    /// Service → app: one staff message of the session on screen (Story 6.16). `id` is the
+    /// service's own counter, `at` the UTC ms it arrived. `fresh` is a message that has just
+    /// come in (the HUD shows it as a toast); a replayed one, sent again on a new connection, is
+    /// not fresh. `read` is whether the player has opened the bell since.
+    StaffMessage {
+        id: u64,
+        text: String,
+        at: i64,
+        read: bool,
+        fresh: bool,
     },
     #[serde(rename = "discovery.found")]
     DiscoveryFound {
@@ -556,12 +565,11 @@ mod tests {
     }
 
     #[test]
-    fn the_pc_screen_omits_an_absent_message() {
+    fn the_pc_screen_omits_what_is_absent() {
         assert_eq!(
             IpcMsg::PcScreen {
                 locked: true,
                 reason: None,
-                message: None,
                 session: None
             }
             .to_line(),
@@ -570,7 +578,6 @@ mod tests {
         let shown = IpcMsg::PcScreen {
             locked: false,
             reason: Some(arena_proto::LockReason::PayAtCounter),
-            message: Some("hi".into()),
             session: Some(PcSession {
                 device_name: "PC 1".into(),
                 elapsed_ms: 7,
@@ -586,6 +593,21 @@ mod tests {
             }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);
+    }
+
+    #[test]
+    fn a_staff_message_is_a_tagged_line_that_round_trips() {
+        let m = IpcMsg::StaffMessage {
+            id: 3,
+            text: "Closing at 11".into(),
+            at: 1_800_000_000_000,
+            read: false,
+            fresh: true,
+        };
+        let v: Value = serde_json::from_str(&m.to_line()).unwrap();
+        assert_eq!(v["type"], "staff_message");
+        assert_eq!(v["text"], "Closing at 11");
+        assert_eq!(IpcMsg::parse(&m.to_line()).unwrap(), m);
     }
 
     #[test]

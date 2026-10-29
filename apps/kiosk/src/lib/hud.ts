@@ -12,8 +12,10 @@ export type ToastKind = "info" | "warning";
 
 export type HudToast = {
   id: number;
-  /** The catalogue key of its text. */
+  /** The catalogue key of its text, or a unique key of its own when it carries `text`. */
   key: string;
+  /** The words themselves, for a staff message (Story 6.16); the catalogue has no line for it. */
+  text?: string;
   kind: ToastKind;
   /** When an info toast goes away, on the monotonic clock (`null`: it stays). */
   until: number | null;
@@ -34,13 +36,23 @@ export function raise(
   kind: ToastKind,
   now: number,
   id: number,
+  text?: string,
 ): HudToast[] {
   const ms = lifetime(kind);
   return [
     ...toasts.filter((x) => x.key !== key),
-    { id, key, kind, until: ms === null ? null : now + ms },
+    {
+      id,
+      key,
+      ...(text === undefined ? {} : { text }),
+      kind,
+      until: ms === null ? null : now + ms,
+    },
   ];
 }
+
+/** The key of the toast for staff message `id`: every message has its own, so they stack. */
+export const staffToastKey = (id: number): string => `staff:${id}`; // i18n-ignore (a toast key)
 
 /** The toasts still showing at `now` (the info ones whose 8 s are up have gone). */
 export function live(toasts: readonly HudToast[], now: number): HudToast[] {

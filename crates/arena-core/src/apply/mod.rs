@@ -294,7 +294,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::LibraryUpsert(_) | P::LibraryDelete(_) => {
             Target::Library(Box::new(library::load(tx, &intent.payload)?))
         }
-        P::DeviceScreen(_) | P::DevicePower(_) => {
+        P::DeviceScreen(_) | P::DeviceMessage(_) | P::DevicePower(_) => {
             Target::Pc(Box::new(pc_command::load(tx, &intent.payload)?))
         }
         P::StaffSetCredentials(c) => Target::Credentials(staff_credentials::load(tx, c)?),

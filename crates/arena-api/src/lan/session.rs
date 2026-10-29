@@ -750,6 +750,10 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "kitchen.board" => match self.kds_display("kitchen.board") {
+                Ok(()) => self.spawn_kitchen_board(rid, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "shop.menu" => match self.paired_device("shop.menu") {
                 Ok(device) => self.spawn_shop_menu(rid, device, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
@@ -950,6 +954,17 @@ impl Ctx<'_> {
             _ => Err(app(
                 ErrorCode::Forbidden,
                 format!("{what} is for paired kiosks only"),
+            )),
+        }
+    }
+
+    /// Succeeds for a kitchen display's session, or `FORBIDDEN`.
+    fn kds_display(&self, what: &str) -> Result<(), AppError> {
+        match self.authed.class {
+            ClientClass::Kds => Ok(()),
+            _ => Err(app(
+                ErrorCode::Forbidden,
+                format!("{what} is for kitchen displays only"),
             )),
         }
     }
@@ -1200,6 +1215,27 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::games::most_played(&hub, &device).await {
                 Ok(result) => Frame::new(rid, FrameBody::GamesMostPlayedResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_kitchen_board(
+        &self,
+        rid: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::kitchen_board::read(&hub).await {
+                Ok(board) => Frame::new(rid, FrameBody::KitchenBoardResult(Box::new(board))),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

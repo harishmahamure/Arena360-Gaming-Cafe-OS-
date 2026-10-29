@@ -10,6 +10,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
     "test:shell": "playwright test",
+    "test:kitchen": "playwright test -c playwright.kitchen.config.ts",
     "bench:floor": "playwright test -c playwright.bench.config.ts floor-perf",
     "bench:flows": "playwright test -c playwright.bench.config.ts flow-timing",
     "bench:scanner": "playwright test -c playwright.bench.config.ts scanner --headed"

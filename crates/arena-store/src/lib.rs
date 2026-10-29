@@ -135,7 +135,7 @@ pub use kitchen_displays::{
 };
 pub use kitchen_tickets::{
     NewTicket, NewTicketLine, TicketLineRow, TicketRow, find_line_for_order_line,
-    find_placement_ticket, find_ticket, insert_ticket, insert_ticket_line,
+    find_placement_ticket, find_ticket, insert_ticket, insert_ticket_line, list_board_tickets,
     list_line_holds_released_at, list_open_tickets, list_order_tickets, list_ticket_lines,
     list_ticket_lines_served_at, next_ticket_number, reopen_hold, restore_ticket_stage,
     set_ticket_cancelled, set_ticket_stage, unmark_line_served,
@@ -1106,6 +1106,23 @@ impl Store {
             return Ok(Vec::new());
         }
         list_open_tickets(&self.conn)?
+            .into_iter()
+            .map(|t| list_ticket_lines(&self.conn, &t.id).map(|l| (t, l)))
+            .collect()
+    }
+
+    /// The tickets a kitchen display shows at `now_ms`, newest first, with their lines (Story 7.7;
+    /// empty before migration 69).
+    pub fn board_tickets(
+        &self,
+        now_ms: i64,
+        served_keep_ms: i64,
+        cancelled_keep_ms: i64,
+    ) -> Result<Vec<(TicketRow, Vec<TicketLineRow>)>, AppError> {
+        if !self.table_exists("kitchen_tickets")? {
+            return Ok(Vec::new());
+        }
+        list_board_tickets(&self.conn, now_ms, served_keep_ms, cancelled_keep_ms)?
             .into_iter()
             .map(|t| list_ticket_lines(&self.conn, &t.id).map(|l| (t, l)))
             .collect()

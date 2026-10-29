@@ -1,9 +1,16 @@
 // The kitchen tablet's side of the Hub (Story 7.6): the status and pairing endpoints, the stored
 // `kds` token and the `/ws` connection. The page keeps the token in `localStorage` (never in a
-// URL) and sends it only in the `hello` frame. There is no board, chime or ticket control here
-// yet (Stories 7.7 to 7.10).
+// URL) and sends it only in the `hello` frame. Once connected it asks the Hub for the board
+// (`kitchen.board`) and takes every whole board the Hub pushes after a ticket changes (Story 7.7).
+// There is no chime or ticket control here yet (Stories 7.8 to 7.10).
 
-import type { Frame, KdsPairResponse, KdsStatus, SettingEntry } from "@arena/ui/generated";
+import type {
+  Frame,
+  KdsPairResponse,
+  KdsStatus,
+  KitchenBoard,
+  SettingEntry,
+} from "@arena/ui/generated";
 
 /** Where the Hub serves this app (the build's `paths.base`). */
 const BASE = "/kitchen";
@@ -114,9 +121,16 @@ export type Link = {
   onRevoked: () => void;
   /** This display's high-contrast setting, on connect and whenever it changes. */
   onHighContrast: (on: boolean) => void;
+  /** The whole board: the reply to the request, then every push after a ticket changed. */
+  onBoard: (board: KitchenBoard) => void;
   /** The socket is gone (the link reconnects by itself). */
   onLost: () => void;
 };
+
+/** The board fields of a `kitchen.board_result` frame or a `kitchen.board` event. */
+function boardOf(body: KitchenBoard): KitchenBoard {
+  return { branch_name: body.branch_name, now_ms: body.now_ms, tickets: body.tickets };
+}
 
 /** `ws://<host>/ws` (or `wss:` on an HTTPS page). */
 function socketUrl(): string {
@@ -174,6 +188,10 @@ export function connect(token: string, link: Link): () => void {
           retryMs = RETRY_MIN_MS;
           link.onReady();
           if (displayId) send({ rid: "hc", kind: "settings.get", keys: [hcKey(displayId)] });
+          send({ rid: "board", kind: "kitchen.board" });
+          break;
+        case "kitchen.board_result":
+          link.onBoard(boardOf(frame));
           break;
         case "ping":
           send({ rid: frame.rid, kind: "pong" });
@@ -183,6 +201,7 @@ export function connect(token: string, link: Link): () => void {
           break;
         case "event":
           if (frame.event.kind === "settings.changed") takeValues(frame.event.values);
+          else if (frame.event.kind === "kitchen.board") link.onBoard(boardOf(frame.event));
           break;
         case "error":
           if (frame.error.code === "TOKEN_REVOKED" || frame.error.code === "TOKEN_INVALID") {

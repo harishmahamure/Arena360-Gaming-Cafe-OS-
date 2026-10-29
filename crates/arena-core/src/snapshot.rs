@@ -327,6 +327,25 @@ pub(crate) fn ticket_view(
     }
 }
 
+/// A kitchen ticket as a kitchen display shows it (Story 7.7): the seat and number, the stage and
+/// when the ticket reached it, never a player.
+pub(crate) fn board_ticket(
+    t: &arena_store::TicketRow,
+    lines: &[arena_store::TicketLineRow],
+) -> arena_proto::KitchenBoardTicket {
+    let view = ticket_view(t, lines);
+    arena_proto::KitchenBoardTicket {
+        id: view.id,
+        number: view.number,
+        seat: view.seat,
+        stage: view.stage,
+        placed_at: view.placed_at,
+        stage_at: t.advanced_at.unwrap_or(t.placed_at),
+        rev: view.rev,
+        lines: view.lines,
+    }
+}
+
 fn group_bills(
     rows: Vec<arena_store::GroupBillRow>,
     sessions: &[arena_store::LiveSession],

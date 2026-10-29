@@ -242,6 +242,30 @@ impl DeviceDirectory {
             .kitchen_displays()
     }
 
+    /// What a kitchen display shows at `now_ms`, read in one snapshot (Story 7.7). It serves the
+    /// tickets that exist whatever the branch's tier now is: a lapse never hides open work.
+    pub fn kitchen_board(&self, now_ms: i64) -> Result<arena_proto::KitchenBoard, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        let branch_name = store.branch_summary()?.map(|b| b.name).unwrap_or_default();
+        let tickets = store
+            .board_tickets(
+                now_ms,
+                arena_proto::BOARD_SERVED_KEEP_MS,
+                arena_proto::BOARD_CANCELLED_KEEP_MS,
+            )?
+            .into_iter()
+            .map(|(t, lines)| crate::snapshot::board_ticket(&t, &lines))
+            .collect();
+        Ok(arena_proto::KitchenBoard {
+            branch_name,
+            now_ms,
+            tickets,
+        })
+    }
+
     pub fn session_screens(
         &self,
         now_ms: i64,

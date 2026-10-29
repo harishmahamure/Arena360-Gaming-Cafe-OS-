@@ -191,6 +191,29 @@ pub fn list_open_tickets(conn: &Connection) -> Result<Vec<TicketRow>, AppError> 
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
+/// The tickets a kitchen display shows at `now_ms` (Story 7.7), newest first: every open ticket,
+/// the tickets served within `served_keep_ms` and those cancelled within `cancelled_keep_ms`.
+pub fn list_board_tickets(
+    conn: &Connection,
+    now_ms: i64,
+    served_keep_ms: i64,
+    cancelled_keep_ms: i64,
+) -> Result<Vec<TicketRow>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {TICKET_COLUMNS} FROM kitchen_tickets
+             WHERE stage IN ('new', 'preparing', 'ready')
+                OR (stage = 'served' AND COALESCE(advanced_at, placed_at) >= ?1 - ?2)
+                OR (stage = 'cancelled' AND COALESCE(advanced_at, placed_at) >= ?1 - ?3)
+             ORDER BY number DESC"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![now_ms, served_keep_ms, cancelled_keep_ms], ticket)
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 pub fn list_ticket_lines(
     conn: &Connection,
     ticket_id: &str,

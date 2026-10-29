@@ -887,3 +887,11 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Serving.** `/kitchen` serves the Kitchen app build from `ARENA_KITCHEN_DIR` (traversal-safe), else a built-in plain-JS pairing page. Bundling the build into the installer is deferred. SvelteKit 3 has no `svelte.config.js`, so `paths.base` lives in `apps/kitchen/vite.config.js`.
 - **Plain-HTTP strays.** Now 403 `FORBIDDEN` (was 404/401) per the story; a kds session counts as Hub presence.
 - **Verification.** See the spec's Auto Run Result. Pre-existing failures also seen on baseline: `arena-replay` seeded-log replay, `arena-tasks` heartbeat trusted time and a stalled-printer test; `arena-e2e` does not build on Windows.
+
+## Story 7.7: the kitchen board shows open tickets in four columns
+
+- **Board feed.** A `kds` session sends `kitchen.board` (reply `kitchen.board_result`) and is pushed the whole board as `event{kind:"kitchen.board"}` after any change to `kitchen_tickets` or `kitchen_ticket_lines`. The board is `{branch_name, now_ms, tickets}`; `stage_at` is the ticket's `advanced_at` (its `placed_at` for a New one). The feed keeps open tickets, tickets served in the last 30 minutes and tickets cancelled in the last 60 s, newest first, and is not flag-gated (a lapse keeps showing existing tickets). It does not use `browser_tables` or `applied` events.
+- **Hub time.** The page holds `now_ms` plus the monotonic time since the board arrived; the tablet's date is never used.
+- **Cancelled tickets.** Story 7.3 drops their lines, so a real one has no lines to strike; the display strikes them when present and keeps a cancelled ticket in the column it was last seen in (New if unseen).
+- **Tests in the Hub package.** The Kitchen app has no test runner; the browser and unit specs live in `apps/hub/tests/kitchen-board/` with `playwright.kitchen.config.ts` (`pnpm --filter @arena/hub test:kitchen`), excluded from the Hub's default Playwright run. Adding Playwright to the Kitchen app would change the lockfile.
+- **Verification.** See the spec's Auto Run Result.

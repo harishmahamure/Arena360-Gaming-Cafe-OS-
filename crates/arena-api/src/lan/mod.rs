@@ -16,6 +16,7 @@
 mod call_staff;
 mod games;
 mod kds_pair;
+mod kitchen_board;
 pub mod listener;
 mod media;
 mod pair;

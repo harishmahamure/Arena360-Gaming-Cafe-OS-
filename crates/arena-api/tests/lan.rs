@@ -5516,3 +5516,172 @@ async fn the_hub_serves_the_kitchen_build_from_its_directory_and_nothing_outside
         "{page}"
     );
 }
+
+/// Seeds two kitchen tickets straight into the branch database (Story 7.7): `K-1` New with a
+/// noted line and `K-2` already Served. Only the kitchen board reads them.
+fn seed_tickets(hub: &TestHub, now: i64) {
+    let mut store = Store::open(&hub.path, T0).unwrap();
+    store
+        .write_tx(|tx| {
+            let notes = vec!["No onion".to_owned()];
+            for (id, number, seat) in [("T1", 1, "PC 07"), ("T2", 2, "Counter")] {
+                arena_store::insert_ticket(
+                    tx,
+                    &arena_store::NewTicket {
+                        id,
+                        order_id: "O1",
+                        device_id: None,
+                        seat,
+                        number,
+                        placement_id: None,
+                        placed_at: now - 60_000,
+                    },
+                )?;
+                arena_store::insert_ticket_line(
+                    tx,
+                    &arena_store::NewTicketLine {
+                        id: &format!("L{number}"),
+                        ticket_id: id,
+                        order_line_id: &format!("OL{number}"),
+                        label: "Burger",
+                        qty: 2,
+                        notes: if number == 1 { &notes } else { &[] },
+                    },
+                )?;
+            }
+            arena_store::set_ticket_stage(tx, "T2", "served", now - 10_000, "test")?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+async fn kitchen_board(
+    ws: &mut (
+             impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+             + SinkExt<Message>
+             + Unpin
+         ),
+    rid: &str,
+) -> Frame {
+    ws.send(Message::text(format!(
+        r#"{{"v":1,"kind":"kitchen.board","rid":"{rid}"}}"#
+    )))
+    .await
+    .ok()
+    .unwrap();
+    loop {
+        let Some(Ok(Message::Text(t))) = ws.next().await else {
+            panic!("the board reply")
+        };
+        let frame = parse_frame(t.as_str()).unwrap();
+        if !matches!(frame.body, FrameBody::Event(_)) {
+            return frame;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_display_reads_the_board_and_is_pushed_it_after_a_ticket_changes() {
+    let hub = start("0.1.0", true).await;
+    seed_tickets(&hub, T0);
+    let mut ws = hub.plain().await;
+    hello_ok(
+        &mut ws,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+
+    let reply = kitchen_board(&mut ws, "b1").await;
+    let FrameBody::KitchenBoardResult(board) = reply.body else {
+        panic!("{reply:?}")
+    };
+    assert_eq!(board.now_ms, T0);
+    let seen: Vec<(i64, &str, &str)> = board
+        .tickets
+        .iter()
+        .map(|t| (t.number, t.stage.as_str(), t.seat.as_str()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![(2, "served", "Counter"), (1, "new", "PC 07")],
+        "newest first, with the seat and no player"
+    );
+    assert_eq!(board.tickets[1].lines[0].notes, vec!["No onion".to_owned()]);
+    assert_eq!(board.tickets[1].lines[0].qty, 2);
+
+    // The display's own advance (its only intent) reaches it back as a whole board.
+    let advance = Intent {
+        base_rev: Some(0),
+        ..intent(
+            system(),
+            IntentPayload::KitchenAdvance(arena_proto::KitchenAdvance {
+                ticket_id: "T1".into(),
+                to: "preparing".into(),
+            }),
+            None,
+        )
+    };
+    send(
+        &mut ws,
+        &Frame::new(
+            "a1",
+            FrameBody::IntentSubmit(IntentSubmit { intent: advance }),
+        )
+        .to_text(),
+    )
+    .await;
+    let pushed = loop {
+        let frame = recv_any(&mut ws).await.expect("a pushed board");
+        if let FrameBody::Event(e) = frame.body
+            && let HubEvent::KitchenBoard(b) = e.event
+        {
+            break b;
+        }
+    };
+    let t1 = pushed.tickets.iter().find(|t| t.id == "T1").unwrap();
+    assert_eq!(t1.stage, "preparing");
+    assert!(t1.stage_at >= t1.placed_at);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_a_kitchen_display_may_ask_for_the_board() {
+    let hub = start("0.1.0", true).await;
+    seed_tickets(&hub, T0);
+    let mut phone = hub.plain().await;
+    hello_ok(&mut phone, hub.hello(ClientClass::Phone, "", "0.1.0")).await;
+    let reply = kitchen_board(&mut phone, "b1").await;
+    assert_eq!(error_of(&reply).1, ErrorCode::Forbidden);
+
+    let mut kiosk = hub.tls().await;
+    hello_ok(
+        &mut kiosk,
+        hub.hello(ClientClass::Paired, &hub.paired_token, "0.1.0"),
+    )
+    .await;
+    let reply = kitchen_board(&mut kiosk, "b2").await;
+    assert_eq!(error_of(&reply).1, ErrorCode::Forbidden);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_board_still_serves_its_tickets_after_a_lapse_to_free() {
+    let hub = start("0.1.0", true).await;
+    seed_tickets(&hub, T0);
+    // Basic, then lapsed: the branch holds no `kitchen` flag now, and the tickets still show.
+    set_flags(&hub, "kitchen").await;
+    set_flags(&hub, "").await;
+    let mut ws = hub.plain().await;
+    hello_ok(
+        &mut ws,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let reply = kitchen_board(&mut ws, "b1").await;
+    let FrameBody::KitchenBoardResult(board) = reply.body else {
+        panic!("{reply:?}")
+    };
+    assert_eq!(
+        board.tickets.len(),
+        2,
+        "the licence flags do not gate the read"
+    );
+}

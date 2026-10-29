@@ -595,3 +595,10 @@
 - (Review) No Rust test reads the real `/ui/snapshot` `kitchen_displays` list or its `connected` overlay; the periodic 60 s `kds.seen` path and the Hub pair panel's expiry / "Get a new code" / revoke-refusal branches have no assertion.
 - (Review) A pairing whose `kds.pair` commits but whose response is lost (`HubSlow`, 8 s tablet timeout) leaves a display row with no token; the manager must revoke it. Static serving does not canonicalise away symlinks inside the kitchen directory and `_app/immutable/*` is sent `no-store`.
 - (Review) The pair panel keeps showing a code that was used or burned by 5 wrong tries until it times out; `kitchen_address` uses the first LAN address without bracketing IPv6.
+
+## Deferred from: Story 7.7 (kitchen board)
+
+- The Hub still does not bundle the built Kitchen app; the built-in `/kitchen` fallback page pairs and connects but shows no board, so the board needs `ARENA_KITCHEN_DIR` to point at the build until the installer bundles it.
+- A real cancelled ticket shows no lines (Story 7.3 deletes them on cancel), so the "struck-through lines" cue only appears if the feed carries lines; decide whether a cancelled ticket should keep its lines for the board.
+- The top-bar clock shows Hub time in the tablet's time zone (a `kds` session cannot read `branch.tz`).
+- The board feed is read on every ticket change for every connected display (a few small queries); no measurement on reference hardware (Story 7.11).

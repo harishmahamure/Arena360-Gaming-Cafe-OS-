@@ -15,6 +15,7 @@ use crate::admin::{AdminPinOk, AdminUnlockAck, ManagerVerifier, VerifyAdminPin};
 use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::kiosk::MostPlayed;
+use crate::kitchen::KitchenBoard;
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::pc_settings::{PcSettings, PlayerPcSettingsResult, PlayerPcSettingsSetResult};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
@@ -205,13 +206,19 @@ pub enum FrameBody {
     /// The session live on that PC and the lock it should show.
     #[serde(rename = "session.sync_result")]
     SessionSyncResult(SessionSync),
+    /// A kitchen display asks for the board (`kds` sessions only; Story 7.7).
+    #[serde(rename = "kitchen.board")]
+    KitchenBoardRequest,
+    /// The open tickets, the recently served and cancelled ones, and the Hub's clock.
+    #[serde(rename = "kitchen.board_result")]
+    KitchenBoardResult(Box<KitchenBoard>),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 53] = [
+pub const FRAME_KINDS: [&str; 55] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -264,6 +271,8 @@ pub const FRAME_KINDS: [&str; 53] = [
     "shop.place_result",
     "session.sync",
     "session.sync_result",
+    "kitchen.board",
+    "kitchen.board_result",
     "ack",
 ];
 
@@ -323,6 +332,8 @@ impl FrameBody {
             Self::ShopPlaceResult(_) => "shop.place_result",
             Self::SessionSyncRequest => "session.sync",
             Self::SessionSyncResult(_) => "session.sync_result",
+            Self::KitchenBoardRequest => "kitchen.board",
+            Self::KitchenBoardResult(_) => "kitchen.board_result",
             Self::Ack => "ack",
         }
     }
@@ -486,6 +497,10 @@ pub enum HubEvent {
     /// fan-out tick (rules start and end by the clock, not by an intent).
     #[serde(rename = "attract")]
     Attract(Box<crate::AttractView>),
+    /// The kitchen board after a ticket changed (`kds` sessions only; Story 7.7). It carries the
+    /// whole board, so a display never has to merge changes.
+    #[serde(rename = "kitchen.board")]
+    KitchenBoard(Box<crate::KitchenBoard>),
 }
 
 /// The body of an `event` frame.

@@ -2,6 +2,7 @@
 import type { AppliedSummary } from "./AppliedSummary";
 import type { AttractView } from "./AttractView";
 import type { CatalogEntry } from "./CatalogEntry";
+import type { KitchenBoard } from "./KitchenBoard";
 import type { LockReason } from "./LockReason";
 import type { ManagerVerifier } from "./ManagerVerifier";
 import type { PcAction } from "./PcAction";
@@ -23,4 +24,5 @@ export type HubEvent =
   | { kind: "session.warning"; session_id: string; minutes_left: number }
   | { kind: "catalog.changed"; products: Array<CatalogEntry> }
   | { kind: "test_session"; lock_after_ms: number }
-  | ({ kind: "attract" } & AttractView);
+  | ({ kind: "attract" } & AttractView)
+  | ({ kind: "kitchen.board" } & KitchenBoard);

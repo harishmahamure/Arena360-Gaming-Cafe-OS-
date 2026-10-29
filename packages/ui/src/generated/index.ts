@@ -231,6 +231,8 @@ export type { KioskSale } from "./KioskSale";
 export type { KioskScanReported } from "./KioskScanReported";
 export type { KitchenAdvance } from "./KitchenAdvance";
 export type { KitchenAdvanceReverted } from "./KitchenAdvanceReverted";
+export type { KitchenBoard } from "./KitchenBoard";
+export type { KitchenBoardTicket } from "./KitchenBoardTicket";
 export type { KitchenDisplayView } from "./KitchenDisplayView";
 export type { KitchenTicketLineView } from "./KitchenTicketLineView";
 export type { KitchenTicketView } from "./KitchenTicketView";

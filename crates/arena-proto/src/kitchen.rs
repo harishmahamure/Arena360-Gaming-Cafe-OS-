@@ -133,6 +133,44 @@ pub struct KitchenTicketView {
     pub lines: Vec<KitchenTicketLineView>,
 }
 
+/// Story 7.7: how long a Served ticket stays on the board, in milliseconds.
+pub const BOARD_SERVED_KEEP_MS: i64 = 30 * 60_000;
+/// How long a Cancelled ticket stays on the board, greyed and untappable, in milliseconds.
+pub const BOARD_CANCELLED_KEEP_MS: i64 = 60_000;
+
+/// One ticket on the kitchen board (Story 7.7). It names the seat and the ticket number, never a
+/// player. `stage_at` is when the ticket reached its stage (the placement time for a New one): a
+/// Served ticket leaves the board 30 minutes after it, a Cancelled one 60 seconds after.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KitchenBoardTicket {
+    pub id: String,
+    #[ts(type = "number")]
+    pub number: i64,
+    pub seat: String,
+    pub stage: String,
+    #[ts(type = "number")]
+    pub placed_at: i64,
+    #[ts(type = "number")]
+    pub stage_at: i64,
+    #[ts(type = "number")]
+    pub rev: i64,
+    pub lines: Vec<KitchenTicketLineView>,
+}
+
+/// What a kitchen display shows (Story 7.7): the open tickets, the Served ones of the last 30
+/// minutes and the Cancelled ones of the last 60 seconds, newest first, with the Hub's clock so
+/// elapsed times never use the tablet's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KitchenBoard {
+    pub branch_name: String,
+    /// The Hub's clock when the board was read, in milliseconds since the epoch.
+    #[ts(type = "number")]
+    pub now_ms: i64,
+    pub tickets: Vec<KitchenBoardTicket>,
+}
+
 /// Story 7.6: the most kitchen displays a branch holds that are not revoked.
 pub const KDS_MAX_DISPLAYS: i64 = 4;
 /// The plain-HTTP path that serves the Kitchen display app.

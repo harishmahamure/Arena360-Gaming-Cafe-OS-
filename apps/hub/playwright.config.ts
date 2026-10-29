@@ -13,8 +13,9 @@ const port = Number(
 
 export default defineConfig({
   testDir: "./tests",
-  // The WAN-down smoke runs against a real Hub (`playwright.wan-down.config.ts`).
-  testIgnore: ["**/wan-down/**", "**/bench/**"],
+  // The WAN-down smoke runs against a real Hub (`playwright.wan-down.config.ts`); the Kitchen
+  // display suite runs against its own app (`playwright.kitchen.config.ts`).
+  testIgnore: ["**/wan-down/**", "**/bench/**", "**/kitchen-board/**"],
   fullyParallel: true,
   forbidOnly: CI,
   retries: 0,

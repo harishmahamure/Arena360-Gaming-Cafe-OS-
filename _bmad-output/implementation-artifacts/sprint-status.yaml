@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 23:30
+last_updated: 10-29-2026 23:59
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -214,7 +214,7 @@ development_status:
   7-4-the-floor-tile-shows-ready-and-the-hub-chimes-when-food-is-r: done
   7-5-a-kot-prints-within-3-s-and-can-be-reprinted-from-the-hub: done
   7-6-pair-a-kitchen-tablet-by-code-as-a-scoped-display: done
-  7-7-the-kitchen-board-shows-open-tickets-in-four-columns: backlog
+  7-7-the-kitchen-board-shows-open-tickets-in-four-columns: review
   7-8-one-tap-advances-a-ticket-with-undo: backlog
   7-9-new-tickets-chime-and-hold-a-new-badge-with-a-mute-toggle: backlog
   7-10-the-board-keeps-working-through-lan-loss-and-syncs-on-reconn: backlog

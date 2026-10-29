@@ -746,3 +746,77 @@ async fn a_free_branch_raises_no_order_ready_alert_for_the_epic_six_mark_ready()
     let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
     assert!(snap.alerts.is_empty() && snap.counter_tickets.is_empty());
 }
+
+#[tokio::test]
+async fn the_board_lists_tickets_newest_first_and_ages_out_served_and_cancelled_ones() {
+    let f = bootstrapped().await;
+    let (b, session) = basic(&f).await;
+    for _ in 0..3 {
+        place(&f, owner(), place_of(&session, &[(&b, 1)]))
+            .await
+            .unwrap();
+    }
+    let ids: Vec<String> = tickets(&f).iter().map(|t| text(t, "id")).collect();
+    assert_eq!(ids.len(), 3);
+    for to in ["preparing", "ready", "served"] {
+        advance(&f, &ids[0], to).await.unwrap();
+    }
+    let line = text(&ticket_lines(&f, &ids[1])[0], "order_line_id");
+    cancel(&f, owner(), &line, false).await.unwrap();
+    assert_eq!(stage(&f, &ids[1]), "cancelled");
+
+    let dir = crate::devices::DeviceDirectory::open(&f.path).unwrap();
+    let numbers = |board: &arena_proto::KitchenBoard| -> Vec<(i64, String)> {
+        board
+            .tickets
+            .iter()
+            .map(|t| (t.number, t.stage.clone()))
+            .collect()
+    };
+    let now = f.clock.now_ms();
+    let board = dir.kitchen_board(now).unwrap();
+    assert_eq!(board.now_ms, now);
+    assert_eq!(board.branch_name, "Dev Branch");
+    assert_eq!(
+        numbers(&board),
+        vec![
+            (3, "new".to_owned()),
+            (2, "cancelled".to_owned()),
+            (1, "served".to_owned())
+        ]
+    );
+    let open = &board.tickets[0];
+    assert_eq!(open.stage_at, open.placed_at);
+    assert_eq!(open.lines.len(), 1);
+    assert!(
+        board.tickets[1].lines.is_empty(),
+        "a cancelled ticket keeps no lines"
+    );
+    assert!(board.tickets[2].stage_at >= board.tickets[2].placed_at);
+
+    f.clock
+        .advance(arena_proto::BOARD_CANCELLED_KEEP_MS + 1_000);
+    let later = dir.kitchen_board(f.clock.now_ms()).unwrap();
+    assert_eq!(
+        numbers(&later),
+        vec![(3, "new".to_owned()), (1, "served".to_owned())]
+    );
+
+    f.clock.advance(arena_proto::BOARD_SERVED_KEEP_MS);
+    let last = dir.kitchen_board(f.clock.now_ms()).unwrap();
+    assert_eq!(numbers(&last), vec![(3, "new".to_owned())]);
+}
+
+#[tokio::test]
+async fn the_board_still_serves_open_tickets_after_the_branch_lapses_to_free() {
+    let f = bootstrapped().await;
+    let (b, session) = basic(&f).await;
+    place(&f, owner(), place_of(&session, &[(&b, 1)]))
+        .await
+        .unwrap();
+    flags(&f, "").await;
+    let dir = crate::devices::DeviceDirectory::open(&f.path).unwrap();
+    let board = dir.kitchen_board(f.clock.now_ms()).unwrap();
+    assert_eq!(board.tickets.len(), 1);
+    assert_eq!(board.tickets[0].stage, "new");
+}

@@ -12,6 +12,11 @@
 //! lags behind the writer broadcast, events were lost, so every session is dropped (clients
 //! reconnect and resync) after revoked devices got their `TOKEN_REVOKED`.
 //!
+//! **Kitchen board (Story 7.7).** After an intent that wrote a `kitchen_tickets` or
+//! `kitchen_ticket_lines` row, every `kds` session is pushed the whole board as
+//! `event{kind:"kitchen.board"}` (nothing is read when no display is connected); a display also
+//! reads it with `kitchen.board`. Other classes never get it.
+//!
 //! **Attract screen (Story 6.7).** On every fan-out tick each connected paired device gets its own
 //! `event{kind:"attract"}`: the branch name, its group's rate with the pricing rule in effect
 //! (rules start and end by the clock, so the tick is the trigger) and the library's curated
@@ -888,6 +893,52 @@ impl Registry {
         }
     }
 
+    /// Pushes the whole kitchen board to every `kds` session after a ticket changed (Story 7.7).
+    /// Nothing is read when no display is connected.
+    async fn push_kitchen_board(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
+        let touched = applied
+            .changes
+            .iter()
+            .any(|c| matches!(c.tbl.as_str(), "kitchen_tickets" | "kitchen_ticket_lines"));
+        if !touched || !self.has_kds_session() {
+            return;
+        }
+        let dir = Arc::clone(devices);
+        let board = match tokio::task::spawn_blocking(move || dir.kitchen_board(epoch_ms())).await {
+            Ok(Ok(board)) => board,
+            _ => {
+                tracing::warn!("kitchen board read failed; dropping the kitchen displays");
+                self.drop_kds();
+                return;
+            }
+        };
+        let msg = event_frame(self.next_rid(), HubEvent::KitchenBoard(Box::new(board)));
+        let Ok(map) = self.sessions.lock() else {
+            return;
+        };
+        for (id, entry) in map.iter().filter(|(_, e)| e.class == ClientClass::Kds) {
+            if entry.out.try_send(msg.clone()).is_err() {
+                tracing::warn!(session = id, "session queue full or closed; dropping it");
+                set_kill(&entry.kill, Kill::Drop);
+            }
+        }
+    }
+
+    fn has_kds_session(&self) -> bool {
+        self.sessions
+            .lock()
+            .is_ok_and(|map| map.values().any(|e| e.class == ClientClass::Kds))
+    }
+
+    /// Drops every kitchen display session (they reconnect and read the board again).
+    fn drop_kds(&self) {
+        if let Ok(map) = self.sessions.lock() {
+            for entry in map.values().filter(|e| e.class == ClientClass::Kds) {
+                set_kill(&entry.kill, Kill::Drop);
+            }
+        }
+    }
+
     fn drop_paired(&self) {
         if let Ok(map) = self.sessions.lock() {
             for entry in map.values().filter(|e| e.class == ClientClass::Paired) {
@@ -991,6 +1042,7 @@ impl Registry {
                     }
                     self.push_remote_exits(&devices, &applied).await;
                     self.push_display_settings(&devices, &applied).await;
+                    self.push_kitchen_board(&devices, &applied).await;
                     self.push_test_sessions(&devices, &applied).await;
                     let mut touched: Vec<String> = applied
                         .changes

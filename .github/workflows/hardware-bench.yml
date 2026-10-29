@@ -2,7 +2,7 @@ name: Hardware bench
 
 # Story 5.39: the monthly proof on the test café's real hardware. On the bench machine (a
 # self-hosted Windows runner labelled `test-cafe`, with the printers on USB and the LAN, a cash
-# drawer on one of them and a USB keyboard-wedge scanner attached) the job sends a sale receipt, the
+# drawer on one of them and a USB keyboard-wedge scanner attached) the job sends a sale receipt, a KOT (Story 7.11), the
 # Z-report and a drawer kick to every printer in the `PRINTERS` variable at the paper width loaded,
 # then waits for a scan of the sheet's barcode. Results go to the compatibility list at
 # docs/compat/hardware.md as a pull request, and a job or scan that fails fails the run.

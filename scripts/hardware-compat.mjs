@@ -14,9 +14,9 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const OUT = "docs/compat/hardware.md";
-const JOBS = ["receipt", "z_report", "drawer"];
+const JOBS = ["receipt", "z_report", "drawer", "kot"];
 const PRINTER_HEAD =
-  "| Printer | Connection | Paper | Receipt | Z-report | Drawer kick | Last run |";
+  "| Printer | Connection | Paper | Receipt | Z-report | Drawer kick | KOT | Last run |";
 const SCANNER_HEAD = "| Scanner | Adds an item | Last run |";
 
 const mark = (ok) => (ok ? "pass" : "FAIL");
@@ -65,13 +65,14 @@ export function render(existing, printers, scanner, date) {
     "# Hardware compatibility",
     "",
     "Written by the monthly hardware job (`.github/workflows/hardware-bench.yml`, Story 5.39) from",
-    "the test café's printers and scanner. A printer passes when its sale receipt, Z-report and",
-    "drawer-kick jobs all come back done at the paper width listed; whoever loads the paper checks",
-    "the slips and the drawer by eye before the run is accepted.",
+    "the test café's printers and scanner. A printer passes when its sale receipt, Z-report,",
+    "drawer-kick and kitchen-ticket (KOT, within 3 s, Story 7.11) jobs all come back done at the",
+    "paper width listed; whoever loads the paper checks the slips and the drawer by eye before the",
+    "run is accepted.",
     "",
     "## ESC/POS printers",
     "",
-    table(PRINTER_HEAD, [0, 1, 2, 3, 4, 5, 6], sorted(printerRows)),
+    table(PRINTER_HEAD, [0, 1, 2, 3, 4, 5, 6, 7], sorted(printerRows)),
     "",
     "## Keyboard-wedge scanners",
     "",

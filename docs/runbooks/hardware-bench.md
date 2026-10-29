@@ -25,7 +25,8 @@ printer twice to test it on both widths, loading the other roll between runs.
 ## What a run does
 
 1. `hardware_bench_prints_receipts_and_a_z_report_and_kicks_the_drawer` (arena-tasks) sends a sale
-   receipt, the Z-report and a drawer kick through the real adapter to each listed printer. Each
+   receipt, the Z-report, a drawer kick and a kitchen ticket (KOT, Story 7.11) through the real
+   adapter to each listed printer. A KOT slower than 3 s counts as failed. Each
    job must come back `done`.
 2. `pnpm --filter @arena/hub bench:scanner` opens the POS and waits 60 s for a scan of `8901`; the
    product must reach the cart.

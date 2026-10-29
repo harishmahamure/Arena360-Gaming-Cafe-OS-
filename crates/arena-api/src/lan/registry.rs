@@ -1044,6 +1044,12 @@ impl Registry {
                     self.push_display_settings(&devices, &applied).await;
                     self.push_kitchen_board(&devices, &applied).await;
                     self.push_test_sessions(&devices, &applied).await;
+                    // A ticket that changes its order's ready mark reaches the PC at once, not on
+                    // the next tick (Story 7.11: the HUD shows the copy within 5 s of the tap).
+                    let has = |t: &str| applied.changes.iter().any(|c| c.tbl == t);
+                    if has("kitchen_tickets") && has("orders") {
+                        self.tick_sessions(&devices).await;
+                    }
                     let mut touched: Vec<String> = applied
                         .changes
                         .iter()

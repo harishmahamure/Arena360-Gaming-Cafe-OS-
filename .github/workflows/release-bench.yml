@@ -15,7 +15,12 @@ name: Release benchmark
 # version. The report job merges them (scripts/journey-report.mjs) and fails the release on a
 # missed budget or a missing result. The rig and its repository variables are described in
 # docs/runbooks/journey-bench.md.
-# The `soak` input adds the 8-hour WAN-down soak (Story 1.22).
+# `kitchen-*` (Story 7.11) time the kitchen flow: Journey 4 and a 5-orders-a-second burst over the
+# LAN, the unplugged printer, 500 orders with no route out against the same orders with one, and
+# the Kitchen display suite on Chrome on Android and Safari on iPad. `kitchen-report` merges them
+# (scripts/kitchen-report.mjs), fails the release on a missed budget or a missing result and
+# publishes docs/compat/kitchen-display.md. See docs/runbooks/kitchen-bench.md.
+# The `soak` input adds the 8-hour WAN-down soak (Story 1.22) and spreads the kitchen soak over 8 h.
 
 on:
   workflow_dispatch:
@@ -411,6 +416,118 @@ jobs:
         with:
           name: journey-report
           path: target/journey/report.md
+          if-no-files-found: ignore
+
+  kitchen-hub:
+    name: kitchen, Journey 4 and the burst over the LAN (reference i3)
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Journey 4, the unplugged printer, the burst and the soak with a route out
+        shell: pwsh
+        env:
+          ARENA_KITCHEN_OUT: ${{ github.workspace }}/target/kitchen-out/hub.json
+          ARENA_KITCHEN_UNPLUGGED_OUT: ${{ github.workspace }}/target/kitchen-out/unplugged.json
+          ARENA_KITCHEN_BURST_OUT: ${{ github.workspace }}/target/kitchen-out/burst.json
+          ARENA_KITCHEN_SOAK_OUT: ${{ github.workspace }}/target/kitchen-out/soak-wan-up.json
+          KITCHEN_SOAK_LABEL: wan-up
+        run: |
+          cargo test --locked --release -p arena-api --test lan the_hub_side_of_journey_4 -- --nocapture
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked --release -p arena-api --test lan an_unplugged_printer -- --nocapture
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked --release -p arena-api --test lan -- --ignored --nocapture --test-threads=1 five_orders_a_second five_hundred_orders
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kitchen-hub
+          path: target/kitchen-out/*.json
+          if-no-files-found: ignore
+
+  kitchen-soak-down:
+    name: kitchen, 500 orders with no route out
+    # A network namespace with only loopback up: the Hub, the displays and the kiosks talk on it,
+    # nothing leaves it. With the `soak` input the orders are spread over 8 hours.
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 600
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kitchen-soak
+      - run: cargo test --locked --release -p arena-api --test lan --no-run
+      - name: 500 orders New to Served, a KOT each, with the WAN down
+        env:
+          ARENA_KITCHEN_SOAK_OUT: ${{ github.workspace }}/target/kitchen-out/soak-wan-down.json
+          KITCHEN_SOAK_LABEL: wan-down
+          KITCHEN_SOAK_SPREAD_SECS: ${{ github.event_name == 'workflow_dispatch' && inputs.soak && '28800' || '0' }}
+        run: |
+          sudo -E env "PATH=$PATH" unshare --net -- bash -c 'ip link set lo up && cargo test --locked --release -p arena-api --test lan -- --ignored --nocapture five_hundred_orders'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kitchen-soak
+          path: target/kitchen-out/*.json
+          if-no-files-found: ignore
+
+  kitchen-browsers:
+    name: kitchen display on Chrome on Android and Safari on iPad
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/hub exec playwright install --with-deps chromium webkit
+      - name: The board, chime, mute, Undo and LAN-loss suite on each browser
+        env:
+          KITCHEN_DEVICES: "1"
+        run: |
+          status=0
+          for project in android-chrome ipad-safari; do
+            KITCHEN_JSON="$GITHUB_WORKSPACE/target/kitchen-out/browser-$project.json" \
+              pnpm --filter @arena/hub exec playwright test -c playwright.kitchen.config.ts --project="$project" || status=1
+          done
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kitchen-browsers
+          path: target/kitchen-out/*.json
+          if-no-files-found: ignore
+
+  kitchen-report:
+    name: kitchen report (budgets and the compatibility list)
+    needs: [kitchen-hub, kitchen-soak-down, kitchen-browsers]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kitchen-*
+          merge-multiple: true
+          path: target/kitchen
+      - name: Check every budget; a missing result fails
+        run: node scripts/kitchen-report.mjs --dir target/kitchen
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kitchen-report-and-compat
+          path: |
+            target/kitchen/report.md
+            docs/compat/kitchen-display.md
           if-no-files-found: ignore
 
   soak:

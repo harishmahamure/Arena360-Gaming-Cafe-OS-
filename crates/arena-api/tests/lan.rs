@@ -5822,3 +5822,780 @@ async fn after_a_lapse_a_display_advances_only_tickets_that_already_exist() {
     .await;
     assert!(matches!(old.body, FrameBody::IntentResult(_)), "{old:?}");
 }
+
+// ---- Story 7.11: Journey 4 and the kitchen under load, timed ----
+
+const KOT_PRINTER: &str = r#"{"kind":"lan","id_or_addr":"192.168.1.50:9100","name":"Kitchen"}"#;
+
+/// A Basic branch with a kitchen item on the menu and the KOT task printing to a fake printer.
+struct KitchenRig {
+    fake: Arc<arena_tasks::printer::FakePrinter>,
+    burger: String,
+}
+
+async fn kitchen_rig(hub: &TestHub, device_cap: u32) -> KitchenRig {
+    let w = hub.writer.as_ref().unwrap();
+    w.submit_intent(intent(
+        system(),
+        IntentPayload::LicenceApply(arena_proto::LicenceApply {
+            standing: arena_proto::LicenceStanding::Verified,
+            clock_wrong: false,
+            tier: arena_proto::Tier::Basic,
+            flags: "kitchen,kiosk_orders".into(),
+            device_cap,
+            user_cap: 10,
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    let sql = format!("UPDATE settings SET value = '{KOT_PRINTER}' WHERE key = 'printer.selected'");
+    w.submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+        .await
+        .unwrap();
+    let burger = w
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: "Burger".into(),
+                category: "Food".into(),
+                price_minor: 12_000,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: false,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: true,
+                favourite: false,
+                active: true,
+                bundle: false,
+                components: Vec::new(),
+                kitchen_notes: None,
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone();
+    let fake = Arc::new(arena_tasks::printer::FakePrinter::new(Vec::new()));
+    let task = arena_tasks::ReceiptPrintTask::new(
+        w.clone(),
+        Arc::new(arena_core::SnapshotReader::open(&hub.path).unwrap()),
+        Arc::new(ManualClock::new(T0)),
+        fake.clone(),
+        Arc::default(),
+    );
+    tokio::spawn(task.run());
+    KitchenRig { fake, burger }
+}
+
+/// The ticket numbers of the KOT slips the fake printer has been sent, in the order sent.
+fn kot_numbers(fake: &arena_tasks::printer::FakePrinter) -> Vec<i64> {
+    fake.sent()
+        .iter()
+        .filter_map(|job| {
+            let text = String::from_utf8_lossy(&job.bytes).into_owned();
+            if !text.contains("KOT") {
+                return None;
+            }
+            let at = text.find("K-")? + 2;
+            let digits: String = text[at..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            digits.parse().ok()
+        })
+        .collect()
+}
+
+fn ticket_rows(hub: &TestHub) -> Vec<arena_store::Row> {
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .rows(arena_store::Table::KitchenTickets)
+        .unwrap()
+}
+
+fn board_ticket(
+    board: &arena_proto::KitchenBoard,
+    number: i64,
+) -> &arena_proto::KitchenBoardTicket {
+    board
+        .tickets
+        .iter()
+        .find(|t| t.number == number)
+        .expect("the ticket is on the board")
+}
+
+/// The next kitchen board the Hub pushes to `ws` that holds at least `tickets` tickets.
+async fn pushed_board<S: AsyncRead + AsyncWrite + Unpin>(
+    ws: &mut WebSocketStream<S>,
+    tickets: usize,
+) -> arena_proto::KitchenBoard {
+    loop {
+        let frame = recv_any(ws).await.expect("a pushed board");
+        if let FrameBody::Event(e) = frame.body
+            && let HubEvent::KitchenBoard(b) = e.event
+            && b.tickets.len() >= tickets
+        {
+            return *b;
+        }
+    }
+}
+
+/// Waits for the KOT slip of `number` to reach the fake printer; how long after `since`.
+async fn kot_within(
+    fake: &arena_tasks::printer::FakePrinter,
+    number: i64,
+    since: Instant,
+    limit: Duration,
+) -> Duration {
+    while !kot_numbers(fake).contains(&number) {
+        assert!(since.elapsed() < limit, "the KOT never reached the printer");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    since.elapsed()
+}
+
+/// Waits for a pushed `session.tick` that carries the order's ready copy; how long after `since`.
+async fn hud_ready_within(
+    events: &mut arena_kiosk_core::EventStream,
+    since: Instant,
+    limit: Duration,
+) -> Duration {
+    loop {
+        assert!(
+            since.elapsed() < limit,
+            "the ready copy never reached the PC"
+        );
+        let ev = tokio::time::timeout(limit, events.next_event())
+            .await
+            .expect("the ready copy reached the PC in time")
+            .unwrap();
+        if let HubEvent::SessionTick(s) = &ev
+            && s.orders.iter().any(|o| o.ready.is_some())
+        {
+            return since.elapsed();
+        }
+    }
+}
+
+/// Waits for the Hub to tell a staff client that a ticket changed and the snapshot to show the PC's
+/// ticket Ready (the tile's READY tag); how long after `since`.
+async fn tile_ready_within(
+    hub: &TestHub,
+    staff: &mut arena_kiosk_core::EventStream,
+    since: Instant,
+    limit: Duration,
+) -> Duration {
+    let reader = Arc::new(arena_core::SnapshotReader::open(&hub.path).unwrap());
+    let device = hub.paired_id.clone();
+    loop {
+        assert!(since.elapsed() < limit, "the tile never showed READY");
+        let ev = tokio::time::timeout(limit, staff.next_event())
+            .await
+            .expect("the tile heard of the change in time")
+            .unwrap();
+        let HubEvent::Applied(a) = ev else {
+            continue;
+        };
+        if !a.changes.iter().any(|c| c.tbl == "kitchen_tickets") {
+            continue;
+        }
+        let (reader, device) = (Arc::clone(&reader), device.clone());
+        let ready = tokio::task::spawn_blocking(move || {
+            reader
+                .snapshot(T0)
+                .unwrap()
+                .bills
+                .iter()
+                .any(|b| b.device_id == device && b.tickets.iter().any(|t| t.stage == "ready"))
+        })
+        .await
+        .unwrap();
+        if ready {
+            return since.elapsed();
+        }
+    }
+}
+
+fn write_out(var: &str, value: &serde_json::Value) {
+    println!("{var}: {value}");
+    if let Ok(out) = std::env::var(var) {
+        let out = PathBuf::from(out);
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(out, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    }
+}
+
+/// The Hub's half of the scripted Journey 4 (kiosk order, KOT, board New, Preparing, Ready, HUD
+/// copy, tile READY, Served), timed over the real LAN protocol. With `ARENA_KITCHEN_OUT` set the
+/// timings are written there for `scripts/kitchen-report.mjs`. Budgets come from `KITCHEN_KOT_MS`
+/// (3000), `KITCHEN_BOARD_MS` (2000), `KITCHEN_HUD_MS` (5000) and `KITCHEN_TILE_MS` (2000).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hub_side_of_journey_4_meets_its_timings() {
+    let hub = start("0.1.0", true).await;
+    let rig = kitchen_rig(&hub, 10).await;
+    rated_pc(&hub, 6_000).await;
+    start_postpaid(&hub, None).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    let mut kds = hub.plain().await;
+    hello_ok(
+        &mut kds,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let (staff_id, staff_token) =
+        register(hub.writer.as_ref().unwrap(), ClientClass::Paired, "Hub UI").await;
+    let _ = staff_id;
+    let staff = HubClient::connect(
+        &hub.url(),
+        &hub.fingerprint,
+        hub.hello(ClientClass::Paired, &staff_token, "0.1.0"),
+    )
+    .await
+    .unwrap();
+    let mut staff_events = staff.events().unwrap();
+    let limit = Duration::from_secs(10);
+
+    // The order from the seat: the KOT prints and the ticket is on the board as New.
+    let at = Instant::now();
+    assert_eq!(
+        place_frame(&client, &[(&rig.burger, 1)]).await.unwrap(),
+        arena_proto::ShopPlaceResult::Ok
+    );
+    let (kot, (board_ms, board)) = tokio::join!(kot_within(&rig.fake, 1, at, limit), async {
+        let b = pushed_board(&mut kds, 1).await;
+        (at.elapsed(), b)
+    });
+    assert_eq!(board_ticket(&board, 1).stage, "new");
+    assert_eq!(kot_numbers(&rig.fake), vec![1], "one KOT for the ticket");
+
+    // Preparing, then Ready: the PC's HUD copy and the tile's READY follow the tap.
+    let id = board_ticket(&board, 1).id.clone();
+    let advance = |to: &str| {
+        IntentPayload::KitchenAdvance(arena_proto::KitchenAdvance {
+            ticket_id: id.clone(),
+            to: to.into(),
+        })
+    };
+    let rev = board_ticket(&board, 1).rev;
+    let moved = kitchen_move(&mut kds, "p", advance("preparing"), rev).await;
+    assert!(
+        matches!(moved.body, FrameBody::IntentResult(_)),
+        "{moved:?}"
+    );
+    let board = match kitchen_board(&mut kds, "b1").await.body {
+        FrameBody::KitchenBoardResult(b) => b,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(board_ticket(&board, 1).stage, "preparing");
+    // Earlier events are harmless: the tile and the HUD only count once the ticket is Ready.
+    let at = Instant::now();
+    let (moved, hud, tile) = tokio::join!(
+        kitchen_move(&mut kds, "r", advance("ready"), board_ticket(&board, 1).rev),
+        hud_ready_within(&mut events, at, limit),
+        tile_ready_within(&hub, &mut staff_events, at, limit),
+    );
+    assert!(
+        matches!(moved.body, FrameBody::IntentResult(_)),
+        "{moved:?}"
+    );
+
+    let board = match kitchen_board(&mut kds, "b2").await.body {
+        FrameBody::KitchenBoardResult(b) => b,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(board_ticket(&board, 1).stage, "ready");
+    let served = kitchen_move(
+        &mut kds,
+        "s",
+        advance("served"),
+        board_ticket(&board, 1).rev,
+    )
+    .await;
+    assert!(
+        matches!(served.body, FrameBody::IntentResult(_)),
+        "{served:?}"
+    );
+
+    let ms = |d: Duration| d.as_millis() as u64;
+    let timings = serde_json::json!({
+        "source": "hub",
+        "kot_ms": ms(kot),
+        "board_ms": ms(board_ms),
+        "hud_ms": ms(hud),
+        "tile_ms": ms(tile),
+    });
+    write_out("ARENA_KITCHEN_OUT", &timings);
+    for (what, took, var, default) in [
+        ("KOT printed", kot, "KITCHEN_KOT_MS", 3_000),
+        ("ticket on the board", board_ms, "KITCHEN_BOARD_MS", 2_000),
+        ("HUD ready copy", hud, "KITCHEN_HUD_MS", 5_000),
+        ("tile READY", tile, "KITCHEN_TILE_MS", 2_000),
+    ] {
+        let allowed = budget_ms(var, default);
+        assert!(
+            ms(took) <= allowed,
+            "{what} took {} ms, the budget is {allowed} ms",
+            ms(took)
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unplugged_printer_raises_the_alert_and_the_board_still_gets_the_ticket() {
+    let hub = start("0.1.0", true).await;
+    let rig = kitchen_rig(&hub, 10).await;
+    rated_pc(&hub, 6_000).await;
+    start_postpaid(&hub, None).await;
+    rig.fake
+        .fail_with(Some(arena_tasks::printer::PrinterError::Refused(
+            "192.168.1.50:9100".parse().unwrap(),
+        )));
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut kds = hub.plain().await;
+    hello_ok(
+        &mut kds,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+
+    let at = Instant::now();
+    assert_eq!(
+        place_frame(&client, &[(&rig.burger, 1)]).await.unwrap(),
+        arena_proto::ShopPlaceResult::Ok
+    );
+    let board = pushed_board(&mut kds, 1).await;
+    assert_eq!(board_ticket(&board, 1).stage, "new");
+    let offline = |h: &TestHub| -> usize {
+        Store::open_reader(&h.path)
+            .unwrap()
+            .alerts()
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.kind == "printer_offline" && a.acked_at.is_none())
+            .count()
+    };
+    while offline(&hub) == 0 {
+        assert!(
+            at.elapsed() < Duration::from_secs(10),
+            "no printer-offline alert"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(offline(&hub), 1);
+    assert!(rig.fake.sent().is_empty(), "nothing printed");
+    write_out(
+        "ARENA_KITCHEN_UNPLUGGED_OUT",
+        &serde_json::json!({ "source": "unplugged", "alert": true, "board": true }),
+    );
+}
+
+/// A plain-HTTP socket that does not borrow the hub, so a task can own it.
+async fn owned_plain(web: SocketAddr) -> WebSocketStream<TcpStream> {
+    let tcp = TcpStream::connect(web).await.unwrap();
+    let url = format!("ws://127.0.0.1:{}/ws", web.port());
+    tokio_tungstenite::client_async(url, tcp).await.unwrap().0
+}
+
+/// Keeps the newest kitchen board a display was pushed.
+struct BoardFollower {
+    last: Arc<Mutex<Option<arena_proto::KitchenBoard>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl BoardFollower {
+    fn follow<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+        mut ws: WebSocketStream<S>,
+    ) -> Self {
+        let last = Arc::new(Mutex::new(None));
+        let keep = Arc::clone(&last);
+        let task = tokio::spawn(async move {
+            // A display pings every 15 s, or the Hub closes a silent session after 45 s.
+            let mut ping = tokio::time::interval(Duration::from_secs(15));
+            let mut n = 0u32;
+            loop {
+                let message = tokio::select! {
+                    m = ws.next() => match m {
+                        Some(Ok(m)) => m,
+                        _ => return,
+                    },
+                    _ = ping.tick() => {
+                        n += 1;
+                        let text = format!(r#"{{"v":1,"kind":"ping","rid":"k{n}"}}"#);
+                        if ws.send(Message::text(text)).await.is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                };
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                if let Ok(frame) = parse_frame(text.as_str())
+                    && let FrameBody::Event(e) = frame.body
+                    && let HubEvent::KitchenBoard(b) = e.event
+                {
+                    *keep.lock().unwrap() = Some(*b);
+                }
+            }
+        });
+        Self { last, task }
+    }
+
+    fn board(&self) -> Option<arena_proto::KitchenBoard> {
+        self.last.lock().unwrap().clone()
+    }
+}
+
+impl Drop for BoardFollower {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// `kiosks` paired PCs, each with a running postpaid session, and a client on each.
+async fn kiosk_floor(hub: &TestHub, kiosks: usize) -> Vec<Arc<HubClient>> {
+    let group = rated_pc(hub, 6_000).await;
+    let w = hub.writer.as_ref().unwrap();
+    let mut floor = vec![(hub.paired_id.clone(), hub.paired())];
+    for n in 1..kiosks {
+        let (id, token) = register(w, ClientClass::Paired, &format!("PC {:02}", n + 1)).await;
+        w.submit_intent(intent(
+            owner(),
+            IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                device_id: id.clone(),
+                group_id: Some(group.clone()),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+        floor.push((id, hub.hello(ClientClass::Paired, &token, "0.1.0")));
+    }
+    let mut clients = Vec::new();
+    for (id, hello) in floor {
+        w.submit_intent(intent(
+            owner(),
+            IntentPayload::SessionStart(arena_proto::SessionStart {
+                group_with: None,
+                pay_from_wallet: false,
+                device_id: id,
+                mode: arena_proto::SessionMode::Postpaid,
+                player_id: None,
+                pack_id: None,
+                plan_id: None,
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+        clients.push(Arc::new(
+            HubClient::connect(&hub.url(), &hub.fingerprint, hello)
+                .await
+                .unwrap(),
+        ));
+    }
+    clients
+}
+
+/// 95th percentile of `ms` (nearest rank).
+fn p95(ms: &mut [u64]) -> u64 {
+    ms.sort_unstable();
+    ms.get((ms.len() * 95).div_ceil(100).saturating_sub(1))
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Places orders at `rate` per second for `secs` across `kiosks` PCs while two displays follow the
+/// board; every KOT must print once, within `KITCHEN_P95_MS` (3000) at the 95th percentile, and
+/// both boards must end equal to the Hub's tickets. Written to `ARENA_KITCHEN_BURST_OUT`.
+async fn burst(rate: u64, secs: u64, kiosks: usize) {
+    let hub = start("0.1.0", true).await;
+    let rig = kitchen_rig(&hub, 40).await;
+    let clients = kiosk_floor(&hub, kiosks).await;
+    let mut boards = Vec::new();
+    for _ in 0..2 {
+        let mut ws = owned_plain(hub.web).await;
+        hello_ok(
+            &mut ws,
+            hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+        )
+        .await;
+        boards.push(BoardFollower::follow(ws));
+    }
+    let total = (rate * secs) as usize;
+
+    // Watches the tickets and the printer: when each ticket first showed in the database and when
+    // its KOT first reached the printer.
+    let watching = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let watcher = {
+        let (watching, fake, path) = (Arc::clone(&watching), rig.fake.clone(), hub.path.clone());
+        tokio::spawn(async move {
+            let mut created: std::collections::HashMap<i64, Instant> = Default::default();
+            let mut printed: std::collections::HashMap<i64, Instant> = Default::default();
+            while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                let now = Instant::now();
+                let rows = tokio::task::spawn_blocking({
+                    let path = path.clone();
+                    move || {
+                        Store::open_reader(&path)
+                            .unwrap()
+                            .rows(arena_store::Table::KitchenTickets)
+                            .unwrap()
+                    }
+                })
+                .await
+                .unwrap();
+                for row in rows {
+                    if let Ok(n) = column(&row, "number").parse() {
+                        created.entry(n).or_insert(now);
+                    }
+                }
+                for n in kot_numbers(&fake) {
+                    printed.entry(n).or_insert_with(Instant::now);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            (created, printed)
+        })
+    };
+
+    let mut tick = tokio::time::interval(Duration::from_millis(1000 / rate));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut placing = Vec::new();
+    for n in 0..total {
+        tick.tick().await;
+        let client = Arc::clone(&clients[n % clients.len()]);
+        let burger = rig.burger.clone();
+        placing.push(tokio::spawn(async move {
+            place_frame(&client, &[(&burger, 1)]).await.unwrap()
+        }));
+    }
+    for placed in placing {
+        assert_eq!(placed.await.unwrap(), arena_proto::ShopPlaceResult::Ok);
+    }
+    // Everything placed: wait for the last KOT and the last board.
+    let settle = Instant::now();
+    while kot_numbers(&rig.fake).len() < total
+        || boards
+            .iter()
+            .any(|b| b.board().is_none_or(|b| b.tickets.len() < total))
+    {
+        assert!(
+            settle.elapsed() < Duration::from_secs(30),
+            "the KOTs or boards never caught up: {} of {total} KOTs, boards {:?}, warnings {:?}",
+            kot_numbers(&rig.fake).len(),
+            boards
+                .iter()
+                .map(|b| b.board().map(|b| b.tickets.len()))
+                .collect::<Vec<_>>(),
+            log_text()
+                .lines()
+                .filter(|l| l.contains("WARN") && !l.contains("reported version"))
+                .take(3)
+                .collect::<Vec<_>>(),
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    watching.store(false, std::sync::atomic::Ordering::Relaxed);
+    let (created, printed) = watcher.await.unwrap();
+
+    let mut numbers = kot_numbers(&rig.fake);
+    numbers.sort_unstable();
+    let once = numbers == (1..=total as i64).collect::<Vec<_>>();
+    let mut latencies: Vec<u64> = created
+        .iter()
+        .filter_map(|(n, made)| {
+            printed
+                .get(n)
+                .map(|p| p.saturating_duration_since(*made).as_millis() as u64)
+        })
+        .collect();
+    let p95_ms = p95(&mut latencies);
+
+    let hub_tickets: std::collections::BTreeSet<(i64, String)> = ticket_rows(&hub)
+        .iter()
+        .map(|r| (column(r, "number").parse().unwrap(), column(r, "stage")))
+        .collect();
+    let boards_match = boards.iter().all(|b| {
+        let seen: std::collections::BTreeSet<(i64, String)> = b
+            .board()
+            .unwrap()
+            .tickets
+            .iter()
+            .map(|t| (t.number, t.stage.clone()))
+            .collect();
+        seen == hub_tickets
+    });
+    let report = serde_json::json!({
+        "source": "burst",
+        "rate": rate,
+        "secs": secs,
+        "kiosks": kiosks,
+        "displays": 2,
+        "orders": total,
+        "kots": numbers.len(),
+        "kot_once_each": once,
+        "kot_p95_ms": p95_ms,
+        "boards_match": boards_match,
+    });
+    write_out("ARENA_KITCHEN_BURST_OUT", &report);
+    assert!(once, "every KOT prints once: {numbers:?}");
+    assert!(boards_match, "both boards match the Hub");
+    let allowed = budget_ms("KITCHEN_P95_MS", 3_000);
+    assert!(
+        p95_ms <= allowed,
+        "KOT p95 was {p95_ms} ms, the budget is {allowed} ms"
+    );
+}
+
+/// A few seconds of the burst, so the ordinary suite exercises the path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_short_burst_across_twenty_kiosks_prints_every_kot_once_and_the_boards_match() {
+    burst(5, 3, 20).await;
+}
+
+/// The release burst: 5 orders per second for `KITCHEN_BURST_SECS` (60) across 20 kiosks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the release burst; run by release-bench.yml"]
+async fn five_orders_a_second_for_a_minute_across_twenty_kiosks() {
+    burst(5, budget_ms("KITCHEN_BURST_SECS", 60), 20).await;
+}
+
+/// A short soak so the ordinary suite exercises the path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forty_orders_flow_through_the_kitchen_with_nothing_lost() {
+    soak(40).await;
+}
+
+/// `KITCHEN_SOAK_ORDERS` (500) orders go through the kitchen, each ticket taken New to Served by a
+/// display, and nothing is lost: every ticket Served, every KOT printed once. The outcome is
+/// written to `ARENA_KITCHEN_SOAK_OUT` with `KITCHEN_SOAK_LABEL` (`wan-up` or `wan-down`) so the
+/// report can check that a run with no route out differs from one with a route in nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the release soak; run by release-bench.yml"]
+async fn five_hundred_orders_flow_through_the_kitchen_with_nothing_lost() {
+    soak(budget_ms("KITCHEN_SOAK_ORDERS", 500) as usize).await;
+}
+
+async fn soak(orders: usize) {
+    let pause = Duration::from_millis(
+        budget_ms("KITCHEN_SOAK_SPREAD_SECS", 0) * 1000 / orders.max(1) as u64,
+    );
+    let hub = start("0.1.0", true).await;
+    let rig = kitchen_rig(&hub, 40).await;
+    let clients = kiosk_floor(&hub, 5).await;
+    let mut observer = owned_plain(hub.web).await;
+    hello_ok(
+        &mut observer,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let follower = BoardFollower::follow(observer);
+    let mut display = hub.plain().await;
+    hello_ok(
+        &mut display,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+
+    let mut advances = 0usize;
+    for n in 0..orders {
+        let number = n as i64 + 1;
+        assert_eq!(
+            place_frame(&clients[n % clients.len()], &[(&rig.burger, 1)])
+                .await
+                .unwrap(),
+            arena_proto::ShopPlaceResult::Ok
+        );
+        for (from, to) in [
+            ("new", "preparing"),
+            ("preparing", "ready"),
+            ("ready", "served"),
+        ] {
+            // The display moves a ticket on the rev it last saw, as the tablet does.
+            let waited = Instant::now();
+            let seen = loop {
+                let found = follower
+                    .board()
+                    .and_then(|b| b.tickets.iter().find(|t| t.number == number).cloned());
+                if let Some(t) = found
+                    && t.stage == from
+                {
+                    break t;
+                }
+                assert!(
+                    waited.elapsed() < Duration::from_secs(10),
+                    "ticket {number} never reached the board as {from}"
+                );
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            };
+            let moved = kitchen_move(
+                &mut display,
+                &format!("m{number}{to}"),
+                IntentPayload::KitchenAdvance(arena_proto::KitchenAdvance {
+                    ticket_id: seen.id,
+                    to: to.into(),
+                }),
+                seen.rev,
+            )
+            .await;
+            assert!(
+                matches!(moved.body, FrameBody::IntentResult(_)),
+                "{moved:?}"
+            );
+            advances += 1;
+        }
+        // The release soak spreads its orders over `KITCHEN_SOAK_SPREAD_SECS` (8 hours), the display
+        // pinging as a tablet does so the Hub keeps its session.
+        let mut left = pause;
+        while !left.is_zero() {
+            let slice = left.min(Duration::from_secs(15));
+            tokio::time::sleep(slice).await;
+            left -= slice;
+            send(&mut display, r#"{"v":1,"kind":"ping","rid":"soak-ping"}"#).await;
+        }
+    }
+    let settle = Instant::now();
+    while kot_numbers(&rig.fake).len() < orders {
+        assert!(
+            settle.elapsed() < Duration::from_secs(30),
+            "KOTs never caught up"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let rows = ticket_rows(&hub);
+    let served = rows
+        .iter()
+        .filter(|r| column(r, "stage") == "served")
+        .count();
+    let mut numbers = kot_numbers(&rig.fake);
+    numbers.sort_unstable();
+    let duplicate = numbers.windows(2).filter(|w| w[0] == w[1]).count();
+    let outcome = serde_json::json!({
+        "source": "soak",
+        "label": std::env::var("KITCHEN_SOAK_LABEL").unwrap_or_else(|_| "local".into()),
+        "orders": orders,
+        "tickets": rows.len(),
+        "served": served,
+        "advances": advances,
+        "kots": numbers.len(),
+        "duplicate_kots": duplicate,
+        "lost": orders.saturating_sub(served),
+    });
+    write_out("ARENA_KITCHEN_SOAK_OUT", &outcome);
+    assert_eq!(rows.len(), orders);
+    assert_eq!(served, orders, "every ticket is Served");
+    assert_eq!(advances, orders * 3);
+    assert_eq!(duplicate, 0, "no KOT printed twice");
+    assert_eq!(numbers, (1..=orders as i64).collect::<Vec<_>>());
+}

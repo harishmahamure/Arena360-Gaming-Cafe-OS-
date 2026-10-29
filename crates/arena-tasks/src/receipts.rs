@@ -991,7 +991,8 @@ mod tests {
         }
     }
 
-    /// Story 5.39, the monthly hardware job (`.github/workflows/hardware-bench.yml`): a sale
+    /// Story 5.39, the monthly hardware job (`.github/workflows/hardware-bench.yml`; Story 7.11 adds
+    /// the KOT of a kitchen ticket, which must print within 3 s): a sale
     /// receipt, the Z-report and a drawer kick go through the real adapter to every printer in
     /// `ARENA_HW_PRINTERS`, a JSON list of `{kind, id_or_addr, name, paper}` (`paper` is the roll
     /// loaded, "58" or "80"). Each job must come back `done`. The outcome per printer is written
@@ -1018,7 +1019,7 @@ mod tests {
             })
             .to_string();
             let mut outcome = serde_json::Map::new();
-            for job in ["receipt", "z_report", "drawer"] {
+            for job in ["receipt", "z_report", "drawer", "kot"] {
                 let f = fixture(Some(&selected)).await;
                 let paper = text("paper");
                 let sql =
@@ -1036,6 +1037,7 @@ mod tests {
                         queued(&f, row, "O1", r#"{"reprint":false,"by":"s"}"#).await;
                     }
                     "z_report" => queued_z(&f, row, r#"{"reprint":false,"by":"s"}"#).await,
+                    "kot" => kot_queued(&f, row, "queued", r#"{"reprint":false,"by":"s"}"#).await,
                     _ => queued_drawer(&f, row).await,
                 }
                 let task = ReceiptPrintTask::new(
@@ -1045,8 +1047,14 @@ mod tests {
                     Arc::new(crate::printer::SystemPrinter::new()),
                     f.jobs.clone(),
                 );
+                let started = std::time::Instant::now();
                 task.drain().await;
-                let (s, error) = state(&f, row);
+                let took = started.elapsed();
+                let (mut s, error) = state(&f, row);
+                // Story 7.11: a KOT slower than 3 s fails the printer even when it came out.
+                if job == "kot" && s == "done" && took > std::time::Duration::from_secs(3) {
+                    s = format!("slow ({} ms)", took.as_millis());
+                }
                 if s != "done" {
                     failed.push(format!(
                         "{} {job}: {}",

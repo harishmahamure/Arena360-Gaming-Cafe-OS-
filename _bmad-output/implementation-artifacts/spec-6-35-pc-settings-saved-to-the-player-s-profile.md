@@ -2,7 +2,7 @@
 title: 'Story 6.35: PC settings saved to the player''s profile'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'd5601b9d031a5d2bdfb075dccb47c3be83e7ba8f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -76,6 +76,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- 2026-10-29 code review: fixed an unreadable stored baseline being overwritten with the player's already-changed values (and cleanup treating it as "nothing to restore"); `apply_saved` now stops if the session ended while the Hub/PC were being asked. Deferred as design choices or low-impact: picking the PC's current display mode is not saved; a failed "Keep this" save leaves the mode applied but unsaved (spec: stays for the session); Windows helper `Ok(None)` when no player token (cleanup must not fail once the player has logged off); saved display mode has no revert countdown; Hub does not re-check the allowed-mode list (kiosk enforces it).
 
 ## Verification
 

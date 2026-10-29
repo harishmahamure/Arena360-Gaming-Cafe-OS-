@@ -179,18 +179,19 @@ fn operating(ctx: &Ctx) -> crate::operating::KioskOperating {
 
 // ---- The baseline ----
 
-fn kv_read(ctx: &Ctx) -> Option<PcSettings> {
+/// `Err` when the stored baseline cannot be read: it may exist, so nothing may record over it.
+fn kv_read(ctx: &Ctx) -> Result<Option<PcSettings>, ()> {
     let stored = ctx
         .queue
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .kv_get(BASELINE_KEY);
     match stored {
-        Ok(Some((v, _))) if !v.is_empty() => serde_json::from_str(&v).ok(),
-        Ok(_) => None,
+        Ok(Some((v, _))) if !v.is_empty() => Ok(serde_json::from_str(&v).ok()),
+        Ok(_) => Ok(None),
         Err(e) => {
             tracing::error!(error = %e, "the PC settings baseline cannot be read");
-            None
+            Err(())
         }
     }
 }
@@ -210,18 +211,23 @@ fn kv_write(ctx: &Ctx, baseline: Option<&PcSettings>) {
 }
 
 /// The PC's own values, recorded before this session's first change.
-fn baseline(ctx: &Ctx) -> Option<PcSettings> {
+fn baseline_checked(ctx: &Ctx) -> Result<Option<PcSettings>, ()> {
     let mut inner = ctx.pc_settings.lock();
     if inner.baseline.is_none() {
-        inner.baseline = Some(kv_read(ctx));
+        // A failed read is not cached, so the next call reads again.
+        inner.baseline = Some(kv_read(ctx)?);
     }
-    inner.baseline.clone().flatten()
+    Ok(inner.baseline.clone().flatten())
+}
+
+fn baseline(ctx: &Ctx) -> Option<PcSettings> {
+    baseline_checked(ctx).ok().flatten()
 }
 
 /// Records `snap` as the baseline unless one is already recorded (a session that starts while an
 /// earlier cleanup failed keeps the earlier, truer one).
 fn record_baseline(ctx: &Ctx, snap: &PcSnapshot) {
-    if baseline(ctx).is_some() {
+    if !matches!(baseline_checked(ctx), Ok(None)) {
         return;
     }
     let base = PcSettings {
@@ -512,6 +518,10 @@ pub async fn apply_saved(ctx: &Arc<Ctx>, saved: PcSettings) {
             return;
         }
     };
+    if !has_session(ctx) {
+        // The session ended while the Hub and the PC were being asked.
+        return;
+    }
     record_baseline(ctx, &snapshot);
     // The display first, then the rest: a skipped one never stops the others.
     let skip = |field: &str| {
@@ -576,7 +586,9 @@ pub async fn apply_saved(ctx: &Arc<Ctx>, saved: PcSettings) {
 pub fn restore(ctx: &Ctx) -> Result<(), String> {
     // A display change still waiting for "Keep this" must not fire after the session.
     ctx.pc_settings.take_pending();
-    let Some(base) = baseline(ctx) else {
+    let Some(base) =
+        baseline_checked(ctx).map_err(|()| "the PC settings baseline cannot be read".to_owned())?
+    else {
         return Ok(());
     };
     let Some(host) = ctx.pc_settings.host() else {

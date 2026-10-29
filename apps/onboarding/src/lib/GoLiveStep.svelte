@@ -8,7 +8,7 @@
   import { STEP_NAMES, advance, wizard } from "./wizard.svelte";
 
   const POLL_MS = 5000;
-  const dashboard = PUBLIC_OWNER_URL.replace(/\/$/, "") + "/account/branches";
+  const dashboard = PUBLIC_OWNER_URL.replace(/\/$/, "") + "/";
   let view = $state<GoLiveView | null>(null);
   let busy = $state(false);
   let error: MessageKey | null = $state(null);

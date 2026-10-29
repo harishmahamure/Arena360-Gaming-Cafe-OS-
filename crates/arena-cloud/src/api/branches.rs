@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AddBranch, AppError, BranchCodeSet, BranchHub, ErrorCode, OwnerBranch, SetBranchCode, Tier,
-    UpdateBranch, valid_branch_code,
+    AddBranch, AppError, BranchCodeSet, BranchHub, BranchSetupProgress, ErrorCode, OwnerBranch,
+    SetBranchCode, Tier, UpdateBranch, valid_branch_code,
 };
 use arena_store::control::{Branch, BranchCodeOutcome, BranchProfile};
 use axum::extract::State;
@@ -31,6 +31,14 @@ pub(super) async fn tier_of(st: &AuthState, branch_id: &str) -> Result<Tier, Api
 async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
     let tier = tier_of(st, &b.id).await?;
     let hub = st.db.active_hub(&b.id).await.map_err(ApiError::internal)?;
+    let states: Vec<_> = st
+        .db
+        .onboarding_progress(&b.id)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(|p| (p.step, p.state))
+        .collect();
     Ok(OwnerBranch {
         id: b.id.clone(),
         name: b.name.clone(),
@@ -44,6 +52,8 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
             .map(|f| (*f).to_owned())
             .collect(),
         live: b.live_at.is_some(),
+        live_at: b.live_at,
+        setup: BranchSetupProgress::of(&states),
         hub: BranchHub {
             paired: hub.is_some(),
             platform: hub.as_ref().map(|h| h.platform),

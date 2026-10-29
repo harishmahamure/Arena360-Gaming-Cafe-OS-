@@ -12,6 +12,18 @@ export const shell = $state({
 export const isFree = () =>
   !!shell.branches?.length && shell.branches.every((b) => b.tier === "free");
 
+/** A branch is live once Go live set `live_at` (Story 2.31). */
+export const isLive = (b: OwnerBranch) => b.live_at !== null;
+
+/**
+ * The shared live-branch list: every branch-scoped screen takes its branches from here, so a
+ * branch appears only once it is live and no screen carries its own filter.
+ */
+export const liveBranches = () => (shell.branches ?? []).filter(isLive);
+
+/** Every branch still in setup: the screens say "Available after … goes live" for these. */
+export const setupBranches = () => (shell.branches ?? []).filter((b) => !isLive(b));
+
 let pending: Promise<void> | null = null;
 
 export const refresh = () => (pending ??= run().finally(() => (pending = null)));

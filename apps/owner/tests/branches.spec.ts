@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { FREE, PAID, stubCloud, t } from "./stub";
+import { FREE, PAID, inSetup, stubCloud, t } from "./stub";
 
 test("each branch shows name, code, plan, setup state and Hub status", async ({ page }) => {
   const live = [
@@ -8,7 +8,7 @@ test("each branch shows name, code, plan, setup state and Hub status", async ({ 
       live: true,
       hub: { paired: true, platform: "android" as const, last_seen_at: Date.now() - 180_000 },
     },
-    PAID[1],
+    inSetup(PAID[1]),
   ];
   await stubCloud(page, live);
   await page.goto("/account/branches");

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { FREE, PAID, stubCloud, t } from "./stub";
+import { FREE, PAID, inSetup, stubCloud, t } from "./stub";
 
 const ROUTES = [
   "/",
@@ -18,6 +18,8 @@ for (const theme of ["light", "dark", "hc"] as const) {
   for (const [name, branches] of [
     ["paid", PAID],
     ["free", FREE],
+    ["live and setup", [PAID[0], inSetup({ ...PAID[1], tier: "basic" })]],
+    ["all in setup", [inSetup(PAID[0]), inSetup({ ...PAID[1], tier: "basic" })]],
   ] as const) {
     for (const route of ROUTES) {
       test(`${route} (${theme}, ${name}): landmarks, one h1, targets and axe`, async ({ page }) => {

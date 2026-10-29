@@ -2,7 +2,8 @@
   import { Button, TierLock, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type { Snippet } from "svelte";
-  import { isFree, refresh, shell } from "./shell.svelte";
+  import SetupGate from "./SetupGate.svelte";
+  import { isFree, isLive, refresh, setupBranches, shell } from "./shell.svelte";
 
   /** `all`: the section draws its own per-branch entries (Today), so paid tenants get `children` once. */
   let {
@@ -10,7 +11,9 @@
     scope = "branch",
     children,
   }: { title: MessageKey; scope?: "branch" | "all"; children?: Snippet } = $props();
-  const mixed = $derived(shell.branches?.some((b) => b.tier === "free"));
+  // Free limits apply once a branch is live; until then it is in setup mode.
+  const locked = $derived(isFree() && !setupBranches().length);
+  const mixed = $derived(shell.branches?.some((b) => b.tier === "free" || !isLive(b)));
 </script>
 
 <svelte:head><title>{t("app.title", { surface: t(title) })}</title></svelte:head>
@@ -28,14 +31,20 @@
 {:else if !shell.branches}
   <p>{t("owner.unavailable")}</p>
   <Button label="common.retry" variant="secondary" onclick={refresh} />
-{:else if isFree()}
+{:else if locked}
   <TierLock tier="Basic" />
 {:else if mixed && scope === "branch"}
   <ul class="branches">
     {#each shell.branches as b (b.id)}
       <li>
         <h2 class="type-hub-label">{b.name}</h2>
-        {#if b.tier === "free"}<TierLock tier="Basic" />{:else}{@render body()}{/if}
+        {#if !isLive(b)}
+          <SetupGate branch={b} />
+        {:else if b.tier === "free"}
+          <TierLock tier="Basic" />
+        {:else}
+          {@render body()}
+        {/if}
       </li>
     {/each}
   </ul>

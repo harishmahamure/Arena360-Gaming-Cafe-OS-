@@ -77,21 +77,21 @@ test("Go live ends on the done screen that opens the dashboard", async ({ page }
   expect(cloud.goLivePosts).toBe(1);
   await expect(page.getByTestId("golive-dashboard")).toHaveAttribute(
     "href",
-    /\/account\/branches$/,
+    "https://app.arena360.cloud/",
   );
   const axe = await new AxeBuilder({ page }).analyze();
   expect(axe.violations).toEqual([]);
 });
 
-test("a live branch's wizard URL goes to the dashboard", async ({ page }) => {
+test("a live branch's wizard URL goes to the Owner app dashboard (Today)", async ({ page }) => {
   await stubCloud(page, {
     signedIn: true,
     owner: READY_OWNER,
     wizard: { branch: {}, done: [...BEFORE, "go_live"], hubPaired: true, goLive: { live: true } },
   });
-  await page.route("**/account/branches", (route) =>
-    route.fulfill({ body: "<h1>branches</h1>", contentType: "text/html" }),
+  await page.route("https://app.arena360.cloud/", (route) =>
+    route.fulfill({ body: "<h1>today</h1>", contentType: "text/html" }),
   );
   await page.goto("/setup");
-  await expect(page).toHaveURL(/\/account\/branches$/);
+  await expect(page).toHaveURL("https://app.arena360.cloud/");
 });

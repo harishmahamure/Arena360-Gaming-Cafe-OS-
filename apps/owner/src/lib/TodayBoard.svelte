@@ -2,8 +2,10 @@
   import { Button, TierLock, formatMoney, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount } from "svelte";
+  import type { OwnerBranch } from "@arena/ui/generated";
+  import SetupCard from "./SetupCard.svelte";
   import TodayCard from "./TodayCard.svelte";
-  import { shell } from "./shell.svelte";
+  import { isLive, refresh, setupBranches, shell } from "./shell.svelte";
   import {
     TICK_MS,
     attentionOf,
@@ -17,6 +19,8 @@
   } from "./today.svelte";
 
   const PULL_PX = 80;
+  /** How often a visible Today re-reads the branches while one is still in setup. */
+  const BRANCH_POLL_MS = 60_000;
   const LINES: Record<string, MessageKey> = {
     shift_variance: "owner.today.attention.shift_variance",
     low_stock: "owner.today.attention.low_stock",
@@ -27,6 +31,7 @@
   let now = $state(Date.now());
   let pullFrom: number | null = null;
   let started = false;
+  const seen = new Set<string>();
 
   const branches = $derived(shell.branches ?? []);
   const paid = $derived(showable(shell.branches));
@@ -53,21 +58,39 @@
     });
   };
 
-  async function reload(force: boolean, report = false) {
+  /** Fetches these branches now and sends their data age. */
+  async function fetchNow(list: OwnerBranch[]) {
     now = Date.now();
-    if (force) busy.refreshing = true;
+    busy.refreshing = true;
     try {
-      await fetchDue(paid, force, report);
+      await fetchDue(list, true, true);
     } finally {
       busy.refreshing = false;
     }
   }
 
-  // The first fetch once the branches are known; cached copies show at once.
+  /** The Refresh button and pull-to-refresh also re-read the branches, so a new go-live shows. */
+  async function reload(force: boolean) {
+    now = Date.now();
+    if (!force) return fetchDue(paid, false);
+    busy.refreshing = true;
+    try {
+      await refresh();
+      await fetchDue(paid, true);
+    } finally {
+      busy.refreshing = false;
+    }
+  }
+
+  // The first fetch of each live branch, on open and when a branch goes live while Today is open;
+  // cached copies show at once. Branches in setup make no call.
   $effect(() => {
-    if (!shell.ready || started || !paid.length) return;
+    if (!shell.ready) return;
+    const fresh = paid.filter((b) => !seen.has(b.id));
+    if (!fresh.length) return;
+    for (const b of fresh) seen.add(b.id);
     started = true;
-    void showCached(paid).then(() => reload(true, true));
+    void showCached(fresh).then(() => fetchNow(fresh));
   });
 
   onMount(() => {
@@ -77,9 +100,14 @@
       if (document.visibilityState === "visible" && started) void reload(false);
     };
     const tick = setInterval(due, TICK_MS);
+    // A branch in setup goes live somewhere else (the wizard), so Today re-reads the branches.
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible" && setupBranches().length) void refresh();
+    }, BRANCH_POLL_MS);
     document.addEventListener("visibilitychange", due);
     return () => {
       clearInterval(tick);
+      clearInterval(poll);
       document.removeEventListener("visibilitychange", due);
     };
   });
@@ -94,16 +122,20 @@
 </script>
 
 <div class="board" role="presentation" ontouchstart={down} ontouchend={up}>
-  <div class="bar">
-    <Button label="owner.today.refresh" variant="secondary" onclick={() => reload(true)} />
-    <span role="status" class="type-hub-label"
-      >{busy.refreshing ? t("owner.today.refreshing") : ""}</span
-    >
-  </div>
+  {#if paid.length}
+    <div class="bar">
+      <Button label="owner.today.refresh" variant="secondary" onclick={() => reload(true)} />
+      <span role="status" class="type-hub-label"
+        >{busy.refreshing ? t("owner.today.refreshing") : ""}</span
+      >
+    </div>
+  {/if}
   <ul class="cards">
     {#each branches as b (b.id)}
       <li>
-        {#if b.tier === "free"}
+        {#if !isLive(b)}
+          <SetupCard branch={b} />
+        {:else if b.tier === "free"}
           <h2 class="type-hub-label">{b.name}</h2>
           <TierLock tier="Basic" />
         {:else}
@@ -112,18 +144,20 @@
       </li>
     {/each}
   </ul>
-  <section aria-labelledby="attention-h">
-    <h2 id="attention-h" class="type-hub-title">{t("owner.today.attention")}</h2>
-    {#if attention.length}
-      <ul class="attention">
-        {#each attention as a (a.branch + a.kind + a.ref)}
-          <li>{line(a)}</li>
-        {/each}
-      </ul>
-    {:else}
-      <p>{t("owner.today.attention.none")}</p>
-    {/if}
-  </section>
+  {#if paid.length}
+    <section aria-labelledby="attention-h">
+      <h2 id="attention-h" class="type-hub-title">{t("owner.today.attention")}</h2>
+      {#if attention.length}
+        <ul class="attention">
+          {#each attention as a (a.branch + a.kind + a.ref)}
+            <li>{line(a)}</li>
+          {/each}
+        </ul>
+      {:else}
+        <p>{t("owner.today.attention.none")}</p>
+      {/if}
+    </section>
+  {/if}
 </div>
 
 <style>

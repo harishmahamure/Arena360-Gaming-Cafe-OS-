@@ -344,8 +344,40 @@ pub struct OwnerBranch {
     pub tier: Tier,
     pub flags: Vec<String>,
     pub live: bool,
+    /// When Go live was pressed; null until then (Story 2.31).
+    #[ts(type = "number | null")]
+    pub live_at: Option<i64>,
+    pub setup: BranchSetupProgress,
     pub hub: BranchHub,
     pub waiting: bool,
+}
+
+/// How far a branch's setup wizard has come (Story 8.14): steps no longer pending, of ten, and the
+/// first one still to do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BranchSetupProgress {
+    pub steps_done: u32,
+    pub steps_total: u32,
+    pub next_step: WizardStep,
+}
+
+impl BranchSetupProgress {
+    pub fn of(states: &[(WizardStep, StepState)]) -> Self {
+        let done = WizardStep::ALL
+            .iter()
+            .filter(|step| {
+                states
+                    .iter()
+                    .any(|(s, state)| s == *step && *state != StepState::Pending)
+            })
+            .count();
+        Self {
+            steps_done: u32::try_from(done).unwrap_or(0),
+            steps_total: u32::try_from(WizardStep::ALL.len()).unwrap_or(0),
+            next_step: current_step(states),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -524,6 +556,25 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&s).unwrap(),
             r#"{"current":"cafe","steps":[]}"#
+        );
+    }
+
+    #[test]
+    fn setup_progress_counts_steps_no_longer_pending_and_names_the_next() {
+        let none = BranchSetupProgress::of(&[]);
+        assert_eq!(
+            (none.steps_done, none.steps_total, none.next_step),
+            (0, 10, WizardStep::Cafe)
+        );
+        let some = BranchSetupProgress::of(&[
+            (WizardStep::Cafe, StepState::Done),
+            (WizardStep::Tier, StepState::Done),
+            (WizardStep::InstallHub, StepState::Pending),
+            (WizardStep::Products, StepState::Skipped),
+        ]);
+        assert_eq!(
+            (some.steps_done, some.next_step),
+            (3, WizardStep::InstallHub)
         );
     }
 }

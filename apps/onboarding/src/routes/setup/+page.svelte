@@ -7,7 +7,7 @@
     const state = wizard.state;
     if (!state) return;
     if (state.steps.some((s) => s.key === "go_live" && s.state === "done")) {
-      location.replace(PUBLIC_OWNER_URL.replace(/\/$/, "") + "/account/branches");
+      location.replace(PUBLIC_OWNER_URL.replace(/\/$/, "") + "/");
     } else goto(stepPath(state.current), { replaceState: true });
   });
 </script>

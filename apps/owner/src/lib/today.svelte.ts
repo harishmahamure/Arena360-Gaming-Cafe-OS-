@@ -2,7 +2,7 @@ import type { OwnerBranch, OwnerLive } from "@arena/ui/generated";
 import { currencyOf, type formatMoney } from "@arena/ui";
 import { load, send } from "./api";
 import { getCached } from "./cache";
-import { refresh } from "./shell.svelte";
+import { isLive, refresh } from "./shell.svelte";
 
 type MoneyLocale = Parameters<typeof formatMoney>[1];
 
@@ -29,9 +29,9 @@ const path = (id: string) => `/branches/${encodeURIComponent(id)}/live`;
 const fetchedAt: Record<string, number> = {};
 const reported = new Set<string>();
 
-/** The branches whose figures Today shows: the paid ones (setup mode arrives with Story 8.14). */
+/** The branches whose figures Today shows: the live paid ones (setup branches get a setup card). */
 export const showable = (branches: OwnerBranch[] | null) =>
-  (branches ?? []).filter((b) => b.tier !== "free");
+  (branches ?? []).filter((b) => b.tier !== "free" && isLive(b));
 
 export const cadenceOf = (b: OwnerBranch) =>
   b.tier === "premium" ? CADENCE_MS.premium : CADENCE_MS.basic;

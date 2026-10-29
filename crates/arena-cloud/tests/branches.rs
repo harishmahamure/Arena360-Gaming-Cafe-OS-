@@ -249,7 +249,9 @@ async fn the_list_shows_each_branch_with_its_hub_and_setup_state() {
         r.body,
         json!([{
             "id": id, "name": "Pixel Arena Gaming", "branch_code": "PAG", "timezone": "Asia/Kolkata",
-            "tier": "free", "flags": [], "live": false, "hub": {"paired": false}, "waiting": false
+            "tier": "free", "flags": [], "live": false, "live_at": null,
+            "setup": {"steps_done": 1, "steps_total": 10, "next_step": "tier"},
+            "hub": {"paired": false}, "waiting": false
         }])
     );
     h.sql(&format!("{HUB}'{id}'"));
@@ -259,7 +261,10 @@ async fn the_list_shows_each_branch_with_its_hub_and_setup_state() {
         r.body[0]["hub"],
         json!({"paired": true, "platform": "windows", "last_seen_at": 5000})
     );
-    assert_eq!(r.body[0]["live"], true);
+    assert_eq!(
+        (r.body[0]["live"].clone(), r.body[0]["live_at"].clone()),
+        (json!(true), json!(9))
+    );
     assert_eq!(h.call("GET", "/v1/branches", None, "").await.status, 401);
 }
 

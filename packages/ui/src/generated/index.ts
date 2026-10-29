@@ -58,6 +58,7 @@ export type { BranchCodeSet } from "./BranchCodeSet";
 export type { BranchHub } from "./BranchHub";
 export type { BranchSeedDefaults } from "./BranchSeedDefaults";
 export type { BranchSetup } from "./BranchSetup";
+export type { BranchSetupProgress } from "./BranchSetupProgress";
 export type { BranchSummary } from "./BranchSummary";
 export type { BundleComponent } from "./BundleComponent";
 export type { BusinessBuyer } from "./BusinessBuyer";

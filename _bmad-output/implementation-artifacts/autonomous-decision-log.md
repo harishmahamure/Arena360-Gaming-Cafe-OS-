@@ -921,3 +921,12 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Attention order.** No timestamps exist, so branches are ordered by most recent summary, then the Hub's order.
 - **Setup mode.** Every paid branch gets a card; setup mode stays Story 8.14.
 - **Data age report.** `POST /v1/branches/{id}/data-age {age_s}` (204), counted per branch with a p99 over the last 200 opens, in process and logged; Grafana export and Lighthouse CI are deferred.
+
+## Story 8.14: The Owner app stays in setup mode until a branch goes live, then opens its dashboard
+
+- **Branch list.** `GET /v1/branches` now carries `live_at` (`live` stays) and `setup {steps_done, steps_total, next_step}`; done counts every step that is not pending (done or skipped) and `next_step` is the wizard's current step, so a branch that is not live shows at most 9 of 10.
+- **Setup beats the tier lock.** A branch with `live_at` null gets a setup card on Today (Free included) and "Available after <branch> goes live" on branch-scoped screens; the Free limits apply only once it is live.
+- **Shared list.** `liveBranches()` and `setupBranches()` in the shell are the single source; `showable` (Today) is live and paid. The branch picker is not built here: it would have no consumer until Story 8.15, which adds it on `liveBranches()`.
+- **Polling.** Today re-reads the branches every 60 s while visible and while some branch is in setup, and on Refresh/pull; a branch that turns live is fetched at once. With no live paid branch the Refresh bar and Needs attention are hidden.
+- **Open dashboard.** The onboarding done screen and the wizard URL of a live branch now open the Owner app root (Today).
+- **Standby.** Unchanged: the Standby item is already advisory in the Go live view.

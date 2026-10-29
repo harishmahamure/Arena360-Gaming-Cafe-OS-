@@ -1535,6 +1535,9 @@
   "owner.today.attention.credit_overdue": "{branch}: {amount} overdue on credit for {days} days",
   "owner.today.attention.alert": "{branch}: alert {kind}",
   "owner.today.attention.other": "{branch}: needs a look",
+  "owner.setup.title": "Setting up {branch} — {done} of {total} steps done",
+  "owner.setup.next": "Next: {step}",
+  "owner.setup.after_live": "Available after {branch} goes live",
 
   "ui.theme.label": "Theme",
   "ui.theme.system": "System",

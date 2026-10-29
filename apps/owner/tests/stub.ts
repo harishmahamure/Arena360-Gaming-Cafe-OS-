@@ -8,10 +8,24 @@ export type Branch = OwnerBranch;
 
 const base = {
   timezone: "Asia/Kolkata",
-  live: false,
+  live: true,
+  live_at: 1_700_000_000_000,
+  setup: { steps_done: 10, steps_total: 10, next_step: "go_live" },
   hub: { paired: false },
   waiting: false,
 } as const;
+
+/** The branch as it is before Go live: `live_at` null, `done` steps finished. */
+export const inSetup = (
+  b: Branch,
+  done = 4,
+  next: Branch["setup"]["next_step"] = "devices",
+): Branch => ({
+  ...b,
+  live: false,
+  live_at: null,
+  setup: { steps_done: done, steps_total: 10, next_step: next },
+});
 
 export const PAID: Branch[] = [
   {
@@ -95,7 +109,12 @@ export type StubOptions = {
   live?: Record<string, OwnerLive | (() => OwnerLive)>;
 };
 
-export async function stubCloud(page: Page, branches: Branch[] = PAID, opts: StubOptions = {}) {
+export async function stubCloud(
+  page: Page,
+  branches: Branch[] | (() => Branch[]) = PAID,
+  opts: StubOptions = {},
+) {
+  const list = () => (typeof branches === "function" ? branches() : branches);
   const calls: string[] = [];
   const bodies: Record<string, unknown[]> = {};
   await page.route("**/v1/**", (route) => {
@@ -116,11 +135,11 @@ export async function stubCloud(page: Page, branches: Branch[] = PAID, opts: Stu
           sms_fallback: false,
         },
       });
-    if (path === "/v1/branches" && req.method() === "GET") return json(branches);
+    if (path === "/v1/branches" && req.method() === "GET") return json(list());
     if (path === "/v1/branches" && req.method() === "POST")
-      return json({ ...branches[0], id: "b9", name: req.postDataJSON().name });
+      return json({ ...list()[0], id: "b9", name: req.postDataJSON().name });
     if (path.startsWith("/v1/branches/") && req.method() === "PATCH")
-      return json({ ...branches[0], ...req.postDataJSON() });
+      return json({ ...list()[0], ...req.postDataJSON() });
     const live = path.match(/^\/v1\/branches\/([^/]+)\/live$/);
     if (live && req.method() === "GET") {
       const given = opts.live?.[live[1]];

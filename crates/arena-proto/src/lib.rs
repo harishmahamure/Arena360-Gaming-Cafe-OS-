@@ -476,11 +476,12 @@ pub use ui_auth::{
 };
 pub use undo::{EffectKind, EffectRecordedEvent};
 pub use wizard::{
-    AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, COUNTRIES, CafeDetails,
-    ChooseTier, Country, CountryRow, GoLiveBlocker, GoLiveItem, GoLiveItemView, GoLiveView,
-    KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME, OwnerBranch, SetBranchCode,
-    StepState, TierChoices, TierOption, TierUnavailable, UpdateBranch, WizardBranch, WizardState,
-    WizardStep, WizardStepInfo, WizardTenant, country, current_step, valid_branch_code,
+    AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, BranchSetupProgress,
+    COUNTRIES, CafeDetails, ChooseTier, Country, CountryRow, GoLiveBlocker, GoLiveItem,
+    GoLiveItemView, GoLiveView, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME,
+    OwnerBranch, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable, UpdateBranch,
+    WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant, country, current_step,
+    valid_branch_code,
 };
 
 /// Returns this crate's name.

@@ -373,8 +373,9 @@ pub use shift::{
     VARIANCE_NOTE_MAX_CHARS, VarianceReason, receipt_photo_problem,
 };
 pub use shop::{
-    FLAG_KIOSK_ORDERS, MAX_SHOP_ID_LEN, POPULAR_DAYS, POPULAR_LIMIT, ShopComponent,
-    ShopImageRequest, ShopImageResult, ShopItem, ShopMenu, kiosk_order_gate,
+    FLAG_KIOSK_ORDERS, MAX_CART_LINES, MAX_CART_QTY, MAX_SHOP_ID_LEN, POPULAR_DAYS, POPULAR_LIMIT,
+    ShopComponent, ShopImageRequest, ShopImageResult, ShopItem, ShopMenu, ShopPlace,
+    ShopPlaceResult, kiosk_order_gate,
 };
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,

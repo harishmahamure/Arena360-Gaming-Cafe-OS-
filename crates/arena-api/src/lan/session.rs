@@ -670,6 +670,13 @@ impl Ctx<'_> {
                 Ok(request) => self.spawn_shop_image(rid, request, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "shop.place" => match self.check_shop_place(value) {
+                Ok((device, request)) => {
+                    self.spawn_shop_place(rid, device, request, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "player.extend" => match self.check_player_extend(value) {
                 Ok((device, request)) => {
                     self.spawn_player_extend(rid, device, request, permits, tasks)
@@ -984,6 +991,39 @@ impl Ctx<'_> {
         };
         request.validate()?;
         Ok(request)
+    }
+
+    fn check_shop_place(&self, value: Value) -> Result<(String, arena_proto::ShopPlace), AppError> {
+        let device = self.paired_device("shop.place")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::ShopPlace(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed shop.place"));
+        };
+        request.validate()?;
+        Ok((device, request))
+    }
+
+    async fn spawn_shop_place(
+        &self,
+        rid: String,
+        device: String,
+        request: arena_proto::ShopPlace,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::shop::place(&hub, &device, request).await {
+                Ok(result) => Frame::new(rid, FrameBody::ShopPlaceResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
     }
 
     async fn spawn_shop_menu(

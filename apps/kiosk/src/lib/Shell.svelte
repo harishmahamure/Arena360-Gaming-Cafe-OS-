@@ -45,6 +45,8 @@
     onlaunchapp = () => {},
     onopenlauncher = () => {},
     onshopadd = () => {},
+    cartCount = 0,
+    oncart = () => {},
   }: {
     session: ShellSession;
     /** The branch logo (a `data:` URI), or `null` for the Arena 360 mark. */
@@ -88,8 +90,11 @@
     onlaunchapp?: (app: GameCard) => void;
     /** A launcher card was activated. */
     onopenlauncher?: (launcher: LauncherCardData) => void;
-    /** A Shop card's Add was activated (the cart arrives with Story 6.31). */
+    /** A Shop card's Add was activated (Story 6.31 puts the item in the cart). */
     onshopadd?: (item: ShopItem) => void;
+    /** The units in the cart, and the Shop button that opens the cart panel (Story 6.31). */
+    cartCount?: number;
+    oncart?: () => void;
   } = $props();
 
   const LABELS: Record<Tab, MessageKey> = {
@@ -278,7 +283,7 @@
     {:else if shown === "apps"}
       <Games kind="apps" games={apps} {gameRunning} onlaunch={onlaunchapp} />
     {:else if shown === "shop"}
-      <Shop {shop} images={shopImages} {locale} onadd={onshopadd} />
+      <Shop {shop} images={shopImages} {locale} onadd={onshopadd} {cartCount} {oncart} />
     {:else}
       <Home
         {games}

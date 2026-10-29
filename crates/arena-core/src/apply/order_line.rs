@@ -199,6 +199,12 @@ pub(super) fn mutate_served(
     written.push(update(RowKey::OrderLines {
         id: line.id.clone(),
     }));
+    written.extend(super::alert::close_kiosk_order(
+        tx,
+        order,
+        &intent.actor.id,
+        now_ms,
+    )?);
     Ok(written)
 }
 
@@ -322,5 +328,11 @@ pub(super) fn mutate_cancel(
         add_order_amount(tx, &order.id, -line.amount_minor)?;
         written.push(update(key));
     }
+    written.extend(super::alert::close_kiosk_order(
+        tx,
+        order,
+        &intent.actor.id,
+        now_ms,
+    )?);
     Ok(written)
 }

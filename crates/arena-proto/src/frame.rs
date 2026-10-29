@@ -24,7 +24,7 @@ use crate::player_session::{
 use crate::player_signup::{PlayerSignup, PlayerSignupResult};
 use crate::scope::ClientClass;
 use crate::session::SessionScreen;
-use crate::shop::{ShopImageRequest, ShopImageResult, ShopMenu};
+use crate::shop::{ShopImageRequest, ShopImageResult, ShopMenu, ShopPlace, ShopPlaceResult};
 use crate::ui_auth::SettingEntry;
 
 /// The only protocol version.
@@ -160,6 +160,12 @@ pub enum FrameBody {
     /// The product's photo as a data URL, or none.
     #[serde(rename = "shop.image_result")]
     ShopImageResult(ShopImageResult),
+    /// A paired kiosk places the player's cart on the session bill (Story 6.31).
+    #[serde(rename = "shop.place")]
+    ShopPlace(ShopPlace),
+    /// Whether the Hub added the order to the bill, or why it refused.
+    #[serde(rename = "shop.place_result")]
+    ShopPlaceResult(ShopPlaceResult),
     /// Whether the Hub added the time, or why it refused.
     #[serde(rename = "player.extend_result")]
     PlayerExtendResult(PlayerExtendResult),
@@ -169,7 +175,7 @@ pub enum FrameBody {
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 41] = [
+pub const FRAME_KINDS: [&str; 43] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -210,6 +216,8 @@ pub const FRAME_KINDS: [&str; 41] = [
     "shop.menu_result",
     "shop.image",
     "shop.image_result",
+    "shop.place",
+    "shop.place_result",
     "ack",
 ];
 
@@ -257,6 +265,8 @@ impl FrameBody {
             Self::ShopMenuResult(_) => "shop.menu_result",
             Self::ShopImage(_) => "shop.image",
             Self::ShopImageResult(_) => "shop.image_result",
+            Self::ShopPlace(_) => "shop.place",
+            Self::ShopPlaceResult(_) => "shop.place_result",
             Self::Ack => "ack",
         }
     }

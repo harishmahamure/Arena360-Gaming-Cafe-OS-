@@ -18,6 +18,12 @@ export type ShopItem = {
    */
   available: boolean;
   /**
+   * How many units the Hub can sell right now (stock less expired lots and open holds; a
+   * bundle's tightest component), or `null` when the item is not tracked. `0` when it is
+   * unavailable. The cart refuses a step past it.
+   */
+  max_qty?: number;
+  /**
    * Whether `shop.image` has a photo for it (the menu itself carries no photos).
    */
   has_image: boolean;

@@ -131,3 +131,36 @@ pub(super) fn mutate(
         )),
     }
 }
+
+/// Closes the PC's open `kiosk_order` alert (Story 6.31) once no line of its session's bill is
+/// left unserved, as part of the serve or cancel that emptied the kitchen's list. A bill with
+/// other unserved lines, or a PC with no such alert open, writes nothing.
+pub(super) fn close_kiosk_order(
+    tx: &StoreTx<'_>,
+    order: &arena_store::OrderRow,
+    by: &str,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let Some(session) = order
+        .session_id
+        .as_deref()
+        .map(|id| arena_store::find_session(tx, id))
+        .transpose()?
+        .flatten()
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(open) = find_open_alert(tx, AlertKind::KioskOrder.as_str(), Some(&session.device_id))?
+    else {
+        return Ok(Vec::new());
+    };
+    if arena_store::count_unserved_lines(tx, &order.id)? > 0 {
+        return Ok(Vec::new());
+    }
+    ack_alert(tx, &open.id, now_ms, by)?;
+    Ok(vec![Written {
+        key: RowKey::Alerts { id: open.id },
+        op: ChangeOp::Update,
+        before: None,
+    }])
+}

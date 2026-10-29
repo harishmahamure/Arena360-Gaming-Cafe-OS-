@@ -39,6 +39,7 @@ import {
   type MostPlayedView,
 } from "./games";
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
+import { placeLines, placeOf, type CartLine, type OrderOutcome } from "./cart";
 import { shopImageOf, shopMenuOf, type ShopView } from "./shop";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
 import { SIGNUP_TIMEOUT_MS, signupOutcomeOf, type SignupOutcome } from "./signup";
@@ -1022,4 +1023,14 @@ export function hudExpand(): void {
 export function hudCollapse(): void {
   if (!inTauri()) return;
   void invoke(CMD.hudCollapse).catch(() => {});
+}
+
+/**
+ * Places the player's cart on the session bill (Story 6.31). The Hub finds the session running on
+ * this PC, applies the order by the Epic 5 rules and answers typed: `ok`, or `refused` with its
+ * words and the short product. `unreachable` when the Hub cannot be asked: the cart stays.
+ */
+export async function placeOrder(lines: CartLine[]): Promise<OrderOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return placeOf(await ask(CMD.shopPlace, { lines: placeLines(lines) }));
 }

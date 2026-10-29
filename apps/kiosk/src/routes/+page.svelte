@@ -16,6 +16,7 @@
     loadShopImage,
     loadShopMenu,
     openLauncher,
+    placeOrder,
     onAttract,
     onHubStatus,
     onPcScreen,
@@ -25,7 +26,9 @@
     type PcScreen,
   } from "../lib/bridge";
   import Attract from "../lib/Attract.svelte";
+  import Cart, { type LineProblem } from "../lib/Cart.svelte";
   import Shell from "../lib/Shell.svelte";
+  import { cartCount, refreshLines, stepCart, type CartLine } from "../lib/cart";
   import {
     GAMES_POLL_MS,
     MOST_PLAYED_POLL_MS,
@@ -82,6 +85,88 @@
   const photoAsked = new Set<string>();
   /** Bumped when a session ends, so a photo that arrives late is not shown to the next player. */
   let shopEpoch = 0;
+
+  /** The cart (Story 6.31): lives for the session, is forgotten when it ends. */
+  let cart: CartLine[] = $state([]);
+  let cartOpen = $state(false);
+  let cartBusy = $state(false);
+  /** The last order went through (the empty cart says so until the player adds something). */
+  let cartPlaced = $state(false);
+  let cartError: "reconnecting" | "refused" | null = $state(null);
+  /** The reason a step or a placement was refused, by product id. */
+  let cartProblems: Record<string, LineProblem> = $state({});
+
+  function resetCart() {
+    cart = [];
+    cartOpen = false;
+    cartBusy = false;
+    cartPlaced = false;
+    cartError = null;
+    cartProblems = {};
+  }
+
+  function closeCart() {
+    cartOpen = false;
+    document.querySelector<HTMLElement>('[data-testid="shop-cart-button"]')?.focus();
+  }
+
+  /**
+   * One step on a cart line (Add is a step up from nothing). A step up asks the Hub for the menu
+   * first, so the stock it is checked against is live; a refusal leaves the cart as it was and
+   * says why on the line. The Hub not answering says the counter is reconnecting.
+   */
+  async function stepLine(id: string, delta: 1 | -1) {
+    cartPlaced = false;
+    const rest = { ...cartProblems };
+    delete rest[id];
+    cartProblems = rest;
+    let fresh = shop?.items.find((i) => i.id === id);
+    if (delta > 0) {
+      const view = await loadShopMenu();
+      if (view === null) {
+        cartError = "reconnecting";
+        return;
+      }
+      cartError = null;
+      shop = view;
+      fresh = view.items.find((i) => i.id === id);
+    }
+    const result = stepCart(cart, id, delta, fresh);
+    cart = result.lines;
+    if (result.problem !== null) cartProblems = { ...cartProblems, [id]: result.problem };
+  }
+
+  async function addToCart(item: { id: string }) {
+    await stepLine(item.id, 1);
+    cartOpen = true;
+  }
+
+  async function place() {
+    if (cartBusy || cart.length === 0) return;
+    cartBusy = true;
+    cartError = null;
+    const sent = cart;
+    const outcome = await placeOrder(sent);
+    cartBusy = false;
+    if (outcome.kind === "ok") {
+      cart = [];
+      cartProblems = {};
+      cartPlaced = true;
+    } else if (outcome.kind === "unreachable") {
+      cartError = "reconnecting";
+    } else if (
+      outcome.productId !== null &&
+      (outcome.code === "OUT_OF_STOCK" || outcome.code === "BUNDLE_SHORT")
+    ) {
+      // The cart stays and the short line says why (no override on the kiosk).
+      cartProblems = {
+        [outcome.productId]:
+          outcome.code === "BUNDLE_SHORT" ? { kind: "bundle_short" } : { kind: "out_of_stock" },
+      };
+    } else {
+      cartError = "refused";
+    }
+  }
 
   async function refreshGames() {
     const [view, cards] = await Promise.all([loadGames(), loadLaunchers()]);
@@ -185,6 +270,7 @@
       shopImages = {};
       photoAsked.clear();
       shopEpoch++;
+      resetCart();
       return;
     }
     const period = tab === "shop" ? SHOP_POLL_OPEN_MS : SHOP_POLL_IDLE_MS;
@@ -193,7 +279,10 @@
     const refresh = async () => {
       const view = await loadShopMenu();
       if (!live) return;
-      if (view !== null) shop = view;
+      if (view !== null) {
+        shop = view;
+        cart = refreshLines(cart, view.items);
+      }
       timer = setTimeout(() => void refresh(), period);
     };
     void refresh();
@@ -342,6 +431,9 @@
       mostPlayedView={mostPlayed}
       {shop}
       {shopImages}
+      cartCount={cartCount(cart)}
+      oncart={() => (cartOpen = true)}
+      onshopadd={addToCart}
       branch={attract.view?.branch_name ?? ""}
       onlaunch={launch}
       onlaunchapp={launchAppTile}
@@ -369,6 +461,22 @@
         {/if}
       {/snippet}
     </Shell>
+    {#if cartOpen && shop?.enabled}
+      <Cart
+        lines={cart}
+        problems={cartProblems}
+        locale={attract.view?.locale ?? null}
+        pc={session.name}
+        zone={attract.view?.zone ?? ""}
+        connected={hub === "connected"}
+        busy={cartBusy}
+        placed={cartPlaced}
+        error={cartError}
+        onstep={(id, delta) => void stepLine(id, delta)}
+        onplace={() => void place()}
+        onclose={closeCart}
+      />
+    {/if}
   </main>
 {:else}
   <!-- No session yet: the attract screen (Story 6.7), painted from the cache at once. -->

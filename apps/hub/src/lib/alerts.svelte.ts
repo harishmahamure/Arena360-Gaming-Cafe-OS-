@@ -23,10 +23,11 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   login_lockout: "hub.alerts.kind.login_lockout",
   check_pc: "hub.alerts.kind.check_pc",
   call_staff: "hub.alerts.kind.call_staff",
+  kiosk_order: "hub.alerts.kind.kiosk_order",
 };
 
 /** The tags a device alert puts on its tile (the tile badge's `AlertTag` subset). */
-type TileTag = "new" | "call" | "time-up" | "controllers" | "locked-out" | "check-pc";
+type TileTag = "new" | "call" | "time-up" | "controllers" | "locked-out" | "check-pc" | "order";
 
 // A branch-level alert (no device) has no tile tag.
 export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
@@ -39,6 +40,7 @@ export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
   login_lockout: "locked-out",
   check_pc: "check-pc",
   call_staff: "call",
+  kiosk_order: "order",
 };
 
 /** Branch-level kinds that also sound, and the screen a pick on them opens. */

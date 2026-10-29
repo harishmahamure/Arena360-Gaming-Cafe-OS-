@@ -40,6 +40,8 @@
 //!   last-played times ([`crate::player_session::most_played`], Story 6.27).
 //! - `shop_menu` and `shop_image{id}` ask the Hub for the Shop menu with live availability and
 //!   one product's photo ([`crate::player_session::shop_menu`], Story 6.30).
+//! - `shop_place{lines}` sends the player's cart to the Hub ([`crate::player_session::shop_place`],
+//!   Story 6.31).
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
 //!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
 
@@ -722,6 +724,14 @@ async fn serve(
                 let out = out_tx.clone();
                 tokio::spawn(async move {
                     let reply = reply_of(rid, crate::player_session::shop_menu(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "shop_place" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::shop_place(&ctx, &body).await);
                     let _ = out.send(reply).await;
                 });
             }

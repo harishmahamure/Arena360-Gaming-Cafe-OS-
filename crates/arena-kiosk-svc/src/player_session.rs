@@ -19,6 +19,8 @@
 //! The Shop (Story 6.30) adds `shop_menu` and `shop_image{id}`, forwarded as `shop.menu` and
 //! `shop.image`: the menu with live availability and one product's photo. Both are reads; the
 //! Hub says whether orders are enabled and the service only relays.
+//! `shop_place{lines}` (Story 6.31) forwards the cart as `shop.place`; the Hub finds the session,
+//! builds the order and answers typed.
 //!
 //! The service decides nothing and keeps no player context: the Hub remembers who logged in on this
 //! PC and builds the session itself, so the app never names a player. Nothing is queued: with no
@@ -32,7 +34,7 @@ use arena_kiosk_core::ipc::SecretPin;
 use arena_kiosk_core::{ClientError, HubClient};
 use arena_proto::{
     AppError, ErrorCode, FrameBody, LockReason, PlayerChoice, PlayerExtend, PlayerUnlockResult,
-    ShopImageRequest,
+    ShopImageRequest, ShopPlace,
 };
 use serde_json::Value;
 
@@ -208,6 +210,35 @@ pub async fn shop_image(ctx: &Ctx, body: &Value) -> Result<Value, AppError> {
     }
 }
 
+/// The cart the app asked to place, as long as it is a sane one (1 to 50 lines of 1 to 99 units,
+/// each product once). Anything else never leaves the PC; the Hub still decides what sells.
+fn shop_place_request(body: &Value) -> Result<ShopPlace, AppError> {
+    let request: ShopPlace = serde_json::from_value(body.clone())
+        .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "malformed order"))?;
+    request
+        .validate()
+        .map_err(|e| AppError::new(ErrorCode::ValidationFailed, e.message))?;
+    Ok(request)
+}
+
+/// Asks the Hub to put the player's cart on the session bill (Story 6.31): the `shop.place_result`
+/// as the reply body. Nothing is queued and nothing is retried: with no live link the app gets
+/// `HUB_SLOW` and keeps the cart; a refusal comes back typed, naming the short product.
+pub async fn shop_place(ctx: &Ctx, body: &Value) -> Result<Value, AppError> {
+    let request = shop_place_request(body)?;
+    let client = client(ctx)?;
+    let body = serde_json::to_value(&request)
+        .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
+    match client.request("shop.place", body).await {
+        Ok(frame) => match frame.body {
+            FrameBody::ShopPlaceResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("shop.place", other)),
+        },
+        Err(e) => Err(failed("shop.place", e)),
+    }
+}
+
 /// The extend the app asked for, as long as it is one the Hub offers (a step of 30 min, 1 h or
 /// 2 h, a pack named only for a pack source). Anything else never leaves the PC.
 fn extend_request(body: &Value) -> Result<PlayerExtend, AppError> {
@@ -351,6 +382,29 @@ mod tests {
         ] {
             assert_eq!(
                 shop_image_request(&bad).unwrap_err().code,
+                ErrorCode::ValidationFailed,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cart_is_a_sane_one_or_never_leaves_the_pc() {
+        use serde_json::json;
+        let ok = shop_place_request(&json!({"lines": [{"product_id": "P1", "qty": 2}]})).unwrap();
+        assert_eq!(ok.lines.len(), 1);
+        for bad in [
+            json!({"lines": []}),
+            json!({"lines": [{"product_id": "P1", "qty": 0}]}),
+            json!({"lines": [{"product_id": "P1", "qty": 100}]}),
+            json!({"lines": [{"product_id": "P1", "qty": 1}, {"product_id": "P1", "qty": 1}]}),
+            json!({"lines": [{"product_id": "", "qty": 1}]}),
+            json!({"lines": "x"}),
+            json!({}),
+            Value::Null,
+        ] {
+            assert_eq!(
+                shop_place_request(&bad).unwrap_err().code,
                 ErrorCode::ValidationFailed,
                 "{bad}"
             );

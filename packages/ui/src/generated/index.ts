@@ -440,6 +440,8 @@ export type { ShopImageRequest } from "./ShopImageRequest";
 export type { ShopImageResult } from "./ShopImageResult";
 export type { ShopItem } from "./ShopItem";
 export type { ShopMenu } from "./ShopMenu";
+export type { ShopPlace } from "./ShopPlace";
+export type { ShopPlaceResult } from "./ShopPlaceResult";
 export type { SignInOk } from "./SignInOk";
 export type { SignInRequest } from "./SignInRequest";
 export type { Signin } from "./Signin";

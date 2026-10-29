@@ -9,6 +9,8 @@ pub(crate) struct Status {
     pub(crate) quantity: i64,
     pub(crate) avg_cost_minor: i64,
     pub(crate) available: bool,
+    /// The units that can be sold now (`None`: not tracked, no limit).
+    pub(crate) sellable: Option<i64>,
     pub(crate) reason: Option<&'static str>,
     pub(crate) components: Vec<ComponentView>,
 }
@@ -52,6 +54,7 @@ pub(crate) fn status(
             quantity,
             avg_cost_minor: stock.map_or(0, |s| s.avg_cost_minor),
             available,
+            sellable: p.track_stock.then_some(usable),
             reason,
             components: Vec::new(),
         });
@@ -90,6 +93,7 @@ pub(crate) fn status(
         quantity: quantity.unwrap_or(0),
         avg_cost_minor: 0,
         available,
+        sellable: quantity,
         reason,
         components,
     })

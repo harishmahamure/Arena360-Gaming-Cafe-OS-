@@ -165,6 +165,25 @@ fn device_extends_own_session(
     Ok(find_session(tx, &extend.session_id)?.is_some_and(|s| s.device_id == intent.actor.id))
 }
 
+/// Whether a paired device may place an order on the session on its own PC (Story 6.31): the
+/// player confirmed their cart at the kiosk. The Hub builds that `order.place` from the device's
+/// session; a kiosk cannot send it (it is outside the paired scope). Another PC's session stays
+/// denied, and so does a stock override: the kiosk has no manager override.
+fn device_places_own_order(
+    tx: &StoreTx<'_>,
+    p: Permission,
+    intent: &Intent,
+) -> Result<bool, AppError> {
+    use arena_proto::IntentPayload;
+    let IntentPayload::OrderPlace(place) = &intent.payload else {
+        return Ok(false);
+    };
+    if p != Permission::PosSell || place.stock_override == Some(true) {
+        return Ok(false);
+    }
+    Ok(find_session(tx, &place.session_id)?.is_some_and(|s| s.device_id == intent.actor.id))
+}
+
 /// **permission.** Checks the intent's [`Requirement`] against its actor. The kind is taken
 /// from the payload, so a mislabelled envelope cannot borrow another kind's requirement.
 pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
@@ -202,6 +221,7 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
                     || device_creates_player(p, intent)
                     || device_ends_own_session(tx, p, intent)?
                     || device_extends_own_session(tx, p, intent)?
+                    || device_places_own_order(tx, p, intent)?
             }
         },
     };

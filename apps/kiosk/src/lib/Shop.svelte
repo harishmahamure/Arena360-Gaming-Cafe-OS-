@@ -9,6 +9,8 @@
     images = {},
     locale = null,
     onadd = () => {},
+    cartCount = 0,
+    oncart = () => {},
   }: {
     /** The Hub's menu; `null` until it has answered. */
     shop: ShopView | null;
@@ -16,8 +18,11 @@
     images?: Record<string, string | null>;
     /** The branch's money format, once the attract view has told it. */
     locale?: SnapshotLocale | null;
-    /** Add was activated (the cart arrives with Story 6.31). */
+    /** Add was activated (Story 6.31 puts the item in the cart). */
     onadd?: (item: ShopItem) => void;
+    /** The units in the cart (Story 6.31); the button opens the cart panel. */
+    cartCount?: number;
+    oncart?: () => void;
   } = $props();
 
   // The filter rail and the search field. One rail item is active at a time and the grid follows
@@ -120,6 +125,15 @@
       <div class="content">
         <div class="title-row">
           <h2 class="type-kiosk-title">{t("player.shop.title")}</h2>
+          <button
+            type="button"
+            class="cart-button type-kiosk-label"
+            aria-label={t("player.shop.cart_button_label", { count: cartCount })}
+            data-testid="shop-cart-button"
+            onclick={oncart}
+          >
+            {t("player.shop.cart_button", { count: cartCount })}
+          </button>
           <input
             bind:this={searchEl}
             bind:value={query}
@@ -232,6 +246,22 @@
 
   .title-row h2 {
     margin: 0;
+  }
+
+  .cart-button {
+    box-sizing: border-box;
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-4);
+    border: var(--button-secondary-border);
+    border-radius: var(--radius-full);
+    background-color: var(--button-secondary-background);
+    color: var(--button-secondary-foreground);
+    cursor: pointer;
+  }
+
+  .cart-button:focus-visible {
+    outline: 4px solid var(--focus-ring);
+    outline-offset: 2px;
   }
 
   .search {

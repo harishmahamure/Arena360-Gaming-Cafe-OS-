@@ -367,6 +367,17 @@ async fn shop_image(
     Ok(service_request(&bridge, "shop_image", serde_json::json!({ "id": id })).await)
 }
 
+/// The player's cart (Story 6.31): IPC `shop_place{lines}`, answered with the Hub's
+/// `shop.place_result` (`{outcome: "ok"}` or `{outcome: "refused", code, message, product_id?}`). An
+/// error answer (the Hub is unreachable, `HUB_SLOW`) leaves the cart where it is.
+#[tauri::command]
+async fn shop_place(
+    lines: serde_json::Value,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "shop_place", serde_json::json!({ "lines": lines })).await)
+}
+
 /// Opens Steam, Epic or Riot from its card (Story 6.26): IPC `launcher_open{id}`, answered like
 /// `game_launch`. A launcher that is already open has its window brought to the front here (this
 /// runs in the player's session); one that did not open raises the HUD's "Couldn't start <name>"
@@ -608,7 +619,8 @@ fn main() {
             launcher_open,
             most_played,
             shop_menu,
-            shop_image
+            shop_image,
+            shop_place
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

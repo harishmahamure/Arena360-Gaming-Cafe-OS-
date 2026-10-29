@@ -29,7 +29,7 @@ async fn place(f: &Fixture, actor: Actor, p: OrderPlace) -> Result<Applied, AppE
     submit(f, actor, IntentPayload::OrderPlace(p)).await
 }
 
-async fn serve(f: &Fixture, actor: Actor, line: &str) -> Result<Applied, AppError> {
+pub(super) async fn serve(f: &Fixture, actor: Actor, line: &str) -> Result<Applied, AppError> {
     submit(
         f,
         actor,

@@ -4220,3 +4220,192 @@ async fn the_shop_frames_are_for_paired_sessions_and_a_bad_image_ask_is_refused(
         other => panic!("{other:?}"),
     }
 }
+
+// ---- Story 6.31: shop.place ----
+
+async fn basic_branch(hub: &TestHub) {
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            system(),
+            IntentPayload::LicenceApply(arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier: arena_proto::Tier::Basic,
+                flags: "kitchen,kiosk_orders".into(),
+                device_cap: 10,
+                user_cap: 10,
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+}
+
+/// A tracked 40.00 Cola with `qty` on the shelf.
+async fn tracked_cola(hub: &TestHub, qty: i64) -> String {
+    let w = hub.writer.as_ref().unwrap();
+    let id = w
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::ProductUpsert(arena_proto::ProductUpsert {
+                id: None,
+                name: "Cola".into(),
+                category: "Drinks".into(),
+                price_minor: 4_000,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+                bundle: false,
+                components: Vec::new(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::StockIn(arena_proto::StockIn {
+            product_id: id.clone(),
+            qty,
+            unit_cost_minor: 2_000,
+            supplier: String::new(),
+            expiry: None,
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    id
+}
+
+async fn place_frame(
+    client: &HubClient,
+    lines: &[(&str, i64)],
+) -> Result<arena_proto::ShopPlaceResult, ClientError> {
+    let lines: Vec<_> = lines
+        .iter()
+        .map(|(id, qty)| serde_json::json!({"product_id": id, "qty": qty}))
+        .collect();
+    match client
+        .request("shop.place", serde_json::json!({ "lines": lines }))
+        .await?
+        .body
+    {
+        FrameBody::ShopPlaceResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn kiosk_order_alerts(hub: &TestHub) -> Vec<arena_store::AlertRow> {
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .alerts()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == "kiosk_order" && a.acked_at.is_none())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kiosk_order_joins_the_session_bill_raises_one_alert_and_a_short_cart_is_refused() {
+    use arena_proto::ShopPlaceResult as R;
+    let hub = start("0.1.0", true).await;
+    basic_branch(&hub).await;
+    rated_pc(&hub, 6_000).await;
+    let cola = tracked_cola(&hub, 3).await;
+    start_postpaid(&hub, None).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+
+    assert_eq!(place_frame(&client, &[(&cola, 2)]).await.unwrap(), R::Ok);
+    let alerts = kiosk_order_alerts(&hub);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].device_id.as_deref(), Some(hub.paired_id.as_str()));
+
+    // One unit is left; asking for two is refused, names the product, and writes nothing.
+    match place_frame(&client, &[(&cola, 2)]).await.unwrap() {
+        R::Refused {
+            code, product_id, ..
+        } => {
+            assert_eq!(code, ErrorCode::OutOfStock);
+            assert_eq!(product_id.as_deref(), Some(cola.as_str()));
+        }
+        other => panic!("{other:?}"),
+    }
+    // The next good order finds the alert already open.
+    assert_eq!(place_frame(&client, &[(&cola, 1)]).await.unwrap(), R::Ok);
+    assert_eq!(kiosk_order_alerts(&hub).len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kiosk_order_without_the_flag_or_a_session_is_refused_and_a_bad_cart_never_reaches_the_hub()
+ {
+    use arena_proto::ShopPlaceResult as R;
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let cola = tracked_cola(&hub, 3).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    // No session on the PC yet.
+    assert!(matches!(
+        place_frame(&client, &[(&cola, 1)]).await.unwrap(),
+        R::Refused {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+    // A session, but a Free branch.
+    start_postpaid(&hub, None).await;
+    assert!(matches!(
+        place_frame(&client, &[(&cola, 1)]).await.unwrap(),
+        R::Refused {
+            code: ErrorCode::FeatureNotInTier,
+            ..
+        }
+    ));
+    assert!(kiosk_order_alerts(&hub).is_empty());
+    for bad in [
+        serde_json::json!({"lines": []}),
+        serde_json::json!({"lines": [{"product_id": cola, "qty": 0}]}),
+        serde_json::json!({"lines": [{"product_id": cola, "qty": 1}, {"product_id": cola, "qty": 1}]}),
+    ] {
+        match client.request("shop.place", bad).await {
+            Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::BadFrame),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shop_place_is_for_paired_sessions() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    send(
+        &mut ws,
+        r#"{"v":1,"kind":"shop.place","rid":"a","lines":[{"product_id":"P1","qty":1}]}"#,
+    )
+    .await;
+    let frame = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
+}

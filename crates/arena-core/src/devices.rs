@@ -322,6 +322,15 @@ impl DeviceDirectory {
         crate::shop::image(&store, id)
     }
 
+    /// The id of the session an order from the kiosk on `device_id` goes on (Story 6.31).
+    pub fn order_target(&self, device_id: &str) -> Result<String, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::shop::order_target(&store, device_id)
+    }
+
     /// The id of the session an extend on `device_id` applies to (Story 6.21).
     pub fn extend_target(&self, device_id: &str) -> Result<String, AppError> {
         let store = self

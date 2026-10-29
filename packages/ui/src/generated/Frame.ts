@@ -28,6 +28,8 @@ import type { SettingsValues } from "./SettingsValues";
 import type { ShopImageRequest } from "./ShopImageRequest";
 import type { ShopImageResult } from "./ShopImageResult";
 import type { ShopMenu } from "./ShopMenu";
+import type { ShopPlace } from "./ShopPlace";
+import type { ShopPlaceResult } from "./ShopPlaceResult";
 import type { VerifyAdminPin } from "./VerifyAdminPin";
 
 /**
@@ -82,6 +84,8 @@ export type Frame = {
   | ({ kind: "shop.menu_result" } & ShopMenu)
   | ({ kind: "shop.image" } & ShopImageRequest)
   | ({ kind: "shop.image_result" } & ShopImageResult)
+  | ({ kind: "shop.place" } & ShopPlace)
+  | ({ kind: "shop.place_result" } & ShopPlaceResult)
   | ({ kind: "player.extend_result" } & PlayerExtendResult)
   | { kind: "ack" }
 );

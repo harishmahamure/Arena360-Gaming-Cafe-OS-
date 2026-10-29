@@ -6,8 +6,8 @@
 //! a bundle's components), so the Shop and the counter agree. Nothing here writes.
 
 use arena_proto::{
-    AppError, KEY_LICENCE_FLAGS, POPULAR_DAYS, POPULAR_LIMIT, ShopComponent, ShopImageResult,
-    ShopItem, ShopMenu, has_flag,
+    AppError, ErrorCode, KEY_LICENCE_FLAGS, POPULAR_DAYS, POPULAR_LIMIT, ShopComponent,
+    ShopImageResult, ShopItem, ShopMenu, has_flag,
 };
 use arena_store::Store;
 
@@ -48,6 +48,11 @@ pub fn menu(store: &Store, now_ms: i64) -> Result<ShopMenu, AppError> {
                 price_minor: p.price_minor,
                 bundle: p.bundle,
                 available: status.available,
+                max_qty: if status.available {
+                    status.sellable
+                } else {
+                    Some(0)
+                },
                 has_image,
                 components: status
                     .components
@@ -81,4 +86,16 @@ pub fn image(store: &Store, id: &str) -> Result<ShopImageResult, AppError> {
         id: id.to_owned(),
         image,
     })
+}
+
+/// The id of the session an order from the kiosk on `device_id` goes on (Story 6.31): the live
+/// session on that PC. Whether it can take an order (a running postpaid or block session) is
+/// `apply()`'s rule, so the counter and the kiosk agree.
+pub fn order_target(store: &Store, device_id: &str) -> Result<String, AppError> {
+    store
+        .live_sessions()?
+        .into_iter()
+        .find(|s| s.device_id == device_id)
+        .map(|s| s.id)
+        .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no session on this PC"))
 }

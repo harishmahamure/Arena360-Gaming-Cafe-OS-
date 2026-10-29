@@ -156,4 +156,23 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   is when a card turns unavailable.
 - With nothing available (or an empty menu) the region reads "Kitchen's closed right now." and the
   rail and search are not shown.
-- Add does nothing yet: the cart is Story 6.31.
+- Add puts the item in the cart (Story 6.31, below).
+
+## The cart (Story 6.31)
+
+- Add opens the cart as a right-side panel: a non-modal dialog named "Your order", addressed "To
+  <PC> · <zone>". Focus moves to the panel; Esc or Close shuts it and returns focus to the Shop's
+  "Cart · n" button, which opens it again with the cart kept. The rest of the shell stays reachable.
+- A line is a list item: name and line amount, bundle components indented beneath ("4 × Cola" for two
+  combos), then a stepper group labelled "<qty> <name>" with "One fewer <name>" and "One more <name>"
+  buttons (touch-sized). The last step down removes the line; an empty cart reads "Cart's empty."
+- A step up asks the Hub for the live stock first. A step past what is available is refused: the
+  quantity stays and the reason is an `alert` under the line with a ⚠ ("Only 2 left.", "Out of
+  stock"), so it is never colour alone. After Place order, a short line is marked the same way and
+  the cart stays; the kiosk has no override.
+- The total is `hud-numeric` in tabular figures with "Inclusive of applicable taxes" under it. The
+  one payment choice is a checked radio, "Add to session bill", with "Payable at the counter when your
+  session ends"; Place order is the primary button and reads "Placing your order…" while it waits.
+- With the Hub link down (or an answer that never came) Place order is disabled and a status line
+  reads "Counter is reconnecting — try again shortly."; the cart is kept. A confirmation after a
+  placed order is a `status` ("Order placed. It's on your session bill.").

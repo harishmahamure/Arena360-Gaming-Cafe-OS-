@@ -30,6 +30,7 @@ const isItem = (v: unknown): v is ShopItem => {
     typeof i.price_minor === "number" &&
     typeof i.bundle === "boolean" &&
     typeof i.available === "boolean" &&
+    (i.max_qty === undefined || i.max_qty === null || typeof i.max_qty === "number") &&
     typeof i.has_image === "boolean" &&
     typeof i.popular === "boolean" &&
     Array.isArray(i.components) &&

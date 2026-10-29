@@ -60,6 +60,7 @@
     "launcherOpen": "launcher_open",
     "mostPlayed": "most_played",
     "shopMenu": "shop_menu",
-    "shopImage": "shop_image"
+    "shopImage": "shop_image",
+    "shopPlace": "shop_place"
   }
 }

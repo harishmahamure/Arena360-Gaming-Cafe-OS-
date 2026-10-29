@@ -13,4 +13,5 @@ export type AlertKind =
   | "stock_low"
   | "login_lockout"
   | "check_pc"
-  | "call_staff";
+  | "call_staff"
+  | "kiosk_order";

@@ -398,7 +398,7 @@ async fn pairing_is_tls_only_and_a_bad_body_pairs_nothing() {
     .unwrap();
     let mut answer = String::new();
     tcp.read_to_string(&mut answer).await.unwrap();
-    assert!(answer.starts_with("HTTP/1.1 404"), "{answer}");
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
 
     let both = PairRequest {
         pin: Some("2222".into()),

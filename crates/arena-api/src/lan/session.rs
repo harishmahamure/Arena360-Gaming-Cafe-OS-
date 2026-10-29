@@ -311,6 +311,42 @@ fn report_version(hub: &LanHub, authed: &Authed, version: &str) {
     });
 }
 
+/// Records that a kitchen display is connected (system actor, best effort): written when it
+/// connects and again when its last-seen is more than a minute old (Story 7.6).
+fn report_seen(hub: &LanHub, authed: &Authed) {
+    let (ClientClass::Kds, Some(device), Some(writer)) =
+        (authed.class, &authed.device, &hub.writer)
+    else {
+        return;
+    };
+    if !hub.is_primary() {
+        return;
+    }
+    let intent = Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::KdsSeen,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: hub.clock.now_ms(),
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::System,
+            id: LAN_SYSTEM_ACTOR.to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::KdsSeen(arena_proto::KdsSeen {
+            display_id: device.device_id.clone(),
+        }),
+    };
+    let writer = writer.clone();
+    let display_id = device.device_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = writer.submit_intent(intent).await {
+            tracing::debug!(display_id = %display_id, code = e.code.as_str(), "could not record a kitchen display as seen");
+        }
+    });
+}
+
 /// Drains the session's queue into the socket until it is killed or the queue closes. On a
 /// kill it sends the kill's error frame (if any) and a close within [`CLOSE_GRACE`].
 async fn write_loop<S>(
@@ -418,6 +454,18 @@ pub(crate) async fn run<S>(
             }
         }
     }
+    // A kitchen display's high contrast as it holds it now: later row changes push only a toggle.
+    if authed.class == ClientClass::Kds
+        && let Some(id) = authed.device_id()
+    {
+        let dir = Arc::clone(&hub.devices);
+        let (id, keys) = (id.to_owned(), vec![arena_proto::hc_key(id)]);
+        if let Ok(Ok(values)) = tokio::task::spawn_blocking(move || dir.settings(&keys)).await
+            && let Some(v) = values.first()
+        {
+            hub.registry.note_display_hc(&id, &v.value);
+        }
+    }
     // Killed already (shutdown, or a revoke that landed before we subscribed was caught by
     // the re-check above): end without hello.ok.
     let early = kill.borrow().clone();
@@ -448,6 +496,8 @@ pub(crate) async fn run<S>(
         "lan session open"
     );
     report_version(&hub, &authed, &hello.versions.app);
+    report_seen(&hub, &authed);
+    let mut seen_at = Instant::now();
     if authed.class == ClientClass::Paired && authed.device.is_some() {
         let dir = Arc::clone(&hub.devices);
         match tokio::task::spawn_blocking(move || dir.manager_verifier()).await {
@@ -487,6 +537,12 @@ pub(crate) async fn run<S>(
                 if last_inbound.elapsed() >= IDLE_TIMEOUT {
                     tracing::info!(device_id = authed.device_id().unwrap_or("-"), "lan session idle; closing");
                     break;
+                }
+                if authed.class == ClientClass::Kds
+                    && seen_at.elapsed() >= Duration::from_millis(arena_proto::KDS_SEEN_INTERVAL_MS.unsigned_abs())
+                {
+                    seen_at = Instant::now();
+                    report_seen(&hub, &authed);
                 }
                 pings += 1;
                 let ping = Frame::new(format!("ka-{pings}"), FrameBody::Ping);

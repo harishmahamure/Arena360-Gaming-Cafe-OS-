@@ -412,7 +412,7 @@ impl HubTask {
                         if applied
                             .changes
                             .iter()
-                            .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta" | "alerts" | "session_segments"))
+                            .any(|c| matches!(c.tbl.as_str(), "devices" | "devices_meta" | "alerts" | "session_segments" | "kitchen_displays"))
                         {
                             self.send("devices.changed", "{}".into(), false);
                         }

@@ -374,6 +374,18 @@ async fn run(
         }
     };
     let pairing = Arc::new(arena_api::pairing::Pairing::new(Arc::clone(&clock))?);
+    // The kitchen display code (Story 7.6) is a second instance: its own key, its own live code, and
+    // no owner check, so a used or expired code is not renewed.
+    let kds_pairing = Arc::new(arena_api::pairing::Pairing::new(Arc::clone(&clock))?);
+    // The built Kitchen display app is served from a directory (`ARENA_KITCHEN_DIR`, default
+    // `kitchen/` beside the Hub executable); without it the Hub serves a built-in pairing page.
+    let kitchen_dir = std::env::var_os("ARENA_KITCHEN_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.join("kitchen")))
+        });
     // The player key: opens profiles for the Hub UI and a player's name for a kiosk login.
     let player_kek: Arc<dyn arena_core::players::Kek> = Arc::new(
         arena_tasks::KeystoreKek::new(match &secrets {
@@ -393,6 +405,7 @@ async fn run(
     .with_staff(Arc::clone(&staff))
     .with_player_kek(Arc::clone(&player_kek))
     .with_pairing(Arc::clone(&pairing))
+    .with_kds_pairing(Arc::clone(&kds_pairing))
     .with_info(HubInfoSource {
         reader: Arc::clone(&snapshots),
         hub_name,
@@ -401,6 +414,9 @@ async fn run(
     });
     if let Some(cache) = &media_cache {
         lan_hub = lan_hub.with_media(Arc::clone(cache));
+    }
+    if let Some(dir) = kitchen_dir {
+        lan_hub = lan_hub.with_kitchen_dir(dir);
     }
     let lan_hub = Arc::new(lan_hub);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
@@ -433,6 +449,7 @@ async fn run(
     .with_printer(printer)
     .with_printer_jobs(Arc::clone(&printer_jobs))
     .with_pairing(pairing)
+    .with_kds_pairing(kds_pairing)
     .with_pair_gate(pair_gate.clone())
     .with_player_kek(Arc::clone(&player_kek));
     if let Some(folder) = &backup_folder {

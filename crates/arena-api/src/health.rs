@@ -200,6 +200,9 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                 let (shown, seen) = state.presence.status(&d.device_id);
                 d.apply_presence(shown, seen);
             }
+            for d in &mut snapshot.kitchen_displays {
+                d.connected = state.presence.display_online(&d.id);
+            }
             if let Some(status) = &state.status {
                 let status = status.borrow();
                 snapshot.connectivity = status.connectivity;

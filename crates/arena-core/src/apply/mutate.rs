@@ -150,6 +150,9 @@ pub(super) fn mutate(
         }
         IntentPayload::BranchSeedDefaults(_) => super::seed_defaults::mutate(tx),
         IntentPayload::SettingsSet(s) => {
+            if let Target::KdsDisplay(t) = target {
+                return super::kds_display::mutate(tx, intent, t, now_ms);
+            }
             let row = match target {
                 Target::Setting(row) => row.as_ref(),
                 _ => None,
@@ -572,6 +575,12 @@ pub(super) fn mutate(
             Target::SessionRateFlip(t) => super::rate_flip::mutate(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::KdsPair(_) | IntentPayload::KdsRevoke(_) | IntentPayload::KdsSeen(_) => {
+            match target {
+                Target::KdsDisplay(t) => super::kds_display::mutate(tx, intent, t, now_ms),
+                _ => Err(mismatch()),
+            }
+        }
         IntentPayload::InvoiceIssue(_) => match target {
             Target::InvoiceIssue(t) => super::invoice_issue::mutate(tx, intent, t, epoch, now_ms),
             _ => Err(mismatch()),

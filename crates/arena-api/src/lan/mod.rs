@@ -3,8 +3,11 @@
 //! - `:7400`: TLS WebSocket at `/` for paired apps.
 //! - `:7401`: the first byte is sniffed. `0x16` (a TLS ClientHello) is served exactly like
 //!   `:7400`; anything else is plain HTTP: `GET /ws` upgrades to a WebSocket for the browser
-//!   classes (`kds`, `phone`), `/kitchen` and `/console/<tv>` return a placeholder page, and
-//!   every other path is 404. `GET /media/<sha256>` is answered on TLS only (Story 6.2).
+//!   classes (`kds`, `phone`), `/kitchen` serves the Kitchen display app with `POST /kitchen/pair`
+//!   and `GET /kitchen/status` (Story 7.6), `/console/<tv>` returns a placeholder page and `/hub-info`
+//!   answers as before. Every other plain path, and a `/kitchen*` request carrying a bearer token that
+//!   is not a live `kds` one, is `FORBIDDEN` (403). `POST /pair` and `GET /media/<sha256>` are
+//!   answered on TLS only.
 //!
 //! Every session starts with `hello` (see [`session`]); class scopes come from `arena-proto`.
 //! Only a primary Hub serves intents; a follower answers `hello` and refuses every intent with
@@ -12,6 +15,7 @@
 
 mod call_staff;
 mod games;
+mod kds_pair;
 pub mod listener;
 mod media;
 mod pair;
@@ -103,6 +107,11 @@ impl Presence {
     /// Whether `device_id` has a live paired session right now.
     pub fn online(&self, device_id: &str) -> bool {
         self.0.as_ref().is_some_and(|r| r.is_online(device_id))
+    }
+
+    /// Whether the kitchen display `id` has a live `kds` session right now (Story 7.6).
+    pub fn display_online(&self, id: &str) -> bool {
+        self.0.as_ref().is_some_and(|r| r.display_online(id))
     }
 
     /// The device's shown presence: online while connected and for 15 s after, and when it was
@@ -234,6 +243,12 @@ pub struct LanHub {
     pub staff: Option<Arc<StaffDirectory>>,
     pub info: Option<Arc<HubInfoSource>>,
     pub pairing: Option<Arc<crate::pairing::Pairing>>,
+    /// The kitchen display pairing code, a second instance of [`Pairing`] (Story 7.6): its owner is
+    /// the issuing staff id and, with no owner check, a used or expired code is not renewed.
+    pub kds_pairing: Option<Arc<crate::pairing::Pairing>>,
+    /// The directory holding the built Kitchen display app `GET /kitchen` serves (`ARENA_KITCHEN_DIR`);
+    /// without it the Hub serves a built-in page that pairs the same way.
+    pub kitchen_dir: Option<std::path::PathBuf>,
     /// The game media cache `GET /media/<sha256>` serves from (Story 6.2).
     pub media: Option<Arc<arena_core::media_cache::MediaCache>>,
     /// Opens a player's sealed name for `player.authenticate`; without it that frame is
@@ -274,6 +289,8 @@ impl LanHub {
             staff: None,
             info: None,
             pairing: None,
+            kds_pairing: None,
+            kitchen_dir: None,
             media: None,
             player_kek: None,
             registry: Arc::new(registry::Registry::default()),
@@ -303,6 +320,18 @@ impl LanHub {
 
     pub fn with_pairing(mut self, pairing: Arc<crate::pairing::Pairing>) -> Self {
         self.pairing = Some(pairing);
+        self
+    }
+
+    /// Pairs kitchen displays with the codes of `pairing` (Story 7.6).
+    pub fn with_kds_pairing(mut self, pairing: Arc<crate::pairing::Pairing>) -> Self {
+        self.kds_pairing = Some(pairing);
+        self
+    }
+
+    /// Serves the built Kitchen display app from `dir` at `/kitchen` (Story 7.6).
+    pub fn with_kitchen_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.kitchen_dir = Some(dir);
         self
     }
 

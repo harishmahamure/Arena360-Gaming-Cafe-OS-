@@ -38,6 +38,7 @@ mod import_players;
 mod import_products;
 mod import_setup;
 mod invoice;
+mod kds_display;
 mod kiosk_order;
 mod kiosk_scan;
 mod kitchen_notes;

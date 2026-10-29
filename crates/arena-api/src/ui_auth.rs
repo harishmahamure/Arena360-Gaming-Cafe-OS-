@@ -414,6 +414,8 @@ pub struct UiAuth {
     printer_find: tokio::sync::Mutex<()>,
     printer_jobs: Arc<arena_core::printer::PrinterJobs>,
     pairing: Option<Arc<crate::pairing::Pairing>>,
+    /// The kitchen display code (Story 7.6), owned by the issuing staff id.
+    kds_pairing: Option<Arc<crate::pairing::Pairing>>,
     streams: Mutex<HashMap<String, usize>>,
     pair_gate: Option<arena_core::PairGate>,
     kek: Option<Arc<dyn arena_core::players::Kek>>,
@@ -469,6 +471,7 @@ impl UiAuth {
             printer_find: tokio::sync::Mutex::new(()),
             printer_jobs: Arc::default(),
             pairing: None,
+            kds_pairing: None,
             pair_gate: None,
             kek: None,
             player_index: Arc::default(),
@@ -528,6 +531,16 @@ impl UiAuth {
 
     pub(crate) fn pairing(&self) -> Option<&Arc<crate::pairing::Pairing>> {
         self.pairing.as_ref()
+    }
+
+    /// Issues kitchen display pairing codes from `kds_pairing` (Story 7.6).
+    pub fn with_kds_pairing(mut self, pairing: Arc<crate::pairing::Pairing>) -> Self {
+        self.kds_pairing = Some(pairing);
+        self
+    }
+
+    pub(crate) fn kds_pairing(&self) -> Option<&Arc<crate::pairing::Pairing>> {
+        self.kds_pairing.as_ref()
     }
 
     pub(crate) fn stream_opened(&self, token: &str) {
@@ -3333,6 +3346,11 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
     Router::new()
         .route("/ui/pairing-code", post(crate::ui_pairing::issue))
         .route("/ui/pairing-code/discard", post(crate::ui_pairing::discard))
+        .route("/ui/kds-pairing-code", post(crate::ui_pairing::issue_kds))
+        .route(
+            "/ui/kds-pairing-code/discard",
+            post(crate::ui_pairing::discard_kds),
+        )
         .route("/ui/auth/sign-in", post(sign_in))
         .route("/ui/auth/setup-code", post(setup_code))
         .route("/ui/auth/sign-out", post(sign_out))
@@ -3587,6 +3605,7 @@ pub(crate) mod tests {
         /// The LAN registry behind the auth's presence (tests register sessions in it).
         pub(crate) lan: Arc<crate::lan::registry::Registry>,
         pub(crate) pairing: Arc<crate::pairing::Pairing>,
+        pub(crate) kds_pairing: Arc<crate::pairing::Pairing>,
         pub(crate) media: Arc<arena_core::media_cache::MediaCache>,
     }
 
@@ -3751,6 +3770,7 @@ pub(crate) mod tests {
                 .unwrap()
                 .with_tick(std::time::Duration::from_millis(10)),
         );
+        let kds_pairing = Arc::new(crate::pairing::Pairing::new(clock.clone()).unwrap());
         let auth = UiAuth::new(
             Arc::new(StaffDirectory::open(&path).unwrap()),
             Arc::new(SnapshotReader::open(&path).unwrap()),
@@ -3761,7 +3781,8 @@ pub(crate) mod tests {
         .with_events_config(config)
         .with_presence(crate::lan::Presence::of(Arc::clone(&lan)))
         .with_media_cache(Arc::clone(&media))
-        .with_pairing(Arc::clone(&pairing));
+        .with_pairing(Arc::clone(&pairing))
+        .with_kds_pairing(Arc::clone(&kds_pairing));
         let auth = Arc::new(if with_kek {
             auth.with_player_kek(Arc::new(TestKek))
         } else {
@@ -3770,6 +3791,7 @@ pub(crate) mod tests {
         Hub {
             lan,
             pairing,
+            kds_pairing,
             media,
             _status: status_tx,
             _dir: dir,

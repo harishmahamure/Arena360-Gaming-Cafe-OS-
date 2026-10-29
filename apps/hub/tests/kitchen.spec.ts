@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { HubSnapshot, SessionStaff } from "@arena/ui/generated";
+import type { HubSnapshot, KitchenDisplayView, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -15,7 +15,7 @@ const STAFF: Record<string, SessionStaff> = {
     staff_id: "01JMANAGER0000000000000000",
     display_name: "Manager",
     role_name: "Manager",
-    permissions: ["settings.edit"],
+    permissions: ["settings.edit", "device.manage"],
   },
   "counter-token": {
     staff_id: "01JCOUNTER0000000000000000",
@@ -57,7 +57,40 @@ const SNAPSHOT: HubSnapshot = {
   setup: null,
 };
 
-async function open(page: Page, flags: string, token = "manager-token", stale = false) {
+type Display = KitchenDisplayView;
+
+/** What the stubbed Hub holds for the kitchen displays and their pairing codes. */
+type Kds = {
+  displays: Display[];
+  codes: number;
+  discards: number;
+  refuse?: { status: number; code: string };
+  revokes: { display_id?: string; base_rev?: number }[];
+};
+
+const DISPLAY_A: Display = {
+  id: "01JKITCHENDISPLAY0000000A",
+  name: "Pass",
+  connected: true,
+  last_seen: 1_800_000_000_000,
+  high_contrast: false,
+  rev: 3,
+};
+const DISPLAY_B: Display = {
+  id: "01JKITCHENDISPLAY0000000B",
+  name: "Grill",
+  connected: false,
+  high_contrast: false,
+  rev: 1,
+};
+
+async function open(
+  page: Page,
+  flags: string,
+  token = "manager-token",
+  stale = false,
+  kds: Kds = { displays: [], codes: 0, discards: 0, revokes: [] },
+) {
   const rows = settings(flags);
   const intents: Sent[] = [];
   await page.addInitScript((t) => sessionStorage.setItem("arena.hub.token", t), token);
@@ -68,7 +101,19 @@ async function open(page: Page, flags: string, token = "manager-token", stale = 
     const staff = STAFF[(req.headers()["authorization"] ?? "").replace(/^Bearer /, "")];
     switch (pathname) {
       case "/ui/snapshot":
-        return json(route, 200, SNAPSHOT);
+        return json(route, 200, { ...SNAPSHOT, kitchen_displays: kds.displays });
+      case "/ui/kds-pairing-code":
+        if (kds.refuse)
+          return json(route, kds.refuse.status, { code: kds.refuse.code, message: "no" });
+        kds.codes++;
+        return json(route, 200, {
+          code: "482913",
+          expires_at: Date.now() + 10 * 60_000,
+          address: "http://192.168.1.20:7401/kitchen",
+        });
+      case "/ui/kds-pairing-code/discard":
+        kds.discards++;
+        return route.fulfill({ status: 204, headers: CORS });
       case "/ui/me":
         return json(route, 200, staff);
       case "/ui/settings":
@@ -94,6 +139,14 @@ async function open(page: Page, flags: string, token = "manager-token", stale = 
           intent: { base_rev: number; payload: Sent };
         };
         if (stale) return json(route, 409, { code: "STALE", message: "stale", field: "base_rev" });
+        if ((intent.payload as { kind?: string }).kind === "kds.revoke") {
+          kds.revokes.push({
+            display_id: (intent.payload as { display_id?: string }).display_id,
+            base_rev: intent.base_rev,
+          });
+          kds.displays = kds.displays.filter((d) => d.id !== kds.revokes.at(-1)?.display_id);
+          return json(route, 200, { applied: { intent_id: "I", changes: [] } });
+        }
         const { key, value } = intent.payload;
         intents.push({ key, value, base_rev: intent.base_rev, ticket: elevation_ticket });
         rows.set(key!, { value: value!, rev: rows.get(key!)!.rev + 1 });
@@ -130,10 +183,9 @@ test("a Basic branch edits the KOT printer and saves with base_rev", async ({ pa
   await expect(page.getByTestId("kitchen-displays")).toHaveText(
     en["hub.settings.kitchen.displays_none"],
   );
-  await expect(page.getByRole("button", { name: en["hub.settings.kitchen.pair"] })).toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
+  await expect(
+    page.getByRole("button", { name: en["hub.settings.kitchen.pair"] }),
+  ).not.toHaveAttribute("aria-disabled", "true");
   await expectNoSeriousAxe(page);
   await page.getByLabel(en["hub.settings.kitchen.mode.none"]).check();
   await page.getByRole("button", { name: en["hub.settings.save"] }).click();
@@ -221,4 +273,77 @@ test("on Android, the KOT picker says why Bluetooth printers are missing and lin
     .click();
   await expect.poll(() => settingsOpened).toBe(1);
   await expectNoSeriousAxe(page);
+});
+
+test("a manager pairs a kitchen display: the address, a 6-digit code and a countdown", async ({
+  page,
+}) => {
+  const kds: Kds = { displays: [], codes: 0, discards: 0, revokes: [] };
+  await open(page, "kitchen", "manager-token", false, kds);
+  await page.getByRole("button", { name: en["hub.settings.kitchen.pair"] }).click();
+  const panel = page.getByTestId("pair-kitchen-panel");
+  await expect(panel.getByTestId("pair-kitchen-address")).toHaveText(
+    "http://192.168.1.20:7401/kitchen",
+  );
+  await expect(panel.getByTestId("pair-kitchen-code")).toHaveText("482 913");
+  await expect(panel.getByTestId("pair-kitchen-expires")).toContainText("Expires in");
+  await expectNoSeriousAxe(page);
+  expect(kds.codes).toBe(1);
+  await panel.getByRole("button", { name: en["hub.settings.kitchen.pair_close"] }).click();
+  await expect(panel).toHaveCount(0);
+  await expect.poll(() => kds.discards).toBe(1);
+});
+
+test("the pair dialog says why a Free branch gets no code", async ({ page }) => {
+  const kds: Kds = {
+    displays: [],
+    codes: 0,
+    discards: 0,
+    refuse: { status: 403, code: "TIER_LOCKED" },
+    revokes: [],
+  };
+  await open(page, "kitchen", "manager-token", false, kds);
+  await page.getByRole("button", { name: en["hub.settings.kitchen.pair"] }).click();
+  await expect(page.getByTestId("pair-kitchen-failed")).toContainText(
+    en["hub.settings.kitchen.locked"],
+  );
+});
+
+test("a counter holds no device.manage: the pair button says so and opens nothing", async ({
+  page,
+}) => {
+  await open(page, "kitchen", "counter-token");
+  await expect(page.getByRole("button", { name: en["hub.settings.kitchen.pair"] })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await expect(page.getByText(en["hub.settings.kitchen.pair_only_managers"]).first()).toBeVisible();
+});
+
+test("the display list shows name, connected state and last seen, and Revoke removes one", async ({
+  page,
+}) => {
+  const kds: Kds = {
+    displays: [{ ...DISPLAY_A }, { ...DISPLAY_B }],
+    codes: 0,
+    discards: 0,
+    revokes: [],
+  };
+  await open(page, "kitchen", "manager-token", false, kds);
+  const pass = page.getByTestId(`kitchen-display-${DISPLAY_A.id}`);
+  await expect(pass).toContainText("Pass");
+  await expect(pass.getByTestId("kitchen-display-state")).toContainText(
+    en["hub.settings.kitchen.display_connected"],
+  );
+  await expect(pass).toContainText("Last seen");
+  const grill = page.getByTestId(`kitchen-display-${DISPLAY_B.id}`);
+  await expect(grill.getByTestId("kitchen-display-state")).toContainText(
+    en["hub.settings.kitchen.display_disconnected"],
+  );
+  await expect(grill).toContainText(en["hub.settings.kitchen.display_never_seen"]);
+  await expectNoSeriousAxe(page);
+
+  await grill.getByRole("button", { name: en["hub.settings.kitchen.revoke"] }).click();
+  await expect(page.getByTestId("kitchen-revoke-status")).toHaveText("Grill was revoked.");
+  expect(kds.revokes).toEqual([{ display_id: DISPLAY_B.id, base_rev: 1 }]);
 });

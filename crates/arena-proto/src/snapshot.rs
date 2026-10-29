@@ -38,6 +38,11 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<crate::KitchenTicketView>>")]
     pub counter_tickets: Vec<crate::KitchenTicketView>,
+    /// The kitchen displays that are not revoked, oldest first (Story 7.6). `connected` is filled by
+    /// the LAN layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<crate::KitchenDisplayView>>")]
+    pub kitchen_displays: Vec<crate::KitchenDisplayView>,
     /// The branch's shift: who has the drawer open, and the float to prefill for the next one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -413,6 +418,7 @@ mod tests {
             group_bills: vec![],
             alerts: vec![],
             counter_tickets: vec![],
+            kitchen_displays: vec![],
             shift: None,
             devices: vec![SnapshotDevice {
                 device_id: "D".into(),

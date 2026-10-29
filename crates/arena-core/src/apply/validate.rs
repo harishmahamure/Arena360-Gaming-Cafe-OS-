@@ -43,6 +43,9 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Ok(())
         }
         IntentPayload::SettingsSet(s) => {
+            if let Target::KdsDisplay(t) = target {
+                return super::kds_display::validate(intent, t);
+            }
             let row = match target {
                 Target::Setting(row) => row.as_ref(),
                 _ => None,
@@ -437,6 +440,12 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Kot(t) => super::kot::validate(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::KdsPair(_) | IntentPayload::KdsRevoke(_) | IntentPayload::KdsSeen(_) => {
+            match target {
+                Target::KdsDisplay(t) => super::kds_display::validate(intent, t),
+                _ => Err(internal_target()),
+            }
+        }
         IntentPayload::InvoiceIssue(_) => match target {
             Target::InvoiceIssue(t) => super::invoice_issue::validate(intent, t),
             _ => Err(internal_target()),

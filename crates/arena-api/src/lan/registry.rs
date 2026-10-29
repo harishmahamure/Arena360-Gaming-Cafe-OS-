@@ -1,7 +1,8 @@
 //! Connected LAN sessions, the push fan-out and revocation.
 //!
 //! Every committed intent from the writer broadcast is pushed to every `paired` session as
-//! `event{kind:"applied"}`. Browser classes (`kds`, `phone`) only get the changes to tables on
+//! `event{kind:"applied"}`. A kitchen display also gets its own `display.hc.<id>` as `settings.changed`
+//! when its row changes (Story 7.6). Browser classes (`kds`, `phone`) only get the changes to tables on
 //! their allow-list ([`browser_tables`], empty for now), and nothing when none remain. When the
 //! intent wrote `kiosk.*` or `branch.fulfilment` settings, their values now follow as `event{kind:"settings.changed"}`,
 //! to `paired` sessions only (browser classes never see settings). Each
@@ -84,6 +85,9 @@ pub(crate) struct Registry {
     pc_acks: broadcast::Sender<PcAckEvent>,
     /// The manager-verifier version last pushed to every paired session (-1: none yet).
     verifier_pushed: AtomicI64,
+    /// The high-contrast value each kitchen display was last told (or read at its hello), so a row
+    /// change that is not a toggle (a last-seen) pushes nothing (Story 7.6).
+    display_hc: Mutex<HashMap<String, String>>,
 }
 
 impl Default for Registry {
@@ -99,6 +103,7 @@ impl Default for Registry {
             pending_cmds: Mutex::default(),
             pc_acks: broadcast::channel(64).0,
             verifier_pushed: AtomicI64::new(-1),
+            display_hc: Mutex::default(),
         }
     }
 }
@@ -158,6 +163,13 @@ impl Drop for SessionGuard {
             .lock()
             .ok()
             .and_then(|mut map| map.remove(&self.id));
+        // Story 7.6: a kitchen display going away changes the Hub list at once.
+        if removed
+            .as_ref()
+            .is_some_and(|e| e.class == ClientClass::Kds && e.device_id.is_some())
+        {
+            self.registry.presence.send_modify(|n| *n += 1);
+        }
         if let Some(id) = removed
             .filter(|e| e.class == ClientClass::Paired)
             .and_then(|e| e.device_id)
@@ -225,7 +237,8 @@ impl Registry {
         let (kill, reader_kill) = watch::channel(None);
         let kill = Arc::new(kill);
         let writer_kill = kill.subscribe();
-        let presence = class == ClientClass::Paired && device_id.is_some();
+        let presence =
+            matches!(class, ClientClass::Paired | ClientClass::Kds) && device_id.is_some();
         let seen_id = device_id.clone();
         if let Ok(mut map) = self.sessions.lock() {
             map.insert(
@@ -244,7 +257,9 @@ impl Registry {
             }
         }
         if presence {
-            if let Some(id) = &seen_id {
+            if class == ClientClass::Paired
+                && let Some(id) = &seen_id
+            {
                 self.mark_seen(id);
             }
             self.presence.send_modify(|n| *n += 1);
@@ -634,6 +649,25 @@ impl Registry {
         })
     }
 
+    /// Records the high-contrast value a kitchen display holds now, read when it connected.
+    pub(crate) fn note_display_hc(&self, id: &str, value: &str) {
+        if let Ok(mut seen) = self.display_hc.lock() {
+            seen.insert(id.to_owned(), value.to_owned());
+        }
+    }
+
+    /// Whether the kitchen display `id` has a live (not closing) `kds` session (Story 7.6).
+    pub(crate) fn display_online(&self, id: &str) -> bool {
+        let Ok(map) = self.sessions.lock() else {
+            return false;
+        };
+        map.values().any(|e| {
+            e.class == ClientClass::Kds
+                && e.device_id.as_deref() == Some(id)
+                && e.kill.borrow().is_none()
+        })
+    }
+
     /// How many sessions are connected.
     pub(crate) fn len(&self) -> usize {
         self.sessions.lock().map(|m| m.len()).unwrap_or(0)
@@ -786,6 +820,74 @@ impl Registry {
         }
     }
 
+    /// Pushes a kitchen display's own `display.hc.<id>` to its `kds` sessions after a change to its
+    /// row (Story 7.6): a manager's high-contrast toggle reaches the live display at once.
+    async fn push_display_settings(&self, devices: &Arc<DeviceDirectory>, applied: &Applied) {
+        let mut ids: Vec<String> = applied
+            .changes
+            .iter()
+            .filter(|c| c.tbl == "kitchen_displays" && c.op == ChangeOp::Update)
+            .map(|c| c.row_id.clone())
+            .filter(|id| self.display_online(id))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        for id in ids {
+            let keys = vec![arena_proto::hc_key(&id)];
+            let dir = Arc::clone(devices);
+            let read = tokio::task::spawn_blocking(move || dir.settings(&keys)).await;
+            let values = match read {
+                Ok(Ok(values)) => values,
+                _ => {
+                    tracing::warn!(display_id = %id, "kitchen display settings read failed; dropping its sessions");
+                    self.kill_device(&id, Kill::Drop);
+                    continue;
+                }
+            };
+            let Some(now) = values.first().map(|v| v.value.clone()) else {
+                continue;
+            };
+            let unchanged = self
+                .display_hc
+                .lock()
+                .ok()
+                .and_then(|mut seen| seen.insert(id.clone(), now.clone()))
+                .is_some_and(|before| before == now);
+            if unchanged {
+                continue;
+            }
+            let Ok(map) = self.sessions.lock() else {
+                return;
+            };
+            for (sid, entry) in map.iter() {
+                if entry.class != ClientClass::Kds
+                    || entry.device_id.as_deref() != Some(id.as_str())
+                {
+                    continue;
+                }
+                let mine: Vec<SettingEntry> = values
+                    .iter()
+                    .filter(|v| may_read_setting(entry.class, &v.key, entry.device_id.as_deref()))
+                    .cloned()
+                    .collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                let n = self.next_event.fetch_add(1, Ordering::Relaxed);
+                let frame = Frame::new(
+                    format!("ev-{n}"),
+                    FrameBody::Event(EventFrame {
+                        event: HubEvent::SettingsChanged(SettingsValues { values: mine }),
+                    }),
+                );
+                if entry.out.try_send(Message::text(frame.to_text())).is_err() {
+                    tracing::warn!(session = sid, "session queue full or closed; dropping it");
+                    set_kill(&entry.kill, Kill::Drop);
+                }
+            }
+        }
+    }
+
     fn drop_paired(&self) {
         if let Ok(map) = self.sessions.lock() {
             for entry in map.values().filter(|e| e.class == ClientClass::Paired) {
@@ -888,11 +990,12 @@ impl Registry {
                         self.push_verifier_if_changed(&devices).await;
                     }
                     self.push_remote_exits(&devices, &applied).await;
+                    self.push_display_settings(&devices, &applied).await;
                     self.push_test_sessions(&devices, &applied).await;
                     let mut touched: Vec<String> = applied
                         .changes
                         .iter()
-                        .filter(|c| c.tbl == "devices")
+                        .filter(|c| matches!(c.tbl.as_str(), "devices" | "kitchen_displays"))
                         .map(|c| c.row_id.clone())
                         .collect();
                     touched.sort();
@@ -1121,10 +1224,13 @@ mod tests {
         assert!(!reg.is_online("P"));
         assert!(changes.has_changed().unwrap(), "the close bumps presence");
         changes.mark_unchanged();
+        // A kitchen display is not a paired device, but its connection moves the Hub's list.
+        assert!(reg.display_online("K") && !reg.display_online("P"));
         drop(_kds);
+        assert!(!reg.display_online("K"));
         assert!(
-            !changes.has_changed().unwrap(),
-            "a kds session is not presence"
+            changes.has_changed().unwrap(),
+            "a kds session closing bumps presence for the kitchen list"
         );
     }
 

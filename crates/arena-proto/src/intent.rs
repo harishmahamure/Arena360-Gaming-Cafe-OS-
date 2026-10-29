@@ -190,6 +190,16 @@ pub enum IntentKind {
     /// a "Printer offline" alert is raised.
     #[serde(rename = "kot.print_failed")]
     KotPrintFailed,
+    /// A kitchen display paired with a code (system only; Story 7.6). Tier-gated New: Free is
+    /// `TIER_LOCKED` and nothing is written.
+    #[serde(rename = "kds.pair")]
+    KdsPair,
+    /// A Manager revokes a kitchen display; its socket closes `TOKEN_REVOKED` (Story 7.6).
+    #[serde(rename = "kds.revoke")]
+    KdsRevoke,
+    /// A kitchen display connected, or its last-seen is stale (system only; Story 7.6).
+    #[serde(rename = "kds.seen")]
+    KdsSeen,
     /// An unserved placed line cancelled, with a reason.
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel,
@@ -376,7 +386,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 118] = [
+    pub const ALL: [IntentKind; 121] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -429,6 +439,9 @@ impl IntentKind {
         Self::KotReprint,
         Self::KotPrinted,
         Self::KotPrintFailed,
+        Self::KdsPair,
+        Self::KdsRevoke,
+        Self::KdsSeen,
         Self::OrderLineCancel,
         Self::OrderVoid,
         Self::RefundCreate,
@@ -552,6 +565,9 @@ impl IntentKind {
             Self::KotReprint => "kot.reprint",
             Self::KotPrinted => "kot.printed",
             Self::KotPrintFailed => "kot.print_failed",
+            Self::KdsPair => "kds.pair",
+            Self::KdsRevoke => "kds.revoke",
+            Self::KdsSeen => "kds.seen",
             Self::OrderLineCancel => "order.line_cancel",
             Self::OrderVoid => "order.void",
             Self::RefundCreate => "refund.create",
@@ -665,7 +681,10 @@ impl IntentKind {
             | Self::KitchenAdvanceReverted
             | Self::KotReprint
             | Self::KotPrinted
-            | Self::KotPrintFailed => IntentCategory::Kitchen,
+            | Self::KotPrintFailed
+            | Self::KdsPair
+            | Self::KdsRevoke
+            | Self::KdsSeen => IntentCategory::Kitchen,
             Self::StaffUpsert
             | Self::RoleUpsert
             | Self::StaffSetCredentials
@@ -770,6 +789,7 @@ impl IntentKind {
             | Self::DevicePlace
             | Self::DeviceMaintenance
             | Self::DeviceTestSessionStart
+            | Self::KdsRevoke
             | Self::RateUpsert => Requirement::Perm(Permission::DeviceManage),
             Self::DeviceRevoke | Self::DevicePower => Requirement::Perm(Permission::DeviceRemote),
             Self::DeviceScreen | Self::DeviceMessage => Requirement::Perm(Permission::DeviceScreen),
@@ -786,6 +806,8 @@ impl IntentKind {
             | Self::ReceiptPrintFailed
             | Self::KotPrinted
             | Self::KotPrintFailed
+            | Self::KdsPair
+            | Self::KdsSeen
             | Self::DrawerKicked
             | Self::DrawerKickFailed
             | Self::GameMatched
@@ -955,6 +977,9 @@ impl IntentKind {
             | Self::KotReprint
             | Self::KotPrinted
             | Self::KotPrintFailed
+            | Self::KdsPair
+            | Self::KdsRevoke
+            | Self::KdsSeen
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
@@ -1542,6 +1567,12 @@ pub enum IntentPayload {
     KotPrinted(crate::KotPrinted),
     #[serde(rename = "kot.print_failed")]
     KotPrintFailed(crate::KotPrintFailed),
+    #[serde(rename = "kds.pair")]
+    KdsPair(crate::KdsPair),
+    #[serde(rename = "kds.revoke")]
+    KdsRevoke(crate::KdsRevoke),
+    #[serde(rename = "kds.seen")]
+    KdsSeen(crate::KdsSeen),
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel(crate::OrderLineCancel),
     #[serde(rename = "order.void")]
@@ -1731,6 +1762,9 @@ impl IntentPayload {
             Self::KotReprint(_) => IntentKind::KotReprint,
             Self::KotPrinted(_) => IntentKind::KotPrinted,
             Self::KotPrintFailed(_) => IntentKind::KotPrintFailed,
+            Self::KdsPair(_) => IntentKind::KdsPair,
+            Self::KdsRevoke(_) => IntentKind::KdsRevoke,
+            Self::KdsSeen(_) => IntentKind::KdsSeen,
             Self::OrderLineCancel(_) => IntentKind::OrderLineCancel,
             Self::OrderVoid(_) => IntentKind::OrderVoid,
             Self::RefundCreate(_) => IntentKind::RefundCreate,
@@ -2114,6 +2148,8 @@ mod tests {
                 | "receipt.print_failed"
                 | "kot.printed"
                 | "kot.print_failed"
+                | "kds.pair"
+                | "kds.seen"
                 | "drawer.kicked"
                 | "drawer.kick_failed"
                 | "stock.expiry_check" => Requirement::System,
@@ -2129,6 +2165,7 @@ mod tests {
                 | "device.place"
                 | "device.maintenance"
                 | "rate.upsert"
+                | "kds.revoke"
                 | "device.test_session.start" => Requirement::Perm(Permission::DeviceManage),
                 "device.revoke" | "device.admin_unlock" | "device.power" => {
                     Requirement::Perm(Permission::DeviceRemote)

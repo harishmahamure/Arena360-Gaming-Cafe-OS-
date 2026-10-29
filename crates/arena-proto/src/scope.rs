@@ -90,6 +90,10 @@ pub const PAIRED_SETTINGS_PREFIX: &str = "kiosk.";
 /// only paired apps, and only `kiosk.*` keys, `branch.fulfilment`, `branch.tz`, the kiosk billing keys and the device's own
 /// `display.hc.<device_id>` (never another device's, never the Hub's).
 pub fn may_read_setting(class: ClientClass, key: &str, device_id: Option<&str>) -> bool {
+    if class == ClientClass::Kds {
+        // Story 7.6: a kitchen display reads only its own high-contrast key.
+        return matches!((parse_hc_key(key), device_id), (Some(HcTarget::Device(id)), Some(own)) if id == own);
+    }
     if class != ClientClass::Paired {
         return false;
     }
@@ -204,12 +208,13 @@ mod tests {
         assert!(!paired("Kiosk.process_allow"));
         for class in [ClientClass::Kds, ClientClass::Phone] {
             assert!(!may_read_setting(class, "kiosk.process_allow", me));
-            assert!(!may_read_setting(
-                class,
-                "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
-                me
-            ));
+            assert!(!may_read_setting(class, "branch.fulfilment", me));
         }
+        assert!(!may_read_setting(
+            ClientClass::Phone,
+            "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
+            me
+        ));
     }
 
     #[test]
@@ -229,6 +234,34 @@ mod tests {
             Some(me)
         ));
         assert!(!may_read_setting(ClientClass::Paired, &own_key, None));
+    }
+
+    #[test]
+    fn a_kitchen_display_reads_only_its_own_hc_key() {
+        let me = "01JABCDEFGHJKMNPQRSTVWXYZ0";
+        let other = "01JABCDEFGHJKMNPQRSTVWXYZ1";
+        let kds = |k: &str, id| may_read_setting(ClientClass::Kds, k, id);
+        assert!(kds(&format!("display.hc.{me}"), Some(me)));
+        assert!(!kds(&format!("display.hc.{other}"), Some(me)));
+        assert!(!kds("display.hc.hub", Some(me)));
+        assert!(!kds(&format!("display.hc.{me}"), None));
+        assert!(!kds("kiosk.process_allow", Some(me)));
+    }
+
+    #[test]
+    fn no_class_may_submit_a_kds_pairing_intent() {
+        for kind in IntentKind::ALL {
+            if kind.as_str().starts_with("kds.") {
+                for class in [ClientClass::Paired, ClientClass::Kds, ClientClass::Phone] {
+                    assert!(
+                        !in_scope(class, kind),
+                        "{} may submit {}",
+                        class.as_str(),
+                        kind.as_str()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

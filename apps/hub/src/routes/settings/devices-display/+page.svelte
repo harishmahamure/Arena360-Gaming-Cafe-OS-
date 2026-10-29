@@ -26,7 +26,7 @@
   const HUB_KEY = "display.hc.hub";
   const keyOf = (deviceId: string) => `display.hc.${deviceId}`; // i18n-ignore (a setting key)
 
-  type Row = { key: string; label: string; testId: string };
+  type Row = { key: string; label: string; testId: string; kitchen?: boolean };
   type Server = { value: boolean; rev: number };
   type RowStatus = { tone: "ok" | "refusal"; message: MessageKey };
 
@@ -95,6 +95,12 @@
         label: d.label,
         testId: `hc-row-${d.device_id}`, // i18n-ignore (a test id)
       })),
+    ...(snapshot?.kitchen_displays ?? []).map((d) => ({
+      key: keyOf(d.id),
+      label: d.name,
+      testId: `hc-row-${d.id}`, // i18n-ignore (a test id)
+      kitchen: true,
+    })),
   ]);
 
   let server: Record<string, Server> = $state({});
@@ -127,6 +133,12 @@
       for (const s of result.settings) {
         if (s.key.startsWith("display.hc."))
           next[s.key] = { value: s.value === "true", rev: s.rev };
+      }
+      // A kitchen display's high contrast lives on its row, which the snapshot carries (Story 7.6).
+      for (const d of snapshot?.kitchen_displays ?? []) {
+        const key = keyOf(d.id);
+        const held = server[key];
+        next[key] = held && held.rev > d.rev ? held : { value: d.high_contrast, rev: d.rev };
       }
       server = next;
       loadFailed = !next[HUB_KEY];
@@ -246,6 +258,25 @@
     });
   });
 
+  // A kitchen display's row changed (a toggle elsewhere, a new display): follow the snapshot.
+  $effect(() => {
+    const list = snapshot?.kitchen_displays ?? [];
+    untrack(() => {
+      if (saving) return;
+      const next = { ...server };
+      let changed = false;
+      for (const d of list) {
+        const key = keyOf(d.id);
+        const held = next[key];
+        if (held && held.rev > d.rev) continue;
+        if (held?.value === d.high_contrast && held.rev === d.rev) continue;
+        next[key] = { value: d.high_contrast, rev: d.rev };
+        changed = true;
+      }
+      if (changed) server = next;
+    });
+  });
+
   // A device paired or revoked (the snapshot was re-read): its row may be new.
   $effect(() => {
     const keys = rows.map((r) => r.key);
@@ -332,6 +363,9 @@
         {@const on = shown(row.key)}
         {@const known = server[row.key] !== undefined}
         <li class="row" data-testid={row.testId}>
+          {#if row.kitchen}
+            <p class="note type-hub-label">{t("hub.settings.devices_display.kitchen_displays")}</p>
+          {/if}
           <div class="line">
             <span class="name type-hub-label">{row.label}</span>
             <label class="switch">

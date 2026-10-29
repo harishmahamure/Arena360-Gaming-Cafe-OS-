@@ -21,6 +21,7 @@ mod gst;
 mod identity;
 mod invoices;
 mod kiosk_scans;
+mod kitchen_displays;
 mod kitchen_tickets;
 mod library;
 mod library_installs;
@@ -127,6 +128,10 @@ pub use kiosk_scans::{
     GameLaunchRow, KioskScanRow, KioskScanSummary, KioskScanWrite, find_kiosk_scan,
     insert_kiosk_scan, list_game_launches, list_kiosk_scan_summaries, list_kiosk_scans,
     replace_kiosk_scan,
+};
+pub use kitchen_displays::{
+    DisplayRow, NewDisplay, count_live_displays, find_display, insert_display, list_displays,
+    set_display_high_contrast, set_display_last_seen, set_display_revoked,
 };
 pub use kitchen_tickets::{
     NewTicket, NewTicketLine, TicketLineRow, TicketRow, find_line_for_order_line,
@@ -749,12 +754,21 @@ impl Store {
         list_staff_names(&self.conn)
     }
 
-    /// Every device's `(device_id, label)`.
+    /// Every device's `(device_id, label)`, and every kitchen display's `(id, name)` (a display acts
+    /// as a device actor).
     pub fn device_labels(&self) -> Result<Vec<(String, String)>, AppError> {
         if !self.devices_table_exists()? {
             return Ok(Vec::new());
         }
-        list_device_labels(&self.conn)
+        let mut labels = list_device_labels(&self.conn)?;
+        if self.table_exists("kitchen_displays")? {
+            labels.extend(
+                list_displays(&self.conn)?
+                    .into_iter()
+                    .map(|d| (d.id, d.name)),
+            );
+        }
+        Ok(labels)
     }
 
     /// The branch's locale columns, outside any write transaction (`None` before bootstrap).
@@ -1110,6 +1124,22 @@ impl Store {
         };
         let lines = list_ticket_lines(&self.conn, id)?;
         Ok(Some((ticket, lines)))
+    }
+
+    /// The kitchen display `id`, outside any write transaction (`None` before migration 72).
+    pub fn kitchen_display(&self, id: &str) -> Result<Option<DisplayRow>, AppError> {
+        if !self.table_exists("kitchen_displays")? {
+            return Ok(None);
+        }
+        find_display(&self.conn, id)
+    }
+
+    /// Every kitchen display, revoked ones included (empty before migration 72).
+    pub fn kitchen_displays(&self) -> Result<Vec<DisplayRow>, AppError> {
+        if !self.table_exists("kitchen_displays")? {
+            return Ok(Vec::new());
+        }
+        list_displays(&self.conn)
     }
 
     /// What the latest KOT of each ticket came to (empty before migration 71).

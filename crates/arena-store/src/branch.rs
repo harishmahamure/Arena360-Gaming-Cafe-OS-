@@ -75,6 +75,7 @@ pub enum Table {
     LibraryInstalls,
     LibraryDismissals,
     GamePlays,
+    KitchenDisplays,
     KitchenTickets,
     KitchenTicketLines,
     PlayerPcSettings,
@@ -82,7 +83,7 @@ pub enum Table {
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 51] = [
+    pub const ALL: [Table; 52] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -131,6 +132,7 @@ impl Table {
         Table::LibraryInstalls,
         Table::LibraryDismissals,
         Table::GamePlays,
+        Table::KitchenDisplays,
         Table::KitchenTickets,
         Table::KitchenTicketLines,
         Table::PlayerPcSettings,
@@ -187,6 +189,7 @@ impl Table {
             Self::LibraryInstalls => "library_installs",
             Self::LibraryDismissals => "library_dismissals",
             Self::GamePlays => "game_plays",
+            Self::KitchenDisplays => "kitchen_displays",
             Self::KitchenTickets => "kitchen_tickets",
             Self::KitchenTicketLines => "kitchen_ticket_lines",
             Self::PlayerPcSettings => "player_pc_settings",
@@ -228,6 +231,7 @@ impl Table {
             | Self::Refunds
             | Self::LibraryEntries
             | Self::GamePlays
+            | Self::KitchenDisplays
             | Self::KitchenTickets
             | Self::KitchenTicketLines => &["id"],
             Self::Plans => &["plan_id"],
@@ -291,6 +295,7 @@ impl Table {
             | Self::LibraryInstalls
             | Self::LibraryDismissals
             | Self::GamePlays
+            | Self::KitchenDisplays
             | Self::KitchenTickets
             | Self::KitchenTicketLines
             | Self::PlayerPcSettings
@@ -465,6 +470,9 @@ pub enum RowKey {
     GamePlays {
         id: String,
     },
+    KitchenDisplays {
+        id: String,
+    },
     KitchenTickets {
         id: String,
     },
@@ -523,6 +531,7 @@ impl RowKey {
             Self::LibraryInstalls { .. } => Table::LibraryInstalls,
             Self::LibraryDismissals { .. } => Table::LibraryDismissals,
             Self::GamePlays { .. } => Table::GamePlays,
+            Self::KitchenDisplays { .. } => Table::KitchenDisplays,
             Self::KitchenTickets { .. } => Table::KitchenTickets,
             Self::KitchenTicketLines { .. } => Table::KitchenTicketLines,
             Self::Coupons { .. } => Table::Coupons,
@@ -565,6 +574,7 @@ impl RowKey {
             } => format!("{entry_id}/{device_id}"),
             Self::LibraryDismissals { key } => key.clone(),
             Self::GamePlays { id } => id.clone(),
+            Self::KitchenDisplays { id } => id.clone(),
             Self::KitchenTickets { id } => id.clone(),
             Self::KitchenTicketLines { id } => id.clone(),
             Self::DeviceGroups { group_id } => group_id.clone(),
@@ -717,6 +727,7 @@ impl RowKey {
             },
             Table::LibraryDismissals => Self::LibraryDismissals { key: text("key")? },
             Table::GamePlays => Self::GamePlays { id: text("id")? },
+            Table::KitchenDisplays => Self::KitchenDisplays { id: text("id")? },
             Table::KitchenTickets => Self::KitchenTickets { id: text("id")? },
             Table::KitchenTicketLines => Self::KitchenTicketLines { id: text("id")? },
             Table::Coupons => Self::Coupons {
@@ -768,6 +779,7 @@ impl RowKey {
             } => vec![entry_id, device_id],
             Self::LibraryDismissals { key } => vec![key],
             Self::GamePlays { id } => vec![id],
+            Self::KitchenDisplays { id } => vec![id],
             Self::KitchenTickets { id } => vec![id],
             Self::KitchenTicketLines { id } => vec![id],
             Self::DeviceGroups { group_id } => vec![group_id],

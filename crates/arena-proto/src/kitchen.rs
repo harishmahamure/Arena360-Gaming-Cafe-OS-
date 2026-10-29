@@ -133,6 +133,151 @@ pub struct KitchenTicketView {
     pub lines: Vec<KitchenTicketLineView>,
 }
 
+/// Story 7.6: the most kitchen displays a branch holds that are not revoked.
+pub const KDS_MAX_DISPLAYS: i64 = 4;
+/// The plain-HTTP path that serves the Kitchen display app.
+pub const KDS_PAGE_PATH: &str = "/kitchen";
+/// `POST` here with a pairing code to pair a display.
+pub const KDS_PAIR_PATH: &str = "/kitchen/pair";
+/// `GET` here tells the page whether the branch has the kitchen flag.
+pub const KDS_STATUS_PATH: &str = "/kitchen/status";
+/// The name a display takes when the tablet sends none.
+pub const KDS_DEFAULT_NAME: &str = "Kitchen";
+/// A display is refreshed in the Hub's list at most this often, in milliseconds.
+pub const KDS_SEEN_INTERVAL_MS: i64 = 60_000;
+/// The wrong-code message the page shows and the field clears with.
+pub const KDS_CODE_WRONG: &str = "That code didn't work. Get a new one from the counter.";
+/// The refusal of a fifth display.
+pub const KDS_LIMIT_MESSAGE: &str =
+    "This branch already has 4 kitchen displays — remove one at the counter.";
+
+/// The payload of `kds.pair` (system, Story 7.6): a kitchen display row with the Argon2id hash of
+/// its token secret. The writer mints the id; `created_by` is the Manager or Owner who issued the
+/// pairing code.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KdsPair {
+    pub name: String,
+    pub token_hash: String,
+    pub created_by: String,
+}
+
+impl std::fmt::Debug for KdsPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KdsPair")
+            .field("name", &self.name)
+            .field("created_by", &self.created_by)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The payload of `kds.revoke` (`device.manage`): the display's token stops working and its live
+/// socket closes `TOKEN_REVOKED`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KdsRevoke {
+    pub display_id: String,
+}
+
+/// The payload of `kds.seen` (system): a display connected, or its last-seen is stale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KdsSeen {
+    pub display_id: String,
+}
+
+/// The body of `POST /kitchen/pair`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KdsPairRequest {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+}
+
+impl std::fmt::Debug for KdsPairRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KdsPairRequest")
+            .field("code", &"<redacted>")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+/// The answer of `POST /kitchen/pair`: the `kds` token, returned this once.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KdsPairResponse {
+    pub display_id: String,
+    pub token: String,
+    pub name: String,
+}
+
+impl std::fmt::Debug for KdsPairResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KdsPairResponse")
+            .field("display_id", &self.display_id)
+            .field("token", &"<redacted>")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+/// The answer of `GET /kitchen/status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KdsStatus {
+    /// Whether the branch has the `kitchen` flag (Basic and above).
+    pub available: bool,
+    pub branch_name: String,
+}
+
+/// The answer of `POST /ui/kds-pairing-code`: the single-use code and where the tablet goes.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KdsPairingCode {
+    pub code: String,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+    /// `http://<hub-lan-ip>:7401/kitchen`, when the Hub knows its LAN address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub address: Option<String>,
+}
+
+impl std::fmt::Debug for KdsPairingCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KdsPairingCode")
+            .field("code", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("address", &self.address)
+            .finish()
+    }
+}
+
+/// A paired kitchen display as the Hub lists it. The token hash never leaves the Hub.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KitchenDisplayView {
+    pub id: String,
+    pub name: String,
+    /// Whether a socket of this display is open now (filled by the LAN layer).
+    pub connected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_seen: Option<i64>,
+    pub high_contrast: bool,
+    #[ts(type = "number")]
+    pub rev: i64,
+}
+
+/// Whether `name` is a display name the Hub accepts: 1 to 40 printable characters.
+pub fn is_display_name(name: &str) -> bool {
+    let n = name.chars().count();
+    name.trim() == name && (1..=40).contains(&n) && !name.chars().any(char::is_control)
+}
+
 pub const KITCHEN_GATED_KEYS: [&str; 3] = [
     KEY_KITCHEN_KOT_MODE,
     KEY_KITCHEN_KOT_PRINTER,
@@ -161,7 +306,11 @@ pub fn kitchen_gate(p: &IntentPayload) -> Option<TierGate> {
         // ticket that does not exist on a branch without the flag.
         IntentPayload::KitchenAdvance(_)
         | IntentPayload::KitchenAdvanceReverted(_)
-        | IntentPayload::KotReprint(_) => Some(TierGate::ExistingWork),
+        | IntentPayload::KotReprint(_)
+        | IntentPayload::KdsRevoke(_)
+        | IntentPayload::KdsSeen(_) => Some(TierGate::ExistingWork),
+        // Story 7.6: pairing a display is new kitchen work.
+        IntentPayload::KdsPair(_) => Some(TierGate::New),
         IntentPayload::PosSale(s) if s.lines.iter().any(|l| !l.kitchen_notes.is_empty()) => {
             Some(TierGate::New)
         }
@@ -225,6 +374,41 @@ mod tests {
         );
         assert_eq!(kitchen_gate(&product(Some(Vec::new()))), None);
         assert_eq!(kitchen_gate(&product(None)), None);
+    }
+
+    #[test]
+    fn pairing_a_display_is_new_work_and_revoking_it_is_existing_work() {
+        let pair = IntentPayload::KdsPair(KdsPair {
+            name: "Pass".into(),
+            token_hash: "h".into(),
+            created_by: "S".into(),
+        });
+        assert_eq!(kitchen_gate(&pair), Some(TierGate::New));
+        let revoke = IntentPayload::KdsRevoke(KdsRevoke {
+            display_id: "D".into(),
+        });
+        assert_eq!(kitchen_gate(&revoke), Some(TierGate::ExistingWork));
+        let seen = IntentPayload::KdsSeen(KdsSeen {
+            display_id: "D".into(),
+        });
+        assert_eq!(kitchen_gate(&seen), Some(TierGate::ExistingWork));
+    }
+
+    #[test]
+    fn display_names_are_one_to_forty_printable_characters() {
+        for ok in ["Kitchen", "Pass 2", "Grill — left"] {
+            assert!(is_display_name(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            " Pass",
+            "Pass ",
+            "a
+b",
+            &"x".repeat(41),
+        ] {
+            assert!(!is_display_name(bad), "{bad:?}");
+        }
     }
 
     #[test]

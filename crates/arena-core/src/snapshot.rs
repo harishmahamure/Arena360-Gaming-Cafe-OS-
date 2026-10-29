@@ -37,6 +37,7 @@ pub fn build_snapshot(
         shift: None,
         alerts: Vec::new(),
         counter_tickets: Vec::new(),
+        kitchen_displays: Vec::new(),
         locale,
         ui,
         // The probe's state is the Hub status's, not the database's: the snapshot handler
@@ -398,6 +399,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         shift,
         tickets,
         kot_states,
+        displays,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -420,6 +422,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.shift_state()?,
             s.open_tickets()?,
             s.kot_states()?,
+            s.kitchen_displays()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
@@ -446,6 +449,18 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             let mut view = ticket_view(t, lines);
             view.kot = kot_of(&kot_states, &t.id);
             view
+        })
+        .collect();
+    snapshot.kitchen_displays = displays
+        .into_iter()
+        .filter(|d| d.revoked_at.is_none())
+        .map(|d| arena_proto::KitchenDisplayView {
+            id: d.id,
+            name: d.name,
+            connected: false,
+            last_seen: d.last_seen,
+            high_contrast: d.high_contrast,
+            rev: d.rev,
         })
         .collect();
     snapshot.alerts = alerts
@@ -2166,6 +2181,7 @@ mod tests {
                 }),
                 alerts: vec![],
                 counter_tickets: vec![],
+                kitchen_displays: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
                     label: "Front PC".into(),
@@ -2255,6 +2271,7 @@ mod tests {
                 }),
                 alerts: vec![],
                 counter_tickets: vec![],
+                kitchen_displays: vec![],
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),

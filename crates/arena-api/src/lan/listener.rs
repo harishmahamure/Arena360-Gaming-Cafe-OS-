@@ -174,7 +174,12 @@ async fn serve_tls(
     match route(&request_line(&head)) {
         Route::HubInfo => return answer_hub_info(&mut tls, &hub).await,
         Route::Pair if hub.pairing.is_some() => {
-            return answer_pair(&mut tls, peer, &head, &hub).await;
+            let hub = Arc::clone(&hub);
+            let head_bytes = head.clone();
+            return answer_pair(&mut tls, &head_bytes, |body| async move {
+                super::pair::handle(&hub, peer, &body).await
+            })
+            .await;
         }
         Route::Pair => return respond(&mut tls, "404 Not Found", "not found").await,
         Route::Media => return super::media::answer(&mut tls, peer, &head, &hub).await,
@@ -220,8 +225,14 @@ async fn serve_web(tcp: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor, hub:
 pub(crate) enum Route {
     /// `GET /ws`: a WebSocket for `kds` and `phone`.
     Ws,
-    /// `GET /kitchen`, `GET /console/<tv>`: a placeholder page.
+    /// `GET /console/<tv>`: a placeholder page.
     Placeholder,
+    /// `GET /kitchen`, `GET /kitchen/<asset>`: the Kitchen display app (Story 7.6).
+    Kitchen,
+    /// `POST /kitchen/pair`: a kitchen display pairs with a code.
+    KitchenPair,
+    /// `GET /kitchen/status`: whether the branch has the kitchen flag.
+    KitchenStatus,
     HubInfo,
     Pair,
     /// `GET /media/<sha256>`: a cached game file for a paired kiosk (TLS only).
@@ -239,6 +250,9 @@ pub(crate) fn route(request_line: &str) -> Route {
     if method == "POST" && path == arena_proto::PAIR_PATH {
         return Route::Pair;
     }
+    if method == "POST" && path == arena_proto::KDS_PAIR_PATH {
+        return Route::KitchenPair;
+    }
     if method != "GET" {
         return Route::NotFound;
     }
@@ -248,7 +262,10 @@ pub(crate) fn route(request_line: &str) -> Route {
     match path {
         "/ws" => Route::Ws,
         "/hub-info" => Route::HubInfo,
-        "/kitchen" | "/kitchen/" => Route::Placeholder,
+        "/kitchen" | "/kitchen/" => Route::Kitchen,
+        arena_proto::KDS_STATUS_PATH => Route::KitchenStatus,
+        arena_proto::KDS_PAIR_PATH => Route::NotFound,
+        p if p.starts_with("/kitchen/") => Route::Kitchen,
         p => match p.strip_prefix("/console/") {
             Some(tv) if is_tv_id(tv.strip_suffix('/').unwrap_or(tv)) => Route::Placeholder,
             _ => Route::NotFound,
@@ -295,13 +312,22 @@ async fn respond_as<S: AsyncWrite + Unpin>(
     content_type: &str,
     body: &str,
 ) {
+    respond_bytes(tcp, status, content_type, body.as_bytes()).await;
+}
+
+async fn respond_bytes<S: AsyncWrite + Unpin>(
+    tcp: &mut S,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) {
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = timeout(HANDSHAKE_TIMEOUT, async {
         let _ = tcp.write_all(head.as_bytes()).await;
-        let _ = tcp.write_all(body.as_bytes()).await;
+        let _ = tcp.write_all(body).await;
         let _ = tcp.shutdown().await;
     })
     .await;
@@ -330,14 +356,16 @@ async fn answer_hub_info<S: AsyncWrite + Unpin>(stream: &mut S, hub: &LanHub) {
     respond_as(stream, status, "application/json", &body).await;
 }
 
-async fn answer_pair<S: AsyncRead + AsyncWrite + Unpin>(
-    stream: &mut S,
-    peer: SocketAddr,
-    head: &[u8],
-    hub: &Arc<LanHub>,
-) {
+/// Reads the request body and answers it with `handle` (the kiosk `POST /pair` and the kitchen
+/// display `POST /kitchen/pair` share this).
+async fn answer_pair<S, F, Fut>(stream: &mut S, head: &[u8], handle: F)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce(Vec<u8>) -> Fut,
+    Fut: Future<Output = super::pair::Answer>,
+{
     let answer = match timeout(HANDSHAKE_TIMEOUT, super::pair::read_body(stream, head)).await {
-        Ok(Ok(body)) => super::pair::handle(hub, peer, &body).await,
+        Ok(Ok(body)) => handle(body).await,
         Ok(Err(e)) => super::pair::Answer {
             status: "400 Bad Request".into(),
             body: serde_json::to_string(&e).unwrap_or_default(),
@@ -345,6 +373,10 @@ async fn answer_pair<S: AsyncRead + AsyncWrite + Unpin>(
         },
         Err(_) => return,
     };
+    write_answer(stream, answer).await;
+}
+
+async fn write_answer<S: AsyncWrite + Unpin>(stream: &mut S, answer: super::pair::Answer) {
     let retry = answer
         .retry_after_s
         .map(|s| format!("Retry-After: {s}\r\n"))
@@ -362,16 +394,66 @@ async fn answer_pair<S: AsyncRead + AsyncWrite + Unpin>(
     .await;
 }
 
+/// The path after `/kitchen/` in a request line (`None` for `/kitchen` and `/kitchen/`).
+fn kitchen_rel(line: &str) -> Option<String> {
+    let target = line.split(' ').nth(1)?;
+    let path = target.split(['?', '#']).next().unwrap_or("");
+    path.strip_prefix("/kitchen/")
+        .filter(|rel| !rel.is_empty())
+        .map(str::to_owned)
+}
+
+/// `GET /kitchen`, `GET /kitchen/<asset>`.
+async fn answer_kitchen<S: AsyncWrite + Unpin>(stream: &mut S, hub: &LanHub, line: &str) {
+    match super::kds_pair::serve(hub, kitchen_rel(line).as_deref()).await {
+        Some(asset) => respond_bytes(stream, "200 OK", asset.content_type, &asset.bytes).await,
+        None => {
+            let body = serde_json::to_string(&arena_proto::AppError::new(
+                arena_proto::ErrorCode::NotFound,
+                "not found",
+            ))
+            .unwrap_or_default();
+            respond_as(stream, "404 Not Found", "application/json", &body).await;
+        }
+    }
+}
+
 async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
     let Ok(Some(head)) = timeout(HANDSHAKE_TIMEOUT, read_head(&mut tcp)).await else {
         return;
     };
-    match route(&request_line(&head)) {
+    let line = request_line(&head);
+    let route = route(&line);
+    // Story 7.6: a request to `/kitchen*` that carries a bearer token must carry a live `kds`
+    // one; a paired-device token or any other token is refused.
+    if matches!(
+        route,
+        Route::Kitchen | Route::KitchenPair | Route::KitchenStatus
+    ) && !super::kds_pair::bearer_allowed(&hub, peer, &head).await
+    {
+        return write_answer(&mut tcp, super::kds_pair::forbidden()).await;
+    }
+    match route {
         Route::HubInfo => answer_hub_info(&mut tcp, &hub).await,
         Route::Placeholder => respond(&mut tcp, "200 OK", PLACEHOLDER).await,
-        Route::NotFound | Route::Pair => respond(&mut tcp, "404 Not Found", "not found").await,
-        // Media is for paired kiosks over TLS: a plain request is refused.
-        Route::Media => super::media::unauthorized(&mut tcp).await,
+        Route::Kitchen => answer_kitchen(&mut tcp, &hub, &line).await,
+        Route::KitchenStatus => {
+            let answer = super::kds_pair::status(&hub).await;
+            write_answer(&mut tcp, answer).await;
+        }
+        Route::KitchenPair => {
+            let hub = Arc::clone(&hub);
+            let head_bytes = head.clone();
+            answer_pair(&mut tcp, &head_bytes, |body| async move {
+                super::kds_pair::pair(&hub, peer, &body).await
+            })
+            .await;
+        }
+        // Everything else is for TLS clients (pairing, media) or does not exist: plain HTTP
+        // answers only the kitchen, the WebSocket, `/hub-info` and `/console/<tv>`.
+        Route::NotFound | Route::Pair | Route::Media => {
+            write_answer(&mut tcp, super::kds_pair::forbidden()).await
+        }
         Route::Ws => {
             let stream = Prefixed {
                 prefix: head,
@@ -435,10 +517,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_kitchen_path_after_the_prefix_is_read_from_the_request_line() {
+        assert_eq!(kitchen_rel("GET /kitchen HTTP/1.1"), None);
+        assert_eq!(kitchen_rel("GET /kitchen/ HTTP/1.1"), None);
+        assert_eq!(
+            kitchen_rel("GET /kitchen/_app/a.js?x=1 HTTP/1.1").as_deref(),
+            Some("_app/a.js")
+        );
+    }
+
+    #[test]
     fn routes_by_method_and_path() {
         assert_eq!(route("GET /ws HTTP/1.1"), Route::Ws);
         assert_eq!(route("GET /ws?x=1 HTTP/1.1"), Route::Ws);
-        assert_eq!(route("GET /kitchen HTTP/1.1"), Route::Placeholder);
+        assert_eq!(route("GET /kitchen HTTP/1.1"), Route::Kitchen);
+        assert_eq!(route("GET /kitchen/ HTTP/1.1"), Route::Kitchen);
+        assert_eq!(
+            route("GET /kitchen/_app/immutable/a.js HTTP/1.1"),
+            Route::Kitchen
+        );
+        assert_eq!(route("GET /kitchen/status HTTP/1.1"), Route::KitchenStatus);
+        assert_eq!(route("POST /kitchen/status HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("POST /kitchen/pair HTTP/1.1"), Route::KitchenPair);
+        assert_eq!(route("POST /kitchen/pair/x HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("GET /kitchen/pair HTTP/1.1"), Route::NotFound);
+        assert_eq!(route("GET /kitchenx HTTP/1.1"), Route::NotFound);
         assert_eq!(route("GET /console/tv-1 HTTP/1.1"), Route::Placeholder);
         assert_eq!(route("GET /console/ HTTP/1.1"), Route::NotFound);
         assert_eq!(route("GET /console/a/b HTTP/1.1"), Route::NotFound);

@@ -420,6 +420,14 @@ enum Op {
         skip: bool,
         undo: bool,
     },
+    /// A kitchen display intent (Story 7.6): `kds.pair` and `kds.seen` as the system actor,
+    /// `kds.revoke` as the owner, or a display's high-contrast `settings.set`, with a good or
+    /// stale `base_rev`. At most 4 displays are ever live, a refusal writes nothing and a display
+    /// never touches the device cap.
+    KdsDisplay {
+        pick: u8,
+        action: u8,
+    },
     /// `kot.reprint` of a ticket (Story 7.5): it never moves the ticket, and a refusal (a cancelled
     /// ticket, no KOT printer, a branch without the kitchen flag) writes nothing.
     KotReprint {
@@ -846,6 +854,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (any::<u8>(), any::<bool>()).prop_map(|(pick, again)| Op::OrderReady { pick, again }),
         2 => prop::bool::weighted(0.7).prop_map(|on| Op::KitchenLicence { on }),
         2 => any::<u8>().prop_map(|pick| Op::KotReprint { pick }),
+        2 => (any::<u8>(), 0..6u8).prop_map(|(pick, action)| Op::KdsDisplay { pick, action }),
         4 => (any::<u8>(), prop::bool::weighted(0.15), prop::bool::weighted(0.25))
             .prop_map(|(pick, skip, undo)| Op::KitchenAdvance { pick, skip, undo }),
         2 => (any::<u8>(), any::<u8>(), any::<u8>(), 0..7u8, 0..5u8, any::<Index>()).prop_map(
@@ -3488,6 +3497,110 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(stock_image(hub), stock_before);
                 }
             }
+        }
+        Op::KdsDisplay { pick, action } => {
+            static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            let hash = HASH
+                .get_or_init(|| arena_core::devices::hash_token_secret("a secret").unwrap())
+                .clone();
+            let displays = hub.reader.rows(Table::KitchenDisplays).unwrap();
+            let live = displays
+                .iter()
+                .filter(|d| d["revoked_at"] == RowValue::Null)
+                .count();
+            let target = displays
+                .get(usize::from(*pick) % displays.len().max(1))
+                .cloned();
+            let staff_id = hub
+                .reader
+                .rows(Table::Staff)
+                .unwrap()
+                .iter()
+                .find(|s| int(s, "active") == 1)
+                .map(|s| text(s, "staff_id"))
+                .unwrap_or_else(|| "nobody".into());
+            let was_live = target
+                .as_ref()
+                .is_some_and(|d| d["revoked_at"] == RowValue::Null);
+            let (mut intent, expect_ok) = match (*action, &target) {
+                (0, _) => (
+                    hub.intent(
+                        IntentPayload::KdsPair(arena_proto::KdsPair {
+                            name: "Pass".into(),
+                            token_hash: hash,
+                            created_by: staff_id.clone(),
+                        }),
+                        None,
+                    ),
+                    staff_id != "nobody" && live < 4,
+                ),
+                (1, Some(d)) => (
+                    hub.intent(
+                        IntentPayload::KdsRevoke(arena_proto::KdsRevoke {
+                            display_id: text(d, "id"),
+                        }),
+                        None,
+                    ),
+                    was_live,
+                ),
+                (2, Some(d)) => (
+                    hub.intent(
+                        IntentPayload::KdsSeen(arena_proto::KdsSeen {
+                            display_id: text(d, "id"),
+                        }),
+                        None,
+                    ),
+                    was_live,
+                ),
+                (3..=5, Some(d)) => (
+                    hub.intent(
+                        IntentPayload::SettingsSet(arena_proto::SettingsSet {
+                            key: arena_proto::hc_key(&text(d, "id")),
+                            value: if *action == 4 { "false" } else { "true" }.into(),
+                        }),
+                        // Action 5 is based on a stale rev.
+                        Some(if *action == 5 {
+                            int(d, "rev") + 7
+                        } else {
+                            int(d, "rev")
+                        }),
+                    ),
+                    was_live && *action != 5,
+                ),
+                _ => return Ok(()),
+            };
+            let (system, flag) = (matches!(action, 0 | 2), hub.setting("licence.flags"));
+            if system {
+                intent.actor.kind = ActorKind::System;
+            }
+            let kitchen = flag.is_some_and(|f| text(&f, "value").contains("kitchen"));
+            let before = hub.change_count();
+            let devices_before = hub.reader.rows(Table::Devices).unwrap();
+            let out = hub.submit_new(intent);
+            match out {
+                Ok(_) => {
+                    prop_assert!(
+                        expect_ok,
+                        "a kitchen display intent applied that should not"
+                    );
+                    prop_assert!(*action != 0 || kitchen, "a display paired on Free");
+                }
+                Err(e) => {
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::TierLocked
+                                | ErrorCode::DeviceLimit
+                                | ErrorCode::ValidationFailed
+                                | ErrorCode::Stale
+                        ),
+                        "{:?}",
+                        e
+                    );
+                    prop_assert_eq!(hub.change_count(), before);
+                }
+            }
+            prop_assert_eq!(hub.reader.rows(Table::Devices).unwrap(), devices_before);
         }
         Op::KotReprint { pick } => {
             let tickets = hub.reader.rows(Table::KitchenTickets).unwrap();
@@ -6637,6 +6750,30 @@ fn assert_sessions_hold(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// Kitchen display invariants (Story 7.6): at most 4 displays are live, every hash is Argon2id
+/// and high contrast is 0 or 1. A display is never a `devices` row.
+fn assert_displays_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let displays = hub.reader.rows(Table::KitchenDisplays).unwrap();
+    let live = displays
+        .iter()
+        .filter(|d| d["revoked_at"] == RowValue::Null)
+        .count();
+    prop_assert!(live <= 4, "{} live kitchen displays", live);
+    for d in &displays {
+        prop_assert!(text(d, "token_hash").starts_with("$argon2id$"));
+        prop_assert!(matches!(int(d, "high_contrast"), 0 | 1));
+        let id = text(d, "id");
+        prop_assert!(
+            hub.reader
+                .rows(Table::Devices)
+                .unwrap()
+                .iter()
+                .all(|r| text(r, "device_id") != id),
+            "a display is a device"
+        );
+    }
+    Ok(())
+}
 /// Kitchen ticket invariants (Story 7.3): a live ticket holds lines, a cancelled one holds none,
 /// numbers are unique, and a Served ticket has every live line served.
 fn assert_tickets_hold(hub: &Hub) -> Result<(), TestCaseError> {
@@ -6965,6 +7102,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_sessions_hold(&hub)?;
                 assert_orders_hold(&hub)?;
                 assert_tickets_hold(&hub)?;
+                assert_displays_hold(&hub)?;
                 assert_cash_holds(&hub)?;
                 assert_stock_holds(&hub)?;
                 assert_holds_hold(&hub)?;

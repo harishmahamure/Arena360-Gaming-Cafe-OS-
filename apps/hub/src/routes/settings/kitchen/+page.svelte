@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { Button, InlinePin, t } from "@arena/ui";
+  import { Button, InlinePin, formatDateTime, t } from "@arena/ui";
   import type {
     BluetoothAccess,
     FoundPrinter,
+    HubSnapshot,
+    KitchenDisplayView,
     PrinterErrorKind,
     PrinterSelected,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
-  import { onMount, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
   import { page } from "$app/state";
   import {
@@ -20,6 +22,7 @@
     submitIntent,
   } from "../../../lib/auth";
   import { branchLocale } from "../../../lib/locale.svelte";
+  import PairKitchenPanel from "../../../lib/PairKitchenPanel.svelte";
   import { sessionStaff } from "../../../lib/operating";
   import {
     KEY_KOT_MODE,
@@ -77,8 +80,19 @@
   let saveWrap: HTMLElement | undefined = $state();
   const saveButton = $derived(saveWrap?.querySelector("button") ?? null);
 
+  const snapshot = $derived(
+    (page.data as { hub?: { ok: boolean; snapshot?: HubSnapshot } }).hub?.snapshot ?? null,
+  );
+  const displays: KitchenDisplayView[] = $derived(snapshot?.kitchen_displays ?? []);
+  const tz = $derived(snapshot?.locale?.tz);
   const staff = $derived(sessionStaff(page.data));
   const needsApproval = $derived(!hasPermission(staff, "settings.edit"));
+  const canPair = $derived(hasPermission(staff, "device.manage"));
+  let pairOpen = $state(false);
+  let pairButton: HTMLElement | undefined = $state();
+  /** The display being revoked, and the last revoke's outcome. */
+  let revoking: string | null = $state(null);
+  let revokeStatus: { tone: "ok" | "refusal"; text: string } | null = $state(null);
   const unlocked = $derived(
     (rows[KEY_LICENCE_FLAGS]?.value ?? "").split(",").some((f) => f.trim() === "kitchen"),
   );
@@ -124,6 +138,51 @@
     } finally {
       loading = false;
     }
+  }
+
+  async function closePair() {
+    pairOpen = false;
+    await tick();
+    pairButton?.querySelector("button")?.focus();
+  }
+
+  async function revoke(display: KitchenDisplayView) {
+    if (revoking) return;
+    revoking = display.id;
+    revokeStatus = null;
+    try {
+      const outcome = await submitIntent(
+        { kind: "kds.revoke", display_id: display.id },
+        newIdempotencyKey(),
+        display.rev,
+      );
+      if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+      if (outcome.kind === "applied") {
+        revokeStatus = {
+          tone: "ok",
+          text: t("hub.settings.kitchen.revoked", { name: display.name }),
+        };
+      } else {
+        const code = outcome.kind === "error" ? outcome.error.code : null;
+        revokeStatus = {
+          tone: "refusal",
+          text:
+            code === "PERMISSION_DENIED"
+              ? t("hub.refusal.permission")
+              : code === "STALE"
+                ? t("hub.settings.branch.stale")
+                : t("hub.settings.kitchen.revoke_failed"),
+        };
+      }
+    } finally {
+      revoking = null;
+    }
+  }
+
+  function lastSeen(display: KitchenDisplayView): string {
+    return display.last_seen
+      ? t("hub.settings.kitchen.display_last_seen", { at: formatDateTime(display.last_seen, tz) })
+      : t("hub.settings.kitchen.display_never_seen");
   }
 
   async function find() {
@@ -412,16 +471,60 @@
 
       <div class="group">
         <h3 class="type-hub-label label">{t("hub.settings.kitchen.displays")}</h3>
-        <p class="type-hub-body" data-testid="kitchen-displays">
-          {t("hub.settings.kitchen.displays_none")}
+        {#if displays.length === 0}
+          <p class="type-hub-body" data-testid="kitchen-displays">
+            {t("hub.settings.kitchen.displays_none")}
+          </p>
+        {:else}
+          <ul class="displays" data-testid="kitchen-displays">
+            {#each displays as display (display.id)}
+              <li class="display" data-testid="kitchen-display-{display.id}">
+                <span class="type-hub-body name">{display.name}</span>
+                <span class="type-hub-label state" data-testid="kitchen-display-state">
+                  <span aria-hidden="true">{display.connected ? "●" : "○"}</span>
+                  {t(
+                    display.connected
+                      ? "hub.settings.kitchen.display_connected"
+                      : "hub.settings.kitchen.display_disconnected",
+                  )}
+                </span>
+                <span class="type-hub-label muted">{lastSeen(display)}</span>
+                <Button
+                  label="hub.settings.kitchen.revoke"
+                  variant="secondary"
+                  disabled={!canPair || revoking !== null}
+                  disabledReason={canPair
+                    ? "hub.settings.saving"
+                    : "hub.settings.kitchen.pair_only_managers"}
+                  onclick={() => void revoke(display)}
+                />
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <p
+          class="status type-hub-label"
+          class:refusal={revokeStatus?.tone === "refusal"}
+          role="status"
+          data-testid="kitchen-revoke-status"
+        >
+          {#if revokeStatus}
+            {#if revokeStatus.tone === "refusal"}<span aria-hidden="true">⚠</span>{/if}
+            <span>{revokeStatus.text}</span>
+          {/if}
         </p>
-        <div class="actions">
-          <Button
-            label="hub.settings.kitchen.pair"
-            variant="secondary"
-            disabled={true}
-            disabledReason="hub.settings.kitchen.pair_later"
-          />
+        <div class="pair" bind:this={pairButton}>
+          {#if !pairOpen}
+            <Button
+              label="hub.settings.kitchen.pair"
+              variant="secondary"
+              disabled={!canPair}
+              disabledReason="hub.settings.kitchen.pair_only_managers"
+              onclick={() => (pairOpen = true)}
+            />
+          {:else}
+            <PairKitchenPanel onclose={() => void closePair()} />
+          {/if}
         </div>
       </div>
 
@@ -563,6 +666,39 @@
     border-width: 2px;
     border-color: var(--accent);
     padding: 0 calc(var(--space-3) - 1px);
+  }
+
+  .displays {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .display {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--space-touch-min);
+  }
+
+  .display .name {
+    flex: 1;
+    min-width: 8rem;
+    color: var(--text);
+    font-weight: var(--type-hub-title-weight);
+  }
+
+  .state {
+    display: inline-flex;
+    gap: var(--space-2);
+    color: var(--text);
+  }
+
+  .pair {
+    justify-self: stretch;
   }
 
   .bluetooth-note {

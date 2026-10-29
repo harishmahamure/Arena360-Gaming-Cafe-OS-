@@ -49,6 +49,8 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
     // between a revoke committing and the LAN fan-out closing the device's sessions.
     if intent.actor.kind == ActorKind::Device
         && find_device(tx, &intent.actor.id)?.is_none_or(|d| d.revoked_at.is_some())
+        // Story 7.6: a kitchen display acts as a device actor while its row is live.
+        && arena_store::find_display(tx, &intent.actor.id)?.is_none_or(|d| d.revoked_at.is_some())
     {
         return Err(refused("the device is revoked or unknown"));
     }
@@ -357,6 +359,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::InvoiceIssue(_)
             | Target::Receipt(_)
             | Target::Kot(_)
+            | Target::KdsDisplay(_)
             | Target::Alert(_)
             | Target::ControllerCheck(_)
             | Target::Shift(_),
@@ -454,6 +457,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::SessionExpire(_) => Ok(()),
         Target::SessionRateFlip(_) => Ok(()),
         Target::InvoiceIssue(_) | Target::Receipt(_) | Target::Kot(_) => Ok(()),
+        Target::KdsDisplay(t) => super::kds_display::base_rev(intent, t),
         Target::Alert(_) | Target::ControllerCheck(_) => Ok(()),
         Target::CreditCollectReverted(t) => {
             super::credit_collect::base_rev_collect_reverted(intent, t)

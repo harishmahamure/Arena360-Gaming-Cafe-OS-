@@ -585,3 +585,9 @@
 - Reprint KOT is offered on every open ticket even when KOT mode is None; the Hub shows the refusal ("No KOT printer is set up") rather than hiding the button.
 - (Review) A KOT row queued before KOT mode is switched to None fails with a Printer offline alert instead of being dropped quietly; `kot_job` also builds a full snapshot just to read the timezone; the Printer offline alert is raised for every failure kind, not only printer faults.
 - (Review) `kot.reprint` has no duplicate guard (double tap while offline queues several slips); the Counter strip maps every non-validation refusal to "ticket changed".
+
+## Deferred from: Story 7.6 (kitchen display pairing)
+
+- The Hub installer does not bundle the built Kitchen app; `/kitchen` falls back to the built-in pairing page until `ARENA_KITCHEN_DIR` holds the build.
+- Settings → Kitchen is covered only by stubbed Playwright specs; the Kitchen app has no Playwright spec (Story 7.7 adds the board and its tests).
+- Bad bearer tokens on `/kitchen*` count against the same per-IP throttle as the TLS hello.

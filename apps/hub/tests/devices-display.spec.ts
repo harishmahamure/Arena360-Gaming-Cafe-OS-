@@ -1,6 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { HubSnapshot, SessionStaff, SnapshotDevice, SnapshotLan } from "@arena/ui/generated";
+import type {
+  HubSnapshot,
+  KitchenDisplayView,
+  SessionStaff,
+  SnapshotDevice,
+  SnapshotLan,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -39,6 +45,7 @@ type Item = { intent_kind: string; key?: string };
 type Hub = {
   settings: Map<string, { value: string; rev: number }>;
   devices: SnapshotDevice[];
+  kitchen: KitchenDisplayView[];
   lan: SnapshotLan | null;
   intents: { key: string; value: string; base_rev?: number; ticket?: string }[];
   elevations: { items: Item[]; pin: string }[];
@@ -55,6 +62,7 @@ function newHub(): Hub {
       [KIOSK_KEY, { value: "false", rev: 1 }],
     ]),
     devices: [{ device_id: KIOSK, label: "Dev Kiosk", class: "paired", zone: null, online: true }],
+    kitchen: [],
     lan: {
       addresses: ["192.168.1.20", "10.0.0.4"],
       lan_port: 7400,
@@ -81,6 +89,7 @@ function snapshot(hub: Hub): HubSnapshot {
     groups: [],
     zones: [],
     devices: hub.devices,
+    kitchen_displays: hub.kitchen,
     locale: {
       currency: "INR",
       exponent: 2,
@@ -177,6 +186,22 @@ async function stub(page: Page, hub: Hub, token: string | null) {
           );
         if (!approved && !STAFF[auth].permissions.includes("settings.edit")) {
           return json(route, 403, { code: "PERMISSION_DENIED", message: "denied" });
+        }
+        const display = hub.kitchen.find((d) => `display.hc.${d.id}` === key);
+        if (display) {
+          if (body.intent.base_rev !== display.rev) {
+            return json(route, 409, { code: "STALE", message: "stale", field: "base_rev" });
+          }
+          display.high_contrast = value === "true";
+          display.rev += 1;
+          pushRaw(
+            hub,
+            `event: devices.changed
+data: {}
+
+`,
+          );
+          return json(route, 200, { applied: { intent_id: "I", changes: [] } });
         }
         const row = hub.settings.get(key)!;
         if (body.intent.base_rev !== row.rev) {
@@ -560,4 +585,51 @@ test("without a clipboard the address is selected with a Ctrl+C hint", async ({ 
     en["hub.settings.devices_display.copy_manual"],
   );
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("192.168.1.20");
+});
+
+test("a kitchen display gets a switch that saves its row with the display's rev", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.kitchen = [
+    {
+      id: "01JKITCHENDISPLAY0000000A",
+      name: "Pass",
+      connected: true,
+      high_contrast: false,
+      rev: 3,
+    },
+  ];
+  await openSection(page, hub);
+  const row = page.getByTestId("hc-row-01JKITCHENDISPLAY0000000A");
+  await expect(row).toContainText("Pass");
+  await expect(row).toContainText(en["hub.settings.devices_display.kitchen_displays"]);
+  await expect(kioskSwitch(page, "Pass")).not.toBeChecked();
+  await kioskSwitch(page, "Pass").check();
+  await expect(row.getByRole("status")).toHaveText(en["hub.settings.saved"]);
+  expect(hub.intents).toEqual([
+    { key: "display.hc.01JKITCHENDISPLAY0000000A", value: "true", base_rev: 3, ticket: undefined },
+  ]);
+  expect(hub.kitchen[0].high_contrast).toBe(true);
+  await expect(kioskSwitch(page, "Pass")).toBeChecked();
+  // The Hub itself stays dark: a display's setting is not this Hub's.
+  expect(await theme(page)).toBe("dark");
+  await expectNoSeriousAxe(page);
+});
+
+test("a counter's change to a kitchen display needs a manager's PIN", async ({ page }) => {
+  const hub = newHub();
+  hub.kitchen = [
+    {
+      id: "01JKITCHENDISPLAY0000000A",
+      name: "Pass",
+      connected: false,
+      high_contrast: false,
+      rev: 1,
+    },
+  ];
+  await openSection(page, hub, "counter-token");
+  await kioskSwitch(page, "Pass").check();
+  await expect(page.getByTestId("hc-approval")).toBeVisible();
+  expect(hub.intents).toEqual([]);
 });

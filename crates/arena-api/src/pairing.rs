@@ -58,6 +58,14 @@ pub struct Taken {
     live: Live,
 }
 
+impl Taken {
+    /// Who the code was issued to: the staff id of a kitchen display code (Story 7.6), the panel's
+    /// session token of a kiosk code.
+    pub fn owner(&self) -> &str {
+        &self.live.owner
+    }
+}
+
 #[derive(Default)]
 struct PinPeer {
     failures: Vec<i64>,

@@ -71,7 +71,9 @@ struct TestHub {
     fingerprint: String,
     paired_id: String,
     paired_token: String,
+    kds_id: String,
     kds_token: String,
+    kds_pairing: Arc<arena_api::pairing::Pairing>,
     writer: Option<WriterHandle>,
     presence: Presence,
     _status: watch::Sender<HubStatus>,
@@ -130,6 +132,87 @@ async fn register(w: &WriterHandle, class: ClientClass, label: &str) -> (String,
     (id, token)
 }
 
+/// Pairs a kitchen display the way the Hub does (Story 7.6): `kds.pair` as the system actor on a
+/// Basic branch, created by a Manager. The branch goes back to Free afterwards. Returns the
+/// display id and its `kds` token.
+async fn register_display(
+    w: &WriterHandle,
+    path: &std::path::Path,
+    name: &str,
+) -> (String, String) {
+    let flags = |value: &'static str| {
+        let sql = format!("UPDATE settings SET value = '{value}' WHERE key = 'licence.flags'");
+        w.submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+    };
+    flags("kitchen").await.unwrap();
+    let manager = match Store::open_reader(path)
+        .unwrap()
+        .rows(arena_store::Table::Staff)
+        .unwrap()
+        .iter()
+        .find_map(|s| match &s["staff_id"] {
+            arena_store::RowValue::Text(t) => Some(t.clone()),
+            _ => None,
+        }) {
+        Some(id) => id,
+        None => {
+            let role_id = Store::open_reader(path)
+                .unwrap()
+                .rows(arena_store::Table::Roles)
+                .unwrap()
+                .into_iter()
+                .find(|r| r["name"] == arena_store::RowValue::Text("Manager".into()))
+                .and_then(|r| match &r["role_id"] {
+                    arena_store::RowValue::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            w.submit_intent(intent(
+                owner(),
+                IntentPayload::StaffUpsert(arena_proto::StaffUpsert {
+                    staff_id: None,
+                    login: "mgr".into(),
+                    display_name: "Manager".into(),
+                    role_id,
+                    password_hash: Some(arena_core::staff::hash_secret("pw").unwrap()),
+                    pin_hash: None,
+                    active: true,
+                    setup_code_hash: None,
+                    setup_expires_at: None,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+                .row_id
+                .clone()
+        }
+    };
+    let secret = arena_core::devices::new_paired_token_secret().unwrap();
+    let applied = w
+        .submit_intent(intent(
+            system(),
+            IntentPayload::KdsPair(arena_proto::KdsPair {
+                name: name.into(),
+                token_hash: hash_token_secret(&secret).unwrap(),
+                created_by: manager.clone(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    flags("").await.unwrap();
+    // The staff seat the display needed is given back, so tests that count staff see none of it.
+    let sql = format!("DELETE FROM staff WHERE staff_id = '{manager}'");
+    w.submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+        .await
+        .unwrap();
+    let id = applied.changes[0].row_id.clone();
+    let token = format_token(&id, &secret);
+    (id, token)
+}
+
 /// A seeded hub (one paired and one kds device) serving the LAN on loopback. `version` is the
 /// hub's own version; a follower serves without a writer.
 async fn start(version: &str, primary: bool) -> TestHub {
@@ -162,6 +245,21 @@ async fn start_full(
     primary: bool,
     media: Option<Arc<arena_core::media_cache::MediaCache>>,
     player_kek: bool,
+) -> TestHub {
+    start_inner(version, primary, media, player_kek, None).await
+}
+
+/// [`start`] serving the Kitchen display app from `dir` (Story 7.6).
+async fn start_kitchen(dir: PathBuf) -> TestHub {
+    start_inner("0.1.0", true, None, true, Some(dir)).await
+}
+
+async fn start_inner(
+    version: &str,
+    primary: bool,
+    media: Option<Arc<arena_core::media_cache::MediaCache>>,
+    player_kek: bool,
+    kitchen_dir: Option<PathBuf>,
 ) -> TestHub {
     logs();
     let dir = tempfile::tempdir().unwrap();
@@ -198,7 +296,7 @@ async fn start_full(
         .await
         .unwrap();
     let (paired_id, paired_token) = register(&writer, ClientClass::Paired, "Dev Kiosk").await;
-    let (_, kds_token) = register(&writer, ClientClass::Kds, "Pass").await;
+    let (kds_id, kds_token) = register_display(&writer, &path, "Pass").await;
     let writer = if primary {
         Some(writer)
     } else {
@@ -209,6 +307,7 @@ async fn start_full(
 
     let cert = HubCert::generate(None).unwrap();
     status_tx.send_modify(|s| s.tls_fingerprint = Some(cert.fingerprint.clone()));
+    let kds_pairing = Arc::new(arena_api::pairing::Pairing::new(clock.clone()).unwrap());
     let mut lan_hub = LanHub::new(
         writer.clone(),
         status_rx,
@@ -218,6 +317,7 @@ async fn start_full(
         version,
     )
     .with_staff(Arc::new(arena_core::StaffDirectory::open(&path).unwrap()))
+    .with_kds_pairing(Arc::clone(&kds_pairing))
     .with_info(HubInfoSource {
         reader: Arc::new(arena_core::SnapshotReader::open(&path).unwrap()),
         hub_name: "test-hub".into(),
@@ -229,6 +329,9 @@ async fn start_full(
     }
     if player_kek {
         lan_hub = lan_hub.with_player_kek(Arc::new(TestKek));
+    }
+    if let Some(dir) = kitchen_dir {
+        lan_hub = lan_hub.with_kitchen_dir(dir);
     }
     let hub = Arc::new(lan_hub);
     let presence = hub.presence();
@@ -248,7 +351,9 @@ async fn start_full(
         fingerprint: cert.fingerprint,
         paired_id,
         paired_token,
+        kds_id,
         kds_token,
+        kds_pairing,
         writer,
         presence,
         _status: status_tx,
@@ -787,9 +892,19 @@ async fn port_7401_sniffs_tls_and_routes_plain_http_by_path() {
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "{path}: {resp}");
         assert!(resp.contains("Arena 360"));
     }
-    for path in ["/nope", "/", "/console/", "/ws/extra"] {
+    // Plain HTTP answers only the kitchen, the socket, `/hub-info` and `/console/<tv>`: any other
+    // path is FORBIDDEN (Story 7.6).
+    for path in [
+        "/nope",
+        "/",
+        "/console/",
+        "/ws/extra",
+        "/media/abc",
+        "/pair",
+    ] {
         let resp = http_get(hub.web, path).await;
-        assert!(resp.starts_with("HTTP/1.1 404"), "{path}: {resp}");
+        assert!(resp.starts_with("HTTP/1.1 403"), "{path}: {resp}");
+        assert!(resp.contains(r#""code":"FORBIDDEN""#), "{path}: {resp}");
     }
     // `:7400` serves the WebSocket at `/` only.
     let err = connect_ws(
@@ -3523,7 +3638,7 @@ async fn hub_info_answers_over_plain_http_and_tls_without_auth() {
         .await
         .unwrap()
         .unwrap();
-    assert!(out.starts_with("HTTP/1.1 404"), "{out}");
+    assert!(out.starts_with("HTTP/1.1 403"), "{out}");
     let client = HubClient::connect(&hub.web_tls_url(), &hub.fingerprint, hub.paired())
         .await
         .unwrap();
@@ -4971,4 +5086,433 @@ async fn the_hub_side_of_journey_3_meets_its_timings() {
             ms(took)
         );
     }
+}
+
+// ---- Story 7.6: kitchen display pairing ----
+
+/// A plain HTTP request with `extra` header lines and an optional JSON body; the whole response.
+async fn http_request(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    extra: &str,
+    body: &str,
+) -> String {
+    let mut tcp = TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: hub\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    tcp.write_all(request.as_bytes()).await.unwrap();
+    let mut out = String::new();
+    tokio::time::timeout(Duration::from_secs(5), tcp.read_to_string(&mut out))
+        .await
+        .unwrap()
+        .unwrap();
+    out
+}
+
+fn status_line(response: &str) -> &str {
+    response.lines().next().unwrap_or("")
+}
+
+fn json_body(response: &str) -> serde_json::Value {
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    serde_json::from_str(body).unwrap_or(serde_json::Value::Null)
+}
+
+async fn pair_display(hub: &TestHub, code: &str, name: Option<&str>) -> String {
+    let body = match name {
+        Some(n) => serde_json::json!({ "code": code, "name": n }),
+        None => serde_json::json!({ "code": code }),
+    };
+    http_request(hub.web, "POST", "/kitchen/pair", "", &body.to_string()).await
+}
+
+async fn set_flags(hub: &TestHub, value: &'static str) {
+    let sql = format!("UPDATE settings SET value = '{value}' WHERE key = 'licence.flags'");
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit(move |tx| tx.execute_batch(&sql).map_err(arena_store::db_error))
+        .await
+        .unwrap();
+}
+
+fn displays(hub: &TestHub) -> Vec<arena_store::Row> {
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .rows(arena_store::Table::KitchenDisplays)
+        .unwrap()
+}
+
+fn column(row: &arena_store::Row, col: &str) -> String {
+    match &row[col] {
+        arena_store::RowValue::Text(t) => t.clone(),
+        arena_store::RowValue::Integer(n) => n.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// A Basic branch with a Manager and a live kitchen code; returns the code.
+async fn kitchen_code(hub: &TestHub) -> String {
+    set_flags(hub, "kitchen").await;
+    let manager = add_staff(hub, "manager", "Manager", "2222").await;
+    hub.kds_pairing.issue(&manager).unwrap().code
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_display_pairs_with_the_code_and_connects_as_kds() {
+    let hub = start("0.1.0", true).await;
+    let code = kitchen_code(&hub).await;
+
+    let status = http_request(hub.web, "GET", "/kitchen/status", "", "").await;
+    assert!(status_line(&status).contains("200"), "{status}");
+    assert_eq!(
+        json_body(&status),
+        serde_json::json!({ "available": true, "branch_name": "Dev Branch" })
+    );
+
+    let paired = pair_display(&hub, &code, Some("Pass 2")).await;
+    assert!(status_line(&paired).contains("200"), "{paired}");
+    let body = json_body(&paired);
+    let (id, token) = (
+        body["display_id"].as_str().unwrap().to_owned(),
+        body["token"].as_str().unwrap().to_owned(),
+    );
+    assert_eq!(body["name"], "Pass 2");
+    // The row holds only the Argon2id hash, never the token or the secret.
+    let row = displays(&hub)
+        .into_iter()
+        .find(|r| column(r, "id") == id)
+        .unwrap();
+    let secret = token.split_once('.').unwrap().1;
+    assert!(column(&row, "token_hash").starts_with("$argon2id$"));
+    assert!(!column(&row, "token_hash").contains(secret));
+    assert_eq!(column(&row, "name"), "Pass 2");
+    assert!(!log_text().contains(secret), "the token reached a log line");
+    assert!(!log_text().contains(&code), "the code reached a log line");
+
+    // The code was single-use.
+    let again = pair_display(&hub, &code, None).await;
+    assert!(status_line(&again).contains("401"), "{again}");
+    assert_eq!(json_body(&again)["code"], "PAIR_CODE_INVALID");
+
+    // The page connects with `hello{class: kds}`; the Hub marks the display seen.
+    let mut ws = hub.plain().await;
+    hello_ok(&mut ws, hub.hello(ClientClass::Kds, &token, "0.1.0")).await;
+    assert!(hub.presence.display_online(&id));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let seen = displays(&hub)
+            .into_iter()
+            .find(|r| column(r, "id") == id)
+            .map(|r| column(&r, "last_seen"))
+            .unwrap_or_default();
+        if seen != "Null" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the display was never marked seen"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_name_defaults_to_kitchen_and_a_free_branch_pairs_nothing() {
+    let hub = start("0.1.0", true).await;
+    let before = displays(&hub).len();
+    // Free: the page says so, and `kds.pair` is refused with nothing written.
+    let status = http_request(hub.web, "GET", "/kitchen/status", "", "").await;
+    assert_eq!(json_body(&status)["available"], false);
+    let manager = add_staff(&hub, "manager", "Manager", "2222").await;
+    let code = hub.kds_pairing.issue(&manager).unwrap().code;
+    let locked = pair_display(&hub, &code, None).await;
+    assert!(status_line(&locked).contains("403"), "{locked}");
+    assert_eq!(json_body(&locked)["code"], "TIER_LOCKED");
+    assert_eq!(displays(&hub).len(), before);
+
+    // Basic: the same code now pairs, as "Kitchen".
+    set_flags(&hub, "kitchen").await;
+    let ok = pair_display(&hub, &code, Some("   ")).await;
+    assert!(status_line(&ok).contains("200"), "{ok}");
+    assert_eq!(json_body(&ok)["name"], "Kitchen");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn five_wrong_codes_kill_the_code_and_the_21st_attempt_is_rate_limited() {
+    let hub = start("0.1.0", true).await;
+    let code = kitchen_code(&hub).await;
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    for n in 0..5 {
+        let r = pair_display(&hub, wrong, None).await;
+        assert!(status_line(&r).contains("401"), "try {n}: {r}");
+        assert_eq!(json_body(&r)["code"], "PAIR_CODE_INVALID");
+    }
+    // The fifth wrong code killed the live code; the right one no longer works.
+    let dead = pair_display(&hub, &code, None).await;
+    assert_eq!(json_body(&dead)["code"], "PAIR_CODE_INVALID", "{dead}");
+    for _ in 7..=20 {
+        let r = pair_display(&hub, wrong, None).await;
+        assert!(status_line(&r).contains("401"), "{r}");
+    }
+    let limited = pair_display(&hub, wrong, None).await;
+    assert!(status_line(&limited).contains("429"), "{limited}");
+    assert_eq!(json_body(&limited)["code"], "RATE_LIMITED");
+    assert!(
+        limited.to_ascii_lowercase().contains("retry-after:"),
+        "{limited}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fifth_display_is_refused_and_the_code_stays_valid() {
+    let hub = start("0.1.0", true).await;
+    set_flags(&hub, "kitchen").await;
+    let manager = add_staff(&hub, "manager", "Manager", "2222").await;
+    // The harness holds one display; three more fill the branch.
+    for n in 0..3 {
+        let code = hub.kds_pairing.issue(&manager).unwrap().code;
+        let r = pair_display(&hub, &code, Some(&format!("Screen {n}"))).await;
+        assert!(status_line(&r).contains("200"), "{r}");
+    }
+    let code = hub.kds_pairing.issue(&manager).unwrap().code;
+    let full = pair_display(&hub, &code, Some("Fifth")).await;
+    assert!(status_line(&full).contains("403"), "{full}");
+    let body = json_body(&full);
+    assert_eq!(body["code"], "DEVICE_LIMIT");
+    assert_eq!(body["message"], arena_proto::KDS_LIMIT_MESSAGE);
+    assert_eq!(displays(&hub).len(), 4);
+    // None of them is a device: the kiosk list and the device cap are untouched.
+    let devices = Store::open_reader(&hub.path).unwrap().devices().unwrap();
+    assert!(devices.iter().all(|d| d.class == "paired"));
+
+    // Revoking one frees the slot, and the same code still works.
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::KdsRevoke(arena_proto::KdsRevoke {
+                display_id: hub.kds_id.clone(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let ok = pair_display(&hub, &code, Some("Fifth")).await;
+    assert!(status_line(&ok).contains("200"), "{ok}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_toggle_reaches_a_display_within_two_seconds_and_a_revoke_closes_its_socket() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    hello_ok(
+        &mut ws,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let key = arena_proto::hc_key(&hub.kds_id);
+
+    // A display reads only its own high-contrast key.
+    send(
+        &mut ws,
+        &format!(r#"{{"v":1,"kind":"settings.get","rid":"g1","keys":["{key}"]}}"#),
+    )
+    .await;
+    let reply = recv(&mut ws).await.unwrap();
+    let FrameBody::SettingsValues(values) = reply.body else {
+        panic!("{reply:?}")
+    };
+    assert_eq!(values.values[0].value, "false");
+    send(
+        &mut ws,
+        r#"{"v":1,"kind":"settings.get","rid":"g2","keys":["display.hc.hub"]}"#,
+    )
+    .await;
+    let reply = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&reply).1, ErrorCode::Forbidden);
+
+    // The manager's toggle (settings.set with the display's rev) is pushed at once.
+    let rev: i64 = column(
+        displays(&hub)
+            .iter()
+            .find(|r| column(r, "id") == hub.kds_id)
+            .unwrap(),
+        "rev",
+    )
+    .parse()
+    .unwrap();
+    let toggled_at = Instant::now();
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::SettingsSet(SettingsSet {
+                key: key.clone(),
+                value: "true".into(),
+            }),
+            Some(rev),
+        ))
+        .await
+        .unwrap();
+    let pushed = loop {
+        let frame = recv_any(&mut ws).await.expect("a pushed settings.changed");
+        if let FrameBody::Event(e) = frame.body
+            && let HubEvent::SettingsChanged(v) = e.event
+        {
+            break v;
+        }
+    };
+    assert!(toggled_at.elapsed() <= Duration::from_secs(2));
+    assert_eq!(pushed.values[0].key, key);
+    assert_eq!(pushed.values[0].value, "true");
+    assert_eq!(
+        column(
+            displays(&hub)
+                .iter()
+                .find(|r| column(r, "id") == hub.kds_id)
+                .unwrap(),
+            "high_contrast"
+        ),
+        "1"
+    );
+
+    // Revoke: TOKEN_REVOKED, then the socket closes, and the token no longer connects.
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::KdsRevoke(arena_proto::KdsRevoke {
+                display_id: hub.kds_id.clone(),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let revoked_at = Instant::now();
+    loop {
+        let frame = recv_any(&mut ws)
+            .await
+            .expect("a TOKEN_REVOKED error before the close");
+        if let FrameBody::Error(e) = &frame.body {
+            assert_eq!(e.error.code, ErrorCode::TokenRevoked);
+            break;
+        }
+    }
+    assert!(revoked_at.elapsed() <= Duration::from_secs(2));
+    assert!(recv_any(&mut ws).await.is_none(), "the socket closes");
+    let mut again = hub.plain().await;
+    send_frame(
+        &mut again,
+        &Frame::new(
+            "h",
+            FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+        ),
+    )
+    .await;
+    let frame = recv(&mut again).await.unwrap();
+    assert_eq!(error_of(&frame).1, ErrorCode::TokenRevoked);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plain_http_strays_and_foreign_bearers_on_the_kitchen_are_forbidden() {
+    let hub = start("0.1.0", true).await;
+    for (method, path) in [
+        ("GET", "/media/abc"),
+        ("GET", "/nope"),
+        ("POST", "/pair"),
+        ("POST", "/kitchen"),
+        ("GET", "/kitchen/pair"),
+    ] {
+        let r = http_request(hub.web, method, path, "", "").await;
+        assert!(status_line(&r).contains("403"), "{method} {path}: {r}");
+        assert_eq!(json_body(&r)["code"], "FORBIDDEN", "{method} {path}");
+    }
+    // A live display token passes.
+    let ok = http_request(
+        hub.web,
+        "GET",
+        "/kitchen/status",
+        &format!("Authorization: Bearer {}\r\n", hub.kds_token),
+        "",
+    )
+    .await;
+    assert!(status_line(&ok).contains("200"), "{ok}");
+    // TLS clients on the same port are unaffected.
+    let client = HubClient::connect(&hub.web_tls_url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    client
+        .request("ping", serde_json::Value::Null)
+        .await
+        .unwrap();
+    // (Wrong tokens count against the hello throttle of the address, so they come last.)
+    // A paired device's token, a made-up one and a Basic header are refused on every kitchen path.
+    let paired = format!("Authorization: Bearer {}\r\n", hub.paired_token);
+    for extra in [
+        paired.as_str(),
+        "Authorization: Bearer nope\r\n",
+        "Authorization: Basic abc\r\n",
+    ] {
+        for (method, path) in [
+            ("GET", "/kitchen"),
+            ("GET", "/kitchen/status"),
+            ("POST", "/kitchen/pair"),
+        ] {
+            let r = http_request(hub.web, method, path, extra, "{}").await;
+            assert!(status_line(&r).contains("403"), "{method} {path}: {r}");
+            assert_eq!(json_body(&r)["code"], "FORBIDDEN", "{method} {path}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hub_serves_the_kitchen_build_from_its_directory_and_nothing_outside_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("kitchen");
+    std::fs::create_dir_all(root.join("_app")).unwrap();
+    std::fs::write(root.join("index.html"), "<!doctype html>APP-INDEX").unwrap();
+    std::fs::write(root.join("_app").join("a.js"), "console.log(1)").unwrap();
+    std::fs::write(dir.path().join("outside-secret.txt"), "secret").unwrap();
+    let hub = start_kitchen(root).await;
+
+    let page = http_request(hub.web, "GET", "/kitchen", "", "").await;
+    assert!(page.contains("APP-INDEX"), "{page}");
+    assert!(page.contains("text/html"));
+    let page = http_request(hub.web, "GET", "/kitchen/", "", "").await;
+    assert!(page.contains("APP-INDEX"), "{page}");
+    let js = http_request(hub.web, "GET", "/kitchen/_app/a.js", "", "").await;
+    assert!(
+        js.contains("console.log(1)") && js.contains("text/javascript"),
+        "{js}"
+    );
+    // A client-side route is the app's page; a missing file is a 404.
+    let spa = http_request(hub.web, "GET", "/kitchen/board", "", "").await;
+    assert!(spa.contains("APP-INDEX"), "{spa}");
+    let missing = http_request(hub.web, "GET", "/kitchen/_app/missing.js", "", "").await;
+    assert!(status_line(&missing).contains("404"), "{missing}");
+    for path in [
+        "/kitchen/../outside-secret.txt",
+        "/kitchen/_app/../../outside-secret.txt",
+        "/kitchen/%2e%2e/outside-secret.txt",
+        "/kitchen/..%5coutside-secret.txt",
+    ] {
+        let r = http_request(hub.web, "GET", path, "", "").await;
+        assert!(!r.contains("secret"), "{path}: {r}");
+        assert!(!status_line(&r).contains("200"), "{path}: {r}");
+    }
+
+    // Without a build directory the built-in page pairs the same way.
+    let bare = start("0.1.0", true).await;
+    let page = http_request(bare.web, "GET", "/kitchen", "", "").await;
+    assert!(
+        status_line(&page).contains("200") && page.contains("/kitchen/pair"),
+        "{page}"
+    );
 }

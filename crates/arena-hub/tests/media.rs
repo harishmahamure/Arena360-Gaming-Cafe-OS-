@@ -490,7 +490,10 @@ async fn an_unauthenticated_or_revoked_request_is_refused_and_failures_are_throt
     let mut out = Vec::new();
     let _ = tokio::time::timeout(Duration::from_secs(5), tcp.read_to_end(&mut out)).await;
     let (status, _, body) = split(&out);
-    assert_eq!((status, body.len()), (401, 0));
+    // Story 7.6: plain HTTP answers only the kitchen, the socket and the info pages; any other
+    // path is FORBIDDEN, with no file bytes.
+    assert_eq!(status, 403);
+    assert!(!String::from_utf8_lossy(&body).contains(&hex(COVER)));
 
     // The right token works, a revoked one does not.
     assert_eq!(r.media(&hex(COVER), "").await.0, 200);

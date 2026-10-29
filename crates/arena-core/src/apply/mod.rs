@@ -48,6 +48,7 @@ mod import_plans;
 mod import_players;
 mod import_setup;
 mod invoice_issue;
+mod kds_display;
 mod kiosk_log;
 mod kiosk_scan;
 mod kitchen_notes;
@@ -257,6 +258,8 @@ pub(crate) enum Target {
     InvoiceIssue(Box<invoice_issue::IssueTarget>),
     Receipt(Box<receipt_print::ReceiptTarget>),
     Kot(Box<kot::KotTarget>),
+    /// `kds.pair`, `kds.revoke`, `kds.seen` and `settings.set` of a display's high-contrast key.
+    KdsDisplay(Box<kds_display::KdsTarget>),
     Alert(Box<alert::AlertTarget>),
     ControllerCheck(Box<controller_check::CheckTarget>),
     Shift(Box<shift::ShiftTarget>),
@@ -266,7 +269,10 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
     use arena_proto::IntentPayload as P;
     Ok(match &intent.payload {
         P::BranchBootstrap(_) | P::BranchSeedDefaults(_) => Target::None,
-        P::SettingsSet(s) => Target::Setting(settings_set::load(tx, s)?),
+        P::SettingsSet(s) => match kds_display::hc_target(tx, s)? {
+            Some(t) => Target::KdsDisplay(Box::new(t)),
+            None => Target::Setting(settings_set::load(tx, s)?),
+        },
         P::AdsConsent(_) => Target::Setting(ads_consent::load(tx)?),
         P::PrinterStatus(_) => Target::Setting(printer_status::load(tx)?),
         P::DeviceRegister(d) => devices::load_register(tx, d)?,
@@ -401,6 +407,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         }
         P::KotReprint(_) | P::KotPrinted(_) | P::KotPrintFailed(_) => {
             Target::Kot(Box::new(kot::load(tx, &intent.payload)?))
+        }
+        P::KdsPair(_) | P::KdsRevoke(_) | P::KdsSeen(_) => {
+            Target::KdsDisplay(Box::new(kds_display::load(tx, &intent.payload)?))
         }
         P::AlertRaise(_) | P::AlertAck(_) => {
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))

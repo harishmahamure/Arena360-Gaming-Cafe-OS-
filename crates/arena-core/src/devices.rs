@@ -208,8 +208,38 @@ impl DeviceDirectory {
         let Some((device_id, _)) = parse_token(token) else {
             return Err(token_invalid());
         };
+        if class == ClientClass::Kds {
+            // Story 7.6: a kitchen display authenticates against `kitchen_displays`, not `devices`.
+            let row = self.kitchen_display(device_id)?.map(|d| DeviceRow {
+                device_id: d.id,
+                branch_id: String::new(),
+                class: ClientClass::Kds.as_str().to_owned(),
+                label: d.name,
+                token_hash: d.token_hash,
+                reported_version: None,
+                revoked_at: d.revoked_at,
+                rev: d.rev,
+            });
+            return check_device_token(row.as_ref(), class, token);
+        }
         let row = self.device(device_id)?;
         check_device_token(row.as_ref(), class, token)
+    }
+
+    /// The kitchen display `id`, if any (Story 7.6).
+    pub fn kitchen_display(&self, id: &str) -> Result<Option<arena_store::DisplayRow>, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?
+            .kitchen_display(id)
+    }
+
+    /// Every kitchen display, revoked ones included (Story 7.6).
+    pub fn kitchen_displays(&self) -> Result<Vec<arena_store::DisplayRow>, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?
+            .kitchen_displays()
     }
 
     pub fn session_screens(
@@ -460,20 +490,33 @@ impl DeviceDirectory {
     }
 
     pub fn settings(&self, keys: &[String]) -> Result<Vec<arena_proto::SettingEntry>, AppError> {
-        let rows = self
+        let store = self
             .reader
             .lock()
-            .map_err(|_| internal("device directory lock poisoned"))?
-            .settings()?;
-        Ok(keys
-            .iter()
-            .filter_map(|k| rows.iter().find(|r| &r.key == k))
-            .map(|r| arena_proto::SettingEntry {
-                key: r.key.clone(),
-                value: r.value.clone(),
-                rev: r.rev,
-            })
-            .collect())
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        let rows = store.settings()?;
+        let mut out = Vec::new();
+        for k in keys {
+            if let Some(r) = rows.iter().find(|r| &r.key == k) {
+                out.push(arena_proto::SettingEntry {
+                    key: r.key.clone(),
+                    value: r.value.clone(),
+                    rev: r.rev,
+                });
+            } else if let Some(arena_proto::HcTarget::Device(id)) = arena_proto::parse_hc_key(k)
+                && let Some(d) = store
+                    .kitchen_display(id)?
+                    .filter(|d| d.revoked_at.is_none())
+            {
+                // Story 7.6: a kitchen display's high contrast lives on its row, not in `settings`.
+                out.push(arena_proto::SettingEntry {
+                    key: k.clone(),
+                    value: d.high_contrast.to_string(),
+                    rev: d.rev,
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// The manager verifier a kiosk caches for offline admin exits: the newest version and its
@@ -512,8 +555,12 @@ impl DeviceDirectory {
 
     /// Whether `device_id` is revoked (a missing device counts as revoked).
     pub fn is_revoked(&self, device_id: &str) -> Result<bool, AppError> {
+        if let Some(row) = self.device(device_id)? {
+            return Ok(row.revoked_at.is_some());
+        }
+        // Story 7.6: a kitchen display is revoked by the same word.
         Ok(self
-            .device(device_id)?
+            .kitchen_display(device_id)?
             .is_none_or(|row| row.revoked_at.is_some()))
     }
 }

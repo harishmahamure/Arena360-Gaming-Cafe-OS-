@@ -40,6 +40,9 @@ import type { ImportPlayers } from "./ImportPlayers";
 import type { ImportProducts } from "./ImportProducts";
 import type { ImportSetup } from "./ImportSetup";
 import type { InvoiceIssue } from "./InvoiceIssue";
+import type { KdsPair } from "./KdsPair";
+import type { KdsRevoke } from "./KdsRevoke";
+import type { KdsSeen } from "./KdsSeen";
 import type { KioskCleanupFailed } from "./KioskCleanupFailed";
 import type { KioskGameLaunched } from "./KioskGameLaunched";
 import type { KioskGamePlayRecorded } from "./KioskGamePlayRecorded";
@@ -172,6 +175,9 @@ export type IntentPayload =
   | ({ kind: "kot.reprint" } & KotReprint)
   | ({ kind: "kot.printed" } & KotPrinted)
   | ({ kind: "kot.print_failed" } & KotPrintFailed)
+  | ({ kind: "kds.pair" } & KdsPair)
+  | ({ kind: "kds.revoke" } & KdsRevoke)
+  | ({ kind: "kds.seen" } & KdsSeen)
   | ({ kind: "order.line_cancel" } & OrderLineCancel)
   | ({ kind: "order.void" } & OrderVoid)
   | ({ kind: "refund.create" } & RefundCreate)
